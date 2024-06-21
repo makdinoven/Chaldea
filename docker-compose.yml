@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./docker/frontend
+    volumes:
+      - ./services/frontend/chaldea:/app
+    command: sh -c "npm install --legacy-peer-deps && npm run build"
+    depends_on:
+      - nginx
+
+  nginx:
+    build:
+      context: ./docker/nginx
+    volumes:
+      - ./services/frontend/chaldea/dist:/usr/share/nginx/html
+    ports:
+      - "80:80"
