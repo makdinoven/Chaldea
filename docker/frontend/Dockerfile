@@ -5,13 +5,13 @@ FROM node:18-alpine AS build
 WORKDIR /app
 
 # Копируем package.json и package-lock.json для установки зависимостей
-COPY ./services/frontend/chaldea/package*.json ./
+COPY services/frontend/app-chaldea/package*.json ./
 
 # Устанавливаем зависимости
 RUN npm install --legacy-peer-deps
 
 # Копируем исходный код приложения
-COPY ./services/frontend/chaldea .
+COPY services/frontend/app-chaldea .
 
 # Сборка приложения
 RUN npm run build
