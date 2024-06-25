@@ -5,7 +5,7 @@ FROM nginx:alpine
 COPY ./docker/nginx/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Копируем статические файлы из собранного фронтенда
-COPY ./services/frontend/app-chaldea/dist /usr/share/nginx/html
+COPY ./services/frontend/app-chaldea /usr/share/nginx/html
 
 # Открываем порт 80
 EXPOSE 80
