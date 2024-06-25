@@ -18,6 +18,8 @@ services:
       - "80:80"
     depends_on:
       - frontend
+
+
   mysql:
     build:
       context: .
@@ -37,14 +39,25 @@ services:
         context: .
         dockerfile: ./docker/phpmyadmin/Dockerfile
       environment:
-        PMA_HOST: ${PMA_HOST}
-        PMA_PORT: ${PMA_PORT}
-        PMA_USER: ${PMA_USER}
-        PMA_PASSWORD: ${PMA_PASSWORD}
+        PMA_HOST: mysql
+        PMA_PORT: 3306
+        PMA_USER: ${MYSQL_USER}
+        PMA_PASSWORD: ${MYSQL_PASSWORD}
       ports:
         - "8081:80"
       depends_on:
         - mysql
+
+  rabbitmq:
+    build:
+      context: .
+      dockerfile: ./docker/rabbitmq/Dockerfile
+    environment:
+      RABBITMQ_DEFAULT_USER: user
+      RABBITMQ_DEFAULT_PASS: password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
 
 volumes:
     mysql_data:
