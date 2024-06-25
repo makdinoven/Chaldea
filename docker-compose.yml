@@ -8,7 +8,7 @@ services:
     volumes:
       - ./services/frontend/app-chaldea:/app
     working_dir: /app
-    command: sh -c "npm install --legacy-peer-deps"
+    command: sh -c "npm install --legacy-peer-deps && npm run build"
 
   nginx:
     build:
@@ -34,19 +34,20 @@ services:
     ports:
       - "3306:3306"
 
-  phpmyadmin:
-      build:
-        context: .
-        dockerfile: ./docker/phpmyadmin/Dockerfile
-      environment:
-        PMA_HOST: mysql
-        PMA_PORT: 3306
-        PMA_USER: ${MYSQL_USER}
-        PMA_PASSWORD: ${MYSQL_PASSWORD}
-      ports:
-        - "8081:80"
-      depends_on:
-        - mysql
+
+#  phpmyadmin:
+#      build:
+#        context: .
+#        dockerfile: ./docker/phpmyadmin/Dockerfile
+#      environment:
+#        PMA_HOST: mysql
+#        PMA_PORT: 3306
+#        PMA_USER: ${MYSQL_USER}
+#        PMA_PASSWORD: ${MYSQL_PASSWORD}
+#      ports:
+#        - "8081:80"
+#      depends_on:
+#        - mysql
 
   rabbitmq:
     build:
@@ -58,6 +59,7 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+
 
 volumes:
     mysql_data:
