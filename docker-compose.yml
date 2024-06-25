@@ -18,3 +18,33 @@ services:
       - "80:80"
     depends_on:
       - frontend
+  mysql:
+    build:
+      context: .
+      dockerfile: ./docker/mysql/Dockerfile
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+
+  phpmyadmin:
+      build:
+        context: .
+        dockerfile: ./docker/phpmyadmin/Dockerfile
+      environment:
+        PMA_HOST: ${PMA_HOST}
+        PMA_PORT: ${PMA_PORT}
+        PMA_USER: ${PMA_USER}
+        PMA_PASSWORD: ${PMA_PASSWORD}
+      ports:
+        - "8081:80"
+      depends_on:
+        - mysql
+
+volumes:
+    mysql_data:

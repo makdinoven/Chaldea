@@ -1,4 +1,3 @@
-FROM ubuntu:latest
-LABEL authors="dudka"
+FROM phpmyadmin/phpmyadmin:latest
 
-ENTRYPOINT ["top", "-b"]
+EXPOSE 80

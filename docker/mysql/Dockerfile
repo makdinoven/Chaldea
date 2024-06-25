@@ -1,4 +1,3 @@
-FROM ubuntu:latest
-LABEL authors="dudka"
+FROM mysql:5.7
 
-ENTRYPOINT ["top", "-b"]
+EXPOSE 3306
