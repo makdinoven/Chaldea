@@ -54,6 +54,19 @@ services:
 #      depends_on:
 #        - mysql
 
+
+  adminer:
+    build:
+      context: .
+      dockerfile: ./docker/adminer/Dockerfile
+    environment:
+      ADMINER_DEFAULT_SERVER: mysql
+    ports:
+      - "8081:8080"
+    depends_on:
+      - mysql
+
+
   rabbitmq:
     build:
       context: .
@@ -65,6 +78,28 @@ services:
       - "5672:5672"
       - "15672:15672"
 
+  user-service:
+    build:
+      context: .
+      dockerfile: ./docker/user-service/Dockerfile
+    environment:
+      DB_HOST: mysql
+      DB_DATABASE: mydatabase
+      DB_USERNAME: myuser
+      DB_PASSWORD: mypassword
+    volumes:
+      - ./services/user-service:/var/www
+    depends_on:
+      - mysql
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./docker/api-gateway/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - user-service
 
 volumes:
     mysql_data:
