@@ -28,6 +28,9 @@ const AuthForm = () => {
         body: JSON.stringify(formData),
       });
       const data = await response.json();
+      if (data.token) {
+        localStorage.setItem('token', data.token);
+      }
       console.log(data);
     } catch (error) {
       console.error('Error:', error);
