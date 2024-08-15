@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic[email]
+mysqlclient
+passlib[bcrypt]
+python-jose
+python-multipart  # Для обработки форм-данных (если требуется)
+pymysql
+cryptography

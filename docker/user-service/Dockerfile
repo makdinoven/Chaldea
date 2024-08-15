@@ -1,35 +1,28 @@
-FROM php:8.1-fpm
+# Используем образ Python 3.10 в качестве базового
+FROM python:3.10-slim
 
-# Устанавливаем системные зависимости и необходимые PHP-расширения
+# Устанавливаем рабочую директорию внутри контейнера
+WORKDIR /app
+
+# Устанавливаем системные зависимости для сборки пакета mysqlclient
 RUN apt-get update && apt-get install -y \
-        git \
-        unzip \
-        libpq-dev \
-        libzip-dev \
-        zip \
-        libxml2-dev \
-        && docker-php-ext-install \
-        pdo \
-        pdo_mysql \
-        xml \
-        && docker-php-ext-enable pdo_mysql
+    gcc \
+    libmariadb-dev-compat \
+    libmariadb-dev \
+    pkg-config \
+    --no-install-recommends && rm -rf /var/lib/apt/lists/*
+
+# Копируем файлы проекта в рабочую директорию контейнера
+COPY ./services/user-service /app
+
+# Устанавливаем зависимости, указанные в файле requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Указываем порт, который будет открыт для доступа к микросервису
+EXPOSE 8000
+
+# Команда для запуска FastAPI приложения с использованием uvicorn
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "/app"]
 
 
-# Устанавливаем Composer
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-
-# Создаем рабочую директорию
-WORKDIR /var/www
-
-# Копируем файлы и устанавливаем зависимости
-COPY ./services/user-service /var/www
-RUN composer install
-
-# Устанавливаем права
-RUN chown -R www-data:www-data /var/www
-RUN chmod -R 755 /var/www
-
-# Открываем порт
-EXPOSE 9000
-
-CMD ["php-fpm"]
