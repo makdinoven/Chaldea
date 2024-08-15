@@ -12,16 +12,15 @@ services:
     working_dir: /app
     command: sh -c "npm install --legacy-peer-deps && npm run build --watch"
 
-
-  api-gateway:
+  nginx:
     build:
       context: .
-      dockerfile: ./docker/api-gateway/Dockerfile
+      dockerfile: ./docker/nginx/Dockerfile
     volumes:
       - ./services/frontend/app-chaldea/dist:/usr/share/nginx/html # Добавлено для монтирования собранных статических файлов
-      - ./docker/api-gateway/nginx.conf:/etc/nginx/conf.d/default.conf # Для монтирования конфигурационного файла nginx
+      - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf # Для монтирования конфигурационного файла nginx
     ports:
-      - "80:80"
+      - '80:80'
     depends_on:
       - frontend
 
@@ -30,71 +29,39 @@ services:
       context: .
       dockerfile: ./docker/mysql/Dockerfile
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: mydatabase
-      MYSQL_USER: myuser
-      MYSQL_PASSWORD: mypassword
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
       - mysql_data:/var/lib/mysql
     ports:
-      - "3306:3306"
+      - '3306:3306'
 
+  #  phpmyadmin:
+  #      build:
+  #        context: .
+  #        dockerfile: ./docker/phpmyadmin/Dockerfile
+  #      environment:
+  #        PMA_HOST: mysql
+  #        PMA_PORT: 3306
+  #        PMA_USER: ${MYSQL_USER}
+  #        PMA_PASSWORD: ${MYSQL_PASSWORD}
+  #      ports:
+  #        - "8081:80"
+  #      depends_on:
+  #        - mysql
 
-#  phpmyadmin:
-#      build:
-#        context: .
-#        dockerfile: ./docker/phpmyadmin/Dockerfile
-#      environment:
-#        PMA_HOST: mysql
-#        PMA_PORT: 3306
-#        PMA_USER: ${MYSQL_USER}
-#        PMA_PASSWORD: ${MYSQL_PASSWORD}
-#      ports:
-#        - "8081:80"
-#      depends_on:
-#        - mysql
-
-
-  adminer:
+  rabbitmq:
     build:
       context: .
-      dockerfile: ./docker/adminer/Dockerfile
+      dockerfile: ./docker/rabbitmq/Dockerfile
     environment:
-      ADMINER_DEFAULT_SERVER: mysql
+      RABBITMQ_DEFAULT_USER: user
+      RABBITMQ_DEFAULT_PASS: password
     ports:
-      - "8081:8080"
-    depends_on:
-      - mysql
-
-  user-service:
-    build:
-      context: .
-      dockerfile: ./docker/user-service/Dockerfile
-    volumes:
-        - ./services/user-service:/app
-    depends_on:
-        - mysql
-        - api-gateway
-    networks:
-        - default
-    ports:
-       - "8000:8000"
-
-#  rabbitmq:
-#    build:
-#      context: .
-#      dockerfile: ./docker/rabbitmq/Dockerfile
-#    environment:
-#      RABBITMQ_DEFAULT_USER: user
-#      RABBITMQ_DEFAULT_PASS: password
-#    ports:
-#      - "5672:5672"
-#      - "15672:15672"
-
-
-networks:
-  default:
-    name: "dev-network"
+      - '5672:5672'
+      - '15672:15672'
 
 volumes:
-    mysql_data:
+  mysql_data:
