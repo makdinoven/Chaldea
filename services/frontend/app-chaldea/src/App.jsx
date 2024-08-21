@@ -1,12 +1,14 @@
 import React from 'react';
-import AuthForm from './components/AuthForm.jsx';
+import StartPage from './components/StartPage/StartPage.jsx';
+
+import './App.css';
 
 const App = () => {
-    return (
-        <div className="App">
-            <AuthForm />
-        </div>
-    );
+  return (
+    <div className='container'>
+      <StartPage />
+    </div>
+  );
 };
 
 export default App;

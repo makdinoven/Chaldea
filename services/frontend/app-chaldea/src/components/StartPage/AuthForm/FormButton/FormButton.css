@@ -1,0 +1,11 @@
+.form-button {
+  border: none;
+  padding: 12px 92px;
+  font-weight: 500;
+  font-size: 20px;
+  text-align: center;
+  color: #fff;
+  border-radius: 10px;
+  text-transform: uppercase;
+  background: linear-gradient(90deg, #2e353e 0%, #537895 100%);
+}

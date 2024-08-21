@@ -1,0 +1,32 @@
+.auth-form {
+  width: 383px;
+  padding: 50px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.auth-form-container {
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  transition: height 0.4s ease;
+}
+
+.policy-container {
+  width: 100%;
+  display: flex;
+  gap: 6px;
+  margin-bottom: 24px;
+}
+
+.policy-label {
+  font-weight: 400;
+  font-size: 10px;
+  letter-spacing: -0.03em;
+  color: #fff;
+}
+
+.policy-link {
+  text-decoration: underline;
+}
