@@ -20,31 +20,31 @@ export default function AuthForm({ activeForm }) {
       <form className='auth-form' action=''>
         {activeForm === 'login' ? (
           <>
-            <Input id='login' type='text' text='Логин*' />
-            <Input id='password' type='text' text='Пароль*' />
+            <Input text='Логин*' />
+            <Input text='Пароль*' />
           </>
         ) : (
           <>
-            <Input id='email' type='text' text='Email*' />
-            <Input id='login' type='text' text='Логин*' />
-            <Input id='password' type='text' text='Пароль*' />
-            <Input id='passwordAgain' type='text' text='Пароль еще раз*' />
+            <Input text='Email*' />
+            <Input text='Логин*' />
+            <Input text='Пароль*' />
+            <Input text='Пароль еще раз*' />
           </>
         )}
 
-        <div className='policy-container'>
-          <div className='custom-radio'>
-            <input className='policy-input' id='policy' type='radio' />
-          </div>
-          <label className='policy-label' htmlFor='policy'>
+        <label className='policy-label' htmlFor='policy'>
+          <input className='real-checkbox' id='policy' type='checkbox' />
+          <span className='custom-checkbox'></span>
+          <span className='policy-text'>
             Я соглашаюсь с{' '}
             <a className='policy-link' href='#'>
               {' '}
               Политикой конфиденциальности{' '}
             </a>
             и даю согласие на обработку моих данных для получения рассылок.
-          </label>
-        </div>
+          </span>
+        </label>
+
         {activeForm === 'login' ? (
           <>
             <FormButton text='Вход' />

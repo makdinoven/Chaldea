@@ -1,24 +1,6 @@
-.input-container {
-  position: relative;
-  width: 100%;
-  margin-bottom: 12px;
-}
-
-.input-label {
-  font-weight: 400;
-  font-size: 16px;
-  letter-spacing: -0.03em;
-  text-align: center;
-  color: #c6c4c4;
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  padding: 0 4px;
-  pointer-events: none;
-  transition: all 0.2s ease;
-}
-
 .auth-input {
+  font-family: var(--font-family);
+  margin-bottom: 12px;
   background-color: transparent;
   border: none;
   width: 100%;
@@ -28,4 +10,9 @@
   font-size: 16px;
   letter-spacing: -0.03em;
   color: #c6c4c4;
+}
+
+.auth-input:focus-visible {
+  outline: none;
+  border-bottom: 1px solid #fff;
 }

@@ -1,0 +1,15 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family);
+  background-image: url('./assets/Бэкграунд.png');
+  background-size: cover;
+  background-repeat: no-repeat;
+  width: 100%;
+  height: 1662px;
+}
