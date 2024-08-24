@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import BaseModel, EmailStr
 from datetime import datetime
 
@@ -5,6 +6,7 @@ from datetime import datetime
 class UserBase(BaseModel):
     email: EmailStr
     username: str
+    role: Optional[str] = 'user'
 
 # Схема для создания пользователя (регистрация)
 class UserCreate(UserBase):
@@ -14,6 +16,7 @@ class UserCreate(UserBase):
 class User(UserBase):
     id: int
     registered_at: datetime
+    avatar: Optional[str] = None  # URL аватарки пользователя
 
     class Config:
         orm_mode = True  # Позволяет Pydantic работать с ORM моделями

@@ -6,6 +6,8 @@ import re
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+DEFAULT_AVATAR_URL = "assets/avatars/avatar.png"
+
 # Получение пользователя по email
 def get_user_by_email(db: Session, email: str):
     return db.query(User).filter(User.email == email).first()
@@ -27,7 +29,8 @@ def create_user(db: Session, user: UserCreate):
     db_user = User(
         email=user.email,
         username=user.username,
-        hashed_password=hashed_password
+        hashed_password=hashed_password,
+        avatar = DEFAULT_AVATAR_URL
     )
     db.add(db_user)
     db.commit()
