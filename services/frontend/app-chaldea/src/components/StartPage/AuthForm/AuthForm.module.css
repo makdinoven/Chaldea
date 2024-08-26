@@ -1,4 +1,11 @@
-.auth-form {
+.container {
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  transition: height 0.4s ease;
+}
+
+.auth_form {
   width: 383px;
   padding: 50px 20px 40px;
   display: flex;
@@ -6,14 +13,7 @@
   align-items: center;
 }
 
-.auth-form-container {
-  overflow: hidden;
-  display: flex;
-  justify-content: center;
-  transition: height 0.4s ease;
-}
-
-.policy-label {
+.policy {
   width: 100%;
   margin-bottom: 24px;
   display: grid;
@@ -26,7 +26,7 @@
   color: #fff;
 }
 
-.real-checkbox {
+.real_checkbox {
   margin: 0;
   width: 0;
   height: 0;
@@ -35,7 +35,7 @@
   z-index: -1;
 }
 
-.custom-checkbox {
+.custom_checkbox {
   position: relative;
   display: flex;
   outline: 1px solid #fefefe;
@@ -47,7 +47,7 @@
   background: transparent;
 }
 
-.custom-checkbox::before {
+.custom_checkbox::before {
   content: '';
   width: 16px;
   height: 16px;
@@ -57,14 +57,14 @@
   transition: 0.1s ease-in;
 }
 
-.real-checkbox:checked + .custom-checkbox::before {
+.real_checkbox:checked + .custom_checkbox::before {
   transform: scale(1);
 }
 
-.policy-text {
+.policy_text {
   display: block;
 }
 
-.policy-link {
+.policy_link {
   text-decoration: underline;
 }

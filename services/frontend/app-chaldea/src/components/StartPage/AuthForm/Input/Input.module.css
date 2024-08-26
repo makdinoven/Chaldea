@@ -1,4 +1,4 @@
-.auth-input {
+.input {
   font-family: var(--font-family);
   margin-bottom: 12px;
   background-color: transparent;
@@ -12,7 +12,7 @@
   color: #c6c4c4;
 }
 
-.auth-input:focus-visible {
+.input:focus-visible {
   outline: none;
   border-bottom: 1px solid #fff;
 }

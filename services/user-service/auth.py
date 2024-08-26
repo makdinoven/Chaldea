@@ -8,7 +8,6 @@ from crud import get_user_by_email
 from schemas import User, UserCreate, Login
 from database import get_db
 
-
 # Секретный ключ и алгоритм шифрования
 SECRET_KEY = "your-secret-key"
 ALGORITHM = "HS256"
@@ -17,9 +16,10 @@ REFRESH_TOKEN_EXPIRE_DAYS = 7  # Срок жизни рефреш-токена
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-# Создание JWT токена
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+# Создание JWT токена с добавлением роли пользователя
+def create_access_token(data: dict, role: str, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
+    to_encode.update({"role": role})  # Добавляем роль пользователя в данные токена
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
@@ -28,9 +28,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-# Создание рефреш-токена
-def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None):
+# Создание рефреш-токена с добавлением роли пользователя
+def create_refresh_token(data: dict, role: str, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
+    to_encode.update({"role": role})  # Добавляем роль пользователя в данные токена
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
@@ -49,7 +50,8 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
-        if email is None:
+        role: str = payload.get("role")  # Извлекаем роль из токена
+        if email is None or role is None:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
