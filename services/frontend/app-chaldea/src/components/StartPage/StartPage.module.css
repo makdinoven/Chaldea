@@ -24,7 +24,13 @@
 
 /* form-window */
 
+.form_window_container {
+  display: flex;
+  justify-content: center;
+}
+
 .form_window {
+  width: 960px;
   border-radius: 10px;
   background: rgba(35, 35, 41, 0.9);
   overflow: hidden;

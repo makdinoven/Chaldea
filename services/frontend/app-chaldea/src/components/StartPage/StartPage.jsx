@@ -14,7 +14,7 @@ export default function StartPage() {
 
   return (
     <>
-      <Header />
+      <Header showMenu={false} />
 
       <section className={styles.content}>
         <h1 className={styles.title}>Ваше приключение начинается здесь</h1>
@@ -23,20 +23,21 @@ export default function StartPage() {
           новые горизонты.
         </p>
       </section>
+      <section className={styles.form_window_container}>
+        <div className={styles.form_window}>
+          <LogButton
+            text='Вход'
+            isActive={activeButton === 'login'}
+            onClick={() => handleButtonClick('login')}
+          />
+          <LogButton
+            text='Регистрация'
+            isActive={activeButton === 'register'}
+            onClick={() => handleButtonClick('register')}
+          />
 
-      <section className={styles.form_window}>
-        <LogButton
-          text='Вход'
-          isActive={activeButton === 'login'}
-          onClick={() => handleButtonClick('login')}
-        />
-        <LogButton
-          text='Регистрация'
-          isActive={activeButton === 'register'}
-          onClick={() => handleButtonClick('register')}
-        />
-
-        <AuthForm activeForm={activeButton} />
+          <AuthForm activeForm={activeButton} />
+        </div>
       </section>
     </>
   );

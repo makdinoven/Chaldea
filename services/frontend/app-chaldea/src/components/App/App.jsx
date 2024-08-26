@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'; // Импорт компонентов для маршрутизации
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import StartPage from '../StartPage/StartPage.jsx';
 import HomePage from '../HomePage/HomePage.jsx';
 
@@ -15,6 +15,11 @@ const App = () => {
         </Routes>
       </div>
     </Router>
+
+    // <div className='container'>
+    //   <HomePage />
+    //   {/* <StartPage /> */}
+    // </div>
   );
 };
 

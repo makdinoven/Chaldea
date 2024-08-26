@@ -3,6 +3,9 @@
 
 :root {
   --font-family: 'Montserrat', sans-serif;
+
+  --zoloto: #fff;
+  --blue: #76a6bd;
   --transition02: 0.2s ease-in-out;
 }
 

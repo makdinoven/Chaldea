@@ -1,0 +1,16 @@
+.main {
+  display: grid;
+  grid-template-columns: 469px 1fr; /* Первая колонка фиксированного размера, вторая гибкая */
+  grid-auto-rows: 185px; /* Устанавливаем высоту строк только для первой колонки */
+  gap: 60px;
+}
+
+.small_buttons {
+  grid-row: 3;
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  row-gap: 18.5px;
+  column-gap: 59px;
+}

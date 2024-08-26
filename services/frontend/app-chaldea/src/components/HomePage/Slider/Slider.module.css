@@ -1,0 +1,11 @@
+.container {
+  grid-row: 1;
+  grid-column: 2;
+  border-radius: 7px;
+  width: 662px;
+  height: 431px;
+  background-color: black;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
