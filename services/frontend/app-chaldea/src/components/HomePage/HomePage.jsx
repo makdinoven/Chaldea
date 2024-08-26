@@ -100,6 +100,4 @@ export default function HomePage() {
       <button onClick={handleLogout}>Logout</button>
     </div>
   );
-
-  // return <h1>Hello</h1>;
 }
