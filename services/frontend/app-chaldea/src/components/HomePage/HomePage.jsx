@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
+import defaultAvatar from '../../assets/avatars/avatar.jpg'
+
 const HomePage = () => {
   const [user, setUser] = useState(null); // Состояние для хранения информации о пользователе
   const [selectedFile, setSelectedFile] = useState(null); // Состояние для хранения выбранного файла
@@ -15,7 +17,6 @@ const HomePage = () => {
         navigate('/'); // Перенаправляем на страницу входа, если токен отсутствует
         return;
       }
-
       try {
         // Отправляем запрос на сервер для получения данных текущего пользователя
         const response = await axios.get('/api/users/me', {
@@ -77,11 +78,12 @@ const HomePage = () => {
   };
 
   if (!user) return null; // Отображаем пустую страницу, пока загружаются данные
-
+      console.log('sdsdssd')
   return (
     <div>
       <h2>Welcome to Your Dashboard</h2>
-      <img src={user.avatar || '/assets/avatars/avatar.jpg'} alt="User Avatar" width="100" height="100" /> {/* Отображаем аватарку */}
+
+      <img src={user.avatar ? user.avatar : defaultAvatar} alt="User Avatar" width="100" height="100"/>{/* Отображаем аватарку */}
       <p>Username: {user.username}</p>
       {user.role === 'admin' && <p>You have admin privileges.</p>} {/* Если пользователь администратор, отображаем сообщение */}
 
