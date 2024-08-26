@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
-const HomePage = () => {
+export default function HomePage() {
   const [user, setUser] = useState(null); // Состояние для хранения информации о пользователе
   const [selectedFile, setSelectedFile] = useState(null); // Состояние для хранения выбранного файла
   const [message, setMessage] = useState(''); // Состояние для сообщений об успехе или ошибке
@@ -20,8 +20,8 @@ const HomePage = () => {
         // Отправляем запрос на сервер для получения данных текущего пользователя
         const response = await axios.get('/api/users/me', {
           headers: {
-            Authorization: `Bearer ${token}` // Передаем токен в заголовках запроса
-          }
+            Authorization: `Bearer ${token}`, // Передаем токен в заголовках запроса
+          },
         });
         setUser(response.data); // Сохраняем данные пользователя в состоянии
       } catch (error) {
@@ -54,14 +54,14 @@ const HomePage = () => {
       const response = await axios.post('/api/upload-avatar/', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
-          Authorization: `Bearer ${token}`
-        }
+          Authorization: `Bearer ${token}`,
+        },
       });
 
       // Обновляем аватарку пользователя
       setUser((prevUser) => ({
         ...prevUser,
-        avatar: response.data.avatar_url
+        avatar: response.data.avatar_url,
       }));
       setMessage('Avatar updated successfully!');
     } catch (error) {
@@ -81,19 +81,25 @@ const HomePage = () => {
   return (
     <div>
       <h2>Welcome to Your Dashboard</h2>
-      <img src={user.avatar || '/assets/avatars/avatar.jpg'} alt="User Avatar" width="100" height="100" /> {/* Отображаем аватарку */}
+      <img
+        src={user.avatar || '/assets/avatars/avatar.jpg'}
+        alt='User Avatar'
+        width='100'
+        height='100'
+      />{' '}
+      {/* Отображаем аватарку */}
       <p>Username: {user.username}</p>
-      {user.role === 'admin' && <p>You have admin privileges.</p>} {/* Если пользователь администратор, отображаем сообщение */}
-
+      {user.role === 'admin' && <p>You have admin privileges.</p>}{' '}
+      {/* Если пользователь администратор, отображаем сообщение */}
       {/* Кнопка выбора файла и загрузки новой аватарки */}
-      <input type="file" onChange={handleFileChange} />
+      <input type='file' onChange={handleFileChange} />
       <button onClick={handleUpload}>Upload New Avatar</button>
-      {message && <p>{message}</p>} {/* Отображаем сообщение об успехе или ошибке */}
-
+      {message && <p>{message}</p>}{' '}
+      {/* Отображаем сообщение об успехе или ошибке */}
       {/* Кнопка выхода из аккаунта */}
       <button onClick={handleLogout}>Logout</button>
     </div>
   );
-};
 
-export default HomePage;
+  // return <h1>Hello</h1>;
+}

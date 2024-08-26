@@ -4,7 +4,7 @@ import axios from 'axios';
 import Input from './Input/Input.jsx';
 import FormButton from './FormButton/FormButton.jsx';
 
-import './AuthForm.css';
+import styles from './AuthForm.module.css';
 
 export default function AuthForm({ activeForm }) {
   const [formHeight, setFormHeight] = useState('279px');
@@ -17,7 +17,7 @@ export default function AuthForm({ activeForm }) {
 
   useEffect(() => {
     // Очистка устаревших токенов из локального хранилища при монтировании компонента
-    console.log("Очистка токенов при монтировании компонента");
+    console.log('Очистка токенов при монтировании компонента');
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
 
@@ -56,7 +56,10 @@ export default function AuthForm({ activeForm }) {
           localStorage.setItem('refreshToken', response.data.refresh_token); // Сохраняем refresh token, если он возвращается
         }
 
-        console.log('Токен успешно сохранен в localStorage:', localStorage.getItem('accessToken'));
+        console.log(
+          'Токен успешно сохранен в localStorage:',
+          localStorage.getItem('accessToken')
+        );
 
         // Перенаправляем на главную страницу после успешного входа
         navigate('/home');
@@ -69,7 +72,12 @@ export default function AuthForm({ activeForm }) {
       // Проверка на наличие ответа от сервера и его данных
       if (error.response) {
         console.error('Ответ сервера:', error.response);
-        setError(`Ошибка: ${JSON.stringify(error.response.data) || 'Не удалось выполнить запрос.'}`);
+        setError(
+          `Ошибка: ${
+            JSON.stringify(error.response.data) ||
+            'Не удалось выполнить запрос.'
+          }`
+        );
       } else {
         setError('Ошибка аутентификации. Проверьте введенные данные.'); // Обработка ошибки
       }
@@ -81,16 +89,18 @@ export default function AuthForm({ activeForm }) {
   };
 
   return (
-    <div className='auth-form-container' style={{ height: formHeight }}>
-      <form className='auth-form' onSubmit={handleSubmit}>
+    <div className={styles.container} style={{ height: formHeight }}>
+      <form className={styles.auth_form} onSubmit={handleSubmit}>
         {activeForm === 'login' ? (
           <>
             <Input
+              id='login'
               text='Логин*'
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />
             <Input
+              id='password'
               text='Пароль*'
               type='password'
               value={password}
@@ -100,22 +110,26 @@ export default function AuthForm({ activeForm }) {
         ) : (
           <>
             <Input
+              id='email'
               text='Email*'
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
             <Input
+              id='reglogin'
               text='Логин*'
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />
             <Input
+              id='regpassword'
               text='Пароль*'
               type='password'
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
             <Input
+              id='regpasswordagain'
               text='Пароль еще раз*'
               type='password'
               value={confirmPassword}
@@ -123,21 +137,19 @@ export default function AuthForm({ activeForm }) {
             />
           </>
         )}
-
-        <label className='policy-label' htmlFor='policy'>
-          <input className='real-checkbox' id='policy' type='checkbox' />
-          <span className='custom-checkbox'></span>
-          <span className='policy-text'>
+        <label className={styles.policy} htmlFor='policy'>
+          <input className={styles.real_checkbox} id='policy' type='checkbox' />
+          <span className={styles.custom_checkbox}></span>
+          <span className={styles.policy_text}>
             Я соглашаюсь с{' '}
-            <a className='policy-link' href='#'>
+            <a className={styles.policy_link} href='#'>
               Политикой конфиденциальности
             </a>{' '}
             и даю согласие на обработку моих данных для получения рассылок.
           </span>
         </label>
-
-        {error && <p className="error-message">{error}</p>} {/* Отображение сообщения об ошибке */}
-
+        {error && <p className={styles.error_message}>{error}</p>}{' '}
+        {/* Отображение сообщения об ошибке */}
         {activeForm === 'login' ? (
           <FormButton text='Вход' />
         ) : (

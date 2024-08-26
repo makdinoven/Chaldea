@@ -1,0 +1,6 @@
+.header {
+  margin-bottom: 92px;
+  display: flex;
+  justify-content: center;
+  background-color: var(--red);
+}
