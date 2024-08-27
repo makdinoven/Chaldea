@@ -23,8 +23,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 RUN pip install --no-cache-dir alembic
 
 # Копируем директорию alembic и конфигурационный файл alembic.ini в контейнер
-COPY ./services/user-service/alembic/alembic.ini /app/alembic/alembic.ini
-COPY ./services/user-service/alembic /app/alembic
+COPY .alembic.ini /app/alembic.ini
+COPY .alembic /app/alembic
 
 # Указываем порт, который будет открыт для доступа к микросервису
 EXPOSE 8000
