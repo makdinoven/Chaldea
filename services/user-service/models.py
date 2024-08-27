@@ -7,9 +7,9 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)  # Уникальный идентификатор пользователя
-    email = Column(String, unique=True, index=True, nullable=False)  # Email пользователя
-    username = Column(String, unique=True, index=True, nullable=False)  # Никнейм пользователя
-    hashed_password = Column(String, nullable=False)  # Захешированный пароль
+    email = Column(String(255), unique=True, index=True, nullable=False)  # Email пользователя
+    username = Column(String(255), unique=True, index=True, nullable=False)  # Никнейм пользователя
+    hashed_password = Column(String(255), nullable=False)  # Захешированный пароль
     registered_at = Column(DateTime, default=datetime.utcnow)  # Дата и время регистрации
-    role = Column(String, default='user')  # Роль пользователя ('user', 'admin', и т.д.)
-    avatar = Column(String, nullable=True)  # URL аватарки пользователя
+    role = Column(String(100), default='user')  # Роль пользователя ('user', 'admin', и т.д.)
+    avatar = Column(String(255), nullable=True)  # URL аватарки пользователя
