@@ -19,12 +19,12 @@ COPY ./services/user-service /app
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем Alembic для управления миграциями
-RUN pip install --no-cache-dir alembic
+# Устанавливаем Alembic для управления миграциями и другие необходимые пакеты
+RUN pip install --no-cache-dir alembic pymysql
 
 # Копируем директорию alembic и конфигурационный файл alembic.ini в контейнер
-COPY .alembic.ini /app/alembic.ini
-COPY .alembic /app/alembic
+COPY ./services/user-service/alembic.ini /app/alembic.ini
+COPY ./services/user-service/alembic /app/alembic
 
 # Указываем порт, который будет открыт для доступа к микросервису
 EXPOSE 8000
