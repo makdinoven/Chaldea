@@ -13,3 +13,4 @@ class User(Base):
     registered_at = Column(DateTime, default=datetime.utcnow)  # Дата и время регистрации
     role = Column(String(100), default='user')  # Роль пользователя ('user', 'admin', и т.д.)
     avatar = Column(String(255), nullable=True)  # URL аватарки пользователя
+    balance = Column(Integer, nullable=True) #Баланс доната
