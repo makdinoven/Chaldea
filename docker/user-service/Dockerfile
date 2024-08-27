@@ -19,10 +19,11 @@ COPY ./services/user-service /app
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
+# Устанавливаем Alembic для управления миграциями и другие необходимые пакеты
+RUN pip install --no-cache-dir alembic pymysql
+
 # Указываем порт, который будет открыт для доступа к микросервису
 EXPOSE 8000
 
-# Команда для запуска FastAPI приложения с использованием uvicorn
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "/app"]
-
-
+# Команда для запуска миграций и FastAPI приложения
+CMD ["sh", "-c", "sleep 10 && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app"]
