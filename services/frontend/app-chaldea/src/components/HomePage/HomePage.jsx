@@ -121,16 +121,16 @@ export default function HomePage() {
       <Header showMenu={true} profileName={'dudka'} />
       <section className={styles.main}>
         <HomePageButton
-          title='Игровой мир'
+          title={{ name: 'Игровой мир', link: '#1' }}
           links={[
-            { name: 'Персонажи', link: '#' },
-            { name: 'Навыки', link: '#' },
-            { name: 'Аукцион', link: '#' },
+            { name: 'Персонажи', link: '#2' },
+            { name: 'Навыки', link: '#3' },
+            { name: 'Аукцион', link: '#4' },
           ]}
           backgroundImg={button1img}
         />
         <HomePageButton
-          title='Руководство'
+          title={{ name: 'Руководство', link: '#' }}
           links={[
             { name: 'Обучение', link: '#' },
             { name: 'Консультант', link: '#' },
@@ -139,7 +139,7 @@ export default function HomePage() {
           backgroundImg={button2img}
         />
         <HomePageButton
-          title='Магазин'
+          title={{ name: 'Магазин', link: '#' }}
           links={[
             { name: 'Рулетка', link: '#' },
             { name: 'События', link: '#' },

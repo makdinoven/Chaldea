@@ -6,13 +6,24 @@ export default function HomePageButton({ title, links, backgroundImg }) {
   };
 
   return (
-    <button className={styles.container} style={additionalStyles}>
+    <button
+      className={styles.container}
+      style={additionalStyles}
+      onClick={(e) => {
+        window.location.href = title.link;
+      }}
+    >
       <div className={styles.button}>
-        <h3 className={styles.title}>{title}</h3>
+        <h3 className={styles.title}>{title.name}</h3>
 
         <div className={styles.links}>
           {links.map((item, index) => (
-            <a key={index} className={styles.link} href={item.link}>
+            <a
+              key={index}
+              className={styles.link}
+              href={item.link}
+              onClick={(e) => e.stopPropagation()}
+            >
               {item.name}
             </a>
           ))}
