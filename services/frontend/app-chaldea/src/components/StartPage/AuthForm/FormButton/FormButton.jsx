@@ -1,10 +1,9 @@
 import React from 'react';
+import styles from './FormButton.module.css';
 
-import './FormButton.css';
-
-export default function FormButton({ text, onClick }) {
+export default function FormButton({ text }) {
   return (
-    <button className='form-button' onClick={onClick}>
+    <button type='submit' className={styles.button}>
       {text}
     </button>
   );

@@ -1,0 +1,20 @@
+.header {
+  margin-bottom: 80px;
+  display: grid;
+  grid-template-columns: 1fr 369px 1fr;
+  background-color: var(--red);
+}
+
+.menu_container {
+  padding-top: 54px;
+  grid-column: 1;
+  display: flex;
+  gap: 43px;
+  align-self: center;
+}
+
+.logo {
+  grid-column: 2;
+  justify-self: center;
+  align-self: center;
+}

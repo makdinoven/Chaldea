@@ -1,0 +1,49 @@
+.container {
+  display: flex;
+  grid-column: 3;
+  justify-self: flex-end;
+  align-self: center;
+  position: relative;
+  width: 221px;
+  height: 64px;
+  border-radius: 15px;
+  background: rgba(255, 250, 250, 0.13);
+  font-weight: 500;
+  font-size: 15px;
+  text-align: center;
+  color: var(--zoloto);
+}
+
+.icon {
+  position: absolute;
+  top: 20px;
+  left: 14px;
+}
+
+.search {
+  width: 100%;
+  height: 100%;
+  padding: 22px 37px 22px 62px;
+}
+
+.search::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50px;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(
+    to bottom,
+    rgba(204, 204, 204, 0) 0%,
+    #999 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  z-index: 1;
+  transform: translateX(-50%);
+  transition: height var(--transition02);
+}
