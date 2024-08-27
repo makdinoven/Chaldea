@@ -1,6 +1,11 @@
 import styles from './HomePageButton.module.css';
 
-export default function HomePageButton({ title, links, backgroundImg }) {
+export default function HomePageButton({
+  titleName,
+  titleLink,
+  links,
+  backgroundImg,
+}) {
   const additionalStyles = {
     backgroundImage: `url(${backgroundImg})`,
   };
@@ -9,22 +14,22 @@ export default function HomePageButton({ title, links, backgroundImg }) {
     <button
       className={styles.container}
       style={additionalStyles}
-      onClick={(e) => {
-        window.location.href = title.link;
+      onClick={() => {
+        window.location.href = titleLink;
       }}
     >
       <div className={styles.button}>
-        <h3 className={styles.title}>{title.name}</h3>
+        <h3 className={styles.title}>{titleName}</h3>
 
-        <div className={styles.links}>
-          {links.map((item, index) => (
+        <div className={styles.links_container}>
+          {links.map((link, index) => (
             <a
               key={index}
               className={styles.link}
-              href={item.link}
+              href={link.link}
               onClick={(e) => e.stopPropagation()}
             >
-              {item.name}
+              {link.name}
             </a>
           ))}
         </div>

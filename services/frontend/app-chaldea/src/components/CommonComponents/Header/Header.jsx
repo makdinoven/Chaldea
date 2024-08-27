@@ -10,29 +10,42 @@ import menuImg1 from '../../../assets/menu1.png';
 import menuImg2 from '../../../assets/menu2.png';
 
 export default function Header({ showMenu, profileName }) {
+  const menuInfo = [
+    {
+      id: 1,
+      menuItems: [
+        { name: 'Сообщения', link: '#' },
+        { name: 'Поддержка', link: '#' },
+        { name: 'Профиль', link: '#' },
+        { name: 'Выход', link: '#' },
+      ],
+      img: menuImg1,
+      title: profileName,
+    },
+    {
+      id: 2,
+      menuItems: [
+        { name: 'Создать', link: '#' },
+        { name: 'Выбрать', link: '#' },
+      ],
+      img: menuImg2,
+      title: 'Профиль',
+    },
+  ];
+
   return (
     <>
       <header className={styles.header}>
         {showMenu && (
           <div className={styles.menu_container}>
-            <Menu
-              menuItems={[
-                { name: 'Сообщения', link: '#' },
-                { name: 'Поддержка', link: '#' },
-                { name: 'Профиль', link: '#' },
-                { name: 'Выход', link: '#' },
-              ]}
-              backgroundImg={menuImg1}
-              title={profileName}
-            />
-            <Menu
-              menuItems={[
-                { name: 'Создать', link: '#' },
-                { name: 'Выбрать', link: '#' },
-              ]}
-              backgroundImg={menuImg2}
-              title='Персонаж'
-            />
+            {menuInfo.map((menu) => (
+              <Menu
+                key={menu.id}
+                title={menu.title}
+                menuItems={menu.menuItems}
+                backgroundImg={menu.img}
+              />
+            ))}
           </div>
         )}
         <img className={styles.logo} src={logo} alt='Logo' />

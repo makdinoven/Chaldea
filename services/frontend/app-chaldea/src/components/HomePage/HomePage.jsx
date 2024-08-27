@@ -16,6 +16,7 @@ import smallbuttonimg1 from '../../assets/smallhomebutton1.png';
 import smallbuttonimg2 from '../../assets/smallhomebutton2.png';
 import smallbuttonimg3 from '../../assets/smallhomebutton3.png';
 import smallbuttonimg4 from '../../assets/smallhomebutton4.png';
+import sliderImg1 from '../../assets/sliderimg1.png';
 
 export default function HomePage() {
   // const [user, setUser] = useState(null); // Состояние для хранения информации о пользователе
@@ -116,55 +117,130 @@ export default function HomePage() {
   //   </div>
   // );
 
+  const buttonsInfo = [
+    {
+      id: 1,
+      titleName: 'Игровой мир',
+      titleLink: '#',
+      img: button1img,
+      links: [
+        { name: 'Персонажи', link: '#' },
+        { name: 'Навыки', link: '#' },
+        { name: 'Аукцион', link: '#' },
+      ],
+    },
+    {
+      id: 2,
+      titleName: 'Руководство',
+      titleLink: '#',
+      img: button2img,
+      links: [
+        { name: 'Обучение', link: '#' },
+        { name: 'Консультант', link: '#' },
+        { name: 'Фандом', link: '#' },
+      ],
+    },
+    {
+      id: 3,
+      titleName: 'Магазин',
+      titleLink: '#',
+      img: button3img,
+      links: [
+        { name: 'Рулетка', link: '#' },
+        { name: 'События', link: '#' },
+        { name: 'Валюта', link: '#' },
+      ],
+    },
+  ];
+
+  const smallButtonsInfo = [
+    {
+      id: 1,
+      link: '#',
+      title: 'Предложения',
+      img: smallbuttonimg1,
+    },
+    {
+      id: 2,
+      link: '#',
+      title: 'Администрация',
+      img: smallbuttonimg2,
+    },
+    {
+      id: 3,
+      link: '#',
+      title: 'Бестиарий',
+      img: smallbuttonimg3,
+    },
+    {
+      id: 4,
+      link: '#',
+      title: 'Поиск игрока',
+      img: smallbuttonimg4,
+    },
+  ];
+
+  const sliderPages = [
+    {
+      index: 1,
+      title: 'Мы открываемся !',
+      description: 'Все что нужно знать о запуске проекта',
+      link: '#',
+      img: sliderImg1,
+      tag: 'Технобук',
+    },
+    {
+      index: 2,
+      title: 'Мы закрываемся !',
+      description: 'Идите нахуй!',
+      link: '#',
+      img: sliderImg1,
+      tag: 'Технобук',
+    },
+    {
+      index: 3,
+      title: 'Снова открываемся !',
+      description: 'извинити пж',
+      link: '#',
+      img: sliderImg1,
+      tag: 'Технобук',
+    },
+    {
+      index: 4,
+      title: 'Сосал?',
+      description: 'да..',
+      link: '#',
+      img: sliderImg1,
+      tag: 'Технобук',
+    },
+  ];
+
   return (
     <>
-      <Header showMenu={true} profileName={'dudka'} />
+      <Header showMenu={true} profileName={'говно'} />
+
       <section className={styles.main}>
-        <HomePageButton
-          title={{ name: 'Игровой мир', link: '#1' }}
-          links={[
-            { name: 'Персонажи', link: '#2' },
-            { name: 'Навыки', link: '#3' },
-            { name: 'Аукцион', link: '#4' },
-          ]}
-          backgroundImg={button1img}
-        />
-        <HomePageButton
-          title={{ name: 'Руководство', link: '#' }}
-          links={[
-            { name: 'Обучение', link: '#' },
-            { name: 'Консультант', link: '#' },
-            { name: 'Фандом', link: '#' },
-          ]}
-          backgroundImg={button2img}
-        />
-        <HomePageButton
-          title={{ name: 'Магазин', link: '#' }}
-          links={[
-            { name: 'Рулетка', link: '#' },
-            { name: 'События', link: '#' },
-            { name: 'Валюта', link: '#' },
-          ]}
-          backgroundImg={button3img}
-        />
-        <Slider />
+        {buttonsInfo.map((button, key) => (
+          <HomePageButton
+            key={button.id}
+            titleName={button.titleName}
+            titleLink={button.titleLink}
+            backgroundImg={button.img}
+            links={button.links}
+          />
+        ))}
+
+        <Slider pages={sliderPages} />
+
         <div className={styles.small_buttons}>
-          <SmallHomePageButton
-            title='Предложения'
-            backgroundImg={smallbuttonimg1}
-          />
-          <SmallHomePageButton
-            title='Администрация'
-            backgroundImg={smallbuttonimg2}
-          />
-          <SmallHomePageButton
-            title='Бестиарий'
-            backgroundImg={smallbuttonimg3}
-          />
-          <SmallHomePageButton
-            title='Поиск Игрока'
-            backgroundImg={smallbuttonimg4}
-          />
+          {smallButtonsInfo.map((button, key) => (
+            <SmallHomePageButton
+              key={button.id}
+              link={button.link}
+              title={button.title}
+              backgroundImg={button.img}
+            />
+          ))}
         </div>
       </section>
     </>
