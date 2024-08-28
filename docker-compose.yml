@@ -26,20 +26,30 @@ services:
     ports:
       - '3306:3306'
 
-  phpmyadmin:
-        build:
-          context: .
-          dockerfile: ./docker/phpmyadmin/Dockerfile
-        environment:
-          PMA_HOST: mysql
-          PMA_PORT: 3306
-          PMA_USER: myuser
-          PMA_PASSWORD: mypassword
-        ports:
-          - "8081:80"
-        depends_on:
-          - mysql
+#  phpmyadmin:
+#        build:
+#          context: .
+#          dockerfile: ./docker/phpmyadmin/Dockerfile
+#        environment:
+#          PMA_HOST: mysql
+#          PMA_PORT: 3306
+#          PMA_USER: myuser
+#          PMA_PASSWORD: mypassword
+#        ports:
+#          - "8081:80"
+#        depends_on:
+#          - mysql
 
+  adminer:
+    build:
+      context: .
+      dockerfile: ./docker/adminer/Dockerfile
+    environment:
+      ADMINER_DEFAULT_SERVER: mysql
+    ports:
+      - "8081:8080"
+    depends_on:
+      - mysql
 
   user-service:
       build:
