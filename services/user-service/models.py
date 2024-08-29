@@ -2,9 +2,8 @@ from sqlalchemy import Column, Integer, String, DateTime
 from datetime import datetime
 from database import Base
 
-
 class User(Base):
-    tablename = "users"
+    __tablename__ = "users"  # Имя таблицы в базе данных
 
     id = Column(Integer, primary_key=True, index=True)  # Уникальный идентификатор пользователя
     email = Column(String(255), unique=True, index=True, nullable=False)  # Email пользователя
@@ -13,4 +12,4 @@ class User(Base):
     registered_at = Column(DateTime, default=datetime.utcnow)  # Дата и время регистрации
     role = Column(String(100), default='user')  # Роль пользователя ('user', 'admin', и т.д.)
     avatar = Column(String(255), nullable=True)  # URL аватарки пользователя
-    balance = Column(Integer, nullable=True) #Баланс доната
+    balance = Column(Integer, nullable=True)  # Баланс доната

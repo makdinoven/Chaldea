@@ -183,7 +183,7 @@ export default function HomePage() {
   const sliderPages = [
     {
       index: 1,
-      title: 'Мы открываемся !',
+      title: 'сюда эту шлюху',
       description: 'Все что нужно знать о запуске проекта',
       link: '#',
       img: sliderImg1,
