@@ -1,8 +1,9 @@
 .main {
   display: grid;
-  grid-template-columns: 469px 1fr; /* Первая колонка фиксированного размера, вторая гибкая */
-  grid-auto-rows: 185px; /* Устанавливаем высоту строк только для первой колонки */
-  gap: 60px;
+  grid-template-columns: 40% 55%;
+  grid-template-rows: repeat(3, 185px);
+  column-gap: 5%;
+  row-gap: 60px;
 }
 
 .small_buttons {
