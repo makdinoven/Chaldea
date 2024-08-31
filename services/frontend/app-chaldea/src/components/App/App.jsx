@@ -15,11 +15,6 @@ const App = () => {
         </Routes>
       </div>
     </Router>
-
-    // <div className='container'>
-    //   <HomePage />
-    //   {/* <StartPage /> */}
-    // </div>
   );
 };
 

@@ -1,10 +1,15 @@
 import React, { useState } from 'react';
+
+import useNavigateTo from '../../../hooks/useNavigateTo';
+
 import SliderCircleButton from './SliderCircleButton/SliderCircleButton';
 import SliderArrowButton from './SliderArrowButton/SliderArrowButton';
+
 import styles from './Slider.module.css';
 
 export default function Slider({ pages }) {
   const [currentIndex, setCurrentIndex] = useState(0);
+  const navigateTo = useNavigateTo();
 
   const handlePrev = (e) => {
     e.stopPropagation();
@@ -36,8 +41,7 @@ export default function Slider({ pages }) {
           background: `url(${pages[currentIndex].img})`,
         }}
         onClick={() => {
-          console.log('click page');
-          window.location.href = pages[currentIndex].link;
+          navigateTo(pages[currentIndex].link);
         }}
       >
         <div className={styles.top_container}>
