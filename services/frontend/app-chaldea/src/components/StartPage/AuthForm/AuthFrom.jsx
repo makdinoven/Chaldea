@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import Input from './Input/Input.jsx';
 import FormButton from './FormButton/FormButton.jsx';
+
+import useNavigateTo from '../../../hooks/useNavigateTo.js';
 
 import styles from './AuthForm.module.css';
 
@@ -13,14 +14,9 @@ export default function AuthForm({ activeForm }) {
   const [password, setPassword] = useState(''); // Состояние для хранения пароля
   const [confirmPassword, setConfirmPassword] = useState(''); // Состояние для подтверждения пароля
   const [error, setError] = useState(''); // Состояние для ошибок
-  const navigate = useNavigate(); // Используем hook для перенаправления
+  const navigateTo = useNavigateTo(); // Используем hook для перенаправления
 
   useEffect(() => {
-    // Очистка устаревших токенов из локального хранилища при монтировании компонента
-    console.log('Очистка токенов при монтировании компонента');
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-
     // Изменение высоты формы в зависимости от активной формы
     if (activeForm === 'login') {
       setFormHeight('279px');
@@ -62,7 +58,7 @@ export default function AuthForm({ activeForm }) {
         );
 
         // Перенаправляем на главную страницу после успешного входа
-        navigate('/home');
+        navigateTo('/home');
       } else {
         setError('Ошибка аутентификации. Проверьте введенные данные.');
       }

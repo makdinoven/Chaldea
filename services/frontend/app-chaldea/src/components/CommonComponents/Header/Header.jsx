@@ -52,7 +52,7 @@ export default function Header({ showMenu, profileName }) {
           </div>
         )}
         <img
-          onClick={navigateTo('./home')}
+          onClick={() => navigateTo('./home')}
           className={styles.logo}
           src={logo}
           alt='Logo'
