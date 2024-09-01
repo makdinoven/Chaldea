@@ -26,4 +26,4 @@ RUN pip install --no-cache-dir alembic pymysql
 EXPOSE 8000
 
 # Команда для запуска миграций и FastAPI приложения
-CMD ["sh", "-c", "sleep 10 && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app"]
+CMD ["sh", "-c", "sleep 10 && PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app"]
