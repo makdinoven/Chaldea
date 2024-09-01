@@ -157,7 +157,7 @@ export default function HomePage() {
   const sliderData = [
     {
       index: 1,
-      title: 'cdd',
+      title: 'Мы открываемся!',
       description: 'Все что нужно знать о запуске проекта',
       link: '/sliderlink1',
       img: sliderImg1,
