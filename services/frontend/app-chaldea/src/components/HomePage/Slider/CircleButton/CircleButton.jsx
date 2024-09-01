@@ -1,4 +1,4 @@
-import styles from './SliderCircleButton.module.css';
+import styles from './CircleButton.module.css';
 
 export default function SliderCircleButton({ isActive, onClick }) {
   const handleClick = (e) => {

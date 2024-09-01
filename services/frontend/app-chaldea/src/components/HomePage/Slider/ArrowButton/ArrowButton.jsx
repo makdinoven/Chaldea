@@ -1,6 +1,6 @@
-import styles from './SliderArrowButton.module.css';
+import styles from './ArrowButton.module.css';
 
-export default function SliderArrowButton({ text, onClick }) {
+export default function ArrowButton({ text, onClick }) {
   const handleClick = (e) => {
     e.stopPropagation();
     if (onClick) onClick(e);

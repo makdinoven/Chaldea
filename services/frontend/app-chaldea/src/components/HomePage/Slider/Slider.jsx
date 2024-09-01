@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 
 import useNavigateTo from '../../../hooks/useNavigateTo';
 
-import SliderCircleButton from './SliderCircleButton/SliderCircleButton';
-import SliderArrowButton from './SliderArrowButton/SliderArrowButton';
+import CircleButton from './CircleButton/CircleButton';
+import ArrowButton from './ArrowButton/ArrowButton';
 
 import styles from './Slider.module.css';
 
@@ -46,17 +46,17 @@ export default function Slider({ pages }) {
       >
         <div className={styles.top_container}>
           <div className={styles.pagination_container}>
-            <SliderArrowButton text='<' onClick={handlePrev} />
+            <ArrowButton text='<' onClick={handlePrev} />
             <div className={styles.circle_buttons_container}>
               {pages.map((_, index) => (
-                <SliderCircleButton
+                <CircleButton
                   key={index}
                   isActive={index === currentIndex}
                   onClick={(e) => handleCircleClick(index, e)}
                 />
               ))}
             </div>
-            <SliderArrowButton text='>' onClick={handleNext} />
+            <ArrowButton text='>' onClick={handleNext} />
           </div>
           <span className={styles.tag}>{pages[currentIndex].tag}</span>
         </div>
