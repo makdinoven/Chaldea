@@ -48,14 +48,12 @@ export default function AuthForm({ activeForm }) {
       if (response.status === 200) {
         // Сохраняем токен доступа в локальное хранилище
         localStorage.setItem('accessToken', response.data.access_token);
+
         if (response.data.refresh_token) {
           localStorage.setItem('refreshToken', response.data.refresh_token); // Сохраняем refresh token, если он возвращается
         }
 
-        console.log(
-          'Токен успешно сохранен в localStorage:',
-          localStorage.getItem('accessToken')
-        );
+        console.log(`Токен: ${localStorage.getItem('accessToken')}`);
 
         // Перенаправляем на главную страницу после успешного входа
         navigateTo('/home');

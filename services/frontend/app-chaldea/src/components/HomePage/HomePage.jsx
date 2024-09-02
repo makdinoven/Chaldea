@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { useUser } from '../../hooks/UserContext';
 
 import Header from '../CommonComponents/Header/Header';
 import Button from './Button/Button';
 import Slider from './Slider/Slider';
+import Stats from './Stats/Stats';
 
 import styles from './HomePage.module.css';
 
@@ -18,11 +20,8 @@ import smallbuttonimg4 from '../../assets/smallhomebutton4.png';
 import sliderImg1 from '../../assets/sliderimg1.png';
 
 export default function HomePage() {
-  const [user, setUser] = useState(null); // Состояние для хранения информации о пользователе
-  const [selectedFile, setSelectedFile] = useState(null); // Состояние для хранения выбранного файла
-  const [message, setMessage] = useState(''); // Состояние для сообщений об успехе или ошибке
   const navigate = useNavigate();
-
+  const { user, setUser } = useUser(); // Используем контекст
   useEffect(() => {
     const fetchUserData = async () => {
       const token = localStorage.getItem('accessToken'); // Получаем токен из локального хранилища
@@ -38,7 +37,8 @@ export default function HomePage() {
             Authorization: `Bearer ${token}`, // Передаем токен в заголовках запроса
           },
         });
-        setUser(response.data); // Сохраняем данные пользователя в состоянии
+        setUser(response.data);
+        //localStorage.setItem('username', response.data.username);
       } catch (error) {
         console.error('Failed to fetch user data:', error);
         localStorage.removeItem('accessToken'); // Удаляем токен в случае ошибки
@@ -49,43 +49,7 @@ export default function HomePage() {
     fetchUserData();
   }, [navigate]);
 
-  // Обработчик выбора файла
-  const handleFileChange = (event) => {
-    setSelectedFile(event.target.files[0]); // Устанавливаем выбранный файл в состояние
-  };
-
-  // Обработчик загрузки файла
-  const handleUpload = async () => {
-    if (!selectedFile) {
-      setMessage('Please select a file first.');
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-
-    try {
-      const token = localStorage.getItem('accessToken');
-      const response = await axios.post('/api/upload-avatar/', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      // Обновляем аватарку пользователя
-      setUser((prevUser) => ({
-        ...prevUser,
-        avatar: response.data.avatar_url,
-      }));
-      setMessage('Avatar updated successfully!');
-    } catch (error) {
-      console.error('Error uploading avatar:', error);
-      setMessage('Failed to upload avatar.');
-    }
-  };
-
-  if (!user) return null; // Отображаем пустую страницу, пока загружаются данные
+  if (!user) return null;
 
   const buttonsData = [
     {
@@ -191,7 +155,7 @@ export default function HomePage() {
 
   return (
     <>
-      <Header showMenu={true} profileName={user.username} />
+      <Header showMenu={true} />
 
       <section className={styles.main}>
         {buttonsData
@@ -210,6 +174,8 @@ export default function HomePage() {
             ))}
         </div>
       </section>
+
+      <Stats />
     </>
   );
 }

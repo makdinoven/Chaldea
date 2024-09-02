@@ -1,0 +1,7 @@
+.container {
+  background: var(--gray-background);
+  width: 1191px;
+  height: 508px;
+  border-radius: 5px;
+  overflow: hidden;
+}
