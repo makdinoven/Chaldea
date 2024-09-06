@@ -3,6 +3,8 @@ uvicorn
 sqlalchemy
 pymysql
 alembic
-pydantic
+pydantic<2.0.0
 requests
 aio_pika
+cryptography
+

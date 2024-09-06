@@ -1,9 +1,9 @@
 from fastapi import FastAPI, Depends, APIRouter
 from sqlalchemy.orm import Session
 import asyncio
-from . import models, schemas, crud
-from .database import SessionLocal, engine
-from .rabbitmq_producer import send_to_rabbitmq
+import models, schemas, crud
+from database import SessionLocal, engine
+from rabbitmq_producer import send_to_rabbitmq
 
 app = FastAPI()
 

@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
 # Копируем файлы проекта в рабочую директорию контейнера
-COPY ./app /app
+COPY ./services/inventory-service/app /app
 
 # Устанавливаем зависимости, указанные в файле requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -26,4 +26,5 @@ RUN pip install --no-cache-dir alembic pymysql
 EXPOSE 8004
 
 # Команда для запуска FastAPI приложения
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8004"]
+CMD ["sh", "-c", "sleep 5 && PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8004 --app-dir /app"]
+

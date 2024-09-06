@@ -1,8 +1,10 @@
 from fastapi import FastAPI, Depends, HTTPException, APIRouter
 from sqlalchemy.orm import Session
-from . import models, schemas, crud
-from .database import SessionLocal, engine
-from .config import settings
+import models
+import schemas
+import crud
+from database import SessionLocal, engine
+from config import settings
 
 # Создаем все таблицы в базе данных, если они еще не созданы
 models.Base.metadata.create_all(bind=engine)

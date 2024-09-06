@@ -2,10 +2,10 @@ import aio_pika
 import asyncio
 import json
 from sqlalchemy.orm import Session
-from .database import SessionLocal
+from database import SessionLocal
 from crud import *
-from .schemas import CharacterCreate, CharacterUpdate, CharacterRequestCreate
-from .config import settings
+from schemas import CharacterCreate, CharacterUpdate, CharacterRequestCreate
+from config import settings
 
 
 async def send_to_rabbitmq(message: dict):

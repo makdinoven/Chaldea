@@ -92,17 +92,7 @@ services:
       - '15672:15672'
 
 
-  api-gateway:
-    build:
-      context: .
-      dockerfile: ./docker/api-gateway/Dockerfile
-    volumes:
-      - ./services/frontend/app-chaldea/dist:/usr/share/nginx/html
-      - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf
-    ports:
-      - "80:80"
-    depends_on:
-      - frontend
+
 
   photo-service:
     build:
@@ -117,7 +107,7 @@ services:
       GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/gcs-credentials.json  # Путь к файлу ключа
     volumes:
       - ./services/photo-service:/app
-      - ./credentials/gcs-credentials.json:/app/credentials/gcs-credentials.json:ro
+      - ./services/photo-service/credentials/gcs-credentials.json:/app/credentials/gcs-credentials.json:ro
     depends_on:
       - mysql
     ports:
@@ -126,7 +116,7 @@ services:
   character-attributes-service:
     build:
       context: .
-      dockerfile: .docker/character-attributes-service/Dockerfile
+      dockerfile: ./docker/character-attributes-service/Dockerfile
     environment:
       DB_HOST: mysql
       DB_DATABASE: mydatabase
@@ -141,7 +131,7 @@ services:
   skills-service:
     build:
       context: .
-      dockerfile: .docker/skills-service/Dockerfile
+      dockerfile: ./docker/skills-service/Dockerfile
     environment:
       DB_HOST: mysql
       DB_DATABASE: mydatabase
@@ -156,7 +146,7 @@ services:
   inventory-service:
     build:
       context: .
-      dockerfile: .docker/inventory-service/Dockerfile
+      dockerfile: ./docker/inventory-service/Dockerfile
     environment:
       DB_HOST: mysql
       DB_DATABASE: mydatabase
@@ -171,7 +161,7 @@ services:
   character-service:
     build:
       context: .
-      dockerfile: .docker/character-service/Dockerfile
+      dockerfile: ./docker/character-service/Dockerfile
     environment:
       DB_HOST: mysql
       DB_DATABASE: mydatabase
@@ -183,5 +173,17 @@ services:
     ports:
       - "8005:8005"
 
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./docker/api-gateway/Dockerfile
+    volumes:
+      - ./services/frontend/app-chaldea/dist:/usr/share/nginx/html
+      - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+    ports:
+      - "80:80"
+    depends_on:
+      - frontend
 volumes:
   mysql_data:

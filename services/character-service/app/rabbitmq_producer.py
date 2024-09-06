@@ -1,6 +1,6 @@
 import aio_pika
 import json
-from .config import settings
+from config import settings
 
 
 async def send_to_rabbitmq(queue_name: str, message: dict):

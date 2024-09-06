@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String
-from .database import Base
+from database import Base
 
 # Определяем модель для хранения навыков персонажа
 class CharacterSkills(Base):
@@ -7,6 +7,6 @@ class CharacterSkills(Base):
 
     id = Column(Integer, primary_key=True, index=True)  # Первичный ключ
     character_id = Column(Integer, unique=True, index=True)  # ID персонажа
-    skill_1 = Column(String, default="Basic Attack")  # Навык 1
-    skill_2 = Column(String, default="Basic Defense")  # Навык 2
-    skill_3 = Column(String, default="Basic Heal")  # Навык 3
+    skill_1 = Column(String(100), default="Basic Attack")  # Навык 1
+    skill_2 = Column(String(100), default="Basic Defense")  # Навык 2
+    skill_3 = Column(String(100), default="Basic Heal")  # Навык 3

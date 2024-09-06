@@ -1,9 +1,9 @@
 import aio_pika
 import asyncio
 import json
-from .crud import create_character_inventory
-from .database import SessionLocal
-from .config import settings
+from crud import create_character_inventory
+from database import SessionLocal
+from config import settings
 
 async def process_message(message: aio_pika.IncomingMessage):
     """

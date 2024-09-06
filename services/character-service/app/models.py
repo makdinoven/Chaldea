@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP
 from sqlalchemy.orm import relationship
-from .database import Base
+from database import Base
 
 class CharacterRequest(Base):
     __tablename__ = "character_requests"
