@@ -14,7 +14,7 @@ import shutil
 app = FastAPI()
 
 # Создаем роутер с префиксом /api
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/user")
 
 UPLOAD_DIR = "src/assets/avatars/"
 

@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+sqlalchemy
+pymysql
+alembic
+pydantic
+requests
+aio_pika

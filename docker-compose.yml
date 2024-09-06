@@ -80,18 +80,17 @@ services:
       depends_on:
         - mysql
 
+  rabbitmq:
+    build:
+      context: .
+      dockerfile: ./docker/rabbitmq/Dockerfile
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - '5672:5672'
+      - '15672:15672'
 
-#  rabbitmq:
-#    build:
-#      context: .
-#      dockerfile: ./docker/rabbitmq/Dockerfile
-#    environment:
-#      RABBITMQ_DEFAULT_USER: user
-#      RABBITMQ_DEFAULT_PASS: password
-#    ports:
-#      - '5672:5672'
-#      - '15672:15672'
-#
 
   api-gateway:
     build:
@@ -105,8 +104,84 @@ services:
     depends_on:
       - frontend
 
+  photo-service:
+    build:
+      context: .
+      dockerfile: ./docker/photo-service/Dockerfile
+    environment:
+      DB_HOST: mysql
+      DB_DATABASE: mydatabase
+      DB_USERNAME: myuser
+      DB_PASSWORD: mypassword
+      GCS_BUCKET_NAME: chaldea  # Замените на название вашего бакета
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/gcs-credentials.json  # Путь к файлу ключа
+    volumes:
+      - ./services/photo-service:/app
+      - ./credentials/gcs-credentials.json:/app/credentials/gcs-credentials.json:ro
+    depends_on:
+      - mysql
+    ports:
+      - "8001:8001"
 
+  character-attributes-service:
+    build:
+      context: .
+      dockerfile: .docker/character-attributes-service/Dockerfile
+    environment:
+      DB_HOST: mysql
+      DB_DATABASE: mydatabase
+      DB_USERNAME: myuser
+      DB_PASSWORD: mypassword
+    depends_on:
+      - rabbitmq
+      - mysql
+    ports:
+      - "8002:8002"
 
+  skills-service:
+    build:
+      context: .
+      dockerfile: .docker/skills-service/Dockerfile
+    environment:
+      DB_HOST: mysql
+      DB_DATABASE: mydatabase
+      DB_USERNAME: myuser
+      DB_PASSWORD: mypassword
+    depends_on:
+      - mysql
+      - rabbitmq
+    ports:
+      - "8003:8003"
+
+  inventory-service:
+    build:
+      context: .
+      dockerfile: .docker/inventory-service/Dockerfile
+    environment:
+      DB_HOST: mysql
+      DB_DATABASE: mydatabase
+      DB_USERNAME: myuser
+      DB_PASSWORD: mypassword
+    depends_on:
+      - rabbitmq
+      - mysql
+    ports:
+      - "8004:8004"
+
+  character-service:
+    build:
+      context: .
+      dockerfile: .docker/character-service/Dockerfile
+    environment:
+      DB_HOST: mysql
+      DB_DATABASE: mydatabase
+      DB_USERNAME: myuser
+      DB_PASSWORD: mypassword
+    depends_on:
+      - mysql
+      - rabbitmq
+    ports:
+      - "8005:8005"
 
 volumes:
   mysql_data:
