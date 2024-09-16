@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import Input from './Input/Input.jsx';
-import FormButton from './FormButton/FormButton.jsx';
+import Input from '../../CommonComponents/Input/Input.jsx';
+import FormButton from '../../CommonComponents/BlueGradientButton/BlueGradientButton.jsx';
 
 import useNavigateTo from '../../../hooks/useNavigateTo.js';
 
@@ -85,69 +85,81 @@ export default function AuthForm({ activeForm }) {
   return (
     <div className={styles.container} style={{ height: formHeight }}>
       <form className={styles.auth_form} onSubmit={handleSubmit}>
-        {activeForm === 'login' ? (
-          <>
-            <Input
-              id='login'
-              text='Логин*'
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+        <div className={styles.inputs_container}>
+          {activeForm === 'login' ? (
+            <>
+              <Input
+                isRequired={true}
+                id='login'
+                text='Логин*'
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+              />
+              <Input
+                isRequired={true}
+                id='password'
+                text='Пароль*'
+                type='password'
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </>
+          ) : (
+            <>
+              <Input
+                isRequired={true}
+                id='email'
+                text='Email*'
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+              <Input
+                isRequired={true}
+                id='reglogin'
+                text='Логин*'
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+              />
+              <Input
+                isRequired={true}
+                id='regpassword'
+                text='Пароль*'
+                type='password'
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <Input
+                isRequired={true}
+                id='regpasswordagain'
+                text='Пароль еще раз*'
+                type='password'
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+              />
+            </>
+          )}
+          <label className={styles.policy} htmlFor='policy'>
+            <input
+              className={styles.real_checkbox}
+              id='policy'
+              type='checkbox'
             />
-            <Input
-              id='password'
-              text='Пароль*'
-              type='password'
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </>
-        ) : (
-          <>
-            <Input
-              id='email'
-              text='Email*'
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <Input
-              id='reglogin'
-              text='Логин*'
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
-            <Input
-              id='regpassword'
-              text='Пароль*'
-              type='password'
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <Input
-              id='regpasswordagain'
-              text='Пароль еще раз*'
-              type='password'
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-            />
-          </>
-        )}
-        <label className={styles.policy} htmlFor='policy'>
-          <input className={styles.real_checkbox} id='policy' type='checkbox' />
-          <span className={styles.custom_checkbox}></span>
-          <span className={styles.policy_text}>
-            Я соглашаюсь с{' '}
-            <a className={styles.policy_link} href='#'>
-              Политикой конфиденциальности
-            </a>{' '}
-            и даю согласие на обработку моих данных для получения рассылок.
-          </span>
-        </label>
+            <span className={styles.custom_checkbox}></span>
+            <span className={styles.policy_text}>
+              Я соглашаюсь с{' '}
+              <a className={styles.policy_link} href='#'>
+                Политикой конфиденциальности
+              </a>{' '}
+              и даю согласие на обработку моих данных для получения рассылок.
+            </span>
+          </label>
+        </div>
         {error && <p className={styles.error_message}>{error}</p>}{' '}
         {/* Отображение сообщения об ошибке */}
         {activeForm === 'login' ? (
-          <FormButton text='Вход' />
+          <FormButton text='Вход' onClick={handleSubmit} />
         ) : (
-          <FormButton text='Регистрация' />
+          <FormButton text='Регистрация' onClick={handleSubmit} />
         )}
       </form>
     </div>

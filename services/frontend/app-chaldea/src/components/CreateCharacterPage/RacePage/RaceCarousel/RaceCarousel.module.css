@@ -1,0 +1,46 @@
+.carousel {
+  z-index: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.buttons_container {
+  z-index: 2;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  justify-content: space-between;
+  width: 45%;
+  transform: translate(-50%, -50%);
+}
+
+.images_container {
+  overflow: hidden;
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(3, 1fr);
+  justify-content: space-between;
+  margin-bottom: 45px;
+}
+
+.race_img {
+  align-self: center;
+  justify-self: center;
+  transition: all var(--transition02);
+  opacity: 0.5;
+  filter: brightness(0.3) contrast(1.1);
+}
+
+.race_img.active {
+  width: 281px;
+  height: 281px;
+  opacity: 1;
+  filter: grayscale(0%);
+}
+
+.race_img:not(.active) {
+  transform: scale(0.6);
+}

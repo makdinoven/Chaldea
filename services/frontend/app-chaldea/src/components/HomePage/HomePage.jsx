@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useUser } from '../../hooks/UserContext';
+import { useFetchUserData } from '../../hooks/useFetchUserData';
 
 import Header from '../CommonComponents/Header/Header';
 import Button from './Button/Button';
@@ -21,33 +22,9 @@ import sliderImg1 from '../../assets/sliderimg1.png';
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const { user, setUser } = useUser(); // Используем контекст
-  useEffect(() => {
-    const fetchUserData = async () => {
-      const token = localStorage.getItem('accessToken'); // Получаем токен из локального хранилища
-      if (!token) {
-        navigate('/'); // Перенаправляем на страницу входа, если токен отсутствует
-        return;
-      }
+  const { user, setUser } = useUser();
 
-      try {
-        // Отправляем запрос на сервер для получения данных текущего пользователя
-        const response = await axios.get('/api/users/me', {
-          headers: {
-            Authorization: `Bearer ${token}`, // Передаем токен в заголовках запроса
-          },
-        });
-        setUser(response.data);
-        //localStorage.setItem('username', response.data.username);
-      } catch (error) {
-        console.error('Failed to fetch user data:', error);
-        localStorage.removeItem('accessToken'); // Удаляем токен в случае ошибки
-        navigate('/'); // Перенаправляем на страницу входа
-      }
-    };
-
-    fetchUserData();
-  }, [navigate]);
+  useFetchUserData(navigate, setUser);
 
   if (!user) return null;
 

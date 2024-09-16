@@ -1,0 +1,10 @@
+.pagination_container {
+  display: flex;
+  justify-content: space-between;
+  width: 50%;
+}
+
+.circle_buttons_container {
+  display: flex;
+  gap: 10px;
+}

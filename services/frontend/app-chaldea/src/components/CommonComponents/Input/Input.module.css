@@ -1,6 +1,5 @@
 .input {
   font-family: var(--font-family);
-  margin-bottom: 12px;
   background-color: transparent;
   border: none;
   width: 100%;
@@ -15,4 +14,10 @@
 .input:focus-visible {
   outline: none;
   border-bottom: 1px solid #fff;
+}
+
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }

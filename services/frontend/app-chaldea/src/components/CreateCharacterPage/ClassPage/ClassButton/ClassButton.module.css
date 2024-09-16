@@ -1,0 +1,41 @@
+.btn {
+  font-weight: 600;
+  font-size: 28px;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--zoloto);
+}
+
+.active {
+  background: linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.inactive {
+  position: relative;
+  color: var(--zoloto);
+}
+
+.inactive::after {
+  content: '';
+  position: absolute;
+  bottom: -5px;
+  left: 50%;
+  width: 0%;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    rgba(204, 204, 204, 0) 0%,
+    #999 42.5%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  z-index: 1;
+  transform: translateX(-50%);
+  transition: width var(--transition02);
+}
+
+.inactive:hover::after {
+  width: 100%;
+}

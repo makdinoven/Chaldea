@@ -1,9 +1,11 @@
 .container {
   border-radius: 15px;
   padding: 37px 60px 70px;
-  width: 1200px;
-  height: 998px;
   background: var(--gray-background);
+  /* height: 1000px; */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .top_container {
@@ -14,6 +16,7 @@
   justify-content: center;
   gap: 15px;
   padding-bottom: 44px;
+  margin-bottom: 15px;
 }
 
 .top_container::after {
@@ -46,4 +49,27 @@
   font-weight: 400;
   font-size: 16px;
   color: var(--zoloto);
+}
+
+.description a {
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  flex: 1;
+  justify-content: space-between;
+  margin-bottom: 40px;
+}
+
+.page_title {
+  font-weight: 600;
+  font-size: 28px;
+  text-align: center;
+  color: var(--zoloto);
+  margin-bottom: 40px;
 }
