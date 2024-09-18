@@ -6,6 +6,7 @@ class CharacterAttributesBase(BaseModel):
     health: int = 100
     mana: int = 75
     energy: int = 50
+    stamina: int = 50
     endurance: int = 100
     strength: int = 10
     agility: int = 10
