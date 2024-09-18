@@ -3,6 +3,11 @@ import models
 import schemas
 
 
+# Получить инвентарь по ID персонажа
+def get_inventory_by_character_id(db: Session, character_id: int):
+    return db.query(models.CharacterInventory).filter(models.CharacterInventory.character_id == character_id).first()
+
+
 # Функция для создания инвентаря персонажа
 def create_character_inventory(db: Session, inventory: schemas.CharacterInventoryCreate):
     """

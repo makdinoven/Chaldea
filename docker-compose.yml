@@ -80,19 +80,16 @@ services:
       depends_on:
         - mysql
 
-  rabbitmq:
-    build:
-      context: .
-      dockerfile: ./docker/rabbitmq/Dockerfile
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    ports:
-      - '5672:5672'
-      - '15672:15672'
-
-
-
+#  rabbitmq:
+#    build:
+#      context: .
+#      dockerfile: ./docker/rabbitmq/Dockerfile
+#    environment:
+#      RABBITMQ_DEFAULT_USER: guest
+#      RABBITMQ_DEFAULT_PASS: guest
+#    ports:
+#      - '5672:5672'
+#      - '15672:15672'
 
   photo-service:
     build:
@@ -122,8 +119,8 @@ services:
       DB_DATABASE: mydatabase
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     depends_on:
-      - rabbitmq
       - mysql
     ports:
       - "8002:8002"
@@ -133,13 +130,13 @@ services:
       context: .
       dockerfile: ./docker/skills-service/Dockerfile
     environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       DB_HOST: mysql
       DB_DATABASE: mydatabase
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
     depends_on:
       - mysql
-      - rabbitmq
     ports:
       - "8003:8003"
 
@@ -148,12 +145,12 @@ services:
       context: .
       dockerfile: ./docker/inventory-service/Dockerfile
     environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       DB_HOST: mysql
       DB_DATABASE: mydatabase
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
     depends_on:
-      - rabbitmq
       - mysql
     ports:
       - "8004:8004"
@@ -163,13 +160,13 @@ services:
       context: .
       dockerfile: ./docker/character-service/Dockerfile
     environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       DB_HOST: mysql
       DB_DATABASE: mydatabase
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
     depends_on:
       - mysql
-      - rabbitmq
     ports:
       - "8005:8005"
 

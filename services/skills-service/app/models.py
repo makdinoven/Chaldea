@@ -10,3 +10,6 @@ class CharacterSkills(Base):
     skill_1 = Column(String(100), default="Basic Attack")  # Навык 1
     skill_2 = Column(String(100), default="Basic Defense")  # Навык 2
     skill_3 = Column(String(100), default="Basic Heal")  # Навык 3
+    # Можно добавить дополнительные навыки, если это требуется
+    skill_4 = Column(String(100), nullable=True)  # Дополнительный навык
+    skill_5 = Column(String(100), nullable=True)  # Дополнительный навык

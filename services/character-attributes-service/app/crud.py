@@ -1,18 +1,26 @@
 from sqlalchemy.orm import Session
 import models, schemas
+import traceback
 
-
-# Функция для создания характеристик персонажа
+# Функция для создания атрибутов персонажа
 def create_character_attributes(db: Session, attributes: schemas.CharacterAttributesCreate):
     """
-    Создает характеристики персонажа и сохраняет их в базе данных.
-
-    :param db: Сессия базы данных
-    :param attributes: Схема Pydantic с данными для создания характеристик
-    :return: Созданные характеристики персонажа
+    Создает атрибуты персонажа и сохраняет их в базе данных.
     """
-    db_attributes = models.CharacterAttributes(**attributes.dict())  # Преобразуем Pydantic модель в SQLAlchemy модель
-    db.add(db_attributes)  # Добавляем запись в сессию
-    db.commit()  # Фиксируем изменения в базе данных
-    db.refresh(db_attributes)  # Обновляем объект, чтобы получить данные из базы
-    return db_attributes  # Возвращаем созданные характеристики
+    try:
+        # Логируем перед сохранением в базу данных
+        print(f"Создание атрибутов для персонажа с ID {attributes.character_id}: {attributes}")
+
+        db_attributes = models.CharacterAttributes(**attributes.dict())  # Преобразование схемы в SQLAlchemy модель
+        db.add(db_attributes)  # Добавляем запись в сессию
+        db.commit()  # Фиксируем изменения в базе данных
+        db.refresh(db_attributes)  # Обновляем объект для получения данных из базы
+
+        print(f"Атрибуты для персонажа с ID {attributes.character_id} успешно сохранены: {db_attributes}")
+        return db_attributes
+    except Exception as e:
+        # Логируем ошибку
+        print(f"Ошибка при сохранении атрибутов для персонажа с ID {attributes.character_id}: {str(e)}")
+        traceback.print_exc()
+        raise e
+

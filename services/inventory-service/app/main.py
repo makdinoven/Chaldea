@@ -4,7 +4,6 @@ import models
 import schemas
 import crud
 from database import SessionLocal, engine
-from config import settings
 
 # Создаем все таблицы в базе данных, если они еще не созданы
 models.Base.metadata.create_all(bind=engine)
@@ -24,15 +23,22 @@ def get_db():
         db.close()
 
 
-@app.post("/inventory/", response_model=schemas.CharacterInventory)
-def generate_character_inventory(character_id: int, db: Session = Depends(get_db)):
+@router.post("/", response_model=schemas.CharacterInventory)
+def generate_character_inventory(inventory_request: schemas.CharacterInventoryCreate, db: Session = Depends(get_db)):
     """
-    Эндпоинт для генерации инвентаря персонажа на основе ID расы.
+    Эндпоинт для генерации инвентаря персонажа на основе ID персонажа.
 
-    :param character_id: ID персонажа
+    :param inventory_request: Схема с данными для создания инвентаря
     :param db: Сессия базы данных
     :return: Сгенерированный инвентарь персонажа
     """
-    # Для примера создаем базовый инвентарь
-    inventory = schemas.CharacterInventoryCreate(character_id=character_id)
-    return crud.create_character_inventory(db, inventory)
+    # Проверяем, существует ли персонаж с переданным ID
+    existing_inventory = crud.get_inventory_by_character_id(db, inventory_request.character_id)
+    if existing_inventory:
+        raise HTTPException(status_code=400, detail="Инвентарь для данного персонажа уже существует")
+
+    # Создаем инвентарь персонажа
+    db_inventory = crud.create_character_inventory(db, inventory_request)
+    return db_inventory
+
+app.include_router(router)

@@ -2,7 +2,6 @@ from fastapi import FastAPI, Depends, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 import models, schemas, crud
 from database import SessionLocal, engine
-from config import settings
 
 # Создаем все таблицы в базе данных, если они еще не созданы
 models.Base.metadata.create_all(bind=engine)
@@ -21,15 +20,22 @@ def get_db():
         db.close()
 
 
-@app.post("/skills/", response_model=schemas.CharacterSkills)
-def generate_character_skills(character_id: int, db: Session = Depends(get_db)):
+@router.post("/", response_model=schemas.CharacterSkills)
+def generate_character_skills(skills_request: schemas.CharacterSkillsCreate, db: Session = Depends(get_db)):
     """
-    Эндпоинт для генерации навыков персонажа на основе ID расы.
+    Эндпоинт для генерации навыков персонажа на основе ID персонажа.
 
-    :param character_id: ID персонажа
+    :param skills_request: Данные для создания навыков
     :param db: Сессия базы данных
     :return: Сгенерированные навыки персонажа
     """
-    # Для примера создаем базовые навыки
-    skills = schemas.CharacterSkillsCreate(character_id=character_id)
-    return crud.create_character_skills(db, skills)
+    # Проверяем, существуют ли навыки для данного персонажа
+    existing_skills = crud.get_skills_by_character_id(db, skills_request.character_id)
+    if existing_skills:
+        raise HTTPException(status_code=400, detail="Навыки для данного персонажа уже существуют")
+
+    # Создаем навыки персонажа
+    db_skills = crud.create_character_skills(db, skills_request)
+    return db_skills
+
+app.include_router(router)

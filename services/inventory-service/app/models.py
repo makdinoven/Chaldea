@@ -10,3 +10,6 @@ class CharacterInventory(Base):
     item_1 = Column(String(100), default="Basic Sword")  # Первый предмет
     item_2 = Column(String(100), default="Basic Shield")  # Второй предмет
     item_3 = Column(String(100), default="Health Potion")  # Третий предмет
+    # Возможность добавления дополнительных предметов
+    item_4 = Column(String(100), nullable=True)  # Дополнительный предмет (можно расширить)
+    item_5 = Column(String(100), nullable=True)  # Дополнительный предмет (можно расширить)

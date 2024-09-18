@@ -1,14 +1,17 @@
-from fastapi import FastAPI, Depends, APIRouter
+import httpx
+from fastapi import FastAPI, Depends, APIRouter, HTTPException
 from sqlalchemy.orm import Session
 import asyncio
 import models, schemas, crud
 from database import SessionLocal, engine
-from rabbitmq_producer import send_to_rabbitmq
+from config import settings
+from presets import SUBRACE_ATTRIBUTES  # Импортируем пресеты подрас
 
 app = FastAPI()
 
-router = APIRouter(prefix="/character")
+models.Base.metadata.create_all(bind=engine)
 
+router = APIRouter(prefix="/character")
 
 # Зависимость для получения сессии базы данных
 def get_db():
@@ -19,53 +22,144 @@ def get_db():
         db.close()
 
 
-@app.post("/requests/", response_model=schemas.CharacterRequest)
+# Создание заявки на персонажа
+@router.post("/requests/", response_model=schemas.CharacterRequest)
 async def create_character_request(request: schemas.CharacterRequestCreate, db: Session = Depends(get_db)):
     """
-    Создание заявки на персонажа. Отправляет запрос в RabbitMQ на обработку заявки.
+    Создание заявки на персонажа.
     """
-    # Сохраняем заявку в базе данных
-    db_request = crud.create_character_request(db, request)
+    try:
+        db_request = crud.create_character_request(db, request)
+        return db_request
+    except Exception as e:
+        print(f"Ошибка при создании заявки: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при создании заявки на персонажа.")
 
-    # Формируем сообщение для отправки в RabbitMQ
-    message = {
-        "request_id": db_request.id,
-        "name": db_request.name,
-        "id_subrace": db_request.id_subrace,
-        "biography": db_request.biography,
-        "personality": db_request.personality,
-        "id_class": db_request.id_class,
-        "status": db_request.status,
-        "action": "create_request"
-    }
-
-    # Отправляем запрос в очередь RabbitMQ для обработки заявки
-    asyncio.create_task(send_to_rabbitmq("character_request_queue", message))
-
-    return db_request
-
-@app.post("/requests/{request_id}/approve")
+# Эндпоинт для одобрения заявки
+@router.post("/requests/{request_id}/approve")
 async def approve_character_request(request_id: int, db: Session = Depends(get_db)):
     """
-    Подтверждает заявку на создание персонажа и отправляет запрос на создание персонажа в очереди RabbitMQ.
+    Подтверждает заявку на создание персонажа и обновляет данные о навыках, инвентаре и атрибутах.
     """
-    # Подтверждаем заявку и создаем запись персонажа в базе данных
-    character = crud.approve_character_request(db, request_id)
+    try:
+        # Найдем заявку по ее ID
+        db_request = db.query(models.CharacterRequest).filter(models.CharacterRequest.id == request_id).first()
+        if not db_request:
+            raise HTTPException(status_code=404, detail="Заявка не найдена")
 
-    # Формируем сообщение для отправки в очереди RabbitMQ
-    message = {
-        "character_id": character.id,
-        "name": character.name,
-        "id_subrace": character.id_subrace,
-        "biography": character.biography,
-        "personality": character.personality,
-        "id_class": character.id_class,
-        "action": "create_character"
-    }
+        # Создаем предварительного персонажа без зависимостей
+        new_character = crud.create_preliminary_character(db, db_request)
 
-    # Отправляем сообщения для создания характеристик, навыков и инвентаря
-    asyncio.create_task(send_to_rabbitmq("character_attributes_queue", message))
-    asyncio.create_task(send_to_rabbitmq("character_skills_queue", message))
-    asyncio.create_task(send_to_rabbitmq("character_inventory_queue", message))
+        # Генерируем атрибуты на основе subrace_id
+        attributes = generate_attributes_for_subrace(db_request.id_subrace)
 
-    return {"message": f"Персонаж с ID {character.id} создается."}
+        # Отправляем запросы на микросервисы для генерации зависимостей
+        # Инвентарь
+        inventory_response = await send_inventory_request(new_character.id)
+        print(f"Ответ от сервиса инвентаря: {inventory_response}")
+
+        # Навыки
+        skills_response = await send_skills_request(new_character.id)
+        print(f"Ответ от сервиса навыков: {skills_response}")
+
+        # Атрибуты
+        attributes_response = await send_attributes_request(new_character.id, attributes)
+        print(f"Ответ от сервиса атрибутов: {attributes_response}")
+
+        # Проверяем, что все ответы не являются None
+        if not (inventory_response and skills_response and attributes_response):
+            raise HTTPException(status_code=500, detail="Не удалось получить ответы от одного или нескольких микросервисов")
+
+        # Обновляем персонажа с зависимостями
+        updated_character = crud.update_character_with_dependencies(
+            db, new_character.id,
+            inventory_id=inventory_response['id'],
+            skills_id=skills_response['id'],
+            attributes_id=attributes_response['id']
+        )
+
+        return {"message": f"Персонаж с ID {new_character.id} успешно создан."}
+
+    except Exception as e:
+        print(f"Ошибка при одобрении заявки: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+# Отправка запроса на микросервис инвентаря
+async def send_inventory_request(character_id: int):
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{settings.INVENTORY_SERVICE_URL}", json={"character_id": character_id})
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"Ошибка при запросе инвентаря: {response.status_code}")
+                return None
+    except Exception as e:
+        print(f"Ошибка при отправке запроса на инвентарь: {e}")
+        return None
+
+# Отправка запроса на микросервис навыков
+async def send_skills_request(character_id: int):
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{settings.SKILLS_SERVICE_URL}", json={"character_id": character_id})
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"Ошибка при запросе навыков: {response.status_code}")
+                return None
+    except Exception as e:
+        print(f"Ошибка при отправке запроса на навыки: {e}")
+        return None
+
+# Отправка запроса на микросервис атрибутов
+async def send_attributes_request(character_id: int, attributes: dict):
+    try:
+        attributes["character_id"] = character_id  # Вставляем character_id в тело запроса
+        async with httpx.AsyncClient() as client:
+            print(f"Отправка запроса на создание атрибутов для персонажа {character_id} с атрибутами: {attributes}")
+
+            response = await client.post(f"{settings.ATTRIBUTES_SERVICE_URL}", json=attributes)
+
+            print(f"Статус-код ответа от сервиса атрибутов: {response.status_code}")
+            print(f"Тело ответа: {response.text}")
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                return None
+    except Exception as e:
+        print(f"Ошибка при отправке запроса на атрибуты: {e}")
+        return None
+
+
+# Генерация атрибутов на основе подрасы
+def generate_attributes_for_subrace(subrace_id: int) -> dict:
+    """
+    Генерирует атрибуты для персонажа на основе его подрасы.
+    """
+    # Возвращаем атрибуты из пресетов или дефолтные значения, если подраса не найдена
+    return SUBRACE_ATTRIBUTES.get(subrace_id, {
+        "strength": 10, "agility": 10, "intelligence": 10,
+        "endurance": 100, "health": 100, "energy": 50, "mana": 75,
+        "stamina": 100, "charisma": 10, "luck": 10
+    })
+
+# Эндпоинт для удаления персонажа
+@router.delete("/characters/{character_id}")
+async def delete_character(character_id: int, db: Session = Depends(get_db)):
+    """
+    Удаление персонажа по его ID.
+    """
+    try:
+        result = crud.delete_character(db, character_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Персонаж не найден")
+        return {"message": f"Персонаж с ID {character_id} успешно удален."}
+    except Exception as e:
+        print(f"Ошибка при удалении персонажа: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+
+app.include_router(router)

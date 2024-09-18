@@ -6,6 +6,8 @@ class CharacterSkillsBase(BaseModel):
     skill_1: str = "Basic Attack"
     skill_2: str = "Basic Defense"
     skill_3: str = "Basic Heal"
+    skill_4: str = None
+    skill_5: str = None
 
 # Схема для создания навыков персонажа
 class CharacterSkillsCreate(CharacterSkillsBase):

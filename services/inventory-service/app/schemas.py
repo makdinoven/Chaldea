@@ -6,6 +6,8 @@ class CharacterInventoryBase(BaseModel):
     item_1: str = "Basic Sword"
     item_2: str = "Basic Shield"
     item_3: str = "Health Potion"
+    item_4: str = None
+    item_5: str = None
 
 # Схема для создания инвентаря персонажа
 class CharacterInventoryCreate(CharacterInventoryBase):
