@@ -54,6 +54,34 @@ def update_character_with_dependencies(db: Session, character_id: int,
     return None
 
 
+# Функция для изменения статуса заявки на "approved"
+def approve_character_request(db: Session, request_id: int):
+    """
+    Обновляет статус заявки на 'approved'.
+    """
+    db_request = db.query(models.CharacterRequest).filter(models.CharacterRequest.id == request_id).first()
+    if db_request:
+        db_request.status = 'approved'
+        db.commit()
+        db.refresh(db_request)
+        return db_request
+    return None
+
+
+# Функция для изменения статуса заявки на "rejected"
+def reject_character_request(db: Session, request_id: int):
+    """
+    Обновляет статус заявки на 'rejected'.
+    """
+    db_request = db.query(models.CharacterRequest).filter(models.CharacterRequest.id == request_id).first()
+    if db_request:
+        db_request.status = 'rejected'
+        db.commit()
+        db.refresh(db_request)
+        return db_request
+    return None
+
+
 # Функция для удаления заявки после одобрения
 def delete_character_request(db: Session, request_id: int):
     """
@@ -65,6 +93,7 @@ def delete_character_request(db: Session, request_id: int):
         db.commit()
         return True
     return False
+
 
 # Функция для удаления персонажа
 def delete_character(db: Session, character_id: int):

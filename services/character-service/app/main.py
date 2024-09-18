@@ -39,13 +39,16 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
 @router.post("/requests/{request_id}/approve")
 async def approve_character_request(request_id: int, db: Session = Depends(get_db)):
     """
-    Подтверждает заявку на создание персонажа и обновляет данные о навыках, инвентаре и атрибутах.
+    Подтверждает заявку на создание персонажа, обновляет статус и создает данные о навыках, инвентаре и атрибутах.
     """
     try:
         # Найдем заявку по ее ID
         db_request = db.query(models.CharacterRequest).filter(models.CharacterRequest.id == request_id).first()
         if not db_request:
             raise HTTPException(status_code=404, detail="Заявка не найдена")
+
+        # Обновляем статус заявки на "approved"
+        crud.approve_character_request(db, request_id)
 
         # Создаем предварительного персонажа без зависимостей
         new_character = crud.create_preliminary_character(db, db_request)
@@ -78,7 +81,7 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             attributes_id=attributes_response['id']
         )
 
-        return {"message": f"Персонаж с ID {new_character.id} успешно создан."}
+        return {"message": f"Персонаж с ID {new_character.id} успешно создан и заявка обновлена."}
 
     except Exception as e:
         print(f"Ошибка при одобрении заявки: {e}")
@@ -160,6 +163,21 @@ async def delete_character(character_id: int, db: Session = Depends(get_db)):
         print(f"Ошибка при удалении персонажа: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
+@router.post("/requests/{request_id}/reject")
+async def reject_character_request(request_id: int, db: Session = Depends(get_db)):
+    """
+    Отклоняет заявку на создание персонажа и обновляет статус на 'rejected'.
+    """
+    try:
+        db_request = crud.reject_character_request(db, request_id)
+        if not db_request:
+            raise HTTPException(status_code=404, detail="Заявка не найдена")
+
+        return {"message": f"Заявка с ID {request_id} была отклонена."}
+
+    except Exception as e:
+        print(f"Ошибка при отклонении заявки: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при отклонении заявки")
 
 
 app.include_router(router)
