@@ -30,7 +30,7 @@ export default function AuthForm({ activeForm }) {
 
     try {
       // Определяем URL в зависимости от формы входа или регистрации
-      const url = activeForm === 'login' ? '/api/login' : '/api/register';
+      const url = activeForm === 'login' ? '/users/login' : '/users/register';
 
       // Формируем данные для отправки
       const data =

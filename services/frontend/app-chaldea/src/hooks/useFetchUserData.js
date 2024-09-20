@@ -12,7 +12,7 @@ export const useFetchUserData = (navigate, setUser) => {
 
       try {
         // Отправляем запрос на сервер для получения данных текущего пользователя
-        const response = await axios.get('/api/users/me', {
+        const response = await axios.get('/users/me', {
           headers: {
             Authorization: `Bearer ${token}`, // Передаем токен в заголовках запроса
           },
