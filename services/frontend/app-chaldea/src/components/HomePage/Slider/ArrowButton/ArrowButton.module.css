@@ -1,0 +1,10 @@
+.button {
+  font-family: var(--font3);
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  transition: color var(--transition02);
+  color: var(--zoloto);
+}

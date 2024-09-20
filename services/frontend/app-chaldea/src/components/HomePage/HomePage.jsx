@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { useUser } from '../../hooks/UserContext';
+import { useFetchUserData } from '../../hooks/useFetchUserData';
 
 import Header from '../CommonComponents/Header/Header';
-import HomePageButton from './HomePageButton/HomePageButton';
-import SmallHomePageButton from './SmallHomePageButton/SmallHomePageButton';
+import Button from './Button/Button';
 import Slider from './Slider/Slider';
+import Stats from './Stats/Stats';
 
 import styles from './HomePage.module.css';
 
@@ -17,175 +19,90 @@ import smallbuttonimg2 from '../../assets/smallhomebutton2.png';
 import smallbuttonimg3 from '../../assets/smallhomebutton3.png';
 import smallbuttonimg4 from '../../assets/smallhomebutton4.png';
 import sliderImg1 from '../../assets/sliderimg1.png';
+import statsBg from '../../assets/stats_bg.png';
+import statsUserImg from '../../assets/stats_user_img.png';
 
 export default function HomePage() {
-  // const [user, setUser] = useState(null); // Состояние для хранения информации о пользователе
-  // const [selectedFile, setSelectedFile] = useState(null); // Состояние для хранения выбранного файла
-  // const [message, setMessage] = useState(''); // Состояние для сообщений об успехе или ошибке
-  // const navigate = useNavigate();
+  const navigate = useNavigate();
+  const { user, setUser } = useUser();
 
-  // useEffect(() => {
-  //   const fetchUserData = async () => {
-  //     const token = localStorage.getItem('accessToken'); // Получаем токен из локального хранилища
-  //     if (!token) {
-  //       navigate('/'); // Перенаправляем на страницу входа, если токен отсутствует
-  //       return;
-  //     }
+  useFetchUserData(navigate, setUser);
 
-  //     try {
-  //       // Отправляем запрос на сервер для получения данных текущего пользователя
-  //       const response = await axios.get('/api/users/me', {
-  //         headers: {
-  //           Authorization: `Bearer ${token}`, // Передаем токен в заголовках запроса
-  //         },
-  //       });
-  //       setUser(response.data); // Сохраняем данные пользователя в состоянии
-  //     } catch (error) {
-  //       console.error('Failed to fetch user data:', error);
-  //       localStorage.removeItem('accessToken'); // Удаляем токен в случае ошибки
-  //       navigate('/'); // Перенаправляем на страницу входа
-  //     }
-  //   };
+  if (!user) return null;
 
-  //   fetchUserData();
-  // }, [navigate]);
-
-  // // Обработчик выбора файла
-  // const handleFileChange = (event) => {
-  //   setSelectedFile(event.target.files[0]); // Устанавливаем выбранный файл в состояние
-  // };
-
-  // // Обработчик загрузки файла
-  // const handleUpload = async () => {
-  //   if (!selectedFile) {
-  //     setMessage('Please select a file first.');
-  //     return;
-  //   }
-
-  //   const formData = new FormData();
-  //   formData.append('file', selectedFile);
-
-  //   try {
-  //     const token = localStorage.getItem('accessToken');
-  //     const response = await axios.post('/api/upload-avatar/', formData, {
-  //       headers: {
-  //         'Content-Type': 'multipart/form-data',
-  //         Authorization: `Bearer ${token}`,
-  //       },
-  //     });
-
-  //     // Обновляем аватарку пользователя
-  //     setUser((prevUser) => ({
-  //       ...prevUser,
-  //       avatar: response.data.avatar_url,
-  //     }));
-  //     setMessage('Avatar updated successfully!');
-  //   } catch (error) {
-  //     console.error('Error uploading avatar:', error);
-  //     setMessage('Failed to upload avatar.');
-  //   }
-  // };
-
-  // // Обработчик выхода из аккаунта
-  // const handleLogout = () => {
-  //   localStorage.removeItem('accessToken'); // Удаляем токен из localStorage
-  //   navigate('/'); // Перенаправляем пользователя на страницу входа
-  // };
-
-  // if (!user) return null; // Отображаем пустую страницу, пока загружаются данные
-
-  // return (
-  //   <div>
-  //     <h2>Welcome to Your Dashboard</h2>
-  //     <img
-  //       src={user.avatar || '/assets/avatars/avatar.jpg'}
-  //       alt='User Avatar'
-  //       width='100'
-  //       height='100'
-  //     />{' '}
-  //     {/* Отображаем аватарку */}
-  //     <p>Username: {user.username}</p>
-  //     {user.role === 'admin' && <p>You have admin privileges.</p>}{' '}
-  //     {/* Если пользователь администратор, отображаем сообщение */}
-  //     {/* Кнопка выбора файла и загрузки новой аватарки */}
-  //     <input type='file' onChange={handleFileChange} />
-  //     <button onClick={handleUpload}>Upload New Avatar</button>
-  //     {message && <p>{message}</p>}{' '}
-  //     {/* Отображаем сообщение об успехе или ошибке */}
-  //     {/* Кнопка выхода из аккаунта */}
-  //     <button onClick={handleLogout}>Logout</button>
-  //   </div>
-  // );
-
-  const buttonsInfo = [
+  const buttonsData = [
     {
       id: 1,
       titleName: 'Игровой мир',
-      titleLink: '#',
+      titleLink: '/world',
       img: button1img,
       links: [
-        { name: 'Персонажи', link: '#' },
-        { name: 'Навыки', link: '#' },
-        { name: 'Аукцион', link: '#' },
+        { name: 'Персонажи', link: '/characters' },
+        { name: 'Навыки', link: '/skills' },
+        { name: 'Аукцион', link: '/auction' },
       ],
+      type: 'large',
     },
     {
       id: 2,
       titleName: 'Руководство',
-      titleLink: '#',
+      titleLink: '/guide',
       img: button2img,
       links: [
-        { name: 'Обучение', link: '#' },
-        { name: 'Консультант', link: '#' },
-        { name: 'Фандом', link: '#' },
+        { name: 'Обучение', link: '/learning' },
+        { name: 'Консультант', link: '/consultant' },
+        { name: 'Фандом', link: '/fandom' },
       ],
+      type: 'large',
     },
     {
       id: 3,
       titleName: 'Магазин',
-      titleLink: '#',
+      titleLink: '/shop',
       img: button3img,
       links: [
-        { name: 'Рулетка', link: '#' },
-        { name: 'События', link: '#' },
-        { name: 'Валюта', link: '#' },
+        { name: 'Рулетка', link: '/roulette' },
+        { name: 'События', link: '/events' },
+        { name: 'Валюта', link: '/currency' },
       ],
-    },
-  ];
-
-  const smallButtonsInfo = [
-    {
-      id: 1,
-      link: '#',
-      title: 'Предложения',
-      img: smallbuttonimg1,
-    },
-    {
-      id: 2,
-      link: '#',
-      title: 'Администрация',
-      img: smallbuttonimg2,
-    },
-    {
-      id: 3,
-      link: '#',
-      title: 'Бестиарий',
-      img: smallbuttonimg3,
+      type: 'large',
     },
     {
       id: 4,
-      link: '#',
-      title: 'Поиск игрока',
+      titleLink: '/offers',
+      titleName: 'Предложения',
+      img: smallbuttonimg1,
+      type: 'small',
+    },
+    {
+      id: 5,
+      titleLink: '/administration',
+      titleName: 'Администрация',
+      img: smallbuttonimg2,
+      type: 'small',
+    },
+    {
+      id: 6,
+      titleLink: '/bestiary',
+      titleName: 'Бестиарий',
+      img: smallbuttonimg3,
+      type: 'small',
+    },
+    {
+      id: 7,
+      titleLink: '/findaplayer',
+      titleName: 'Поиск игрока',
       img: smallbuttonimg4,
+      type: 'small',
     },
   ];
 
-  const sliderPages = [
+  const sliderData = [
     {
       index: 1,
-      title: 'Мы открываемся !',
+      title: 'Мы открываемся!',
       description: 'Все что нужно знать о запуске проекта',
-      link: '#',
+      link: '/sliderlink1',
       img: sliderImg1,
       tag: 'Технобук',
     },
@@ -193,7 +110,7 @@ export default function HomePage() {
       index: 2,
       title: 'Мы закрываемся !',
       description: 'Идите нахуй!',
-      link: '#',
+      link: '/sliderlink2',
       img: sliderImg1,
       tag: 'Технобук',
     },
@@ -201,7 +118,7 @@ export default function HomePage() {
       index: 3,
       title: 'Снова открываемся !',
       description: 'извинити пж',
-      link: '#',
+      link: '/sliderlink3',
       img: sliderImg1,
       tag: 'Технобук',
     },
@@ -209,40 +126,66 @@ export default function HomePage() {
       index: 4,
       title: 'Сосал?',
       description: 'да..',
-      link: '#',
+      link: '/sliderlink4',
       img: sliderImg1,
       tag: 'Технобук',
     },
   ];
 
+  const statsData = {
+    img: statsBg,
+    title: 'Статистика',
+    sections: [
+      {
+        sectionName: 'Лучшие ролевики',
+        users: [
+          { name: 'Фармила', points: 895, avatar: statsUserImg },
+          { name: 'Сгущенка', points: 654, avatar: statsUserImg },
+          { name: 'Тушенка', points: 432, avatar: statsUserImg },
+        ],
+      },
+      {
+        sectionName: 'Лучшие боевики',
+        users: [
+          { name: 'Бэбрик Йохансон', points: 545, avatar: statsUserImg },
+          { name: 'Чебурашка', points: 322, avatar: statsUserImg },
+          { name: 'Сгущенка', points: 212, avatar: statsUserImg },
+        ],
+      },
+      {
+        sectionName: 'Лучшие писатели',
+        users: [
+          { name: 'Фармила', points: 8495, avatar: statsUserImg },
+          { name: 'Сгущенка', points: 654, avatar: statsUserImg },
+          { name: 'Тушенка', points: 432, avatar: statsUserImg },
+        ],
+      },
+    ],
+  };
+
   return (
     <>
-      <Header showMenu={true} profileName={'говно'} />
+      <Header showMenu={true} />
 
       <section className={styles.main}>
-        {buttonsInfo.map((button, key) => (
-          <HomePageButton
-            key={button.id}
-            titleName={button.titleName}
-            titleLink={button.titleLink}
-            backgroundImg={button.img}
-            links={button.links}
-          />
-        ))}
+        {buttonsData
+          .filter((button) => button.type === 'large')
+          .map((buttonData) => (
+            <Button key={buttonData.id} data={buttonData} />
+          ))}
 
-        <Slider pages={sliderPages} />
+        <Slider pages={sliderData} />
 
         <div className={styles.small_buttons}>
-          {smallButtonsInfo.map((button, key) => (
-            <SmallHomePageButton
-              key={button.id}
-              link={button.link}
-              title={button.title}
-              backgroundImg={button.img}
-            />
-          ))}
+          {buttonsData
+            .filter((button) => button.type === 'small')
+            .map((buttonData) => (
+              <Button key={buttonData.id} data={buttonData} />
+            ))}
         </div>
       </section>
+
+      <Stats statsData={statsData} />
     </>
   );
 }

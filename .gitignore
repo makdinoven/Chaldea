@@ -22,3 +22,6 @@ logs/
 # System files
 .DS_Store
 Thumbs.db
+
+services/user-service/__pycache__
+

@@ -1,0 +1,44 @@
+.button {
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.03em;
+  text-align: center;
+}
+
+.disabled {
+  cursor: default;
+  background: linear-gradient(180deg, #3d3d3d 0%, #656565 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.active {
+  position: relative;
+  background: linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.active::after {
+  content: '';
+  position: absolute;
+  bottom: -5px;
+  left: 50%;
+  width: 0%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(204, 204, 204, 0) 0%,
+    #999 42.5%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  z-index: 1;
+  transform: translateX(-50%);
+  transition: width var(--transition02);
+}
+
+.active:hover::after {
+  width: 140%;
+}

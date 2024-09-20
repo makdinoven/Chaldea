@@ -1,0 +1,35 @@
+.form_textarea {
+  color: var(--zoloto);
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 15px;
+  width: 100%;
+  height: 100px;
+  resize: none;
+  transition: border 0.2s ease-in-out;
+}
+
+.form_textarea:hover {
+  border: 1px solid var(--zoloto);
+}
+
+.form_textarea:focus {
+  border: 1px solid var(--zoloto);
+  outline: none;
+}
+
+.textarea_wrapper {
+  position: relative;
+}
+
+.question_mark {
+  cursor: pointer;
+  position: absolute;
+  width: 15px;
+  height: 15px;
+  top: -12px;
+  right: -15px;
+  background-image: url('../../../assets/questionMarkSVG.svg');
+  background-repeat: no-repeat;
+  background-size: cover;
+}
