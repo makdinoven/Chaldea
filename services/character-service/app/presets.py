@@ -42,21 +42,7 @@ SUBRACE_ATTRIBUTES = {
         "charisma": 0,
         "luck": 30
     },
-    4: {  # Эльф/Малах
-        "strength": 5,
-        "agility": 15,
-        "intelligence": 20,
-        "endurance": 10,
-
-        "health": 0,
-        "energy": 0,
-        "mana": 10,
-        "stamina": 10,
-
-        "charisma": 10,
-        "luck": 20
-    },
-    5: {  # Эльф - Лесной
+    4: {  # Эльф/Лесной
         "strength": 0,
         "agility": 30,
         "intelligence": 20,
@@ -70,7 +56,7 @@ SUBRACE_ATTRIBUTES = {
         "charisma": 20,
         "luck": 10
     },
-    6: {  # Эльф - темный
+    5: {  # Эльф - Темный
         "strength": 15,
         "agility": 15,
         "intelligence": 15,
@@ -83,6 +69,20 @@ SUBRACE_ATTRIBUTES = {
 
         "charisma": 0,
         "luck": 15
+    },
+    6: {  # Эльф - Малах
+        "strength": 5,
+        "agility": 15,
+        "intelligence": 20,
+        "endurance": 10,
+
+        "health": 0,
+        "energy": 0,
+        "mana": 10,
+        "stamina": 10,
+
+        "charisma": 10,
+        "luck": 20
     },
     7: {  # Драконид/Равагарт
         "strength": 30,
@@ -126,7 +126,21 @@ SUBRACE_ATTRIBUTES = {
         "charisma": 0,
         "luck": 0
     },
-    10: {  # Демон/Левиаан
+    10: {  # Дворф/Ониксовый
+        "strength": 20,
+        "agility": 0,
+        "intelligence": 20,
+        "endurance": 10,
+
+        "health": 20,
+        "energy": 20,
+        "mana": 5,
+        "stamina": 5,
+
+        "charisma": 0,
+        "luck": 0
+    },
+    11: {  # Демон/Левиаан
         "strength": 30,
         "agility": 20,
         "intelligence": 0,
@@ -140,7 +154,7 @@ SUBRACE_ATTRIBUTES = {
         "charisma": 0,
         "luck": 20
     },
-    11: {  # Демон/Альб
+    12: {  # Демон/Альб
         "strength": 0,
         "agility": 20,
         "intelligence": 40,
@@ -154,7 +168,7 @@ SUBRACE_ATTRIBUTES = {
         "charisma": 0,
         "luck": 0
     },
-    12: {  # Бистмен/Зверолюд
+    13: {  # Бистмен/Зверолюд
         "strength": 20,
         "agility": 20,
         "intelligence": 0,
@@ -168,7 +182,7 @@ SUBRACE_ATTRIBUTES = {
         "charisma": 0,
         "luck": 10
     },
-    13: {  # Бистмен/Полукровка
+    14: {  # Бистмен/Полукровка
         "strength": 0,
         "agility": 40,
         "intelligence": 10,
@@ -182,7 +196,7 @@ SUBRACE_ATTRIBUTES = {
         "charisma": 10,
         "luck": 10
     },
-    14: {  # Урук - урук
+    15: {  # Урук - северные
         "strength": 40,
         "agility": 10,
         "intelligence": 0,
@@ -196,7 +210,7 @@ SUBRACE_ATTRIBUTES = {
         "charisma": 0,
         "luck": 0
     },
-    15: {  # Урук/Темный урук
+    16: {  # Урук/Темный урук
         "strength": 30,
         "agility": 20,
         "intelligence": 0,

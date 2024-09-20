@@ -127,3 +127,27 @@ def delete_character(db: Session, character_id: int):
         db.commit()
         return True
     return False
+
+#Получение всех рас и подрас
+def get_all_races_and_subraces(db: Session):
+    races = db.query(models.Race).all()
+    subraces = db.query(models.Subrace).all()
+
+    # Создаем словарь, где ключ - это ID расы, а значение - это подрасы, относящиеся к этой расе
+    races_data = {}
+
+    for race in races:
+        races_data[race.id_race] = {
+            "name": race.name,
+            "description": race.description,  # Добавляем описание расы
+            "subraces": []
+        }
+
+    for subrace in subraces:
+        races_data[subrace.id_race]["subraces"].append({
+            "id_subrace": subrace.id_subrace,
+            "name": subrace.name,
+            "description": subrace.description  # Добавляем описание подрасы
+        })
+
+    return races_data

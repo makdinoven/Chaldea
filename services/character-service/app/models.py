@@ -30,3 +30,25 @@ class Character(Base):
     currency_balance = Column(Integer, default=0)
     request_id = Column(Integer, ForeignKey("character_requests.id"), nullable=False)  # Ссылка на заявку
     user_id = Column(Integer, nullable=True)  # Добавляем поле user_id
+
+class Race(Base):
+    __tablename__ = "races"
+
+    id_race = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+
+    # Связь с подрасами
+    subraces = relationship("Subrace", back_populates="race")
+
+
+class Subrace(Base):
+    __tablename__ = "subraces"
+
+    id_subrace = Column(Integer, primary_key=True, index=True)
+    id_race = Column(Integer, ForeignKey("races.id_race"), nullable=False)
+    name = Column(String(50), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Связь с расами
+    race = relationship("Race", back_populates="subraces")
