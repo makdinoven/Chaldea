@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime
 from datetime import datetime
 from database import Base
+from sqlalchemy.orm import relationship
 
 
 class User(Base):
@@ -14,3 +15,4 @@ class User(Base):
     role = Column(String(100), default='user')  # Роль пользователя ('user', 'admin', и т.д.)
     avatar = Column(String(255), nullable=True)  # URL аватарки пользователя
     balance = Column(Integer, nullable=True) #Баланс доната
+    id_character = Column(Integer, nullable=True) #Номер персонажа

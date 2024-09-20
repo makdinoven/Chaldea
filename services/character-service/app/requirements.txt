@@ -8,3 +8,5 @@ requests
 aio_pika
 cryptography
 httpx
+pytest
+pytest-asyncio

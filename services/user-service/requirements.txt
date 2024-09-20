@@ -8,3 +8,5 @@ python-jose
 python-multipart  # Для обработки форм-данных (если требуется)
 pymysql
 cryptography
+pytest
+pytest-asyncio

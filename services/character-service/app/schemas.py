@@ -2,6 +2,7 @@ from pydantic import BaseModel
 
 # Базовая схема для заявки на создание персонажа
 class CharacterRequestBase(BaseModel):
+    user_id: int
     name: str
     id_subrace: int
     biography: str

@@ -1,8 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, UploadFile
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
-from models import User
-from schemas import User, UserCreate, Login  # Импорт схем для пользователя, включая Login
+import models
 from crud import create_user, get_user_by_email, get_user_by_username, authenticate_user  # Импорт CRUD функций
 from auth import *  # Импорт функций аутентификации
 from auth import SECRET_KEY, ALGORITHM
@@ -13,8 +11,10 @@ import shutil
 
 app = FastAPI()
 
+models.Base.metadata.create_all(bind=engine)
+
 # Создаем роутер с префиксом /api
-router = APIRouter(prefix="/user")
+router = APIRouter(prefix="/users")
 
 UPLOAD_DIR = "src/assets/avatars/"
 
@@ -75,7 +75,7 @@ def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
     return {"access_token": new_access_token, "token_type": "bearer"}
 
 # Получение информации о текущем пользователе
-@router.get("/users/me", response_model=User)
+@router.get("/me", response_model=User)
 def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
 
@@ -96,6 +96,27 @@ async def upload_avatar(file: UploadFile, current_user: User = Depends(get_curre
 
     # Возвращаем относительный URL загруженного файла
     return {"avatar_url": relative_path}
+
+# Эндпоинт для обновления пользователя с присвоением персонажа
+@router.put("/{user_id}/update_character")
+def update_user_character(user_id: int, character_data: dict, db: Session = Depends(get_db)):
+    """
+    Обновляет пользователя, присваивая ему персонажа.
+    """
+    print(f"Запрос на обновление пользователя с ID {user_id} и персонажем {character_data.get('character_id')}")
+
+    db_user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not db_user:
+        print(f"Пользователь с ID {user_id} не найден")
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    db_user.id_character = character_data.get("character_id")
+    db.commit()
+
+    print(f"Пользователь с ID {user_id} успешно обновлен с персонажем {db_user.id_character}")
+
+    return {"message": f"Пользователю с ID {user_id} присвоен персонаж с ID {db_user.id_character}"}
+
 
 # Настройка статических файлов
 app.mount("/assets", StaticFiles(directory="src/assets"), name="assets")

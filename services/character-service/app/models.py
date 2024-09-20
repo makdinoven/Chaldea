@@ -13,6 +13,7 @@ class CharacterRequest(Base):
     id_class = Column(Integer)
     status = Column(Enum('pending', 'approved', 'rejected'), default='pending')
     created_at = Column(TIMESTAMP, server_default=func.now())
+    user_id = Column(Integer, nullable=True)
 
 class Character(Base):
     __tablename__ = "characters"
@@ -28,3 +29,4 @@ class Character(Base):
     id_attributes = Column(Integer, nullable=True)  # Поле для атрибутов
     currency_balance = Column(Integer, default=0)
     request_id = Column(Integer, ForeignKey("character_requests.id"), nullable=False)  # Ссылка на заявку
+    user_id = Column(Integer, nullable=True)  # Добавляем поле user_id

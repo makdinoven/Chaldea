@@ -29,7 +29,8 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
     Создание заявки на персонажа.
     """
     try:
-        db_request = crud.create_character_request(db, request)
+        user_id = request.user_id
+        db_request = crud.create_character_request(db, request, user_id)
         return db_request
     except Exception as e:
         print(f"Ошибка при создании заявки: {e}")
@@ -39,37 +40,26 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
 @router.post("/requests/{request_id}/approve")
 async def approve_character_request(request_id: int, db: Session = Depends(get_db)):
     """
-    Подтверждает заявку на создание персонажа, обновляет статус и создает данные о навыках, инвентаре и атрибутах.
+    Подтверждает заявку на создание персонажа, обновляет статус и данные о навыках, инвентаре и атрибутах.
     """
     try:
-        # Найдем заявку по ее ID
+        # Найдем заявку по её ID
         db_request = db.query(models.CharacterRequest).filter(models.CharacterRequest.id == request_id).first()
         if not db_request:
             raise HTTPException(status_code=404, detail="Заявка не найдена")
 
-        # Обновляем статус заявки на "approved"
-        crud.approve_character_request(db, request_id)
-
-        # Создаем предварительного персонажа без зависимостей
+        # Создаем предварительного персонажа с указанием user_id
         new_character = crud.create_preliminary_character(db, db_request)
 
         # Генерируем атрибуты на основе subrace_id
         attributes = generate_attributes_for_subrace(db_request.id_subrace)
 
         # Отправляем запросы на микросервисы для генерации зависимостей
-        # Инвентарь
         inventory_response = await send_inventory_request(new_character.id)
-        print(f"Ответ от сервиса инвентаря: {inventory_response}")
-
-        # Навыки
         skills_response = await send_skills_request(new_character.id)
-        print(f"Ответ от сервиса навыков: {skills_response}")
-
-        # Атрибуты
         attributes_response = await send_attributes_request(new_character.id, attributes)
-        print(f"Ответ от сервиса атрибутов: {attributes_response}")
 
-        # Проверяем, что все ответы не являются None
+        # Проверяем ответы от всех микросервисов
         if not (inventory_response and skills_response and attributes_response):
             raise HTTPException(status_code=500, detail="Не удалось получить ответы от одного или нескольких микросервисов")
 
@@ -81,7 +71,15 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             attributes_id=attributes_response['id']
         )
 
-        return {"message": f"Персонаж с ID {new_character.id} успешно создан и заявка обновлена."}
+        # Обновляем статус заявки на "approved"
+        crud.update_character_request_status(db, request_id, "approved")
+
+        # Присваиваем персонажа пользователю
+        assign_result = await assign_character_to_user(db_request.user_id, updated_character.id)
+        if not assign_result:
+            raise HTTPException(status_code=500, detail="Не удалось присвоить персонажа пользователю")
+
+        return {"message": f"Персонаж с ID {new_character.id} успешно создан и присвоен пользователю."}
 
     except Exception as e:
         print(f"Ошибка при одобрении заявки: {e}")
@@ -91,29 +89,45 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
 async def send_inventory_request(character_id: int):
     try:
         async with httpx.AsyncClient() as client:
+            print(f"Отправка запроса на инвентарь для персонажа {character_id}")  # Лог перед отправкой запроса
             response = await client.post(f"{settings.INVENTORY_SERVICE_URL}", json={"character_id": character_id})
+
+            # Логируем статус-код и тело ответа
+            print(f"Статус-код ответа от сервиса инвентаря: {response.status_code}")
+            print(f"Тело ответа от сервиса инвентаря: {response.text}")
+
             if response.status_code == 200:
                 return response.json()
             else:
-                print(f"Ошибка при запросе инвентаря: {response.status_code}")
+                print(
+                    f"Ошибка при запросе инвентаря: {response.status_code} - {response.text}")  # Более детализированный лог
                 return None
     except Exception as e:
         print(f"Ошибка при отправке запроса на инвентарь: {e}")
         return None
 
+
 # Отправка запроса на микросервис навыков
 async def send_skills_request(character_id: int):
     try:
         async with httpx.AsyncClient() as client:
+            print(f"Отправка запроса на навыки для персонажа {character_id}")  # Лог перед отправкой запроса
             response = await client.post(f"{settings.SKILLS_SERVICE_URL}", json={"character_id": character_id})
+
+            # Логируем статус-код и тело ответа
+            print(f"Статус-код ответа от сервиса навыков: {response.status_code}")
+            print(f"Тело ответа от сервиса навыков: {response.text}")
+
             if response.status_code == 200:
                 return response.json()
             else:
-                print(f"Ошибка при запросе навыков: {response.status_code}")
+                print(
+                    f"Ошибка при запросе навыков: {response.status_code} - {response.text}")  # Более детализированный лог
                 return None
     except Exception as e:
         print(f"Ошибка при отправке запроса на навыки: {e}")
         return None
+
 
 # Отправка запроса на микросервис атрибутов
 async def send_attributes_request(character_id: int, attributes: dict):
@@ -148,8 +162,26 @@ def generate_attributes_for_subrace(subrace_id: int) -> dict:
         "stamina": 100, "charisma": 10, "luck": 10
     })
 
+# Отправка запроса в user-service для присвоения персонажа пользователю
+async def assign_character_to_user(user_id: int, character_id: int):
+    try:
+        async with httpx.AsyncClient() as client:
+            # Формируем запрос
+            response = await client.put(
+                f"{settings.USER_SERVICE_URL}/users/{user_id}/update_character",
+                json={"character_id": character_id}
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"Ошибка при обновлении пользователя: {response.status_code}, {response.text}")
+                return None
+    except Exception as e:
+        print(f"Ошибка при отправке запроса в user-service: {e}")
+        return None
+
 # Эндпоинт для удаления персонажа
-@router.delete("/characters/{character_id}")
+@router.delete("/{character_id}")
 async def delete_character(character_id: int, db: Session = Depends(get_db)):
     """
     Удаление персонажа по его ID.
@@ -163,13 +195,30 @@ async def delete_character(character_id: int, db: Session = Depends(get_db)):
         print(f"Ошибка при удалении персонажа: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
+# Отправка запроса на обновление пользователя в user-service
+async def update_user_with_character(user_id: int, character_id: int):
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.put(f"{settings.USER_SERVICE_URL}users/{user_id}/update_character", json={"character_id": character_id})
+            if response.status_code == 200:
+                print(f"Пользователь с ID {user_id} успешно обновлен с персонажем ID {character_id}")
+                return True
+            else:
+                print(f"Ошибка при обновлении пользователя: {response.status_code}")
+                return False
+    except Exception as e:
+        print(f"Ошибка при отправке запроса на обновление пользователя: {e}")
+        return False
+
+
+
 @router.post("/requests/{request_id}/reject")
 async def reject_character_request(request_id: int, db: Session = Depends(get_db)):
     """
     Отклоняет заявку на создание персонажа и обновляет статус на 'rejected'.
     """
     try:
-        db_request = crud.reject_character_request(db, request_id)
+        db_request = crud.update_character_request_status(db, request_id, "rejected")
         if not db_request:
             raise HTTPException(status_code=404, detail="Заявка не найдена")
 

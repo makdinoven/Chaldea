@@ -41,6 +41,20 @@ services:
     ports:
       - '3306:3306'
 
+  mysql_test:
+      build:
+        context: .
+        dockerfile: ./docker/mysql_test/Dockerfile
+      environment:
+        MYSQL_ROOT_PASSWORD: ${MYSQL_TEST_ROOT_PASSWORD}
+        MYSQL_DATABASE: ${MYSQL_TEST_DATABASE}
+        MYSQL_USER: ${MYSQL_TEST_USER}
+        MYSQL_PASSWORD: ${MYSQL_TEST_PASSWORD}
+      volumes:
+        - mysql_test_data:/var/lib/mysql_test
+      ports:
+        - '3307:3307'
+
 #  phpmyadmin:
 #        build:
 #          context: .
@@ -75,6 +89,8 @@ services:
         DB_DATABASE: mydatabase
         DB_USERNAME: myuser
         DB_PASSWORD: mypassword
+      ports:
+        - "8000:8000"
       volumes:
         - ./services/user-service:/var/www
       depends_on:
@@ -182,5 +198,7 @@ services:
       - "80:80"
     depends_on:
       - frontend
+
 volumes:
   mysql_data:
+  mysql_test_data:
