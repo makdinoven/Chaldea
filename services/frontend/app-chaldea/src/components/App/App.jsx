@@ -1,7 +1,9 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+
 import StartPage from '../StartPage/StartPage.jsx';
 import HomePage from '../HomePage/HomePage.jsx';
+import CreateCharacterPage from '../CreateCharacterPage/CreateCharacterPage.jsx';
 
 import './App.css';
 
@@ -12,14 +14,10 @@ const App = () => {
         <Routes>
           <Route path='/' element={<StartPage />} />
           <Route path='/home' element={<HomePage />} />
+          <Route path='/createCharacter' element={<CreateCharacterPage />} />
         </Routes>
       </div>
     </Router>
-
-    // <div className='container'>
-    //   <HomePage />
-    //   {/* <StartPage /> */}
-    // </div>
   );
 };
 

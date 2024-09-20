@@ -8,6 +8,7 @@
   --zoloto: #fff;
   --blue: #76a6bd;
   --transition02: 0.2s ease-in-out;
+  --gray-background: rgba(35, 35, 41, 0.9);
 }
 
 #root {
@@ -20,7 +21,6 @@ body {
   background-size: cover;
   background-repeat: no-repeat;
   width: 100%;
-  height: 1662px;
 }
 
 /* Reset and base styles  */
