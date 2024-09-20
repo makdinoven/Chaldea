@@ -1,6 +1,7 @@
 import { useState, useEffect, memo } from 'react';
 import useNavigateTo from '../../hooks/useNavigateTo';
 import { useRequireAuth } from '../../hooks/useRequireAuth';
+import axios from 'axios';
 
 import Header from '../CommonComponents/Header/Header';
 import RacePage from './RacePage/RacePage';
@@ -23,6 +24,11 @@ export default function CreateCharacterPage({}) {
   const [selectedRaceId, setSelectedRaceId] = useState(0);
   const [selectedSubraceId, setSelectedSubraceId] = useState(0);
   const [selectedClassId, setSelectedClassId] = useState(0);
+
+  axios
+    .get('/character/races')
+    .then((response) => console.log(response.data))
+    .catch((error) => console.error(error));
 
   useRequireAuth();
 
