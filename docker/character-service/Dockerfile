@@ -32,5 +32,4 @@ RUN pip install --no-cache-dir alembic pymysql
 # Указываем порт, который будет открыт для доступа к микросервису
 EXPOSE 8005
 
-# Используем dockerize для ожидания RabbitMQ перед запуском приложения
 CMD ["sh", "-c", "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app "]
