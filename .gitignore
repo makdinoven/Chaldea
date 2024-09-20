@@ -24,4 +24,5 @@ logs/
 Thumbs.db
 
 services/user-service/__pycache__
+services/user-service/alembic/versions
 
