@@ -32,7 +32,6 @@
 .form_window {
   width: 960px;
   border-radius: 10px;
-  background: var(--gray-background);
+  background: rgba(35, 35, 41, 0.9);
   overflow: hidden;
-  margin-bottom: 100px;
 }

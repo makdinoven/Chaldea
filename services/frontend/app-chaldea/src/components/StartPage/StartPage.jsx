@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import Header from '../CommonComponents/Header/Header.jsx';
 import LogButton from './LogButton/LogButton.jsx';
 import AuthForm from './AuthForm/AuthFrom.jsx';
@@ -7,12 +7,6 @@ import styles from './StartPage.module.css';
 
 export default function StartPage() {
   const [activeButton, setActiveButton] = React.useState('login');
-
-  useEffect(() => {
-    console.log('Очистка токенов при монтировании стартовой страницы');
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-  }, []);
 
   const handleButtonClick = (buttonName) => {
     setActiveButton(buttonName);

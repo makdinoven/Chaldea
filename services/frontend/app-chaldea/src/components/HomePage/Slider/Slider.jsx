@@ -1,15 +1,10 @@
 import React, { useState } from 'react';
-
-import useNavigateTo from '../../../hooks/useNavigateTo';
-
-import CircleButton from './CircleButton/CircleButton';
-import ArrowButton from './ArrowButton/ArrowButton';
-
+import SliderCircleButton from './SliderCircleButton/SliderCircleButton';
+import SliderArrowButton from './SliderArrowButton/SliderArrowButton';
 import styles from './Slider.module.css';
 
 export default function Slider({ pages }) {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const navigateTo = useNavigateTo();
 
   const handlePrev = (e) => {
     e.stopPropagation();
@@ -41,22 +36,23 @@ export default function Slider({ pages }) {
           background: `url(${pages[currentIndex].img})`,
         }}
         onClick={() => {
-          navigateTo(pages[currentIndex].link);
+          console.log('click page');
+          window.location.href = pages[currentIndex].link;
         }}
       >
         <div className={styles.top_container}>
           <div className={styles.pagination_container}>
-            <ArrowButton text='<' onClick={handlePrev} />
+            <SliderArrowButton text='<' onClick={handlePrev} />
             <div className={styles.circle_buttons_container}>
               {pages.map((_, index) => (
-                <CircleButton
+                <SliderCircleButton
                   key={index}
                   isActive={index === currentIndex}
                   onClick={(e) => handleCircleClick(index, e)}
                 />
               ))}
             </div>
-            <ArrowButton text='>' onClick={handleNext} />
+            <SliderArrowButton text='>' onClick={handleNext} />
           </div>
           <span className={styles.tag}>{pages[currentIndex].tag}</span>
         </div>

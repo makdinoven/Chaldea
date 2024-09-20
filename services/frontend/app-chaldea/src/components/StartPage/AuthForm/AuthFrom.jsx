@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import Input from '../../CommonComponents/Input/Input.jsx';
-import FormButton from '../../CommonComponents/BlueGradientButton/BlueGradientButton.jsx';
-
-import useNavigateTo from '../../../hooks/useNavigateTo.js';
+import Input from './Input/Input.jsx';
+import FormButton from './FormButton/FormButton.jsx';
 
 import styles from './AuthForm.module.css';
 
@@ -14,9 +13,14 @@ export default function AuthForm({ activeForm }) {
   const [password, setPassword] = useState(''); // Состояние для хранения пароля
   const [confirmPassword, setConfirmPassword] = useState(''); // Состояние для подтверждения пароля
   const [error, setError] = useState(''); // Состояние для ошибок
-  const navigateTo = useNavigateTo(); // Используем hook для перенаправления
+  const navigate = useNavigate(); // Используем hook для перенаправления
 
   useEffect(() => {
+    // Очистка устаревших токенов из локального хранилища при монтировании компонента
+    console.log('Очистка токенов при монтировании компонента');
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+
     // Изменение высоты формы в зависимости от активной формы
     if (activeForm === 'login') {
       setFormHeight('279px');
@@ -48,15 +52,17 @@ export default function AuthForm({ activeForm }) {
       if (response.status === 200) {
         // Сохраняем токен доступа в локальное хранилище
         localStorage.setItem('accessToken', response.data.access_token);
-
         if (response.data.refresh_token) {
           localStorage.setItem('refreshToken', response.data.refresh_token); // Сохраняем refresh token, если он возвращается
         }
 
-        console.log(`Токен: ${localStorage.getItem('accessToken')}`);
+        console.log(
+          'Токен успешно сохранен в localStorage:',
+          localStorage.getItem('accessToken')
+        );
 
         // Перенаправляем на главную страницу после успешного входа
-        navigateTo('/home');
+        navigate('/home');
       } else {
         setError('Ошибка аутентификации. Проверьте введенные данные.');
       }
@@ -85,80 +91,69 @@ export default function AuthForm({ activeForm }) {
   return (
     <div className={styles.container} style={{ height: formHeight }}>
       <form className={styles.auth_form} onSubmit={handleSubmit}>
-        <div className={styles.inputs_container}>
-          {activeForm === 'login' ? (
-            <>
-              <Input
-                isRequired={true}
-                id='login'
-                text='Логин*'
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-              />
-              <Input
-                isRequired={true}
-                id='password'
-                text='Пароль*'
-                type='password'
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </>
-          ) : (
-            <>
-              <Input
-                isRequired={true}
-                id='email'
-                text='Email*'
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-              <Input
-                isRequired={true}
-                id='reglogin'
-                text='Логин*'
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-              />
-              <Input
-                isRequired={true}
-                id='regpassword'
-                text='Пароль*'
-                type='password'
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-              <Input
-                isRequired={true}
-                id='regpasswordagain'
-                text='Пароль еще раз*'
-                type='password'
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-              />
-            </>
-          )}
-          <label className={styles.policy} htmlFor='policy'>
-            <input
-              className={styles.real_checkbox}
-              id='policy'
-              type='checkbox'
+        {activeForm === 'login' ? (
+          <>
+            <Input
+              id='login'
+              text='Логин*'
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
             />
-            <span className={styles.custom_checkbox}></span>
-            <span className={styles.policy_text}>
-              Я соглашаюсь с{' '}
-              <a className={styles.policy_link} href='#'>
-                Политикой конфиденциальности
-              </a>{' '}
-              и даю согласие на обработку моих данных для получения рассылок.
-            </span>
-          </label>
-        </div>
+            <Input
+              id='password'
+              text='Пароль*'
+              type='password'
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </>
+        ) : (
+          <>
+            <Input
+              id='email'
+              text='Email*'
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            <Input
+              id='reglogin'
+              text='Логин*'
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+            <Input
+              id='regpassword'
+              text='Пароль*'
+              type='password'
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <Input
+              id='regpasswordagain'
+              text='Пароль еще раз*'
+              type='password'
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+          </>
+        )}
+        <label className={styles.policy} htmlFor='policy'>
+          <input className={styles.real_checkbox} id='policy' type='checkbox' />
+          <span className={styles.custom_checkbox}></span>
+          <span className={styles.policy_text}>
+            Я соглашаюсь с{' '}
+            <a className={styles.policy_link} href='#'>
+              Политикой конфиденциальности
+            </a>{' '}
+            и даю согласие на обработку моих данных для получения рассылок.
+          </span>
+        </label>
+        {error && <p className={styles.error_message}>{error}</p>}{' '}
         {/* Отображение сообщения об ошибке */}
         {activeForm === 'login' ? (
-          <FormButton text='Вход' onClick={handleSubmit} />
+          <FormButton text='Вход' />
         ) : (
-          <FormButton text='Регистрация' onClick={handleSubmit} />
+          <FormButton text='Регистрация' />
         )}
       </form>
     </div>
