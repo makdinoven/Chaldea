@@ -5,7 +5,8 @@ import asyncio
 import models, schemas, crud
 from database import SessionLocal, engine
 from config import settings
-from presets import SUBRACE_ATTRIBUTES  # Импортируем пресеты подрас
+from presets import SUBRACE_ATTRIBUTES, CLASS_ITEMS # Импортируем пресеты подрас
+from typing import List
 
 app = FastAPI()
 
@@ -39,23 +40,21 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
 # Эндпоинт для одобрения заявки
 @router.post("/requests/{request_id}/approve")
 async def approve_character_request(request_id: int, db: Session = Depends(get_db)):
-    """
-    Подтверждает заявку на создание персонажа, обновляет статус и данные о навыках, инвентаре и атрибутах.
-    """
     try:
-        # Найдем заявку по её ID
         db_request = db.query(models.CharacterRequest).filter(models.CharacterRequest.id == request_id).first()
         if not db_request:
             raise HTTPException(status_code=404, detail="Заявка не найдена")
 
-        # Создаем предварительного персонажа с указанием user_id
         new_character = crud.create_preliminary_character(db, db_request)
-
-        # Генерируем атрибуты на основе subrace_id
         attributes = generate_attributes_for_subrace(db_request.id_subrace)
 
-        # Отправляем запросы на микросервисы для генерации зависимостей
-        inventory_response = await send_inventory_request(new_character.id)
+        # Получаем стартовую экипировку в зависимости от класса
+        items_to_add = CLASS_ITEMS.get(new_character.id_class, [])
+
+        # Отправка запроса на создание инвентаря в микросервис инвентаря
+        inventory_response = await send_inventory_request(new_character.id, items_to_add)
+
+        # Остальные запросы к микросервисам (навыки и атрибуты)
         skills_response = await send_skills_request(new_character.id)
         attributes_response = await send_attributes_request(new_character.id, attributes)
 
@@ -71,10 +70,7 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             attributes_id=attributes_response['id']
         )
 
-        # Обновляем статус заявки на "approved"
         crud.update_character_request_status(db, request_id, "approved")
-
-        # Присваиваем персонажа пользователю
         assign_result = await assign_character_to_user(db_request.user_id, updated_character.id)
         if not assign_result:
             raise HTTPException(status_code=500, detail="Не удалось присвоить персонажа пользователю")
@@ -86,25 +82,38 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 # Отправка запроса на микросервис инвентаря
-async def send_inventory_request(character_id: int):
+async def send_inventory_request(character_id: int, items: List[dict]):
+    """
+    Отправляет запрос на создание инвентаря в микросервис инвентаря.
+
+    :param character_id: ID персонажа
+    :param items: Список предметов для добавления в инвентарь
+    :return: Ответ от микросервиса инвентаря
+    """
+    inventory_data = {
+        "character_id": character_id,
+        "items": items  # Отправляем только id и quantity
+    }
+
     try:
         async with httpx.AsyncClient() as client:
-            print(f"Отправка запроса на инвентарь для персонажа {character_id}")  # Лог перед отправкой запроса
-            response = await client.post(f"{settings.INVENTORY_SERVICE_URL}", json={"character_id": character_id})
-
-            # Логируем статус-код и тело ответа
-            print(f"Статус-код ответа от сервиса инвентаря: {response.status_code}")
-            print(f"Тело ответа от сервиса инвентаря: {response.text}")
-
+            response = await client.post(f"{settings.INVENTORY_SERVICE_URL}", json=inventory_data)
             if response.status_code == 200:
                 return response.json()
             else:
-                print(
-                    f"Ошибка при запросе инвентаря: {response.status_code} - {response.text}")  # Более детализированный лог
+                print(f"Ошибка при запросе инвентаря: {response.status_code} - {response.text}")
                 return None
     except Exception as e:
         print(f"Ошибка при отправке запроса на инвентарь: {e}")
         return None
+
+
+def generate_items_for_class(class_id: int) -> List[dict]:
+    """
+    Генерирует предметы для персонажа на основе его класса.
+    """
+    # Получаем предметы из словаря class_items или возвращаем пустой список, если класс не найден
+    return CLASS_ITEMS.get(class_id, [])
 
 
 # Отправка запроса на микросервис навыков

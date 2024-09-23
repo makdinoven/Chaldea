@@ -151,3 +151,35 @@ def get_all_races_and_subraces(db: Session):
         })
 
     return races_data
+
+
+async def send_equipment_slots_request(character_id: int):
+    """
+    Отправляет запрос на создание слотов экипировки для персонажа.
+
+    :param character_id: ID персонажа
+    :return: Ответ от микросервиса экипировки
+    """
+    equipment_slots_data = [
+        {"character_id": character_id, "slot_type": "head", "item_id": None},
+        {"character_id": character_id, "slot_type": "chest", "item_id": None},
+        {"character_id": character_id, "slot_type": "legs", "item_id": None},
+        {"character_id": character_id, "slot_type": "feet", "item_id": None},
+        {"character_id": character_id, "slot_type": "weapon", "item_id": None},
+        {"character_id": character_id, "slot_type": "accessory", "item_id": None},
+    ]
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings.EQUIPMENT_SERVICE_URL}/slots",
+                json={"character_id": character_id, "equipment_slots": equipment_slots_data}
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"Ошибка при запросе слотов экипировки: {response.status_code} - {response.text}")
+                return None
+    except Exception as e:
+        print(f"Ошибка при отправке запроса на слоты экипировки: {e}")
+        return None

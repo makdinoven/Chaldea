@@ -1,16 +1,21 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import List, Optional
 
 # Схема для отображения предмета в инвентаре
 class ItemInInventory(BaseModel):
-    id: int
-    name: str
-    item_type: str
-    quantity: int
+    id: int  # ID предмета
+    quantity: int  # Количество предмета
 
     class Config:
         orm_mode = True  # Включаем режим ORM для поддержки работы с моделями SQLAlchemy
 
+# Схема для отображения слота экипировки
+class EquipmentSlotInInventory(BaseModel):
+    slot_type: str
+    item_id: Optional[int] = None  # ID предмета в слоте, может быть None, если слот пуст
+
+    class Config:
+        orm_mode = True  # Включаем режим ORM для поддержки работы с моделями SQLAlchemy
 
 # Базовая схема для инвентаря персонажа
 class CharacterInventoryBase(BaseModel):
@@ -24,6 +29,7 @@ class CharacterInventoryCreate(CharacterInventoryBase):
 # Схема для отображения инвентаря персонажа
 class CharacterInventory(CharacterInventoryBase):
     id: int
+    equipment_slots: List[EquipmentSlotInInventory]  # Список слотов экипировки
 
     class Config:
         orm_mode = True  # Включаем режим ORM для поддержки работы с моделями SQLAlchemy
