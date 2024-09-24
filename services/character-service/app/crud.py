@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 import models, schemas
-
+from sqlalchemy.orm import joinedload
 
 # Функция для создания заявки на персонажа
 def create_character_request(db: Session, request: schemas.CharacterRequestCreate, user_id: int):
@@ -14,7 +14,9 @@ def create_character_request(db: Session, request: schemas.CharacterRequestCreat
         id_subrace=request.id_subrace,
         biography=request.biography,
         personality=request.personality,
-        id_class=request.id_class
+        id_class=request.id_class,
+        #sex=request.sex,
+        appearance=request.appearance
     )
     db.add(db_request)
     db.commit()
@@ -183,3 +185,17 @@ async def send_equipment_slots_request(character_id: int):
     except Exception as e:
         print(f"Ошибка при отправке запроса на слоты экипировки: {e}")
         return None
+
+
+
+# Получение заявок, которые находятся на модерации
+def get_moderation_requests(db: Session):
+    """
+    Получает все заявки, которые находятся на модерации.
+    """
+    try:
+        moderation_requests = db.query(models.CharacterRequest).filter(models.CharacterRequest.status.in_  (['pending','rejected','approved'])).all()
+        return moderation_requests
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        return []

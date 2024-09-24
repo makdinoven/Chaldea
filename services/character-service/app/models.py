@@ -14,6 +14,13 @@ class CharacterRequest(Base):
     status = Column(Enum('pending', 'approved', 'rejected'), default='pending')
     created_at = Column(TIMESTAMP, server_default=func.now())
     user_id = Column(Integer, nullable=True)
+    appearance = Column(Text, nullable=False)
+    sex=Column(Enum('male', 'female','genderless'), default='genderless' )
+    background=Column(Text, nullable=True)
+    age = Column(Integer, nullable=True)
+    weight = Column(String(10), nullable=True)
+    height = Column(String(10), nullable=True)
+
 
 class Character(Base):
     __tablename__ = "characters"
@@ -30,6 +37,12 @@ class Character(Base):
     currency_balance = Column(Integer, default=0)
     request_id = Column(Integer, ForeignKey("character_requests.id"), nullable=False)  # Ссылка на заявку
     user_id = Column(Integer, nullable=True)  # Добавляем поле user_id
+    appearance = Column(Text, nullable=False)
+    sex=Column(Enum('male', 'female','genderless'), default='genderless' )
+    background = Column(Text, nullable=True)
+    age = Column(Integer, nullable=True)
+    weight = Column(String(10), nullable=True)
+    height = Column(String(10), nullable=True)
 
 class Race(Base):
     __tablename__ = "races"

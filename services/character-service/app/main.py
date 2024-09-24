@@ -256,4 +256,23 @@ async def get_races_and_subraces(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Ошибка при получении рас и подрас.")
 
 
+@router.get("/moderation-requests", response_model=List[schemas.CharacterRequest])
+async def get_moderation_requests(db: Session = Depends(get_db)):
+    """
+    Эндпоинт для получения всех заявок на модерации
+    """
+    try:
+        requests = crud.get_moderation_requests(db)  # Вызов функции из CRUD для получения заявок
+
+        if not requests:
+            raise HTTPException(status_code=404, detail="Заявки на модерацию не найдены")
+
+        return requests
+    except Exception as e:
+        print(f"Ошибка при получении заявок на модерацию: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при получении заявок на модерацию.")
+
+
+
+
 app.include_router(router)

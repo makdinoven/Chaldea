@@ -1,3 +1,4 @@
+
 from pydantic import BaseModel
 
 # Базовая схема для заявки на создание персонажа
@@ -8,6 +9,12 @@ class CharacterRequestBase(BaseModel):
     biography: str
     personality: str
     id_class: int
+    appearance: str
+    background:str
+    age:int
+    weight:str
+    height:str
+
 
 # Схема для создания заявки на персонажа
 class CharacterRequestCreate(CharacterRequestBase):
@@ -32,6 +39,11 @@ class CharacterCreate(BaseModel):
     id_skill_inventory: int
     id_attributes: int
     currency_balance: int = 0
+    appearance: str
+    background:str
+    age: int
+    weight: str
+    height: str
 
     class Config:
         orm_mode = True
@@ -50,3 +62,5 @@ class CharacterUpdate(BaseModel):
 
     class Config:
         orm_mode = True
+
+
