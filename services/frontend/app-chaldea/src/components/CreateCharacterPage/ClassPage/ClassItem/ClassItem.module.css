@@ -1,0 +1,129 @@
+.class_item {
+  position: relative;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 15px;
+  z-index: 1;
+  padding: 20px;
+  outline: 3px solid transparent;
+  transition: outline var(--transition02);
+}
+
+.class_item:hover {
+  outline: 3px solid var(--zolotoReal);
+}
+
+.class_item:hover::before {
+  opacity: 0;
+}
+
+.active {
+  outline: 3px solid var(--zolotoReal);
+}
+
+.inactive::before {
+  content: '';
+  position: absolute;
+  top: 0px;
+  left: 0px;
+  right: 0px;
+  bottom: 0px;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 15px;
+  z-index: 3;
+  transition: opacity var(--transition02);
+  opacity: 1;
+}
+
+.class_title {
+  font-weight: 600;
+  font-size: 28px;
+  text-align: center;
+}
+
+.active .class_title {
+  background: linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.inactive .class_title {
+  color: var(--zoloto);
+}
+
+.question_mark {
+  cursor: pointer;
+  position: absolute;
+  width: 15px;
+  height: 15px;
+  top: -5px;
+  right: -18px;
+  background-image: url('../../../../assets/questionMarkSVG.svg');
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+.class_img {
+  width: 208px;
+  height: 200px;
+}
+
+.class_item_section {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 0 20px;
+  width: 100%;
+  position: relative;
+}
+
+.class_item_section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(204, 204, 204, 0) 0%,
+    #999 42.5%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  z-index: 1;
+  transform: translateX(-50%);
+  width: 80%;
+}
+
+.section_title {
+  width: fit-content;
+  position: relative;
+  font-weight: 600;
+  font-size: 20px;
+  text-align: center;
+  color: var(--zoloto);
+  margin-bottom: 15px;
+}
+
+.section_images {
+  align-items: center;
+  justify-content: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.features {
+  font-weight: 400;
+  font-size: 16px;
+  color: var(--zoloto);
+  text-align: justify;
+}

@@ -2,7 +2,9 @@
   width: 100%;
   display: grid;
   grid-template-columns: repeat(3, 30%);
+  justify-content: space-between;
   gap: 50px;
+  padding: 0 60px;
 }
 
 .desc_col {
@@ -72,6 +74,7 @@
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   margin-bottom: 55px;
+  width: 100%;
 }
 
 .params_inner:nth-child(1) {

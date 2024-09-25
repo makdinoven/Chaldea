@@ -2,20 +2,6 @@
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   width: 100%;
-  margin-bottom: 200px;
-}
-
-.class_container {
-  cursor: pointer;
-  align-self: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 15px;
-}
-
-.class_container img {
-  width: 270px;
-  height: 260px;
+  gap: 40px;
+  padding: 0 35px;
 }

@@ -18,6 +18,7 @@ import starikImg from '../../assets/starikImage.png';
 import warriorImg from '../../assets/classWarriorImg.png';
 import plutImg from '../../assets/classPlutImg.png';
 import magicianImg from '../../assets/classMagicianImg.png';
+import classInventoryImg from '../../assets/classInventoryImg.png';
 
 export default function CreateCharacterPage({}) {
   const navigateTo = useNavigateTo();
@@ -282,13 +283,63 @@ export default function CreateCharacterPage({}) {
       pageId: 1,
       pageTitle: 'Выбор класса',
       classes: [
-        { id: 0, name: 'Воин', img: warriorImg },
-        { id: 1, name: 'Плут', img: plutImg },
-        { id: 2, name: 'Маг', img: magicianImg },
+        {
+          id: 0,
+          name: 'Воин',
+          img: warriorImg,
+          features:
+            'Воин да и воин хуль с него взять то пиздит всех мечом налево направо',
+          inventory: [
+            { name: 'item1', link: '/shop/item1', img: classInventoryImg },
+            { name: 'item2', link: '/shop/item2', img: classInventoryImg },
+            { name: 'item3', link: '/shop/item3', img: classInventoryImg },
+            { name: 'item4', link: '/shop/item4', img: classInventoryImg },
+          ],
+          skills: [
+            { name: 'skill1', link: '/shop/skill1', img: classInventoryImg },
+            { name: 'skill2', link: '/shop/skill2', img: classInventoryImg },
+            { name: 'skill3', link: '/shop/skill3', img: classInventoryImg },
+          ],
+        },
+        {
+          id: 1,
+          name: 'Плут',
+          img: plutImg,
+          features:
+            'Имеет огромный хуй, трахает всех подряд и жестко кайфует от жизни',
+          inventory: [
+            { name: 'item1', link: '/shop/item1', img: classInventoryImg },
+            { name: 'item2', link: '/shop/item2', img: classInventoryImg },
+            { name: 'item3', link: '/shop/item3', img: classInventoryImg },
+            { name: 'item4', link: '/shop/item4', img: classInventoryImg },
+          ],
+          skills: [
+            { name: 'skill1', link: '/shop/skill1', img: classInventoryImg },
+            { name: 'skill2', link: '/shop/skill2', img: classInventoryImg },
+            { name: 'skill3', link: '/shop/skill3', img: classInventoryImg },
+          ],
+        },
+        {
+          id: 2,
+          name: 'Маг',
+          img: magicianImg,
+          features: 'Кастует какуюто хуйню и делает пафосное ебло',
+          inventory: [
+            { name: 'item1', link: '/shop/item1', img: classInventoryImg },
+            { name: 'item2', link: '/shop/item2', img: classInventoryImg },
+            { name: 'item3', link: '/shop/item3', img: classInventoryImg },
+            { name: 'item4', link: '/shop/item4', img: classInventoryImg },
+          ],
+          skills: [
+            { name: 'skill1', link: '/shop/skill1', img: classInventoryImg },
+            { name: 'skill2', link: '/shop/skill2', img: classInventoryImg },
+            { name: 'skill3', link: '/shop/skill3', img: classInventoryImg },
+          ],
+        },
       ],
     },
-    { pageId: 2, pageTitle: 'Ввод биографии', pageData: { images: '' } },
-    { pageId: 3, pageTitle: 'Ваш персонаж', pageData: { images: '' } },
+    { pageId: 2, pageTitle: 'Ввод биографии' },
+    { pageId: 3, pageTitle: 'Ваш персонаж' },
   ];
 
   return (

@@ -1,6 +1,6 @@
 .container {
   border-radius: 15px;
-  padding: 37px 60px 70px;
+  padding: 37px 0 70px;
   background: var(--gray-background);
   /* height: 1000px; */
   display: flex;
