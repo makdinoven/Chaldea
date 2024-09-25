@@ -1,20 +1,35 @@
-
+from inspect import classify_class_attrs
+from typing import Optional
 from pydantic import BaseModel
+from datetime import datetime
 
 # Базовая схема для заявки на создание персонажа
 class CharacterRequestBase(BaseModel):
-    user_id: int
-    name: str
+    id: int
     id_subrace: int
-    biography: str
-    personality: str
+    biography: Optional[str]
+    personality: Optional[str]
     id_class: int
     appearance: str
-    background:str
-    age:int
-    weight:str
-    height:str
+    background: Optional[str]
+    age: Optional[int]
+    weight: Optional[str]
+    height: Optional[str]
+    id_race: int
+    name: str
+    status: str
+    created_at: str
+    user_id: Optional[int]
+    race_name: str
+    subrace_name: str
 
+    class_name: str
+    created_at: datetime
+    class Config:
+        orm_mode = True
+        json_encoders = {
+            datetime: lambda v: v.strftime('%Y-%m-%dT%H:%M:%S'),
+        }
 
 # Схема для создания заявки на персонажа
 class CharacterRequestCreate(CharacterRequestBase):
@@ -44,7 +59,7 @@ class CharacterCreate(BaseModel):
     age: int
     weight: str
     height: str
-
+    id_race: int
     class Config:
         orm_mode = True
 

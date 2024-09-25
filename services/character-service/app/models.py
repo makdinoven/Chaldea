@@ -20,6 +20,8 @@ class CharacterRequest(Base):
     age = Column(Integer, nullable=True)
     weight = Column(String(10), nullable=True)
     height = Column(String(10), nullable=True)
+    id_race = Column(Integer, nullable=False)
+
 
 
 class Character(Base):
@@ -43,6 +45,7 @@ class Character(Base):
     age = Column(Integer, nullable=True)
     weight = Column(String(10), nullable=True)
     height = Column(String(10), nullable=True)
+    id_race = Column(Integer, nullable=False)
 
 class Race(Base):
     __tablename__ = "races"
@@ -65,3 +68,8 @@ class Subrace(Base):
 
     # Связь с расами
     race = relationship("Race", back_populates="subraces")
+class Class(Base):
+    __tablename__ = "classes"
+    id_class = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), nullable=False)
+    description = Column(Text, nullable=True)

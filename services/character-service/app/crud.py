@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 import models, schemas
 from sqlalchemy.orm import joinedload
 
+
 # Функция для создания заявки на персонажа
 def create_character_request(db: Session, request: schemas.CharacterRequestCreate, user_id: int):
     """
@@ -187,7 +188,7 @@ async def send_equipment_slots_request(character_id: int):
         return None
 
 
-
+'''
 # Получение заявок, которые находятся на модерации
 def get_moderation_requests(db: Session):
     """
@@ -199,3 +200,54 @@ def get_moderation_requests(db: Session):
     except Exception as e:
         print(f"Ошибка: {e}")
         return []
+'''
+
+
+def get_moderation_requests(db: Session):
+    """
+    Получает все заявки, которые находятся на модерации, с названиями класса, расы и подрасы.
+    """
+    try:
+        # Выполняем запрос для получения заявок на модерацию
+        moderation_requests = (
+            db.query(models.CharacterRequest)
+            .filter(models.CharacterRequest.status.in_(['pending', 'rejected', 'approved']))
+            .all()
+        )
+
+        results = []
+        for request in moderation_requests:
+            # Получаем данные подрасы и расы
+            subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == request.id_subrace).first()
+            race = db.query(models.Race).filter(models.Race.id_race == subrace.id_race).first() if subrace else None
+
+            # Получаем данные о классе
+            char_class = db.query(models.Class).filter(models.Class.id_class == request.id_class).first()
+            created_at_str = request.created_at.strftime('%Y-%m-%dT%H:%M:%S')if request.created_at else None
+            # Собираем результат
+            results.append(
+                {
+                "id": request.id,
+                "id_subrace": request.id_subrace,
+                "biography": request.biography,
+                "personality": request.personality,
+                "id_class": request.id_class,
+                "appearance": request.appearance,
+                "background": request.background,
+                "age": request.age,
+                "weight": request.weight,
+                "height": request.height,
+                "name": request.name,
+                "status": request.status,
+                "created_at": created_at_str,
+                "user_id": request.user_id,
+                "race_name": race.name if race else "Unknown",
+                "subrace_name": subrace.name if subrace else "Unknown",
+                "class_name": char_class.name if char_class else "Unknown",
+            })
+
+        return results
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        return []
+
