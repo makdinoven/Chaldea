@@ -1,4 +1,4 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, useEffect } from 'react';
 import useNavigateTo from '../../hooks/useNavigateTo';
 import { useRequireAuth } from '../../hooks/useRequireAuth';
 import axios from 'axios';
@@ -7,6 +7,7 @@ import Header from '../CommonComponents/Header/Header';
 import RacePage from './RacePage/RacePage';
 import ClassPage from './ClassPage/ClassPage';
 import BiographyPage from './BiographyPage/BiographyPage';
+import SubmitPage from './SubmitPage/SubmitPage';
 
 import Pagination from './Pagination/Pagination';
 
@@ -24,11 +25,24 @@ export default function CreateCharacterPage({}) {
   const [selectedRaceId, setSelectedRaceId] = useState(0);
   const [selectedSubraceId, setSelectedSubraceId] = useState(0);
   const [selectedClassId, setSelectedClassId] = useState(0);
+  const [biography, setBiography] = useState({
+    biography: '',
+    personality: '',
+    appearance: '',
+    name: '',
+    age: '',
+    height: '',
+    weight: '',
+    origin: '',
+    sex: '',
+  });
 
-  axios
-    .get('/character/races')
-    .then((response) => console.log(response.data))
-    .catch((error) => console.error(error));
+  useEffect(() => {
+    axios
+      .get('/character/races')
+      .then((response) => console.log(response.data))
+      .catch((error) => console.error(error));
+  }, []);
 
   useRequireAuth();
 
@@ -41,6 +55,10 @@ export default function CreateCharacterPage({}) {
   //   console.log('Selected Subrace:', selectedSubraceId);
   //   console.log('Selected Class:', selectedClassId);
   // }, [selectedRaceId, selectedSubraceId, selectedClassId]);
+
+  const handleFormValuesChange = (formValues) => {
+    setBiography(formValues);
+  };
 
   const renderComponentById = (id) => {
     switch (id) {
@@ -69,9 +87,20 @@ export default function CreateCharacterPage({}) {
       case 2:
         return (
           <BiographyPage
-            selectedRaceId={selectedRaceId}
-            selectedSubraceId={selectedSubraceId}
-            selectedClassId={selectedClassId}
+            onFormValuesChange={handleFormValuesChange}
+            enteredFormValues={biography}
+          />
+        );
+      case 3:
+        return (
+          <SubmitPage
+            biography={biography}
+            selectedRace={data[0].pageData.races[selectedRaceId].raceName}
+            selectedSubrace={
+              data[0].pageData.races[selectedRaceId].subraces[selectedSubraceId]
+                .subraceName
+            }
+            selectedClass={data[1].classes[selectedClassId].name}
           />
         );
 
@@ -259,6 +288,7 @@ export default function CreateCharacterPage({}) {
       ],
     },
     { pageId: 2, pageTitle: 'Ввод биографии', pageData: { images: '' } },
+    { pageId: 3, pageTitle: 'Ваш персонаж', pageData: { images: '' } },
   ];
 
   return (

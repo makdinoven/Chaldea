@@ -45,16 +45,8 @@ export default function RaceCarousel({ races, onRaceChange, selectedRace }) {
   return (
     <div className={styles.carousel}>
       <div className={styles.buttons_container}>
-        <ArrowButton
-          disabled={currentIndex === 0}
-          text='&lt;'
-          onClick={handlePrev}
-        />
-        <ArrowButton
-          disabled={currentIndex === races.length - 1}
-          text='&gt;'
-          onClick={handleNext}
-        />
+        <ArrowButton text='&lt;' onClick={handlePrev} />
+        <ArrowButton text='&gt;' onClick={handleNext} />
       </div>
 
       <div className={styles.images_container}>
