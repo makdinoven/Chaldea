@@ -1,6 +1,5 @@
 from sqlalchemy.orm import Session
 import models, schemas
-from sqlalchemy.orm import joinedload
 
 
 # Функция для создания заявки на персонажа
@@ -16,7 +15,7 @@ def create_character_request(db: Session, request: schemas.CharacterRequestCreat
         biography=request.biography,
         personality=request.personality,
         id_class=request.id_class,
-        #sex=request.sex,
+        # sex=request.sex,
         appearance=request.appearance
     )
     db.add(db_request)
@@ -48,6 +47,7 @@ def create_preliminary_character(db: Session, character_request: models.Characte
     db.refresh(new_character)
     return new_character
 
+
 # Обновление статуса заявки
 def update_character_request_status(db: Session, request_id: int, status: str):
     """
@@ -60,6 +60,7 @@ def update_character_request_status(db: Session, request_id: int, status: str):
         db.refresh(db_request)
         return db_request
     return None
+
 
 # Функция для обновления персонажа после получения зависимостей
 def update_character_with_dependencies(db: Session, character_id: int,
@@ -131,7 +132,8 @@ def delete_character(db: Session, character_id: int):
         return True
     return False
 
-#Получение всех рас и подрас
+
+# Получение всех рас и подрас
 def get_all_races_and_subraces(db: Session):
     races = db.query(models.Race).all()
     subraces = db.query(models.Subrace).all()
@@ -215,39 +217,42 @@ def get_moderation_requests(db: Session):
             .all()
         )
 
-        results = []
+        results = {}
         for request in moderation_requests:
+
             # Получаем данные подрасы и расы
             subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == request.id_subrace).first()
-            race = db.query(models.Race).filter(models.Race.id_race == subrace.id_race).first() if subrace else None
+            race = db.query(models.Race).filter(models.Race.id_race == request.id_race).first()
 
             # Получаем данные о классе
             char_class = db.query(models.Class).filter(models.Class.id_class == request.id_class).first()
-            created_at_str = request.created_at.strftime('%Y-%m-%dT%H:%M:%S')if request.created_at else None
+            created_at_str = request.created_at.strftime('%Y-%m-%dT%H:%M:%S') if request.created_at else None
             # Собираем результат
-            results.append(
-                {
-                "id": request.id,
-                "id_subrace": request.id_subrace,
-                "biography": request.biography,
-                "personality": request.personality,
-                "id_class": request.id_class,
-                "appearance": request.appearance,
-                "background": request.background,
-                "age": request.age,
-                "weight": request.weight,
-                "height": request.height,
-                "name": request.name,
-                "status": request.status,
-                "created_at": created_at_str,
-                "user_id": request.user_id,
-                "race_name": race.name if race else "Unknown",
-                "subrace_name": subrace.name if subrace else "Unknown",
-                "class_name": char_class.name if char_class else "Unknown",
-            })
+            if request.id not in results:
+                results[request.id] = {
 
-        return results
+                        "id": request.id,
+                        "user_id": request.user_id,
+                        "name": request.name,
+                        "biography": request.biography,
+                        "appearance": request.appearance,
+                        "personality": request.personality,
+                        "background": request.background,
+                        "age": request.age,
+                        "weight": request.weight,
+                        "height": request.height,
+                        "id_class": request.id_class,
+                        "class_name": char_class.name if char_class else "Unknown",
+                        "id_race": request.id_race,
+                        "race_name": race.name if race else "Unknown",
+                        "id_subrace": request.id_subrace,
+                        "subrace_name": subrace.name if subrace else "Unknown",
+                        "status": request.status,
+                        "created_at": created_at_str,
+
+                    }
+
+        return list(results.values())
     except Exception as e:
         print(f"Ошибка: {e}")
         return []
-
