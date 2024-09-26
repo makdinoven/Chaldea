@@ -1,18 +1,13 @@
 import styles from './ArrowButton.module.css';
 
-export default function ArrowButton({ text, onClick, disabled }) {
+export default function ArrowButton({ text, onClick }) {
   const handleClick = (e) => {
     e.stopPropagation();
-    if (!disabled && onClick) {
-      onClick(e);
-    }
+    onClick(e);
   };
 
   return (
-    <button
-      onClick={handleClick}
-      className={`${styles.button} ${disabled ? styles.inactive : ''}`}
-    >
+    <button data-text={text} onClick={handleClick} className={styles.button}>
       {text}
     </button>
   );

@@ -1,4 +1,4 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, useEffect } from 'react';
 import useNavigateTo from '../../hooks/useNavigateTo';
 import { useRequireAuth } from '../../hooks/useRequireAuth';
 import axios from 'axios';
@@ -7,6 +7,7 @@ import Header from '../CommonComponents/Header/Header';
 import RacePage from './RacePage/RacePage';
 import ClassPage from './ClassPage/ClassPage';
 import BiographyPage from './BiographyPage/BiographyPage';
+import SubmitPage from './SubmitPage/SubmitPage';
 
 import Pagination from './Pagination/Pagination';
 
@@ -17,6 +18,7 @@ import starikImg from '../../assets/starikImage.png';
 import warriorImg from '../../assets/classWarriorImg.png';
 import plutImg from '../../assets/classPlutImg.png';
 import magicianImg from '../../assets/classMagicianImg.png';
+import classInventoryImg from '../../assets/classInventoryImg.png';
 
 export default function CreateCharacterPage({}) {
   const navigateTo = useNavigateTo();
@@ -24,11 +26,24 @@ export default function CreateCharacterPage({}) {
   const [selectedRaceId, setSelectedRaceId] = useState(0);
   const [selectedSubraceId, setSelectedSubraceId] = useState(0);
   const [selectedClassId, setSelectedClassId] = useState(0);
+  const [biography, setBiography] = useState({
+    biography: '',
+    personality: '',
+    appearance: '',
+    name: '',
+    age: '',
+    height: '',
+    weight: '',
+    origin: '',
+    sex: '',
+  });
 
-  axios
-    .get('/character/races')
-    .then((response) => console.log(response.data))
-    .catch((error) => console.error(error));
+  useEffect(() => {
+    axios
+      .get('/character/races')
+      .then((response) => console.log(response.data))
+      .catch((error) => console.error(error));
+  }, []);
 
   useRequireAuth();
 
@@ -41,6 +56,10 @@ export default function CreateCharacterPage({}) {
   //   console.log('Selected Subrace:', selectedSubraceId);
   //   console.log('Selected Class:', selectedClassId);
   // }, [selectedRaceId, selectedSubraceId, selectedClassId]);
+
+  const handleFormValuesChange = (formValues) => {
+    setBiography(formValues);
+  };
 
   const renderComponentById = (id) => {
     switch (id) {
@@ -69,9 +88,20 @@ export default function CreateCharacterPage({}) {
       case 2:
         return (
           <BiographyPage
-            selectedRaceId={selectedRaceId}
-            selectedSubraceId={selectedSubraceId}
-            selectedClassId={selectedClassId}
+            onFormValuesChange={handleFormValuesChange}
+            enteredFormValues={biography}
+          />
+        );
+      case 3:
+        return (
+          <SubmitPage
+            biography={biography}
+            selectedRace={data[0].pageData.races[selectedRaceId].raceName}
+            selectedSubrace={
+              data[0].pageData.races[selectedRaceId].subraces[selectedSubraceId]
+                .subraceName
+            }
+            selectedClass={data[1].classes[selectedClassId].name}
           />
         );
 
@@ -253,12 +283,63 @@ export default function CreateCharacterPage({}) {
       pageId: 1,
       pageTitle: 'Выбор класса',
       classes: [
-        { id: 0, name: 'Воин', img: warriorImg },
-        { id: 1, name: 'Плут', img: plutImg },
-        { id: 2, name: 'Маг', img: magicianImg },
+        {
+          id: 0,
+          name: 'Воин',
+          img: warriorImg,
+          features:
+            'Воин да и воин хуль с него взять то пиздит всех мечом налево направо',
+          inventory: [
+            { name: 'item1', link: '/shop/item1', img: classInventoryImg },
+            { name: 'item2', link: '/shop/item2', img: classInventoryImg },
+            { name: 'item3', link: '/shop/item3', img: classInventoryImg },
+            { name: 'item4', link: '/shop/item4', img: classInventoryImg },
+          ],
+          skills: [
+            { name: 'skill1', link: '/shop/skill1', img: classInventoryImg },
+            { name: 'skill2', link: '/shop/skill2', img: classInventoryImg },
+            { name: 'skill3', link: '/shop/skill3', img: classInventoryImg },
+          ],
+        },
+        {
+          id: 1,
+          name: 'Плут',
+          img: plutImg,
+          features:
+            'Имеет огромный хуй, трахает всех подряд и жестко кайфует от жизни',
+          inventory: [
+            { name: 'item1', link: '/shop/item1', img: classInventoryImg },
+            { name: 'item2', link: '/shop/item2', img: classInventoryImg },
+            { name: 'item3', link: '/shop/item3', img: classInventoryImg },
+            { name: 'item4', link: '/shop/item4', img: classInventoryImg },
+          ],
+          skills: [
+            { name: 'skill1', link: '/shop/skill1', img: classInventoryImg },
+            { name: 'skill2', link: '/shop/skill2', img: classInventoryImg },
+            { name: 'skill3', link: '/shop/skill3', img: classInventoryImg },
+          ],
+        },
+        {
+          id: 2,
+          name: 'Маг',
+          img: magicianImg,
+          features: 'Кастует какуюто хуйню и делает пафосное ебло',
+          inventory: [
+            { name: 'item1', link: '/shop/item1', img: classInventoryImg },
+            { name: 'item2', link: '/shop/item2', img: classInventoryImg },
+            { name: 'item3', link: '/shop/item3', img: classInventoryImg },
+            { name: 'item4', link: '/shop/item4', img: classInventoryImg },
+          ],
+          skills: [
+            { name: 'skill1', link: '/shop/skill1', img: classInventoryImg },
+            { name: 'skill2', link: '/shop/skill2', img: classInventoryImg },
+            { name: 'skill3', link: '/shop/skill3', img: classInventoryImg },
+          ],
+        },
       ],
     },
-    { pageId: 2, pageTitle: 'Ввод биографии', pageData: { images: '' } },
+    { pageId: 2, pageTitle: 'Ввод биографии' },
+    { pageId: 3, pageTitle: 'Ваш персонаж' },
   ];
 
   return (
