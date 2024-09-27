@@ -14,6 +14,7 @@ export default function SubmitPage({
   selectedClass,
 }) {
   const fileInputRef = useRef(null);
+  const [avatarUrl, setAvatarUrl] = useState('');
 
   const handlePhotoInputClick = () => {
     fileInputRef.current.click();
@@ -35,26 +36,38 @@ export default function SubmitPage({
 
   const sendPhoto = () => {
     const file = fileInputRef.current.files[0];
+    const user_id = 1; // Идентификатор пользователя
+
     if (!file) {
       console.log('Файл не выбран');
       return;
     }
 
     const formData = new FormData();
-    formData.append('avatar', file); // 'avatar' — это имя поля, которое будет на сервере.
+    formData.append('file', file); // 'file' — это ключ для файла, как ожидается сервером
+    formData.append('user_id', user_id); // Передаем также user_id отдельно
 
     axios
-      .post('/upload-photo', formData, {
+      .post('/photo/upload-photo_user_avatar', formData, {
         headers: {
           'Content-Type': 'multipart/form-data', // Указывает, что передаём данные формы
         },
       })
       .then((response) => {
-        console.log('Фото загружено успешно:', response.data);
+        const { avatar_url } = response.data; // Получаем URL аватара из ответа
+        setAvatarUrl(avatar_url); // Сохраняем его в состоянии
+        console.log('Фото загружено успешно:', avatar_url);
       })
       .catch((error) => {
         console.error('Ошибка загрузки фото:', error);
       });
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      sendPhoto(file); // Отправляем фото сразу после выбора
+    }
   };
 
   const characterItemsSmall = [
@@ -74,19 +87,22 @@ export default function SubmitPage({
             // style={{ backgroundImage: url('../../../assets/menu2.png') }}
             className={styles.custom_file_upload}
             onClick={handlePhotoInputClick}
+            style={{
+              backgroundImage: `url(${avatarUrl})`,
+            }}
           >
             <div className={styles.character_name_container}>
               <span className={styles.character_name}>{biography.name}</span>
             </div>
             <label htmlFor='fileInput'>Сменить аватар</label>
             <input
+              onChange={handleFileChange}
               ref={fileInputRef}
               type='file'
               id='fileInput'
               accept='image/*'
             />
           </div>
-          <button onClick={sendPhoto}>Отправить фото</button>
 
           <div className={styles.smallInfo_container}>
             {characterItemsSmall.map((item, index) => (
