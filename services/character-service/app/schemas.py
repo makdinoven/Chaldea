@@ -22,7 +22,7 @@ class CharacterRequestBase(BaseModel):
     user_id: Optional[int]
     race_name: str
     subrace_name: str
-
+    avatar : str
     class_name: str
     created_at: datetime
     class Config:

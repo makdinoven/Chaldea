@@ -21,6 +21,7 @@ class CharacterRequest(Base):
     weight = Column(String(10), nullable=True)
     height = Column(String(10), nullable=True)
     id_race = Column(Integer, nullable=False)
+    avatar = Column(String(255), nullable=False)
 
 
 
@@ -46,6 +47,7 @@ class Character(Base):
     weight = Column(String(10), nullable=True)
     height = Column(String(10), nullable=True)
     id_race = Column(Integer, nullable=False)
+    avatar = Column(String(255), nullable=False)
 
 class Race(Base):
     __tablename__ = "races"

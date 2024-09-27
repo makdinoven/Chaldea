@@ -16,6 +16,7 @@ class Items(Base):
     is_sellable = Column(Boolean, default=False)
     price = Column(Integer, nullable=True)
     is_rare = Column(Boolean, nullable=False, default=False)
+    image = Column(String(255), nullable=True)
 
     # Обратная связь с CharacterInventory и EquipmentSlot
     inventories = relationship("CharacterInventory", back_populates="item")
