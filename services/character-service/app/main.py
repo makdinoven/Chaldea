@@ -238,7 +238,7 @@ async def reject_character_request(request_id: int, db: Session = Depends(get_db
         raise HTTPException(status_code=500, detail="Ошибка при отклонении заявки")
 
 #Возвращает список всех рас, их подрас и атрибуты для каждой подрасы.
-@router.get("/races", response_model=dict)
+@router.get("/metadata", response_model=dict)
 async def get_races_and_subraces(db: Session = Depends(get_db)):
 
     try:
