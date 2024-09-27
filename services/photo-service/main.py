@@ -1,8 +1,7 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, APIRouter, Form
 from google.cloud import storage
-import pymysql
-import os
 import uuid
+from crud import *
 
 app = FastAPI()
 
@@ -12,39 +11,8 @@ router = APIRouter(prefix="/photo")
 bucket_name = os.getenv('GCS_BUCKET_NAME')
 gcs_client = storage.Client()
 
-# Настройка подключения к базе данных
-db_config = {
-    'user': os.getenv('DB_USERNAME'),
-    'password': os.getenv('DB_PASSWORD'),
-    'host': os.getenv('DB_HOST'),
-    'database': os.getenv('DB_DATABASE'),
-}
 
-
-def get_db_connection():
-    """Создание подключения к базе данных MySQL"""
-    return pymysql.connect(
-        host=db_config['host'],
-        user=db_config['user'],
-        password=db_config['password'],
-        database=db_config['database'],
-        cursorclass=pymysql.cursors.DictCursor
-    )
-
-
-def update_user_avatar(user_id: int, avatar_url: str):
-    """Обновление URL аватара в таблице пользователей"""
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            query = "UPDATE users SET avatar = %s WHERE id = %s"
-            cursor.execute(query, (avatar_url, user_id))
-            connection.commit()
-    finally:
-        connection.close()
-
-
-def generate_unique_filename(user_id: int, original_filename: str, prefix: str = "profile_photo") -> str:
+def generate_unique_filename_for_profile_photo(user_id: int, original_filename: str, prefix: str = "profile_photo") -> str:
     """Генерация уникального имени файла для сохранения в GCS"""
     # Извлечение расширения файла (например, .jpg, .png)
     extension = os.path.splitext(original_filename)[1]
@@ -53,12 +21,12 @@ def generate_unique_filename(user_id: int, original_filename: str, prefix: str =
     return unique_filename
 
 
-@router.post("/upload-photo_user_avatar")
+@router.post("/change_user_avatar_photo")
 async def upload_photo(user_id: int = Form(...), file: UploadFile = File(...)):
     """Загрузка фотографии пользователя в Google Cloud Storage"""
     try:
         # Генерация уникального имени файла с префиксом и user_id
-        unique_filename = generate_unique_filename(user_id, file.filename)
+        unique_filename = generate_unique_filename_for_profile_photo(user_id, file.filename)
 
         # Получение бакета по имени
         bucket = gcs_client.bucket(bucket_name)
@@ -82,9 +50,10 @@ async def upload_photo(user_id: int = Form(...), file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Ошибка при загрузке фотографии: {e}")
 
 
-@app.delete("/delete-photo")
+@app.delete("/delete_user_avatar_photo")
 async def delete_photo(user_id: int):
     """Удаление фотографии пользователя"""
+    global connection
     try:
         # Получение текущего URL аватара из БД
         connection = get_db_connection()
