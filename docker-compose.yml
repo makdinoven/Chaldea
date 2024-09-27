@@ -186,6 +186,21 @@ services:
     ports:
       - "8005:8005"
 
+  locations-service:
+    build:
+      context: .
+      dockerfile: ./docker/locations-service/Dockerfile
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      DB_HOST: mysql
+      DB_DATABASE: mydatabase
+      DB_USERNAME: myuser
+      DB_PASSWORD: mypassword
+    depends_on:
+      - mysql
+    ports:
+      - "8006:8006"
+
 
   api-gateway:
     build:

@@ -1,10 +1,12 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, APIRouter
 from google.cloud import storage
 import pymysql
 import os
 import uuid
 
 app = FastAPI()
+
+router = APIRouter(prefix="/photo")
 
 # Настройка клиента GCS
 bucket_name = os.getenv('GCS_BUCKET_NAME')
@@ -110,3 +112,5 @@ async def delete_photo(user_id: int):
 
     finally:
         connection.close()
+
+app.include_router(router)
