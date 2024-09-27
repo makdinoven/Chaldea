@@ -243,7 +243,6 @@ async def get_races_and_subraces(db: Session = Depends(get_db)):
 
     try:
         races_data = crud.get_all_races_and_subraces(db)
-
         # Добавляем атрибуты к каждой подрасе на основе ее id
         for race_id, race_info in races_data.items():
             for subrace in race_info["subraces"]:
