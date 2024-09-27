@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, APIRouter
+from fastapi import FastAPI, File, UploadFile, HTTPException, APIRouter, Form
 from google.cloud import storage
 import pymysql
 import os
@@ -53,8 +53,8 @@ def generate_unique_filename(user_id: int, original_filename: str, prefix: str =
     return unique_filename
 
 
-@app.post("/upload-photo")
-async def upload_photo(user_id: int, file: UploadFile = File(...)):
+@router.post("/upload-photo_user_avatar")
+async def upload_photo(user_id: int = Form(...), file: UploadFile = File(...)):
     """Загрузка фотографии пользователя в Google Cloud Storage"""
     try:
         # Генерация уникального имени файла с префиксом и user_id
@@ -66,6 +66,7 @@ async def upload_photo(user_id: int, file: UploadFile = File(...)):
         # Создание объекта (blob) в бакете с уникальным именем файла
         blob = bucket.blob(unique_filename)
 
+        
         # Загрузка файла в GCS из переданного файла
         blob.upload_from_file(file.file)
 

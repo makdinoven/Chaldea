@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import axios from 'axios';
 
 import FormButton from '../../CommonComponents/BlueGradientButton/BlueGradientButton';
 import CharacterInfo from './CharacterInfo/CharacterInfo';
@@ -13,6 +14,7 @@ export default function SubmitPage({
   selectedClass,
 }) {
   const fileInputRef = useRef(null);
+  const [avatarUrl, setAvatarUrl] = useState('');
 
   const handlePhotoInputClick = () => {
     fileInputRef.current.click();
@@ -32,6 +34,42 @@ export default function SubmitPage({
     { title: 'Внешность', text: biography.appearance },
   ];
 
+  const sendPhoto = () => {
+    const file = fileInputRef.current.files[0];
+    const user_id = 1; // Идентификатор пользователя
+
+    if (!file) {
+      console.log('Файл не выбран');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file); // 'file' — это ключ для файла, как ожидается сервером
+    formData.append('user_id', user_id); // Передаем также user_id отдельно
+
+    axios
+      .post('/photo/upload-photo_user_avatar', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data', // Указывает, что передаём данные формы
+        },
+      })
+      .then((response) => {
+        const { avatar_url } = response.data; // Получаем URL аватара из ответа
+        setAvatarUrl(avatar_url); // Сохраняем его в состоянии
+        console.log('Фото загружено успешно:', avatar_url);
+      })
+      .catch((error) => {
+        console.error('Ошибка загрузки фото:', error);
+      });
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      sendPhoto(file); // Отправляем фото сразу после выбора
+    }
+  };
+
   const characterItemsSmall = [
     { text: `${selectedRace} - ${selectedSubrace}` },
     { text: selectedClass },
@@ -46,15 +84,19 @@ export default function SubmitPage({
       <div className={styles.submit_container}>
         <div className={styles.left}>
           <div
+            // style={{ backgroundImage: url('../../../assets/menu2.png') }}
             className={styles.custom_file_upload}
             onClick={handlePhotoInputClick}
+            style={{
+              backgroundImage: `url(${avatarUrl})`,
+            }}
           >
             <div className={styles.character_name_container}>
               <span className={styles.character_name}>{biography.name}</span>
             </div>
             <label htmlFor='fileInput'>Сменить аватар</label>
             <input
-              style={{ display: 'none' }}
+              onChange={handleFileChange}
               ref={fileInputRef}
               type='file'
               id='fileInput'
