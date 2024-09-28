@@ -38,6 +38,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
       - mysql_data:/var/lib/mysql
+      - .docker/mysql/backups:/backups
     ports:
       - '3306:3306'
 
