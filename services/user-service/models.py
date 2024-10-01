@@ -15,4 +15,11 @@ class User(Base):
     role = Column(String(100), default='user')  # Роль пользователя ('user', 'admin', и т.д.)
     avatar = Column(String(255), nullable=True)  # URL аватарки пользователя
     balance = Column(Integer, nullable=True) #Баланс доната
-    id_character = Column(Integer, nullable=True) #Номер персонажа
+    #id_character = Column(Integer, nullable=True) #Номер персонажа
+    current_character_id = Column(Integer, nullable=True) #id текущего персонажа
+
+class Character_user(Base):
+    __tablename__ = "character_users"
+    id_row = Column(Integer, primary_key=True, index=True)
+    id_character = Column(Integer, foreign_key=True, index=True)
+    id = Column(Integer, foreign_key=True, index=True)
