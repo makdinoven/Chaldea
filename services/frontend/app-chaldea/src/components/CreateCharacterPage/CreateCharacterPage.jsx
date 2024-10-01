@@ -40,7 +40,7 @@ export default function CreateCharacterPage({}) {
 
   useEffect(() => {
     axios
-      .get('/character/races')
+      .get('/character/metadata')
       .then((response) => console.log(response.data))
       .catch((error) => console.error(error));
   }, []);

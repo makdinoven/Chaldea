@@ -7,6 +7,8 @@ import CharacterInfoSmall from './CharacterInfoSmall/CharacterInfoSmall';
 
 import styles from './SubmitPage.module.css';
 
+import defaultAvatar from '../../../assets/menu2.png';
+
 export default function SubmitPage({
   biography,
   selectedRace,
@@ -14,7 +16,7 @@ export default function SubmitPage({
   selectedClass,
 }) {
   const fileInputRef = useRef(null);
-  const [avatarUrl, setAvatarUrl] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState(defaultAvatar);
 
   const handlePhotoInputClick = () => {
     fileInputRef.current.click();
@@ -27,12 +29,6 @@ export default function SubmitPage({
     console.log('Selected Class:', selectedClass);
     console.log('Form:', biography);
   };
-
-  const biographyItems = [
-    { title: 'Биография', text: biography.biography },
-    { title: 'Личность', text: biography.personality },
-    { title: 'Внешность', text: biography.appearance },
-  ];
 
   const sendPhoto = () => {
     const file = fileInputRef.current.files[0];
@@ -66,17 +62,25 @@ export default function SubmitPage({
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (file) {
-      sendPhoto(file); // Отправляем фото сразу после выбора
+      sendPhoto(file);
     }
   };
 
+  const biographyItems = [
+    { title: 'Биография', text: biography.biography },
+    { title: 'Личность', text: biography.personality },
+    { title: 'Внешность', text: biography.appearance },
+  ];
+
   const characterItemsSmall = [
-    { text: `${selectedRace} - ${selectedSubrace}` },
+    {
+      text: `${selectedRace} - ${selectedSubrace}`,
+    },
     { text: selectedClass },
-    { text: `Возраст : ${biography.age}` },
-    { text: `Рост : ${biography.height}` },
-    { text: `Пол : ${biography.sex}` },
-    { text: biography.origin },
+    { text: biography.age ? `Возраст : ${biography.age}` : null },
+    { text: biography.height ? `Рост : ${biography.height}` : null },
+    { text: biography.sex ? `Пол : ${biography.sex}` : null },
+    { text: biography.origin || null },
   ];
 
   return (
@@ -84,7 +88,6 @@ export default function SubmitPage({
       <div className={styles.submit_container}>
         <div className={styles.left}>
           <div
-            // style={{ backgroundImage: url('../../../assets/menu2.png') }}
             className={styles.custom_file_upload}
             onClick={handlePhotoInputClick}
             style={{
@@ -96,6 +99,7 @@ export default function SubmitPage({
             </div>
             <label htmlFor='fileInput'>Сменить аватар</label>
             <input
+              style={{ display: 'none' }}
               onChange={handleFileChange}
               ref={fileInputRef}
               type='file'
@@ -105,13 +109,16 @@ export default function SubmitPage({
           </div>
 
           <div className={styles.smallInfo_container}>
-            {characterItemsSmall.map((item, index) => (
-              <CharacterInfoSmall
-                key={index}
-                title={item.title}
-                text={item.text}
-              />
-            ))}
+            {characterItemsSmall.map(
+              (item, index) =>
+                item.text && (
+                  <CharacterInfoSmall
+                    key={index}
+                    title={item.title}
+                    text={item.text}
+                  />
+                )
+            )}
           </div>
         </div>
         <div className={styles.right}>

@@ -10,6 +10,7 @@ import styles from './Header.module.css';
 import logo from '../../../assets/logo.png';
 import menuImg1 from '../../../assets/menu1.png';
 import menuImg2 from '../../../assets/menu2.png';
+import menuImg3 from '../../../assets/menuImg.png';
 
 export default function Header({ showMenu }) {
   const navigateTo = useNavigateTo();
@@ -44,14 +45,20 @@ export default function Header({ showMenu }) {
       img: menuImg2,
       title: 'Персонаж',
     },
+    {
+      id: 3,
+      menuButtons: [{ name: 'Заявки', link: '/requestsPage' }],
+      img: menuImg3,
+      title: 'Заявки',
+    },
   ];
 
   return (
     <>
       <header className={styles.header}>
         {showMenu && (
-          <div className={styles.menu_container}>
-            {menuData.map((menu) => (
+          <div className={styles.menu_container_left}>
+            {menuData.slice(0, 2).map((menu) => (
               <Menu
                 key={menu.id}
                 title={menu.title}
@@ -67,7 +74,18 @@ export default function Header({ showMenu }) {
           src={logo}
           alt='Logo'
         />
-        {showMenu && <Search />}
+        {showMenu && (
+          <div className={styles.menu_container_right}>
+            {menuData.slice(2).map((menu) => (
+              <Menu
+                key={menu.id}
+                title={menu.title}
+                menuButtons={menu.menuButtons}
+                backgroundImg={menu.img}
+              />
+            ))}
+          </div>
+        )}
       </header>
     </>
   );

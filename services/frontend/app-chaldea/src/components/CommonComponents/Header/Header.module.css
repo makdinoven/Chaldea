@@ -5,12 +5,19 @@
   background-color: var(--red);
 }
 
-.menu_container {
+.menu_container_left {
   padding-top: 54px;
-  grid-column: 1;
   display: flex;
   gap: 43px;
   align-self: center;
+}
+
+.menu_container_right {
+  padding-top: 54px;
+  display: flex;
+  gap: 43px;
+  align-self: center;
+  justify-content: flex-end;
 }
 
 .logo {
