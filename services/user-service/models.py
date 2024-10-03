@@ -21,5 +21,5 @@ class User(Base):
 class Character_user(Base):
     __tablename__ = "character_users"
     id_row = Column(Integer, primary_key=True, index=True)
-    id_character = Column(Integer, foreign_key=True, index=True)
-    id = Column(Integer, foreign_key=True, index=True)
+    id_character = Column(Integer, ForeignKey=True, index=True)
+    id = Column(Integer, ForeignKey('users.id'), index=True)
