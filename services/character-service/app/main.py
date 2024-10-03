@@ -211,17 +211,20 @@ async def update_user_with_character(user_id: int, character_id: int):
     try:
         # Отправляем запрос в микросервис пользователей для добавления записи в таблицу user_characters
         async with httpx.AsyncClient() as client:
-            # Первый запрос: создаем связь между пользователем и персонажем (user_characters)
+            print(f"Отправляем запрос на создание связи между пользователем {user_id} и персонажем {character_id}")
             create_relation_response = await client.post(
-                f"{settings.USER_SERVICE_URL}/user_characters/",
+                f"{settings.USER_SERVICE_URL}/users/user_characters/",
                 json={"user_id": user_id, "character_id": character_id}
             )
 
-            if create_relation_response.status_code != 201:
+            if create_relation_response.status_code not in [200, 201]:
                 print(f"Ошибка при создании записи в user_characters: {create_relation_response.status_code}")
                 return False
 
+            print(f"Запись в user_characters успешно создана для пользователя {user_id} и персонажа {character_id}")
+
             # Второй запрос: обновляем поле current_character у пользователя
+            print(f"Отправляем запрос на обновление current_character для пользователя {user_id} с персонажем {character_id}")
             update_user_response = await client.put(
                 f"{settings.USER_SERVICE_URL}/users/{user_id}/update_character",
                 json={"current_character": character_id}
@@ -232,12 +235,12 @@ async def update_user_with_character(user_id: int, character_id: int):
                 return True
             else:
                 print(f"Ошибка при обновлении пользователя: {update_user_response.status_code}")
+                print(f"Ответ от сервера: {update_user_response.text}")
                 return False
 
     except Exception as e:
         print(f"Ошибка при отправке запросов на обновление пользователя: {e}")
         return False
-
 
 
 @router.post("/requests/{request_id}/reject")

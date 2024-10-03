@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, UploadFile
 from fastapi.staticfiles import StaticFiles
 import models
+from schemas import *
 from crud import create_user, get_user_by_email, get_user_by_username, authenticate_user  # Импорт CRUD функций
 from auth import *  # Импорт функций аутентификации
 from auth import SECRET_KEY, ALGORITHM
@@ -99,38 +100,38 @@ async def upload_avatar(file: UploadFile, current_user: User = Depends(get_curre
 
 # Эндпоинт для обновления пользователя с присвоением персонажа
 @router.put("/{user_id}/update_character")
-def update_user_character(user_id: int, character_data: dict, db: Session = Depends(get_db)):
+async def update_user_character(user_id: int, character_data: dict, db: Session = Depends(get_db)):
     """
-    Обновляет пользователя, присваивая ему персонажа.
+    Обновляет поле current_character пользователя.
     """
-    character_id = character_data.get("character_id")
+    character_id = character_data.get("current_character")
 
     if character_id is None:
-        raise HTTPException(status_code=400, detail="character_id обязателен")
+        raise HTTPException(status_code=400, detail="current_character обязателен")
 
-    print(f"Запрос на обновление пользователя с ID {user_id} и персонажем {character_id}")
-
-    # Поиск пользователя в базе данных
+    # Поиск пользователя
     db_user = db.query(models.User).filter(models.User.id == user_id).first()
-
     if not db_user:
-        print(f"Пользователь с ID {user_id} не найден")
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
-    try:
-        # Обновление текущего персонажа пользователя
-        db_user.current_character = character_id
-        db.commit()
+    # Обновление поля current_character
+    print(f"Текущий персонаж до обновления: {db_user.current_character}")
+    db_user.current_character = character_id
+    db.commit()
+    print(f"Текущий персонаж после обновления: {db_user.current_character}")
 
-        print(f"Пользователь с ID {user_id} успешно обновлен с персонажем {db_user.current_character}")
+    return {"message": f"Пользователь с ID {user_id} успешно обновлен. Текущий персонаж: {db_user.current_character}"}
 
-        return {"message": f"Пользователю с ID {user_id} присвоен персонаж с ID {db_user.current_character}"}
 
-    except Exception as e:
-        db.rollback()  # Откат транзакции в случае ошибки
-        print(f"Ошибка при обновлении пользователя с ID {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Ошибка при обновлении пользователя")
-
+@router.post("/user_characters/")
+async def create_user_character_relation(user_character: UserCharacterCreate, db: Session = Depends(get_db)):
+    """
+    Создает связь между пользователем и персонажем.
+    """
+    db_relation = models.UserCharacter(user_id=user_character.user_id, character_id=user_character.character_id)
+    db.add(db_relation)
+    db.commit()
+    return {"message": "Связь между пользователем и персонажем создана"}
 
 # Настройка статических файлов
 app.mount("/assets", StaticFiles(directory="src/assets"), name="assets")

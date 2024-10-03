@@ -33,7 +33,7 @@ def create_character_request(db: Session, request: schemas.CharacterRequestCreat
 
 
 ## Функция для создания предварительного персонажа (с указанием user_id)
-def create_preliminary_character(db: Session, character_request: models.CharacterRequest,user_id: int):
+def create_preliminary_character(db: Session, character_request: models.CharacterRequest):
     """
     Создает предварительную запись персонажа с указанием user_id из заявки.
     """
@@ -41,7 +41,8 @@ def create_preliminary_character(db: Session, character_request: models.Characte
         id_item_inventory=None,
         id_skill_inventory=None,
         id_attributes=None,
-        user_id=user_id,
+        request_id=character_request.id,
+        user_id=character_request.user_id,
         name=character_request.name,
         id_subrace=character_request.id_subrace,
         id_race=character_request.id_race,
