@@ -5,6 +5,13 @@ echo "Скрипт восстановления запущен." >> /tmp/restore
 BACKUP_DIR="/backups"
 LATEST_BACKUP=$(ls -t $BACKUP_DIR/*.sql | head -n 1)
 
+# Ожидание доступности MySQL с помощью mysqladmin ping
+echo "Ожидание доступности MySQL..." >> /tmp/restore_log.txt
+while ! mysqladmin ping -h "localhost" --silent; do
+    echo "MySQL недоступен. Ждем..." >> /tmp/restore_log.txt
+    sleep 5
+done
+
 if [ -f "$LATEST_BACKUP" ]; then
     echo "Восстанавливаю базу данных из бекапа: $LATEST_BACKUP" >> /tmp/restore_log.txt
 

@@ -71,7 +71,9 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
         )
 
         crud.update_character_request_status(db, request_id, "approved")
-        assign_result = await assign_character_to_user(db_request.user_id, updated_character.id)
+
+        # Присваиваем персонажа пользователю и обновляем current_character через API
+        assign_result = await update_user_with_character(db_request.user_id, updated_character.id)
         if not assign_result:
             raise HTTPException(status_code=500, detail="Не удалось присвоить персонажа пользователю")
 
@@ -207,16 +209,33 @@ async def delete_character(character_id: int, db: Session = Depends(get_db)):
 # Отправка запроса на обновление пользователя в user-service
 async def update_user_with_character(user_id: int, character_id: int):
     try:
+        # Отправляем запрос в микросервис пользователей для добавления записи в таблицу user_characters
         async with httpx.AsyncClient() as client:
-            response = await client.put(f"{settings.USER_SERVICE_URL}users/{user_id}/update_character", json={"character_id": character_id})
-            if response.status_code == 200:
+            # Первый запрос: создаем связь между пользователем и персонажем (user_characters)
+            create_relation_response = await client.post(
+                f"{settings.USER_SERVICE_URL}/user_characters/",
+                json={"user_id": user_id, "character_id": character_id}
+            )
+
+            if create_relation_response.status_code != 201:
+                print(f"Ошибка при создании записи в user_characters: {create_relation_response.status_code}")
+                return False
+
+            # Второй запрос: обновляем поле current_character у пользователя
+            update_user_response = await client.put(
+                f"{settings.USER_SERVICE_URL}/users/{user_id}/update_character",
+                json={"current_character": character_id}
+            )
+
+            if update_user_response.status_code == 200:
                 print(f"Пользователь с ID {user_id} успешно обновлен с персонажем ID {character_id}")
                 return True
             else:
-                print(f"Ошибка при обновлении пользователя: {response.status_code}")
+                print(f"Ошибка при обновлении пользователя: {update_user_response.status_code}")
                 return False
+
     except Exception as e:
-        print(f"Ошибка при отправке запроса на обновление пользователя: {e}")
+        print(f"Ошибка при отправке запросов на обновление пользователя: {e}")
         return False
 
 

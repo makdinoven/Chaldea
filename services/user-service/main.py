@@ -103,19 +103,33 @@ def update_user_character(user_id: int, character_data: dict, db: Session = Depe
     """
     Обновляет пользователя, присваивая ему персонажа.
     """
-    print(f"Запрос на обновление пользователя с ID {user_id} и персонажем {character_data.get('character_id')}")
+    character_id = character_data.get("character_id")
 
+    if character_id is None:
+        raise HTTPException(status_code=400, detail="character_id обязателен")
+
+    print(f"Запрос на обновление пользователя с ID {user_id} и персонажем {character_id}")
+
+    # Поиск пользователя в базе данных
     db_user = db.query(models.User).filter(models.User.id == user_id).first()
+
     if not db_user:
         print(f"Пользователь с ID {user_id} не найден")
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
-    db_user.id_character = character_data.get("character_id")
-    db.commit()
+    try:
+        # Обновление текущего персонажа пользователя
+        db_user.current_character = character_id
+        db.commit()
 
-    print(f"Пользователь с ID {user_id} успешно обновлен с персонажем {db_user.id_character}")
+        print(f"Пользователь с ID {user_id} успешно обновлен с персонажем {db_user.current_character}")
 
-    return {"message": f"Пользователю с ID {user_id} присвоен персонаж с ID {db_user.id_character}"}
+        return {"message": f"Пользователю с ID {user_id} присвоен персонаж с ID {db_user.current_character}"}
+
+    except Exception as e:
+        db.rollback()  # Откат транзакции в случае ошибки
+        print(f"Ошибка при обновлении пользователя с ID {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении пользователя")
 
 
 # Настройка статических файлов

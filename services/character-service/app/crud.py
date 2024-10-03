@@ -1,5 +1,7 @@
+import httpx
 from sqlalchemy.orm import Session
 import models, schemas
+from config import settings
 
 
 # Функция для создания заявки на персонажа
@@ -12,10 +14,16 @@ def create_character_request(db: Session, request: schemas.CharacterRequestCreat
         user_id=user_id,
         name=request.name,
         id_subrace=request.id_subrace,
+        id_race=request.id_race,
+        background=request.background,
+        age=request.age,
+        weight=request.weight,
+        height=request.height,
+        avatar=request.avatar,
         biography=request.biography,
         personality=request.personality,
         id_class=request.id_class,
-        # sex=request.sex,
+        sex=request.sex,
         appearance=request.appearance
     )
     db.add(db_request)
@@ -25,22 +33,28 @@ def create_character_request(db: Session, request: schemas.CharacterRequestCreat
 
 
 ## Функция для создания предварительного персонажа (с указанием user_id)
-def create_preliminary_character(db: Session, character_request: models.CharacterRequest):
+def create_preliminary_character(db: Session, character_request: models.CharacterRequest,user_id: int):
     """
     Создает предварительную запись персонажа с указанием user_id из заявки.
     """
     new_character = models.Character(
-        name=character_request.name,
-        id_subrace=character_request.id_subrace,
-        biography=character_request.biography,
-        personality=character_request.personality,
         id_item_inventory=None,
         id_skill_inventory=None,
         id_attributes=None,
+        user_id=user_id,
+        name=character_request.name,
+        id_subrace=character_request.id_subrace,
+        id_race=character_request.id_race,
+        background=character_request.background,
+        age=character_request.age,
+        weight=character_request.weight,
+        height=character_request.height,
+        avatar=character_request.avatar,
+        biography=character_request.biography,
+        personality=character_request.personality,
         id_class=character_request.id_class,
-        currency_balance=0,
-        user_id=character_request.user_id,  # Присваиваем user_id из заявки
-        request_id=character_request.id  # Связь с заявкой
+        sex=character_request.sex,
+        appearance=character_request.appearance
     )
     db.add(new_character)
     db.commit()

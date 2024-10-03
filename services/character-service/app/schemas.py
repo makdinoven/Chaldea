@@ -5,31 +5,20 @@ from datetime import datetime
 
 # Базовая схема для заявки на создание персонажа
 class CharacterRequestBase(BaseModel):
-    id: int
+    name: str
     id_subrace: int
     biography: Optional[str]
     personality: Optional[str]
-    id_class: int
     appearance: str
     background: Optional[str]
     age: Optional[int]
     weight: Optional[str]
     height: Optional[str]
+    sex: Optional[str]
+    id_class: int
     id_race: int
-    name: str
-    status: str
-    created_at: str
     user_id: Optional[int]
-    race_name: str
-    subrace_name: str
     avatar : str
-    class_name: str
-    created_at: datetime
-    class Config:
-        orm_mode = True
-        json_encoders = {
-            datetime: lambda v: v.strftime('%Y-%m-%dT%H:%M:%S'),
-        }
 
 # Схема для создания заявки на персонажа
 class CharacterRequestCreate(CharacterRequestBase):
