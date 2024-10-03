@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
 from datetime import datetime
 from database import Base
 from sqlalchemy.orm import relationship
@@ -15,11 +15,10 @@ class User(Base):
     role = Column(String(100), default='user')  # Роль пользователя ('user', 'admin', и т.д.)
     avatar = Column(String(255), nullable=True)  # URL аватарки пользователя
     balance = Column(Integer, nullable=True) #Баланс доната
-    #id_character = Column(Integer, nullable=True) #Номер персонажа
-    current_character_id = Column(Integer, nullable=True) #id текущего персонажа
+    current_character = Column(Integer, nullable=True, ) #Номер персонажа
 
-class Character_user(Base):
-    __tablename__ = "character_users"
-    id_row = Column(Integer, primary_key=True, index=True)
-    id_character = Column(Integer, ForeignKey=True, index=True)
-    id = Column(Integer, ForeignKey('users.id'), index=True)
+class UserCharacter(Base):
+    __tablename__ = "users_character"
+
+    user_id = Column(Integer,primary_key=True)
+    character_id = Column(Integer,primary_key=True)

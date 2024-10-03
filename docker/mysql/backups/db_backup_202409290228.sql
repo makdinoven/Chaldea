@@ -252,11 +252,7 @@ CREATE TABLE `classes` (
 -- Dumping data for table `classes`
 --
 
-LOCK TABLES `classes` WRITE;
-/*!40000 ALTER TABLE `classes` DISABLE KEYS */;
 INSERT INTO `classes` VALUES (1,'Воин',NULL),(2,'Ловкач',NULL),(3,'Маг',NULL);
-/*!40000 ALTER TABLE `classes` ENABLE KEYS */;
-UNLOCK TABLES;
 
 --
 -- Table structure for table `equipment_slots`
