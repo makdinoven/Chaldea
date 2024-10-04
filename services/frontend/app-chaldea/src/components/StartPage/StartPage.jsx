@@ -9,7 +9,7 @@ export default function StartPage() {
   const [activeButton, setActiveButton] = React.useState('login');
 
   useEffect(() => {
-    console.log('Очистка токенов при монтировании стартовой страницы');
+    // console.log('Очистка токенов при монтировании стартовой страницы');
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
   }, []);
