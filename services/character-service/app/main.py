@@ -6,7 +6,7 @@ import models, schemas, crud
 from database import SessionLocal, engine
 from config import settings
 from presets import SUBRACE_ATTRIBUTES, CLASS_ITEMS # Импортируем пресеты подрас
-from typing import List
+from typing import List, Dict
 
 app = FastAPI()
 
@@ -277,7 +277,7 @@ async def get_races_and_subraces(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Ошибка при получении рас и подрас.")
 
 
-@router.get("/moderation-requests", response_model=List[schemas.CharacterRequest])
+@router.get("/moderation-requests", response_model=Dict)
 async def get_moderation_requests(db: Session = Depends(get_db)):
     """
     Эндпоинт для получения всех заявок на модерации

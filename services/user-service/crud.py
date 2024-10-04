@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from models import User
+from models import *
 from schemas import UserCreate
 from passlib.context import CryptContext
 import re
@@ -35,6 +35,27 @@ def create_user(db: Session, user: UserCreate):
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
+
+    # Добавление записи в таблицу UserAvatarCharacterPreview
+    db_user_avatar_character_preview = UserAvatarCharacterPreview(
+        user_id=db_user.id,
+        avatar=DEFAULT_AVATAR_URL  # можно использовать аватар по умолчанию
+    )
+    db.add(db_user_avatar_character_preview)
+
+    # Добавление записи в таблицу UserAvatarPreview
+    db_user_avatar_preview = UserAvatarPreview(
+        user_id=db_user.id,
+        avatar=DEFAULT_AVATAR_URL  # также можно использовать аватар по умолчанию
+    )
+    db.add(db_user_avatar_preview)
+
+    # Сохранение изменений в базе данных
+    db.commit()
+
+    # Обновление данных пользователя в сессии
+    db.refresh(db_user)
+
     return db_user
 
 # Аутентификация пользователя

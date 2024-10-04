@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
 from datetime import datetime
 from database import Base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, foreign
 
 
 class User(Base):
@@ -22,3 +22,15 @@ class UserCharacter(Base):
 
     user_id = Column(Integer,primary_key=True)
     character_id = Column(Integer,primary_key=True)
+
+class UserAvatarCharacterPreview(Base):
+    __tablename__ = "users_avatar_character_preview"
+    id = Column(Integer,primary_key=True)
+    user_id = Column(Integer,ForeignKey('users.id'))
+    avatar =Column(String(255), nullable=True)
+
+class UserAvatarPreview(Base):
+    __tablename__ = "users_avatar_preview"
+    id = Column(Integer,primary_key=True)
+    user_id = Column(Integer,ForeignKey('users.id'))
+    avatar =Column(String(255), nullable=True)

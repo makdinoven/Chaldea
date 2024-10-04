@@ -1,7 +1,11 @@
 import httpx
-from sqlalchemy.orm import Session
 import models, schemas
 from config import settings
+from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import Session
+from models import CharacterRequest, Race, Subrace, Class
+from sqlalchemy.orm import Session
+
 
 
 # Функция для создания заявки на персонажа
@@ -219,55 +223,95 @@ def get_moderation_requests(db: Session):
         return []
 '''
 
-
 def get_moderation_requests(db: Session):
     """
     Получает все заявки, которые находятся на модерации, с названиями класса, расы и подрасы.
+    Результат: словарь, где ключом является id заявки, а значением словарь с остальными данными заявки.
     """
     try:
-        # Выполняем запрос для получения заявок на модерацию
+        # Выполняем запрос с соединениями таблиц для получения всех данных за один запрос
         moderation_requests = (
-            db.query(models.CharacterRequest)
-            .filter(models.CharacterRequest.status.in_(['pending', 'rejected', 'approved']))
+            db.query(
+                CharacterRequest.id,
+                CharacterRequest.user_id,
+                CharacterRequest.name,
+                CharacterRequest.biography,
+                CharacterRequest.appearance,
+                CharacterRequest.personality,
+                CharacterRequest.background,
+                CharacterRequest.age,
+                CharacterRequest.weight,
+                CharacterRequest.height,
+                CharacterRequest.sex,
+                CharacterRequest.status,
+                CharacterRequest.created_at,
+                CharacterRequest.id_class,
+                Class.name.label('class_name'),
+                CharacterRequest.id_race,
+                Race.name.label('race_name'),
+                CharacterRequest.id_subrace,
+                Subrace.name.label('subrace_name'),
+                CharacterRequest.avatar  # добавляем поле avatar
+            )
+            .join(Race, CharacterRequest.id_race == Race.id_race, isouter=True)
+            .join(Subrace, CharacterRequest.id_subrace == Subrace.id_subrace, isouter=True)
+            .join(Class, CharacterRequest.id_class == Class.id_class, isouter=True)
+            .filter(CharacterRequest.status.in_(['pending', 'rejected', 'approved']))
             .all()
         )
 
+        # Собираем результаты
         results = {}
-        for request in moderation_requests:
+        for (
+            request_id,
+            user_id,
+            name,
+            biography,
+            appearance,
+            personality,
+            background,
+            age,
+            weight,
+            height,
+            sex,
+            status,
+            created_at,
+            id_class,
+            class_name,
+            id_race,
+            race_name,
+            id_subrace,
+            subrace_name,
+            avatar  # поле avatar
+        ) in moderation_requests:
+            created_at_str = created_at.strftime('%Y-%m-%dT%H:%M:%S') if created_at else None
 
-            # Получаем данные подрасы и расы
-            subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == request.id_subrace).first()
-            race = db.query(models.Race).filter(models.Race.id_race == request.id_race).first()
+            # Добавляем в словарь с ключом request_id
+            results[request_id] = {
+                "user_id": user_id,
+                "name": name,
+                "biography": biography,
+                "appearance": appearance,
+                "personality": personality,
+                "background": background,
+                "age": age,
+                "weight": weight,
+                "height": height,
+                "sex": sex,
+                "id_class": id_class,
+                "class_name": class_name if class_name else "Unknown",
+                "id_race": id_race,
+                "race_name": race_name if race_name else "Unknown",
+                "id_subrace": id_subrace,
+                "subrace_name": subrace_name if subrace_name else "Unknown",
+                "status": status,
+                "created_at": created_at_str,
+                "avatar": avatar if avatar else ""  # возвращаем пустую строку, если avatar нет
+            }
 
-            # Получаем данные о классе
-            char_class = db.query(models.Class).filter(models.Class.id_class == request.id_class).first()
-            created_at_str = request.created_at.strftime('%Y-%m-%dT%H:%M:%S') if request.created_at else None
-            # Собираем результат
-            if request.id not in results:
-                results[request.id] = {
+        # Возвращаем результат как словарь с ключом id заявки
+        return results
 
-                        "id": request.id,
-                        "user_id": request.user_id,
-                        "name": request.name,
-                        "biography": request.biography,
-                        "appearance": request.appearance,
-                        "personality": request.personality,
-                        "background": request.background,
-                        "age": request.age,
-                        "weight": request.weight,
-                        "height": request.height,
-                        "id_class": request.id_class,
-                        "class_name": char_class.name if char_class else "Unknown",
-                        "id_race": request.id_race,
-                        "race_name": race.name if race else "Unknown",
-                        "id_subrace": request.id_subrace,
-                        "subrace_name": subrace.name if subrace else "Unknown",
-                        "status": request.status,
-                        "created_at": created_at_str,
-
-                    }
-
-        return list(results.values())
     except Exception as e:
-        print(f"Ошибка: {e}")
-        return []
+        print(f"Ошибка при получении заявок на модерацию: {e}")
+        return {}
