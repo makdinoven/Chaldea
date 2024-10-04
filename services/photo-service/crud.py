@@ -69,7 +69,7 @@ def update_character_avatar_preview(user_id: int, avatar_url: str):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            query = "UPDATE character_avatar_preview SET avatar = %s WHERE id = %s"
+            query = "UPDATE users_avatar_character_preview SET avatar = %s WHERE id = %s"
             cursor.execute(query, (avatar_url, user_id))
             connection.commit()
     finally:
