@@ -93,7 +93,35 @@ async def delete_photo(user_id: int):
 
 
 @router.post("/change_character_avatar_photo")
-async def upload_photo(character_id: int = Form(...), file: UploadFile = File(...)):
+async def upload_photo_character(character_id: int = Form(...), file: UploadFile = File(...), user_id: int = Form(...)):
+    """Загрузка фотографии пользователя в Google Cloud Storage"""
+    try:
+        # Генерация уникального имени файла с префиксом и user_id
+        unique_filename = generate_unique_filename_for_profile_photo(character_id, file.filename)
+
+        # Получение бакета по имени
+        bucket = gcs_client.bucket(bucket_name)
+
+        # Создание объекта (blob) в бакете с уникальным именем файла
+        blob = bucket.blob(unique_filename)
+
+        # Загрузка файла в GCS из переданного файла
+        blob.upload_from_file(file.file)
+
+        # Получение публичного URL загруженного файла
+        avatar_url = blob.public_url
+
+        # Обновление URL аватара в БД
+        update_character_avatar(character_id, avatar_url, user_id)
+
+        return {"message": "Фото успешно загружено", "avatar_url": avatar_url}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при загрузке фотографии: {e}")
+
+
+@router.post("/character_avatar_preview")
+async def upload_photo(user_id: int = Form(...), file: UploadFile = File(...)):
     """Загрузка фотографии пользователя в Google Cloud Storage"""
     try:
         # Генерация уникального имени файла с префиксом и user_id
@@ -112,12 +140,38 @@ async def upload_photo(character_id: int = Form(...), file: UploadFile = File(..
         avatar_url = blob.public_url
 
         # Обновление URL аватара в БД
-        update_user_avatar(user_id, avatar_url)
+        update_character_avatar_preview(user_id, avatar_url)
 
         return {"message": "Фото успешно загружено", "avatar_url": avatar_url}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при загрузке фотографии: {e}")
 
+@router.post("/user_avatar_preview")
+async def upload_photo(user_id: int = Form(...), file: UploadFile = File(...)):
+    """Загрузка фотографии пользователя в Google Cloud Storage"""
+    try:
+        # Генерация уникального имени файла с префиксом и user_id
+        unique_filename = generate_unique_filename_for_profile_photo(user_id, file.filename)
+
+        # Получение бакета по имени
+        bucket = gcs_client.bucket(bucket_name)
+
+        # Создание объекта (blob) в бакете с уникальным именем файла
+        blob = bucket.blob(unique_filename)
+
+        # Загрузка файла в GCS из переданного файла
+        blob.upload_from_file(file.file)
+
+        # Получение публичного URL загруженного файла
+        avatar_url = blob.public_url
+
+        # Обновление URL аватара в БД
+        update_user_avatar_preview(user_id, avatar_url)
+
+        return {"message": "Фото успешно загружено", "avatar_url": avatar_url}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при загрузке фотографии: {e}")
 
 app.include_router(router)

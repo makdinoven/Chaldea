@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, foreign
 from database import Base
 
 class CharacterRequest(Base):
@@ -7,10 +7,10 @@ class CharacterRequest(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(20), index=True)
-    id_subrace = Column(Integer)
+    id_subrace = Column(Integer, foreign_key="subraces.id_subrace")
     biography = Column(Text)
     personality = Column(Text)
-    id_class = Column(Integer)
+    id_class = Column(Integer, foreign_key="classes.id_class")
     status = Column(Enum('pending', 'approved', 'rejected'), default='pending')
     created_at = Column(TIMESTAMP, server_default=func.now())
     user_id = Column(Integer, nullable=True)
@@ -20,8 +20,8 @@ class CharacterRequest(Base):
     age = Column(Integer, nullable=True)
     weight = Column(String(10), nullable=True)
     height = Column(String(10), nullable=True)
-    id_race = Column(Integer, nullable=False)
-    avatar = Column(String(255), nullable=False)
+    id_race = Column(Integer,foreign_key='races.id_race', nullable=False)
+    avatar = Column(String(255), nullable=True)
 
 
 

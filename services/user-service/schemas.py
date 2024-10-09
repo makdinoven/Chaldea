@@ -26,7 +26,6 @@ class Login(BaseModel):
     identifier: str
     password: str
 
-class Character_users(BaseModel):
+class UserCharacterCreate(BaseModel):
+    user_id: int
     character_id: int
-    id : int
-    id_row:int
