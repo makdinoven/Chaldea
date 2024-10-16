@@ -287,8 +287,7 @@ export default function CreateCharacterPage({}) {
           id: 0,
           name: 'Воин',
           img: warriorImg,
-          features:
-            'Воин да и воин хуль с него взять то пиздит всех мечом налево направо',
+          features: 'Описание воина',
           inventory: [
             { name: 'item1', link: '/shop/item1', img: classInventoryImg },
             { name: 'item2', link: '/shop/item2', img: classInventoryImg },
@@ -305,8 +304,7 @@ export default function CreateCharacterPage({}) {
           id: 1,
           name: 'Плут',
           img: plutImg,
-          features:
-            'Имеет огромный хуй, трахает всех подряд и жестко кайфует от жизни',
+          features: 'Описание плута',
           inventory: [
             { name: 'item1', link: '/shop/item1', img: classInventoryImg },
             { name: 'item2', link: '/shop/item2', img: classInventoryImg },
@@ -323,7 +321,7 @@ export default function CreateCharacterPage({}) {
           id: 2,
           name: 'Маг',
           img: magicianImg,
-          features: 'Кастует какуюто хуйню и делает пафосное ебло',
+          features: 'Описание мага',
           inventory: [
             { name: 'item1', link: '/shop/item1', img: classInventoryImg },
             { name: 'item2', link: '/shop/item2', img: classInventoryImg },

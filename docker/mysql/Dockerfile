@@ -1,7 +1,7 @@
 FROM mysql:8.0
 
 # Копируем скрипт для восстановления данных
-COPY ./docker/mysql/restore.sh /usr/local/bin/restore.sh4
+COPY ./docker/mysql/restore.sh /usr/local/bin/restore.sh
 
 # Даем права на выполнение скрипта
 
