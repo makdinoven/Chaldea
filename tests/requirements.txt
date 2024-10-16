@@ -5,8 +5,10 @@ pymysql
 alembic
 pydantic<2.0.0
 requests
-aio_pika
+aio-pika
 cryptography
 httpx
 pytest
 pytest-asyncio
+setuptools
+docker
