@@ -32,7 +32,7 @@ export default function SubmitPage({
 
   const sendPhoto = () => {
     const file = fileInputRef.current.files[0];
-    const user_id = 1; // Идентификатор пользователя
+    const user_id = 1;
 
     if (!file) {
       console.log('Файл не выбран');
@@ -44,7 +44,7 @@ export default function SubmitPage({
     formData.append('user_id', user_id); // Передаем также user_id отдельно
 
     axios
-      .post('/photo/upload-photo_user_avatar', formData, {
+      .post('/photo/character_avatar_preview', formData, {
         headers: {
           'Content-Type': 'multipart/form-data', // Указывает, что передаём данные формы
         },
