@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func
-from sqlalchemy.orm import relationship, foreign
+from sqlalchemy.orm import relationship
 from database import Base
 
 class CharacterRequest(Base):
@@ -48,6 +48,11 @@ class Character(Base):
     height = Column(String(10), nullable=True)
     id_race = Column(Integer, nullable=False)
     avatar = Column(String(255), nullable=False)
+    current_title_id = Column(Integer, ForeignKey("titles.id_title"), nullable=True)
+
+    titles = relationship("CharacterTitle", back_populates="character")
+    current_title = relationship("Title")
+
 
 class Race(Base):
     __tablename__ = "races"
@@ -75,3 +80,29 @@ class Class(Base):
     id_class = Column(Integer, primary_key=True, index=True)
     name = Column(String(50), nullable=False)
     description = Column(Text, nullable=True)
+
+class Title(Base):
+    __tablename__ = "titles"
+
+    id_title = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+
+    # Связь с персонажами через промежуточную таблицу
+    characters = relationship("CharacterTitle", back_populates="title")
+
+
+class CharacterTitle(Base):
+    __tablename__ = "character_titles"
+
+    character_id = Column(Integer, ForeignKey("characters.id"), primary_key=True)
+    title_id = Column(Integer, ForeignKey("titles.id_title"), primary_key=True)
+
+    # Дата присвоения титула
+    assigned_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Связь с персонажем и титулом
+    character = relationship("Character", back_populates="titles")
+    title = relationship("Title", back_populates="characters")
+
+

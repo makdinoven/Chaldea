@@ -12,8 +12,7 @@ app = FastAPI()
 
 models.Base.metadata.create_all(bind=engine)
 
-router = APIRouter(prefix="/character")
-
+router = APIRouter(prefix="/characters")
 # Зависимость для получения сессии базы данных
 def get_db():
     db = SessionLocal()
@@ -294,6 +293,71 @@ async def get_moderation_requests(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Ошибка при получении заявок на модерацию.")
 
 
+@router.post("/titles/", response_model=schemas.Title)
+async def create_title(request: schemas.TitleCreate, db: Session = Depends(get_db)):
+    """
+    Создание нового титула.
+    """
+    try:
+        title = crud.create_title(db, request.name, request.description)
+        return title
+    except Exception as e:
+        print(f"Ошибка при создании титула: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при создании титула.")
 
+@router.post("/{character_id}/titles/{title_id}")
+async def assign_title(character_id: int, title_id: int, db: Session = Depends(get_db)):
+    """
+    Присваивает титул персонажу.
+    """
+    try:
+        assignment = crud.assign_title_to_character(db, character_id, title_id)
+        if not assignment:
+            raise HTTPException(status_code=404, detail="Персонаж или титул не найден")
+        return {"message": f"Титул с ID {title_id} успешно присвоен персонажу с ID {character_id}."}
+    except Exception as e:
+        print(f"Ошибка при присвоении титула: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при присвоении титула персонажу.")
+
+
+@router.post("/{character_id}/current-title/{title_id}")
+async def set_current_title(character_id: int, title_id: int, db: Session = Depends(get_db)):
+    """
+    Устанавливает текущий титул для персонажа.
+    """
+    try:
+        character = crud.set_current_title(db, character_id, title_id)
+        if not character:
+            raise HTTPException(status_code=404, detail="Персонаж не найден")
+        return {"message": f"Титул с ID {title_id} успешно установлен как текущий для персонажа с ID {character_id}."}
+    except Exception as e:
+        print(f"Ошибка при установке текущего титула: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при установке титула.")
+
+@router.get("/titles/", response_model=List[schemas.Title])
+async def get_titles(db: Session = Depends(get_db)):
+    """
+    Получить список всех титулов.
+    """
+    try:
+        titles = crud.get_all_titles(db)
+        return titles
+    except Exception as e:
+        print(f"Ошибка при получении титулов: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при получении титулов.")
+
+@router.get("/{character_id}/titles", response_model=List[schemas.Title])
+async def get_titles_for_character(character_id: int, db: Session = Depends(get_db)):
+    """
+    Получить все титулы для конкретного персонажа.
+    """
+    try:
+        titles = crud.get_titles_for_character(db, character_id)
+        if not titles:
+            raise HTTPException(status_code=404, detail="Персонаж не имеет титулов")
+        return titles
+    except Exception as e:
+        print(f"Ошибка при получении титулов для персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при получении титулов для персонажа.")
 
 app.include_router(router)

@@ -141,6 +141,8 @@ services:
       - mysql
     ports:
       - "8002:8002"
+    volumes:
+      - ./services/character-attributes-service/app:/app
 
   skills-service:
     build:
@@ -156,6 +158,8 @@ services:
       - mysql
     ports:
       - "8003:8003"
+    volumes:
+      - ./services/skills-service/app:/app
 
   inventory-service:
     build:
@@ -171,6 +175,8 @@ services:
       - mysql
     ports:
       - "8004:8004"
+    volumes:
+      - ./services/inventory-service/app:/app
 
   character-service:
     build:
@@ -186,6 +192,8 @@ services:
       - mysql
     ports:
       - "8005:8005"
+    volumes:
+      - ./services/character-service/app:/app
 
   locations-service:
     build:
@@ -201,6 +209,8 @@ services:
       - mysql
     ports:
       - "8006:8006"
+    volumes:
+      - ./services/locations-service/app:/app
 
 
   api-gateway:

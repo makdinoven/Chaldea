@@ -63,8 +63,51 @@ class CharacterUpdate(BaseModel):
     id_skill_inventory: int = None
     id_attributes: int = None
     currency_balance: int = None
+    current_title_id: Optional[int] = None
 
     class Config:
         orm_mode = True
+
+class CharacterBase(BaseModel):
+    name: str
+    id_subrace: int
+    biography: str
+    personality: str
+    id_class: int
+    id_item_inventory: int
+    id_skill_inventory: int
+    id_attributes: int
+    currency_balance: int = 0
+    appearance: str
+    background: str
+    age: int
+    weight: str
+    height: str
+    id_race: int
+
+    class Config:
+        orm_mode = True
+
+class CharacterTitle(BaseModel):
+    character_id: int
+    title_id: int
+
+    class Config:
+        orm_mode = True
+
+
+class TitleBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+class TitleCreate(TitleBase):
+    pass
+
+class Title(TitleBase):
+    id_title: int
+
+    class Config:
+        orm_mode = True
+
 
 

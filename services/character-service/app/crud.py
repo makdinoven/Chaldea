@@ -315,3 +315,68 @@ def get_moderation_requests(db: Session):
     except Exception as e:
         print(f"Ошибка при получении заявок на модерацию: {e}")
         return {}
+
+
+# Функция для создания титула
+def create_title(db: Session, name: str, description: str = None):
+    """
+    Создание нового титула.
+    """
+    new_title = models.Title(name=name, description=description)
+    db.add(new_title)
+    db.commit()
+    db.refresh(new_title)
+    return new_title
+
+# Функция для присвоения титула персонажу
+def assign_title_to_character(db: Session, character_id: int, title_id: int):
+    """
+    Присваивает титул персонажу.
+    """
+    db_character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    db_title = db.query(models.Title).filter(models.Title.id_title == title_id).first()
+
+    if db_character and db_title:
+        # Создаем запись в промежуточной таблице CharacterTitle
+        new_assignment = models.CharacterTitle(character_id=character_id, title_id=title_id)
+        db.add(new_assignment)
+        db.commit()
+        db.refresh(new_assignment)
+        return new_assignment
+    return None
+
+
+# Функция для выбора текущего титула персонажем
+def set_current_title(db: Session, character_id: int, title_id: int):
+    """
+    Выбирает титул как текущий для персонажа.
+    """
+    db_character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if db_character:
+        db_character.current_title_id = title_id
+        db.commit()
+        db.refresh(db_character)
+        return db_character
+    return None
+
+
+# Функция для получения всех титулов
+def get_all_titles(db: Session):
+    """
+    Возвращает список всех титулов.
+    """
+    return db.query(models.Title).all()
+
+# Функция для получения всех титулов персонажа
+def get_titles_for_character(db: Session, character_id: int):
+    """
+    Получает все титулы для конкретного персонажа.
+    """
+    titles = (
+        db.query(models.Title)
+        .join(models.CharacterTitle, models.Title.id_title == models.CharacterTitle.title_id)
+        .filter(models.CharacterTitle.character_id == character_id)
+        .all()
+    )
+    return titles
+

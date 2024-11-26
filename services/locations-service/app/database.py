@@ -14,3 +14,12 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Создаем базовый класс для моделей SQLAlchemy
 Base = declarative_base()
+
+# Зависимость для получения сессии базы данных
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+

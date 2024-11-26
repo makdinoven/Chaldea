@@ -26,4 +26,4 @@ RUN pip install --no-cache-dir google-cloud-storage python-multipart
 EXPOSE 8001
 
 # Команда для запуска FastAPI приложения
-CMD ["sh", "-c", "sleep 10 && PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8001 --app-dir /app"]
+CMD sleep 15 && PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8001 --app-dir /app --reload
