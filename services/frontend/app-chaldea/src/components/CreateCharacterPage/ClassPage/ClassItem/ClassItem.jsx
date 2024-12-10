@@ -16,7 +16,7 @@ export default function ClassItem({
     onClick(); // Добавлено вызов функции onClick
   }
 
-  console.log(data);
+  // console.log(data);
 
   // Условное присвоение класса
   const itemClass = currentIndex === index ? styles.active : styles.inactive;

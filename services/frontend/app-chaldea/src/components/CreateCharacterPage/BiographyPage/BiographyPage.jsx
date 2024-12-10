@@ -18,7 +18,7 @@ export default function BiographyPage({
     age: enteredFormValues.age,
     height: enteredFormValues.height,
     weight: enteredFormValues.weight,
-    origin: enteredFormValues.origin,
+    background: enteredFormValues.background,
     sex: enteredFormValues.sex,
   });
 
@@ -54,7 +54,7 @@ export default function BiographyPage({
     { id: 'name', isRequired: true, text: 'Имя персонажа*', maxLength: 20 },
     { id: 'age', text: 'Возраст', type: 'number' },
     { id: 'weight', text: 'Вес', type: 'number' },
-    { id: 'origin', text: 'Происхождение', maxLength: 20 },
+    { id: 'background', text: 'Происхождение', maxLength: 20 },
     { id: 'height', text: 'Рост', type: 'number' },
   ];
 

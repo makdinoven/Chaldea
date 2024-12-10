@@ -7,8 +7,17 @@ from database import SessionLocal, engine
 from config import settings
 from presets import SUBRACE_ATTRIBUTES, CLASS_ITEMS # Импортируем пресеты подрас
 from typing import List, Dict
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 models.Base.metadata.create_all(bind=engine)
 

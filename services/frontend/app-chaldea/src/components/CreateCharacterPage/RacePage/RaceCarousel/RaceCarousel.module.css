@@ -30,15 +30,20 @@
   align-self: center;
   justify-self: center;
   transition: all var(--transition02);
-  opacity: 0.5;
-  filter: brightness(0.3) contrast(1.1);
+  background-color: #878787;
+  display: flex;
+  border-radius: 100%;
+  justify-content: center;
+  align-items: center;
+  opacity: 0.3;
+  width: 281px;
+  height: 281px;
+  /* filter: brightness(0.3) contrast(1.1); */
 }
 
 .race_img.active {
-  width: 281px;
-  height: 281px;
-  opacity: 1;
-  filter: grayscale(0%);
+  opacity: 0.6;
+  /* filter: grayscale(0%); */
 }
 
 .race_img:not(.active) {

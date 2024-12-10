@@ -36,9 +36,9 @@ export default function RaceCarousel({ races, onRaceChange, selectedRace }) {
     const nextIndex = (index + 1) % totalImages;
 
     return [
-      races[prevIndex].raceImg,
-      races[index].raceImg,
-      races[nextIndex].raceImg,
+      races[prevIndex]?.raceImg,
+      races[index]?.raceImg,
+      races[nextIndex]?.raceImg,
     ];
   };
 
@@ -51,12 +51,10 @@ export default function RaceCarousel({ races, onRaceChange, selectedRace }) {
 
       <div className={styles.images_container}>
         {visibleImages.map((img, index) => (
-          <img
+          <div
             className={`${styles.race_img} ${index === 1 ? styles.active : ''}`}
             key={index}
-            src={img}
-            alt={`Image ${index}`}
-          />
+          >{`Image ${index}`}</div>
         ))}
       </div>
     </div>

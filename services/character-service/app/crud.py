@@ -162,6 +162,7 @@ def get_all_races_and_subraces(db: Session):
 
     for race in races:
         races_data[race.id_race] = {
+            "id_race": race.id_race,
             "name": race.name,
             "description": race.description,  # Добавляем описание расы
             "subraces": []

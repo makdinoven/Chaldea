@@ -12,32 +12,7 @@ export default function RacePage({
   const [currentRaceId, setCurrentRaceId] = useState(selectedRaceId);
   const [currentSubraceId, setCurrentSubraceId] = useState(selectedSubraceId);
 
-  // useEffect(() => {
-  //   setCurrentRaceId(selectedRaceId);
-  // }, [selectedRaceId]);
-
-  // useEffect(() => {
-  //   setCurrentSubraceId(selectedSubraceId);
-  // }, [selectedSubraceId]);
-
-  // useEffect(() => {
-  //   console.log('RacePage rendered');
-  // }, []);
-
-  // useEffect(() => {
-  //   console.log(
-  //     'Раса:',
-  //     races[currentRaceId].raceName,
-
-  //     'Подраса:',
-  //     races[currentRaceId].subraces[currentSubraceId].subraceName
-  //   );
-  // }, [currentRaceId, currentSubraceId]);
-
-  // useEffect(() => {
-  //   // Сброс индекса подрасы на 0 при изменении расы
-  //   setCurrentSubraceId(0);
-  // }, [currentRaceId]);
+  // console.log(races);
 
   const handleRaceChange = (id) => {
     setCurrentRaceId(id);

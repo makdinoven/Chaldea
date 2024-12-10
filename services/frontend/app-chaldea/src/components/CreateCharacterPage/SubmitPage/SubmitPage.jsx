@@ -12,8 +12,11 @@ import defaultAvatar from '../../../assets/menu2.png';
 export default function SubmitPage({
   biography,
   selectedRace,
+  selectedRaceId,
   selectedSubrace,
+  selectedSubraceId,
   selectedClass,
+  selectedClassId,
 }) {
   const fileInputRef = useRef(null);
   const [avatarUrl, setAvatarUrl] = useState(defaultAvatar);
@@ -24,10 +27,26 @@ export default function SubmitPage({
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    console.log('Selected Race:', selectedRace);
-    console.log('Selected Subrace:', selectedSubrace);
-    console.log('Selected Class:', selectedClass);
-    console.log('Form:', biography);
+
+    const data = {
+      ...biography,
+      user_id: 1,
+      avatar: 'string',
+      id_subrace: selectedSubraceId + 1,
+      id_class: selectedClassId,
+      id_race: selectedRaceId,
+    };
+
+    // console.log(data);
+
+    axios
+      .post('http://localhost:8005/characters/requests', data)
+      .then((response) => {
+        console.log('ok');
+      })
+      .catch((error) => {
+        console.error('Ошибка', error);
+      });
   };
 
   const sendPhoto = () => {
@@ -44,7 +63,7 @@ export default function SubmitPage({
     formData.append('user_id', user_id); // Передаем также user_id отдельно
 
     axios
-      .post('/photo/character_avatar_preview', formData, {
+      .post('http://localhost:8001/photo/character_avatar_preview', formData, {
         headers: {
           'Content-Type': 'multipart/form-data', // Указывает, что передаём данные формы
         },
@@ -80,7 +99,7 @@ export default function SubmitPage({
     { text: biography.age ? `Возраст : ${biography.age}` : null },
     { text: biography.height ? `Рост : ${biography.height}` : null },
     { text: biography.sex ? `Пол : ${biography.sex}` : null },
-    { text: biography.origin || null },
+    { text: biography.background || null },
   ];
 
   return (
