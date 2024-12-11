@@ -23,6 +23,11 @@ logs/
 .DS_Store
 Thumbs.db
 
+services/character-attributes-service/app/__pycache__
+services/character-service/app/__pycache__
+services/inventory-service/app/__pycache__
+services/locations-service/app/__pycache__
+services/skills-service/app/__pycache__
 services/user-service/__pycache__
 services/photo-service/__pycache__
 services/user-service/alembic/versions
