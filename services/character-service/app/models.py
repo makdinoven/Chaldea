@@ -33,7 +33,7 @@ class Character(Base):
     id_subrace = Column(Integer, nullable=False)
     biography = Column(Text, nullable=True)
     personality = Column(Text, nullable=True)
-    id_item_inventory = Column(Integer, nullable=True)  # Поле для инвентаря
+    # Удаляем поле id_item_inventory
     id_skill_inventory = Column(Integer, nullable=True)  # Поле для навыков
     id_class = Column(Integer, nullable=False)
     id_attributes = Column(Integer, nullable=True)  # Поле для атрибутов
@@ -41,7 +41,7 @@ class Character(Base):
     request_id = Column(Integer, ForeignKey("character_requests.id"), nullable=False)  # Ссылка на заявку
     user_id = Column(Integer, nullable=True)  # Добавляем поле user_id
     appearance = Column(Text, nullable=False)
-    sex=Column(Enum('male', 'female','genderless'), default='genderless' )
+    sex = Column(Enum('male', 'female', 'genderless'), default='genderless')
     background = Column(Text, nullable=True)
     age = Column(Integer, nullable=True)
     weight = Column(String(10), nullable=True)
@@ -49,6 +49,7 @@ class Character(Base):
     id_race = Column(Integer, nullable=False)
     avatar = Column(String(255), nullable=False)
     current_title_id = Column(Integer, ForeignKey("titles.id_title"), nullable=True)
+    max_weight = Column(Integer, nullable=True, default=30)
 
     titles = relationship("CharacterTitle", back_populates="character")
     current_title = relationship("Title")

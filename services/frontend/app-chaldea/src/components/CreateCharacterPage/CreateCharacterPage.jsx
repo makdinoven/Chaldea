@@ -40,7 +40,7 @@ export default function CreateCharacterPage({}) {
 
   useEffect(() => {
     axios
-      .get('/character/metadata')
+      .get('http://localhost:8005/characters/metadata')
       .then((response) => console.log(response.data))
       .catch((error) => console.error(error));
   }, []);
