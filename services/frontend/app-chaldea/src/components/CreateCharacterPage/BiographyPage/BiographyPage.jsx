@@ -60,9 +60,9 @@ export default function BiographyPage({
 
   const selectOptions = [
     { name: 'Пол', value: '', isDisabled: true },
-    { name: 'Мужской', value: 'Мужской' },
-    { name: 'Женский', value: 'Женский' },
-    { name: 'Бесполый', value: 'Бесполый' },
+    { name: 'Мужской', value: 'male' },
+    { name: 'Женский', value: 'female' },
+    { name: 'Бесполый', value: 'genderless' },
   ];
 
   const textareasData = [

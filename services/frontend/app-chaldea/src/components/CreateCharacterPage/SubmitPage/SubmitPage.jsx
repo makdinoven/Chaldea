@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import useNavigateTo from '../../../hooks/useNavigateTo';
 
 import FormButton from '../../CommonComponents/BlueGradientButton/BlueGradientButton';
 import CharacterInfo from './CharacterInfo/CharacterInfo';
@@ -18,6 +19,7 @@ export default function SubmitPage({
   selectedClass,
   selectedClassId,
 }) {
+  const navigateTo = useNavigateTo();
   const fileInputRef = useRef(null);
   const [avatarUrl, setAvatarUrl] = useState(defaultAvatar);
 
@@ -37,12 +39,12 @@ export default function SubmitPage({
       id_race: selectedRaceId,
     };
 
-    // console.log(data);
+    console.log(data);
 
     axios
-      .post('http://localhost:8005/characters/requests', data)
+      .post('http://localhost:8005/characters/requests/', data)
       .then((response) => {
-        console.log('ok');
+        response.status === 200 ? navigateTo('/home') : console.log(response);
       })
       .catch((error) => {
         console.error('Ошибка', error);
