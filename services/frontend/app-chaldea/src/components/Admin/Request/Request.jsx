@@ -5,6 +5,7 @@ import styles from './Request.module.css';
 import RequestButton from './RequestButton/RequestButton';
 
 export default function Request({ data }) {
+  console.log(data);
   const biographyItems = [
     { title: 'Биография', text: 'Биография' },
     { title: 'Личность', text: 'Личность' },
@@ -17,14 +18,14 @@ export default function Request({ data }) {
     { type: 'open', text: 'Просмотреть' },
   ];
 
-  const handleButtonClick = () => {
-    console.log('click');
+  const handleButtonClick = (type) => {
+    console.log('click', type);
   };
 
   return (
     <div className={styles.request}>
       <div className={styles.left}>
-        <UserAvatar img={data.img} name={data.name} />
+        <UserAvatar img={data.avatar} name={data.name} />
       </div>
       <div className={styles.center}>
         {biographyItems.map((item, index) => (
@@ -36,7 +37,7 @@ export default function Request({ data }) {
           <RequestButton
             key={button.type}
             text={button.text}
-            onClick={() => handleButtonClick}
+            onClick={() => handleButtonClick(button.type)}
           />
         ))}
       </div>

@@ -65,7 +65,7 @@ export default function SubmitPage({
     formData.append('user_id', user_id); // Передаем также user_id отдельно
 
     axios
-      .post('http://localhost:8001/photo/character_avatar_preview', formData, {
+      .post('/photo/character_avatar_preview', formData, {
         headers: {
           'Content-Type': 'multipart/form-data', // Указывает, что передаём данные формы
         },
