@@ -11,9 +11,12 @@ class Country(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=False)
-    leader_id = Column(BigInteger, nullable=True)
+    leader_id = Column(BigInteger, nullable=True)  # ID лидера страны (персонажа)
+    map_image_url = Column(String(255), nullable=True)  # Изображение карты страны
+    map_points = Column(JSON, nullable=True)  # Точки на карте (JSON)
 
     regions = relationship("Region", back_populates="country")
+
 
 
 # Модель для Regions

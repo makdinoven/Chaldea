@@ -1,6 +1,7 @@
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from models import District, Location, LocationPath, LocationNeighbor, Region, Post
-from schemas import DistrictCreate, LocationCreate
+from schemas import DistrictCreate, LocationCreate, Country
 
 
 # Создание района
@@ -221,3 +222,65 @@ def create_post(session: Session, character_id: int, location_id: int, content: 
     session.commit()
     session.refresh(new_post)  # Обновляем объект с присвоенным ID
     return new_post
+
+def update_region(session: Session, region_id: int, data: dict) -> Region:
+    """
+    Обновляет данные региона.
+    """
+    region = session.query(Region).filter(Region.id == region_id).first()
+    if not region:
+        raise HTTPException(status_code=404, detail="Region not found")
+
+    if "name" in data:
+        region.name = data["name"]
+    if "description" in data:
+        region.description = data["description"]
+    if "image_url" in data:
+        region.image_url = data["image_url"]
+    if "map_image_url" in data:
+        region.map_image_url = data["map_image_url"]
+    if "map_points" in data:
+        region.map_points = data["map_points"]
+    if "ruler_id" in data:
+        region.ruler_id = data["ruler_id"]
+    if "entrance_location_id" in data:
+        region.entrance_location_id = data["entrance_location_id"]
+
+    session.commit()
+    session.refresh(region)
+    return region
+
+
+def add_map_point(session: Session, region_id: int, point_data: dict) -> list:
+    """
+    Добавляет точку на карту региона.
+    """
+    region = session.query(Region).filter(Region.id == region_id).first()
+    if not region:
+        raise HTTPException(status_code=404, detail="Region not found")
+
+    map_points = region.map_points or []
+    map_points.append(point_data)
+    region.map_points = map_points
+
+    session.commit()
+    return map_points
+
+def get_all_countries_with_details(session: Session) -> list:
+    """
+    Возвращает список всех стран с полной информацией.
+    """
+    countries = session.query(Country).all()
+
+    return [
+        {
+            "id": country.id,
+            "name": country.name,
+            "description": country.description,
+            "country_image_url": country.country_image_url,
+            "map_image_url": country.map_image_url,
+            "map_points": country.map_points,
+            "leader_id": country.leader_id,
+        }
+        for country in countries
+    ]

@@ -50,6 +50,8 @@ class Character(Base):
     avatar = Column(String(255), nullable=False)
     current_title_id = Column(Integer, ForeignKey("titles.id_title"), nullable=True)
     max_weight = Column(Integer, nullable=True, default=30)
+    level = Column(Integer, nullable=False, default=1)
+    stat_points = Column(Integer, nullable=False, default=0)
 
     titles = relationship("CharacterTitle", back_populates="character")
     current_title = relationship("Title")
@@ -105,5 +107,11 @@ class CharacterTitle(Base):
     # Связь с персонажем и титулом
     character = relationship("Character", back_populates="titles")
     title = relationship("Title", back_populates="characters")
+
+class LevelThreshold(Base):
+    __tablename__ = "level_thresholds"
+    id = Column(Integer, primary_key=True, index=True)
+    level_number = Column(Integer, unique=True, nullable=False)
+    required_experience = Column(Integer, nullable=False)
 
 
