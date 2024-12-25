@@ -1,5 +1,5 @@
 from inspect import classify_class_attrs
-from typing import Optional
+from typing import Optional, Dict
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -109,5 +109,23 @@ class Title(TitleBase):
     class Config:
         orm_mode = True
 
+class LevelProgress(BaseModel):
+    current_exp_in_level: int
+    exp_to_next_level: int
+    progress_fraction: float
+
+class Attribute(BaseModel):
+    current: int
+    max: int
+
+class FullProfileResponse(BaseModel):
+    name: str
+    currency_balance: int
+    level: int
+    stat_points: int
+    level_progress: LevelProgress
+    attributes: Dict[str, Attribute]
+    active_title: Optional[str]
+    avatar: Optional[str]
 
 

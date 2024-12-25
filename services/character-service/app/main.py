@@ -1,5 +1,6 @@
 import httpx
 from fastapi import FastAPI, Depends, APIRouter, HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 import asyncio
 import models, schemas, crud
@@ -8,12 +9,16 @@ from config import settings
 from presets import SUBRACE_ATTRIBUTES, CLASS_ITEMS # Импортируем пресеты подрас
 from typing import List, Dict
 from fastapi.middleware.cors import CORSMiddleware
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("character-service")
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,155 +54,71 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
 @router.post("/requests/{request_id}/approve")
 async def approve_character_request(request_id: int, db: Session = Depends(get_db)):
     try:
+        print(f"[INFO] Начало обработки заявки с ID {request_id}")
+
         db_request = db.query(models.CharacterRequest).filter(models.CharacterRequest.id == request_id).first()
         if not db_request:
+            print(f"[ERROR] Заявка с ID {request_id} не найдена")
             raise HTTPException(status_code=404, detail="Заявка не найдена")
+        print(f"[INFO] Заявка с ID {request_id} найдена")
 
         new_character = crud.create_preliminary_character(db, db_request)
-        attributes = generate_attributes_for_subrace(db_request.id_subrace)
+        print(f"[INFO] Создан персонаж с ID {new_character.id}")
 
-        # Получаем стартовую экипировку в зависимости от класса
+        attributes = crud.generate_attributes_for_subrace(db_request.id_subrace)
+        print(f"[INFO] Сгенерированы атрибуты для подрасы {db_request.id_subrace}: {attributes}")
+
         items_to_add = CLASS_ITEMS.get(new_character.id_class, [])
+        print(f"[INFO] Стартовая экипировка для класса {new_character.id_class}: {items_to_add}")
 
-        # Отправка запроса на создание инвентаря в микросервис инвентаря
-        inventory_response = await send_inventory_request(new_character.id, items_to_add)
+        # Отправка запроса на создание инвентаря
+        inventory_response = await crud.send_inventory_request(new_character.id, items_to_add)
+        if inventory_response:
+            print(f"[INFO] Инвентарь создан: {inventory_response}")
+        else:
+            print("[ERROR] Ошибка при создании инвентаря")
+            raise HTTPException(status_code=500, detail="Не удалось создать инвентарь")
 
-        # Остальные запросы к микросервисам (навыки и атрибуты)
-        skills_response = await send_skills_request(new_character.id)
-        attributes_response = await send_attributes_request(new_character.id, attributes)
+        # Отправка запросов на создание навыков и атрибутов
+        skills_response = await crud.send_skills_request(new_character.id)
+        if skills_response:
+            print(f"[INFO] Навыки созданы: {skills_response}")
+        else:
+            print("[ERROR] Ошибка при создании навыков")
+            raise HTTPException(status_code=500, detail="Не удалось создать навыки")
 
-        # Проверяем ответы от всех микросервисов
-        if not (inventory_response and skills_response and attributes_response):
-            raise HTTPException(status_code=500, detail="Не удалось получить ответы от одного или нескольких микросервисов")
+        attributes_response = await crud.send_attributes_request(new_character.id, attributes)
+        if attributes_response:
+            print(f"[INFO] Атрибуты созданы: {attributes_response}")
+        else:
+            print("[ERROR] Ошибка при создании атрибутов")
+            raise HTTPException(status_code=500, detail="Не удалось создать атрибуты")
 
         # Обновляем персонажа с зависимостями
         updated_character = crud.update_character_with_dependencies(
             db, new_character.id,
-            inventory_id=inventory_response['id'],
             skills_id=skills_response['id'],
             attributes_id=attributes_response['id']
         )
+        print(f"[INFO] Персонаж с ID {new_character.id} обновлен с зависимостями")
 
         crud.update_character_request_status(db, request_id, "approved")
+        print(f"[INFO] Заявка с ID {request_id} одобрена")
 
-        # Присваиваем персонажа пользователю и обновляем current_character через API
-        assign_result = await update_user_with_character(db_request.user_id, updated_character.id)
-        if not assign_result:
+        # Присваиваем персонажа пользователю
+        assign_result = await crud.assign_character_to_user(db_request.user_id, updated_character.id)
+        if assign_result:
+            print(f"[INFO] Персонаж с ID {updated_character.id} успешно присвоен пользователю {db_request.user_id}")
+        else:
+            print("[ERROR] Не удалось присвоить персонажа пользователю")
             raise HTTPException(status_code=500, detail="Не удалось присвоить персонажа пользователю")
 
+        print(f"[INFO] Завершение обработки заявки с ID {request_id}")
         return {"message": f"Персонаж с ID {new_character.id} успешно создан и присвоен пользователю."}
 
     except Exception as e:
-        print(f"Ошибка при одобрении заявки: {e}")
+        print(f"[ERROR] Ошибка при одобрении заявки: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
-
-# Отправка запроса на микросервис инвентаря
-async def send_inventory_request(character_id: int, items: List[dict]):
-    """
-    Отправляет запрос на создание инвентаря в микросервис инвентаря.
-
-    :param character_id: ID персонажа
-    :param items: Список предметов для добавления в инвентарь
-    :return: Ответ от микросервиса инвентаря
-    """
-    inventory_data = {
-        "character_id": character_id,
-        "items": items  # Отправляем только id и quantity
-    }
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{settings.INVENTORY_SERVICE_URL}", json=inventory_data)
-            if response.status_code == 200:
-                return response.json()
-            else:
-                print(f"Ошибка при запросе инвентаря: {response.status_code} - {response.text}")
-                return None
-    except Exception as e:
-        print(f"Ошибка при отправке запроса на инвентарь: {e}")
-        return None
-
-
-def generate_items_for_class(class_id: int) -> List[dict]:
-    """
-    Генерирует предметы для персонажа на основе его класса.
-    """
-    # Получаем предметы из словаря class_items или возвращаем пустой список, если класс не найден
-    return CLASS_ITEMS.get(class_id, [])
-
-
-# Отправка запроса на микросервис навыков
-async def send_skills_request(character_id: int):
-    try:
-        async with httpx.AsyncClient() as client:
-            print(f"Отправка запроса на навыки для персонажа {character_id}")  # Лог перед отправкой запроса
-            response = await client.post(f"{settings.SKILLS_SERVICE_URL}", json={"character_id": character_id})
-
-            # Логируем статус-код и тело ответа
-            print(f"Статус-код ответа от сервиса навыков: {response.status_code}")
-            print(f"Тело ответа от сервиса навыков: {response.text}")
-
-            if response.status_code == 200:
-                return response.json()
-            else:
-                print(
-                    f"Ошибка при запросе навыков: {response.status_code} - {response.text}")  # Более детализированный лог
-                return None
-    except Exception as e:
-        print(f"Ошибка при отправке запроса на навыки: {e}")
-        return None
-
-
-# Отправка запроса на микросервис атрибутов
-async def send_attributes_request(character_id: int, attributes: dict):
-    try:
-        attributes["character_id"] = character_id  # Вставляем character_id в тело запроса
-        async with httpx.AsyncClient() as client:
-            print(f"Отправка запроса на создание атрибутов для персонажа {character_id} с атрибутами: {attributes}")
-
-            response = await client.post(f"{settings.ATTRIBUTES_SERVICE_URL}", json=attributes)
-
-            print(f"Статус-код ответа от сервиса атрибутов: {response.status_code}")
-            print(f"Тело ответа: {response.text}")
-
-            if response.status_code == 200:
-                return response.json()
-            else:
-                return None
-    except Exception as e:
-        print(f"Ошибка при отправке запроса на атрибуты: {e}")
-        return None
-
-
-# Генерация атрибутов на основе подрасы
-def generate_attributes_for_subrace(subrace_id: int) -> dict:
-    """
-    Генерирует атрибуты для персонажа на основе его подрасы.
-    """
-    # Возвращаем атрибуты из пресетов или дефолтные значения, если подраса не найдена
-    return SUBRACE_ATTRIBUTES.get(subrace_id, {
-        "strength": 10, "agility": 10, "intelligence": 10,
-        "endurance": 100, "health": 100, "energy": 50, "mana": 75,
-        "stamina": 100, "charisma": 10, "luck": 10
-    })
-
-# Отправка запроса в user-service для присвоения персонажа пользователю
-async def assign_character_to_user(user_id: int, character_id: int):
-    try:
-        async with httpx.AsyncClient() as client:
-            # Формируем запрос
-            response = await client.put(
-                f"{settings.USER_SERVICE_URL}/users/{user_id}/update_character",
-                json={"character_id": character_id}
-            )
-            if response.status_code == 200:
-                return response.json()
-            else:
-                print(f"Ошибка при обновлении пользователя: {response.status_code}, {response.text}")
-                return None
-    except Exception as e:
-        print(f"Ошибка при отправке запроса в user-service: {e}")
-        return None
 
 # Эндпоинт для удаления персонажа
 @router.delete("/{character_id}")
@@ -368,5 +289,146 @@ async def get_titles_for_character(character_id: int, db: Session = Depends(get_
     except Exception as e:
         print(f"Ошибка при получении титулов для персонажа {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при получении титулов для персонажа.")
+
+@router.put("/{character_id}/deduct_points")
+def deduct_points(character_id: int, data: dict, db: Session = Depends(get_db)):
+    """
+    Списание stat_points у персонажа.
+    """
+    points_to_deduct = data.get("points_to_deduct", 0)
+    logger.info(f"Получен запрос на списание {points_to_deduct} stat_points для персонажа ID {character_id}")
+
+    if not isinstance(points_to_deduct, int) or points_to_deduct <= 0:
+        logger.warning(f"Неверное количество stat_points для списания: {points_to_deduct}")
+        raise HTTPException(status_code=400, detail="Invalid points to deduct")
+
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        logger.error(f"Персонаж ID {character_id} не найден.")
+        raise HTTPException(status_code=404, detail="Character not found")
+
+    if character.stat_points < points_to_deduct:
+        logger.warning(f"Недостаточно stat_points для списания: требуется {points_to_deduct}, доступно {character.stat_points}")
+        raise HTTPException(status_code=400, detail="Not enough stat points")
+
+    character.stat_points -= points_to_deduct
+    db.commit()
+    db.refresh(character)
+    logger.info(f"stat_points успешно списаны. Остаток stat_points: {character.stat_points}")
+
+    return {"message": "Stat points deducted", "remaining_points": character.stat_points}
+
+# character-service/main.py
+
+@router.get("/{character_id}/full_profile", response_model=schemas.FullProfileResponse)
+async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
+    # Получаем персонажа
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        logger.error(f"Персонаж ID {character_id} не найден.")
+        raise HTTPException(status_code=404, detail="Character not found")
+
+    # Получаем passive_experience из attributes-service
+    try:
+        async with httpx.AsyncClient() as client:
+            # Исправлен URL с добавлением '/attributes/'
+            attributes_url = f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}/passive_experience"
+            logger.info(f"Отправка запроса на получение passive_experience персонажа по URL: {attributes_url}")
+            response = await client.get(attributes_url)
+            if response.status_code != 200:
+                logger.error(f"Не удалось получить passive_experience персонажа ID {character_id}: {response.status_code} - {response.text}")
+                raise HTTPException(status_code=404, detail="Passive experience not found in attributes-service")
+            passive_experience = response.json().get("passive_experience", 0)
+            logger.info(f"passive_experience персонажа ID {character_id}: {passive_experience}")
+    except httpx.RequestError as e:
+        logger.exception(f"Ошибка при запросе к attributes-service: {e}")
+        raise HTTPException(status_code=500, detail="Failed to communicate with attributes-service")
+
+    # Проверка и обновление уровня на основе текущего пассивного опыта
+    character = crud.check_and_update_level(db, character_id, passive_experience)
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+
+    # Получаем атрибуты персонажа из attributes-service
+    try:
+        async with httpx.AsyncClient() as client:
+            attributes_url = f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}"
+            logger.info(f"Отправка запроса на получение атрибутов персонажа по URL: {attributes_url}")
+            response = await client.get(attributes_url)
+            if response.status_code != 200:
+                logger.error(f"Не удалось получить атрибуты персонажа ID {character_id}: {response.status_code} - {response.text}")
+                raise HTTPException(status_code=404, detail="Attributes not found")
+            attr_data = response.json()
+    except httpx.RequestError as e:
+        logger.exception(f"Ошибка при запросе к attributes-service: {e}")
+        raise HTTPException(status_code=500, detail="Failed to communicate with attributes-service")
+
+    # Получаем порог для текущего уровня и следующего уровня
+    current_level = character.level
+    current_threshold = db.query(models.LevelThreshold).filter(models.LevelThreshold.level_number == current_level).first()
+    next_level = current_level + 1
+    next_threshold = db.query(models.LevelThreshold).filter(models.LevelThreshold.level_number == next_level).first()
+
+    if current_threshold:
+        prev_required_exp = current_threshold.required_experience
+    else:
+        # Если это первый уровень, порог предыдущего уровня можно считать 0
+        prev_required_exp = 0
+
+    if next_threshold:
+        required_exp_for_next = next_threshold.required_experience
+    else:
+        # Если уровень макс. или не задан, считаем очень большое число, чтобы шкала была почти пустой
+        required_exp_for_next = passive_experience + 999999
+
+    # Текущий прогресс для шкалы уровня
+    # Опыт, набранный после предыдущего уровня:
+    current_level_exp = passive_experience - prev_required_exp
+    # Сколько осталось до следующего уровня
+    experience_to_next = required_exp_for_next - passive_experience
+    if experience_to_next < 0:
+        experience_to_next = 0
+
+    # Рассчитываем заполненность шкалы уровня (0.0 до 1.0)
+    if (required_exp_for_next - prev_required_exp) > 0:
+        level_progress_fraction = current_level_exp / (required_exp_for_next - prev_required_exp)
+    else:
+        level_progress_fraction = 1.0
+
+    # Получаем текущий активный титул (если есть)
+    active_title_name = character.current_title.name if character.current_title else None
+
+    # Формируем ответ с нужными данными
+    return schemas.FullProfileResponse(
+        name=character.name,
+        currency_balance=character.currency_balance,
+        level=current_level,
+        stat_points=character.stat_points,
+        level_progress=schemas.LevelProgress(
+            current_exp_in_level=current_level_exp,
+            exp_to_next_level=experience_to_next,
+            progress_fraction=min(level_progress_fraction, 1.0)  # ограничиваем до 1.0
+        ),
+        attributes={
+            "health": {
+                "current": attr_data["current_health"],
+                "max": attr_data["max_health"]
+            },
+            "mana": {
+                "current": attr_data["current_mana"],
+                "max": attr_data["max_mana"]
+            },
+            "energy": {
+                "current": attr_data["current_energy"],
+                "max": attr_data["max_energy"]
+            },
+            "stamina": {
+                "current": attr_data["current_stamina"],
+                "max": attr_data["max_stamina"]
+            }
+        },
+        active_title=active_title_name,
+        avatar=character.avatar
+    )
 
 app.include_router(router)

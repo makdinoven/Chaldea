@@ -6,12 +6,21 @@ import models
 import schemas
 import crud
 from database import SessionLocal, engine, get_db
+from fastapi.middleware.cors import CORSMiddleware
 
 # Создаем все таблицы в базе данных, если они еще не созданы
 models.Base.metadata.create_all(bind=engine)
 
 # Создаем экземпляр приложения FastAPI
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 router = APIRouter(prefix="/locations")
 
@@ -60,15 +69,15 @@ def create_neighbor(location_id: int, neighbor_data: schemas.LocationNeighborCre
     return crud.add_neighbor(session, location_id, neighbor_data.neighbor_id, neighbor_data.energy_cost)
 
 #Получение информации о регионе
-@router.get("/regions/{region_id}/details/")
+@router.get("/regions/{region_id}/details/", response_model=schemas.Region)
 def get_region_details_route(region_id: int, session: Session = Depends(get_db)):
     """
-    Возвращает всю информацию о регионе: районы, локации и их вложенные элементы.
+    Возвращает данные о регионе с учетом карты, правителя и входной локации.
     """
-    result = crud.get_region_details(session, region_id)
-    if not result:
+    region = crud.get_region_details(session, region_id)
+    if not region:
         raise HTTPException(status_code=404, detail="Region not found")
-    return result
+    return region
 
 @router.get("/{location_id}/details")
 def get_location_details_route(location_id: int, session: Session = Depends(get_db)):
@@ -102,6 +111,26 @@ def create_new_post(post_data: schemas.PostCreate, session: Session = Depends(ge
     )
     return new_post
 
+@router.put("/regions/{region_id}", response_model=schemas.Region)
+def update_region_route(region_id: int, data: dict, session: Session = Depends(get_db)):
+    """
+    Обновляет данные региона.
+    """
+    return crud.update_region(session, region_id, data)
+
+@router.post("/regions/{region_id}/map_points/")
+def add_map_point_route(region_id: int, point_data: dict, session: Session = Depends(get_db)):
+    """
+    Добавляет точку на карту региона.
+    """
+    return crud.add_map_point(session, region_id, point_data)
+
+@router.get("/countries/", response_model=List[schemas.Country])
+def get_all_countries_route(session: Session = Depends(get_db)):
+    """
+    Возвращает список всех стран с полной информацией.
+    """
+    return crud.get_all_countries_with_details(session)
 
 
 # Подключаем маршруты

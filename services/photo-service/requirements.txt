@@ -1,5 +1,5 @@
 fastapi
 uvicorn
-google-cloud-storage
 python-multipart
 pymysql
+Pillow

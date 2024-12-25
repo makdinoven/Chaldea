@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Text, Boolean, Enum, BigInteger, TIMESTAMP, func
+from sqlalchemy import Column, Integer, String, ForeignKey, Text, Boolean, Enum, BigInteger, TIMESTAMP, func, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -11,9 +11,12 @@ class Country(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=False)
-    leader_id = Column(BigInteger, nullable=True)
+    leader_id = Column(BigInteger, nullable=True)  # ID лидера страны (персонажа)
+    map_image_url = Column(String(255), nullable=True)  # Изображение карты страны
+    map_points = Column(JSON, nullable=True)  # Точки на карте (JSON)
 
     regions = relationship("Region", back_populates="country")
+
 
 
 # Модель для Regions
@@ -27,6 +30,8 @@ class Region(Base):
     image_url = Column(String(255), nullable=False)
     entrance_location_id = Column(BigInteger, ForeignKey('Locations.id', ondelete="SET NULL"))
     leader_id = Column(BigInteger, nullable=True)
+    map_image_url = Column(String(255), nullable=True)
+    map_points = Column(JSON, nullable=True)
 
     country = relationship("Country", back_populates="regions")
     districts = relationship("District", back_populates="region")

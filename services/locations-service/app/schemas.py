@@ -3,6 +3,19 @@ from typing import Optional, List, Literal
 from datetime import datetime
 
 # Модель для чтения Country
+
+class Country(BaseModel):
+    id: int
+    name: str
+    description: str
+    country_image_url: Optional[str]
+    map_image_url: Optional[str]
+    map_points: Optional[List[dict]]
+    leader_id: Optional[int]
+
+    class Config:
+        orm_mode = True
+
 class CountryBase(BaseModel):
     name: str
     description: str
@@ -20,10 +33,19 @@ class Country(CountryBase):
 
 # Модель для Region
 class RegionBase(BaseModel):
+    id: int
     name: str
     description: str
     image_url: str
-    country_id: int
+    map_image_url: Optional[str]
+    map_points: Optional[List[dict]]  # Список точек карты
+    entrance_location_id: Optional[int]
+    ruler_id: Optional[int]
+    districts: Optional[List["District"]] = []  # Районы в регионе
+
+    class Config:
+        orm_mode = True
+
 
 class RegionCreate(RegionBase):
     entrance_location_id: Optional[int] = None

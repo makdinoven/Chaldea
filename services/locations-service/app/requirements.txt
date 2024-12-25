@@ -3,3 +3,4 @@ uvicorn
 sqlalchemy
 pymysql
 pydantic<2.0.0
+aiohttp
