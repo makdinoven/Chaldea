@@ -12,8 +12,10 @@ export default function RequestsPage() {
     axios
       .get('/characters/moderation-requests', data)
       .then((response) => {
+          console.log(response.data);
         const dataArray = Object.values(response.data);
         setData(dataArray);
+        console.log(dataArray);
         setLoading(false);
       })
       .catch((error) => {

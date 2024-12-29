@@ -32,14 +32,16 @@ export default function Request({ data }) {
 
   const handleButtonClick = (type) => {
     if (type === 'confirm') {
-        console.log('confirm');
         console.log(data);
-        axios.post('/characters/requests/3/approve').then((res) => {
+        axios.post(`/characters/requests/${data.request_id}/approve`).then((res) => {
             console.log(res);
         })
     }
     if (type === 'cancel') {
-        console.log('cancel');
+        console.log(data);
+        axios.post(`/characters/requests/${data.request_id}/reject`).then((res) => {
+            console.log(res);
+        })
     }
   };
 

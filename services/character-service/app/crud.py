@@ -289,6 +289,7 @@ def get_moderation_requests(db: Session):
 
             # Добавляем в словарь с ключом request_id
             results[request_id] = {
+                "request_id": request_id,
                 "user_id": user_id,
                 "name": name,
                 "biography": biography,
