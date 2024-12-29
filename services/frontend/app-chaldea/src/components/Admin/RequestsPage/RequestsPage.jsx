@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react';
 import Header from '../../CommonComponents/Header/Header';
 import Request from '../Request/Request';
-
 import styles from './RequestsPage.module.css';
-import userAvatar from '../../../assets/userAvatarReq.png';
 import axios from 'axios';
 
 export default function RequestsPage() {
@@ -31,6 +29,7 @@ export default function RequestsPage() {
       <h1 className={styles.title}>Заявки на персонажей</h1>
       <div className={styles.requests_container}>
         {data.map((item, index) => (
+            item.status === 'pending' &&
           <Request key={index} data={item} />
         ))}
       </div>

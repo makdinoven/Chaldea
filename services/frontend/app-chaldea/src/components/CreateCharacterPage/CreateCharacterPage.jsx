@@ -19,6 +19,7 @@ import warriorImg from '../../assets/classWarriorImg.png';
 import plutImg from '../../assets/classPlutImg.png';
 import magicianImg from '../../assets/classMagicianImg.png';
 import classInventoryImg from '../../assets/classInventoryImg.png';
+import {useUser} from "../../hooks/UserContext.jsx";
 
 export default function CreateCharacterPage({}) {
   const navigateTo = useNavigateTo();

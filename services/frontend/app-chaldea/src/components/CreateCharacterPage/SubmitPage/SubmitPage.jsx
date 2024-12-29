@@ -9,6 +9,7 @@ import CharacterInfoSmall from './CharacterInfoSmall/CharacterInfoSmall';
 import styles from './SubmitPage.module.css';
 
 import defaultAvatar from '../../../assets/menu2.png';
+import {useUser} from "../../../hooks/UserContext.jsx";
 
 export default function SubmitPage({
   biography,
@@ -19,6 +20,7 @@ export default function SubmitPage({
   selectedClass,
   selectedClassId,
 }) {
+  const { user, setUser } = useUser();
   const navigateTo = useNavigateTo();
   const fileInputRef = useRef(null);
   const [avatarUrl, setAvatarUrl] = useState(defaultAvatar);
@@ -32,7 +34,7 @@ export default function SubmitPage({
 
     const data = {
       ...biography,
-      user_id: 1,
+      user_id: user.id,
       avatar: 'string',
       id_subrace: selectedSubraceId + 1,
       id_class: selectedClassId,

@@ -15,15 +15,6 @@ import menuImg3 from '../../../assets/menuImg.png';
 export default function Header({ showMenu }) {
   const navigateTo = useNavigateTo();
   const { user, setUser } = useUser();
-  // useEffect(() => {
-  //   // Чтение имени пользователя из localStorage
-  //   const storedUsername = localStorage.getItem('username');
-  //   if (storedUsername && !user) {
-  //     // Устанавливаем пользователя в контексте, если он не установлен
-  //     setUser({ username: storedUsername });
-  //   }
-  // }, [user, setUser]);
-
   const menuData = [
     {
       id: 1,
@@ -77,6 +68,7 @@ export default function Header({ showMenu }) {
         {showMenu && (
           <div className={styles.menu_container_right}>
             {menuData.slice(2).map((menu) => (
+                user.role === 'admin'  &&
               <Menu
                 key={menu.id}
                 title={menu.title}

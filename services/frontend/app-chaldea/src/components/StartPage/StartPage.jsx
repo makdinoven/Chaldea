@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import Header from '../CommonComponents/Header/Header.jsx';
 import LogButton from './LogButton/LogButton.jsx';
-import AuthForm from './AuthForm/AuthFrom.jsx';
+import AuthForm from './AuthForm/AuthForm.jsx';
 
 import styles from './StartPage.module.css';
 
