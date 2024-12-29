@@ -49,16 +49,32 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
     return create_user(db=db, user=user)
 
 # Вход в систему и получение JWT и рефреш-токена
-@router.post("/login")  # Изменено на router.post
+@router.post("/login")
 def login_user(data: Login, db: Session = Depends(get_db)):
     user = authenticate_user(db, data.identifier, data.password)
     if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials"
+        )
 
-    access_token = create_access_token(data={"sub": user.email}, role=user.role)  # Передаем роль пользователя
-    refresh_token = create_refresh_token(data={"sub": user.email}, role=user.role)
+    access_token = create_access_token(
+        data={
+            "sub": user.email,
+            "current_character": user.current_character
+        },
+        role=user.role
+    )
+    refresh_token = create_refresh_token(
+        data={
+            "sub": user.email,
+            "current_character": user.current_character
+        },
+        role=user.role
+    )
 
     return {"access_token": access_token, "refresh_token": refresh_token}
+
 
 # Обновление JWT токена с использованием рефреш-токена
 @router.post("/refresh")

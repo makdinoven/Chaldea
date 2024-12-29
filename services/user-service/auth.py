@@ -18,8 +18,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 # Создание JWT токена с добавлением роли пользователя
 def create_access_token(data: dict, role: str, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    to_encode.update({"role": role})  # Добавляем роль пользователя в данные токена
+    to_encode = data.copy()  # data уже содержит current_character
+    to_encode.update({"role": role})
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
@@ -28,10 +28,9 @@ def create_access_token(data: dict, role: str, expires_delta: Optional[timedelta
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-# Создание рефреш-токена с добавлением роли пользователя
 def create_refresh_token(data: dict, role: str, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    to_encode.update({"role": role})  # Добавляем роль пользователя в данные токена
+    to_encode = data.copy()  # data уже содержит current_character
+    to_encode.update({"role": role})
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
@@ -39,6 +38,7 @@ def create_refresh_token(data: dict, role: str, expires_delta: Optional[timedelt
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
 
 # Получение текущего пользователя по JWT токену
 def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
@@ -50,12 +50,21 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
-        role: str = payload.get("role")  # Извлекаем роль из токена
+        role: str = payload.get("role")
+        current_character: int = payload.get("current_character")  # Вот тут
         if email is None or role is None:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
+
     user = get_user_by_email(db, email=email)
     if user is None:
         raise credentials_exception
+
+    # Если вы хотите проверить, что current_character в токене совпадает
+    # с тем, что лежит в базе, это можно сделать:
+    # if current_character != user.current_character:
+    #     raise HTTPException(status_code=401, detail="Token data mismatch")
+
     return user
+
