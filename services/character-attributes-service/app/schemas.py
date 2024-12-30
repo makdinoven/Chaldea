@@ -55,7 +55,7 @@ class CharacterAttributesResponse(CharacterAttributesBase):
     res_physical: float
     res_cutting: float
     res_crushing: float
-    res_piersing: float
+    res_piercing: float
     res_magic: float
     res_fire: float
     res_ice: float

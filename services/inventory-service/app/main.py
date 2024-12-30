@@ -1,5 +1,5 @@
+import httpx
 from typing import List
-
 from fastapi import FastAPI, Depends, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 import models
@@ -7,9 +7,8 @@ import schemas
 import crud
 from database import SessionLocal, engine
 from fastapi.middleware.cors import CORSMiddleware
+from config import settings
 
-
-# Создаем экземпляр приложения FastAPI
 app = FastAPI()
 
 app.add_middleware(
@@ -20,16 +19,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Создаем все таблицы в базе данных, если они еще не созданы
+# Создаем таблицы, если не существуют
 models.Base.metadata.create_all(bind=engine)
-
-
-
 
 router = APIRouter(prefix="/inventory")
 
-
-# Зависимость для получения сессии базы данных
 def get_db():
     db = SessionLocal()
     try:
@@ -46,61 +40,48 @@ def create_inventory(inventory_request: schemas.InventoryRequest, db: Session = 
     character_id = inventory_request.character_id
     items_to_add = inventory_request.items
 
-    # Создаём стандартные слоты экипировки для персонажа
+    # Создаём стандартные слоты
     equipment_slots = crud.create_default_equipment_slots(db, character_id)
-    print(f"[INFO] Созданы слоты экипировки для персонажа {character_id}: {equipment_slots}")
 
     inventory_data = []
-
-    for item_request in items_to_add:
-        item_id = item_request.item_id
-        quantity = item_request.quantity
-
-        # Проверяем, существует ли предмет в таблице items
-        db_item = db.query(models.Items).filter(models.Items.id == item_id).first()
+    for item_req in items_to_add:
+        db_item = db.query(models.Items).filter(models.Items.id == item_req.item_id).first()
         if not db_item:
-            raise HTTPException(status_code=404, detail=f"Предмет с ID {item_id} не найден в базе данных")
+            raise HTTPException(status_code=404, detail=f"Предмет {item_req.item_id} не найден")
 
-        # Проверяем возможность добавления предмета
-        if db_item.max_stack_size == 1 and quantity > 1:
-            raise HTTPException(status_code=400, detail=f"Предмет с ID {item_id} не может быть в количестве больше 1")
+        if db_item.max_stack_size == 1 and item_req.quantity > 1:
+            raise HTTPException(status_code=400, detail=f"Предмет {item_req.item_id} нельзя добавить более 1 шт")
 
-        # Добавляем запись в таблицу character_inventory
-        new_inventory_item = models.CharacterInventory(
+        new_inv = models.CharacterInventory(
             character_id=character_id,
-            item_id=item_id,
-            quantity=quantity
+            item_id=item_req.item_id,
+            quantity=item_req.quantity
         )
-        db.add(new_inventory_item)
+        db.add(new_inv)
+        db.commit()
 
-        # Собираем данные для ответа
         inventory_data.append({
             "item_id": db_item.id,
             "name": db_item.name,
             "max_stack_size": db_item.max_stack_size,
-            "quantity": quantity,
+            "quantity": item_req.quantity,
             "description": db_item.description,
             "weight": db_item.weight,
         })
 
-    db.commit()
-
     return {"character_id": character_id, "items": inventory_data}
+
 
 @router.get("/{character_id}/items", response_model=List[schemas.CharacterInventory])
 def get_character_inventory(character_id: int, db: Session = Depends(get_db)):
     """
     Получить все предметы в инвентаре персонажа.
     """
-    inventory_items = crud.get_inventory_items(db, character_id)
-    return inventory_items
+    return crud.get_inventory_items(db, character_id)
+
 
 @router.post("/{character_id}/items", response_model=List[schemas.CharacterInventory])
-def add_item_to_inventory(
-    character_id: int,
-    item_data: schemas.InventoryItem,
-    db: Session = Depends(get_db)
-):
+def add_item_to_inventory(character_id: int, item_data: schemas.InventoryItem, db: Session = Depends(get_db)):
     """
     Добавить предмет в инвентарь персонажа с учётом максимального стека.
     """
@@ -108,200 +89,296 @@ def add_item_to_inventory(
     if not db_item:
         raise HTTPException(status_code=404, detail="Предмет не найден")
 
-    if not db_item.max_stack_size and item_data.quantity > 1:
-        raise HTTPException(status_code=400, detail="Нестакаемый предмет не может иметь количество больше 1")
 
-    remaining_quantity = item_data.quantity
+    remaining = item_data.quantity
     inventory_items = []
 
-    # Заполняем существующие слоты, где есть место
-    existing_inventory_items = db.query(models.CharacterInventory).filter(
+    # Заполняем имеющиеся слоты
+    existing_slots = db.query(models.CharacterInventory).filter(
         models.CharacterInventory.character_id == character_id,
         models.CharacterInventory.item_id == item_data.item_id,
         models.CharacterInventory.quantity < db_item.max_stack_size
     ).all()
 
-    for inventory_item in existing_inventory_items:
-        if remaining_quantity == 0:
+    for slot in existing_slots:
+        if remaining == 0:
             break
+        space = db_item.max_stack_size - slot.quantity
+        to_add = min(space, remaining)
+        slot.quantity += to_add
+        remaining -= to_add
+        db.add(slot)
+        inventory_items.append(slot)
 
-        available_space = db_item.max_stack_size - inventory_item.quantity
-        quantity_to_add = min(available_space, remaining_quantity)
-        inventory_item.quantity += quantity_to_add
-        remaining_quantity -= quantity_to_add
-        db.add(inventory_item)
-        inventory_items.append(inventory_item)
-
-    # Создаём новые слоты, если осталось количество
-    while remaining_quantity > 0:
-        quantity_to_add = min(remaining_quantity, db_item.max_stack_size)
-        new_inventory_item = models.CharacterInventory(
+    # Если ещё осталось - создаём новые записи
+    while remaining > 0:
+        to_add = min(remaining, db_item.max_stack_size)
+        new_slot = models.CharacterInventory(
             character_id=character_id,
             item_id=item_data.item_id,
-            quantity=quantity_to_add
+            quantity=to_add
         )
-        db.add(new_inventory_item)
+        db.add(new_slot)
         db.commit()
-        db.refresh(new_inventory_item)
-        inventory_items.append(new_inventory_item)
-        remaining_quantity -= quantity_to_add
+        db.refresh(new_slot)
+        inventory_items.append(new_slot)
+        remaining -= to_add
 
     return inventory_items
 
 
 @router.delete("/{character_id}/items/{item_id}", response_model=List[schemas.CharacterInventory])
-def remove_item_from_inventory(
-    character_id: int,
-    item_id: int,
-    quantity: int = 1,
-    db: Session = Depends(get_db)
-):
+def remove_item_from_inventory(character_id: int, item_id: int, quantity: int = 1, db: Session = Depends(get_db)):
     """
-    Удалить определённое количество предметов из инвентаря персонажа.
+    Удалить некоторое количество предметов из инвентаря персонажа.
     """
-    total_quantity_to_remove = quantity
-    inventory_items = db.query(models.CharacterInventory).filter(
+    total_remove = quantity
+    slots = db.query(models.CharacterInventory).filter(
         models.CharacterInventory.character_id == character_id,
         models.CharacterInventory.item_id == item_id
     ).order_by(models.CharacterInventory.quantity.desc()).all()
 
-    if not inventory_items:
-        raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
+    if not slots:
+        raise HTTPException(status_code=404, detail="Нет такого предмета в инвентаре")
 
     updated_items = []
-
-    for inventory_item in inventory_items:
-        if total_quantity_to_remove == 0:
+    for s in slots:
+        if total_remove == 0:
             break
-
-        if inventory_item.quantity <= total_quantity_to_remove:
-            total_quantity_to_remove -= inventory_item.quantity
-            db.delete(inventory_item)
+        if s.quantity <= total_remove:
+            total_remove -= s.quantity
+            db.delete(s)
         else:
-            inventory_item.quantity -= total_quantity_to_remove
-            db.add(inventory_item)
-            total_quantity_to_remove = 0
-            updated_items.append(inventory_item)
+            s.quantity -= total_remove
+            total_remove = 0
+            updated_items.append(s)
 
-    if total_quantity_to_remove > 0:
-        raise HTTPException(status_code=400, detail="Недостаточно количества предметов для удаления")
+    if total_remove > 0:
+        raise HTTPException(status_code=400, detail="Недостаточно предметов для удаления")
 
     db.commit()
     return updated_items
 
+
 @router.get("/{character_id}/equipment", response_model=List[schemas.EquipmentSlot])
 def get_equipment_slots(character_id: int, db: Session = Depends(get_db)):
-    """
-    Получить все слоты экипировки персонажа.
-    """
-    equipment_slots = db.query(models.EquipmentSlot).filter(
-        models.EquipmentSlot.character_id == character_id
-    ).all()
-    return equipment_slots
+    return crud.get_equipment_slots(db, character_id)
 
 
+# -----------------------------------------------------------------------------
+# Вспомогательные функции для обращений к сервису атрибутов
+# -----------------------------------------------------------------------------
+async def apply_modifiers_in_attributes_service(character_id: int, modifiers: dict):
+    """
+    Единственная функция, которая будет вызывать /apply_modifiers (с любым знаком).
+    """
+    url = f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}/apply_modifiers"
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, json=modifiers)
+        resp.raise_for_status()
+
+
+async def recover_in_attributes_service(character_id: int, recovery: dict):
+    """
+    Для восстановления ресурсов (health_recovery, mana_recovery и т.д.).
+    """
+    url = f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}/recover"
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, json=recovery)
+        resp.raise_for_status()
+
+
+# -----------------------------------------------------------------------------
+# Экипировка (equip)
+# -----------------------------------------------------------------------------
 @router.post("/{character_id}/equip", response_model=schemas.EquipmentSlot)
-def equip_item(
-    character_id: int,
-    equip_data: schemas.EquipmentSlotCreate,
-    db: Session = Depends(get_db)
-):
+async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Session = Depends(get_db)):
     """
-    Экипировать предмет из инвентаря в слот экипировки.
+    Надеть предмет (транзакция):
+      1) Проверяем, что предмет есть в инвентаре
+      2) Если слот занят - снимаем старый предмет (и вычитаем его модификаторы)
+      3) Уменьшаем инвентарь на 1, надеваем предмет
+      4) Вызываем apply_modifiers с положительными значениями
+      5) Если что-то упало - rollback
     """
-    item = db.query(models.Items).filter(models.Items.id == equip_data.item_id).first()
-    if not item:
+    db.begin()  # начинаем транзакцию вручную
+
+    try:
+        # Проверяем предмет
+        db_item = db.query(models.Items).filter(models.Items.id == req.item_id).first()
+        if not db_item:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Предмет не найден")
+
+        # Проверяем наличие в инвентаре
+        inv_slot = db.query(models.CharacterInventory).filter(
+            models.CharacterInventory.character_id == character_id,
+            models.CharacterInventory.item_id == req.item_id
+        ).order_by(models.CharacterInventory.quantity.desc()).first()
+
+        if not inv_slot or inv_slot.quantity < 1:
+            db.rollback()
+            raise HTTPException(status_code=400, detail="Недостаточно предметов в инвентаре")
+
+        # Ищем слот
+        slot = crud.find_equipment_slot_for_item(db, character_id, db_item)
+        if not slot:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Нет подходящего слота для этого предмета")
+
+        # Если слот уже занят => снимаем старый предмет
+        if slot.item_id:
+            old_item = db.query(models.Items).filter(models.Items.id == slot.item_id).first()
+            if old_item:
+                # возвращаем старый предмет в инвентарь
+                crud.return_item_to_inventory(db, character_id, old_item)
+                db.flush()
+                # вычитаем его бонусы (передаём отрицательные значения)
+                minus_mods = crud.build_modifiers_dict(old_item, negative=True)
+                if minus_mods:
+                    await apply_modifiers_in_attributes_service(character_id, minus_mods)
+
+            slot.item_id = None
+            db.add(slot)
+            db.flush()
+
+        # Уменьшаем количество нового предмета
+        inv_slot.quantity -= 1
+        if inv_slot.quantity <= 0:
+            db.delete(inv_slot)
+        else:
+            db.add(inv_slot)
+        db.flush()
+
+        # Надеваем предмет
+        slot.item_id = db_item.id
+        db.add(slot)
+        db.flush()
+
+        # Добавляем модификаторы (положительные)
+        plus_mods = crud.build_modifiers_dict(db_item, negative=False)
+        if plus_mods:
+            await apply_modifiers_in_attributes_service(character_id, plus_mods)
+
+        db.commit()
+        db.refresh(slot)
+        return slot
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except httpx.HTTPError as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Ошибка обращения к сервису атрибутов: {e}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {e}")
+
+
+# -----------------------------------------------------------------------------
+# Снятие (unequip)
+# -----------------------------------------------------------------------------
+@router.post("/{character_id}/unequip", response_model=schemas.EquipmentSlot)
+async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(get_db)):
+    """
+    Снять предмет (транзакция):
+      1) Возвращаем предмет в инвентарь
+      2) Передаём отрицательные значения в apply_modifiers
+      3) Очищаем слот
+      4) rollback при ошибке
+    """
+    db.begin()
+
+    try:
+        slot = db.query(models.EquipmentSlot).filter(
+            models.EquipmentSlot.character_id == character_id,
+            models.EquipmentSlot.slot_type == slot_type
+        ).with_for_update().first()
+
+        if not slot or not slot.item_id:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Слот пуст или не найден")
+
+        old_item = db.query(models.Items).filter(models.Items.id == slot.item_id).first()
+        if not old_item:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Предмет в слоте не найден")
+
+        # Возвращаем предмет
+        crud.return_item_to_inventory(db, character_id, old_item)
+        db.flush()
+
+        # Убираем его бонусы => negative=True
+        minus_mods = crud.build_modifiers_dict(old_item, negative=True)
+        if minus_mods:
+            await apply_modifiers_in_attributes_service(character_id, minus_mods)
+
+        # Освобождаем слот
+        slot.item_id = None
+        db.add(slot)
+        db.flush()
+
+        db.commit()
+        db.refresh(slot)
+        return slot
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except httpx.HTTPError as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Ошибка обращения к сервису атрибутов: {e}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {e}")
+
+
+# -----------------------------------------------------------------------------
+# Использование предмета (use_item)
+# -----------------------------------------------------------------------------
+@router.post("/{character_id}/use_item")
+async def use_item(character_id: int, req: schemas.InventoryItem, db: Session = Depends(get_db)):
+    """
+    Используем расходник:
+      1) Уменьшаем quantity
+      2) Если есть health_recovery и т.п., вызываем /recover
+    """
+    db_item = db.query(models.Items).filter(models.Items.id == req.item_id).first()
+    if not db_item:
         raise HTTPException(status_code=404, detail="Предмет не найден")
 
-    if not crud.is_item_compatible_with_slot(item.item_type, equip_data.slot_type):
-        raise HTTPException(status_code=400, detail="Предмет несовместим со слотом")
+    if db_item.item_type not in ("consumable", "scroll", "misc", "resource"):
+        raise HTTPException(status_code=400, detail="Нельзя использовать этот предмет")
 
-    equipment_slot = db.query(models.EquipmentSlot).filter(
-        models.EquipmentSlot.character_id == character_id,
-        models.EquipmentSlot.slot_type == equip_data.slot_type
-    ).first()
-
-    if not equipment_slot:
-        raise HTTPException(status_code=404, detail="Слот экипировки не найден")
-
-    if equipment_slot.item_id:
-        raise HTTPException(status_code=400, detail="Слот уже занят")
-
-    # Ищем слот в инвентаре с этим предметом
-    inventory_item = db.query(models.CharacterInventory).filter(
+    inv_slot = db.query(models.CharacterInventory).filter(
         models.CharacterInventory.character_id == character_id,
-        models.CharacterInventory.item_id == equip_data.item_id
-    ).order_by(models.CharacterInventory.quantity.desc()).first()
+        models.CharacterInventory.item_id == req.item_id
+    ).first()
+    if not inv_slot or inv_slot.quantity < req.quantity:
+        raise HTTPException(status_code=400, detail="Недостаточно предметов в инвентаре")
 
-    if not inventory_item:
-        raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
-
-    # Уменьшаем количество или удаляем слот, если количество стало 0
-    inventory_item.quantity -= 1
-    if inventory_item.quantity == 0:
-        db.delete(inventory_item)
+    inv_slot.quantity -= req.quantity
+    if inv_slot.quantity <= 0:
+        db.delete(inv_slot)
     else:
-        db.add(inventory_item)
-
-    equipment_slot.item_id = equip_data.item_id
-    db.add(equipment_slot)
+        db.add(inv_slot)
     db.commit()
-    db.refresh(equipment_slot)
-    return equipment_slot
 
-@router.post("/{character_id}/unequip", response_model=schemas.EquipmentSlot)
-def unequip_item(
-    character_id: int,
-    slot_type: str,
-    db: Session = Depends(get_db)
-):
-    """
-    Снять предмет из слота экипировки в инвентарь.
-    """
-    equipment_slot = db.query(models.EquipmentSlot).filter(
-        models.EquipmentSlot.character_id == character_id,
-        models.EquipmentSlot.slot_type == slot_type
-    ).first()
+    # Поля восстановления
+    recover_payload = {}
+    if db_item.health_recovery and db_item.health_recovery > 0:
+        recover_payload["health_recovery"] = db_item.health_recovery * req.quantity
+    if db_item.energy_recovery and db_item.energy_recovery > 0:
+        recover_payload["energy_recovery"] = db_item.energy_recovery * req.quantity
+    if db_item.mana_recovery and db_item.mana_recovery > 0:
+        recover_payload["mana_recovery"] = db_item.mana_recovery * req.quantity
+    if db_item.stamina_recovery and db_item.stamina_recovery > 0:
+        recover_payload["stamina_recovery"] = db_item.stamina_recovery * req.quantity
 
-    if not equipment_slot or not equipment_slot.item_id:
-        raise HTTPException(status_code=404, detail="В этом слоте нет предмета")
+    if recover_payload:
+        await recover_in_attributes_service(character_id, recover_payload)
 
-    item_id = equipment_slot.item_id
-    db_item = db.query(models.Items).filter(models.Items.id == item_id).first()
+    return {"status": "ok", "detail": "Предмет использован"}
 
-    remaining_quantity = 1
-
-    # Заполняем существующие слоты, где есть место
-    existing_inventory_items = db.query(models.CharacterInventory).filter(
-        models.CharacterInventory.character_id == character_id,
-        models.CharacterInventory.item_id == item_id,
-        models.CharacterInventory.quantity < db_item.max_stack_size
-    ).all()
-
-    for inventory_item in existing_inventory_items:
-        if remaining_quantity == 0:
-            break
-
-        available_space = db_item.max_stack_size - inventory_item.quantity
-        quantity_to_add = min(available_space, remaining_quantity)
-        inventory_item.quantity += quantity_to_add
-        remaining_quantity -= quantity_to_add
-        db.add(inventory_item)
-
-    # Создаём новый слот, если осталось количество
-    if remaining_quantity > 0:
-        new_inventory_item = models.CharacterInventory(
-            character_id=character_id,
-            item_id=item_id,
-            quantity=remaining_quantity
-        )
-        db.add(new_inventory_item)
-
-    equipment_slot.item_id = None
-    db.add(equipment_slot)
-
-    db.commit()
-    db.refresh(equipment_slot)
-    return equipment_slot
 
 app.include_router(router)

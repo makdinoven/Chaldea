@@ -9,27 +9,23 @@ from config import settings
 import httpx
 import logging
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Настройка CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Измените на нужные домены
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Создание всех таблиц в базе данных
 models.Base.metadata.create_all(bind=engine)
 
 router = APIRouter(prefix="/attributes")
 
-# Зависимость для получения сессии базы данных
 def get_db():
     db = SessionLocal()
     try:
@@ -37,44 +33,34 @@ def get_db():
     finally:
         db.close()
 
-# Эндпоинт для создания атрибутов персонажа
+# -----------------------------
+# 1. Создание атрибутов
+# -----------------------------
 @router.post("/", response_model=schemas.CharacterAttributesResponse)
 def create_character_attributes(attributes: schemas.CharacterAttributesCreate, db: Session = Depends(get_db)):
-    """
-    Эндпоинт для создания атрибутов персонажа.
-    """
     try:
-        # Логирование входящего запроса
-        logger.info(
-            f"Запрос на создание атрибутов для персонажа с ID {attributes.character_id} с данными: {attributes}")
-
-        # Создание атрибутов персонажа
+        logger.info(f"Создание атрибутов для персонажа ID {attributes.character_id}")
         db_attributes = crud.create_character_attributes(db, attributes)
-
-        # Логирование успешного создания
-        logger.info(f"Атрибуты для персонажа с ID {attributes.character_id} успешно созданы: {db_attributes}")
-
         return db_attributes
     except SQLAlchemyError as e:
-        # Логирование ошибки и стек вызовов
-        logger.error(f"Ошибка при создании атрибутов для персонажа ID {attributes.character_id}: {e}")
+        logger.error(f"Ошибка при создании атрибутов: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-# Эндпоинт для получения passive_experience персонажа
+# -----------------------------
+# 2. Получение passive_experience
+# -----------------------------
 @router.get("/{character_id}/passive_experience", response_model=schemas.PassiveExperienceResponse)
 def get_passive_experience_endpoint(character_id: int, db: Session = Depends(get_db)):
-    """
-    Получить passive_experience персонажа.
-    """
     logger.info(f"Получение passive_experience для персонажа ID {character_id}")
     passive_experience = crud.get_passive_experience(db, character_id)
     if passive_experience is None:
-        logger.error(f"Passive experience для персонажа ID {character_id} не найден.")
         raise HTTPException(status_code=404, detail="Passive experience not found")
     return {"passive_experience": passive_experience}
 
-# Эндпоинт для получения всех атрибутов персонажа
+# -----------------------------
+# 3. Получение всех атрибутов
+# -----------------------------
 @router.get("/{character_id}", response_model=schemas.CharacterAttributesResponse)
 def get_full_attributes(character_id: int, db: Session = Depends(get_db)):
     attr = db.query(models.CharacterAttributes).filter(models.CharacterAttributes.character_id == character_id).first()
@@ -82,35 +68,25 @@ def get_full_attributes(character_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Attributes not found")
     return attr
 
-# Эндпоинт для прокачки статов
+# -----------------------------
+# 4. Прокачка (upgrade)
+# -----------------------------
 @router.post("/{character_id}/upgrade", response_model=schemas.AttributesResponse)
-async def upgrade_attributes(
-    character_id: int,
-    upgrade_request: schemas.StatsUpgradeRequest,
-    db: Session = Depends(get_db)
-):
-    """
-    Прокачка статов за счет stat_points.
-    """
-    logger.info(f"Получен запрос на прокачку статов для персонажа ID {character_id}: {upgrade_request}")
-
-    # 1. Получаем текущие stat_points из character-service
+async def upgrade_attributes(character_id: int, upgrade_request: schemas.StatsUpgradeRequest, db: Session = Depends(get_db)):
+    logger.info(f"Запрос на прокачку статов у персонажа {character_id}")
+    # --- Логика прокачки из вашего примера (запрос в character-service, списание stat_points, и т.д.) ---
     try:
         async with httpx.AsyncClient() as client:
             full_profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/full_profile"
-            logger.info(f"Отправка запроса на получение профиля персонажа по URL: {full_profile_url}")
             resp = await client.get(full_profile_url)
             if resp.status_code != 200:
-                logger.error(f"Не удалось получить профиль персонажа ID {character_id}: {resp.status_code} - {resp.text}")
-                raise HTTPException(status_code=404, detail="Character not found in character-service")
+                raise HTTPException(status_code=404, detail="Character not found")
             char_data = resp.json()
             available_stat_points = char_data.get("stat_points", 0)
-            logger.info(f"У персонажа ID {character_id} доступно stat_points: {available_stat_points}")
     except httpx.RequestError as e:
         logger.exception(f"Ошибка при запросе к character-service: {e}")
         raise HTTPException(status_code=500, detail="Failed to communicate with character-service")
 
-    # 2. Считаем, сколько stat_points нужно
     total_needed = (
         upgrade_request.strength +
         upgrade_request.agility +
@@ -123,46 +99,35 @@ async def upgrade_attributes(
         upgrade_request.charisma +
         upgrade_request.luck
     )
-    logger.info(f"Общее количество stat_points, необходимых для прокачки: {total_needed}")
-
     if total_needed == 0:
-        logger.info("Нет статов для прокачки.")
-        raise HTTPException(status_code=400, detail="No stats to upgrade.")
-
+        raise HTTPException(status_code=400, detail="No stats to upgrade")
     if available_stat_points < total_needed:
-        logger.warning(f"Недостаточно stat_points: требуется {total_needed}, доступно {available_stat_points}")
         raise HTTPException(status_code=400, detail="Not enough stat points")
 
-    # 3. Спишем stat_points в character-service
+    # Списываем stat_points
     try:
         async with httpx.AsyncClient() as client:
-            # Исправленный URL с добавлением '/characters/'
-            deduct_points_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/deduct_points"
+            deduct_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/deduct_points"
             payload = {"points_to_deduct": total_needed}
-            logger.info(f"Отправка запроса на списание stat_points: {deduct_points_url} с данными: {payload}")
-            resp = await client.put(deduct_points_url, json=payload)
+            resp = await client.put(deduct_url, json=payload)
             if resp.status_code != 200:
-                logger.error(f"Не удалось списать stat_points: {resp.status_code} - {resp.text}")
-                raise HTTPException(status_code=500, detail="Failed to deduct stat points from character-service")
+                raise HTTPException(status_code=500, detail="Failed to deduct stat points")
             deduct_response = resp.json()
             remaining_points = deduct_response.get("remaining_points", available_stat_points - total_needed)
-            logger.info(f"stat_points успешно списаны. Остаток stat_points: {remaining_points}")
     except httpx.RequestError as e:
-        logger.exception(f"Ошибка при запросе к character-service для списания stat_points: {e}")
+        logger.exception(f"Ошибка при списании stat_points: {e}")
         raise HTTPException(status_code=500, detail="Failed to communicate with character-service")
 
-    # 4. Применяем прокачку атрибутов внутри транзакции
+    # Применяем прокачку (транзакция)
     try:
-        # Начинаем транзакцию
         with db.begin():
-            attr = db.query(models.CharacterAttributes).filter(models.CharacterAttributes.character_id == character_id).with_for_update().first()
+            attr = db.query(models.CharacterAttributes).filter(
+                models.CharacterAttributes.character_id == character_id
+            ).with_for_update().first()
             if not attr:
-                logger.error(f"Атрибуты персонажа ID {character_id} не найдены в character-attributes сервисе.")
                 raise HTTPException(status_code=404, detail="Attributes not found")
 
-            logger.info(f"Прокачка атрибутов для персонажа ID {character_id}: {upgrade_request}")
-
-            # Применяем изменения
+            # Код из вашего примера
             attr.res_physical += upgrade_request.strength * 0.1
             attr.dodge += upgrade_request.agility * 0.1
             attr.res_magic += upgrade_request.intelligence * 0.1
@@ -185,11 +150,10 @@ async def upgrade_attributes(
             attr.current_stamina += upgrade_request.stamina * 5
 
             attr.charisma += upgrade_request.charisma
-            # За каждое +1 luck => +0.1% к крит.шансам и уклонению
             attr.critical_hit_chance += upgrade_request.luck * 0.1
             attr.dodge += upgrade_request.luck * 0.1
 
-            # Округляем нужные поля до целого
+            # Округляем
             attr.current_health = int(attr.current_health)
             attr.max_health = int(attr.max_health)
             attr.current_mana = int(attr.current_mana)
@@ -203,17 +167,11 @@ async def upgrade_attributes(
             attr.energy = int(attr.energy)
             attr.stamina = int(attr.stamina)
 
-            # Другие поля остаются float
-
-        # После транзакции, обновляем объект из базы данных
         db.refresh(attr)
-        logger.info(f"Атрибуты персонажа ID {character_id} успешно обновлены.")
     except SQLAlchemyError as e:
-        logger.exception(f"Ошибка при обновлении атрибутов персонажа ID {character_id}: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to upgrade attributes")
 
-    # Формируем ответ
     updated_attributes = {
         "health": attr.health,
         "max_health": attr.max_health,
@@ -240,31 +198,192 @@ async def upgrade_attributes(
         updated_attributes=updated_attributes
     )
 
-# Эндпоинт для получения количества доступных stat_points (опционально)
-@router.get("/{character_id}/stat_points")
-async def get_stat_points(character_id: int, db: Session = Depends(get_db)):
+
+# -----------------------------
+# 5. apply_modifiers (общий)
+# -----------------------------
+HEALTH_MULTIPLIER = 10
+MANA_MULTIPLIER = 10
+ENERGY_MULTIPLIER = 5
+STAMINA_MULTIPLIER = 5
+
+@router.post("/{character_id}/apply_modifiers")
+def apply_modifiers(character_id: int, modifiers: dict, db: Session = Depends(get_db)):
     """
-    Получить количество доступных stat_points персонажа.
+    Применяем модификаторы к CharacterAttributes.
+    'health', 'mana', 'energy', 'stamina' => пересчитываем max_/current_.
+    Остальные поля (strength, damage, res_fire и т.д.) просто складываем.
     """
-    logger.info(f"Получение stat_points для персонажа ID {character_id}")
+    with db.begin():
+        attr = db.query(models.CharacterAttributes).filter(
+            models.CharacterAttributes.character_id == character_id
+        ).with_for_update().first()
 
-    # Получаем текущие stat_points из character-service
-    try:
-        async with httpx.AsyncClient() as client:
-            full_profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/full_profile"
-            logger.info(f"Отправка запроса на получение профиля персонажа по URL: {full_profile_url}")
-            resp = await client.get(full_profile_url)
-            if resp.status_code != 200:
-                logger.error(f"Не удалось получить профиль персонажа ID {character_id}: {resp.status_code} - {resp.text}")
-                raise HTTPException(status_code=404, detail="Character not found in character-service")
-            char_data = resp.json()
-            available_stat_points = char_data.get("stat_points", 0)
-            logger.info(f"У персонажа ID {character_id} доступно stat_points: {available_stat_points}")
-    except httpx.RequestError as e:
-        logger.exception(f"Ошибка при запросе к character-service: {e}")
-        raise HTTPException(status_code=500, detail="Failed to communicate with character-service")
+        if not attr:
+            raise HTTPException(status_code=404, detail="Character attributes not found")
 
-    return {"stat_points": available_stat_points}
+        # ------- health -------
+        delta_health = modifiers.get("health", 0)
+        if delta_health != 0:
+            old_health = attr.health
+            new_health = old_health + delta_health
+            if new_health < 0:
+                new_health = 0
 
-# Регистрируем роутер
+            old_max_health = attr.max_health
+            diff = (new_health - old_health) * HEALTH_MULTIPLIER
+            new_max_health = old_max_health + diff
+
+            new_current_health = attr.current_health + diff
+            if new_current_health < 0:
+                new_current_health = 0
+            if new_current_health > new_max_health:
+                new_current_health = new_max_health
+
+            attr.health = new_health
+            attr.max_health = new_max_health
+            attr.current_health = new_current_health
+
+        # ------- mana -------
+        delta_mana = modifiers.get("mana", 0)
+        if delta_mana != 0:
+            old_mana = attr.mana
+            new_mana = old_mana + delta_mana
+            if new_mana < 0:
+                new_mana = 0
+
+            old_max_mana = attr.max_mana
+            diff = (new_mana - old_mana) * MANA_MULTIPLIER
+            new_max_mana = old_max_mana + diff
+
+            new_current_mana = attr.current_mana + diff
+            if new_current_mana < 0:
+                new_current_mana = 0
+            if new_current_mana > new_max_mana:
+                new_current_mana = new_max_mana
+
+            attr.mana = new_mana
+            attr.max_mana = new_max_mana
+            attr.current_mana = new_current_mana
+
+        # ------- energy -------
+        delta_energy = modifiers.get("energy", 0)
+        if delta_energy != 0:
+            old_energy = attr.energy
+            new_energy = old_energy + delta_energy
+            if new_energy < 0:
+                new_energy = 0
+
+            old_max_energy = attr.max_energy
+            diff = (new_energy - old_energy) * ENERGY_MULTIPLIER
+            new_max_energy = old_max_energy + diff
+
+            new_current_energy = attr.current_energy + diff
+            if new_current_energy < 0:
+                new_current_energy = 0
+            if new_current_energy > new_max_energy:
+                new_current_energy = new_max_energy
+
+            attr.energy = new_energy
+            attr.max_energy = new_max_energy
+            attr.current_energy = new_current_energy
+
+        # ------- stamina -------
+        delta_stamina = modifiers.get("stamina", 0)
+        if delta_stamina != 0:
+            old_stamina = attr.stamina
+            new_stamina = old_stamina + delta_stamina
+            if new_stamina < 0:
+                new_stamina = 0
+
+            old_max_stamina = attr.max_stamina
+            diff = (new_stamina - old_stamina) * STAMINA_MULTIPLIER
+            new_max_stamina = old_max_stamina + diff
+
+            new_current_stamina = attr.current_stamina + diff
+            if new_current_stamina < 0:
+                new_current_stamina = 0
+            if new_current_stamina > new_max_stamina:
+                new_current_stamina = new_max_stamina
+
+            attr.stamina = new_stamina
+            attr.max_stamina = new_max_stamina
+            attr.current_stamina = new_current_stamina
+
+        # ------- Остальные (strength, agility, damage, dodge, resistances, etc.) -------
+        # Просто складываем. Перечислим все поля, которые есть в модели:
+        simple_keys = [
+            "strength",
+            "agility",
+            "intelligence",
+            "endurance",
+            "charisma",
+            "luck",
+            "damage",
+            "dodge",
+            "res_effects",
+            "res_physical",
+            "res_cutting",
+            "res_crushing",
+            "res_piercing",
+            "res_magic",
+            "res_fire",
+            "res_ice",
+            "res_watering",    # в модели "res_watering"
+            "res_electricity",
+            "res_wind",
+            "res_sainting",
+            "res_damning",
+            "critical_hit_chance",
+            "critical_damage",
+            # ... если есть ещё поля, которые просто суммируются, добавьте.
+        ]
+
+        for key in simple_keys:
+            if key in modifiers and modifiers[key] != 0:
+                old_val = getattr(attr, key, 0)
+                setattr(attr, key, old_val + modifiers[key])
+
+        db.flush()
+
+    db.refresh(attr)
+    return {"detail": "Modifiers applied successfully"}
+
+# -----------------------------
+# 6. Восстановление (recover)
+# -----------------------------
+@router.post("/{character_id}/recover")
+def recover_resources(character_id: int, recovery: dict, db: Session = Depends(get_db)):
+    """
+    Восстанавливаем здоровье, ману, энергию, выносливость (current_*) но не превышаем max_*.
+    """
+    with db.begin():
+        attr = db.query(models.CharacterAttributes).filter(
+            models.CharacterAttributes.character_id == character_id
+        ).with_for_update().first()
+        if not attr:
+            raise HTTPException(status_code=404, detail="Character attributes not found")
+
+        health_rec = recovery.get("health_recovery", 0)
+        mana_rec = recovery.get("mana_recovery", 0)
+        energy_rec = recovery.get("energy_recovery", 0)
+        stamina_rec = recovery.get("stamina_recovery", 0)
+
+        new_health = min(attr.current_health + health_rec, attr.max_health)
+        attr.current_health = max(0, new_health)
+
+        new_mana = min(attr.current_mana + mana_rec, attr.max_mana)
+        attr.current_mana = max(0, new_mana)
+
+        new_energy = min(attr.current_energy + energy_rec, attr.max_energy)
+        attr.current_energy = max(0, new_energy)
+
+        new_stamina = min(attr.current_stamina + stamina_rec, attr.max_stamina)
+        attr.current_stamina = max(0, new_stamina)
+
+        db.flush()
+
+    db.refresh(attr)
+    return {"detail": "Resources recovered successfully"}
+
 app.include_router(router)
