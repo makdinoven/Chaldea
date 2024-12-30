@@ -9,4 +9,5 @@ aio_pika
 cryptography
 pytest
 pytest-asyncio
+httpx
 

@@ -47,7 +47,7 @@ class CharacterAttributes(Base):
     res_physical = Column(Float, default=0.0)  # Сопротивление физическому урону (%)
     res_cutting = Column(Float, default=0.0)  # Сопротивление режущему (%)
     res_crushing = Column(Float, default=0.0)  # Сопротивление дробящему (%)
-    res_piersing = Column(Float, default=0.0)  # Сопротивление колющему (%)
+    res_piercing = Column(Float, default=0.0)  # Сопротивление колющему (%)
     res_magic = Column(Float, default=0.0)  # Сопротивление магическому (%)
     res_fire = Column(Float, default=0.0)  # Сопротивление огню (%)
     res_ice = Column(Float, default=0.0)  # Сопротивление льду (%)
