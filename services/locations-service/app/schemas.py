@@ -138,6 +138,12 @@ class PostCreate(BaseModel):
     location_id: int
     content: str
 
+class MapPointCreate(BaseModel):
+    x: float
+    y: float
+    location_id: int
+    title: str
+
 
 # Разрешаем ссылки на другие модели
 Country.update_forward_refs()

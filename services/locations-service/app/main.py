@@ -118,12 +118,19 @@ def update_region_route(region_id: int, data: dict, session: Session = Depends(g
     """
     return crud.update_region(session, region_id, data)
 
-@router.post("/regions/{region_id}/map_points/")
+@router.post("/regions/{region_id}/map_points/", response_model=List[schemas.MapPointCreate])
 def add_map_point_route(region_id: int, point_data: dict, session: Session = Depends(get_db)):
     """
     Добавляет точку на карту региона.
     """
     return crud.add_map_point(session, region_id, point_data)
+
+@router.post("/countries/{country_id}/map_points/", response_model=List[schemas.MapPointCreate])
+def add_map_point_country_route(country_id: int, point_data: dict, session: Session = Depends(get_db)):
+    """
+    Добавляет точку на карту страны.
+    """
+    return crud.add_country_map_point(session, country_id, point_data)
 
 @router.get("/countries/", response_model=List[schemas.Country])
 def get_all_countries_route(session: Session = Depends(get_db)):

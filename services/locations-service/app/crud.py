@@ -266,6 +266,21 @@ def add_map_point(session: Session, region_id: int, point_data: dict) -> list:
     session.commit()
     return map_points
 
+def add_country_map_point(session: Session, country_id: int, point_data: dict) -> list:
+    """
+    Добавляет точку на карту региона.
+    """
+    country = session.query(Country).filter(Country.id == country_id).first()
+    if not country:
+        raise HTTPException(status_code=404, detail="Country not found")
+
+    map_points = country.map_points or []
+    map_points.append(point_data)
+    country.map_points = map_points
+
+    session.commit()
+    return map_points
+
 def get_all_countries_with_details(session: Session) -> list:
     """
     Возвращает список всех стран с полной информацией.
