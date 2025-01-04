@@ -1,4 +1,4 @@
-import styles from './UserAvatar.module.css';
+import styles from './UserAvatar.module.scss';
 
 export default function UserAvatar({ img, name }) {
   return (

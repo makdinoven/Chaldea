@@ -1,4 +1,4 @@
-import styles from './CharacterInfo.module.css';
+import styles from './CharacterInfo.module.scss';
 
 export default function CharacterInfo({ title, text }) {
   return (

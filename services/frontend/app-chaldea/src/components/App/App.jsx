@@ -5,20 +5,22 @@ import StartPage from '../StartPage/StartPage.jsx';
 import HomePage from '../HomePage/HomePage.jsx';
 import CreateCharacterPage from '../CreateCharacterPage/CreateCharacterPage.jsx';
 import RequestsPage from '../Admin/RequestsPage/RequestsPage.jsx';
-
-import './App.css';
+import Layout from "./Layout/Layout.jsx";
+import WorldPage from "../WorldPage/WorldPage.jsx";
 
 const App = () => {
   return (
     <Router>
-      <div className='container'>
         <Routes>
-          <Route path='/' element={<StartPage />} />
-          <Route path='/home' element={<HomePage />} />
-          <Route path='/createCharacter' element={<CreateCharacterPage />} />
-          <Route path='/requestsPage' element={<RequestsPage />} />
+          <Route path="/" element={<StartPage />} />
+
+          <Route path="/*" element={<Layout />}>
+            <Route path="home" element={<HomePage />} />
+            <Route path="createCharacter" element={<CreateCharacterPage />} />
+            <Route path="requestsPage" element={<RequestsPage />} />
+            <Route path="world" element={<WorldPage />} />
+          </Route>
         </Routes>
-      </div>
     </Router>
   );
 };

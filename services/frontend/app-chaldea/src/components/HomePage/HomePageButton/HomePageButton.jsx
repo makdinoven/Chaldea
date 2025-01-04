@@ -1,4 +1,4 @@
-import styles from './HomePageButton.module.css';
+import styles from './HomePageButton.module.scss';
 
 export default function HomePageButton({
   titleName,

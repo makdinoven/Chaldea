@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import useNavigateTo from '../../../../hooks/useNavigateTo';
 import SubraceButton from './SubraceButton/SubraceButton';
-import styles from './RaceDescription.module.css';
+import styles from './RaceDescription.module.scss';
 
 export default function RaceDescription({
   raceData,

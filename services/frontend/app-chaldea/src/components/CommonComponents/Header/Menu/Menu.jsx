@@ -1,9 +1,7 @@
-import useNavigateTo from '../../../../hooks/useNavigateTo';
-
-import styles from './Menu.module.css';
+import styles from './Menu.module.scss';
+import {Link} from "react-router-dom";
 
 export default function Menu({ title, backgroundImg, menuButtons }) {
-  const navigateTo = useNavigateTo();
 
   const additionalStyles = {
     backgroundImage: `url(${backgroundImg})`,
@@ -15,13 +13,10 @@ export default function Menu({ title, backgroundImg, menuButtons }) {
       <div className={styles.menu} style={additionalStyles}>
         <div className={styles.menu_items}>
           {menuButtons.map((button, index) => (
-            <button
-              key={index}
-              className={styles.menu_item}
-              onClick={() => navigateTo(button.link)}
+            <Link to={button.link} key={index} className={styles.menu_item}
             >
               {button.name}
-            </button>
+            </Link>
           ))}
         </div>
       </div>

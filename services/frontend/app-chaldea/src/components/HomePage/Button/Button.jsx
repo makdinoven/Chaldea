@@ -1,6 +1,6 @@
 import useNavigateTo from '../../../hooks/useNavigateTo';
 
-import styles from './Button.module.css';
+import styles from './Button.module.scss';
 
 export default function Button({ data }) {
   const navigateTo = useNavigateTo();

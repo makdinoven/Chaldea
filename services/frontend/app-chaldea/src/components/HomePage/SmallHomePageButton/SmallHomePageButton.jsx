@@ -1,4 +1,4 @@
-import styles from './SmallHomePageButton.module.css';
+import styles from './SmallHomePageButton.module.scss';
 
 export default function SmallHomePageButton({ title, backgroundImg, link }) {
   const additionalStyles = {

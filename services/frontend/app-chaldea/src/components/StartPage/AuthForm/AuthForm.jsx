@@ -5,7 +5,7 @@ import FormButton from '../../CommonComponents/BlueGradientButton/BlueGradientBu
 
 import useNavigateTo from '../../../hooks/useNavigateTo.js';
 
-import styles from './AuthForm.module.css';
+import styles from './AuthForm.module.scss';
 
 export default function AuthForm({ activeForm }) {
   const [formHeight, setFormHeight] = useState('279px');

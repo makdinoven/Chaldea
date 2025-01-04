@@ -1,6 +1,6 @@
 import useNavigateTo from '../../../hooks/useNavigateTo';
 
-import styles from './Textarea.module.css';
+import styles from './Textarea.module.scss';
 
 export default function Textarea({
   id,

@@ -1,6 +1,6 @@
 import useNavigateTo from '../../../../hooks/useNavigateTo';
 
-import styles from './ClassItem.module.css';
+import styles from './ClassItem.module.scss';
 
 export default function ClassItem({
   onClick,

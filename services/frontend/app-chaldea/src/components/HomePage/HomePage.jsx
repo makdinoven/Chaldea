@@ -165,7 +165,6 @@ export default function HomePage() {
 
   return (
     <>
-      <Header showMenu={true} />
 
       <section className={styles.main}>
         {buttonsData

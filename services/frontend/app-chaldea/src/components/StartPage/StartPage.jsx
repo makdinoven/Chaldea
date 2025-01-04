@@ -1,15 +1,13 @@
 import React, { useEffect } from 'react';
-import Header from '../CommonComponents/Header/Header.jsx';
 import LogButton from './LogButton/LogButton.jsx';
 import AuthForm from './AuthForm/AuthForm.jsx';
 
-import styles from './StartPage.module.css';
+import styles from './StartPage.module.scss';
 
 export default function StartPage() {
   const [activeButton, setActiveButton] = React.useState('login');
 
   useEffect(() => {
-    // console.log('Очистка токенов при монтировании стартовой страницы');
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
   }, []);
@@ -19,9 +17,7 @@ export default function StartPage() {
   };
 
   return (
-    <>
-      <Header showMenu={false} />
-
+    <div className={styles.content}>
       <section className={styles.content}>
         <h1 className={styles.title}>Ваше приключение начинается здесь</h1>
         <p className={styles.description}>
@@ -45,6 +41,6 @@ export default function StartPage() {
           <AuthForm activeForm={activeButton} />
         </div>
       </section>
-    </>
+    </div>
   );
 }

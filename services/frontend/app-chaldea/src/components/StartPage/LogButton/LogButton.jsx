@@ -1,6 +1,6 @@
 import React from 'react';
 
-import styles from './LogButton.module.css';
+import styles from './LogButton.module.scss';
 
 export default function LogButton({ text, isActive, onClick }) {
   return (

@@ -6,7 +6,7 @@ import FormButton from '../../CommonComponents/BlueGradientButton/BlueGradientBu
 import CharacterInfo from './CharacterInfo/CharacterInfo';
 import CharacterInfoSmall from './CharacterInfoSmall/CharacterInfoSmall';
 
-import styles from './SubmitPage.module.css';
+import styles from './SubmitPage.module.scss';
 
 import defaultAvatar from '../../../assets/menu2.png';
 import {useUser} from "../../../hooks/UserContext.jsx";

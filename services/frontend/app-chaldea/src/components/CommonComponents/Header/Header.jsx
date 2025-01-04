@@ -1,19 +1,17 @@
 import React, { useEffect } from 'react';
 
 import Menu from './Menu/Menu';
-import Search from './Search/Search';
-import useNavigateTo from '../../../hooks/useNavigateTo';
 import { useUser } from '../../../hooks/UserContext';
 
-import styles from './Header.module.css';
+import styles from './Header.module.scss';
 
 import logo from '../../../assets/logo.png';
 import menuImg1 from '../../../assets/menu1.png';
 import menuImg2 from '../../../assets/menu2.png';
 import menuImg3 from '../../../assets/menuImg.png';
+import {Link} from "react-router-dom";
 
-export default function Header({ showMenu }) {
-  const navigateTo = useNavigateTo();
+export default function Header() {
   const { user, setUser } = useUser();
   const menuData = [
     {
@@ -47,7 +45,6 @@ export default function Header({ showMenu }) {
   return (
     <>
       <header className={styles.header}>
-        {showMenu && (
           <div className={styles.menu_container_left}>
             {menuData.slice(0, 2).map((menu) => (
               <Menu
@@ -58,17 +55,16 @@ export default function Header({ showMenu }) {
               />
             ))}
           </div>
-        )}
-        <img
-          onClick={() => navigateTo('/home')}
-          className={styles.logo}
-          src={logo}
-          alt='Logo'
-        />
-        {showMenu && (
-          <div className={styles.menu_container_right}>
-            {menuData.slice(2).map((menu) => (
-                user.role === 'admin'  &&
+        <Link to={'/home'} className={styles.logo}>
+          <img
+              src={logo}
+              alt='Logo'
+          />
+        </Link>
+
+        <div className={styles.menu_container_right}>
+          {menuData.slice(2).map((menu) => (
+              user.role === 'admin' &&
               <Menu
                 key={menu.id}
                 title={menu.title}
@@ -77,7 +73,6 @@ export default function Header({ showMenu }) {
               />
             ))}
           </div>
-        )}
       </header>
     </>
   );

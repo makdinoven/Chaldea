@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 
 import ClassItem from './ClassItem/ClassItem';
 
-import styles from './ClassPage.module.css';
+import styles from './ClassPage.module.scss';
 
 export default function ClassPage({ classes, onSelectClass, selectedClassId }) {
   const [classIndex, setClassIndex] = useState(selectedClassId);

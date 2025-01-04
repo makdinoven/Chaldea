@@ -1,7 +1,7 @@
 import UserAvatar from '../../CommonComponents/UserAvatar/UserAvatar';
 import CharacterInfo from '../../CreateCharacterPage/SubmitPage/CharacterInfo/CharacterInfo';
 import axios from 'axios';
-import styles from './Request.module.css';
+import styles from './Request.module.scss';
 import RequestButton from './RequestButton/RequestButton';
 import CharacterInfoSmall from "../../CreateCharacterPage/SubmitPage/CharacterInfoSmall/CharacterInfoSmall.jsx";
 
@@ -16,7 +16,6 @@ export default function Request({ data }) {
   const buttons = [
     { type: 'confirm', text: 'Одобрить' },
     { type: 'cancel', text: 'Отклонить' },
-    // { type: 'open', text: 'Просмотреть' },
   ];
 
     const characterItemsSmall = [
@@ -34,13 +33,14 @@ export default function Request({ data }) {
     if (type === 'confirm') {
         console.log(data);
         axios.post(`/characters/requests/${data.request_id}/approve`).then((res) => {
-            console.log(res);
+            res.status === 200 ? alert('Заявка одобрена') : console.log(res)
         })
     }
     if (type === 'cancel') {
         console.log(data);
         axios.post(`/characters/requests/${data.request_id}/reject`).then((res) => {
             console.log(res);
+            res.status === 200 ? alert('Заявка отклонена') : console.log(res)
         })
     }
   };

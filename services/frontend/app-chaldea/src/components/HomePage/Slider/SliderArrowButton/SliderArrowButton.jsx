@@ -1,4 +1,4 @@
-import styles from './SliderArrowButton.module.css';
+import styles from './SliderArrowButton.module.scss';
 
 export default function SliderArrowButton({ text, onClick }) {
   const handleClick = (e) => {
