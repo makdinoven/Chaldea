@@ -323,7 +323,7 @@ def apply_modifiers(character_id: int, modifiers: dict, db: Session = Depends(ge
             "dodge",
             "res_effects",
             "res_physical",
-            "res_cutting",
+            "res_catting",
             "res_crushing",
             "res_piercing",
             "res_magic",
@@ -336,6 +336,19 @@ def apply_modifiers(character_id: int, modifiers: dict, db: Session = Depends(ge
             "res_damning",
             "critical_hit_chance",
             "critical_damage",
+            "vul_effects",
+            "vul_physical",
+            "vul_catting",
+            "vul_crushing",
+            "vul_piercing",
+            "vul_magic",
+            "vul_fire",
+            "vul_ice",
+            "vul_watering",
+            "vul_electricity",
+            "vul_sainting",
+            "vul_wind",
+            "vul_damning"
             # ... если есть ещё поля, которые просто суммируются, добавьте.
         ]
 

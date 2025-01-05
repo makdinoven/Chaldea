@@ -19,6 +19,7 @@ class ItemType(str, Enum):
     resource = "resource"
     scroll = "scroll"
     misc = "misc"
+    bracelet = "bracelet"
 
 class ItemRarity(str, Enum):
     common = "common"
@@ -50,9 +51,6 @@ class ItemBase(BaseModel):
     is_unique: bool
     description: Optional[str] = None
 
-    # Если в БД weight может быть NULL, то используем Optional[float];
-    # иначе можно поставить дефолт 0.0
-    weight: float = 0.0
 
     # Модификаторы характеристик
     strength_modifier: Optional[int] = None
@@ -69,23 +67,38 @@ class ItemBase(BaseModel):
     dodge_modifier: Optional[int] = None
     res_effects_modifier: Optional[int] = None
     res_physical_modifier: Optional[int] = None
-    res_cutting_modifier: Optional[int] = None
+    res_catting_modifier: Optional[int] = None
     res_crushing_modifier: Optional[int] = None
     res_piercing_modifier: Optional[int] = None
     res_magic_modifier: Optional[int] = None
     res_fire_modifier: Optional[int] = None
     res_ice_modifier: Optional[int] = None
-    res_water_modifier: Optional[int] = None
+    res_watering_modifier: Optional[int] = None
     res_electricity_modifier: Optional[int] = None
     res_wind_modifier: Optional[int] = None
-    res_holy_modifier: Optional[int] = None
-    res_cursed_modifier: Optional[int] = None
+    res_sainting_modifier: Optional[int] = None
+    res_damning_modifier: Optional[int] = None
     critical_hit_chance_modifier: Optional[int] = None
     critical_damage_modifier: Optional[int] = None
     health_recovery: Optional[int] = None
     energy_recovery: Optional[int] = None
     mana_recovery: Optional[int] = None
     stamina_recovery: Optional[int] = None
+
+    vul_effects_modifier: Optional[int] = None
+    vul_physical_modifier: Optional[int] = None
+    vul_catting_modifier: Optional[int] = None
+    vul_crushing_modifier: Optional[int] = None
+    vul_piercing_modifier: Optional[int] = None
+    vul_magic_modifier: Optional[int] = None
+    vul_fire_modifier: Optional[int] = None
+    vul_ice_modifier: Optional[int] = None
+    vul_watering_modifier: Optional[int] = None
+    vul_electricity_modifier: Optional[int] = None
+    vul_sainting_modifier: Optional[int] = None
+    vul_wind_modifier: Optional[int] = None
+    vul_damning_modifier: Optional[int] = None
+
 
 class ItemCreate(ItemBase):
     """
@@ -151,23 +164,38 @@ class ItemResponse(BaseModel):
     dodge_modifier: Optional[int] = None
     res_effects_modifier: Optional[int] = None
     res_physical_modifier: Optional[int] = None
-    res_cutting_modifier: Optional[int] = None
+    res_catting_modifier: Optional[int] = None
     res_crushing_modifier: Optional[int] = None
     res_piercing_modifier: Optional[int] = None
     res_magic_modifier: Optional[int] = None
     res_fire_modifier: Optional[int] = None
     res_ice_modifier: Optional[int] = None
-    res_water_modifier: Optional[int] = None
+    res_watering_modifier: Optional[int] = None
     res_electricity_modifier: Optional[int] = None
     res_wind_modifier: Optional[int] = None
-    res_holy_modifier: Optional[int] = None
-    res_cursed_modifier: Optional[int] = None
+    res_sainting_modifier: Optional[int] = None
+    res_damning_modifier: Optional[int] = None
     critical_hit_chance_modifier: Optional[int] = None
     critical_damage_modifier: Optional[int] = None
+
     health_recovery: Optional[int] = None
     energy_recovery: Optional[int] = None
     mana_recovery: Optional[int] = None
     stamina_recovery: Optional[int] = None
+
+    vul_effects_modifier: Optional[int] = None
+    vul_physical_modifier: Optional[int] = None
+    vul_catting_modifier: Optional[int] = None
+    vul_crushing_modifier: Optional[int] = None
+    vul_piercing_modifier: Optional[int] = None
+    vul_magic_modifier: Optional[int] = None
+    vul_fire_modifier: Optional[int] = None
+    vul_ice_modifier: Optional[int] = None
+    vul_watering_modifier: Optional[int] = None
+    vul_electricity_modifier: Optional[int] = None
+    vul_sainting_modifier: Optional[int] = None
+    vul_wind_modifier: Optional[int] = None
+    vul_damning_modifier: Optional[int] = None
 
 class InventoryResponse(BaseModel):
     """

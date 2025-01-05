@@ -45,7 +45,7 @@ class CharacterAttributes(Base):
     # Сопротивления
     res_effects = Column(Float, default=0.0)  # Сопротивление эффектам (%)
     res_physical = Column(Float, default=0.0)  # Сопротивление физическому урону (%)
-    res_cutting = Column(Float, default=0.0)  # Сопротивление режущему (%)
+    res_catting = Column(Float, default=0.0)  # Сопротивление режущему (%)
     res_crushing = Column(Float, default=0.0)  # Сопротивление дробящему (%)
     res_piercing = Column(Float, default=0.0)  # Сопротивление колющему (%)
     res_magic = Column(Float, default=0.0)  # Сопротивление магическому (%)
@@ -56,6 +56,20 @@ class CharacterAttributes(Base):
     res_sainting = Column(Float, default=0.0)  # Сопротивление святому (%)
     res_wind = Column(Float, default=0.0)  # Сопротивление ветру (%)
     res_damning = Column(Float, default=0.0)  # Сопротивление проклятому (%)
+
+    vul_effects = Column(Float, default=0.0)
+    vul_physical = Column(Float, default=0.0)
+    vul_catting = Column(Float, default=0.0)
+    vul_crushing = Column(Float, default=0.0)
+    vul_piercing = Column(Float, default=0.0)
+    vul_magic = Column(Float, default=0.0)
+    vul_fire = Column(Float, default=0.0)
+    vul_ice = Column(Float, default=0.0)
+    vul_watering = Column(Float, default=0.0)
+    vul_electricity = Column(Float, default=0.0)
+    vul_sainting = Column(Float, default=0.0)
+    vul_wind = Column(Float, default=0.0)
+    vul_damning = Column(Float, default=0.0)
 
 
 
