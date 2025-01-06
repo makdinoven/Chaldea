@@ -88,6 +88,23 @@ services:
       mysql:
         condition: service_healthy
 
+  rabbitmq:
+    build:
+      context: .
+      dockerfile: ./docker/rabbitmq/Dockerfile
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   user-service:
       build:
         context: .
@@ -106,23 +123,6 @@ services:
           condition: service_healthy
         rabbitmq:
           condition: service_healthy
-
-  rabbitmq:
-    build:
-      context: .
-      dockerfile: ./docker/rabbitmq/Dockerfile
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    ports:
-      - '5672:5672'
-      - '15672:15672'
-    healthcheck:
-      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
 
   photo-service:
     build:
@@ -267,6 +267,7 @@ services:
       - "80:80"
     depends_on:
       - frontend
+      - user-service
 
 volumes:
   mysql_data:

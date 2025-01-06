@@ -1,5 +1,7 @@
 import pika
+import asyncio
 import json
+from threading import Thread
 from sqlalchemy.orm import Session
 from database import get_db
 from models import Notification
@@ -7,10 +9,8 @@ from schemas import NotificationCreate
 
 QUEUE_NAME = "user_registration"
 
-def start():
-    connection = pika.BlockingConnection(
-        pika.ConnectionParameters(host="rabbitmq")
-    )
+def consume():
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host="rabbitmq"))
     channel = connection.channel()
     channel.queue_declare(queue=QUEUE_NAME, durable=True)
 
@@ -29,5 +29,8 @@ def start():
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
     channel.basic_consume(queue=QUEUE_NAME, on_message_callback=callback)
-    print(" [*] Waiting for messages. To exit press CTRL+C")
     channel.start_consuming()
+
+def start_user_registration_consumer():
+    thread = Thread(target=consume, daemon=True)
+    thread.start()

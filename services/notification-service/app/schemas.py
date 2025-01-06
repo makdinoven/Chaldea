@@ -9,8 +9,10 @@ class NotificationBase(BaseModel):
 class NotificationCreate(NotificationBase):
     pass
 
-class Notification(NotificationBase):
+class Notification(BaseModel):
     id: int
+    user_id: int
+    message: str
     status: str
     created_at: datetime
 
