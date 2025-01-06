@@ -26,5 +26,5 @@ RUN pip install --no-cache-dir alembic pymysql
 EXPOSE 8004
 
 # Команда для запуска FastAPI приложения
-CMD sleep 15 && PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8004 --app-dir /app --reload
+CMD PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8004 --app-dir /app --reload
 
