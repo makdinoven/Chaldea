@@ -4,7 +4,7 @@ import models
 from database import engine
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Notification
+import models
 from schemas import Notification
 from typing import List, Optional
 
@@ -19,46 +19,79 @@ async def startup_event():
 
 
 router = APIRouter(prefix="/notifications")
-
-@router.get("/", response_model=List[Notification])
-def get_notifications(
-    user_id: int,
-    status: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
+@router.get("/{user_id}/unread", response_model=List[Notification])
+def get_unread_notifications(user_id: int, db: Session = Depends(get_db)):
     """
-    Получение списка уведомлений для пользователя.
-    Можно фильтровать по статусу (unread, read).
+    Получение всех непрочитанных уведомлений пользователя.
     """
-    query = db.query(Notification).filter(Notification.user_id == user_id)
+    notifications = db.query(models.Notification).filter(
+        models.Notification.user_id == user_id,
+        models.Notification.status == "unread"
+    ).order_by(models.Notification.created_at.asc()).all()
 
-    if status:
-        query = query.filter(Notification.status == status)
+    if not notifications:
+        raise HTTPException(status_code=404, detail="No unread notifications found.")
 
-    notifications = query.order_by(Notification.created_at.desc()).all()
+    return notifications
+
+
+@router.get("/{user_id}/full", response_model=List[Notification])
+def get_all_notifications(user_id: int, db: Session = Depends(get_db)):
+    """
+    Получение всех уведомлений пользователя.
+    """
+    notifications = db.query(models.Notification).filter(
+        models.Notification.user_id == user_id
+    ).order_by(models.Notification.created_at.asc()).all()
 
     if not notifications:
         raise HTTPException(status_code=404, detail="No notifications found.")
 
     return notifications
 
-@router.put("/{notification_id}/read", response_model=Notification)
-def mark_notification_as_read(
-    notification_id: int,
+
+@router.put("/{user_id}/mark-as-read", response_model=List[Notification])
+def mark_multiple_notifications_as_read(
+    user_id: int,
+    notification_ids: List[int],
     db: Session = Depends(get_db)
 ):
     """
-    Отметить уведомление как прочитанное.
+    Отметить несколько уведомлений как прочитанные.
     """
-    notification = db.query(Notification).filter(Notification.id == notification_id).first()
+    notifications = db.query(models.Notification).filter(
+        models.Notification.user_id == user_id,
+        models.Notification.id.in_(notification_ids),
+        models.Notification.status == "unread"
+    ).all()
 
-    if not notification:
-        raise HTTPException(status_code=404, detail="Notification not found.")
+    if not notifications:
+        raise HTTPException(status_code=404, detail="No unread notifications to update.")
 
-    notification.status = "read"
+    for notification in notifications:
+        notification.status = "read"
     db.commit()
-    db.refresh(notification)
 
-    return notification
+    return notifications
+
+
+@router.put("/{user_id}/mark-all-as-read", response_model=List[Notification])
+def mark_all_notifications_as_read(user_id: int, db: Session = Depends(get_db)):
+    """
+    Отметить все уведомления пользователя как прочитанные.
+    """
+    notifications = db.query(models.Notification).filter(
+        models.Notification.user_id == user_id,
+        models.Notification.status == "unread"
+    ).all()
+
+    if not notifications:
+        raise HTTPException(status_code=404, detail="No unread notifications to update.")
+
+    for notification in notifications:
+        notification.status = "read"
+    db.commit()
+
+    return notifications
 
 app.include_router(router)
