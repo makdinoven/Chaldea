@@ -1,10 +1,233 @@
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from models import District, Location, LocationPath, LocationNeighbor, Region, Post
-from schemas import DistrictCreate, LocationCreate, Country
+from typing import List, Optional
+
+from models import (
+    Country, Region, District, Location, LocationNeighbor, Post
+)
+from schemas import (
+    DistrictCreate, LocationCreate, PostCreate
+)
+
+# -------------------------------
+#   Рекурсивный сбор вложенных локаций
+# -------------------------------
+def get_location_tree(session: Session, location: Location) -> dict:
+    """
+    Рекурсивно собирает дерево локаций (все уровни "children").
+    Возвращает dict вида:
+    {
+      "id": ...,
+      "name": ...,
+      "type": ...,
+      "image_url": ...,
+      "recommended_level": ...,
+      "quick_travel_marker": ...,
+      "description": ...,
+      "parent_id": ...,
+      "children": [ ... ]
+    }
+    """
+    children_db = session.query(Location).filter(Location.parent_id == location.id).all()
+    children_list = [get_location_tree(session, child) for child in children_db]
+
+    return {
+        "id": location.id,
+        "name": location.name,
+        "type": location.type,
+        "image_url": location.image_url,
+        "recommended_level": location.recommended_level,
+        "quick_travel_marker": location.quick_travel_marker,
+        "description": location.description,
+        "parent_id": location.parent_id,
+        "children": children_list
+    }
+
+# -------------------------------
+#   LOOKUP
+# -------------------------------
+def get_locations_lookup(session: Session) -> List[dict]:
+    db_locs = session.query(Location).all()
+    return [{"id": loc.id, "name": loc.name} for loc in db_locs]
+
+def get_districts_lookup(session: Session) -> List[dict]:
+    db_districts = session.query(District).all()
+    return [{"id": d.id, "name": d.name} for d in db_districts]
 
 
-# Создание района
+# -------------------------------
+#   COUNTRY
+# -------------------------------
+def create_new_country(session: Session, name: str, description: str,
+                       leader_id: Optional[int], map_image_url: Optional[str]) -> Country:
+    new_country = Country(
+        name=name,
+        description=description,
+        leader_id=leader_id,
+        map_image_url=map_image_url
+    )
+    session.add(new_country)
+    session.commit()
+    session.refresh(new_country)
+    return new_country
+
+def update_country(session: Session, country_id: int, data) -> Country:
+    db_country = session.query(Country).filter(Country.id == country_id).first()
+    if not db_country:
+        raise HTTPException(status_code=404, detail="Country not found")
+
+    if getattr(data, "name", None) is not None:
+        db_country.name = data.name
+    if getattr(data, "description", None) is not None:
+        db_country.description = data.description
+    if getattr(data, "leader_id", None) is not None:
+        db_country.leader_id = data.leader_id
+    if getattr(data, "map_image_url", None) is not None:
+        db_country.map_image_url = data.map_image_url
+
+    session.commit()
+    session.refresh(db_country)
+    return db_country
+
+
+def get_country_details(session: Session, country_id: int) -> Optional[dict]:
+    """
+    Возвращает полную инфу о стране + для каждого региона только (id, name, image_url, x, y).
+    """
+    db_country = session.query(Country).filter(Country.id == country_id).first()
+    if not db_country:
+        return None
+
+    result = {
+        "id": db_country.id,
+        "name": db_country.name,
+        "description": db_country.description,
+        "leader_id": db_country.leader_id,
+        "map_image_url": db_country.map_image_url,
+        "regions": []
+    }
+
+    # Собираем регионы (только нужные поля)
+    for reg in db_country.regions:
+        result["regions"].append({
+            "id": reg.id,
+            "name": reg.name,
+            "image_url": reg.image_url,
+            "x": reg.x,
+            "y": reg.y
+        })
+
+    return result
+
+
+# -------------------------------
+#   REGION
+# -------------------------------
+def create_new_region(session: Session, data) -> Region:
+    new_region = Region(
+        country_id=data.country_id,
+        name=data.name,
+        description=data.description,
+        image_url=data.image_url,
+        entrance_location_id=data.entrance_location_id,
+        leader_id=data.leader_id,
+        x=data.x,
+        y=data.y
+    )
+    session.add(new_region)
+    session.commit()
+    session.refresh(new_region)
+    return new_region
+
+def update_region(session: Session, region_id: int, data) -> Region:
+    db_region = session.query(Region).filter(Region.id == region_id).first()
+    if not db_region:
+        raise HTTPException(status_code=404, detail="Region not found")
+
+    if data.country_id is not None:
+        db_region.country_id = data.country_id
+    if data.name is not None:
+        db_region.name = data.name
+    if data.description is not None:
+        db_region.description = data.description
+    if data.image_url is not None:
+        db_region.image_url = data.image_url
+    if data.entrance_location_id is not None:
+        db_region.entrance_location_id = data.entrance_location_id
+    if data.leader_id is not None:
+        db_region.leader_id = data.leader_id
+    if data.x is not None:
+        db_region.x = data.x
+    if data.y is not None:
+        db_region.y = data.y
+
+    session.commit()
+    session.refresh(db_region)
+    return db_region
+
+
+def get_region_full_details(session: Session, region_id: int) -> Optional[dict]:
+    """
+    Возвращает полную информацию о регионе + районы.
+    Для района: все поля.
+    Если есть entry_location, добавляем его id и name.
+    Для локаций – рекурсивное дерево.
+    """
+    db_region = session.query(Region).filter(Region.id == region_id).first()
+    if not db_region:
+        return None
+
+    # Основные поля региона
+    region_data = {
+        "id": db_region.id,
+        "country_id": db_region.country_id,
+        "name": db_region.name,
+        "description": db_region.description,
+        "image_url": db_region.image_url,
+        "entrance_location_id": db_region.entrance_location_id,
+        "leader_id": db_region.leader_id,
+        "x": db_region.x,
+        "y": db_region.y,
+        "districts": []
+    }
+
+    # Собираем районы
+    for dist in db_region.districts:
+        # Добавим entry_location (id+name), если оно есть
+        entry_loc_data = None
+        if dist.entry_location_detail:
+            entry_loc_data = {
+                "id": dist.entry_location_detail.id,
+                "name": dist.entry_location_detail.name
+            }
+
+        # Собираем локации рекурсивно
+        district_locations = []
+        for loc in dist.locations:
+            # Только те локации, у которых parent_id = None (верхний уровень)
+            if loc.parent_id is None:
+                loc_tree = get_location_tree(session, loc)
+                district_locations.append(loc_tree)
+
+        dist_dict = {
+            "id": dist.id,
+            "name": dist.name,
+            "description": dist.description,
+            "image_url": dist.image_url,
+            "recommended_level": dist.recommended_level,
+            "entry_location": entry_loc_data,  # dict или None
+            "x": dist.x,
+            "y": dist.y,
+            "locations": district_locations
+        }
+        region_data["districts"].append(dist_dict)
+
+    return region_data
+
+
+# -------------------------------
+#   DISTRICT
+# -------------------------------
 def create_district(session: Session, district_data: DistrictCreate) -> District:
     new_district = District(**district_data.dict())
     session.add(new_district)
@@ -12,290 +235,150 @@ def create_district(session: Session, district_data: DistrictCreate) -> District
     session.refresh(new_district)
     return new_district
 
+def update_district(session: Session, district_id: int, data) -> District:
+    db_district = session.query(District).filter(District.id == district_id).first()
+    if not db_district:
+        raise HTTPException(status_code=404, detail="District not found")
 
-# Получение локации по ID
-def get_location_by_id(session: Session, location_id: int) -> Location:
-    """
-    Возвращает локацию по ID.
-    """
-    return session.query(Location).filter(Location.id == location_id).first()
+    if getattr(data, "name", None) is not None:
+        db_district.name = data.name
+    if getattr(data, "description", None) is not None:
+        db_district.description = data.description
+    if getattr(data, "image_url", None) is not None:
+        db_district.image_url = data.image_url
+    if getattr(data, "recommended_level", None) is not None:
+        db_district.recommended_level = data.recommended_level
+    if getattr(data, "entry_location", None) is not None:
+        db_district.entry_location = data.entry_location
+    if getattr(data, "x", None) is not None:
+        db_district.x = data.x
+    if getattr(data, "y", None) is not None:
+        db_district.y = data.y
+
+    session.commit()
+    session.refresh(db_district)
+    return db_district
 
 
-# Создание локации или подрайона
+# -------------------------------
+#   LOCATION
+# -------------------------------
 def create_location(session: Session, location_data: LocationCreate) -> Location:
-    """
-    Создает новую локацию или подрайон.
-    """
     new_location = Location(**location_data.dict())
     session.add(new_location)
     session.commit()
     session.refresh(new_location)
-
-    # Заполнение таблицы LocationsPath
-    if location_data.parent_id:
-        parent_paths = session.query(LocationPath).filter(LocationPath.descendant_id == location_data.parent_id).all()
-        for path in parent_paths:
-            session.add(
-                LocationPath(
-                    ancestor_id=path.ancestor_id,
-                    descendant_id=new_location.id,
-                    depth=path.depth + 1
-                )
-            )
-    session.add(
-        LocationPath(
-            ancestor_id=new_location.id,
-            descendant_id=new_location.id,
-            depth=0
-        )
-    )
-    session.commit()
     return new_location
 
+def update_location(session: Session, location_id: int, data) -> Location:
+    db_location = session.query(Location).filter(Location.id == location_id).first()
+    if not db_location:
+        raise HTTPException(status_code=404, detail="Location not found")
 
-# Добавление соседа
+    if getattr(data, "name", None) is not None:
+        db_location.name = data.name
+    if getattr(data, "district_id", None) is not None:
+        db_location.district_id = data.district_id
+    if getattr(data, "type", None) is not None:
+        db_location.type = data.type
+    if getattr(data, "image_url", None) is not None:
+        db_location.image_url = data.image_url
+    if getattr(data, "recommended_level", None) is not None:
+        db_location.recommended_level = data.recommended_level
+    if getattr(data, "quick_travel_marker", None) is not None:
+        db_location.quick_travel_marker = data.quick_travel_marker
+    if getattr(data, "description", None) is not None:
+        db_location.description = data.description
+    if getattr(data, "parent_id", None) is not None:
+        db_location.parent_id = data.parent_id
 
+    session.commit()
+    session.refresh(db_location)
+    return db_location
+
+def get_location_by_id(session: Session, location_id: int) -> Optional[Location]:
+    return session.query(Location).filter(Location.id == location_id).first()
+
+
+# -------------------------------
+#   NEIGHBORS
+# -------------------------------
 def add_neighbor(session: Session, location_id: int, neighbor_id: int, energy_cost: int) -> dict:
-    """
-    Добавляет связь между двумя локациями и автоматически создает обратную связь.
-    """
-    # Добавляем прямую связь
-    forward_neighbor = LocationNeighbor(
+    forward = LocationNeighbor(
         location_id=location_id,
         neighbor_id=neighbor_id,
         energy_cost=energy_cost
     )
-    session.add(forward_neighbor)
+    session.add(forward)
 
-    # Добавляем обратную связь
-    reverse_neighbor = LocationNeighbor(
+    reverse = LocationNeighbor(
         location_id=neighbor_id,
         neighbor_id=location_id,
-        energy_cost=energy_cost  # Можно изменить логику, если стоимость отличается
+        energy_cost=energy_cost
     )
-    session.add(reverse_neighbor)
-
+    session.add(reverse)
     session.commit()
 
     return {
         "forward": {
-            "location_id": forward_neighbor.location_id,
-            "neighbor_id": forward_neighbor.neighbor_id,
-            "energy_cost": forward_neighbor.energy_cost,
+            "location_id": forward.location_id,
+            "neighbor_id": forward.neighbor_id,
+            "energy_cost": forward.energy_cost,
         },
         "reverse": {
-            "location_id": reverse_neighbor.location_id,
-            "neighbor_id": reverse_neighbor.neighbor_id,
-            "energy_cost": reverse_neighbor.energy_cost,
+            "location_id": reverse.location_id,
+            "neighbor_id": reverse.neighbor_id,
+            "energy_cost": reverse.energy_cost,
         },
     }
 
 
-def get_nested_locations(session: Session, parent_id: int):
-    """
-    Рекурсивно получает вложенные локации и подрайоны для указанного parent_id.
-    """
-    locations = (
-        session.query(Location)
-        .filter(Location.parent_id == parent_id)
-        .all()
-    )
-
-    result = []
-    for location in locations:
-        location_data = {
-            "location_id": location.id,
-            "location_name": location.name,
-            "type": location.type,
-            "image_url": location.image_url,
-            "children": get_nested_locations(session, location.id),  # Рекурсия
-        }
-        result.append(location_data)
-
-    return result
-
-# Получение всех локаций в регионе
-def get_region_details(session: Session, region_id: int):
-    """
-    Возвращает все районы, локации и подрайоны для указанного региона.
-    """
-    # Получаем регион
-    region = session.query(Region).filter(Region.id == region_id).first()
-    if not region:
+def get_location_details(session: Session, location_id: int) -> Optional[dict]:
+    loc = session.query(Location).filter(Location.id == location_id).first()
+    if not loc:
         return None
 
-    # Формируем вложенную структуру
-    result = {
-        "region_id": region.id,
-        "region_name": region.name,
-        "region_description": region.description,
-        "districts": [],
-    }
-
-    # Получаем районы в регионе
-    districts = session.query(District).filter(District.region_id == region.id).all()
-    for district in districts:
-        district_data = {
-            "district_id": district.id,
-            "district_name": district.name,
-            "district_image": district.image_url,
-            "locations": [],
-        }
-
-        # Получаем локации верхнего уровня (без parent_id) для района
-        locations = (
-            session.query(Location)
-            .filter(Location.district_id == district.id)
-            .filter(Location.parent_id.is_(None))
-            .all()
-        )
-
-        for location in locations:
-            location_data = {
-                "location_id": location.id,
-                "location_name": location.name,
-                "type": location.type,
-                "image_url": location.image_url,
-                "children": get_nested_locations(session, location.id),  # Рекурсия
-            }
-            district_data["locations"].append(location_data)
-
-        result["districts"].append(district_data)
-
-    return result
-
-def get_location_details(session: Session, location_id: int):
-    """
-    Возвращает информацию о конкретной локации, включая описание, соседей и подлокации.
-    """
-    location = session.query(Location).filter(Location.id == location_id).first()
-    if not location:
-        return None
-
-    # Получаем соседей
     neighbors = session.query(LocationNeighbor).filter(LocationNeighbor.location_id == location_id).all()
-
-    # Получаем подлокации
     children = session.query(Location).filter(Location.parent_id == location_id).all()
 
     return {
-        "location_id": location.id,
-        "name": location.name,
-        "type": location.type,
-        "description": location.description,
-        "image_url": location.image_url,
-        "recommended_level": location.recommended_level,
-        "quick_travel_marker": location.quick_travel_marker,
-        "district_id": location.district_id,
+        "location_id": loc.id,
+        "name": loc.name,
+        "type": loc.type,
+        "description": loc.description,
+        "image_url": loc.image_url,
+        "recommended_level": loc.recommended_level,
+        "quick_travel_marker": loc.quick_travel_marker,
+        "district_id": loc.district_id,
         "neighbors": [
-            {
-                "neighbor_id": neighbor.neighbor_id,
-                "energy_cost": neighbor.energy_cost,
-            }
-            for neighbor in neighbors
+            {"neighbor_id": n.neighbor_id, "energy_cost": n.energy_cost}
+            for n in neighbors
         ],
         "children": [
             {
-                "location_id": child.id,
-                "name": child.name,
-                "type": child.type,
-                "image_url": child.image_url,
+                "id": c.id,
+                "name": c.name,
+                "type": c.type,
+                "image_url": c.image_url
             }
-            for child in children
-        ],
+            for c in children
+        ]
     }
 
-#Получение постов
-def get_posts_by_location(session: Session, location_id: int):
-    """
-    Получает все посты в указанной локации.
-    """
-    return session.query(Post).filter(Post.location_id == location_id).all()
 
-def create_post(session: Session, character_id: int, location_id: int, content: str) -> Post:
-    """
-    Создает новый пост в локации.
-    """
-    # Создаем новый пост
-    new_post = Post(character_id=character_id, location_id=location_id, content=content)
+# -------------------------------
+#   POSTS
+# -------------------------------
+def create_post(session: Session, post_data: PostCreate) -> Post:
+    new_post = Post(
+        character_id=post_data.character_id,
+        location_id=post_data.location_id,
+        content=post_data.content
+    )
     session.add(new_post)
     session.commit()
-    session.refresh(new_post)  # Обновляем объект с присвоенным ID
+    session.refresh(new_post)
     return new_post
 
-def update_region(session: Session, region_id: int, data: dict) -> Region:
-    """
-    Обновляет данные региона.
-    """
-    region = session.query(Region).filter(Region.id == region_id).first()
-    if not region:
-        raise HTTPException(status_code=404, detail="Region not found")
-
-    if "name" in data:
-        region.name = data["name"]
-    if "description" in data:
-        region.description = data["description"]
-    if "image_url" in data:
-        region.image_url = data["image_url"]
-    if "map_image_url" in data:
-        region.map_image_url = data["map_image_url"]
-    if "map_points" in data:
-        region.map_points = data["map_points"]
-    if "ruler_id" in data:
-        region.ruler_id = data["ruler_id"]
-    if "entrance_location_id" in data:
-        region.entrance_location_id = data["entrance_location_id"]
-
-    session.commit()
-    session.refresh(region)
-    return region
-
-
-def add_map_point(session: Session, region_id: int, point_data: dict) -> list:
-    """
-    Добавляет точку на карту региона.
-    """
-    region = session.query(Region).filter(Region.id == region_id).first()
-    if not region:
-        raise HTTPException(status_code=404, detail="Region not found")
-
-    map_points = region.map_points or []
-    map_points.append(point_data)
-    region.map_points = map_points
-
-    session.commit()
-    return map_points
-
-def add_country_map_point(session: Session, country_id: int, point_data: dict) -> list:
-    """
-    Добавляет точку на карту региона.
-    """
-    country = session.query(Country).filter(Country.id == country_id).first()
-    if not country:
-        raise HTTPException(status_code=404, detail="Country not found")
-
-    map_points = country.map_points or []
-    map_points.append(point_data)
-    country.map_points = map_points
-
-    session.commit()
-    return map_points
-
-def get_all_countries_with_details(session: Session) -> list:
-    """
-    Возвращает список всех стран с полной информацией.
-    """
-    countries = session.query(Country).all()
-
-    return [
-        {
-            "id": country.id,
-            "name": country.name,
-            "description": country.description,
-            "country_image_url": country.country_image_url,
-            "map_image_url": country.map_image_url,
-            "map_points": country.map_points,
-            "leader_id": country.leader_id,
-        }
-        for country in countries
-    ]
+def get_posts_by_location(session: Session, location_id: int) -> list:
+    return session.query(Post).filter(Post.location_id == location_id).all()
