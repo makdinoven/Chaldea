@@ -1,28 +1,33 @@
 import s from './WorldPage.module.scss'
 import axios from "axios";
-import {useEffect} from "react";
+import {useEffect, useState} from "react";
 import Map from "./Map/Map.jsx";
+import CountryDropdown from "./CountryDropdown/CountryDropdown.jsx";
 
 export default function WorldPage() {
+    const [countries, setCountries] = useState([])
+    const [loading, setLoading] = useState(true)
 
     useEffect(() => {
         axios
-            .get('http://localhost:8006/locations/locations/lookup', {
+            .get('http://localhost:8006/locations/countries/lookup', {
                 headers: {
                     Accept: 'application/json',
                 },
             })
             .then((response) => {
-                console.log(response.data);
+                setCountries(response.data);
+                setLoading(false)
             })
             .catch((error) => console.log(error));
     }, []);
 
 
     return (
-        <>
-            <h1>World page</h1>
-            <Map />
-            </>)
+        <div className={s.dropdown_container}>
+            {loading ? 'Loading...' : countries.map((country) => (
+                <CountryDropdown name={country.name} key={country.id} id={country.id} />
+            ))}
+            </div>)
 
 }

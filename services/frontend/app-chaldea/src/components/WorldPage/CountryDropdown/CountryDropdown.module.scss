@@ -1,0 +1,36 @@
+.dropdown {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.dropdown_button {
+  cursor: pointer;
+  position: relative;
+  color: #fff;
+  font-size: 20px;
+  text-transform: uppercase;
+  font-weight: 500;
+  border-radius: 20px;
+  padding: 10px 50% 10px 20px;
+  backdrop-filter: blur(4px);
+  background: linear-gradient(90deg, rgba(219, 179, 71, 0.2) 0%, rgba(219, 179, 71, 0.2) 100%);
+
+  &.active {
+    background: linear-gradient(90deg, rgba(219, 179, 71, 0.6) 0%, rgba(219, 179, 71, 0.6) 100%);
+  }
+
+  &::after {
+    position: absolute;
+    content: "";
+    width: 16px;
+    height: 8px;
+    right: 24px;
+    top: 50%;
+    transform: translateY(-50%);
+    background-image: url("/dropdown-arrow.svg");
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+}
+
