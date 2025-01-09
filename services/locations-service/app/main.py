@@ -37,6 +37,15 @@ def districts_lookup(session: Session = Depends(get_db)):
     data = crud.get_districts_lookup(session)
     return data
 
+@router.get("/countries/lookup", response_model=List[schemas.CountryLookup])
+def countries_lookup(session: Session = Depends(get_db)):
+    """
+    Возвращает список всех стран (id, name).
+    """
+    data = crud.get_countries_lookup(session)
+    return data
+
+
 
 # --------------------------------------------------------------------
 # COUNTRY
@@ -117,7 +126,7 @@ def update_district_route(district_id: int, body: schemas.DistrictUpdate, sessio
 # --------------------------------------------------------------------
 # LOCATION
 # --------------------------------------------------------------------
-@router.post("/locations/", response_model=schemas.LocationRead)
+@router.post("/", response_model=schemas.LocationRead)
 def create_new_location(location_data: schemas.LocationCreate, session: Session = Depends(get_db)):
     if location_data.parent_id:
         parent = crud.get_location_by_id(session, location_data.parent_id)
@@ -125,11 +134,11 @@ def create_new_location(location_data: schemas.LocationCreate, session: Session 
             raise HTTPException(status_code=404, detail="Parent location not found")
     return crud.create_location(session, location_data)
 
-@router.put("/locations/{location_id}/update", response_model=schemas.LocationRead)
+@router.put("/{location_id}/update", response_model=schemas.LocationRead)
 def update_location_route(location_id: int, body: schemas.LocationUpdate, session: Session = Depends(get_db)):
     return crud.update_location(session, location_id, body)
 
-@router.get("/locations/{location_id}/details")
+@router.get("/location_id}/details")
 def get_location_details_route(location_id: int, session: Session = Depends(get_db)):
     data = crud.get_location_details(session, location_id)
     if not data:
@@ -140,7 +149,7 @@ def get_location_details_route(location_id: int, session: Session = Depends(get_
 # --------------------------------------------------------------------
 # NEIGHBORS
 # --------------------------------------------------------------------
-@router.post("/locations/{location_id}/neighbors/", response_model=schemas.LocationNeighbor)
+@router.post("/{location_id}/neighbors/", response_model=schemas.LocationNeighbor)
 def create_neighbor(location_id: int, neighbor_data: schemas.LocationNeighborCreate, session: Session = Depends(get_db)):
     loc = crud.get_location_by_id(session, location_id)
     if not loc:
@@ -160,7 +169,7 @@ def create_neighbor(location_id: int, neighbor_data: schemas.LocationNeighborCre
 def create_new_post(post_data: schemas.PostCreate, session: Session = Depends(get_db)):
     return crud.create_post(session, post_data)
 
-@router.get("/locations/{location_id}/posts/", response_model=List[schemas.PostResponse])
+@router.get("/{location_id}/posts/", response_model=List[schemas.PostResponse])
 def get_posts_in_location(location_id: int, session: Session = Depends(get_db)):
     return crud.get_posts_by_location(session, location_id)
 

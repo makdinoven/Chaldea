@@ -120,6 +120,14 @@ def get_country_details(session: Session, country_id: int) -> Optional[dict]:
     return result
 
 
+def get_countries_lookup(session: Session) -> List[dict]:
+    """
+    Возвращает список {id, name} для всех стран.
+    """
+    db_countries = session.query(Country).all()
+    return [{"id": c.id, "name": c.name} for c in db_countries]
+
+
 # -------------------------------
 #   REGION
 # -------------------------------
@@ -382,3 +390,5 @@ def create_post(session: Session, post_data: PostCreate) -> Post:
 
 def get_posts_by_location(session: Session, location_id: int) -> list:
     return session.query(Post).filter(Post.location_id == location_id).all()
+
+

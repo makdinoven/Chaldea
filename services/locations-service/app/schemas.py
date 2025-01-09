@@ -30,6 +30,10 @@ class CountryRead(BaseModel):
     class Config:
         orm_mode = True
 
+class CountryLookup(BaseModel):
+    id: int
+    name: str
+
 
 # -------------------------------
 #   REGION SCHEMAS
