@@ -26,5 +26,5 @@ RUN pip install --no-cache-dir alembic pymysql
 # Указываем порт, который будет открыт для доступа к микросервису
 EXPOSE 8005
 
-CMD sleep 15 && PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app --reload
+CMD PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app --reload
 

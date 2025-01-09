@@ -10,6 +10,7 @@ from jose import JWTError, jwt
 import os
 import shutil
 from fastapi.middleware.cors import CORSMiddleware
+from producer import send_notification_event
 
 app = FastAPI()
 
@@ -46,7 +47,12 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Username already taken")
 
     # Создание нового пользователя
-    return create_user(db=db, user=user)
+    new_user = create_user(db=db, user=user)
+
+    # Отправка сообщения в RabbitMQ
+    send_notification_event(new_user.id)
+
+    return new_user
 
 # Вход в систему и получение JWT и рефреш-токена
 @router.post("/login")

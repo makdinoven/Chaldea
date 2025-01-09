@@ -49,7 +49,6 @@ class Character(Base):
     id_race = Column(Integer, nullable=False)
     avatar = Column(String(255), nullable=False)
     current_title_id = Column(Integer, ForeignKey("titles.id_title"), nullable=True)
-    max_weight = Column(Integer, nullable=True, default=30)
     level = Column(Integer, nullable=False, default=1)
     stat_points = Column(Integer, nullable=False, default=0)
 

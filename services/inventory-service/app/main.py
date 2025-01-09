@@ -49,9 +49,6 @@ def create_inventory(inventory_request: schemas.InventoryRequest, db: Session = 
         if not db_item:
             raise HTTPException(status_code=404, detail=f"Предмет {item_req.item_id} не найден")
 
-        if db_item.max_stack_size == 1 and item_req.quantity > 1:
-            raise HTTPException(status_code=400, detail=f"Предмет {item_req.item_id} нельзя добавить более 1 шт")
-
         new_inv = models.CharacterInventory(
             character_id=character_id,
             item_id=item_req.item_id,
@@ -66,7 +63,6 @@ def create_inventory(inventory_request: schemas.InventoryRequest, db: Session = 
             "max_stack_size": db_item.max_stack_size,
             "quantity": item_req.quantity,
             "description": db_item.description,
-            "weight": db_item.weight,
         })
 
     return {"character_id": character_id, "items": inventory_data}
@@ -199,18 +195,19 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
       2) Если слот занят - снимаем старый предмет (и вычитаем его модификаторы)
       3) Уменьшаем инвентарь на 1, надеваем предмет
       4) Вызываем apply_modifiers с положительными значениями
-      5) Если что-то упало - rollback
+      5) Если всё ОК — commit, иначе rollback
+      6) По окончании — пересчитываем быстрые слоты (recalc_fast_slots).
     """
     db.begin()  # начинаем транзакцию вручную
 
     try:
-        # Проверяем предмет
+        # 1) Проверяем предмет
         db_item = db.query(models.Items).filter(models.Items.id == req.item_id).first()
         if not db_item:
             db.rollback()
             raise HTTPException(status_code=404, detail="Предмет не найден")
 
-        # Проверяем наличие в инвентаре
+        # 2) Проверяем наличие в инвентаре
         inv_slot = db.query(models.CharacterInventory).filter(
             models.CharacterInventory.character_id == character_id,
             models.CharacterInventory.item_id == req.item_id
@@ -220,7 +217,7 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
             db.rollback()
             raise HTTPException(status_code=400, detail="Недостаточно предметов в инвентаре")
 
-        # Ищем слот
+        # 3) Ищем слот
         slot = crud.find_equipment_slot_for_item(db, character_id, db_item)
         if not slot:
             db.rollback()
@@ -233,7 +230,7 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
                 # возвращаем старый предмет в инвентарь
                 crud.return_item_to_inventory(db, character_id, old_item)
                 db.flush()
-                # вычитаем его бонусы (передаём отрицательные значения)
+                # вычитаем его бонусы (отправляем отрицательные значения)
                 minus_mods = crud.build_modifiers_dict(old_item, negative=True)
                 if minus_mods:
                     await apply_modifiers_in_attributes_service(character_id, minus_mods)
@@ -242,7 +239,7 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
             db.add(slot)
             db.flush()
 
-        # Уменьшаем количество нового предмета
+        # 4) Уменьшаем количество нового предмета
         inv_slot.quantity -= 1
         if inv_slot.quantity <= 0:
             db.delete(inv_slot)
@@ -255,14 +252,14 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
         db.add(slot)
         db.flush()
 
-        # Добавляем модификаторы (положительные)
+        # 5) Добавляем модификаторы (положительные)
         plus_mods = crud.build_modifiers_dict(db_item, negative=False)
         if plus_mods:
             await apply_modifiers_in_attributes_service(character_id, plus_mods)
 
+        # Всё прошло успешно — commit
         db.commit()
         db.refresh(slot)
-        return slot
 
     except HTTPException:
         db.rollback()
@@ -273,6 +270,15 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {e}")
+
+    # ---------------------------------------
+    # 6) После успешной транзакции пересчитываем быстрые слоты
+    # (вне try/except, т.к. мы уже закоммитили изменения)
+    # Если recalc_fast_slots тоже должно быть атомарным, можно вызвать его ДО коммита.
+    crud.recalc_fast_slots(db, character_id)
+    # ---------------------------------------
+
+    return slot
 
 
 # -----------------------------------------------------------------------------
@@ -285,10 +291,10 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
       1) Возвращаем предмет в инвентарь
       2) Передаём отрицательные значения в apply_modifiers
       3) Очищаем слот
-      4) rollback при ошибке
+      4) rollback при ошибке, commit при успехе
+      5) Вызываем recalc_fast_slots (после commit)
     """
     db.begin()
-
     try:
         slot = db.query(models.EquipmentSlot).filter(
             models.EquipmentSlot.character_id == character_id,
@@ -304,23 +310,22 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
             db.rollback()
             raise HTTPException(status_code=404, detail="Предмет в слоте не найден")
 
-        # Возвращаем предмет
+        # 1) Возвращаем предмет
         crud.return_item_to_inventory(db, character_id, old_item)
         db.flush()
 
-        # Убираем его бонусы => negative=True
+        # 2) Убираем его бонусы => negative=True
         minus_mods = crud.build_modifiers_dict(old_item, negative=True)
         if minus_mods:
             await apply_modifiers_in_attributes_service(character_id, minus_mods)
 
-        # Освобождаем слот
+        # 3) Очищаем слот
         slot.item_id = None
         db.add(slot)
         db.flush()
 
         db.commit()
         db.refresh(slot)
-        return slot
 
     except HTTPException:
         db.rollback()
@@ -331,6 +336,11 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {e}")
+
+    # 5) После коммита пересчитываем быстрые слоты
+    crud.recalc_fast_slots(db, character_id)
+
+    return slot
 
 
 # -----------------------------------------------------------------------------

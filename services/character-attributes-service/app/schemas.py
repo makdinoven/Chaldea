@@ -53,7 +53,7 @@ class CharacterAttributesResponse(CharacterAttributesBase):
     critical_hit_chance: float
     res_effects: float
     res_physical: float
-    res_cutting: float
+    res_catting: float
     res_crushing: float
     res_piercing: float
     res_magic: float
@@ -64,6 +64,20 @@ class CharacterAttributesResponse(CharacterAttributesBase):
     res_sainting: float
     res_wind: float
     res_damning: float
+
+    vul_effects: float
+    vul_physical: float
+    vul_catting: float
+    vul_crushing: float
+    vul_piercing: float
+    vul_magic: float
+    vul_fire: float
+    vul_ice: float
+    vul_watering: float
+    vul_electricity: float
+    vul_sainting: float
+    vul_wind: float
+    vul_damning: float
 
     class Config:
         orm_mode = True

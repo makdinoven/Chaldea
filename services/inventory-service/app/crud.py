@@ -25,23 +25,44 @@ def create_character_inventory(db: Session, inventory_data: schemas.CharacterInv
     db.refresh(db_inventory)
     return db_inventory
 
+
 def create_default_equipment_slots(db: Session, character_id: int):
     """
     Создает стандартные слоты экипировки для персонажа.
+    Все слоты, кроме fast_slot_X, включены (is_enabled=True).
+    Все fast_slot_X по умолчанию отключены (is_enabled=False).
     """
     slot_types = [
-        'head', 'body', 'cloak', 'belt', 'ring','necklace',
-        'main_weapon', 'additional_weapons','fast_slot_1', 'fast_slot_2', 'fast_slot_3', 'fast_slot_4'
+        'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet',
+        'main_weapon', 'additional_weapons',
+        'fast_slot_1', 'fast_slot_2', 'fast_slot_3', 'fast_slot_4',
+        'fast_slot_5', 'fast_slot_6', 'fast_slot_7', 'fast_slot_8',
+        'fast_slot_9', 'fast_slot_10'
     ]
+
     equipment_slots = []
+
     for slot_type in slot_types:
-        equipment_slot = models.EquipmentSlot(
-            character_id=character_id,
-            slot_type=slot_type,
-            item_id=None
-        )
-        db.add(equipment_slot)
-        equipment_slots.append(equipment_slot)
+        if slot_type.startswith("fast_slot_"):
+            # Если это быстрый слот, делаем is_enabled = False
+            new_slot = models.EquipmentSlot(
+                character_id=character_id,
+                slot_type=slot_type,
+                item_id=None,
+                is_enabled=False
+            )
+        else:
+            # Все остальные слоты включаем
+            new_slot = models.EquipmentSlot(
+                character_id=character_id,
+                slot_type=slot_type,
+                item_id=None,
+                is_enabled=True
+            )
+
+        db.add(new_slot)
+        equipment_slots.append(new_slot)
+
     db.commit()
     return equipment_slots
 
@@ -63,6 +84,7 @@ def is_item_compatible_with_slot(item_type: str, slot_type: str) -> bool:
         'belt': ['belt'],
         'ring': ['ring'],
         'necklace': ['necklace'],
+        'bracelet': ['bracelet'],
         'main_weapon': ['main_weapon'],
         'additional_weapons': ['additional_weapons'],
         'fast_slot_1': ['consumable'],
@@ -86,7 +108,8 @@ def find_equipment_slot_for_item(db: Session, character_id: int, item_obj: model
         'ring': 'ring',
         'necklace': 'necklace',
         'main_weapon': 'main_weapon',
-        'additional_weapons': 'additional_weapons'
+        'additional_weapons': 'additional_weapons',
+        'bracelet': 'bracelet',
     }
     slot_type = fixed_types_map.get(item_obj.item_type)
 
@@ -98,10 +121,11 @@ def find_equipment_slot_for_item(db: Session, character_id: int, item_obj: model
         return slot
     else:
         # Ищем первый свободный fast_slot
-        fast_slots = ['fast_slot_1', 'fast_slot_2', 'fast_slot_3', 'fast_slot_4']
+        fast_slots = ['fast_slot_1', 'fast_slot_2', 'fast_slot_3', 'fast_slot_4', 'fast_slot_5', 'fast_slot_6', 'fast_slot_7', 'fast_slot_8', 'fast_slot_9', 'fast_slot_10']
         slot = db.query(models.EquipmentSlot).filter(
             models.EquipmentSlot.character_id == character_id,
             models.EquipmentSlot.slot_type.in_(fast_slots),
+            models.EquipmentSlot.is_enabled == True,
             models.EquipmentSlot.item_id.is_(None)
         ).first()
         return slot
@@ -175,8 +199,8 @@ def build_modifiers_dict(item_obj: models.Items, negative: bool = False) -> dict
         mods["res_effects"] = val(item_obj.res_effects_modifier)
     if item_obj.res_physical_modifier:
         mods["res_physical"] = val(item_obj.res_physical_modifier)
-    if item_obj.res_cutting_modifier:
-        mods["res_cutting"] = val(item_obj.res_cutting_modifier)
+    if item_obj.res_catting_modifier:
+        mods["res_catting"] = val(item_obj.res_catting_modifier)
     if item_obj.res_crushing_modifier:
         mods["res_crushing"] = val(item_obj.res_crushing_modifier)
     if item_obj.res_piercing_modifier:
@@ -187,26 +211,100 @@ def build_modifiers_dict(item_obj: models.Items, negative: bool = False) -> dict
         mods["res_fire"] = val(item_obj.res_fire_modifier)
     if item_obj.res_ice_modifier:
         mods["res_ice"] = val(item_obj.res_ice_modifier)
-    if item_obj.res_water_modifier:
-        # В модели CharacterAttributes это поле называется res_watering
-        mods["res_watering"] = val(item_obj.res_water_modifier)
+    if item_obj.res_watering_modifier:
+        mods["res_watering"] = val(item_obj.res_watering_modifier)
     if item_obj.res_electricity_modifier:
         mods["res_electricity"] = val(item_obj.res_electricity_modifier)
     if item_obj.res_wind_modifier:
         mods["res_wind"] = val(item_obj.res_wind_modifier)
-    if item_obj.res_holy_modifier:
-        # В модели атрибутов "res_sainting"
-        mods["res_sainting"] = val(item_obj.res_holy_modifier)
-    if item_obj.res_cursed_modifier:
-        # В модели атрибутов "res_damning"
-        mods["res_damning"] = val(item_obj.res_cursed_modifier)
+    if item_obj.res_sainting_modifier:
+        mods["res_sainting"] = val(item_obj.res_sainting_modifier)
+    if item_obj.res_damning_modifier:
+        mods["res_damning"] = val(item_obj.res_damning_modifier)
 
     if item_obj.critical_hit_chance_modifier:
         mods["critical_hit_chance"] = val(item_obj.critical_hit_chance_modifier)
     if item_obj.critical_damage_modifier:
         mods["critical_damage"] = val(item_obj.critical_damage_modifier)
 
+    if item_obj.vul_effects_modifier:
+        mods["vul_effects"] = val(item_obj.vul_effects_modifier)
+    if item_obj.vul_physical_modifier:
+        mods["vul_physical"] = val(item_obj.vul_physical_modifier)
+    if item_obj.vul_catting_modifier:
+        mods["vul_catting"] = val(item_obj.vul_catting_modifier)
+    if item_obj.vul_crushing_modifier:
+        mods["vul_crushing"] = val(item_obj.vul_crushing_modifier)
+    if item_obj.vul_piercing_modifier:
+        mods["vul_piercing"] = val(item_obj.vul_piercing_modifier)
+    if item_obj.vul_magic_modifier:
+        mods["vul_magic"] = val(item_obj.vul_magic_modifier)
+    if item_obj.vul_fire_modifier:
+        mods["vul_fire"] = val(item_obj.vul_fire_modifier)
+    if item_obj.vul_ice_modifier:
+        mods["vul_ice"] = val(item_obj.vul_ice_modifier)
+    if item_obj.vul_watering_modifier:
+        mods["vul_watering"] = val(item_obj.vul_watering_modifier)
+    if item_obj.vul_electricity_modifier:
+        mods["vul_electricity"] = val(item_obj.vul_electricity_modifier)
+    if item_obj.vul_sainting_modifier:
+        mods["vul_sainting"] = val(item_obj.vul_sainting_modifier)
+    if item_obj.vul_wind_modifier:
+        mods["vul_wind"] = val(item_obj.vul_wind_modifier)
+    if item_obj.vul_damning_modifier:
+        mods["vul_damning"] = val(item_obj.vul_damning_modifier)
+
     # ПРИМЕЧАНИЕ: поля типа health_recovery / mana_recovery - это "расход" (consume)
     # Мы их используем только при "use_item", а не при "apply_modifiers" для экипировки.
     # Соответственно, здесь не добавляем их.
     return mods
+
+def recalc_fast_slots(db: Session, character_id: int):
+    # 1) Смотрим, какие предметы надеты
+    eq_slots = db.query(models.EquipmentSlot).filter(
+        models.EquipmentSlot.character_id == character_id,
+        models.EquipmentSlot.item_id.isnot(None)
+    ).all()
+
+    # 2) Суммируем бонусы
+    BASE_FAST_SLOTS = 0  # если хотите, что по умолчанию 4 слота, то ставьте 4
+    total_bonus = 0
+    for s in eq_slots:
+        # Находим item_id => item => item.fast_slot_bonus
+        item_obj = db.query(models.Items).filter(models.Items.id == s.item_id).first()
+        if item_obj and item_obj.fast_slot_bonus:
+            total_bonus += item_obj.fast_slot_bonus
+
+    available_fast_slots = BASE_FAST_SLOTS + total_bonus
+    # Не больше 10
+    if available_fast_slots > 10:
+        available_fast_slots = 10
+    if available_fast_slots < 0:
+        available_fast_slots = 0
+
+    # 3) Получаем все fast_slot_* (1..10)
+    fast_slots = db.query(models.EquipmentSlot).filter(
+        models.EquipmentSlot.character_id == character_id,
+        models.EquipmentSlot.slot_type.in_([f"fast_slot_{i}" for i in range(1, 11)])
+    ).order_by(models.EquipmentSlot.slot_type.asc()).all()
+
+    # Сортировка: fast_slot_1, fast_slot_2, ...
+    # Активируем первые N, остальные деактивируем
+    count_enabled = 0
+    for slot in fast_slots:
+        count_enabled += 1
+        if count_enabled <= available_fast_slots:
+            # Включаем
+            slot.is_enabled = True
+        else:
+            # Выключаем
+            slot.is_enabled = False
+            # если там что-то лежит -> снимаем
+            if slot.item_id is not None:
+                old_item = db.query(models.Items).filter(models.Items.id == slot.item_id).first()
+                # возвращаем в инвентарь
+                return_item_to_inventory(db, character_id, old_item)
+                slot.item_id = None
+        db.add(slot)
+
+    db.commit()

@@ -10,3 +10,4 @@ pymysql
 cryptography
 pytest
 pytest-asyncio
+pika
