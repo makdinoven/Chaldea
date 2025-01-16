@@ -1,0 +1,27 @@
+.point {
+  cursor: pointer;
+  z-index: 30;
+  position: absolute;
+  width: 70px;
+  height: 70px;
+  background-color: #3d3d3d;
+  border-radius: 100%;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: -3px; /* Отступ для рамки */
+    left: -3px;
+    right: -3px;
+    bottom: -3px;
+    border-radius: 50%; /* Круглая форма */
+    background: linear-gradient(90deg, rgba(255,249,184,1) 0%, rgba(188,171,76,1) 100%);
+    z-index: -1; /* Позади кнопки */
+    pointer-events: none; /* Не мешает кликам */
+    mask: radial-gradient(circle, transparent 60%, black 61%);
+    -webkit-mask: radial-gradient(circle, transparent 60%, black 61%);
+  }
+}

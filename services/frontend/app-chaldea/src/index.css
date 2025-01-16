@@ -13,15 +13,22 @@
 }
 
 #root {
-  height: 100%;
+  min-height: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 20px;
+  margin-bottom: 100px;
 }
 
 body {
   font-family: var(--font-family);
+  background-color: black;
   background-image: url('./assets/Бэкграунд.png');
   background-size: cover;
   background-repeat: no-repeat;
+  background-position: center;
   width: 100%;
+  min-height: 100vh;
 }
 
 /* Reset and base styles  */

@@ -1,0 +1,14 @@
+.map {
+  z-index: 1;
+  position: relative;
+  flex: 1;
+  border-radius: 40px;
+  min-width: 901px;
+  min-height: 580px;
+  //background-color: black;
+  backdrop-filter: blur(20px);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  //opacity: 0.4;
+}

@@ -1,20 +1,18 @@
-import s from './CountryDropdown.module.scss'
+import s from './CountryDropdown.module.scss';
 import {useEffect, useState} from "react";
 import axios from "axios";
 import DropdownItem from "./DropdownItem/DropdownItem.jsx";
 
-export default function CountryDropdown({ name, id }) {
-    const [isOpened, setIsOpened] = useState(false);
+export default function CountryDropdown({ name, id, isOpen, handleDropdownClick }) {
     const [regions, setRegions] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [loaded, setLoaded] = useState(false); // Флаг, чтобы загружать регионы только один раз
 
-    const handleDropdownClick = () => {
-        if (!isOpened) {
-            setIsOpened(true);
+    useEffect(() => {
+        if (isOpen && !loaded) {
             loadRegions();
         }
-        setIsOpened(!isOpened);
-    };
+    }, [isOpen]);
 
     function loadRegions() {
         setLoading(true);
@@ -27,6 +25,7 @@ export default function CountryDropdown({ name, id }) {
             .then((response) => {
                 setRegions(response.data.regions);
                 setLoading(false);
+                setLoaded(true);
             })
             .catch((error) => {
                 console.error(error);
@@ -37,14 +36,14 @@ export default function CountryDropdown({ name, id }) {
     return (
         <div className={s.dropdown}>
             <div
-                className={`${s.dropdown_button} ${isOpened ? s.active : ''}`}
+                className={`${s.dropdown_button} ${isOpen ? s.active : ''}`}
                 onClick={handleDropdownClick}
             >
                 {name}
             </div>
-            {isOpened && (
+            {isOpen && (
                     loading ? (
-                        <p>Loading...</p>
+                        <p>Загрузка...</p>
                     ) : (
                         regions.map((region) => (
                             <DropdownItem key={region.id} name={region.name} id={region.id} />
@@ -53,4 +52,5 @@ export default function CountryDropdown({ name, id }) {
             )}
         </div>
     );
+
 }

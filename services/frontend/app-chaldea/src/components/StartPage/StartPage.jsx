@@ -18,7 +18,7 @@ export default function StartPage() {
 
   return (
     <div className={styles.content}>
-      <section className={styles.content}>
+      <section>
         <h1 className={styles.title}>Ваше приключение начинается здесь</h1>
         <p className={styles.description}>
           Войдите или зарегистрируйтесь, чтобы начать свой путь и исследовать
