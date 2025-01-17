@@ -18,7 +18,7 @@ services:
       dockerfile: ./docker/frontend/Dockerfile
     volumes:
       - ./services/frontend/app-chaldea:/app
-      - /app/node_modules
+#      - /app/node_modules
     working_dir: /app
     command: sh -c "npm install --legacy-peer-deps && npm run dev"
     ports:
