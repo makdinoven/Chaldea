@@ -138,7 +138,7 @@ def create_new_location(location_data: schemas.LocationCreate, session: Session 
 def update_location_route(location_id: int, body: schemas.LocationUpdate, session: Session = Depends(get_db)):
     return crud.update_location(session, location_id, body)
 
-@router.get("/location_id}/details")
+@router.get("/{location_id}/details")
 def get_location_details_route(location_id: int, session: Session = Depends(get_db)):
     data = crud.get_location_details(session, location_id)
     if not data:
