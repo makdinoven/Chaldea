@@ -92,7 +92,8 @@ def update_country(session: Session, country_id: int, data) -> Country:
 
 def get_country_details(session: Session, country_id: int) -> Optional[dict]:
     """
-    Возвращает полную инфу о стране + для каждого региона только (id, name, image_url, x, y).
+    Возвращает полную инфу о стране + для каждого региона:
+      (id, name, image_url, x, y, entrance_location_id, entrance_location_name).
     """
     db_country = session.query(Country).filter(Country.id == country_id).first()
     if not db_country:
@@ -107,17 +108,26 @@ def get_country_details(session: Session, country_id: int) -> Optional[dict]:
         "regions": []
     }
 
-    # Собираем регионы (только нужные поля)
     for reg in db_country.regions:
+        # Получаем входную локацию (если есть)
+        entrance_loc_name = None
+        if reg.entrance_location_id:
+            entrance_loc = session.query(Location).get(reg.entrance_location_id)
+            if entrance_loc:
+                entrance_loc_name = entrance_loc.name
+
         result["regions"].append({
             "id": reg.id,
             "name": reg.name,
             "image_url": reg.image_url,
             "x": reg.x,
-            "y": reg.y
+            "y": reg.y,
+            "entrance_location_id": reg.entrance_location_id,
+            "entrance_location_name": entrance_loc_name  # <-- добавленное поле
         })
 
     return result
+
 
 
 def get_countries_lookup(session: Session) -> List[dict]:
