@@ -23,6 +23,7 @@ export default function WorldPage() {
             .then((response) => {
                 setCountries(response.data);
                 setLoading(false)
+                // console.log(response.data);
             })
             .catch((error) => console.log(error));
     }, []);

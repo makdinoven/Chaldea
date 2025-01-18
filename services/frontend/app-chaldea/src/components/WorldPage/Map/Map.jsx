@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import MapPoint from './MapPoint/MapPoint.jsx';
 import MapTooltip from './MapTooltip/MapTooltip.jsx';
+import DetailCard from "../DetailCard/DetailCard.jsx";
 
 export default function Map({ countryId }) {
   const [country, setCountry] = useState(null);
@@ -42,7 +43,7 @@ export default function Map({ countryId }) {
     }
   }, [countryId]);
 
-  // подгрузка бэкграунда карты в зависимости от страны
+  // установка бэкграунда карты в зависимости от страны
   useEffect(() => {
     country?.map_image_url
       ? setMapBackground(country.map_image_url)
@@ -52,32 +53,45 @@ export default function Map({ countryId }) {
   }, [country]);
 
   return (
-    <>
+      <>
       {loading ? (
-        'Loading...'
+          'Loading...'
       ) : (
-        <div
-          style={{
-            backgroundImage: mapBackground ? `url('${mapBackground}')` : 'none',
-          }}
-          className={s.map}
-          onClick={() => setActiveMapPointId(null)}
-        >
-          {regions.map((region) => (
-            <MapPoint
-              key={region.id}
-              data={region}
-              isActive={activeMapPointId === region.id}
-              handleMapPointClick={(e) => handleMapPointClick(e, region.id)}
-            />
-          ))}
-            {activeMapPointId !== null && (
-                <MapTooltip
-                    data={regions.find((region) => region.id === activeMapPointId)}
-                />
-            )}
-        </div>
-      )}
-    </>
-  );
+          <div className={s.map_container}>
+            <div
+                style={{
+                  backgroundImage: mapBackground ? `url('${mapBackground}')` : 'none',
+                }}
+                className={s.map}
+                onClick={() => setActiveMapPointId(null)}
+            >
+              {regions.map((region) => (
+                  <MapPoint
+                      key={region.id}
+                      data={region}
+                      isActive={activeMapPointId === region.id}
+                      handleMapPointClick={(e) => handleMapPointClick(e, region.id)}
+                  />
+              ))}
+              {activeMapPointId !== null && (
+                  <MapTooltip
+                      data={regions.find((region) => region.id === activeMapPointId)}
+                  />
+              )}
+            </div>
+            <div className={s.detail_cards_container}>
+              {country &&
+                  <>
+                    <DetailCard data={''}/>
+                    <DetailCard data={country}/>
+                    <DetailCard data={''}/>
+                  </>
+              }
+            </div>
+          </div>
+      )
+      }
+      </>
+  )
+      ;
 }

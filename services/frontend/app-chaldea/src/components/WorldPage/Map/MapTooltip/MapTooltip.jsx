@@ -1,8 +1,9 @@
 import s from './MapTooltip.module.scss'
+import LineButton from "../../../CommonComponents/LineButton/LineButton.jsx";
 
 export default function MapTooltip({data}) {
     // console.log(data)
-    console.log(data?.image_url)
+    // console.log(data?.image_url)
     return (
         <div className={s.tooltip}>
             <div className={s.tooltip_header}>
@@ -18,6 +19,8 @@ export default function MapTooltip({data}) {
                     </p>
                 </div>
             </div>
+            <LineButton text={'Перейти'} link={'#'} />
+
         </div>
     )
 }
