@@ -12,15 +12,6 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str  # Пароль пользователя
 
-# Схема для отображения информации о пользователе
-class User(UserBase):
-    id: int
-    registered_at: datetime
-    avatar: Optional[str] = None  # URL аватарки пользователя
-
-    class Config:
-        orm_mode = True  # Позволяет Pydantic работать с ORM моделями
-
 # Схема для входа пользователя (логин)
 class Login(BaseModel):
     identifier: str
@@ -29,3 +20,14 @@ class Login(BaseModel):
 class UserCharacterCreate(BaseModel):
     user_id: int
     character_id: int
+
+class UserRead(BaseModel):
+    id: int
+    email: str
+    username: str
+    role: str
+    avatar: str | None
+    registered_at: datetime | None
+
+    class Config:
+        orm_mode = True

@@ -250,6 +250,7 @@ class EquipmentSlotBase(BaseModel):
     character_id: int
     slot_type: str  # Желательно использовать Enum или валидацию
     item_id: Optional[int] = None
+    is_enabled: Optional[bool] = None
 
 class EquipmentSlotCreate(EquipmentSlotBase):
     """
@@ -261,7 +262,7 @@ class EquipmentSlot(EquipmentSlotBase):
     """
     Полноценная схема слота с ID и ссылкой на Item (через orm_mode).
     """
-    id: int
+
     item: Optional[Item]
 
     class Config:

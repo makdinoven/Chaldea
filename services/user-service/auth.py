@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from crud import get_user_by_email
-from schemas import User, UserCreate, Login
+from schemas import UserRead, UserCreate, Login
 from database import get_db
 
 # Секретный ключ и алгоритм шифрования
