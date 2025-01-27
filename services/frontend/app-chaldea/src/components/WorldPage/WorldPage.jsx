@@ -1,42 +1,27 @@
-import s from './WorldPage.module.scss'
-import axios from "axios";
-import {useEffect, useState} from "react";
-import Map from "./Map/Map.jsx";
-import CountryDropdown from "./CountryDropdown/CountryDropdown.jsx";
-import backgroundImage from '../../assets/background.png'
-import {useBodyBackground} from "../../hooks/useBodyBackground.js";
+import s from './WorldPage.module.scss';
+import { useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { fetchCountries, setOpenedCountryId } from '../../redux/slices/countriesSlice.js';
+import Map from './Map/Map.jsx';
+import CountryDropdown from './CountryDropdown/CountryDropdown.jsx';
+import backgroundImage from '../../assets/background.png';
+import { useBodyBackground } from '../../hooks/useBodyBackground.js';
+import DetailCard from "./DetailCard/DetailCard.jsx";
 
 export default function WorldPage() {
-    const [countries, setCountries] = useState([])
-    const [loading, setLoading] = useState(true)
-    const [openDropdownId, setOpenDropdownId] = useState(null);
+    const dispatch = useDispatch();
+    const countries = useSelector((state) => state.countries.countries);
+    const loading = useSelector((state) => state.countries.loading);
+
     useBodyBackground(backgroundImage);
 
-    //подгрузка стран
     useEffect(() => {
-        axios
-            .get('http://localhost:8006/locations/countries/lookup', {
-                headers: {
-                    Accept: 'application/json',
-                },
-            })
-            .then((response) => {
-                setCountries(response.data);
-                setLoading(false)
-                // console.log(response.data);
-            })
-            .catch((error) => console.log(error));
+        dispatch(fetchCountries());
     }, []);
 
-    //установка первого дропдауна открытым
-    useEffect(() => {
-        countries.length > 0 && setOpenDropdownId(countries[0]?.id)
-    },[countries]);
-
-    //обработчик клика по дропдауну
-    const handleDropdownClick = (id) => {
-        (openDropdownId !== id) && setOpenDropdownId(id);
-    }
+    // useEffect(() => {
+    //     console.log('world page rerender');
+    // })
 
     return (
         <div className={s.worldpage_container}>
@@ -44,18 +29,24 @@ export default function WorldPage() {
                 'Loading...'
             ) : (
                 <>
-                    <div className={s.dropdown_container}>
-                        {countries.map((country, index) => (
-                            <CountryDropdown
-                                name={country.name}
-                                key={country.id}
-                                id={country.id}
-                                isOpen={openDropdownId === country.id}
-                                handleDropdownClick={() => handleDropdownClick(country.id)}
-                            />
-                        ))}
+                <div className={s.dropdown_container}>
+                    {countries.map((country) => (
+                        <CountryDropdown
+                            key={country.name}
+                            id={country.id}
+                        />
+                    ))}
+                </div>
+                <div className={s.map_container}>
+                    <Map/>
+                    <div className={s.detail_cards_container}>
+                            <>
+                                <DetailCard type={'leader'}/>
+                                <DetailCard type={'description'}/>
+                                <DetailCard type={'vestnik'}/>
+                            </>
                     </div>
-                    <Map countryId={openDropdownId} />
+                </div>
                 </>
             )}
         </div>

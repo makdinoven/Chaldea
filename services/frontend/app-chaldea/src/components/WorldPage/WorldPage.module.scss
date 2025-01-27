@@ -9,4 +9,17 @@
     width: 370px;
   }
 
-}
+  .map_container {
+    display: flex;
+    flex-direction: column;
+    gap: 60px;
+    flex: 1;
+    max-width: 901px;
+
+    .detail_cards_container {
+      display: grid;
+      grid-template-columns: repeat(3,1fr);
+      gap: 30px;
+    }
+  }
+  }

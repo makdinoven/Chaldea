@@ -7,6 +7,7 @@ import CreateCharacterPage from '../CreateCharacterPage/CreateCharacterPage.jsx'
 import RequestsPage from '../Admin/RequestsPage/RequestsPage.jsx';
 import Layout from "./Layout/Layout.jsx";
 import WorldPage from "../WorldPage/WorldPage.jsx";
+import RegionPage from "../RegionPage/RegionPage.jsx";
 
 const App = () => {
   return (
@@ -18,6 +19,7 @@ const App = () => {
             <Route path="createCharacter" element={<CreateCharacterPage />} />
             <Route path="requestsPage" element={<RequestsPage />} />
             <Route path="world" element={<WorldPage />} />
+            <Route path="region/:regionId" element={<RegionPage />} />
           </Route>
         </Routes>
     </Router>

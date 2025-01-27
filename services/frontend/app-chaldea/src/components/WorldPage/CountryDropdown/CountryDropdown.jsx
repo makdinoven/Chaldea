@@ -1,37 +1,44 @@
 import s from './CountryDropdown.module.scss';
 import {useEffect, useState} from "react";
-import axios from "axios";
 import DropdownItem from "./DropdownItem/DropdownItem.jsx";
+import {useDispatch, useSelector} from "react-redux";
+import {setOpenedCountryId} from "../../../redux/slices/countriesSlice.js";
+import {fetchCountryDetails} from "../../../redux/slices/countryDetailsSlice.js";
 
-export default function CountryDropdown({ name, id, isOpen, handleDropdownClick }) {
-    const [regions, setRegions] = useState([]);
-    const [loading, setLoading] = useState(false);
-    const [loaded, setLoaded] = useState(false); // Флаг, чтобы загружать регионы только один раз
+export default function CountryDropdown({ id }) {
+    const dispatch = useDispatch();
+    const country = useSelector((state) => state.countries.countries.find((country) => country.id === id));
+    const openedCountryId = useSelector((state) => state.countries.openedCountryId);
+
+    const countryDetails = useSelector((state) => state.countryDetails.data[id]);
+    const loading = useSelector((state) => state.countryDetails.loading[id]);
+    const isLoaded = useSelector((state) => state.countryDetails.isLoaded[id]);
+
+
+    const isOpen = openedCountryId === id;
 
     useEffect(() => {
-        if (isOpen && !loaded) {
-            loadRegions();
-        }
-    }, [isOpen]);
+            if (isOpen && !isLoaded) {
+                dispatch(fetchCountryDetails(id));
+            }
+    }, [])
 
-    function loadRegions() {
-        setLoading(true);
-        axios
-            .get(`http://localhost:8006/locations/countries/${id}/details`, {
-                headers: {
-                    Accept: 'application/json',
-                },
-            })
-            .then((response) => {
-                setRegions(response.data.regions);
-                setLoading(false);
-                setLoaded(true);
-            })
-            .catch((error) => {
-                console.error(error);
-                setLoading(false);
-            });
-    }
+    const handleDropdownClick = () => {
+        if (openedCountryId !== id) {
+            if (isOpen) {
+                dispatch(setOpenedCountryId(null));
+            } else {
+                dispatch(setOpenedCountryId(id));
+                if (!isLoaded) {
+                    dispatch(fetchCountryDetails(id));
+                }
+            }
+        }
+    };
+
+    // useEffect(() => {
+    //     console.log(`dropdown countryID: ${id} rerender`);
+    // })
 
     return (
         <div className={s.dropdown}>
@@ -39,17 +46,22 @@ export default function CountryDropdown({ name, id, isOpen, handleDropdownClick 
                 className={`${s.dropdown_button} ${isOpen ? s.active : ''}`}
                 onClick={handleDropdownClick}
             >
-                {name}
+                {country.name}
             </div>
-            {isOpen && (
+                {isOpen && (
                     loading ? (
                         <p>Загрузка...</p>
                     ) : (
-                        regions.map((region) => (
-                            <DropdownItem key={region.id} name={region.name} id={region.id} />
+                        countryDetails?.regions.map((region) => (
+                            <DropdownItem
+                                key={region.id}
+                                name={region.name}
+                                id={region.id}
+                                link={`/region/${region.id}`}
+                            />
                         ))
                     )
-            )}
+                )}
         </div>
     );
 
