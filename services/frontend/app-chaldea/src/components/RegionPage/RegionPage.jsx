@@ -3,5 +3,9 @@ import {useParams} from "react-router-dom";
 
 export default function RegionPage() {
     const { regionId } = useParams();
-    return (<h1>{regionId}</h1>)
+    return (
+        <div className={s.regionPage_container}>
+                <h1>{regionId}</h1>
+        </div>
+    )
 }

@@ -1,7 +1,7 @@
 import s from './WorldPage.module.scss';
 import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { fetchCountries, setOpenedCountryId } from '../../redux/slices/countriesSlice.js';
+import { fetchCountries} from '../../redux/actions/fetchCountries.js';
 import Map from './Map/Map.jsx';
 import CountryDropdown from './CountryDropdown/CountryDropdown.jsx';
 import backgroundImage from '../../assets/background.png';
@@ -38,7 +38,7 @@ export default function WorldPage() {
                     ))}
                 </div>
                 <div className={s.map_container}>
-                    <Map/>
+                    <Map  type={'country'} />
                     <div className={s.detail_cards_container}>
                             <>
                                 <DetailCard type={'leader'}/>

@@ -6,13 +6,22 @@ import MapTooltip from './MapTooltip/MapTooltip.jsx';
 import DetailCard from "../DetailCard/DetailCard.jsx";
 import {useSelector} from "react-redux";
 
-export default function Map() {
+export default function Map({type}) {
   const [mapBackground, setMapBackground] = useState(null);
   const [activeMapPointId, setActiveMapPointId] = useState(null);
 
-  const openedCountryId = useSelector((state) => state.countries.openedCountryId);
-  const country = useSelector((state) => state.countryDetails.data[openedCountryId]);
-  const loading = useSelector((state) => state.countryDetails.loading[openedCountryId]);
+  const openedDropdownId = type === 'country' ?
+      useSelector((state) => state.countries.openedCountryId)
+      : null;
+  const activeDropdown = type === 'country' ?
+      useSelector((state) => state.countryDetails.data[openedDropdownId])
+      : null;
+  const loading = type === 'country' ?
+      useSelector((state) => state.countryDetails.loading[openedDropdownId])
+      : null;
+
+
+  const mapPoints = activeDropdown?.regions || activeDropdown?.subregions || [];
 
   const handleMapPointClick = (e, id) => {
     e.stopPropagation();
@@ -25,13 +34,13 @@ export default function Map() {
 
   // установка бэкграунда карты в зависимости от страны
   useEffect(() => {
-    if (country) {
-      country?.map_image_url
-          ? setMapBackground(country.map_image_url)
+    if (activeDropdown) {
+      activeDropdown?.map_image_url
+          ? setMapBackground(activeDropdown.map_image_url)
           : setMapBackground('no-background');
       setActiveMapPointId(null)
     }
-  }, [country]);
+  }, [activeDropdown]);
 
   // useEffect(() => {
   //   console.log('map rerender');
@@ -49,17 +58,17 @@ export default function Map() {
           className={s.map}
           onClick={handleMapClick}
       >
-        {country?.regions.map((region) => (
+        {mapPoints.map((point) => (
             <MapPoint
-                key={region.id}
-                data={region}
-                isActive={activeMapPointId === region.id}
-                handleMapPointClick={(e) => handleMapPointClick(e, region.id)}
+                key={point.id}
+                data={point}
+                isActive={activeMapPointId === point.id}
+                handleMapPointClick={(e) => handleMapPointClick(e, point.id)}
             />
         ))}
         {activeMapPointId !== null && (
             <MapTooltip
-                data={country?.regions.find((region) => region.id === activeMapPointId)}
+                data={mapPoints.find((point) => point.id === activeMapPointId)}
             />
         )}
       </div>
