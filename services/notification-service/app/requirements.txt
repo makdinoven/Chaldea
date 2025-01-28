@@ -4,3 +4,4 @@ sqlalchemy
 pydantic<2.0.0
 pika
 pymysql
+requests

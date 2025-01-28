@@ -1,3 +1,5 @@
+from typing import List
+
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, UploadFile
 from fastapi.staticfiles import StaticFiles
 import models
@@ -34,7 +36,7 @@ if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
 # Регистрация нового пользователя
-@router.post("/register", response_model=User)
+@router.post("/register", response_model=UserCreate)
 def register_user(user: UserCreate, db: Session = Depends(get_db)):
     # Проверка уникальности email
     db_user_email = get_user_by_email(db, email=user.email)
@@ -107,13 +109,13 @@ def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
     return {"access_token": new_access_token, "token_type": "bearer"}
 
 # Получение информации о текущем пользователе
-@router.get("/me", response_model=User)
-def read_users_me(current_user: User = Depends(get_current_user)):
+@router.get("/me", response_model=UserRead)
+def read_users_me(current_user: models.User = Depends(get_current_user)):
     return current_user
 
 # Маршрут для загрузки аватарки
 @router.post("/upload-avatar/")
-async def upload_avatar(file: UploadFile, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def upload_avatar(file: UploadFile, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     # Создаем уникальное имя файла для загрузки
     file_path = os.path.join(UPLOAD_DIR, f"{current_user.id}_{file.filename}")
 
@@ -166,6 +168,22 @@ async def create_user_character_relation(user_character: UserCharacterCreate, db
 
 # Настройка статических файлов
 app.mount("/assets", StaticFiles(directory="src/assets"), name="assets")
+
+@router.get("/all", response_model=List[UserRead])
+def get_all_users(db: Session = Depends(get_db)):
+    """
+    Возвращает список всех пользователей из базы.
+    """
+    users = db.query(models.User).all()
+    return users
+
+@router.get("/admins", response_model=List[UserRead])
+def get_admin_users(db: Session = Depends(get_db)):
+    """
+    Возвращает список пользователей, у которых роль = 'admin'.
+    """
+    admins = db.query(models.User).filter(models.User.role == "admin").all()
+    return admins
 
 # Подключаем маршрутизатор к основному приложению FastAPI
 app.include_router(router)
