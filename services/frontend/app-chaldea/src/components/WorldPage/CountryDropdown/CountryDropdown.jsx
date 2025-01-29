@@ -6,7 +6,7 @@ import {setOpenedCountryId} from "../../../redux/slices/countriesSlice.js";
 import {fetchCountryDetails} from "../../../redux/actions/fetchCountryDetails.js";
 import DropdownButton from "../DropdownButton/DropdownButton.jsx";
 
-export default function CountryDropdown({ id }) {
+export default function CountryDropdown({id}) {
     const dispatch = useDispatch();
     const country = useSelector((state) => state.countries.countries.find((country) => country.id === id));
     const openedCountryId = useSelector((state) => state.countries.openedCountryId);
@@ -18,9 +18,9 @@ export default function CountryDropdown({ id }) {
     const isOpen = openedCountryId === id;
 
     useEffect(() => {
-            if (isOpen && !isLoaded) {
-                dispatch(fetchCountryDetails(id));
-            }
+        if (isOpen && !isLoaded) {
+            dispatch(fetchCountryDetails(id));
+        }
     }, [])
 
     const handleDropdownButtonClick = () => {
@@ -42,18 +42,16 @@ export default function CountryDropdown({ id }) {
 
     return (
         <DropdownButton label={country.name} handleClick={handleDropdownButtonClick} isOpen={isOpen}>
-            {loading ? (
-                <p>Загрузка...</p>
-            ) : (
+            {
                 countryDetails?.regions.map((region) => (
-                    <DropdownItem
-                        key={region.id}
-                        name={region.name}
-                        id={region.id}
-                        link={`/region/${region.id}`}
-                    />
-                ))
-            )}
+                        <DropdownItem
+                            key={region.id}
+                            name={region.name}
+                            id={region.id}
+                            link={`country/${openedCountryId}/${region.id}`}
+                        />
+                    )
+                )}
         </DropdownButton>
     );
 

@@ -4,11 +4,11 @@ import {useSelector} from "react-redux";
 export default function DetailCard({type}) {
     const openedCountryId = useSelector((state) => state.countries.openedCountryId);
     const country = useSelector((state) => state.countryDetails.data[openedCountryId]);
-    const loading = useSelector((state) => state.countryDetails.loading[openedCountryId]);
+    // const loading = useSelector((state) => state.countryDetails.loading[openedCountryId]);
 
-    if (loading) {
-        return <div className={s.card}>Loading...</div>;
-    }
+    // if (loading) {
+    //     return <div className={s.card}>Loading...</div>;
+    // }
 
     switch (type) {
         case 'description':
@@ -23,8 +23,8 @@ export default function DetailCard({type}) {
             return (
                 <div className={s.card}>vestnik</div>
             )
-            default:
-                return (<div className={s.card}>Default</div>)
+        default:
+            return (<div className={s.card}>Default</div>)
     }
 
 

@@ -1,0 +1,41 @@
+.btn_wrapper {
+  padding: 17px;
+  position: relative;
+  cursor: pointer;
+  border-radius: 20px;
+  color: #fff !important;
+  text-decoration: none;
+
+  .btn {
+    display: block;
+    font-family: var(--font-family);
+    font-weight: 500;
+    font-size: 16px;
+    text-transform: uppercase;
+    padding: 20px;
+    text-align: center;
+    border-radius: inherit;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: cover;
+    width: 100%;
+  }
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: inherit;
+    backdrop-filter: blur(4px);
+    background: rgba(219, 179, 71, 0.4);
+    pointer-events: none;
+  }
+
+  &::before {
+    z-index: -1;
+  }
+}
+
