@@ -1,5 +1,5 @@
-import { createSlice } from '@reduxjs/toolkit';
-import { fetchCountryDetails } from "../actions/fetchCountryDetails.js";
+import {createSlice} from '@reduxjs/toolkit';
+import {fetchCountryDetails} from "../actions/countryActions.js";
 
 const countryDetailsSlice = createSlice({
     name: 'countryDetails',
@@ -18,7 +18,7 @@ const countryDetailsSlice = createSlice({
             })
             .addCase(fetchCountryDetails.fulfilled, (state, action) => {
                 if (action.payload) {
-                    const { countryId, country } = action.payload;
+                    const {countryId, country} = action.payload;
                     state.data[countryId] = country; // Сохраняем всю страну
                     state.isLoaded[countryId] = true;
                 }

@@ -1,7 +1,7 @@
 import s from './WorldPage.module.scss';
 import {useEffect} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
-import {fetchCountries} from '../../redux/actions/fetchCountries.js';
+import {fetchCountries} from '../../redux/actions/countryActions.js';
 import Map from './Map/Map.jsx';
 import CountryDropdown from './CountryDropdown/CountryDropdown.jsx';
 import backgroundImage from '../../assets/background.png';
@@ -14,9 +14,9 @@ export default function WorldPage() {
     const isLoaded = useSelector(state => state.countries.isLoaded);
     const loading = useSelector((state) => state.countries.loading);
 
-    useEffect(() => {
-        console.log('rerender')
-    })
+    // useEffect(() => {
+    //     console.log('rerender')
+    // })
 
     useBodyBackground(backgroundImage);
 
