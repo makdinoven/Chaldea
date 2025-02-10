@@ -28,6 +28,26 @@ export default function WorldPage() {
     //     console.log('world page rerender');
     // })
 
+    const renderDetailCards = () => {
+        return (<>
+            <DetailCard>
+                {
+                    'leader'
+                }
+            </DetailCard>
+            <DetailCard>
+                {
+                    'description'
+                }
+            </DetailCard>
+            <DetailCard>
+                {
+                    'vestnik'
+                }
+            </DetailCard>
+        </>)
+    }
+
     return (
         <div className={s.worldpage_container}>
             {loading ? (
@@ -39,17 +59,14 @@ export default function WorldPage() {
                             <CountryDropdown
                                 key={country.name}
                                 id={country.id}
+                                name={country.name}
                             />
                         ))}
                     </div>
                     <div className={s.map_container}>
                         <Map type={'country'}/>
                         <div className={s.detail_cards_container}>
-                            <>
-                                <DetailCard type={'leader'}/>
-                                <DetailCard type={'description'}/>
-                                <DetailCard type={'vestnik'}/>
-                            </>
+                            {renderDetailCards()}
                         </div>
                     </div>
                 </>

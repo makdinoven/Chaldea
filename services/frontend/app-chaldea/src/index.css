@@ -1,47 +1,49 @@
 @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Anonymous+Pro:ital,wght@0,400;0,700;1,400;1,700&display=swap');
+
 @import-normalize;
 
 :root {
-  --font-family: 'Montserrat', sans-serif;
-  --font3: 'Anonymous Pro', sans-serif;
-  --zoloto: #fff;
-  --zolotoReal: #f0d95c;
-  --blue: #76a6bd;
-  --transition02: 0.2s ease-in-out;
-  --gray-background: rgba(35, 35, 41, 0.9);
+    --font-family: 'Montserrat', sans-serif;
+    --font3: 'Anonymous Pro', sans-serif;
+    --zoloto: #fff;
+    --zolotoReal: #f0d95c;
+    --blue: #76a6bd;
+    --transition02: 0.2s ease-in-out;
+    --gray-background: rgba(35, 35, 41, 0.9);
 }
 
 #root {
-  min-height: 100%;
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 0 20px;
-  margin-bottom: 100px;
+    min-height: 100%;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 20px;
+    margin-bottom: 100px;
 }
 
 body {
-  font-family: var(--font-family);
-  background-color: black;
-  background-image: url('./assets/Бэкграунд.png');
-  background-size: cover;
-  background-repeat: no-repeat;
-  background-position: center;
-  width: 100%;
-  min-height: 100vh;
+    font-family: var(--font-family);
+    background-color: black;
+    background-image: url('./assets/Бэкграунд.png');
+    background-size: cover;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-attachment: fixed;
+    width: 100%;
+    min-height: 100vh;
 }
 
 /* Reset and base styles  */
 * {
-  padding: 0px;
-  margin: 0px;
-  border: none;
+    padding: 0px;
+    margin: 0px;
+    border: none;
 }
 
 *,
 *::before,
 *::after {
-  box-sizing: border-box;
+    box-sizing: border-box;
 }
 
 /* Links */
@@ -49,7 +51,7 @@ body {
 a,
 a:link,
 a:visited {
-  color: inherit;
+    color: inherit;
 }
 
 /* Common */
@@ -60,7 +62,7 @@ footer,
 header,
 section,
 main {
-  display: block;
+    display: block;
 }
 
 h1,
@@ -70,27 +72,27 @@ h4,
 h5,
 h6,
 p {
-  font-size: inherit;
-  font-weight: inherit;
+    font-size: inherit;
+    font-weight: inherit;
 }
 
 ul,
 ul li {
-  list-style: none;
+    list-style: none;
 }
 
 img {
-  vertical-align: top;
+    vertical-align: top;
 }
 
 img,
 svg {
-  max-width: 100%;
-  height: auto;
+    max-width: 100%;
+    height: auto;
 }
 
 address {
-  font-style: normal;
+    font-style: normal;
 }
 
 /* Form */
@@ -99,41 +101,41 @@ input,
 textarea,
 button,
 select {
-  font-family: inherit;
-  font-size: inherit;
-  color: inherit;
-  background-color: transparent;
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background-color: transparent;
 }
 
 input::-ms-clear {
-  display: none;
+    display: none;
 }
 
 button,
 input[type='submit'] {
-  display: inline-block;
-  box-shadow: none;
-  background-color: transparent;
-  background: none;
-  cursor: pointer;
+    display: inline-block;
+    box-shadow: none;
+    background-color: transparent;
+    background: none;
+    cursor: pointer;
 }
 
 input:focus,
 input:active,
 button:focus,
 button:active {
-  outline: none;
+    outline: none;
 }
 
 button::-moz-focus-inner {
-  padding: 0;
-  border: 0;
+    padding: 0;
+    border: 0;
 }
 
 label {
-  cursor: pointer;
+    cursor: pointer;
 }
 
 legend {
-  display: block;
+    display: block;
 }

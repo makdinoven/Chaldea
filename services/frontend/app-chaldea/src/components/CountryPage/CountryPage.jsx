@@ -9,11 +9,11 @@ import Map from "../WorldPage/Map/Map.jsx";
 import DetailCard from "../WorldPage/DetailCard/DetailCard.jsx";
 import BackToWorldBtn from "./BackToWorldBtn/BackToWorldBtn.jsx";
 import {fetchCountries, fetchCountryDetails} from "../../redux/actions/countryActions.js";
-import RegionDropdown from "../WorldPage/CountryDropdown/RegionDropdown.jsx";
+import RegionDropdown from "./RegionDropdown.jsx";
 
 export default function CountryPage() {
     const dispatch = useDispatch();
-    const {countryId, regionId} = useParams();
+    const {countryId} = useParams();
     const isLoaded = useSelector(state => state.countries.isLoaded);
     const country = useSelector((state) => state.countryDetails.data[countryId]);
     const regions = useSelector((state) => state.countryDetails.data[countryId]?.regions);
@@ -26,9 +26,26 @@ export default function CountryPage() {
         }
     }, []);
 
-    useEffect(() => {
-        console.log(regions);
-    }, [regions])
+    const renderDetailCards = () => {
+        return (<>
+            <DetailCard>
+                {
+                    'leader'
+                }
+            </DetailCard>
+            <DetailCard>
+                {
+                    'description'
+                }
+            </DetailCard>
+            <DetailCard>
+                {
+                    'vestnik'
+                }
+            </DetailCard>
+        </>)
+    }
+
 
     return (
         <div className={s.regionPage_container}>
@@ -38,18 +55,15 @@ export default function CountryPage() {
                     <RegionDropdown
                         key={region.name}
                         id={region.id}
+                        name={region.name}
                     />
                 ))}
             </div>
             <div className={s.map_container}>
                 <BackToWorldBtn imgUrl={backgroundImage}/>
-                {/*<Map  type={'region'} />*/}
+                <Map type={'region'}/>
                 <div className={s.detail_cards_container}>
-                    <>
-                        <DetailCard type={'leader'}/>
-                        <DetailCard type={'description'}/>
-                        <DetailCard type={'vestnik'}/>
-                    </>
+                    {renderDetailCards()}
                 </div>
             </div>
         </div>

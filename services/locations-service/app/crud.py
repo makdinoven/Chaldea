@@ -202,6 +202,7 @@ def get_region_full_details(session: Session, region_id: int) -> Optional[dict]:
         "name": db_region.name,
         "description": db_region.description,
         "image_url": db_region.image_url,
+        "map_image_url":db_region.map_image_url,
         "entrance_location_id": db_region.entrance_location_id,
         "leader_id": db_region.leader_id,
         "x": db_region.x,

@@ -19,7 +19,7 @@ const App = () => {
                     <Route path="createCharacter" element={<CreateCharacterPage/>}/>
                     <Route path="requestsPage" element={<RequestsPage/>}/>
                     <Route path="world" element={<WorldPage/>}/>
-                    <Route path="world/country/:countryId/:regionId" element={<CountryPage/>}/>
+                    <Route path="world/country/:countryId/" element={<CountryPage/>}/>
                 </Route>
             </Routes>
         </Router>
