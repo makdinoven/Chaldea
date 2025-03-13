@@ -51,9 +51,9 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         role: str = payload.get("role")
-        current_character: int = payload.get("current_character")  # Вот тут
         if email is None or role is None:
             raise credentials_exception
+        current_character = payload.get("current_character")  # может быть None
     except JWTError:
         raise credentials_exception
 

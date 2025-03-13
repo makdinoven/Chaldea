@@ -36,7 +36,7 @@ if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
 # Регистрация нового пользователя
-@router.post("/register", response_model=UserCreate)
+@router.post("/register", response_model=UserRead)
 def register_user(user: UserCreate, db: Session = Depends(get_db)):
     # Проверка уникальности email
     db_user_email = get_user_by_email(db, email=user.email)
@@ -66,18 +66,19 @@ def login_user(data: Login, db: Session = Depends(get_db)):
             detail="Invalid credentials"
         )
 
+    token_data = {
+        "sub": user.email,
+    }
+    
+    if user.current_character is not None:
+        token_data["current_character"] = user.current_character
+
     access_token = create_access_token(
-        data={
-            "sub": user.email,
-            "current_character": user.current_character
-        },
+        data=token_data,
         role=user.role
     )
     refresh_token = create_refresh_token(
-        data={
-            "sub": user.email,
-            "current_character": user.current_character
-        },
+        data=token_data,
         role=user.role
     )
 
@@ -133,27 +134,49 @@ async def upload_avatar(file: UploadFile, current_user: models.User = Depends(ge
 
 # Эндпоинт для обновления пользователя с присвоением персонажа
 @router.put("/{user_id}/update_character")
-async def update_user_character(user_id: int, character_data: dict, db: Session = Depends(get_db)):
+async def update_user_character(
+    user_id: int, 
+    character_data: dict, 
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
     Обновляет поле current_character пользователя.
     """
-    character_id = character_data.get("current_character")
+    # Проверка прав доступа
+    if current_user.id != user_id and current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
 
+    character_id = character_data.get("current_character")
     if character_id is None:
         raise HTTPException(status_code=400, detail="current_character обязателен")
 
-    # Поиск пользователя
+    # Проверка существования связи пользователь-персонаж
+    character_relation = db.query(models.UserCharacter).filter(
+        models.UserCharacter.user_id == user_id,
+        models.UserCharacter.character_id == character_id
+    ).first()
+    
+    if not character_relation:
+        raise HTTPException(
+            status_code=400, 
+            detail="У пользователя нет доступа к этому персонажу"
+        )
+
     db_user = db.query(models.User).filter(models.User.id == user_id).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
-    # Обновление поля current_character
-    print(f"Текущий персонаж до обновления: {db_user.current_character}")
     db_user.current_character = character_id
     db.commit()
-    print(f"Текущий персонаж после обновления: {db_user.current_character}")
 
-    return {"message": f"Пользователь с ID {user_id} успешно обновлен. Текущий персонаж: {db_user.current_character}"}
+    return {
+        "message": f"Пользователь с ID {user_id} успешно обновлен",
+        "current_character": db_user.current_character
+    }
 
 
 @router.post("/user_characters/")
