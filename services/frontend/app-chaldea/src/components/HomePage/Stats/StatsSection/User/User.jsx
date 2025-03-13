@@ -1,4 +1,4 @@
-import styles from './User.module.css';
+import styles from './User.module.scss';
 
 export default function User({ data }) {
   return (

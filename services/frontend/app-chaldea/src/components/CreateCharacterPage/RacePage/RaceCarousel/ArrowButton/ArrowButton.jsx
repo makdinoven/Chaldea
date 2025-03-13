@@ -1,4 +1,4 @@
-import styles from './ArrowButton.module.css';
+import styles from './ArrowButton.module.scss';
 
 export default function ArrowButton({ text, onClick }) {
   const handleClick = (e) => {

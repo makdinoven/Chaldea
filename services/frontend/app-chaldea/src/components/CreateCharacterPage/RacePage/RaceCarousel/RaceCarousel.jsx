@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import ArrowButton from './ArrowButton/ArrowButton';
-import styles from './RaceCarousel.module.css';
+import styles from './RaceCarousel.module.scss';
 
 export default function RaceCarousel({ races, onRaceChange, selectedRace }) {
   const [currentIndex, setCurrentIndex] = useState(selectedRace);

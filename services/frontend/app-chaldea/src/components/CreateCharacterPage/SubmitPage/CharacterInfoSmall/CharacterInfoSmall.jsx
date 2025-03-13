@@ -1,4 +1,4 @@
-import styles from './CharacterInfoSmall.module.css';
+import styles from './CharacterInfoSmall.module.scss';
 
 export default function CharacterInfoSmall({ text }) {
   return (

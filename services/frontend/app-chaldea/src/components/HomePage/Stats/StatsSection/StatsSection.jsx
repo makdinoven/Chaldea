@@ -1,6 +1,6 @@
 import User from './User/User';
 
-import styles from './StatsSection.module.css';
+import styles from './StatsSection.module.scss';
 
 export default function StatsSection({ data }) {
   return (

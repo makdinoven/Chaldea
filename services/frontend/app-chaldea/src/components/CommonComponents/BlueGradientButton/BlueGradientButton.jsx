@@ -1,5 +1,5 @@
 import React from 'react';
-import styles from './BlueGradientButton.module.css';
+import styles from './BlueGradientButton.module.scss';
 
 export default function BlueGradientButton({ text, onClick }) {
   function handleClick(e) {

@@ -1,4 +1,4 @@
-import styles from './SubraceButton.module.css';
+import styles from './SubraceButton.module.scss';
 
 export default function SubraceButton({
   text,

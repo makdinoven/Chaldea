@@ -1,4 +1,4 @@
-import styles from './PaginationButton.module.css';
+import styles from './PaginationButton.module.scss';
 
 export default function PaginationButton({ text, isDisabled, onClick }) {
   return (

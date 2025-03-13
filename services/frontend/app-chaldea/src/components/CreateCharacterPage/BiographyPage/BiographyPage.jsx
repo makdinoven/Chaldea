@@ -4,7 +4,7 @@ import Input from '../../CommonComponents/Input/Input';
 import Select from '../../CommonComponents/Select/Select';
 import Textarea from '../../CommonComponents/Textarea/Textarea';
 
-import styles from './BiographyPage.module.css';
+import styles from './BiographyPage.module.scss';
 
 export default function BiographyPage({
   onFormValuesChange,

@@ -3,7 +3,6 @@ import useNavigateTo from '../../hooks/useNavigateTo';
 import { useRequireAuth } from '../../hooks/useRequireAuth';
 import axios from 'axios';
 
-import Header from '../CommonComponents/Header/Header';
 import RacePage from './RacePage/RacePage';
 import ClassPage from './ClassPage/ClassPage';
 import BiographyPage from './BiographyPage/BiographyPage';
@@ -11,7 +10,7 @@ import SubmitPage from './SubmitPage/SubmitPage';
 
 import Pagination from './Pagination/Pagination';
 
-import styles from './CreateCharacterPage.module.css';
+import styles from './CreateCharacterPage.module.scss';
 
 import elfImg from '../../assets/elfImage.png';
 import starikImg from '../../assets/starikImage.png';
@@ -19,6 +18,7 @@ import warriorImg from '../../assets/classWarriorImg.png';
 import plutImg from '../../assets/classPlutImg.png';
 import magicianImg from '../../assets/classMagicianImg.png';
 import classInventoryImg from '../../assets/classInventoryImg.png';
+import {useUser} from "../../hooks/UserContext.jsx";
 
 export default function CreateCharacterPage({}) {
   const navigateTo = useNavigateTo();
@@ -363,14 +363,6 @@ export default function CreateCharacterPage({}) {
       .catch((error) => setError(error));
   }, []);
 
-  // useEffect(() => {
-  //   console.log('raceID:', selectedRaceId);
-  // }, [selectedRaceId]);
-
-  // useEffect(() => {
-  //   console.log('subraceID:', selectedSubraceId);
-  // }, [selectedSubraceId]);
-
   useRequireAuth();
 
   const handleFormValuesChange = (formValues) => {
@@ -421,7 +413,7 @@ export default function CreateCharacterPage({}) {
               data[0].races[selectedRaceId].subraces[selectedSubraceId].name
             }
             selectedSubraceId={selectedSubraceId}
-            selectedClass={data[1].classes[selectedClassId].name}
+            selectedClass={data[1].classes[selectedClassId -1].name}
             selectedClassId={selectedClassId}
           />
         );
@@ -433,8 +425,6 @@ export default function CreateCharacterPage({}) {
 
   return (
     <>
-      <Header showMenu={true} />
-
       <div className={styles.container}>
         <div className={styles.top_container}>
           <h1 className={styles.title}>Создание персонажа</h1>

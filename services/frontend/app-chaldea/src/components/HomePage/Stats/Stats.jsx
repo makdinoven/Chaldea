@@ -1,6 +1,6 @@
 import StatsSection from './StatsSection/StatsSection';
 
-import styles from './Stats.module.css';
+import styles from './Stats.module.scss';
 
 export default function Stats({ statsData }) {
   return (

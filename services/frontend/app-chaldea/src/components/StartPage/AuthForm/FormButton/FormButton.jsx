@@ -1,5 +1,5 @@
 import React from 'react';
-import styles from './FormButton.module.css';
+import styles from './FormButton.module.scss';
 
 export default function FormButton({ text }) {
   return (

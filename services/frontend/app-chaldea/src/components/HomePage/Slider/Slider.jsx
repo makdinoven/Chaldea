@@ -5,7 +5,7 @@ import useNavigateTo from '../../../hooks/useNavigateTo';
 import CircleButton from './CircleButton/CircleButton';
 import ArrowButton from './ArrowButton/ArrowButton';
 
-import styles from './Slider.module.css';
+import styles from './Slider.module.scss';
 
 export default function Slider({ pages }) {
   const [currentIndex, setCurrentIndex] = useState(0);

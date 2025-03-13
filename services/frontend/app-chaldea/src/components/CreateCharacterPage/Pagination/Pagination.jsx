@@ -3,7 +3,7 @@ import { useState } from 'react';
 import CircleButton from '../../HomePage/Slider/CircleButton/CircleButton.jsx';
 import PaginationButton from './PaginationButton/PaginationButton.jsx';
 
-import styles from './Pagination.module.css';
+import styles from './Pagination.module.scss';
 
 export default function Pagination({ pages, currentIndex, onIndexChange }) {
   const handlePrev = () => {
