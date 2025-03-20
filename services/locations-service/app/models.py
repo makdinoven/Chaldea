@@ -48,7 +48,7 @@ class District(Base):
     region_id = Column(BigInteger, ForeignKey('Regions.id', ondelete="CASCADE"), nullable=False)
     description = Column(Text, nullable=False)
     image_url = Column(String(255), nullable=True)
-    entry_location = Column(BigInteger, ForeignKey('Locations.id', ondelete="SET NULL"))
+    entrance_location_id = Column(BigInteger, ForeignKey('Locations.id', ondelete="SET NULL"))
     recommended_level = Column(Integer, nullable=True, default=1)
 
     x = Column(Float, nullable=True)
@@ -66,7 +66,7 @@ class District(Base):
 
     entry_location_detail = relationship(
         "Location",
-        foreign_keys=[entry_location]  # <-- указываем, что entry_location ссылается на Location.id
+        foreign_keys=[entrance_location_id]  # <-- указываем, что entry_location ссылается на Location.id
     )
 
 

@@ -34,53 +34,6 @@ class CountryLookup(BaseModel):
     id: int
     name: str
 
-
-# -------------------------------
-#   REGION SCHEMAS
-# -------------------------------
-class RegionBase(BaseModel):
-    country_id: int
-    name: str
-    description: str
-    map_image_url: str
-    image_url: str
-    entrance_location_id: Optional[int] = None
-    leader_id: Optional[int] = None
-    x: Optional[float] = None
-    y: Optional[float] = None
-
-class RegionCreate(RegionBase):
-    pass
-
-class RegionUpdate(BaseModel):
-    country_id: Optional[int]
-    name: Optional[str]
-    description: Optional[str]
-    map_image_url: Optional[str]
-    image_url: Optional[str]
-    entrance_location_id: Optional[int]
-    leader_id: Optional[int]
-    x: Optional[float]
-    y: Optional[float]
-
-class RegionRead(BaseModel):
-    id: int
-    country_id: int
-    name: str
-    description: str
-    map_image_url: str
-    image_url: str
-    entrance_location_id: Optional[int] = None
-    leader_id: Optional[int] = None
-    x: Optional[float] = None
-    y: Optional[float] = None
-
-    districts: List["DistrictRead"] = []
-
-    class Config:
-        orm_mode = True
-
-
 # -------------------------------
 #   DISTRICT SCHEMAS
 # -------------------------------
@@ -101,22 +54,88 @@ class DistrictUpdate(BaseModel):
     description: Optional[str]
     image_url: Optional[str]
     recommended_level: Optional[int]
-    entry_location: Optional[int]
+    entrance_location_id: Optional[int]
     x: Optional[float]
     y: Optional[float]
 
 class DistrictRead(BaseModel):
     id: int
     name: str
-    description: str
-    image_url: str
-    recommended_level: Optional[int]
-    entry_location: Optional[int]
     region_id: int
-    x: Optional[float]
-    y: Optional[float]
+    description: str
+    entrance_location_id: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+    image_url: Optional[str] = None
 
     locations: List["LocationRead"] = []
+
+    class Config:
+        orm_mode = True
+
+# -------------------------------
+#   REGION SCHEMAS
+# -------------------------------
+class RegionBase(BaseModel):
+    country_id: int
+    name: str
+    description: str
+    map_image_url: str
+    image_url: str
+    entrance_location_id: Optional[int] = None
+    leader_id: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+
+class RegionCreate(BaseModel):
+    name: str
+    description: str
+    country_id: int
+    entrance_location_id: Optional[int] = None
+    leader_id: Optional[int] = None
+    x: Optional[int] = 0
+    y: Optional[int] = 0
+    map_image_url: Optional[str] = None
+    image_url: Optional[str] = None
+
+class RegionUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    country_id: Optional[int] = None
+    entrance_location_id: Optional[int] = None
+    leader_id: Optional[int] = None
+    x: Optional[int] = None
+    y: Optional[int] = None
+    map_image_url: Optional[str] = None
+    image_url: Optional[str] = None
+
+class RegionUpdateResponse(BaseModel):
+    id: int
+    country_id: int
+    name: str
+    description: str
+    map_image_url: Optional[str] = None
+    image_url: Optional[str] = None
+    entrance_location_id: Optional[int] = None
+    leader_id: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+
+    class Config:
+        orm_mode = True
+
+class RegionRead(BaseModel):
+    id: int
+    name: str
+    description: str
+    country_id: int
+    entrance_location_id: Optional[int] = None
+    leader_id: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+    map_image_url: Optional[str] = None
+    image_url: Optional[str] = None
+    districts: List[DistrictRead] = []
 
     class Config:
         orm_mode = True
@@ -221,3 +240,26 @@ else:
     DistrictRead.update_forward_refs()
     RegionRead.update_forward_refs()
     LocationRead.update_forward_refs()
+
+# Добавляем схему для ответа при создании региона
+class RegionCreateResponse(BaseModel):
+    id: int
+    name: str
+    description: str
+    country_id: int
+    entrance_location_id: Optional[int] = None
+    leader_id: Optional[int] = None
+    x: Optional[int] = None
+    y: Optional[int] = None
+    map_image_url: Optional[str] = None
+    image_url: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+class AdminPanelData(BaseModel):
+    countries: List[CountryRead]
+    regions: List[RegionRead]
+
+    class Config:
+        orm_mode = True

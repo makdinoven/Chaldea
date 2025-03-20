@@ -8,6 +8,7 @@ import RequestsPage from '../Admin/RequestsPage/RequestsPage.jsx';
 import Layout from "./Layout/Layout.jsx";
 import WorldPage from "../WorldPage/WorldPage.jsx";
 import CountryPage from "../CountryPage/CountryPage.jsx";
+import AdminLocationsPage from '../AdminLocationsPage/AdminLocationsPage.jsx';
 
 const App = () => {
     return (
@@ -20,6 +21,7 @@ const App = () => {
                     <Route path="requestsPage" element={<RequestsPage/>}/>
                     <Route path="world" element={<WorldPage/>}/>
                     <Route path="world/country/:countryId/" element={<CountryPage/>}/>
+                    <Route path="admin/locations" element={<AdminLocationsPage />}/>
                 </Route>
             </Routes>
         </Router>

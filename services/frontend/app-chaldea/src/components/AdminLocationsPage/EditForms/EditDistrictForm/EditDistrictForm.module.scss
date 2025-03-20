@@ -1,0 +1,63 @@
+.edit_district_form {
+    padding: 20px;
+    max-width: 800px;
+    margin: 0 auto;
+
+    h2 {
+        margin-bottom: 20px;
+        text-align: center;
+    }
+
+    .form_section {
+        margin-bottom: 30px;
+        
+        h3 {
+            margin-bottom: 15px;
+        }
+    }
+
+    .form_group {
+        margin-bottom: 15px;
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            color: #fff;
+
+            &:focus {
+                border-color: #8ab3d5;
+                outline: none;
+            }
+        }
+
+        .coordinates {
+            display: flex;
+            gap: 10px;
+
+            input {
+                width: 50%;
+            }
+        }
+    }
+
+    .form_actions {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        margin-top: 20px;
+
+        button {
+            padding: 8px 16px;
+            cursor: pointer;
+        }
+    }
+}

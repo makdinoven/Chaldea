@@ -1,6 +1,8 @@
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from typing import List, Optional
+from sqlalchemy.orm import selectinload
 
 from models import (
     Country, Region, District, Location, LocationNeighbor, Post
@@ -12,7 +14,7 @@ from schemas import (
 # -------------------------------
 #   Рекурсивный сбор вложенных локаций
 # -------------------------------
-def get_location_tree(session: Session, location: Location) -> dict:
+async def get_location_tree(session: AsyncSession, location: Location) -> dict:
     """
     Рекурсивно собирает дерево локаций (все уровни "children").
     Возвращает dict вида:
@@ -28,8 +30,9 @@ def get_location_tree(session: Session, location: Location) -> dict:
       "children": [ ... ]
     }
     """
-    children_db = session.query(Location).filter(Location.parent_id == location.id).all()
-    children_list = [get_location_tree(session, child) for child in children_db]
+    result = await session.execute(select(Location).where(Location.parent_id == location.id))
+    children_db = result.scalars().all()
+    children_list = [await get_location_tree(session, child) for child in children_db]
 
     return {
         "id": location.id,
@@ -46,19 +49,21 @@ def get_location_tree(session: Session, location: Location) -> dict:
 # -------------------------------
 #   LOOKUP
 # -------------------------------
-def get_locations_lookup(session: Session) -> List[dict]:
-    db_locs = session.query(Location).all()
+async def get_locations_lookup(session: AsyncSession) -> List[dict]:
+    result = await session.execute(select(Location))
+    db_locs = result.scalars().all()
     return [{"id": loc.id, "name": loc.name} for loc in db_locs]
 
-def get_districts_lookup(session: Session) -> List[dict]:
-    db_districts = session.query(District).all()
+async def get_districts_lookup(session: AsyncSession) -> List[dict]:
+    result = await session.execute(select(District))
+    db_districts = result.scalars().all()
     return [{"id": d.id, "name": d.name} for d in db_districts]
 
 
 # -------------------------------
 #   COUNTRY
 # -------------------------------
-def create_new_country(session: Session, name: str, description: str,
+async def create_new_country(session: AsyncSession, name: str, description: str,
                        leader_id: Optional[int], map_image_url: Optional[str]) -> Country:
     new_country = Country(
         name=name,
@@ -67,12 +72,13 @@ def create_new_country(session: Session, name: str, description: str,
         map_image_url=map_image_url
     )
     session.add(new_country)
-    session.commit()
-    session.refresh(new_country)
+    await session.commit()
+    await session.refresh(new_country)
     return new_country
 
-def update_country(session: Session, country_id: int, data) -> Country:
-    db_country = session.query(Country).filter(Country.id == country_id).first()
+async def update_country(session: AsyncSession, country_id: int, data) -> Country:
+    result = await session.execute(select(Country).where(Country.id == country_id))
+    db_country = result.scalars().first()
     if not db_country:
         raise HTTPException(status_code=404, detail="Country not found")
 
@@ -85,177 +91,171 @@ def update_country(session: Session, country_id: int, data) -> Country:
     if getattr(data, "map_image_url", None) is not None:
         db_country.map_image_url = data.map_image_url
 
-    session.commit()
-    session.refresh(db_country)
+    await session.commit()
+    await session.refresh(db_country)
     return db_country
 
 
-def get_country_details(session: Session, country_id: int) -> Optional[dict]:
-    """
-    Возвращает полную инфу о стране + для каждого региона:
-      (id, name, image_url, x, y, entrance_location_id, entrance_location_name).
-    """
-    db_country = session.query(Country).filter(Country.id == country_id).first()
-    if not db_country:
+async def get_country_details(session: AsyncSession, country_id: int) -> Optional[dict]:
+    """Возвращает детали страны с регионами"""
+    result = await session.execute(
+        select(Country)
+        .options(selectinload(Country.regions))
+        .where(Country.id == country_id)
+    )
+    country = result.scalars().first()
+    if not country:
         return None
 
-    result = {
-        "id": db_country.id,
-        "name": db_country.name,
-        "description": db_country.description,
-        "leader_id": db_country.leader_id,
-        "map_image_url": db_country.map_image_url,
-        "regions": []
+    return {
+        "id": country.id,
+        "name": country.name,
+        "description": country.description,
+        "leader_id": country.leader_id,
+        "map_image_url": country.map_image_url,
+        "regions": [
+            {
+                "id": reg.id,
+                "name": reg.name,
+                "image_url": reg.image_url,
+                "x": reg.x,
+                "y": reg.y,
+                "entrance_location_id": reg.entrance_location_id,
+                "entrance_location_name": None  # Будет заполнено при необходимости
+            } for reg in country.regions
+        ]
     }
 
-    for reg in db_country.regions:
-        # Получаем входную локацию (если есть)
-        entrance_loc_name = None
-        if reg.entrance_location_id:
-            entrance_loc = session.query(Location).get(reg.entrance_location_id)
-            if entrance_loc:
-                entrance_loc_name = entrance_loc.name
 
-        result["regions"].append({
-            "id": reg.id,
-            "name": reg.name,
-            "image_url": reg.image_url,
-            "x": reg.x,
-            "y": reg.y,
-            "entrance_location_id": reg.entrance_location_id,
-            "entrance_location_name": entrance_loc_name  # <-- добавленное поле
-        })
-
-    return result
-
-
-
-def get_countries_lookup(session: Session) -> List[dict]:
+async def get_countries_lookup(session: AsyncSession) -> List[dict]:
     """
     Возвращает список {id, name} для всех стран.
     """
-    db_countries = session.query(Country).all()
+    result = await session.execute(select(Country))
+    db_countries = result.scalars().all()
     return [{"id": c.id, "name": c.name} for c in db_countries]
 
 
 # -------------------------------
 #   REGION
 # -------------------------------
-def create_new_region(session: Session, data) -> Region:
+async def create_new_region(session: AsyncSession, data) -> Region:
     new_region = Region(
         country_id=data.country_id,
         name=data.name,
         description=data.description,
         image_url=data.image_url,
+        map_image_url=data.map_image_url,
         entrance_location_id=data.entrance_location_id,
         leader_id=data.leader_id,
         x=data.x,
         y=data.y
     )
     session.add(new_region)
-    session.commit()
-    session.refresh(new_region)
+    await session.commit()
+    await session.refresh(new_region)
     return new_region
 
-def update_region(session: Session, region_id: int, data) -> Region:
-    db_region = session.query(Region).filter(Region.id == region_id).first()
+async def update_region(session: AsyncSession, region_id: int, data) -> Region:
+    result = await session.execute(
+        select(Region).where(Region.id == region_id)
+    )
+    db_region = result.scalars().first()
     if not db_region:
-        raise HTTPException(status_code=404, detail="Region not found")
+        raise HTTPException(status_code=404, detail="Регион не найден")
+    # Обновляем только те поля, которые пришли в запросе
+    for field, value in data.dict(exclude_unset=True).items():
+        setattr(db_region, field, value)
 
-    if data.country_id is not None:
-        db_region.country_id = data.country_id
-    if data.name is not None:
-        db_region.name = data.name
-    if data.description is not None:
-        db_region.description = data.description
-    if data.image_url is not None:
-        db_region.image_url = data.image_url
-    if data.entrance_location_id is not None:
-        db_region.entrance_location_id = data.entrance_location_id
-    if data.leader_id is not None:
-        db_region.leader_id = data.leader_id
-    if data.x is not None:
-        db_region.x = data.x
-    if data.y is not None:
-        db_region.y = data.y
-
-    session.commit()
-    session.refresh(db_region)
-    return db_region
+    try:
+        await session.commit()
+        await session.refresh(db_region)
+        return db_region
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-def get_region_full_details(session: Session, region_id: int) -> Optional[dict]:
-    """
-    Возвращает полную информацию о регионе + районы.
-    Для района: все поля.
-    Если есть entry_location, добавляем его id и name.
-    Для локаций – рекурсивное дерево.
-    """
-    db_region = session.query(Region).filter(Region.id == region_id).first()
-    if not db_region:
+async def get_region_full_details(session: AsyncSession, region_id: int) -> Optional[dict]:
+    """Возвращает детали региона с районами и локациями"""
+    result = await session.execute(
+        select(Region)
+        .options(
+            selectinload(Region.districts)
+            .selectinload(District.locations)
+        )
+        .where(Region.id == region_id)
+    )
+    region = result.scalars().first()
+    if not region:
         return None
 
-    # Основные поля региона
-    region_data = {
-        "id": db_region.id,
-        "country_id": db_region.country_id,
-        "name": db_region.name,
-        "description": db_region.description,
-        "image_url": db_region.image_url,
-        "map_image_url":db_region.map_image_url,
-        "entrance_location_id": db_region.entrance_location_id,
-        "leader_id": db_region.leader_id,
-        "x": db_region.x,
-        "y": db_region.y,
-        "districts": []
+    # Получаем входную локацию региона, если есть
+    entrance_location = None
+    if region.entrance_location_id:
+        entrance_result = await session.execute(
+            select(Location).where(Location.id == region.entrance_location_id)
+        )
+        entrance_location = entrance_result.scalars().first()
+
+    # Получаем все локации для каждого района
+    districts_data = []
+    for district in region.districts:
+        # Получаем корневые локации района (без parent_id)
+        root_locations_result = await session.execute(
+            select(Location).where(
+                Location.district_id == district.id,
+                Location.parent_id.is_(None)
+            )
+        )
+        root_locations = root_locations_result.scalars().all()
+        
+        # Строим дерево для каждой корневой локации
+        locations_tree = []
+        for location in root_locations:
+            location_tree = await get_location_tree(session, location)
+            locations_tree.append(location_tree)
+
+        districts_data.append({
+            "id": district.id,
+            "name": district.name,
+            "description": district.description,
+            "entrance_location_id": district.entrance_location_id,
+            "x": district.x,
+            "y": district.y,
+            "image_url": district.image_url,
+            "locations": locations_tree
+        })
+
+    return {
+        "id": region.id,
+        "country_id": region.country_id,
+        "name": region.name,
+        "description": region.description,
+        "image_url": region.image_url,
+        "map_image_url": region.map_image_url,
+        "entrance_location_id": region.entrance_location_id,
+        "entrance_location_name": entrance_location.name if entrance_location else None,
+        "leader_id": region.leader_id,
+        "x": region.x,
+        "y": region.y,
+        "districts": districts_data
     }
-
-    # Собираем районы
-    for dist in db_region.districts:
-        # Добавим entry_location (id+name), если оно есть
-        entry_loc_data = None
-        if dist.entry_location_detail:
-            entry_loc_data = {
-                "id": dist.entry_location_detail.id,
-                "name": dist.entry_location_detail.name
-            }
-
-        # Собираем локации рекурсивно
-        district_locations = []
-        for loc in dist.locations:
-            # Только те локации, у которых parent_id = None (верхний уровень)
-            if loc.parent_id is None:
-                loc_tree = get_location_tree(session, loc)
-                district_locations.append(loc_tree)
-
-        dist_dict = {
-            "id": dist.id,
-            "name": dist.name,
-            "description": dist.description,
-            "image_url": dist.image_url,
-            "recommended_level": dist.recommended_level,
-            "entry_location": entry_loc_data,  # dict или None
-            "x": dist.x,
-            "y": dist.y,
-            "locations": district_locations
-        }
-        region_data["districts"].append(dist_dict)
-
-    return region_data
 
 
 # -------------------------------
 #   DISTRICT
 # -------------------------------
-def create_district(session: Session, district_data: DistrictCreate) -> District:
+async def create_district(session: AsyncSession, district_data: DistrictCreate) -> District:
     new_district = District(**district_data.dict())
     session.add(new_district)
-    session.commit()
-    session.refresh(new_district)
+    await session.commit()
+    await session.refresh(new_district)
     return new_district
 
-def update_district(session: Session, district_id: int, data) -> District:
-    db_district = session.query(District).filter(District.id == district_id).first()
+async def update_district(session: AsyncSession, district_id: int, data) -> District:
+    result = await session.execute(select(District).where(District.id == district_id))
+    db_district = result.scalars().first()
     if not db_district:
         raise HTTPException(status_code=404, detail="District not found")
 
@@ -274,23 +274,24 @@ def update_district(session: Session, district_id: int, data) -> District:
     if getattr(data, "y", None) is not None:
         db_district.y = data.y
 
-    session.commit()
-    session.refresh(db_district)
+    await session.commit()
+    await session.refresh(db_district)
     return db_district
 
 
 # -------------------------------
 #   LOCATION
 # -------------------------------
-def create_location(session: Session, location_data: LocationCreate) -> Location:
+async def create_location(session: AsyncSession, location_data: LocationCreate) -> Location:
     new_location = Location(**location_data.dict())
     session.add(new_location)
-    session.commit()
-    session.refresh(new_location)
+    await session.commit()
+    await session.refresh(new_location)
     return new_location
 
-def update_location(session: Session, location_id: int, data) -> Location:
-    db_location = session.query(Location).filter(Location.id == location_id).first()
+async def update_location(session: AsyncSession, location_id: int, data) -> Location:
+    result = await session.execute(select(Location).where(Location.id == location_id))
+    db_location = result.scalars().first()
     if not db_location:
         raise HTTPException(status_code=404, detail="Location not found")
 
@@ -311,18 +312,19 @@ def update_location(session: Session, location_id: int, data) -> Location:
     if getattr(data, "parent_id", None) is not None:
         db_location.parent_id = data.parent_id
 
-    session.commit()
-    session.refresh(db_location)
+    await session.commit()
+    await session.refresh(db_location)
     return db_location
 
-def get_location_by_id(session: Session, location_id: int) -> Optional[Location]:
-    return session.query(Location).filter(Location.id == location_id).first()
+async def get_location_by_id(session: AsyncSession, location_id: int) -> Optional[Location]:
+    result = await session.execute(select(Location).where(Location.id == location_id))
+    return result.scalars().first()
 
 
 # -------------------------------
 #   NEIGHBORS
 # -------------------------------
-def add_neighbor(session: Session, location_id: int, neighbor_id: int, energy_cost: int) -> dict:
+async def add_neighbor(session: AsyncSession, location_id: int, neighbor_id: int, energy_cost: int) -> dict:
     forward = LocationNeighbor(
         location_id=location_id,
         neighbor_id=neighbor_id,
@@ -336,7 +338,7 @@ def add_neighbor(session: Session, location_id: int, neighbor_id: int, energy_co
         energy_cost=energy_cost
     )
     session.add(reverse)
-    session.commit()
+    await session.commit()
 
     return {
         "forward": {
@@ -352,13 +354,21 @@ def add_neighbor(session: Session, location_id: int, neighbor_id: int, energy_co
     }
 
 
-def get_location_details(session: Session, location_id: int) -> Optional[dict]:
-    loc = session.query(Location).filter(Location.id == location_id).first()
+async def get_location_details(session: AsyncSession, location_id: int) -> Optional[dict]:
+    result = await session.execute(select(Location).where(Location.id == location_id))
+    loc = result.scalars().first()
     if not loc:
         return None
 
-    neighbors = session.query(LocationNeighbor).filter(LocationNeighbor.location_id == location_id).all()
-    children = session.query(Location).filter(Location.parent_id == location_id).all()
+    neighbors_result = await session.execute(
+        select(LocationNeighbor).where(LocationNeighbor.location_id == location_id)
+    )
+    neighbors = neighbors_result.scalars().all()
+
+    children_result = await session.execute(
+        select(Location).where(Location.parent_id == location_id)
+    )
+    children = children_result.scalars().all()
 
     return {
         "location_id": loc.id,
@@ -388,18 +398,105 @@ def get_location_details(session: Session, location_id: int) -> Optional[dict]:
 # -------------------------------
 #   POSTS
 # -------------------------------
-def create_post(session: Session, post_data: PostCreate) -> Post:
+async def create_post(session: AsyncSession, post_data: PostCreate) -> Post:
     new_post = Post(
         character_id=post_data.character_id,
         location_id=post_data.location_id,
         content=post_data.content
     )
     session.add(new_post)
-    session.commit()
-    session.refresh(new_post)
+    await session.commit()
+    await session.refresh(new_post)
     return new_post
 
-def get_posts_by_location(session: Session, location_id: int) -> list:
-    return session.query(Post).filter(Post.location_id == location_id).all()
+async def get_posts_by_location(session: AsyncSession, location_id: int) -> list:
+    result = await session.execute(select(Post).where(Post.location_id == location_id))
+    return result.scalars().all()
+
+async def get_admin_panel_data(session: AsyncSession) -> dict:
+    """
+    Получает все данные для админ панели одним запросом
+    """
+    # Получаем все страны
+    countries_result = await session.execute(select(Country))
+    countries = countries_result.scalars().all()
+    
+    # Получаем все регионы с их районами
+    regions_result = await session.execute(
+        select(Region).options(
+            selectinload(Region.districts)
+        )
+    )
+    regions = regions_result.scalars().all()
+
+    # Подготавливаем список регионов
+    regions_data = []
+    for region in regions:
+        districts_data = []
+        for district in region.districts:
+            # Получаем локации для района
+            locations_result = await session.execute(
+                select(Location).where(Location.district_id == district.id)
+            )
+            locations = locations_result.scalars().all()
+            
+            districts_data.append({
+                "id": district.id,
+                "name": district.name,
+                "region_id": district.region_id,
+                "description": district.description,
+                "entrance_location_id": district.entrance_location_id,
+                "x": district.x,
+                "y": district.y,
+                "image_url": district.image_url,
+                "locations": [
+                    {
+                        "id": loc.id,
+                        "name": loc.name,
+                        "type": loc.type,
+                        "description": loc.description
+                    } for loc in locations
+                ]
+            })
+        
+        regions_data.append({
+            "id": region.id,
+            "name": region.name,
+            "description": region.description,
+            "country_id": region.country_id,
+            "entrance_location_id": region.entrance_location_id,
+            "leader_id": region.leader_id,
+            "x": region.x,
+            "y": region.y,
+            "map_image_url": region.map_image_url,
+            "image_url": region.image_url,
+            "districts": districts_data
+        })
+
+    return {
+        "countries": [
+            {
+                "id": country.id,
+                "name": country.name,
+                "description": country.description,
+                "leader_id": country.leader_id,
+                "map_image_url": country.map_image_url
+            } for country in countries
+        ],
+        "regions": regions_data
+    }
+
+async def get_countries_list(session: AsyncSession) -> List[dict]:
+    """Получает базовый список стран"""
+    result = await session.execute(select(Country))
+    countries = result.scalars().all()
+    return [
+        {
+            "id": country.id,
+            "name": country.name,
+            "description": country.description,
+            "map_image_url": country.map_image_url
+        } for country in countries
+    ]
 
 

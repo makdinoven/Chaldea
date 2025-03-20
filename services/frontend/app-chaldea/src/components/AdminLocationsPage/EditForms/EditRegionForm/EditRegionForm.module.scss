@@ -1,0 +1,126 @@
+.edit_region_form {
+    padding: 20px;
+    background: #1a1a1a;
+    border-radius: 8px;
+    color: #e0e0e0;
+    max-width: 800px;
+    margin: 20px auto;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+
+    h2 {
+        color: #ffd700;
+        text-align: center;
+        margin-bottom: 30px;
+    }
+
+    h3 {
+        color: #ffd700;
+        margin-bottom: 20px;
+        border-bottom: 1px solid #333;
+        padding-bottom: 10px;
+    }
+}
+
+.form_section {
+    background: #242424;
+    padding: 20px;
+    border-radius: 6px;
+    margin-bottom: 25px;
+}
+
+.form_group {
+    margin-bottom: 20px;
+
+    label {
+        display: block;
+        color: #ffd700;
+        margin-bottom: 8px;
+        font-weight: 500;
+    }
+
+    input, select, textarea {
+        width: 100%;
+        padding: 10px;
+        background: #333;
+        border: 1px solid #444;
+        border-radius: 4px;
+        color: #e0e0e0;
+        font-size: 14px;
+
+        &:focus {
+            border-color: #ffd700;
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.2);
+        }
+    }
+
+    textarea {
+        min-height: 120px;
+        resize: vertical;
+    }
+}
+
+.coordinates {
+    display: flex;
+    gap: 15px;
+
+    .coordinate_input {
+        flex: 1;
+    }
+}
+
+.image_preview {
+    margin-top: 10px;
+    max-width: 200px;
+    border-radius: 4px;
+}
+
+.button_container {
+    display: flex;
+    justify-content: flex-end;
+    gap: 15px;
+    margin-top: 30px;
+
+    button {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 4px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.3s ease;
+
+        &:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+    }
+}
+
+.submit_button {
+    background: #ffd700;
+    color: #000;
+
+    &:hover:not(:disabled) {
+        background: #ffed4a;
+    }
+}
+
+.cancel_button {
+    background: #444;
+    color: #fff;
+
+    &:hover:not(:disabled) {
+        background: #555;
+    }
+}
+
+.error_message {
+    color: #ff4444;
+    margin-top: 5px;
+    font-size: 0.9em;
+}
+
+.loading {
+    opacity: 0.7;
+    pointer-events: none;
+}
