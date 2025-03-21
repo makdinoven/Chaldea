@@ -1,0 +1,32 @@
+# Add directories or file patterns to ignore during indexing (e.g. foo/ or *.csv)
+# Node dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Logs
+logs/
+*.log
+
+# IDE-specific files
+.idea/
+.vscode/
+
+# System files
+.DS_Store
+Thumbs.db
+
+services/character-attributes-service/app/__pycache__
+services/character-service/app/__pycache__
+services/inventory-service/app/__pycache__
+services/locations-service/app/__pycache__
+services/skills-service/app/__pycache__
+services/user-service/__pycache__
+services/photo-service/__pycache__
+services/user-service/alembic/versions
+services/notification-service/app/__pycache__
+services/notification-service/app/consumers/__pycache__
+**/__pycache__/
+

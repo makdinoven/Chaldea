@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Устанавливаем Alembic для управления миграциями и другие необходимые пакеты
-RUN pip install --no-cache-dir alembic pymysql
+RUN pip install --no-cache-dir alembic pymysql aiomysql
 
 # Указываем порт, который будет открыт для доступа к микросервису
 EXPOSE 8006

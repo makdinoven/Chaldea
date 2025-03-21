@@ -7,12 +7,15 @@ import CountryDropdown from './CountryDropdown/CountryDropdown.jsx';
 import backgroundImage from '../../assets/background.png';
 import {useBodyBackground} from '../../hooks/useBodyBackground.js';
 import DetailCard from "./DetailCard/DetailCard.jsx";
+import useNavigateTo from '../../hooks/useNavigateTo';
 
 export default function WorldPage() {
     const dispatch = useDispatch();
     const countries = useSelector((state) => state.countries.countries);
     const isLoaded = useSelector(state => state.countries.isLoaded);
     const loading = useSelector((state) => state.countries.loading);
+    const navigateTo = useNavigateTo();
+    
 
     // useEffect(() => {
     //     console.log('rerender')
@@ -62,6 +65,12 @@ export default function WorldPage() {
                                 name={country.name}
                             />
                         ))}
+                        <button 
+                            className={s.admin_button}
+                            onClick={() => navigateTo('/admin/locations')}
+                        >
+                            Управление локациями
+                        </button>
                     </div>
                     <div className={s.map_container}>
                         <Map type={'country'}/>
