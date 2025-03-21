@@ -7,6 +7,7 @@ import {
     uploadRegionImage,
     uploadRegionMap 
 } from '../../../../redux/actions/regionEditActions';
+import { fetchAllLocations } from '../../../../redux/actions/locationEditActions';
 import Input from '../../../CommonComponents/Input/Input';
 import Textarea from '../../../CommonComponents/Textarea/Textarea';
 import s from './EditRegionForm.module.scss';
@@ -18,12 +19,13 @@ function EditRegionForm({ regionId = 'new', initialCountryId, onCancel, onSucces
     const dispatch = useDispatch();
     const { loading, error, currentRegion } = useSelector(selectRegionEdit);
     const { countries } = useSelector(selectAdminLocations);
+    const { allLocations } = useSelector(state => state.locationEdit);
 
     const [formData, setFormData] = useState({
         name: '',
         description: '',
         country_id: initialCountryId || '',
-        entry_location_id: '',
+        entrance_location_id: '',
         leader_id: '',
         x: '',
         y: '',
@@ -37,19 +39,22 @@ function EditRegionForm({ regionId = 'new', initialCountryId, onCancel, onSucces
     const [mapPreview, setMapPreview] = useState(null);
     const [isUploading, setIsUploading] = useState(false);
 
+    // Загружаем детали региона (если редактирование) и все локации при монтировании
     useEffect(() => {
         if (regionId !== 'new') {
             dispatch(fetchRegionDetails(regionId));
         }
+        dispatch(fetchAllLocations());
     }, [dispatch, regionId]);
 
+    // Обновляем состояние формы при получении текущего региона
     useEffect(() => {
         if (currentRegion && regionId !== 'new') {
             setFormData({
                 name: currentRegion.name || '',
                 description: currentRegion.description || '',
                 country_id: currentRegion.country_id || initialCountryId || '',
-                entry_location_id: currentRegion.entry_location_id || '',
+                entrance_location_id: currentRegion.entrance_location_id || '',
                 leader_id: currentRegion.leader_id || '',
                 x: currentRegion.x || '',
                 y: currentRegion.y || '',
@@ -61,6 +66,7 @@ function EditRegionForm({ regionId = 'new', initialCountryId, onCancel, onSucces
         }
     }, [currentRegion, regionId, initialCountryId]);
 
+    // Сброс состояния при размонтировании формы
     useEffect(() => {
         return () => {
             dispatch(resetRegionEditState());
@@ -70,7 +76,6 @@ function EditRegionForm({ regionId = 'new', initialCountryId, onCancel, onSucces
     const handleChange = (e) => {
         const { name, value, type, id } = e.target;
         const fieldName = name || id; // Используем name, если есть, иначе id
-        
         setFormData(prev => ({
             ...prev,
             [fieldName]: type === 'number' ? (value === '' ? '' : Number(value)) : value
@@ -109,7 +114,7 @@ function EditRegionForm({ regionId = 'new', initialCountryId, onCancel, onSucces
             name: formData.name,
             description: formData.description,
             country_id: Number(formData.country_id),
-            entrance_location_id: formData.entry_location_id ? Number(formData.entry_location_id) : null,
+            entrance_location_id: formData.entrance_location_id ? Number(formData.entrance_location_id) : null,
             leader_id: formData.leader_id ? Number(formData.leader_id) : null,
             x: formData.x !== '' ? Number(formData.x) : 0,
             y: formData.y !== '' ? Number(formData.y) : 0,
@@ -162,16 +167,16 @@ function EditRegionForm({ regionId = 'new', initialCountryId, onCancel, onSucces
                     <h3>Основная информация</h3>
                     
                     <div className={s.form_group}>
-    <label>НАЗВАНИЕ:</label>
-    <Input
-        id="name"
-        name="name"
-        text="Введите название региона"
-        value={formData.name}
-        onChange={handleChange}
-        required
-    />
-</div>
+                        <label>НАЗВАНИЕ:</label>
+                        <Input
+                            id="name"
+                            name="name"
+                            text="Введите название региона"
+                            value={formData.name}
+                            onChange={handleChange}
+                            required
+                        />
+                    </div>
 
                     <div className={s.form_group}>
                         <label>СТРАНА:</label>
@@ -191,14 +196,15 @@ function EditRegionForm({ regionId = 'new', initialCountryId, onCancel, onSucces
                     </div>
 
                     <div className={s.form_group}>
-    <label>ВХОДНАЯ ЛОКАЦИЯ:</label>
-    <LocationSearch
-        name="entry_location_id"
-        value={formData.entry_location_id}
-        onChange={handleChange}
-        countryId={formData.country_id}
-    />
-</div>
+                        <label>ВХОДНАЯ ЛОКАЦИЯ:</label>
+                        <LocationSearch
+                            name="entrance_location_id"
+                            value={formData.entrance_location_id}
+                            onChange={handleChange}
+                            countryId={formData.country_id}
+                            locations={allLocations} 
+                        />
+                    </div>
 
                     <div className={s.form_group}>
                         <label>ПРАВИТЕЛЬ:</label>
@@ -214,16 +220,16 @@ function EditRegionForm({ regionId = 'new', initialCountryId, onCancel, onSucces
                     </div>
 
                     <div className={s.form_group}>
-    <label>ОПИСАНИЕ:</label>
-    <Textarea
-        id="description"
-        name="description"
-        text="Описание региона"
-        value={formData.description}
-        onChange={handleChange}
-        required
-    />
-</div>
+                        <label>ОПИСАНИЕ:</label>
+                        <Textarea
+                            id="description"
+                            name="description"
+                            text="Описание региона"
+                            value={formData.description}
+                            onChange={handleChange}
+                            required
+                        />
+                    </div>
                 </div>
 
                 <div className={s.form_section}>
@@ -283,7 +289,7 @@ function EditRegionForm({ regionId = 'new', initialCountryId, onCancel, onSucces
 
                 {error && <div className={s.error_message}>{error}</div>}
 
-                <div className={s.button_container}>
+                <div className={s.form_actions}>
                     <button 
                         type="button" 
                         className={s.cancel_button}

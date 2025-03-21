@@ -35,19 +35,62 @@ class CountryLookup(BaseModel):
     name: str
 
 # -------------------------------
+#   LOCATION SCHEMAS
+# -------------------------------
+class LocationBase(BaseModel):
+    name: str
+    district_id: int
+    type: Literal["location", "subdistrict"]
+    image_url: str
+    recommended_level: int
+    quick_travel_marker: bool
+    description: str
+
+class LocationCreate(BaseModel):
+    name: str
+    district_id: int
+    parent_id: Optional[int] = None
+    description: Optional[str] = ""
+    image_url: Optional[str] = ""
+    recommended_level: Optional[int] = 1
+    quick_travel_marker: Optional[bool] = False
+
+class LocationUpdate(BaseModel):
+    name: Optional[str] = None
+    district_id: Optional[int] = None
+    type: Optional[Literal["location", "subdistrict"]] = None
+    image_url: Optional[str] = ""
+    recommended_level: Optional[int] = 1
+    quick_travel_marker: Optional[bool] = False
+    description: Optional[str] = ""
+    parent_id: Optional[int] = None
+
+class LocationRead(BaseModel):
+    id: int
+    name: str
+    type: str
+    description: str
+    recommended_level: int
+    quick_travel_marker: bool
+    image_url: Optional[str] = None
+    parent_id: Optional[int] = None
+
+    class Config:
+        orm_mode = True
+# -------------------------------
 #   DISTRICT SCHEMAS
 # -------------------------------
 class DistrictBase(BaseModel):
     name: str
     description: str
-    image_url: str
     region_id: int
     recommended_level: Optional[int] = 1
     x: Optional[float] = None
     y: Optional[float] = None
+    image_url: Optional[str] = None
 
 class DistrictCreate(DistrictBase):
-    entry_location: Optional[int] = None
+    entrance_location_id: Optional[int] = None
 
 class DistrictUpdate(BaseModel):
     name: Optional[str]
@@ -61,14 +104,14 @@ class DistrictUpdate(BaseModel):
 class DistrictRead(BaseModel):
     id: int
     name: str
-    region_id: int
     description: str
+    region_id: int
     entrance_location_id: Optional[int] = None
+    recommended_level: Optional[int] = 1
     x: Optional[float] = None
     y: Optional[float] = None
     image_url: Optional[str] = None
-
-    locations: List["LocationRead"] = []
+    locations: List[LocationRead] = []
 
     class Config:
         orm_mode = True
@@ -141,46 +184,6 @@ class RegionRead(BaseModel):
         orm_mode = True
 
 
-# -------------------------------
-#   LOCATION SCHEMAS
-# -------------------------------
-class LocationBase(BaseModel):
-    name: str
-    district_id: int
-    type: Literal["location", "subdistrict"]
-    image_url: str
-    recommended_level: int
-    quick_travel_marker: bool
-    description: str
-
-class LocationCreate(LocationBase):
-    parent_id: Optional[int] = None
-
-class LocationUpdate(BaseModel):
-    name: Optional[str]
-    district_id: Optional[int]
-    type: Optional[Literal["location", "subdistrict"]]
-    image_url: Optional[str]
-    recommended_level: Optional[int]
-    quick_travel_marker: Optional[bool]
-    description: Optional[str]
-    parent_id: Optional[int]
-
-class LocationRead(BaseModel):
-    id: int
-    name: str
-    district_id: int
-    type: str
-    image_url: str
-    recommended_level: int
-    quick_travel_marker: bool
-    description: str
-    parent_id: Optional[int] = None
-
-    children: List["LocationRead"] = []
-
-    class Config:
-        orm_mode = True
 
 
 # -------------------------------
@@ -188,7 +191,7 @@ class LocationRead(BaseModel):
 # -------------------------------
 class LocationNeighborCreate(BaseModel):
     neighbor_id: int
-    energy_cost: int
+    energy_cost: int = 1
 
 class LocationNeighbor(BaseModel):
     id: int
@@ -263,3 +266,13 @@ class AdminPanelData(BaseModel):
 
     class Config:
         orm_mode = True
+
+class LocationNeighborResponse(BaseModel):
+    neighbor_id: int
+    energy_cost: int
+    
+    class Config:
+        orm_mode = True
+
+class LocationNeighborsUpdate(BaseModel):
+    neighbors: List[LocationNeighborCreate]

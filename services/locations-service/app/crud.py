@@ -3,12 +3,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import List, Optional
 from sqlalchemy.orm import selectinload
+from sqlalchemy import text, delete
 
 from models import (
     Country, Region, District, Location, LocationNeighbor, Post
 )
 from schemas import (
-    DistrictCreate, LocationCreate, PostCreate
+    DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate
 )
 
 # -------------------------------
@@ -17,34 +18,47 @@ from schemas import (
 async def get_location_tree(session: AsyncSession, location: Location) -> dict:
     """
     Рекурсивно собирает дерево локаций (все уровни "children").
-    Возвращает dict вида:
-    {
-      "id": ...,
-      "name": ...,
-      "type": ...,
-      "image_url": ...,
-      "recommended_level": ...,
-      "quick_travel_marker": ...,
-      "description": ...,
-      "parent_id": ...,
-      "children": [ ... ]
-    }
     """
-    result = await session.execute(select(Location).where(Location.parent_id == location.id))
-    children_db = result.scalars().all()
-    children_list = [await get_location_tree(session, child) for child in children_db]
+    try:
+        # Получаем все дочерние локации за один запрос
+        stmt = select(Location).where(Location.parent_id == location.id)
+        result = await session.execute(stmt)
+        children_db = result.scalars().all()
+        
+        # Создаем список для хранения дочерних локаций
+        children_list = []
+        
+        # Обрабатываем каждую дочернюю локацию
+        for child in children_db:
+            # Рекурсивно получаем дерево для дочерней локации
+            child_tree = await get_location_tree(session, child)
+            children_list.append(child_tree)
 
-    return {
-        "id": location.id,
-        "name": location.name,
-        "type": location.type,
-        "image_url": location.image_url,
-        "recommended_level": location.recommended_level,
-        "quick_travel_marker": location.quick_travel_marker,
-        "description": location.description,
-        "parent_id": location.parent_id,
-        "children": children_list
-    }
+        # Возвращаем информацию о текущей локации и ее дочерних элементах
+        return {
+            "id": location.id,
+            "name": location.name,
+            "type": location.type,
+            "image_url": location.image_url,
+            "recommended_level": location.recommended_level,
+            "quick_travel_marker": location.quick_travel_marker,
+            "description": location.description,
+            "parent_id": location.parent_id,
+            "children": children_list
+        }
+    except Exception as e:
+        print(f"Ошибка при получении дерева локаций: {e}")
+        return {
+            "id": location.id,
+            "name": location.name,
+            "type": location.type,
+            "image_url": location.image_url,
+            "recommended_level": location.recommended_level,
+            "quick_travel_marker": location.quick_travel_marker,
+            "description": location.description,
+            "parent_id": location.parent_id,
+            "children": []
+        }
 
 # -------------------------------
 #   LOOKUP
@@ -182,7 +196,6 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         select(Region)
         .options(
             selectinload(Region.districts)
-            .selectinload(District.locations)
         )
         .where(Region.id == region_id)
     )
@@ -190,32 +203,44 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
     if not region:
         return None
 
-    # Получаем входную локацию региона, если есть
-    entrance_location = None
-    if region.entrance_location_id:
-        entrance_result = await session.execute(
-            select(Location).where(Location.id == region.entrance_location_id)
-        )
-        entrance_location = entrance_result.scalars().first()
+    # Получаем все локации для региона одним запросом
+    locations_result = await session.execute(
+        select(Location)
+        .where(Location.district_id.in_([d.id for d in region.districts]))
+    )
+    all_locations = locations_result.scalars().all()
+    
+    # Создаем словарь для быстрого доступа к локациям
+    locations_by_id = {loc.id: {
+        "id": loc.id,
+        "name": loc.name,
+        "type": loc.type,
+        "image_url": loc.image_url,
+        "recommended_level": loc.recommended_level,
+        "quick_travel_marker": loc.quick_travel_marker,
+        "description": loc.description,
+        "parent_id": loc.parent_id,
+        "children": []
+    } for loc in all_locations}
+    
+    # Строим дерево
+    root_locations = []
+    for loc in all_locations:
+        if loc.parent_id is None:
+            root_locations.append(locations_by_id[loc.id])
+        else:
+            parent = locations_by_id.get(loc.parent_id)
+            if parent:
+                parent["children"].append(locations_by_id[loc.id])
 
-    # Получаем все локации для каждого района
+    # Формируем ответ с районами
     districts_data = []
     for district in region.districts:
-        # Получаем корневые локации района (без parent_id)
-        root_locations_result = await session.execute(
-            select(Location).where(
-                Location.district_id == district.id,
-                Location.parent_id.is_(None)
-            )
-        )
-        root_locations = root_locations_result.scalars().all()
+        district_root_locations = [
+            loc for loc in root_locations 
+            if loc["id"] in [l.id for l in all_locations if l.district_id == district.id]
+        ]
         
-        # Строим дерево для каждой корневой локации
-        locations_tree = []
-        for location in root_locations:
-            location_tree = await get_location_tree(session, location)
-            locations_tree.append(location_tree)
-
         districts_data.append({
             "id": district.id,
             "name": district.name,
@@ -224,7 +249,7 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
             "x": district.x,
             "y": district.y,
             "image_url": district.image_url,
-            "locations": locations_tree
+            "locations": district_root_locations
         })
 
     return {
@@ -235,7 +260,6 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         "image_url": region.image_url,
         "map_image_url": region.map_image_url,
         "entrance_location_id": region.entrance_location_id,
-        "entrance_location_name": entrance_location.name if entrance_location else None,
         "leader_id": region.leader_id,
         "x": region.x,
         "y": region.y,
@@ -246,19 +270,46 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
 # -------------------------------
 #   DISTRICT
 # -------------------------------
-async def create_district(session: AsyncSession, district_data: DistrictCreate) -> District:
-    new_district = District(**district_data.dict())
-    session.add(new_district)
+async def create_district(session: AsyncSession, district: DistrictCreate) -> District:
+    """Создает новый район"""
+    db_district = District(
+        name=district.name,
+        description=district.description,
+        region_id=district.region_id,
+        entrance_location_id=district.entrance_location_id,
+        recommended_level=district.recommended_level,
+        x=district.x,
+        y=district.y,
+        image_url=district.image_url or ""  # Используем пустую строку вместо None
+    )
+    
+    session.add(db_district)
     await session.commit()
-    await session.refresh(new_district)
-    return new_district
+    await session.refresh(db_district)
+    
+    # Получаем район со всеми связанными данными
+    stmt = select(District).where(District.id == db_district.id).options(
+        selectinload(District.locations)
+    )
+    result = await session.execute(stmt)
+    district_with_relations = result.scalar_one_or_none()
+    
+    return district_with_relations
 
 async def update_district(session: AsyncSession, district_id: int, data) -> District:
-    result = await session.execute(select(District).where(District.id == district_id))
+    result = await session.execute(
+        select(District)
+        .options(
+            selectinload(District.entrance_location_detail),
+            selectinload(District.locations)  # добавляем eager‑loading для locations
+        )
+        .where(District.id == district_id)
+    )
     db_district = result.scalars().first()
     if not db_district:
         raise HTTPException(status_code=404, detail="District not found")
-
+    
+    # Обновление полей
     if getattr(data, "name", None) is not None:
         db_district.name = data.name
     if getattr(data, "description", None) is not None:
@@ -267,8 +318,8 @@ async def update_district(session: AsyncSession, district_id: int, data) -> Dist
         db_district.image_url = data.image_url
     if getattr(data, "recommended_level", None) is not None:
         db_district.recommended_level = data.recommended_level
-    if getattr(data, "entry_location", None) is not None:
-        db_district.entry_location = data.entry_location
+    if getattr(data, "entrance_location_id", None) is not None:
+        db_district.entrance_location_id = data.entrance_location_id
     if getattr(data, "x", None) is not None:
         db_district.x = data.x
     if getattr(data, "y", None) is not None:
@@ -278,43 +329,92 @@ async def update_district(session: AsyncSession, district_id: int, data) -> Dist
     await session.refresh(db_district)
     return db_district
 
-
 # -------------------------------
 #   LOCATION
 # -------------------------------
 async def create_location(session: AsyncSession, location_data: LocationCreate) -> Location:
-    new_location = Location(**location_data.dict())
-    session.add(new_location)
-    await session.commit()
-    await session.refresh(new_location)
-    return new_location
+    try:
+        print("=== Начало создания локации ===")
+        print(f"Входные данные: {location_data}")
+        
+        # Создаем словарь с данными локации
+        location_dict = location_data.dict()
+        print(f"Преобразованные данные: {location_dict}")
+        
+        # Устанавливаем значения по умолчанию
+        location_dict['type'] = 'location'
+        location_dict['image_url'] = location_dict.get('image_url', '')
+        location_dict['description'] = location_dict.get('description', '')
+        location_dict['recommended_level'] = location_dict.get('recommended_level', 1)
+        location_dict['quick_travel_marker'] = location_dict.get('quick_travel_marker', False)
+        print(f"Данные после установки значений по умолчанию: {location_dict}")
 
-async def update_location(session: AsyncSession, location_id: int, data) -> Location:
-    result = await session.execute(select(Location).where(Location.id == location_id))
-    db_location = result.scalars().first()
-    if not db_location:
-        raise HTTPException(status_code=404, detail="Location not found")
+        # Создаем новую локацию
+        print("Создание объекта Location...")
+        new_location = Location(**location_dict)
+        print(f"Объект Location создан: {new_location.__dict__}")
+        
+        print("Добавление в сессию...")
+        session.add(new_location)
+        
+        print("Выполнение commit...")
+        await session.commit()
+        
+        print("Обновление объекта...")
+        await session.refresh(new_location)
+        print(f"Локация создана с ID: {new_location.id}")
 
-    if getattr(data, "name", None) is not None:
-        db_location.name = data.name
-    if getattr(data, "district_id", None) is not None:
-        db_location.district_id = data.district_id
-    if getattr(data, "type", None) is not None:
-        db_location.type = data.type
-    if getattr(data, "image_url", None) is not None:
-        db_location.image_url = data.image_url
-    if getattr(data, "recommended_level", None) is not None:
-        db_location.recommended_level = data.recommended_level
-    if getattr(data, "quick_travel_marker", None) is not None:
-        db_location.quick_travel_marker = data.quick_travel_marker
-    if getattr(data, "description", None) is not None:
-        db_location.description = data.description
-    if getattr(data, "parent_id", None) is not None:
-        db_location.parent_id = data.parent_id
+        # Если есть parent_id, обновляем тип родительской локации
+        if new_location.parent_id:
+            print(f"Обновление типа родительской локации (ID: {new_location.parent_id})")
+            parent = await get_location_by_id(session, new_location.parent_id)
+            if parent:
+                print("Родительская локация найдена, обновляем тип на subdistrict")
+                parent.type = 'subdistrict'
+                await session.commit()
+                await session.refresh(parent)
+                print("Тип родительской локации обновлен")
 
-    await session.commit()
-    await session.refresh(db_location)
-    return db_location
+        print("=== Создание локации завершено успешно ===")
+        return new_location
+    except Exception as e:
+        print(f"=== ОШИБКА при создании локации ===")
+        print(f"Тип ошибки: {type(e)}")
+        print(f"Текст ошибки: {str(e)}")
+        print(f"Traceback:")
+        import traceback
+        traceback.print_exc()
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def update_location(session: AsyncSession, location_id: int, location_data) -> Location:
+    """Обновляет локацию"""
+    try:
+        # Получаем локацию
+        result = await session.execute(select(Location).where(Location.id == location_id))
+        location = result.scalars().first()
+        if not location:
+            raise HTTPException(status_code=404, detail="Location not found")
+        
+        # Обновляем только те поля, которые пришли в запросе
+        update_data = location_data.dict(exclude_unset=True)
+        
+        # Устанавливаем значения по умолчанию для обязательных полей
+        if 'image_url' in update_data and update_data['image_url'] is None:
+            update_data['image_url'] = ""
+        if 'description' in update_data and update_data['description'] is None:
+            update_data['description'] = ""
+            
+        for field, value in update_data.items():
+            setattr(location, field, value)
+        
+        await session.commit()
+        await session.refresh(location)
+        return location
+    except Exception as e:
+        await session.rollback()
+        print(f"Ошибка при обновлении локации: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def get_location_by_id(session: AsyncSession, location_id: int) -> Optional[Location]:
     result = await session.execute(select(Location).where(Location.id == location_id))
@@ -325,32 +425,55 @@ async def get_location_by_id(session: AsyncSession, location_id: int) -> Optiona
 #   NEIGHBORS
 # -------------------------------
 async def add_neighbor(session: AsyncSession, location_id: int, neighbor_id: int, energy_cost: int) -> dict:
-    forward = LocationNeighbor(
-        location_id=location_id,
-        neighbor_id=neighbor_id,
-        energy_cost=energy_cost
+    """Добавляет соседа к локации"""
+    # Проверяем, существует ли уже такая связь
+    forward_result = await session.execute(
+        select(LocationNeighbor).where(
+            LocationNeighbor.location_id == location_id,
+            LocationNeighbor.neighbor_id == neighbor_id
+        )
     )
-    session.add(forward)
+    existing_forward = forward_result.scalars().first()
+    
+    if existing_forward:
+        # Если связь уже существует, обновляем energy_cost
+        existing_forward.energy_cost = energy_cost
+    else:
+        # Иначе создаем новую связь
+        forward = LocationNeighbor(
+            location_id=location_id,
+            neighbor_id=neighbor_id,
+            energy_cost=energy_cost
+        )
+        session.add(forward)
 
-    reverse = LocationNeighbor(
-        location_id=neighbor_id,
-        neighbor_id=location_id,
-        energy_cost=energy_cost
+    # То же самое для обратной связи
+    reverse_result = await session.execute(
+        select(LocationNeighbor).where(
+            LocationNeighbor.location_id == neighbor_id,
+            LocationNeighbor.neighbor_id == location_id
+        )
     )
-    session.add(reverse)
+    existing_reverse = reverse_result.scalars().first()
+    
+    if existing_reverse:
+        existing_reverse.energy_cost = energy_cost
+    else:
+        reverse = LocationNeighbor(
+            location_id=neighbor_id,
+            neighbor_id=location_id,
+            energy_cost=energy_cost
+        )
+        session.add(reverse)
+    
+    # Сохраняем изменения
     await session.commit()
-
+    
+    # Возвращаем информацию о созданной связи
     return {
-        "forward": {
-            "location_id": forward.location_id,
-            "neighbor_id": forward.neighbor_id,
-            "energy_cost": forward.energy_cost,
-        },
-        "reverse": {
-            "location_id": reverse.location_id,
-            "neighbor_id": reverse.neighbor_id,
-            "energy_cost": reverse.energy_cost,
-        },
+        "location_id": location_id,
+        "neighbor_id": neighbor_id,
+        "energy_cost": energy_cost
     }
 
 
@@ -360,20 +483,24 @@ async def get_location_details(session: AsyncSession, location_id: int) -> Optio
     if not loc:
         return None
 
+    # Получаем соседей
     neighbors_result = await session.execute(
         select(LocationNeighbor).where(LocationNeighbor.location_id == location_id)
     )
     neighbors = neighbors_result.scalars().all()
 
+    # Получаем дочерние локации
     children_result = await session.execute(
         select(Location).where(Location.parent_id == location_id)
     )
     children = children_result.scalars().all()
 
+    # Формируем и возвращаем результат
     return {
-        "location_id": loc.id,
+        "id": loc.id,
         "name": loc.name,
         "type": loc.type,
+        "parent_id": loc.parent_id,
         "description": loc.description,
         "image_url": loc.image_url,
         "recommended_level": loc.recommended_level,
@@ -393,7 +520,6 @@ async def get_location_details(session: AsyncSession, location_id: int) -> Optio
             for c in children
         ]
     }
-
 
 # -------------------------------
 #   POSTS
@@ -499,4 +625,83 @@ async def get_countries_list(session: AsyncSession) -> List[dict]:
         } for country in countries
     ]
 
+async def get_locations_by_district(session: AsyncSession, district_id: int):
+    """Получает список всех локаций в районе"""
+    query = select(Location).where(Location.district_id == district_id)
+    result = await session.execute(query)
+    locations = result.scalars().all()
+    return [
+        {
+            "id": loc.id,
+            "name": loc.name,
+            "type": loc.type,
+            "recommended_level": loc.recommended_level
+        }
+        for loc in locations
+    ]
+
+async def get_location_children(db: AsyncSession, location_id: int):
+    """
+    Получает список дочерних локаций для указанной локации.
+    """
+    try:
+        stmt = select(Location).where(Location.parent_id == location_id)
+        result = await db.execute(stmt)
+        children = result.scalars().all()
+        return children
+    except Exception as e:
+        print(f"Ошибка при получении дочерних локаций: {e}")
+        return []
+
+async def update_location_neighbors(
+    db: AsyncSession, 
+    location_id: int, 
+    neighbors: List[LocationNeighborCreate]
+) -> List[dict]:
+    """
+    Обновляет список соседей локации.
+    Удаляет все существующие связи и создает новые.
+    """
+    try:
+        # Используем ORM вместо текстового SQL
+        await db.execute(
+            delete(LocationNeighbor).where(LocationNeighbor.location_id == location_id)
+        )
+        await db.commit()
+        
+        # Создаем новые связи
+        new_neighbors = []
+        for neighbor in neighbors:
+            # Проверяем существование соседней локации
+            neighbor_exists = await db.execute(
+                select(Location).where(Location.id == neighbor.neighbor_id)
+            )
+            if not neighbor_exists.scalars().first():
+                continue  # Пропускаем несуществующие локации
+                
+            # Создаем новую связь
+            new_neighbor = LocationNeighbor(
+                location_id=location_id,
+                neighbor_id=neighbor.neighbor_id,
+                energy_cost=neighbor.energy_cost
+            )
+            db.add(new_neighbor)
+            new_neighbors.append({
+                "neighbor_id": neighbor.neighbor_id,
+                "energy_cost": neighbor.energy_cost
+            })
+        
+        await db.commit()
+        return new_neighbors
+    except Exception as e:
+        await db.rollback()
+        print(f"Ошибка при обновлении соседей: {e}")
+        # Важно: не пробрасываем исключение дальше, а возвращаем пустой список
+        return []
+
+async def get_district_locations(session: AsyncSession, district_id: int):
+    """Получает все локации района"""
+    stmt = select(Location).where(Location.district_id == district_id)
+    result = await session.execute(stmt)
+    return result.scalars().all()
 

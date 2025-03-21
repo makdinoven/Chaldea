@@ -1,10 +1,11 @@
 import { createSlice } from '@reduxjs/toolkit';
-import { createDistrict, updateDistrict, uploadDistrictImage, fetchDistrictDetails } from '../actions/districtEditActions';
+import { createDistrict, updateDistrict, uploadDistrictImage, fetchDistrictDetails, fetchLocationsList, fetchDistrictLocations } from '../actions/districtEditActions';
 
 const initialState = {
     currentDistrict: null,
     loading: false,
-    error: null
+    error: null,
+    districtLocations: []
 };
 
 const districtEditSlice = createSlice({
@@ -15,6 +16,7 @@ const districtEditSlice = createSlice({
             state.currentDistrict = null;
             state.loading = false;
             state.error = null;
+            state.districtLocations = [];
         }
     },
     extraReducers: (builder) => {
@@ -54,6 +56,31 @@ const districtEditSlice = createSlice({
             .addCase(fetchDistrictDetails.rejected, (state, action) => {
                 state.loading = false;
                 state.error = action.payload;
+            })
+            .addCase(fetchLocationsList.pending, (state) => {
+                state.loading = true;
+                state.error = null;
+            })
+            .addCase(fetchLocationsList.fulfilled, (state, action) => {
+                state.districtLocations = action.payload;
+                state.loading = false;
+            })
+            .addCase(fetchLocationsList.rejected, (state, action) => {
+                state.loading = false;
+                state.error = action.payload;
+            })
+            .addCase(fetchDistrictLocations.pending, (state) => {
+                state.loading = true;
+                state.error = null;
+            })
+            .addCase(fetchDistrictLocations.fulfilled, (state, action) => {
+                state.districtLocations = Array.isArray(action.payload) ? action.payload : [];
+                state.loading = false;
+            })
+            .addCase(fetchDistrictLocations.rejected, (state, action) => {
+                state.loading = false;
+                state.error = action.payload;
+                state.districtLocations = [];
             });
     }
 });

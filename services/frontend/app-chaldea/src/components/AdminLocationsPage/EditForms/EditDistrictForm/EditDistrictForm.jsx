@@ -4,8 +4,10 @@ import {
     createDistrict, 
     updateDistrict, 
     fetchDistrictDetails,
-    uploadDistrictImage 
+    uploadDistrictImage,
+    fetchDistrictLocations
 } from '../../../../redux/actions/districtEditActions';
+import { fetchAllLocations } from '../../../../redux/actions/locationEditActions';
 import { selectDistrictEdit } from '../../../../redux/selectors/locationSelectors';
 import Input from '../../../CommonComponents/Input/Input';
 import Textarea from '../../../CommonComponents/Textarea/Textarea';
@@ -15,37 +17,94 @@ import { resetDistrictEditState } from '../../../../redux/slices/districtEditSli
 
 function EditDistrictForm({ districtId = 'new', initialRegionId, onCancel, onSuccess }) {
     const dispatch = useDispatch();
-    const { loading, error, currentDistrict } = useSelector(selectDistrictEdit);
-
-    const [formData, setFormData] = useState({
-        name: '',
-        description: '',
-        region_id: initialRegionId || '',
-        entrance_location_id: '',
-        recommended_level: '',
-        x: '',
-        y: '',
-        image_url: ''
+    
+    const { loading, error, currentDistrict, districtLocations } = useSelector(state => {
+        console.log('Redux State:', state.districtEdit);
+        return state.districtEdit;
     });
 
+    const [isLoadingLocations, setIsLoadingLocations] = useState(false);
     const [selectedImage, setSelectedImage] = useState(null);
     const [imagePreview, setImagePreview] = useState(null);
     const [isUploading, setIsUploading] = useState(false);
 
+    const [formData, setFormData] = useState({
+        name: '',
+        description: '',
+        region_id: Number(initialRegionId),
+        entrance_location_id: '',
+        recommended_level: 1,
+        x: 0,
+        y: 0,
+        image_url: ''
+    });
+
+    // Загружаем данные при монтировании компонента
     useEffect(() => {
         if (districtId !== 'new') {
-            dispatch(fetchDistrictDetails(districtId));
+            console.log('Fetching district details and locations for ID:', districtId);
+            setIsLoadingLocations(true);
+            
+            Promise.all([
+                dispatch(fetchDistrictDetails(districtId)),
+                dispatch(fetchDistrictLocations(districtId))
+            ]).finally(() => {
+                setIsLoadingLocations(false);
+            });
         }
-        return () => {
-            dispatch(resetDistrictEditState());
-        };
     }, [dispatch, districtId]);
 
+    // Обновляем форму при получении данных района
+    useEffect(() => {
+        if (currentDistrict) {
+            console.log('Setting form data from currentDistrict:', currentDistrict);
+            setFormData(prev => ({
+                ...prev,
+                name: currentDistrict.name || '',
+                description: currentDistrict.description || '',
+                region_id: currentDistrict.region_id,
+                entrance_location_id: currentDistrict.entrance_location_id || '',
+                recommended_level: currentDistrict.recommended_level || 1,
+                x: currentDistrict.x || 0,
+                y: currentDistrict.y || 0,
+                image_url: currentDistrict.image_url || ''
+            }));
+            setImagePreview(currentDistrict.image_url);
+        }
+    }, [currentDistrict]);
+
+    console.log('Current form data:', formData);
+    console.log('District locations:', districtLocations);
+    console.log('District locations in form:', districtLocations); // Отладка
+
+    // Обработчик для всех остальных полей формы
     const handleChange = (e) => {
         const { name, value, type } = e.target;
+        let processedValue = value;
+        if (type === 'number') {
+            if (name === 'x' || name === 'y') {
+                processedValue = value === '' ? 0 : Number(value);
+            } else {
+                processedValue = value === '' ? '' : Number(value);
+            }
+        }
         setFormData(prev => ({
             ...prev,
-            [name]: type === 'number' ? (value === '' ? '' : Number(value)) : value
+            [name]: processedValue
+        }));
+    };
+
+    // Отдельный обработчик для выбора входной локации
+    const handleEntranceLocationSelect = (eOrValue) => {
+        let newValue;
+        if (eOrValue && eOrValue.target) {
+            newValue = eOrValue.target.value;
+        } else {
+            newValue = eOrValue;
+        }
+        setFormData(prev => ({
+            ...prev,
+            entrance_location_id: newValue
         }));
     };
 
@@ -65,28 +124,59 @@ function EditDistrictForm({ districtId = 'new', initialRegionId, onCancel, onSuc
         e.preventDefault();
         if (isUploading) return;
 
-        if (!formData.name || !formData.region_id) {
-            console.error('Не заполнены обязательные поля');
+        if (!formData.region_id) {
+            console.error('Region ID is missing:', { region_id: formData.region_id, formData });
             return;
         }
 
-        setIsUploading(true);
+        const districtData = {
+            name: formData.name,
+            description: formData.description || '',
+            region_id: Number(formData.region_id),
+            entrance_location_id: formData.entrance_location_id ? Number(formData.entrance_location_id) : null,
+            recommended_level: formData.recommended_level ? Number(formData.recommended_level) : 1,
+            x: formData.x || 0,
+            y: formData.y || 0,
+            image_url: formData.image_url || ''
+        };
+
+        console.log('Sending district data:', districtData);
+
         try {
-            const action = districtId !== 'new' ? updateDistrict : createDistrict;
-            const dataToSend = districtId !== 'new' ? { id: districtId, ...formData } : formData;
-            
-            const result = await dispatch(action(dataToSend)).unwrap();
-            
-            if (selectedImage) {
-                await dispatch(uploadDistrictImage({ 
-                    districtId: result.id, 
-                    file: selectedImage 
-                }));
+            setIsUploading(true);
+            const action = districtId === 'new' 
+                ? await dispatch(createDistrict(districtData))
+                : await dispatch(updateDistrict({ id: districtId, ...districtData }));
+
+            if (action.error) {
+                console.error('Server error:', action.payload);
+                throw new Error(action.payload?.message || 'Ошибка при сохранении района');
             }
 
-            onSuccess(result);
+            if (!action.payload) {
+                throw new Error('Нет данных в ответе от сервера');
+            }
+
+            if (selectedImage) {
+                const uploadAction = await dispatch(uploadDistrictImage({
+                    districtId: action.payload.id,
+                    file: selectedImage
+                }));
+                
+                if (uploadAction.error) {
+                    console.error('Image upload error:', uploadAction.payload);
+                    throw new Error(uploadAction.payload?.message || 'Ошибка при загрузке изображения');
+                }
+            }
+
+            onSuccess && onSuccess();
         } catch (error) {
-            console.error('Error saving district:', error);
+            console.error('Error details:', {
+                error,
+                message: error.message,
+                stack: error.stack,
+                response: error.response?.data
+            });
         } finally {
             setIsUploading(false);
         }
@@ -102,11 +192,13 @@ function EditDistrictForm({ districtId = 'new', initialRegionId, onCancel, onSuc
                     
                     <div className={s.form_group}>
                         <label>НАЗВАНИЕ:</label>
-                        <Input
+                        <input
+                            type="text"
                             name="name"
                             value={formData.name}
                             onChange={handleChange}
                             required
+                            className={s.input}
                         />
                     </div>
 
@@ -115,49 +207,59 @@ function EditDistrictForm({ districtId = 'new', initialRegionId, onCancel, onSuc
                         <LocationSearch
                             name="entrance_location_id"
                             value={formData.entrance_location_id}
-                            onChange={handleChange}
-                            regionId={formData.region_id}
+                            onChange={handleEntranceLocationSelect}
+                            locations={districtLocations}
+                            placeholder="Выберите входную локацию"
                         />
+                        <div style={{ fontSize: '12px', color: 'gray' }}>
+                            District ID: {districtId}, 
+                            Current Location ID: {formData.entrance_location_id},
+                            Locations count: {districtLocations?.length}
+                        </div>
                     </div>
 
                     <div className={s.form_group}>
                         <label>РЕКОМЕНДУЕМЫЙ УРОВЕНЬ:</label>
-                        <Input
+                        <input
                             type="number"
                             name="recommended_level"
                             value={formData.recommended_level}
                             onChange={handleChange}
-                            required
+                            min="1"
+                            className={s.input}
                         />
                     </div>
 
                     <div className={s.form_group}>
                         <label>КООРДИНАТЫ:</label>
                         <div className={s.coordinates}>
-                            <Input
+                            <input
                                 type="number"
                                 name="x"
                                 value={formData.x}
                                 onChange={handleChange}
                                 placeholder="X"
+                                className={s.input}
                             />
-                            <Input
+                            <input
                                 type="number"
                                 name="y"
                                 value={formData.y}
                                 onChange={handleChange}
                                 placeholder="Y"
+                                className={s.input}
                             />
                         </div>
                     </div>
 
                     <div className={s.form_group}>
                         <label>ОПИСАНИЕ:</label>
-                        <Textarea
+                        <textarea
                             name="description"
                             value={formData.description}
                             onChange={handleChange}
-                            required
+                            className={s.textarea}
+                            rows={4}
                         />
                     </div>
 

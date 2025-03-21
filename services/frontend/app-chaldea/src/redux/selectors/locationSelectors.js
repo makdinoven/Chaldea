@@ -45,18 +45,10 @@ export const selectAdminLocations = createSelector(
     })
 );
 
-export const selectLocations = createSelector(
-    [getAdminLocations, (state, countryId) => countryId],
-    (adminLocations, countryId) => {
-        if (!countryId || !adminLocations.countries) return [];
-        
-        const country = adminLocations.countries
-            .find(country => country.id === Number(countryId));
-            
-        if (!country || !country.regions) return [];
-        
-        return country.regions
-            .flatMap(region => region.districts || [])
-            .flatMap(district => district.locations || []);
-    }
-);
+export const selectLocationEdit = (state) => state.locationEdit;
+
+export const selectLocations = (state, districtId) => {
+    const locationsList = state.locationEdit.locationsList || [];
+    if (!districtId) return [];
+    return locationsList.filter(location => location.district_id === districtId);
+};

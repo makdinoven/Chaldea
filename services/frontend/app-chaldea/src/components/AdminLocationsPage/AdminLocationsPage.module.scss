@@ -86,7 +86,7 @@
 
 .location_item {
     display: grid;
-    grid-template-columns: 80px 1fr 150px 150px;
+    grid-template-columns: 60px minmax(200px, 1fr) 100px auto;
     align-items: center;
     padding: 8px 12px;
     background: rgba(255, 255, 255, 0.05);
@@ -94,6 +94,25 @@
     margin: 4px 0;
     font-size: 14px;
     color: #d4e6f3;
+
+    .actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        justify-content: flex-end;
+
+        button {
+            padding: 4px 8px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .arrow {
+            margin-left: 8px;
+            display: inline-flex;
+            align-items: center;
+        }
+    }
 
     &.region {
         background: rgba(66, 133, 244, 0.1);
@@ -347,7 +366,7 @@
 
 .location_item {
     display: grid;
-    grid-template-columns: 80px 1fr 150px 150px;
+    grid-template-columns: 60px minmax(200px, 1fr) 100px auto;
     align-items: center;
     padding: 8px 12px;
     background: rgba(255, 255, 255, 0.05);
@@ -356,27 +375,24 @@
     font-size: 14px;
     color: #d4e6f3;
 
-    &:hover {
-        background: rgba(255, 255, 255, 0.1);
+    .actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        justify-content: flex-end;
+
+        button {
+            padding: 4px 8px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .arrow {
+            margin-left: 8px;
+            display: inline-flex;
+            align-items: center;
+        }
     }
-}
-
-.nested_container {
-    margin-left: 20px;
-    border-left: 1px solid rgba(255, 255, 255, 0.1);
-    padding-left: 20px;
-}
-
-.location_item {
-    display: grid;
-    grid-template-columns: 80px 1fr 150px 150px;
-    align-items: center;
-    padding: 8px 12px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 4px;
-    margin: 4px 0;
-    font-size: 14px;
-    color: #d4e6f3;
 
     &.region {
         background: rgba(66, 133, 244, 0.1);
@@ -399,18 +415,44 @@
     }
 }
 
+.nested_container {
+    margin-left: 20px;
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    padding-left: 20px;
+}
+
 .add_district_button {
-    padding: 6px 12px;
+    padding: 4px 8px;
     background: rgba(66, 133, 244, 0.2);
     color: #fff;
     border: none;
     border-radius: 4px;
     cursor: pointer;
-    margin-left: 10px;
-    font-size: 14px;
+    font-size: 12px;
     transition: all 0.2s ease;
+    white-space: nowrap;
 
     &:hover {
         background: rgba(66, 133, 244, 0.3);
+    }
+}
+
+.edit_form_container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 1000;
+    overflow-y: auto;
+    padding: 40px 20px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    cursor: pointer;
+
+    > * {
+        cursor: default;
     }
 }

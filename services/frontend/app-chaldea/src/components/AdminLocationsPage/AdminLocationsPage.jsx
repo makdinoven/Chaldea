@@ -10,6 +10,7 @@ import s from './AdminLocationsPage.module.scss';
 import EditCountryForm from './EditForms/EditCountryForm/EditCountryForm';
 import EditRegionForm from './EditForms/EditRegionForm/EditRegionForm';
 import EditDistrictForm from './EditForms/EditDistrictForm/EditDistrictForm';
+import EditLocationForm from './EditForms/EditLocationForm/EditLocationForm';
 
 const AdminLocationsPage = () => {
     useRequireAuth();
@@ -22,6 +23,7 @@ const AdminLocationsPage = () => {
     const [openedCountries, setOpenedCountries] = useState({});
     const [openedRegions, setOpenedRegions] = useState({});
     const [openedDistricts, setOpenedDistricts] = useState({});
+    const [editingItem, setEditingItem] = useState(null);
 
     useEffect(() => {
         dispatch(fetchCountriesList());
@@ -92,7 +94,7 @@ const AdminLocationsPage = () => {
 
     const handleAddDistrict = (e, regionId) => {
         e.stopPropagation();
-        setEditingDistrict({ region_id: regionId });
+        setEditingDistrict({ id: 'new', initialRegionId: regionId });
     };
 
     const handleEditDistrict = (e, district) => {
@@ -108,6 +110,31 @@ const AdminLocationsPage = () => {
         }
     };
 
+    const handleOverlayClick = (e, closeForm) => {
+        if (e.target === e.currentTarget) {
+            closeForm();
+        }
+    };
+
+    const handleEditLocation = (e, location) => {
+        e.stopPropagation();
+        setEditingItem({
+            type: 'location',
+            id: location.id,
+            data: location
+        });
+    };
+
+    const handleAddLocation = (e, districtId) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setEditingItem({
+            type: 'location',
+            id: 'new',
+            data: { district_id: districtId }
+        });
+    };
+
     const renderLocationsRecursively = (location) => (
         <div key={location.id}>
             <div className={`${s.location_item} ${s.location}`}>
@@ -115,7 +142,12 @@ const AdminLocationsPage = () => {
                 <div>{location.name}</div>
                 <div>{location.type}</div>
                 <div className={s.actions}>
-                    <button className={s.edit_button}>Изменить</button>
+                    <button 
+                        className={s.edit_button} 
+                        onClick={(e) => handleEditLocation(e, location)}
+                    >
+                        Изменить
+                    </button>
                     <button className={s.delete_button}>Удалить</button>
                 </div>
             </div>
@@ -201,6 +233,13 @@ const AdminLocationsPage = () => {
                                                                 <button className={s.delete_button} onClick={(e) => handleDeleteDistrict(e, district.id)}>
                                                                     Удалить
                                                                 </button>
+                                                                <button 
+                                                                    className={s.add_location_button} 
+                                                                    onClick={(e) => handleAddLocation(e, district.id)}
+                                                                    type="button"
+                                                                >
+                                                                    Добавить локацию
+                                                                </button>
                                                                 <span className={`${s.arrow} ${openedDistricts[district.id] ? s.open : ''}`}>▼</span>
                                                             </div>
                                                         </div>
@@ -222,39 +261,73 @@ const AdminLocationsPage = () => {
                 ))}
 
                 {editingCountry && (
-                    <EditCountryForm
-                        countryId={editingCountry.id || 'new'}
-                        initialData={editingCountry}
-                        onCancel={() => setEditingCountry(null)}
-                        onSuccess={() => {
-                            setEditingCountry(null);
-                            dispatch(fetchCountriesList());
-                        }}
-                    />
+                    <div 
+                        className={s.edit_form_container} 
+                        onClick={(e) => handleOverlayClick(e, () => setEditingCountry(null))}
+                    >
+                        <EditCountryForm
+                            initialData={editingCountry}
+                            onCancel={() => setEditingCountry(null)}
+                            onSuccess={() => {
+                                setEditingCountry(null);
+                                dispatch(fetchCountriesList());
+                            }}
+                        />
+                    </div>
                 )}
 
-                {editingRegion && (
-                    <EditRegionForm
-                        regionId={editingRegion.id || 'new'}
-                        initialData={editingRegion}
-                        onCancel={() => setEditingRegion(null)}
-                        onSuccess={() => {
-                            setEditingRegion(null);
-                            dispatch(fetchCountriesList());
-                        }}
-                    />
-                )}
+{editingRegion && (
+    <div 
+        className={s.edit_form_container} 
+        onClick={(e) => handleOverlayClick(e, () => setEditingRegion(null))}
+    >
+        <EditRegionForm
+            regionId={editingRegion.id || 'new'}
+            initialCountryId={editingRegion.country_id}
+            initialData={editingRegion}
+            onCancel={() => setEditingRegion(null)}
+            onSuccess={() => {
+                setEditingRegion(null);
+                dispatch(fetchCountriesList());
+            }}
+        />
+    </div>
+)}
+
 
                 {editingDistrict && (
-                    <EditDistrictForm
-                        districtId={editingDistrict.id || 'new'}
-                        initialData={editingDistrict}
-                        onCancel={() => setEditingDistrict(null)}
-                        onSuccess={() => {
-                            setEditingDistrict(null);
-                            dispatch(fetchCountriesList());
-                        }}
-                    />
+                    <div 
+                        className={s.edit_form_container} 
+                        onClick={(e) => handleOverlayClick(e, () => setEditingDistrict(null))}
+                    >
+                        <EditDistrictForm
+                            districtId={editingDistrict.id || 'new'}
+                            initialRegionId={editingDistrict.initialRegionId}
+                            onCancel={() => setEditingDistrict(null)}
+                            onSuccess={() => {
+                                setEditingDistrict(null);
+                                dispatch(fetchCountriesList());
+                            }}
+                        />
+                    </div>
+                )}
+
+                {editingItem && editingItem.type === 'location' && (
+                    <div 
+                        className={s.edit_form_container} 
+                        onClick={(e) => handleOverlayClick(e, () => setEditingItem(null))}
+                    >
+                        <EditLocationForm
+                            locationId={editingItem.id}
+                            initialData={editingItem.data}
+                            onCancel={() => setEditingItem(null)}
+                            onSuccess={() => {
+                                setEditingItem(null);
+                                // Перезагружаем страницу
+                                window.location.reload();
+                            }}
+                        />
+                    </div>
                 )}
             </div>
         </div>

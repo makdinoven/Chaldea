@@ -64,9 +64,9 @@ class District(Base):
         foreign_keys="[Location.district_id]"  # <-- явная привязка
     )
 
-    entry_location_detail = relationship(
+    entrance_location_detail = relationship(
         "Location",
-        foreign_keys=[entrance_location_id]  # <-- указываем, что entry_location ссылается на Location.id
+        foreign_keys=[entrance_location_id]  # <-- указываем, что entrance_location ссылается на Location.id
     )
 
 
