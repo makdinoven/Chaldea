@@ -14,7 +14,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 120
 REFRESH_TOKEN_EXPIRE_DAYS = 7  # Срок жизни рефреш-токена
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 # Создание JWT токена с добавлением роли пользователя
 def create_access_token(data: dict, role: str, expires_delta: Optional[timedelta] = None):

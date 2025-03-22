@@ -64,7 +64,7 @@ export default function Header() {
 
         <div className={styles.menu_container_right}>
           {menuData.slice(2).map((menu) => (
-              user.role === 'admin' &&
+              user?.role === 'admin' &&
               <Menu
                 key={menu.id}
                 title={menu.title}
