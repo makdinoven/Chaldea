@@ -53,7 +53,7 @@ function EditCountryForm({ initialData, onCancel, onSuccess }) {
             formData.append('file', selectedFile);
             
             const response = await axios.post(
-                'http://localhost:8006/photo/change_country_map',
+                'http://4452515-co41851.twc1.net:8006/photo/change_country_map',
                 formData,
                 {
                     headers: {

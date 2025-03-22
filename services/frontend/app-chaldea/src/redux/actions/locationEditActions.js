@@ -27,7 +27,7 @@ export const createLocation = createAsyncThunk(
             
             console.log('Обработанные данные для создания:', processedData);
             
-            const response = await axios.post('http://localhost:8006/locations/', processedData);
+            const response = await axios.post('http://4452515-co41851.twc1.net:8006/locations/', processedData);
             return response.data;
         } catch (error) {
             console.error('Ошибка при создании локации:', error.response?.data || error.message);
@@ -47,7 +47,7 @@ export const updateLocation = createAsyncThunk(
             // Если передан только id и type, обновляем только тип локации
             if (Object.keys(updateData).length === 1 && updateData.type) {
                 const response = await axios.patch(
-                    `http://localhost:8006/locations/${id}/update-type`,
+                    `http://4452515-co41851.twc1.net:8006/locations/${id}/update-type`,
                     { type: updateData.type }
                 );
                 return response.data;
@@ -66,7 +66,7 @@ export const updateLocation = createAsyncThunk(
                 updateData.recommended_level = parseInt(updateData.recommended_level);
             }
             
-            const response = await axios.put(`http://localhost:8006/locations/${id}/update`, updateData);
+            const response = await axios.put(`http://4452515-co41851.twc1.net:8006/locations/${id}/update`, updateData);
             return response.data;
         } catch (error) {
             console.error('Ошибка при обновлении локации:', error);
@@ -79,7 +79,7 @@ export const fetchLocationDetails = createAsyncThunk(
     'locationEdit/fetchLocationDetails',
     async (locationId, { rejectWithValue }) => {
         try {
-            const response = await axios.get(`http://localhost:8006/locations/${locationId}/details`);
+            const response = await axios.get(`http://4452515-co41851.twc1.net:8006/locations/${locationId}/details`);
             return response.data;
         } catch (error) {
             return rejectWithValue(error.response?.data || error.message);
@@ -96,7 +96,7 @@ export const uploadLocationImage = createAsyncThunk(
             formData.append('location_id', locationId);
             
             const response = await axios.post(
-                'http://localhost:8006/photo/change_location_image',
+                'http://4452515-co41851.twc1.net:8006/photo/change_location_image',
                 formData,
                 {
                     headers: {
@@ -135,7 +135,7 @@ export const updateLocationNeighbors = createAsyncThunk(
             
             // Отправляем запрос на обновление соседей
             const response = await axios.post(
-                `http://localhost:8006/locations/${locationId}/neighbors/update`,
+                `http://4452515-co41851.twc1.net:8006/locations/${locationId}/neighbors/update`,
                 { neighbors: processedNeighbors }
             );
             
@@ -151,7 +151,7 @@ export const fetchLocationsList = createAsyncThunk(
     'locationEdit/fetchLocationsList',
     async (districtId, { rejectWithValue }) => {
         try {
-            const response = await axios.get(`http://localhost:8006/locations/districts/${districtId}/locations`);
+            const response = await axios.get(`http://4452515-co41851.twc1.net:8006/locations/districts/${districtId}/locations`);
             return response.data;
         } catch (error) {
             return rejectWithValue(error.response?.data || error.message);
@@ -163,7 +163,7 @@ export const fetchDistrictLocations = createAsyncThunk(
     'locationEdit/fetchDistrictLocations',
     async (districtId, { rejectWithValue }) => {
         try {
-            const response = await axios.get(`http://localhost:8006/districts/${districtId}/locations`);
+            const response = await axios.get(`http://4452515-co41851.twc1.net:8006/districts/${districtId}/locations`);
             return response.data;
         } catch (error) {
             return rejectWithValue(error.response?.data || error.message);
@@ -175,7 +175,7 @@ export const fetchAllLocations = createAsyncThunk(
     'locationEdit/fetchAllLocations',
     async (_, { rejectWithValue }) => {
         try {
-            const response = await axios.get('http://localhost:8006/locations/locations/lookup');
+            const response = await axios.get('http://4452515-co41851.twc1.net:8006/locations/locations/lookup');
             return response.data;
         } catch (error) {
             return rejectWithValue(error.response?.data || error.message);

@@ -6,7 +6,7 @@ export const createDistrict = createAsyncThunk(
     async (districtData, { rejectWithValue }) => {
         try {
             console.log('Creating district with data:', districtData);
-            const response = await axios.post('http://localhost:8006/locations/districts', districtData);
+            const response = await axios.post('http://4452515-co41851.twc1.net:8006/locations/districts', districtData);
             console.log('Server response:', response.data);
             return response.data;
         } catch (error) {
@@ -24,7 +24,7 @@ export const updateDistrict = createAsyncThunk(
     'districtEdit/updateDistrict',
     async ({ id, ...districtData }, { rejectWithValue }) => {
         try {
-            const response = await axios.put(`http://localhost:8006/locations/districts/${id}/update`, districtData);
+            const response = await axios.put(`http://4452515-co41851.twc1.net:8006/locations/districts/${id}/update`, districtData);
             return response.data;
         } catch (error) {
             return rejectWithValue(error.response?.data || error.message);
@@ -41,7 +41,7 @@ export const uploadDistrictImage = createAsyncThunk(
             formData.append('file', file);
 
             const response = await axios.post(
-                'http://localhost:8006/photo/change_district_image',
+                'http://4452515-co41851.twc1.net:8006/photo/change_district_image',
                 formData,
                 {
                     headers: { 'Content-Type': 'multipart/form-data' }
@@ -59,7 +59,7 @@ export const fetchDistrictDetails = createAsyncThunk(
     async (districtId, { rejectWithValue }) => {
         try {
             console.log('Fetching district details:', districtId);
-            const response = await axios.get(`http://localhost:8006/locations/districts/${districtId}/details`);
+            const response = await axios.get(`http://4452515-co41851.twc1.net:8006/locations/districts/${districtId}/details`);
             console.log('District details response:', response.data);
             return response.data;
         } catch (error) {
@@ -74,7 +74,7 @@ export const fetchLocationsList = createAsyncThunk(
     async (districtId, { rejectWithValue }) => {
         try {
             console.log('Fetching locations for district:', districtId);
-            const response = await axios.get(`http://localhost:8006/locations/districts/${districtId}/locations`);
+            const response = await axios.get(`http://4452515-co41851.twc1.net:8006/locations/districts/${districtId}/locations`);
             console.log('Locations response:', response.data);
             return response.data;
         } catch (error) {
@@ -89,7 +89,7 @@ export const fetchDistrictLocations = createAsyncThunk(
     async (districtId, { rejectWithValue }) => {
         try {
             console.log('Fetching locations for district:', districtId);
-            const response = await axios.get(`http://localhost:8006/locations/districts/${districtId}/locations`);
+            const response = await axios.get(`http://4452515-co41851.twc1.net:8006/locations/districts/${districtId}/locations`);
             console.log('Raw locations response:', response.data);
             
             if (!Array.isArray(response.data)) {
