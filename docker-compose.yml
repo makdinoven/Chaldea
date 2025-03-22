@@ -202,13 +202,13 @@ services:
     ports:
       - "8007:8007"
 
-  api-gateway:
-    container_name: api-gateway
-    build:
-      context: .
-      dockerfile: ./docker/api-gateway/Dockerfile
-    ports:
-      - "8080:80"
-    depends_on:
-      - frontend
-      - user-service
+#  api-gateway:
+#    container_name: api-gateway
+#    build:
+#      context: .
+#      dockerfile: ./docker/api-gateway/Dockerfile
+#    ports:
+#      - "8080:80"
+#    depends_on:
+#      - frontend
+#      - user-service
