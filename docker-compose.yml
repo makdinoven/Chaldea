@@ -11,6 +11,11 @@ services:
       - "5173:5173"
     environment:
       - CHOKIDAR_USEPOLLING=true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   mysql:
     container_name: mysql
@@ -30,6 +35,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   adminer:
     container_name: adminer
@@ -43,6 +53,11 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   rabbitmq:
     container_name: rabbitmq
@@ -61,6 +76,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   user-service:
     container_name: user-service
@@ -79,6 +99,11 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   photo-service:
     container_name: photo-service
@@ -97,6 +122,11 @@ services:
         condition: service_healthy
     ports:
       - "8001:8001"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   character-attributes-service:
     container_name: character-attributes-service
@@ -114,6 +144,11 @@ services:
         condition: service_healthy
     ports:
       - "8002:8002"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   skills-service:
     container_name: skills-service
@@ -131,6 +166,11 @@ services:
         condition: service_healthy
     ports:
       - "8003:8003"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   inventory-service:
     container_name: inventory-service
@@ -148,6 +188,11 @@ services:
         condition: service_healthy
     ports:
       - "8004:8004"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   character-service:
     container_name: character-service
@@ -165,6 +210,11 @@ services:
         condition: service_healthy
     ports:
       - "8005:8005"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   locations-service:
     container_name: locations-service
@@ -182,6 +232,11 @@ services:
         condition: service_healthy
     ports:
       - "8006:8006"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   notification-service:
     container_name: notification-service
@@ -201,6 +256,11 @@ services:
         condition: service_healthy
     ports:
       - "8007:8007"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   api-gateway:
     container_name: api-gateway
@@ -212,4 +272,8 @@ services:
     depends_on:
       - frontend
       - user-service
-
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
