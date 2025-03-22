@@ -29,6 +29,8 @@ services:
       MYSQL_PASSWORD: mypassword
     ports:
       - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
     healthcheck:
       test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${MYSQL_USER}", "--password=${MYSQL_PASSWORD}" ]
       interval: 5s
@@ -277,3 +279,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  mysql-data:
