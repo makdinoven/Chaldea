@@ -268,7 +268,7 @@ services:
       context: .
       dockerfile: ./docker/api-gateway/Dockerfile
     ports:
-      - "8080:80"
+      - "80:80"
     depends_on:
       - frontend
       - user-service
