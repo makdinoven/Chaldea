@@ -1,9 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useRequireAuth } from '../../hooks/useRequireAuth';
+// Экшены для получения данных
 import { fetchCountriesList, fetchCountryDetails, fetchRegionDetails } from '../../redux/actions/adminLocationsActions';
+// Экшены для удаления страны / региона
 import { deleteCountry } from '../../redux/actions/countryEditActions';
 import { deleteRegion } from '../../redux/actions/regionEditActions';
+
+// === Импортируем нужные экшены для удаления района и локации ===
+import { deleteDistrict } from '../../redux/actions/districtEditActions';
+import { deleteLocation } from '../../redux/actions/locationEditActions';
+
 import { selectAdminLocations } from '../../redux/selectors/locationSelectors';
 
 import s from './AdminLocationsPage.module.scss';
@@ -16,7 +23,8 @@ const AdminLocationsPage = () => {
     useRequireAuth();
     const dispatch = useDispatch();
     const { countries, countryDetails, regionDetails, loading, error } = useSelector(selectAdminLocations);
-    
+
+    // --- Локальные стейты (управление открытием / редактированием) ---
     const [editingCountry, setEditingCountry] = useState(null);
     const [editingRegion, setEditingRegion] = useState(null);
     const [editingDistrict, setEditingDistrict] = useState(null);
@@ -25,51 +33,22 @@ const AdminLocationsPage = () => {
     const [openedDistricts, setOpenedDistricts] = useState({});
     const [editingItem, setEditingItem] = useState(null);
 
+    // Загружаем список стран при загрузке страницы
     useEffect(() => {
         dispatch(fetchCountriesList());
     }, [dispatch]);
 
+    // ---------------------------
+    //   Вспомогательные функции
+    // ---------------------------
     const toggleCountry = (countryId) => {
         setOpenedCountries(prev => ({
             ...prev,
             [countryId]: !prev[countryId]
         }));
+        // Если данные по стране ещё не загружены, загрузим
         if (!countryDetails[countryId]) {
             dispatch(fetchCountryDetails(countryId));
-        }
-    };
-
-    const handleAddNewCountry = () => {
-        setEditingCountry({});
-    };
-
-    const handleEditCountry = (e, country) => {
-        e.stopPropagation();
-        setEditingCountry(country);
-    };
-
-    const handleDeleteCountry = async (e, countryId) => {
-        e.stopPropagation();
-        if (window.confirm('Вы уверены, что хотите удалить эту страну?')) {
-            await dispatch(deleteCountry(countryId));
-            dispatch(fetchCountriesList());
-        }
-    };
-
-    const handleAddNewRegion = (countryId) => {
-        setEditingRegion({ country_id: countryId });
-    };
-
-    const handleEditRegion = (e, region) => {
-        e.stopPropagation();
-        setEditingRegion(region);
-    };
-
-    const handleDeleteRegion = async (e, regionId) => {
-        e.stopPropagation();
-        if (window.confirm('Вы уверены, что хотите удалить этот регион?')) {
-            await dispatch(deleteRegion(regionId));
-            dispatch(fetchCountriesList());
         }
     };
 
@@ -92,6 +71,73 @@ const AdminLocationsPage = () => {
         }));
     };
 
+    const handleOverlayClick = (e, closeForm) => {
+        if (e.target === e.currentTarget) {
+            closeForm();
+        }
+    };
+
+    // -------------------------
+    //  Удаление объектов
+    // -------------------------
+    // -- Страна --
+    const handleDeleteCountry = async (e, countryId) => {
+        e.stopPropagation();
+        if (window.confirm('Вы уверены, что хотите удалить эту страну?')) {
+            await dispatch(deleteCountry(countryId));
+            dispatch(fetchCountriesList());
+        }
+    };
+
+    // -- Регион --
+    const handleDeleteRegion = async (e, regionId) => {
+        e.stopPropagation();
+        if (window.confirm('Вы уверены, что хотите удалить этот регион?')) {
+            await dispatch(deleteRegion(regionId));
+            // Обновим дерево
+            dispatch(fetchCountriesList());
+        }
+    };
+
+    // -- Район --
+    const handleDeleteDistrict = async (e, districtId) => {
+        e.stopPropagation();
+        if (window.confirm('Вы уверены, что хотите удалить этот район?')) {
+            await dispatch(deleteDistrict(districtId));
+            dispatch(fetchCountriesList());
+        }
+    };
+
+    // -- Локация --
+    const handleDeleteLocation = async (e, locationId) => {
+        e.stopPropagation();
+        if (window.confirm('Вы уверены, что хотите удалить эту локацию?')) {
+            await dispatch(deleteLocation(locationId));
+            dispatch(fetchCountriesList());
+        }
+    };
+
+    // -------------------------
+    //   Редактирование/Создание
+    // -------------------------
+    const handleAddNewCountry = () => {
+        setEditingCountry({});
+    };
+
+    const handleEditCountry = (e, country) => {
+        e.stopPropagation();
+        setEditingCountry(country);
+    };
+
+    const handleAddNewRegion = (countryId) => {
+        setEditingRegion({ country_id: countryId });
+    };
+
+    const handleEditRegion = (e, region) => {
+        e.stopPropagation();
+        setEditingRegion(region);
+    };
+
     const handleAddDistrict = (e, regionId) => {
         e.stopPropagation();
         setEditingDistrict({ id: 'new', initialRegionId: regionId });
@@ -102,18 +148,17 @@ const AdminLocationsPage = () => {
         setEditingDistrict(district);
     };
 
-    const handleDeleteDistrict = async (e, districtId) => {
+    // -------------------------
+    //   Редактирование/Создание локаций
+    // -------------------------
+    const handleAddLocation = (e, districtId) => {
+        e.preventDefault();
         e.stopPropagation();
-        if (window.confirm('Вы уверены, что хотите удалить этот район?')) {
-            await dispatch(deleteDistrict(districtId));
-            dispatch(fetchCountriesList());
-        }
-    };
-
-    const handleOverlayClick = (e, closeForm) => {
-        if (e.target === e.currentTarget) {
-            closeForm();
-        }
+        setEditingItem({
+            type: 'location',
+            id: 'new',
+            data: { district_id: districtId }
+        });
     };
 
     const handleEditLocation = (e, location) => {
@@ -125,16 +170,9 @@ const AdminLocationsPage = () => {
         });
     };
 
-    const handleAddLocation = (e, districtId) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setEditingItem({
-            type: 'location',
-            id: 'new',
-            data: { district_id: districtId }
-        });
-    };
-
+    // -------------------------
+    //   Рекурсивный рендер локаций
+    // -------------------------
     const renderLocationsRecursively = (location) => (
         <div key={location.id}>
             <div className={`${s.location_item} ${s.location}`}>
@@ -142,13 +180,18 @@ const AdminLocationsPage = () => {
                 <div>{location.name}</div>
                 <div>{location.type}</div>
                 <div className={s.actions}>
-                    <button 
-                        className={s.edit_button} 
+                    <button
+                        className={s.edit_button}
                         onClick={(e) => handleEditLocation(e, location)}
                     >
                         Изменить
                     </button>
-                    <button className={s.delete_button}>Удалить</button>
+                    <button
+                        className={s.delete_button}
+                        onClick={(e) => handleDeleteLocation(e, location.id)}
+                    >
+                        Удалить
+                    </button>
                 </div>
             </div>
             {location.children && location.children.length > 0 && (
@@ -159,10 +202,12 @@ const AdminLocationsPage = () => {
         </div>
     );
 
+    // -------------------------
+    //   Основной рендер
+    // -------------------------
     if (error) return <div className={s.error}>Ошибка: {error}</div>;
     if (loading && !countries?.length) return <div className={s.loading}>Загрузка списка стран...</div>;
 
-    
     return (
         <div className={s.admin_page}>
             <h1>Управление локациями</h1>
@@ -176,10 +221,16 @@ const AdminLocationsPage = () => {
                         <div className={s.country_header} onClick={() => toggleCountry(country.id)}>
                             <span className={s.country_name}>{country.name}</span>
                             <div className={s.header_controls}>
-                                <button className={s.edit_button} onClick={(e) => handleEditCountry(e, country)}>
+                                <button
+                                    className={s.edit_button}
+                                    onClick={(e) => handleEditCountry(e, country)}
+                                >
                                     Редактировать
                                 </button>
-                                <button className={s.delete_button} onClick={(e) => handleDeleteCountry(e, country.id)}>
+                                <button
+                                    className={s.delete_button}
+                                    onClick={(e) => handleDeleteCountry(e, country.id)}
+                                >
                                     Удалить
                                 </button>
                                 <span className={`${s.arrow} ${openedCountries[country.id] ? s.open : ''}`}>▼</span>
@@ -188,27 +239,39 @@ const AdminLocationsPage = () => {
 
                         {openedCountries[country.id] && countryDetails[country.id] && (
                             <div className={s.regions_container}>
-                                <button className={s.add_region_button} onClick={() => handleAddNewRegion(country.id)}>
+                                <button
+                                    className={s.add_region_button}
+                                    onClick={() => handleAddNewRegion(country.id)}
+                                >
                                     Добавить регион
                                 </button>
 
                                 {countryDetails[country.id].regions?.map((region) => (
                                     <div key={region.id}>
-                                        <div 
-                                            className={`${s.location_item} ${s.region}`} 
+                                        <div
+                                            className={`${s.location_item} ${s.region}`}
                                             onClick={(e) => toggleRegion(e, region.id)}
                                         >
                                             <div>{region.id}</div>
                                             <div>{region.name}</div>
                                             <div>Регион</div>
                                             <div className={s.actions}>
-                                                <button className={s.edit_button} onClick={(e) => handleEditRegion(e, region)}>
+                                                <button
+                                                    className={s.edit_button}
+                                                    onClick={(e) => handleEditRegion(e, region)}
+                                                >
                                                     Изменить
                                                 </button>
-                                                <button className={s.delete_button} onClick={(e) => handleDeleteRegion(e, region.id)}>
+                                                <button
+                                                    className={s.delete_button}
+                                                    onClick={(e) => handleDeleteRegion(e, region.id)}
+                                                >
                                                     Удалить
                                                 </button>
-                                                <button className={s.add_district_button} onClick={(e) => handleAddDistrict(e, region.id)}>
+                                                <button
+                                                    className={s.add_district_button}
+                                                    onClick={(e) => handleAddDistrict(e, region.id)}
+                                                >
                                                     Добавить район
                                                 </button>
                                                 <span className={`${s.arrow} ${openedRegions[region.id] ? s.open : ''}`}>▼</span>
@@ -219,7 +282,7 @@ const AdminLocationsPage = () => {
                                             <div className={s.nested_container}>
                                                 {regionDetails[region.id].districts?.map((district) => (
                                                     <div key={district.id}>
-                                                        <div 
+                                                        <div
                                                             className={`${s.location_item} ${s.district}`}
                                                             onClick={(e) => toggleDistrict(e, district.id)}
                                                         >
@@ -227,14 +290,20 @@ const AdminLocationsPage = () => {
                                                             <div>{district.name}</div>
                                                             <div>Район</div>
                                                             <div className={s.actions}>
-                                                                <button className={s.edit_button} onClick={(e) => handleEditDistrict(e, district)}>
+                                                                <button
+                                                                    className={s.edit_button}
+                                                                    onClick={(e) => handleEditDistrict(e, district)}
+                                                                >
                                                                     Изменить
                                                                 </button>
-                                                                <button className={s.delete_button} onClick={(e) => handleDeleteDistrict(e, district.id)}>
+                                                                <button
+                                                                    className={s.delete_button}
+                                                                    onClick={(e) => handleDeleteDistrict(e, district.id)}
+                                                                >
                                                                     Удалить
                                                                 </button>
-                                                                <button 
-                                                                    className={s.add_location_button} 
+                                                                <button
+                                                                    className={s.add_location_button}
                                                                     onClick={(e) => handleAddLocation(e, district.id)}
                                                                     type="button"
                                                                 >
@@ -260,9 +329,10 @@ const AdminLocationsPage = () => {
                     </div>
                 ))}
 
+                {/* --- Модальное окно редактирования/добавления "Страны" --- */}
                 {editingCountry && (
-                    <div 
-                        className={s.edit_form_container} 
+                    <div
+                        className={s.edit_form_container}
                         onClick={(e) => handleOverlayClick(e, () => setEditingCountry(null))}
                     >
                         <EditCountryForm
@@ -276,28 +346,29 @@ const AdminLocationsPage = () => {
                     </div>
                 )}
 
-{editingRegion && (
-    <div 
-        className={s.edit_form_container} 
-        onClick={(e) => handleOverlayClick(e, () => setEditingRegion(null))}
-    >
-        <EditRegionForm
-            regionId={editingRegion.id || 'new'}
-            initialCountryId={editingRegion.country_id}
-            initialData={editingRegion}
-            onCancel={() => setEditingRegion(null)}
-            onSuccess={() => {
-                setEditingRegion(null);
-                dispatch(fetchCountriesList());
-            }}
-        />
-    </div>
-)}
+                {/* --- Модальное окно редактирования/добавления "Региона" --- */}
+                {editingRegion && (
+                    <div
+                        className={s.edit_form_container}
+                        onClick={(e) => handleOverlayClick(e, () => setEditingRegion(null))}
+                    >
+                        <EditRegionForm
+                            regionId={editingRegion.id || 'new'}
+                            initialCountryId={editingRegion.country_id}
+                            initialData={editingRegion}
+                            onCancel={() => setEditingRegion(null)}
+                            onSuccess={() => {
+                                setEditingRegion(null);
+                                dispatch(fetchCountriesList());
+                            }}
+                        />
+                    </div>
+                )}
 
-
+                {/* --- Модальное окно редактирования/добавления "Района" --- */}
                 {editingDistrict && (
-                    <div 
-                        className={s.edit_form_container} 
+                    <div
+                        className={s.edit_form_container}
                         onClick={(e) => handleOverlayClick(e, () => setEditingDistrict(null))}
                     >
                         <EditDistrictForm
@@ -312,9 +383,10 @@ const AdminLocationsPage = () => {
                     </div>
                 )}
 
+                {/* --- Модальное окно редактирования/добавления "Локации" --- */}
                 {editingItem && editingItem.type === 'location' && (
-                    <div 
-                        className={s.edit_form_container} 
+                    <div
+                        className={s.edit_form_container}
                         onClick={(e) => handleOverlayClick(e, () => setEditingItem(null))}
                     >
                         <EditLocationForm
@@ -323,8 +395,7 @@ const AdminLocationsPage = () => {
                             onCancel={() => setEditingItem(null)}
                             onSuccess={() => {
                                 setEditingItem(null);
-                                // Перезагружаем страницу
-                                window.location.reload();
+                                dispatch(fetchCountriesList());
                             }}
                         />
                     </div>

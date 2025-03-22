@@ -182,3 +182,17 @@ export const fetchAllLocations = createAsyncThunk(
         }
     }
 );
+
+export const deleteLocation = createAsyncThunk(
+    'locationEdit/deleteLocation',
+    async (locationId, { rejectWithValue }) => {
+        try {
+            // Вызов роутера FastAPI: DELETE /locations/{location_id}/delete
+            await axios.delete(`http://4452515-co41851.twc1.net:8006/locations/${locationId}/delete`);
+            return locationId;
+        } catch (error) {
+            return rejectWithValue(error.response?.data || error.message);
+        }
+    }
+);
+

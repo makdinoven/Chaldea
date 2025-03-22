@@ -106,7 +106,23 @@ async def get_region_details_route(region_id: int, session: AsyncSession = Depen
         raise HTTPException(status_code=404, detail="Region not found")
     return data
 
-
+@router.delete("/regions/{region_id}/delete", response_model=dict)
+async def delete_region_route(
+    region_id: int,
+    session: AsyncSession = Depends(get_db)
+):
+    """
+    Удаляет регион вместе со всеми его районами и локациями.
+    """
+    try:
+        await crud.delete_region(session, region_id)
+        await session.commit()
+        return {"status": "success", "message": f"Region {region_id} has been deleted."}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 # --------------------------------------------------------------------
 # DISTRICT
 # --------------------------------------------------------------------
@@ -166,7 +182,23 @@ async def get_district_locations(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
+@router.delete("/districts/{district_id}/delete", response_model=dict)
+async def delete_district_route(
+    district_id: int,
+    session: AsyncSession = Depends(get_db)
+):
+    """
+    Удаляет район вместе со всеми его локациями.
+    """
+    try:
+        await crud.delete_district(session, district_id)
+        await session.commit()
+        return {"status": "success", "message": f"District {district_id} has been deleted."}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 # --------------------------------------------------------------------
 # LOCATION
 # --------------------------------------------------------------------
@@ -233,7 +265,24 @@ async def get_location_children(location_id: int, db: AsyncSession = Depends(get
         print(f"Ошибка при получении дочерних локаций: {e}")
         return []
 
-
+@router.delete("/locations/{location_id}/delete", response_model=dict)
+async def delete_location_route(
+    location_id: int,
+    session: AsyncSession = Depends(get_db)
+):
+    """
+    Удаляет локацию вместе со всеми её дочерними локациями (рекурсивно)
+    и со всеми соседними связями.
+    """
+    try:
+        await crud.delete_location_recursively(session, location_id)
+        await session.commit()
+        return {"status": "success", "message": f"Location {location_id} and its children have been deleted."}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 # --------------------------------------------------------------------
 # NEIGHBORS
 # --------------------------------------------------------------------

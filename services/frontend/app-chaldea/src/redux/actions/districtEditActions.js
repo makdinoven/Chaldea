@@ -104,3 +104,16 @@ export const fetchDistrictLocations = createAsyncThunk(
         }
     }
 );
+
+export const deleteDistrict = createAsyncThunk(
+    'districtEdit/deleteDistrict',
+    async (districtId, { rejectWithValue }) => {
+        try {
+            // Вызов роутера FastAPI: DELETE /locations/districts/{district_id}/delete
+            await axios.delete(`http://4452515-co41851.twc1.net:8006/locations/districts/${districtId}/delete`);
+            return districtId;
+        } catch (error) {
+            return rejectWithValue(error.response?.data || error.message);
+        }
+    }
+);

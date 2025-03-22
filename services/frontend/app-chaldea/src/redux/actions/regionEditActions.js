@@ -89,7 +89,7 @@ export const deleteRegion = createAsyncThunk(
     'regionEdit/deleteRegion',
     async (regionId, { rejectWithValue }) => {
         try {
-            await axios.delete(`http://4452515-co41851.twc1.net:8006/locations/regions/${regionId}`);
+            await axios.delete(`http://4452515-co41851.twc1.net:8006/locations/regions/${regionId}/delete`);
             return regionId;
         } catch (error) {
             return rejectWithValue(error.response?.data || error.message);

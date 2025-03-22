@@ -705,3 +705,109 @@ async def get_district_locations(session: AsyncSession, district_id: int):
     result = await session.execute(stmt)
     return result.scalars().all()
 
+async def delete_location_recursively(
+    session: AsyncSession,
+    location_id: int,
+    commit: bool = False
+):
+    """
+    Рекурсивно удаляет локацию вместе с её дочерними локациями
+    и всеми записями в LocationNeighbor.
+    Если commit=False, то коммит не выполняется внутри этой функции
+    (это удобно при массовых удалениях).
+    """
+    # Сначала получаем саму локацию
+    loc = await get_location_by_id(session, location_id)
+    if not loc:
+        # Локация уже не существует — просто возвращаем
+        return
+
+    # 1) Удаляем все связи с соседями (в обе стороны)
+    await session.execute(
+        delete(LocationNeighbor).where(
+            (LocationNeighbor.location_id == location_id) |
+            (LocationNeighbor.neighbor_id == location_id)
+        )
+    )
+
+    # 2) Получаем всех дочерних локаций
+    children_result = await session.execute(
+        select(Location).where(Location.parent_id == location_id)
+    )
+    children = children_result.scalars().all()
+
+    # Рекурсивно удаляем каждого потомка
+    for child in children:
+        await delete_location_recursively(session, child.id, commit=False)
+
+    # 3) Удаляем саму локацию
+    await session.execute(
+        delete(Location).where(Location.id == location_id)
+    )
+
+    if commit:
+        await session.commit()
+
+
+async def delete_district(
+    session: AsyncSession,
+    district_id: int,
+    commit: bool = True
+):
+    """
+    Удаляет район вместе со всеми его локациями.
+    Если commit=False, то коммит не выполняется,
+    что может быть нужно для транзакций на более высоком уровне (напр. удаление региона).
+    """
+    # Проверяем существование района
+    district_result = await session.execute(
+        select(District).where(District.id == district_id)
+    )
+    district = district_result.scalars().first()
+    if not district:
+        raise HTTPException(status_code=404, detail="District not found")
+
+    # Получаем все локации этого района
+    locations_result = await session.execute(
+        select(Location).where(Location.district_id == district_id)
+    )
+    locations = locations_result.scalars().all()
+
+    # Удаляем все локации (рекурсивно)
+    for loc in locations:
+        await delete_location_recursively(session, loc.id, commit=False)
+
+    # Удаляем сам район
+    await session.execute(
+        delete(District).where(District.id == district_id)
+    )
+
+    if commit:
+        await session.commit()
+
+async def delete_region(session: AsyncSession, region_id: int):
+    """
+    Удаляет регион вместе со всеми его районами и локациями.
+    """
+    # Проверяем существование региона
+    region_result = await session.execute(
+        select(Region).where(Region.id == region_id)
+    )
+    region = region_result.scalars().first()
+    if not region:
+        raise HTTPException(status_code=404, detail="Region not found")
+
+    # Получаем все районы этого региона
+    districts_result = await session.execute(
+        select(District).where(District.region_id == region_id)
+    )
+    districts = districts_result.scalars().all()
+
+    # Для каждого района — удаляем
+    for d in districts:
+        await delete_district(session, d.id, commit=False)
+
+    # Удаляем сам регион
+    await session.execute(
+        delete(Region).where(Region.id == region_id)
+    )
