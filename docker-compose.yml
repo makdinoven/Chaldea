@@ -1,4 +1,219 @@
-version: "2.4"
+#version: "3.9"
+#services:
+#  frontend:
+#    container_name: frontend
+#    build:
+#      context: .
+#      dockerfile: ./docker/frontend/Dockerfile
+#    working_dir: /app
+#    command: sh -c "npm install --legacy-peer-deps && npm run dev"
+#    ports:
+#      - "5173:5173"
+#    environment:
+#      - CHOKIDAR_USEPOLLING=true
+#
+#  mysql:
+#    container_name: mysql
+#    build:
+#      context: .
+#      dockerfile: ./docker/mysql/Dockerfile
+#    environment:
+#      MYSQL_ROOT_PASSWORD: rootpassword
+#      MYSQL_DATABASE: mydatabase
+#      MYSQL_USER: myuser
+#      MYSQL_PASSWORD: mypassword
+#    ports:
+#      - "3306:3306"
+#    healthcheck:
+#      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${MYSQL_USER}", "--password=${MYSQL_PASSWORD}" ]
+#      interval: 5s
+#      timeout: 5s
+#      retries: 5
+#      start_period: 20s
+#
+#  adminer:
+#    container_name: adminer
+#    build:
+#      context: .
+#      dockerfile: ./docker/adminer/Dockerfile
+#    environment:
+#      ADMINER_DEFAULT_SERVER: mysql
+#    ports:
+#      - "8081:8080"
+#    depends_on:
+#      mysql:
+#        condition: service_healthy
+#
+#  rabbitmq:
+#    container_name: rabbitmq
+#    build:
+#      context: .
+#      dockerfile: ./docker/rabbitmq/Dockerfile
+#    environment:
+#      RABBITMQ_DEFAULT_USER: guest
+#      RABBITMQ_DEFAULT_PASS: guest
+#    ports:
+#      - "5672:5672"
+#      - "15672:15672"
+#    healthcheck:
+#      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
+#      interval: 5s
+#      timeout: 5s
+#      retries: 5
+#      start_period: 20s
+#
+#  user-service:
+#    container_name: user-service
+#    build:
+#      context: .
+#      dockerfile: ./docker/user-service/Dockerfile
+#    environment:
+#      DB_HOST: mysql
+#      DB_DATABASE: mydatabase
+#      DB_USERNAME: myuser
+#      DB_PASSWORD: mypassword
+#    ports:
+#      - "8000:8000"
+#    depends_on:
+#      mysql:
+#        condition: service_healthy
+#      rabbitmq:
+#        condition: service_healthy
+#
+#  photo-service:
+#    container_name: photo-service
+#    build:
+#      context: .
+#      dockerfile: ./docker/photo-service/Dockerfile
+#    environment:
+#      DB_HOST: mysql
+#      DB_DATABASE: mydatabase
+#      DB_USERNAME: myuser
+#      DB_PASSWORD: mypassword
+#      GCS_BUCKET_NAME: chaldea
+#      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/gcs-credentials.json
+#    depends_on:
+#      mysql:
+#        condition: service_healthy
+#    ports:
+#      - "8001:8001"
+#
+#  character-attributes-service:
+#    container_name: character-attributes-service
+#    build:
+#      context: .
+#      dockerfile: ./docker/character-attributes-service/Dockerfile
+#    environment:
+#      DB_HOST: mysql
+#      DB_DATABASE: mydatabase
+#      DB_USERNAME: myuser
+#      DB_PASSWORD: mypassword
+#      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+#    depends_on:
+#      mysql:
+#        condition: service_healthy
+#    ports:
+#      - "8002:8002"
+#
+#  skills-service:
+#    container_name: skills-service
+#    build:
+#      context: .
+#      dockerfile: ./docker/skills-service/Dockerfile
+#    environment:
+#      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+#      DB_HOST: mysql
+#      DB_DATABASE: mydatabase
+#      DB_USERNAME: myuser
+#      DB_PASSWORD: mypassword
+#    depends_on:
+#      mysql:
+#        condition: service_healthy
+#    ports:
+#      - "8003:8003"
+#
+#  inventory-service:
+#    container_name: inventory-service
+#    build:
+#      context: .
+#      dockerfile: ./docker/inventory-service/Dockerfile
+#    environment:
+#      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+#      DB_HOST: mysql
+#      DB_DATABASE: mydatabase
+#      DB_USERNAME: myuser
+#      DB_PASSWORD: mypassword
+#    depends_on:
+#      mysql:
+#        condition: service_healthy
+#    ports:
+#      - "8004:8004"
+#
+#  character-service:
+#    container_name: character-service
+#    build:
+#      context: .
+#      dockerfile: ./docker/character-service/Dockerfile
+#    environment:
+#      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+#      DB_HOST: mysql
+#      DB_DATABASE: mydatabase
+#      DB_USERNAME: myuser
+#      DB_PASSWORD: mypassword
+#    depends_on:
+#      mysql:
+#        condition: service_healthy
+#    ports:
+#      - "8005:8005"
+#
+#  locations-service:
+#    container_name: locations-service
+#    build:
+#      context: .
+#      dockerfile: ./docker/locations-service/Dockerfile
+#    environment:
+#      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+#      DB_HOST: mysql
+#      DB_DATABASE: mydatabase
+#      DB_USERNAME: myuser
+#      DB_PASSWORD: mypassword
+#    depends_on:
+#      mysql:
+#        condition: service_healthy
+#    ports:
+#      - "8006:8006"
+#
+#  notification-service:
+#    container_name: notification-service
+#    build:
+#      context: .
+#      dockerfile: ./docker/notification-service/Dockerfile
+#    environment:
+#      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+#      DB_HOST: mysql
+#      DB_DATABASE: mydatabase
+#      DB_USERNAME: myuser
+#      DB_PASSWORD: mypassword
+#    depends_on:
+#      rabbitmq:
+#        condition: service_healthy
+#      mysql:
+#        condition: service_healthy
+#    ports:
+#      - "8007:8007"
+#
+#  api-gateway:
+#    container_name: api-gateway
+#    build:
+#      context: .
+#      dockerfile: ./docker/api-gateway/Dockerfile
+#    ports:
+#      - "8080:80"
+#    depends_on:
+#      - frontend
+#      - user-service
+
+version: "3.8"
 services:
   frontend:
     container_name: frontend
@@ -25,7 +240,7 @@ services:
     ports:
       - "3306:3306"
     healthcheck:
-      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${MYSQL_USER}", "--password=${MYSQL_PASSWORD}" ]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${MYSQL_USER}", "--password=${MYSQL_PASSWORD}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -40,9 +255,6 @@ services:
       ADMINER_DEFAULT_SERVER: mysql
     ports:
       - "8081:8080"
-    depends_on:
-      mysql:
-        condition: service_healthy
 
   rabbitmq:
     container_name: rabbitmq
@@ -56,7 +268,7 @@ services:
       - "5672:5672"
       - "15672:15672"
     healthcheck:
-      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -74,11 +286,6 @@ services:
       DB_PASSWORD: mypassword
     ports:
       - "8000:8000"
-    depends_on:
-      mysql:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
 
   photo-service:
     container_name: photo-service
@@ -92,9 +299,6 @@ services:
       DB_PASSWORD: mypassword
       GCS_BUCKET_NAME: chaldea
       GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/gcs-credentials.json
-    depends_on:
-      mysql:
-        condition: service_healthy
     ports:
       - "8001:8001"
 
@@ -109,9 +313,6 @@ services:
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-    depends_on:
-      mysql:
-        condition: service_healthy
     ports:
       - "8002:8002"
 
@@ -126,9 +327,6 @@ services:
       DB_DATABASE: mydatabase
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
-    depends_on:
-      mysql:
-        condition: service_healthy
     ports:
       - "8003:8003"
 
@@ -143,9 +341,6 @@ services:
       DB_DATABASE: mydatabase
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
-    depends_on:
-      mysql:
-        condition: service_healthy
     ports:
       - "8004:8004"
 
@@ -160,9 +355,6 @@ services:
       DB_DATABASE: mydatabase
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
-    depends_on:
-      mysql:
-        condition: service_healthy
     ports:
       - "8005:8005"
 
@@ -177,9 +369,6 @@ services:
       DB_DATABASE: mydatabase
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
-    depends_on:
-      mysql:
-        condition: service_healthy
     ports:
       - "8006:8006"
 
@@ -194,11 +383,6 @@ services:
       DB_DATABASE: mydatabase
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-      mysql:
-        condition: service_healthy
     ports:
       - "8007:8007"
 
@@ -209,6 +393,3 @@ services:
       dockerfile: ./docker/api-gateway/Dockerfile
     ports:
       - "8080:80"
-    depends_on:
-      - frontend
-      - user-service
