@@ -1,31 +1,16 @@
 version: "3.8"
 services:
-#  frontend:
-#    build:
-#      context: .
-#      dockerfile: ./docker/frontend/Dockerfile
-#    volumes:
-#      - ./services/frontend/app-chaldea:/app
-#      - /app/node_modules
-#      - /app/dist
-#    working_dir: /app
-#    command: sh -c "npm install --legacy-peer-deps && npm run build --watch"
-
   frontend:
     container_name: frontend
     build:
       context: .
       dockerfile: ./docker/frontend/Dockerfile
-    volumes:
-      - ./services/frontend/app-chaldea:/app
-#      - /app/node_modules
     working_dir: /app
     command: sh -c "npm install --legacy-peer-deps && npm run dev"
     ports:
       - "5173:5173"
     environment:
       - CHOKIDAR_USEPOLLING=true
-
 
   mysql:
     container_name: mysql
@@ -37,31 +22,14 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - ./docker/mysql/backups:/backups
     ports:
-      - '3306:3306'
+      - "3306:3306"
     healthcheck:
       test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${MYSQL_USER}", "--password=${MYSQL_PASSWORD}" ]
       interval: 5s
       timeout: 5s
       retries: 5
       start_period: 20s
-
-#  phpmyadmin:
-#        build:
-#          context: .
-#          dockerfile: ./docker/phpmyadmin/Dockerfile
-#        environment:
-#          PMA_HOST: mysql
-#          PMA_PORT: 3306
-#          PMA_USER: myuser
-#          PMA_PASSWORD: mypassword
-#        ports:
-#          - "8081:80"
-#        depends_on:
-#          - mysql
 
   adminer:
     container_name: adminer
@@ -85,8 +53,8 @@ services:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
     ports:
-      - '5672:5672'
-      - '15672:15672'
+      - "5672:5672"
+      - "15672:15672"
     healthcheck:
       test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
       interval: 5s
@@ -100,19 +68,17 @@ services:
       context: .
       dockerfile: ./docker/user-service/Dockerfile
     environment:
-        DB_HOST: mysql
-        DB_DATABASE: mydatabase
-        DB_USERNAME: myuser
-        DB_PASSWORD: mypassword
+      DB_HOST: mysql
+      DB_DATABASE: mydatabase
+      DB_USERNAME: myuser
+      DB_PASSWORD: mypassword
     ports:
-        - "8000:8000"
-    volumes:
-        - ./services/user-service:/var/www
+      - "8000:8000"
     depends_on:
-        mysql:
-          condition: service_healthy
-        rabbitmq:
-          condition: service_healthy
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
   photo-service:
     container_name: photo-service
@@ -124,11 +90,8 @@ services:
       DB_DATABASE: mydatabase
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
-      GCS_BUCKET_NAME: chaldea  # Замените на название вашего бакета
-      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/gcs-credentials.json  # Путь к файлу ключа
-    volumes:
-      - ./services/photo-service:/app
-      - ./services/photo-service/credentials/gcs-credentials.json:/app/credentials/gcs-credentials.json:ro
+      GCS_BUCKET_NAME: chaldea
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/gcs-credentials.json
     depends_on:
       mysql:
         condition: service_healthy
@@ -151,8 +114,6 @@ services:
         condition: service_healthy
     ports:
       - "8002:8002"
-    volumes:
-      - ./services/character-attributes-service/app:/app
 
   skills-service:
     container_name: skills-service
@@ -170,8 +131,6 @@ services:
         condition: service_healthy
     ports:
       - "8003:8003"
-    volumes:
-      - ./services/skills-service/app:/app
 
   inventory-service:
     container_name: inventory-service
@@ -189,8 +148,6 @@ services:
         condition: service_healthy
     ports:
       - "8004:8004"
-    volumes:
-      - ./services/inventory-service/app:/app
 
   character-service:
     container_name: character-service
@@ -208,8 +165,6 @@ services:
         condition: service_healthy
     ports:
       - "8005:8005"
-    volumes:
-      - ./services/character-service/app:/app
 
   locations-service:
     container_name: locations-service
@@ -227,8 +182,6 @@ services:
         condition: service_healthy
     ports:
       - "8006:8006"
-    volumes:
-      - ./services/locations-service/app:/app
 
   notification-service:
     container_name: notification-service
@@ -248,24 +201,14 @@ services:
         condition: service_healthy
     ports:
       - "8007:8007"
-    volumes:
-      - ./services/notification-service/app:/app
-
 
   api-gateway:
     container_name: api-gateway
     build:
       context: .
       dockerfile: ./docker/api-gateway/Dockerfile
-    volumes:
-      - ./services/frontend/app-chaldea/dist:/usr/share/nginx/html
-      - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf
-      - ./services/photo-service/media:/var/www/photo-service/media
     ports:
-      - "80:80"
+      - "8080:80"
     depends_on:
       - frontend
       - user-service
-
-volumes:
-  mysql_data:
