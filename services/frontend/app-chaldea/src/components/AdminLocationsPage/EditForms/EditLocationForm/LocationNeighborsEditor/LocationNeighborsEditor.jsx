@@ -1,149 +1,84 @@
 import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-
-// Экшены для получения всех локаций и удаления соседей
+// Пример: removeNeighbor — Thunk (DELETE /locations/:locId/neighbors/:neighborId)
 import { fetchAllLocations, removeNeighbor } from '../../../../../redux/actions/locationEditActions';
 import { selectLocationEdit } from '../../../../../redux/selectors/locationSelectors';
-
 import LocationSearch from '../../../../CommonComponents/LocationSearch/LocationSearch';
 import s from './LocationNeighborsEditor.module.scss';
 
-/**
- * Компонент для отображения и редактирования соседних локаций.
- *
- * @param {object} props
- * @param {object} props.formData - Данные текущей локации (минимум id).
- * @param {Array} props.neighbors - Изначальный список соседей ([{ neighbor_id, energy_cost }, ...]).
- * @param {function} [props.onAdd] - Колбэк, вызываемый при добавлении соседа (не обязательно).
- */
 const LocationNeighborsEditor = ({
-  formData,
-  neighbors = [],
-  onAdd
+  formData,           // Данные текущей локации (id, ...)
+  neighbors,          // Локальный массив: [{ neighbor_id, energy_cost }, ...]
+  onAdd,              // Callback при добавлении
+  onRemove,           // Callback при удалении — если хотим управлять из родителя
+  canDeleteImmediately = true // Можно ли сразу делать DELETE на сервер
 }) => {
   const dispatch = useDispatch();
   const { allLocations } = useSelector(selectLocationEdit);
 
-  // ------------------------------------------
-  // Локальный стейт для "всех соседей" в UI
-  // ------------------------------------------
-  const [localNeighbors, setLocalNeighbors] = useState(neighbors);
-
-  // ------------------------------------------
-  // Стейт для формы добавления соседа
-  // ------------------------------------------
+  // Локальный стейт для выбора при добавлении
   const [selectedNeighbor, setSelectedNeighbor] = useState('');
   const [energyCost, setEnergyCost] = useState(1);
-  const [neighborsList, setNeighborsList] = useState([]); // Все локации минус текущая
+  const [neighborsList, setNeighborsList] = useState([]);
 
-  // 1) При первом рендере загружаем список всех локаций
   useEffect(() => {
     dispatch(fetchAllLocations());
   }, [dispatch]);
 
-  // 2) Когда приходят/обновляются пропсы neighbors, синхронизируем
-  useEffect(() => {
-    setLocalNeighbors(neighbors);
-  }, [neighbors]);
-
-  // 3) Когда получаем allLocations, формируем список
-  //    возможных "кандидатов" в соседи (не включая саму себя)
   useEffect(() => {
     if (allLocations && allLocations.length > 0) {
       setNeighborsList(allLocations.filter(loc => loc.id !== formData.id));
     }
   }, [allLocations, formData.id]);
 
-  // ------------------------------------------
   // Вспомогательная функция
-  // ------------------------------------------
   const getLocationName = (locationId) => {
-    const location = allLocations.find(loc => loc.id === parseInt(locationId));
-    return location ? location.name : `Локация #${locationId}`;
+    const found = allLocations.find(loc => loc.id === parseInt(locationId));
+    return found ? found.name : `Локация #${locationId}`;
   };
 
-  // ------------------------------------------
-  // Обработчики
-  // ------------------------------------------
-  const handleNeighborSelect = (eOrValue) => {
-    let value;
-    if (eOrValue && eOrValue.target) {
-      value = eOrValue.target.value;
-    } else {
-      value = eOrValue;
-    }
-    setSelectedNeighbor(value);
-  };
-
-  const handleEnergyCostChange = (e) => {
-    setEnergyCost(parseInt(e.target.value) || 1);
-  };
-
-  // Добавляем соседа:
-  // - Если у вас уже есть колбэк onAdd (который, например, делает POST /neighbors/),
-  //   используем его. Если нет, можно самостоятельно диспатчить экшен addNeighbor.
-  const handleAddNeighbor = async () => {
+  // Добавить соседа в локальный массив (и, если нужно, сразу POST на сервер)
+  const handleAddNeighbor = () => {
     if (!selectedNeighbor) return;
-    const neighborIdInt = parseInt(selectedNeighbor);
+    const neighborId = parseInt(selectedNeighbor);
 
-    // Проверяем, нет ли уже такого соседа
-    const alreadyExists = localNeighbors.some(
-      n => n.neighbor_id === neighborIdInt
-    );
-    if (alreadyExists) {
-      alert('Такой сосед уже существует!');
+    if (neighbors.some(n => n.neighbor_id === neighborId)) {
+      alert('Сосед уже есть');
       return;
     }
-
-    // Если проп onAdd передан, вызовем его
-    if (onAdd) {
-      await onAdd({
-        neighbor_id: neighborIdInt,
-        energy_cost: energyCost
-      });
-    }
-
-    // Локально добавляем его в список
     const newNeighbor = {
-      neighbor_id: neighborIdInt,
+      neighbor_id: neighborId,
       energy_cost: energyCost
     };
-    setLocalNeighbors(prev => [...prev, newNeighbor]);
 
-    // Сброс полей
+    // Вызываем onAdd (переданный из родителя EditLocationForm)
+    onAdd?.(newNeighbor);
+
     setSelectedNeighbor('');
     setEnergyCost(1);
   };
 
-  // Удаляем соседа через Thunk removeNeighbor,
-  // а затем локально вырезаем его из массива
+  // Удалить соседа (локально и с сервера)
   const handleRemoveNeighbor = async (neighborId) => {
-    if (!window.confirm(`Удалить соседа #${neighborId}?`)) {
-      return;
+    // Если хотим сразу удалять на сервере (DELETE /locations/:id/neighbors/:neighborId):
+    if (canDeleteImmediately && formData.id !== 'new') {
+      await dispatch(removeNeighbor({
+        locationId: formData.id,
+        neighborId
+      }));
     }
-    try {
-      // 1) Вызываем DELETE /locations/{formData.id}/neighbors/{neighborId} на бэкенде
-      await dispatch(removeNeighbor({ locationId: formData.id, neighborId }));
-
-      // 2) Мгновенно убираем из localNeighbors (UI‑списка)
-      setLocalNeighbors(prev => prev.filter(n => n.neighbor_id !== neighborId));
-    } catch (err) {
-      console.error('Ошибка при удалении соседа:', err);
-    }
+    // Вызываем onRemove (чтобы родитель тоже удалил его из локального массива)
+    onRemove?.(neighborId);
   };
 
-  // ------------------------------------------
-  // Render
-  // ------------------------------------------
   return (
     <div className={s.neighbors_editor}>
-      {/* Форма добавления соседа */}
       <div className={s.add_neighbor}>
         <div className={s.neighbor_search_container}>
           <LocationSearch
             name="neighbor_id"
             value={selectedNeighbor}
-            onChange={handleNeighborSelect}
+            onChange={(e) => setSelectedNeighbor(e.target.value)}
             locations={neighborsList}
             placeholder="Выберите соседнюю локацию"
             className={s.neighbor_search}
@@ -155,7 +90,7 @@ const LocationNeighborsEditor = ({
             type="number"
             min="1"
             value={energyCost}
-            onChange={handleEnergyCostChange}
+            onChange={(e) => setEnergyCost(parseInt(e.target.value) || 1)}
             placeholder="Энергия"
             className={s.energy_input}
           />
@@ -171,21 +106,20 @@ const LocationNeighborsEditor = ({
         </button>
       </div>
 
-      {/* Список текущих соседей */}
       <div className={s.neighbors_list}>
-        {localNeighbors.length > 0 ? (
-          localNeighbors.map((neighbor) => (
-            <div key={neighbor.neighbor_id} className={s.neighbor_item}>
+        {neighbors.length > 0 ? (
+          neighbors.map((n) => (
+            <div key={n.neighbor_id} className={s.neighbor_item}>
               <span className={s.location_name}>
-                {getLocationName(neighbor.neighbor_id)}
+                {getLocationName(n.neighbor_id)}
               </span>
               <span className={s.energy_cost}>
-                Энергия: {neighbor.energy_cost}
+                Энергия: {n.energy_cost}
               </span>
               <button
                 type="button"
                 className={s.remove_button}
-                onClick={() => handleRemoveNeighbor(neighbor.neighbor_id)}
+                onClick={() => handleRemoveNeighbor(n.neighbor_id)}
               >
                 Удалить
               </button>
