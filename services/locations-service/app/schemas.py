@@ -47,6 +47,7 @@ class LocationBase(BaseModel):
     description: str
 
 class LocationCreate(BaseModel):
+    id: int
     name: str
     district_id: int
     parent_id: Optional[int] = None
