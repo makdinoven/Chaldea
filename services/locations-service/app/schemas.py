@@ -47,6 +47,15 @@ class LocationBase(BaseModel):
     description: str
 
 class LocationCreate(BaseModel):
+    name: str
+    district_id: int
+    parent_id: Optional[int] = None
+    description: Optional[str] = ""
+    image_url: Optional[str] = ""
+    recommended_level: Optional[int] = 1
+    quick_travel_marker: Optional[bool] = False
+
+class LocationCreateResponse(BaseModel):
     id: int
     name: str
     district_id: int

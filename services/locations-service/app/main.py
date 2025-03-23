@@ -202,7 +202,7 @@ async def delete_district_route(
 # --------------------------------------------------------------------
 # LOCATION
 # --------------------------------------------------------------------
-@router.post("/", response_model=schemas.LocationCreate)
+@router.post("/", response_model=schemas.LocationCreateResponse)
 async def create_location(location: schemas.LocationCreate, db: AsyncSession = Depends(get_db)):
     try:
         db_location = await crud.create_location(db, location)
