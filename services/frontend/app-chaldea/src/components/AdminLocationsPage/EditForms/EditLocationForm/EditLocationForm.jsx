@@ -140,82 +140,86 @@ const EditLocationForm = ({ locationId = 'new', initialData, onCancel, onSuccess
     // ------------------------
     //   Сабмит формы
     // ------------------------
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        if (isUploading) return;
+     const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (isUploading) return;
 
-        if (!formData.name || !formData.district_id) {
-            console.error('Не заполнены обязательные поля: name, district_id');
-            return;
+    if (!formData.name || !formData.district_id) {
+        console.error('Не заполнены обязательные поля: name, district_id');
+        return;
+    }
+
+    setIsUploading(true);
+    try {
+        // Подготавливаем данные для локации
+        const { parent_id, ...rest } = formData;
+        const locationData = {
+            ...rest,
+            ...(parent_id ? { parent_id: Number(parent_id) } : {}),
+            recommended_level: formData.recommended_level
+                ? Number(formData.recommended_level)
+                : 1,
+            type: 'location',
+            quick_travel_marker: Boolean(formData.quick_travel_marker),
+            district_id: Number(formData.district_id),
+        };
+
+        // 1) Если редактируем — updateLocation, иначе createLocation
+        const action = locationId !== 'new' ? updateLocation : createLocation;
+        const result = await dispatch(action(locationData)).unwrap();
+        // Теперь в result.id содержится фактический ID локации
+        // (новой или существующей)
+
+        // 2) Если только что создали новую локацию и есть parent_id,
+        // переводим родительскую локацию в тип 'subdistrict'
+        if (locationId === 'new' && formData.parent_id) {
+            try {
+                await dispatch(updateLocation({
+                    id: formData.parent_id,
+                    type: 'subdistrict'
+                })).unwrap();
+            } catch (error) {
+                console.error('Ошибка при обновлении типа родителя:', error);
+            }
         }
 
-        setIsUploading(true);
-        try {
-            // Подготавливаем данные для локации
-            const { parent_id, ...rest } = formData;
-            const locationData = {
-                ...rest,
-                ...(parent_id ? { parent_id: Number(parent_id) } : {}),
-                recommended_level: formData.recommended_level
-                    ? Number(formData.recommended_level)
-                    : 1,
-                type: 'location',
-                quick_travel_marker: Boolean(formData.quick_travel_marker),
-                district_id: Number(formData.district_id)
-            };
-
-            // Если это создание или редактирование
-            const action = (locationId !== 'new') ? updateLocation : createLocation;
-            const result = await dispatch(action(locationData)).unwrap();
-
-            // Если у новой локации есть parent_id -> переводим родителя в type='subdistrict'
-            if (locationId === 'new' && formData.parent_id) {
-                try {
-                    await dispatch(updateLocation({
-                        id: formData.parent_id,
-                        type: 'subdistrict'
-                    })).unwrap();
-                } catch (error) {
-                    console.error('Ошибка при обновлении типа родителя:', error);
-                }
+        // 3) Если загрузили изображение — отправляем его
+        if (selectedImage) {
+            try {
+                await dispatch(uploadLocationImage({
+                    locationId: result.id,  // используем ID, возвращённый при создании/обновлении
+                    file: selectedImage
+                })).unwrap();
+            } catch (imgError) {
+                console.error('Ошибка при загрузке изображения:', imgError);
             }
-
-            // Загрузка изображения, если выбрали
-            if (selectedImage) {
-                try {
-                    await dispatch(uploadLocationImage({
-                        locationId: result.id, // id созданной/обновленной локации
-                        file: selectedImage
-                    })).unwrap();
-                } catch (imgError) {
-                    console.error('Ошибка при загрузке изображения:', imgError);
-                }
-            }
-
-            // --- Обновляем соседей (если есть) ---
-            // Локация может быть новой => берем result.id
-            const newLocationId = locationId === 'new' ? result.id : locationId;
-            if (neighbors.length > 0) {
-                try {
-                    // Вызываем роут обновления (или создания) соседей
-                    await dispatch(updateLocationNeighbors({
-                        locationId: newLocationId,
-                        neighbors
-                    })).unwrap();
-                    console.log('Соседи успешно обновлены');
-                } catch (neighborError) {
-                    console.error('Ошибка при обновлении соседей:', neighborError);
-                }
-            }
-
-            // Финальный колбэк
-            onSuccess(formData.district_id, dispatch);
-        } catch (error) {
-            console.error('Ошибка при сохранении локации:', error);
-        } finally {
-            setIsUploading(false);
         }
-    };
+
+        // 4) Обновляем соседей (если они есть в стейте)
+        // Для новой локации берём result.id, для существующей — locationId
+        const newLocationId = (locationId === 'new') ? result.id : locationId;
+
+        if (neighbors.length > 0) {
+            try {
+                await dispatch(updateLocationNeighbors({
+                    locationId: newLocationId,  // <-- теперь не undefined
+                    neighbors
+                })).unwrap();
+                console.log('Соседи успешно обновлены');
+            } catch (neighborError) {
+                console.error('Ошибка при обновлении соседей:', neighborError);
+            }
+        }
+
+        // 5) Завершающее действие (например, закрыть форму, обновить список и т.д.)
+        onSuccess(formData.district_id, dispatch);
+
+    } catch (error) {
+        console.error('Ошибка при сохранении локации:', error);
+    } finally {
+        setIsUploading(false);
+    }
+};
 
     // ------------------------
     //   Рендер
