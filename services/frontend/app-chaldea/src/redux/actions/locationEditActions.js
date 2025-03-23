@@ -196,3 +196,19 @@ export const deleteLocation = createAsyncThunk(
     }
 );
 
+export const removeNeighbor = createAsyncThunk(
+  'locationEdit/removeNeighbor',
+  async ({ locationId, neighborId }, { rejectWithValue }) => {
+    try {
+      // Вызываем роут DELETE /locations/{locationId}/neighbors/{neighborId}
+      const url = `http://4452515-co41851.twc1.net:8006/locations/${locationId}/neighbors/${neighborId}`;
+      await axios.delete(url);
+
+      // Возвращаем данные, чтобы редьюсер мог обновить стейт, если нужно
+      return { locationId, neighborId };
+    } catch (error) {
+      return rejectWithValue(error.response?.data || error.message);
+    }
+  }
+);
+

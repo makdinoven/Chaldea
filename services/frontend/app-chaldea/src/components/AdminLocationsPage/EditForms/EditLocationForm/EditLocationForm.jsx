@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import Input from '../../../CommonComponents/Input/Input';
 import LocationSearch from '../../../CommonComponents/LocationSearch/LocationSearch';
-import { 
-    createLocation, 
-    updateLocation, 
+
+import {
+    createLocation,
+    updateLocation,
     uploadLocationImage,
     updateLocationNeighbors,
     fetchLocationDetails,
@@ -12,97 +12,104 @@ import {
     fetchAllLocations
 } from '../../../../redux/actions/locationEditActions';
 import { selectLocationEdit } from '../../../../redux/selectors/locationSelectors';
+
 import s from './EditLocationForm.module.scss';
 import LocationNeighborsEditor from './LocationNeighborsEditor/LocationNeighborsEditor';
-import { fetchRegionDetails } from '../../../../redux/actions/adminLocationsActions';
 
 const EditLocationForm = ({ locationId = 'new', initialData, onCancel, onSuccess }) => {
     const dispatch = useDispatch();
     const { currentLocation, districtLocations, allLocations } = useSelector(selectLocationEdit);
-    
-    console.log('EditLocationForm render:', { locationId, initialData, currentLocation });
-    
+
+    // ------------------------
+    //   Локальный стейт
+    // ------------------------
     const [formData, setFormData] = useState({
         name: '',
         district_id: '',
         parent_id: null,
         description: '',
         recommended_level: 1,
-        quick_travel_marker: false,
+        quick_travel_marker: false, // по умолчанию false
         ...initialData
     });
-    
-    console.log('formData after initialization:', formData);
-    
+
     const [isUploading, setIsUploading] = useState(false);
     const [selectedImage, setSelectedImage] = useState(null);
     const [imagePreview, setImagePreview] = useState(initialData?.image_url || '');
+
+    // Список соседей (neighbor_id, energy_cost)
     const [neighbors, setNeighbors] = useState([]);
-    
+
+    // ------------------------
+    //   Эффекты
+    // ------------------------
     useEffect(() => {
+        // Если редактируем существующую локацию, подгружаем её детали
         if (locationId !== 'new') {
             dispatch(fetchLocationDetails(locationId));
         }
     }, [dispatch, locationId]);
 
     useEffect(() => {
+        // Если у нас уже есть district_id, грузим все локации этого района
         if (locationId !== 'new' && formData.district_id) {
             dispatch(fetchLocationsList(formData.district_id));
         }
     }, [dispatch, formData.district_id, locationId]);
 
+    // Список всех локаций (для LocationSearch)
     useEffect(() => {
         dispatch(fetchAllLocations());
     }, [dispatch]);
 
-    useEffect(() => {
-        console.log('districtLocations:', districtLocations);
-    }, [districtLocations]);
-
+    // Когда подгрузились детали текущей локации — заполняем форму
     useEffect(() => {
         if (currentLocation && locationId !== 'new') {
-            console.log('Setting formData from currentLocation:', currentLocation);
             setFormData({
                 ...currentLocation,
                 recommended_level: currentLocation.recommended_level || 1,
-                parent_id: currentLocation.parent_id || null
+                parent_id: currentLocation.parent_id || null,
+                quick_travel_marker: currentLocation.quick_travel_marker ?? false
             });
             if (Array.isArray(currentLocation.neighbors)) {
-                setNeighbors(currentLocation.neighbors.map(n => ({
-                    neighbor_id: n.neighbor_id,
-                    energy_cost: n.energy_cost || 1
-                })));
+                setNeighbors(
+                    currentLocation.neighbors.map(n => ({
+                        neighbor_id: n.neighbor_id,
+                        energy_cost: n.energy_cost || 1
+                    }))
+                );
             } else {
                 setNeighbors([]);
             }
         }
     }, [currentLocation, locationId]);
 
+    // ------------------------
+    //   Обработчики полей
+    // ------------------------
     const handleChange = (e) => {
-        console.log('handleChange called:', e.target.name, e.target.value);
-        if (!e.target || !e.target.name) {
-            console.error('Invalid event in handleChange:', e);
-            return;
-        }
+        if (!e.target || !e.target.name) return;
         const { name, value, type } = e.target;
-        setFormData(prev => {
-            const newData = {
-                ...prev,
-                [name]: type === 'number' ? (value === '' ? '' : Number(value)) : value
-            };
-            console.log('Updated formData:', newData);
-            return newData;
-        });
+        setFormData(prev => ({
+            ...prev,
+            [name]: (type === 'number')
+                ? (value === '' ? '' : Number(value))
+                : value
+        }));
     };
 
-    // Обновленный обработчик для изменения родительской локации,
-    // который ожидает объект события с target (name и value)
     const handleParentChange = (e) => {
-        console.log('handleParentChange called:', e.target.name, e.target.value);
         const { value } = e.target;
         setFormData(prev => ({
             ...prev,
             parent_id: value ? Number(value) : null
+        }));
+    };
+
+    const handleQuickTravelChange = (e) => {
+        setFormData(prev => ({
+            ...prev,
+            quick_travel_marker: e.target.checked
         }));
     };
 
@@ -118,79 +125,90 @@ const EditLocationForm = ({ locationId = 'new', initialData, onCancel, onSuccess
         }
     };
 
+    // ------------------------
+    //   Обработчики соседей
+    // ------------------------
     const handleNeighborAdd = (neighbor) => {
+        // Если уже есть такой neighbor_id, пропускаем
         if (!neighbor || neighbors.some(n => n.neighbor_id === neighbor.neighbor_id)) return;
         setNeighbors(prev => [...prev, neighbor]);
     };
-
     const handleNeighborRemove = (neighborId) => {
         setNeighbors(prev => prev.filter(n => n.neighbor_id !== neighborId));
     };
 
+    // ------------------------
+    //   Сабмит формы
+    // ------------------------
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (isUploading) return;
-    
+
         if (!formData.name || !formData.district_id) {
-            console.error('Не заполнены обязательные поля');
+            console.error('Не заполнены обязательные поля: name, district_id');
             return;
         }
-    
+
         setIsUploading(true);
         try {
-            const { parent_id, ...restFormData } = formData;
+            // Подготавливаем данные для локации
+            const { parent_id, ...rest } = formData;
             const locationData = {
-                ...restFormData,
+                ...rest,
                 ...(parent_id ? { parent_id: Number(parent_id) } : {}),
-                recommended_level: formData.recommended_level ? Number(formData.recommended_level) : 1,
+                recommended_level: formData.recommended_level
+                    ? Number(formData.recommended_level)
+                    : 1,
                 type: 'location',
                 quick_travel_marker: Boolean(formData.quick_travel_marker),
                 district_id: Number(formData.district_id)
             };
-    
-            console.log('Подготовленные данные для отправки:', locationData);
-    
-            const action = locationId !== 'new' ? updateLocation : createLocation;
+
+            // Если это создание или редактирование
+            const action = (locationId !== 'new') ? updateLocation : createLocation;
             const result = await dispatch(action(locationData)).unwrap();
-    
+
+            // Если у новой локации есть parent_id -> переводим родителя в type='subdistrict'
             if (locationId === 'new' && formData.parent_id) {
                 try {
                     await dispatch(updateLocation({
                         id: formData.parent_id,
                         type: 'subdistrict'
                     })).unwrap();
-                    console.log('Тип родительской локации обновлен на subdistrict');
                 } catch (error) {
                     console.error('Ошибка при обновлении типа родителя:', error);
                 }
             }
-    
+
+            // Загрузка изображения, если выбрали
             if (selectedImage) {
                 try {
                     await dispatch(uploadLocationImage({
-                        locationId: result.id,
+                        locationId: result.id, // id созданной/обновленной локации
                         file: selectedImage
                     })).unwrap();
-                    console.log('Изображение успешно загружено');
-                } catch (imageError) {
-                    console.error('Ошибка при загрузке изображения:', imageError);
+                } catch (imgError) {
+                    console.error('Ошибка при загрузке изображения:', imgError);
                 }
             }
-    
-            if (locationId !== 'new' && neighbors.length > 0) {
+
+            // --- Обновляем соседей (если есть) ---
+            // Локация может быть новой => берем result.id
+            const newLocationId = locationId === 'new' ? result.id : locationId;
+            if (neighbors.length > 0) {
                 try {
+                    // Вызываем роут обновления (или создания) соседей
                     await dispatch(updateLocationNeighbors({
-                        locationId: result.id,
-                        neighbors: neighbors
+                        locationId: newLocationId,
+                        neighbors
                     })).unwrap();
                     console.log('Соседи успешно обновлены');
                 } catch (neighborError) {
                     console.error('Ошибка при обновлении соседей:', neighborError);
                 }
-            } else {
-                console.log('Нет соседей для обновления');
             }
-    
+
+            // Финальный колбэк
             onSuccess(formData.district_id, dispatch);
         } catch (error) {
             console.error('Ошибка при сохранении локации:', error);
@@ -199,14 +217,23 @@ const EditLocationForm = ({ locationId = 'new', initialData, onCancel, onSuccess
         }
     };
 
+    // ------------------------
+    //   Рендер
+    // ------------------------
     return (
         <div className={s.edit_location_form}>
-            <h2>{initialData?.id ? 'ИЗМЕНЕНИЕ ЛОКАЦИИ' : 'СОЗДАНИЕ ЛОКАЦИИ'}</h2>
-            
+            <h2>
+                {locationId !== 'new'
+                    ? 'ИЗМЕНЕНИЕ ЛОКАЦИИ'
+                    : 'СОЗДАНИЕ ЛОКАЦИИ'
+                }
+            </h2>
+
             <form onSubmit={handleSubmit}>
                 <div className={s.form_section}>
                     <h3>Основная информация</h3>
-                    
+
+                    {/* Название */}
                     <div className={s.form_group}>
                         <label>НАЗВАНИЕ:</label>
                         <input
@@ -219,6 +246,7 @@ const EditLocationForm = ({ locationId = 'new', initialData, onCancel, onSuccess
                         />
                     </div>
 
+                    {/* Описание */}
                     <div className={s.form_group}>
                         <label>ОПИСАНИЕ:</label>
                         <textarea
@@ -230,6 +258,7 @@ const EditLocationForm = ({ locationId = 'new', initialData, onCancel, onSuccess
                         />
                     </div>
 
+                    {/* Рекомендуемый уровень */}
                     <div className={s.form_group}>
                         <label>РЕКОМЕНДУЕМЫЙ УРОВЕНЬ:</label>
                         <input
@@ -242,6 +271,20 @@ const EditLocationForm = ({ locationId = 'new', initialData, onCancel, onSuccess
                         />
                     </div>
 
+                    {/* Чекбокс "быстрый переход" */}
+                    <div className={s.form_group}>
+                        <label>
+                            <input
+                                type="checkbox"
+                                name="quick_travel_marker"
+                                checked={formData.quick_travel_marker}
+                                onChange={handleQuickTravelChange}
+                            />
+                            &nbsp;Возможность быстрого перехода
+                        </label>
+                    </div>
+
+                    {/* Родительская локация */}
                     <div className={s.form_group}>
                         <label>РОДИТЕЛЬСКАЯ ЛОКАЦИЯ:</label>
                         <LocationSearch
@@ -254,6 +297,7 @@ const EditLocationForm = ({ locationId = 'new', initialData, onCancel, onSuccess
                         />
                     </div>
 
+                    {/* Загрузка изображения */}
                     <div className={s.form_group}>
                         <label>ИЗОБРАЖЕНИЕ:</label>
                         <input
@@ -263,30 +307,42 @@ const EditLocationForm = ({ locationId = 'new', initialData, onCancel, onSuccess
                         />
                         {(imagePreview || formData.image_url) && (
                             <div className={s.image_preview}>
-                                <img src={imagePreview || formData.image_url} alt="Preview" />
+                                <img
+                                    src={imagePreview || formData.image_url}
+                                    alt="Preview"
+                                />
                             </div>
                         )}
                     </div>
                 </div>
 
-                {locationId !== 'new' && (
-                    <div className={s.form_section}>
-                        <h3>Соседние локации</h3>
-                        <LocationNeighborsEditor
-                            formData={formData}
-                            onChange={handleChange}
-                            neighbors={neighbors}
-                            onAdd={handleNeighborAdd}
-                            onRemove={handleNeighborRemove}
-                        />
-                    </div>
-                )}
+                {/*
+                  УБРАЛИ условие `locationId !== 'new'`
+                  - теперь при создании тоже можно выбирать соседей.
+                */}
+                <div className={s.form_section}>
+                    <h3>Соседние локации</h3>
+                    <LocationNeighborsEditor
+                        formData={formData}
+                        neighbors={neighbors}
+                        onAdd={handleNeighborAdd}
+                        onRemove={handleNeighborRemove}
+                    />
+                </div>
 
                 <div className={s.form_actions}>
-                    <button type="button" onClick={onCancel} className={s.cancel_button}>
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        className={s.cancel_button}
+                    >
                         Отмена
                     </button>
-                    <button type="submit" className={s.submit_button} disabled={isUploading}>
+                    <button
+                        type="submit"
+                        className={s.submit_button}
+                        disabled={isUploading}
+                    >
                         {isUploading ? 'Сохранение...' : 'Сохранить'}
                     </button>
                 </div>
