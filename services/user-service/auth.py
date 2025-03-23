@@ -11,7 +11,7 @@ from database import get_db
 # Секретный ключ и алгоритм шифрования
 SECRET_KEY = "your-secret-key"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 120
+ACCESS_TOKEN_EXPIRE_MINUTES = 1200
 REFRESH_TOKEN_EXPIRE_DAYS = 7  # Срок жизни рефреш-токена
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")

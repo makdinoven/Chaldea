@@ -653,50 +653,66 @@ async def get_location_children(db: AsyncSession, location_id: int):
         print(f"Ошибка при получении дочерних локаций: {e}")
         return []
 
+
 async def update_location_neighbors(
-    db: AsyncSession, 
-    location_id: int, 
-    neighbors: List[LocationNeighborCreate]
+        db: AsyncSession,
+        location_id: int,
+        neighbors: List[LocationNeighborCreate]
 ) -> List[dict]:
     """
-    Обновляет список соседей локации.
-    Удаляет все существующие связи и создает новые.
+    Обновляет (перезаписывает) список соседей для локации location_id.
+    Удаляет все существующие связи (X->N, N->X), и создаёт новые пары в обе стороны.
     """
     try:
-        # Используем ORM вместо текстового SQL
+        # 1) Удаляем любые связи, где X — одна из сторон
         await db.execute(
-            delete(LocationNeighbor).where(LocationNeighbor.location_id == location_id)
+            delete(LocationNeighbor).where(
+                (LocationNeighbor.location_id == location_id)
+                | (LocationNeighbor.neighbor_id == location_id)
+            )
         )
         await db.commit()
-        
-        # Создаем новые связи
+
+        # 2) Создаём новые связи (в обе стороны)
         new_neighbors = []
         for neighbor in neighbors:
-            # Проверяем существование соседней локации
+            # Сначала проверяем, что такая локация существует
             neighbor_exists = await db.execute(
                 select(Location).where(Location.id == neighbor.neighbor_id)
             )
             if not neighbor_exists.scalars().first():
-                continue  # Пропускаем несуществующие локации
-                
-            # Создаем новую связь
-            new_neighbor = LocationNeighbor(
+                # Если локации нет — пропускаем
+                continue
+
+            # Прямое направление X->N
+            forward = LocationNeighbor(
                 location_id=location_id,
                 neighbor_id=neighbor.neighbor_id,
                 energy_cost=neighbor.energy_cost
             )
-            db.add(new_neighbor)
+            db.add(forward)
+
+            # Обратное направление N->X
+            reverse = LocationNeighbor(
+                location_id=neighbor.neighbor_id,
+                neighbor_id=location_id,
+                energy_cost=neighbor.energy_cost
+            )
+            db.add(reverse)
+
+            # Добавляем в список для возврата клиенту
             new_neighbors.append({
                 "neighbor_id": neighbor.neighbor_id,
                 "energy_cost": neighbor.energy_cost
             })
-        
+
         await db.commit()
         return new_neighbors
     except Exception as e:
         await db.rollback()
         print(f"Ошибка при обновлении соседей: {e}")
-        # Важно: не пробрасываем исключение дальше, а возвращаем пустой список
+        # Возвращаем пустой список вместо выброса ошибки,
+        # чтобы не ронять сервис (по аналогии с вашим кодом).
         return []
 
 async def get_district_locations(session: AsyncSession, district_id: int):
