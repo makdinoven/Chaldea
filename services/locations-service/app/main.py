@@ -265,7 +265,7 @@ async def get_location_children(location_id: int, db: AsyncSession = Depends(get
         print(f"Ошибка при получении дочерних локаций: {e}")
         return []
 
-@router.delete("/locations/{location_id}/delete", response_model=dict)
+@router.delete("/{location_id}/delete", response_model=dict)
 async def delete_location_route(
     location_id: int,
     session: AsyncSession = Depends(get_db)
