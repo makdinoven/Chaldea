@@ -8,11 +8,17 @@ from config import settings
 SQLALCHEMY_DATABASE_URL = f"mysql+aiomysql://{settings.DB_USER}:{settings.DB_PASSWORD}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
 
 # Создаем асинхронный движок базы данных
-engine = create_async_engine(SQLALCHEMY_DATABASE_URL)
+engine = create_async_engine(
+    SQLALCHEMY_DATABASE_URL,
+    pool_recycle=3600,  # Пересоздавать соединения каждые 1 час
+    pool_pre_ping=True
+)
 
 # Изменяем создание сессии на асинхронную
 async_session = sessionmaker(
-    engine, class_=AsyncSession, expire_on_commit=False
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False
 )
 
 # Создаем базовый класс для моделей SQLAlchemy

@@ -81,7 +81,7 @@ class Location(Base):
     recommended_level = Column(Integer, nullable=False)
     quick_travel_marker = Column(Boolean, nullable=False)
     parent_id = Column(BigInteger, ForeignKey('Locations.id', ondelete="CASCADE"))
-    description = Column(Text), nullable=False)
+    description = Column(Text, nullable=False)
 
     # ЯВНО указываем, какие колонке использовать в ForeignKey для district:
     district = relationship(

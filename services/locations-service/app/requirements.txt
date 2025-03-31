@@ -1,7 +1,8 @@
-fastapi
-uvicorn
-sqlalchemy
+fastapi==0.115.11
+uvicorn==0.34.0
+sqlalchemy==2.0.39
 pymysql==1.1.1
 pydantic<2.0.0
-aiohttp
+aiohttp==3.11.14
 aiomysql==0.2.0
+pymysql==1.1.1
