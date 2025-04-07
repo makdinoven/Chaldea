@@ -6,6 +6,8 @@ import boto3
 from dotenv import load_dotenv
 from botocore import UNSIGNED
 from botocore.config import Config
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 load_dotenv()
 
