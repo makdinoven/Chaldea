@@ -1,3 +1,5 @@
+import traceback
+
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from crud import (
     update_user_avatar, get_user_avatar, update_user_avatar_preview,
@@ -195,6 +197,7 @@ async def change_skill_image(skill_id: int = Form(...), file: UploadFile = File(
             "image_url": image_url
         }
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -215,4 +218,5 @@ async def change_skill_rank_image(skill_rank_id: int = Form(...), file: UploadFi
             "image_url": image_url
         }
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
