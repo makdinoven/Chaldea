@@ -50,7 +50,7 @@ export const uploadSkillImage = createAsyncThunk(
     formData.append('skill_id', skillId);
     formData.append('file', file);
     try {
-      const res = await axios.post('http://4452515-co41851.twc1.net:8003/photo/change_skill_image', formData);
+      const res = await axios.post('http://4452515-co41851.twc1.net:8001/photo/change_skill_image', formData);
       return { skillId, image_url: res.data.image_url };
     } catch (err) {
       return rejectWithValue(err.response?.data || err.message);
@@ -66,7 +66,7 @@ export const uploadSkillRankImage = createAsyncThunk(
     formData.append('skill_rank_id', skillRankId);
     formData.append('file', file);
     try {
-      const res = await axios.post('http://4452515-co41851.twc1.net:8003/photo/change_skill_rank_image', formData);
+      const res = await axios.post('http://4452515-co41851.twc1.net:8001/photo/change_skill_rank_image', formData);
       return { skillRankId, image_url: res.data.image_url };
     } catch (err) {
       return rejectWithValue(err.response?.data || err.message);
