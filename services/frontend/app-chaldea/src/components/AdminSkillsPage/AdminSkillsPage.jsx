@@ -41,7 +41,7 @@ const AdminSkillsPage = () => {
     }
     try {
       // DELETE запрос
-      await axios.delete(`http://localhost:8003/skills/admin/skills/${skillId}`)
+      await axios.delete(`http://4452515-co41851.twc1.net:8003/skills/admin/skills/${skillId}`)
       // Обновляем список навыков, сбрасываем выделенный
       dispatch(fetchSkills())
       dispatch(clearSelectedSkillTree())

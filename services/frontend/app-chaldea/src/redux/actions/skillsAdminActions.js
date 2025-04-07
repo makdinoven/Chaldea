@@ -1,7 +1,7 @@
 // src/features/skills/skillsActions.js
 import { createAsyncThunk } from '@reduxjs/toolkit'
 import axios from 'axios'
- const BASE_URL = 'http://localhost:8003/skills'
+ const BASE_URL = 'http://4452515-co41851.twc1.net:8003/skills'
 
 // 1) Получить список навыков
 export const fetchSkills = createAsyncThunk(
