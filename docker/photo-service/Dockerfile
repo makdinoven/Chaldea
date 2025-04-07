@@ -19,9 +19,6 @@ COPY ./services/photo-service /app
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем Google Cloud Storage SDK и другие необходимые пакеты
-RUN pip install --no-cache-dir google-cloud-storage python-multipart
-
 # Указываем порт, который будет открыт для доступа к микросервису
 EXPOSE 8001
 

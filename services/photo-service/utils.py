@@ -4,32 +4,34 @@ from PIL import Image
 import io
 import boto3
 from dotenv import load_dotenv
-from botocore import UNSIGNED
 from botocore.config import Config
 import logging
-logging.basicConfig(level=logging.DEBUG)
+import hashlib
+import base64
 
+logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 
-# настройки s3 из окружения
-S3_ENDPOINT_URL = os.getenv('S3_ENDPOINT_URL')
+# Настройки из окружения
+S3_ENDPOINT_URL = os.getenv('S3_ENDPOINT_URL', 'https://s3.twcstorage.ru')
 S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 S3_REGION = os.getenv("S3_REGION", "ru-1")
 
-
+# Конфигурация клиента S3
 s3_client = boto3.client(
     's3',
-    endpoint_url='https://s3.twcstorage.ru',  # Обязательно правильный эндпоинт
-    region_name='ru-1',                        # Регион должен быть ru-1
-    aws_access_key_id='ВАШ_ACCESS_KEY',        # Логин аккаунта
-    aws_secret_access_key='ВАШ_SECRET_KEY',    # Пароль администратора
+    endpoint_url=S3_ENDPOINT_URL,
+    region_name=S3_REGION,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     config=Config(
-        signature_version='s3v4',             # Требуется версия подписи V4
-        s3={'addressing_style': 'path'}       # Критически важный параметр!
+        signature_version='s3v4',
+        s3={'addressing_style': 'path'}
     )
 )
+
 
 def convert_to_webp(input_file, quality=80) -> bytes:
     try:
@@ -38,9 +40,11 @@ def convert_to_webp(input_file, quality=80) -> bytes:
             image = image.convert("RGB")
         output_stream = io.BytesIO()
         image.save(output_stream, "webp", quality=quality)
-        return output_stream.getvalue()  # Возвращаем bytes, а не поток
+        return output_stream.getvalue()
     except Exception as e:
-        raise RuntimeError(f"Image conversion failed: {str(e)}")
+        logging.error(f"Image conversion error: {str(e)}")
+        raise
+
 
 def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".webp") -> str:
     return f"{prefix}_{entity_id}_{uuid.uuid4().hex}{extension}"
@@ -48,29 +52,45 @@ def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".web
 
 def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "") -> str:
     s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
-    file_obj = io.BytesIO(file_stream)
-    file_obj.seek(0)  # Сброс позиции в начало
 
     try:
-        s3_client.upload_fileobj(
-            Fileobj=file_obj,
+        # Вариант 1: Используем put_object с явным указанием параметров
+        response = s3_client.put_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
-            ExtraArgs={
-                'ACL': 'public-read',
-                'ContentType': 'image/webp',
-                'ContentLength': len(file_stream)  # Явное указание длины контента
-            }
+            Body=file_stream,
+            ACL='public-read',
+            ContentType='image/webp',
+            ContentLength=len(file_stream),
+            ContentMD5=base64.b64encode(hashlib.md5(file_stream).digest()).decode()
         )
+
+        # Вариант 2: Или через upload_fileobj без ContentLength
+        # file_obj = io.BytesIO(file_stream)
+        # s3_client.upload_fileobj(
+        #     file_obj,
+        #     S3_BUCKET_NAME,
+        #     s3_key,
+        #     ExtraArgs={
+        #         'ACL': 'public-read',
+        #         'ContentType': 'image/webp'
+        #     }
+        # )
+
+        return f"{S3_ENDPOINT_URL}/{S3_BUCKET_NAME}/{s3_key}"
+
     except Exception as e:
-        logging.error(f"S3 upload error: {str(e)}")
+        logging.error(f"S3 Upload Error: {str(e)}")
         raise
 
-    return f"{S3_ENDPOINT_URL}/{S3_BUCKET_NAME}/{s3_key}"
 
 def delete_s3_file(file_url: str):
-    """
-    Удаляет файл из S3 по переданному URL.
-    """
-    s3_key = "/".join(file_url.split("/")[-2:])
-    s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+    try:
+        s3_key = "/".join(file_url.split("/")[3:])  # Правильное извлечение ключа из URL
+        s3_client.delete_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key
+        )
+    except Exception as e:
+        logging.error(f"S3 Delete Error: {str(e)}")
+        raise
