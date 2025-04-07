@@ -38,8 +38,7 @@ def upload_file_to_s3(file_bytes: bytes, filename: str, subdirectory: str = "") 
     Загружает файл в S3 и возвращает URL для доступа к файлу.
     """
     s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
-    print(f"[DEBUG] upload_file_to_s3 — BUCKET={S3_BUCKET_NAME}, KEY={s3_key}")
-    s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=file_bytes, ACL='public-read', ContentType='image/webp')
+    s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=io.BytesIO(file_bytes), ACL='public-read', ContentType='image/webp')
 
     # Возвращает публичный URL
     return f"{S3_ENDPOINT_URL}/{S3_BUCKET_NAME}/{s3_key}"
