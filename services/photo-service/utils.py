@@ -66,27 +66,20 @@ def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "")
     s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
 
     try:
-        # Принудительное вычисление SHA256 хеша
-        content_sha256 = hashlib.sha256(file_stream).hexdigest()
-
         response = s3_client.put_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
             Body=file_stream,
             ACL='public-read',
             ContentType='image/webp',
-            ContentLength=len(file_stream),
-            ContentMD5=base64.b64encode(hashlib.md5(file_stream).digest()).decode(),
-            # Явное указание SHA256 через заголовок
-            Metadata={'Content-SHA256': content_sha256}
+            ContentLength=len(file_stream),  # Важно!
+            ContentMD5=base64.b64encode(hashlib.md5(file_stream).digest()).decode()
         )
-
         return f"{S3_ENDPOINT_URL}/{S3_BUCKET_NAME}/{s3_key}"
 
     except Exception as e:
         logging.error(f"S3 Upload Error: {str(e)}")
         raise
-
 
 def delete_s3_file(file_url: str):
     try:
