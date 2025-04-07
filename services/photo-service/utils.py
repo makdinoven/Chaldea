@@ -20,7 +20,7 @@ S3_REGION = os.getenv("S3_REGION", "ru-1")
 
 config = Config(
     signature_version='s3v4',
-    s3={'use_accelerate_endpoint': False, 'addressing_style': 'path', 'payload_signing_enabled': False}
+    s3={'use_accelerate_endpoint': False, 'addressing_style': 'path', 'payload_signing_enabled': False, 'checksum_mode': 'disabled'}
 )
 
 s3_client = boto3.client(
