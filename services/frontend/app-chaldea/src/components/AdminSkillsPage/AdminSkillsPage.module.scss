@@ -1,0 +1,300 @@
+/* AdminSkillsPage.module.scss */
+
+.adminPage {
+  padding: 20px;
+  color: #333;  /* Более тёмный текст */
+  min-height: 100vh;
+  background: #f0f0f0; /* Светло-серый фон */
+}
+
+.container {
+  display: flex;
+  gap: 2rem;
+}
+
+/* Меню навыков */
+.sidebar {
+  width: 260px;
+  background: #fafafa;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.sidebar h2 {
+  font-size: 16px;
+  margin-bottom: 10px;
+}
+
+.skillsList {
+  margin-top: 10px;
+}
+
+.skillButton {
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  color: #333;
+  cursor: pointer;
+  transition: background 0.3s ease;
+  &:hover {
+    background: #eee;
+  }
+}
+
+/* Основная область */
+.editorContainer {
+  flex: 1;
+}
+
+.editorTitle {
+  font-size: 20px;
+  margin-right: 20px;
+  color: #333;
+  font-weight: bold;
+}
+
+.treeEditorContainer {
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.editorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 15px;
+}
+
+.skillNameInput {
+  margin-left: 10px;
+  padding: 6px;
+  border-radius: 4px;
+  border: 1px solid #999;
+  background: #fff;
+  color: #333;
+}
+
+.metaControls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.typeSelector {
+  padding: 6px;
+  border-radius: 4px;
+  border: 1px solid #999;
+  background: #fff;
+  color: #333;
+}
+
+.saveButton {
+  padding: 8px 16px;
+  background: #63b778;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  &:hover {
+    background: #5aa26a;
+  }
+}
+
+.skillDescription {
+  width: 100%;
+  height: 80px;
+  margin-bottom: 15px;
+  border: 1px solid #999;
+  border-radius: 4px;
+  padding: 6px;
+  background: #fff;
+  color: #333;
+}
+
+.addRankButton {
+  padding: 8px 16px;
+  background: #4f8af0;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  &:hover {
+    background: #3b78e0;
+  }
+}
+
+/* Небольшие отступы */
+.inputRow, .basicFields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.inputGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  label {
+    font-size: 14px;
+    color: #555;
+  }
+  input, select, textarea {
+    padding: 6px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    background: #fff;
+    color: #333;
+  }
+}
+
+.treeWrapper {
+  margin-bottom: 10px;
+}
+
+/* ------ RankNode как граф-вершина ------ */
+.rankGraphContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Каждый узел = вершина, дочерние ранги = отобразим в .rankChildren */
+}
+
+.rankNodeBox {
+  background: #fff;
+  border: 2px solid #bbb;
+  border-radius: 6px;
+  padding: 12px;
+  min-width: 220px;
+  text-align: center;
+  box-shadow: 1px 1px 3px rgba(0,0,0,0.1);
+  margin-bottom: 10px;
+  position: relative;
+}
+
+/* Шапка ранга */
+.rankHeaderBox {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.rankNumber {
+  font-weight: bold;
+  font-size: 16px;
+  color: #333;
+}
+
+/* Кнопки */
+.copyButton,
+.deleteButton {
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+.copyButton {
+  background: #4f8af0;
+  &:hover { background: #3b78e0; }
+}
+
+.deleteButton {
+  background: #e05b5b;
+  &:hover { background: #c54a4a; }
+}
+
+.rankBodyBox {
+  margin-top: 8px;
+  text-align: left;
+}
+
+/* Контейнер для детей (left, right) */
+.rankChildren {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+}
+
+/* Линии между вершинами:
+   Можно нарисовать <svg> или псевдоэлементы.
+   Здесь для простоты – можно ничего не рисовать, просто флекс.
+*/
+
+/* Вкладки */
+.tabButtons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.tabButton {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  background: #eee;
+  color: #333;
+  border-radius: 4px;
+  cursor: pointer;
+  &.activeTab {
+    border-color: #4f8af0;
+    background: #fff;
+    font-weight: bold;
+  }
+  &:hover {
+    background: #ddd;
+  }
+}
+
+/* Секции */
+.section {
+  background: #fafafa;
+  border: 1px dashed #ccc;
+  border-radius: 4px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+
+.sectionTitle {
+  font-weight: bold;
+  margin-bottom: 6px;
+  color: #444;
+  font-size: 14px;
+  text-transform: uppercase;
+}
+
+.addButton {
+  padding: 6px 10px;
+  background: #4f8af0;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  &:hover {
+    background: #3b78e0;
+  }
+}
+
+.deleteButton {
+  background: #e05b5b;
+  &:hover {
+    background: #c54a4a;
+  }
+}
+
+.flowContainer {
+  width: 100%;
+  height: 600px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+}
+

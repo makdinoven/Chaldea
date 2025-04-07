@@ -33,8 +33,6 @@ class Character(Base):
     id_subrace = Column(Integer, nullable=False)
     biography = Column(Text, nullable=True)
     personality = Column(Text, nullable=True)
-    # Удаляем поле id_item_inventory
-    id_skill_inventory = Column(Integer, nullable=True)  # Поле для навыков
     id_class = Column(Integer, nullable=False)
     id_attributes = Column(Integer, nullable=True)  # Поле для атрибутов
     currency_balance = Column(Integer, default=0)

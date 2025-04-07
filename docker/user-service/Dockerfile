@@ -12,18 +12,18 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
-# Копируем файлы проекта в рабочую директорию контейнера
-COPY ./services/user-service /app
-
-# Устанавливаем зависимости, указанные в файле requirements.txt
+COPY ./services/user-service/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем Alembic для управления миграциями и другие необходимые пакеты
-RUN pip install --no-cache-dir alembic pymysql
+# Копируем файлы проекта в рабочую директорию контейнера
+COPY ./services/user-service /app
+
+
+
 
 # Указываем порт, который будет открыт для доступа к микросервису
 EXPOSE 8000
 
 # Команда для запуска миграций и FastAPI приложения
-CMD ["sh", "-c", "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app --reload"]
+CMD ["sh", "-c", "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app"]

@@ -44,7 +44,6 @@ def create_preliminary_character(db: Session, character_request: models.Characte
     Создает предварительную запись персонажа с указанием user_id из заявки.
     """
     new_character = models.Character(
-        id_skill_inventory=None,
         id_attributes=None,
         request_id=character_request.id,
         user_id=character_request.user_id,
@@ -90,7 +89,6 @@ def update_character_with_dependencies(db: Session, character_id: int,
     """
     db_character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if db_character:
-        db_character.id_skill_inventory = skills_id
         db_character.id_attributes = attributes_id
         db.commit()
         db.refresh(db_character)

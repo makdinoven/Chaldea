@@ -107,3 +107,6 @@ class AttributesResponse(BaseModel):
 # Схема ответа на запрос passive_experience
 class PassiveExperienceResponse(BaseModel):
     passive_experience: int
+
+class UpdateActiveExperienceRequest(BaseModel):
+    amount: int  # Положительное число означает "добавить", отрицательное — "снять".

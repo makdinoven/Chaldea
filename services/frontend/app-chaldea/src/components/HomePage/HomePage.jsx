@@ -38,7 +38,7 @@ export default function HomePage() {
       img: button1img,
       links: [
         { name: 'Персонажи', link: '/characters' },
-        { name: 'Навыки', link: '/skills' },
+        { name: 'Навыки', link: 'admin/skills' },
         { name: 'Аукцион', link: '/auction' },
       ],
       type: 'large',

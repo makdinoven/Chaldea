@@ -431,4 +431,27 @@ async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
         avatar=character.avatar
     )
 
+@router.get("/{character_id}/race_info", response_model=schemas.CharacterBaseInfoResponse)
+def get_basic_info(character_id: int, db: Session = Depends(get_db)):
+    """
+    Возвращает основные данные о персонаже:
+    - ID персонажа
+    - id_class
+    - id_race
+    - id_subrace
+    - level
+    """
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        logger.error(f"Персонаж ID {character_id} не найден.")
+        raise HTTPException(status_code=404, detail="Character not found")
+
+    return schemas.CharacterBaseInfoResponse(
+        id=character.id,
+        id_class=character.id_class,
+        id_race=character.id_race,
+        id_subrace=character.id_subrace,
+        level=character.level
+    )
+
 app.include_router(router)

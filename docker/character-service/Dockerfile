@@ -1,10 +1,7 @@
-# Используем образ Python 3.10 в качестве базового
 FROM python:3.10-slim
 
-# Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
-# Устанавливаем системные зависимости для сборки пакета mysqlclient и скачиваем dockerize
 RUN apt-get update && apt-get install -y \
     gcc \
     libmariadb-dev-compat \
@@ -12,19 +9,14 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
+COPY ./services/character-service/app/requirements.txt /app/requirements.txt
 
-# Копируем файлы проекта в рабочую директорию контейнера
-COPY ./services/character-service/app /app
-
-# Устанавливаем зависимости, указанные в файле requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем Alembic для управления миграциями и другие необходимые пакеты
-RUN pip install --no-cache-dir alembic pymysql
+# Копирование приложения должно быть ОТДЕЛЬНО от RUN
+COPY ./services/character-service/app /app
 
-# Указываем порт, который будет открыт для доступа к микросервису
 EXPOSE 8005
 
-CMD PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app --reload
-
+CMD PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app

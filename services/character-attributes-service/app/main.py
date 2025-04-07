@@ -399,4 +399,37 @@ def recover_resources(character_id: int, recovery: dict, db: Session = Depends(g
     db.refresh(attr)
     return {"detail": "Resources recovered successfully"}
 
+@router.put("/{character_id}/active_experience")
+def update_active_experience(
+    character_id: int,
+    request: schemas.UpdateActiveExperienceRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Увеличивает или уменьшает active_experience на указанное значение.
+    request.amount > 0 => добавляем
+    request.amount < 0 => снимаем
+    """
+    attr = db.query(models.CharacterAttributes).filter(
+        models.CharacterAttributes.character_id == character_id
+    ).first()
+
+    if not attr:
+        raise HTTPException(status_code=404, detail="Character attributes not found")
+
+    new_value = attr.active_experience + request.amount
+    if new_value < 0:
+        # На ваше усмотрение: либо разрешаем уходить в минус, либо блокируем
+        raise HTTPException(status_code=400, detail="active_experience cannot be negative")
+
+    attr.active_experience = new_value
+
+    db.commit()
+    db.refresh(attr)
+
+    return {
+        "detail": "Active experience updated",
+        "active_experience": attr.active_experience
+    }
+
 app.include_router(router)

@@ -129,3 +129,12 @@ class FullProfileResponse(BaseModel):
     avatar: Optional[str]
 
 
+class CharacterBaseInfoResponse(BaseModel):
+    id: int
+    id_class: int
+    id_race: int
+    id_subrace: int
+    level: int
+
+    class Config:
+        orm_mode = True

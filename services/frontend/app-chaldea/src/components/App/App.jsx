@@ -9,6 +9,7 @@ import Layout from "./Layout/Layout.jsx";
 import WorldPage from "../WorldPage/WorldPage.jsx";
 import CountryPage from "../CountryPage/CountryPage.jsx";
 import AdminLocationsPage from '../AdminLocationsPage/AdminLocationsPage.jsx';
+import AdminSkillsPage from "../AdminSkillsPage/AdminSkillsPage.jsx";
 
 const App = () => {
     return (
@@ -22,6 +23,7 @@ const App = () => {
                     <Route path="world" element={<WorldPage/>}/>
                     <Route path="world/country/:countryId/" element={<CountryPage/>}/>
                     <Route path="admin/locations" element={<AdminLocationsPage />}/>
+                    <Route path="home/admin/skills" element={<AdminSkillsPage />}/>
                 </Route>
             </Routes>
         </Router>

@@ -1,15 +1,30 @@
-from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
 from config import settings
 
-# Формируем URL подключения к базе данных
-SQLALCHEMY_DATABASE_URL = f"mysql+pymysql://{settings.DB_USER}:{settings.DB_PASSWORD}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
+# Используем асинхронный драйвер (asyncmy или aiomysql вместо pymysql)
+SQLALCHEMY_DATABASE_URL = f"mysql+aiomysql://{settings.DB_USER}:{settings.DB_PASSWORD}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
 
-# Создаем движок базы данных
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
-# Создаем сессию для работы с базой данных
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Создаем асинхронный движок
+engine = create_async_engine(
+    SQLALCHEMY_DATABASE_URL,
+    pool_recycle=3600,
+    pool_pre_ping=True
+)
 
-# Создаем базовый класс для моделей SQLAlchemy
 Base = declarative_base()
+
+# Используем async_sessionmaker для асинхронных сессий
+async_session = async_sessionmaker(
+    engine,
+    expire_on_commit=False,
+    class_=AsyncSession
+)
+
+async def get_db():
+    async with async_session() as session:
+        yield session
+
+async def create_tables():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
