@@ -38,7 +38,7 @@ def convert_to_webp(input_file, quality=80):
     output_stream = io.BytesIO()
     image.save(output_stream, "webp", quality=quality)
     output_stream.seek(0)
-    return output_stream
+    return output_stream.read()
 
 def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".webp") -> str:
     return f"{prefix}_{entity_id}_{uuid.uuid4().hex}{extension}"
