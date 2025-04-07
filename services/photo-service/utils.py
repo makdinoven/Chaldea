@@ -32,17 +32,17 @@ def convert_to_webp(input_file, quality=80):
     output_stream = io.BytesIO()
     image.save(output_stream, "webp", quality=quality)
     output_stream.seek(0)
-    return output_stream.read()
+    return output_stream
 
 def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".webp") -> str:
     return f"{prefix}_{entity_id}_{uuid.uuid4().hex}{extension}"
 
-def upload_file_to_s3(file_bytes: bytes, filename: str, subdirectory: str = "") -> str:
+def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "") -> str:
     """
     Загружает файл в S3 и возвращает URL для доступа к файлу.
     """
     s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
-    s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=io.BytesIO(file_bytes), ACL='public-read', ContentType='image/webp')
+    s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=file_stream, ACL='public-read', ContentType='image/webp')
 
     # Возвращает публичный URL
     return f"{S3_ENDPOINT_URL}/{S3_BUCKET_NAME}/{s3_key}"
