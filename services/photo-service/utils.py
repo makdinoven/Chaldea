@@ -28,13 +28,17 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     config=Config(
         signature_version='s3v4',
-        s3={'addressing_style': 'path'}
+        s3={'addressing_style': 'path'},
+        # Отключаем автоматическое чанкирование
+        payload_signing_enabled=False
     )
 )
 
 
 def convert_to_webp(input_file, quality=80) -> bytes:
     try:
+        image = Image.open(input_file)
+        image.verify()
         image = Image.open(input_file)
         if image.mode != "RGB":
             image = image.convert("RGB")
@@ -54,7 +58,9 @@ def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "")
     s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
 
     try:
-        # Вариант 1: Используем put_object с явным указанием параметров
+        # Явное вычисление хеша содержимого
+        content_sha256 = hashlib.sha256(file_stream).hexdigest()
+
         response = s3_client.put_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
@@ -62,20 +68,10 @@ def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "")
             ACL='public-read',
             ContentType='image/webp',
             ContentLength=len(file_stream),
-            ContentMD5=base64.b64encode(hashlib.md5(file_stream).digest()).decode()
+            ContentMD5=base64.b64encode(hashlib.md5(file_stream).digest()).decode(),
+            # Явное указание SHA256
+            ChecksumSHA256=content_sha256
         )
-
-        # Вариант 2: Или через upload_fileobj без ContentLength
-        # file_obj = io.BytesIO(file_stream)
-        # s3_client.upload_fileobj(
-        #     file_obj,
-        #     S3_BUCKET_NAME,
-        #     s3_key,
-        #     ExtraArgs={
-        #         'ACL': 'public-read',
-        #         'ContentType': 'image/webp'
-        #     }
-        # )
 
         return f"{S3_ENDPOINT_URL}/{S3_BUCKET_NAME}/{s3_key}"
 
