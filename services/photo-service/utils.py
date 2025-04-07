@@ -16,13 +16,17 @@ AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 S3_REGION = os.getenv("S3_REGION", "ru-1")
 
+config = Config(
+    signature_version='s3v4',
+    s3={'use_accelerate_endpoint': False, 'addressing_style': 'path', 'payload_signing_enabled': False}
+)
 
 s3_client = boto3.client(
     's3',
     endpoint_url=S3_ENDPOINT_URL,
     aws_access_key_id=AWS_ACCESS_KEY_ID,
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-    config=Config(signature_version='s3v4')
+    config=config
 )
 
 def convert_to_webp(input_file, quality=80):
