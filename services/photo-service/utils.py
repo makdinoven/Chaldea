@@ -4,6 +4,8 @@ from PIL import Image
 import io
 import boto3
 from dotenv import load_dotenv
+from botocore import UNSIGNED
+from botocore.config import Config
 
 load_dotenv()
 
@@ -18,7 +20,8 @@ s3_client = boto3.client(
     's3',
     endpoint_url=S3_ENDPOINT_URL,
     aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    config=Config(signature_version=UNSIGNED)
 )
 
 def convert_to_webp(input_file, quality=80):
