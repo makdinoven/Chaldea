@@ -19,7 +19,7 @@ AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 S3_REGION = os.getenv("S3_REGION", "ru-1")
 
-# Конфигурация клиента S3
+# Конфигурация клиента S3 (исправленная версия)
 s3_client = boto3.client(
     's3',
     endpoint_url=S3_ENDPOINT_URL,
@@ -28,17 +28,13 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     config=Config(
         signature_version='s3v4',
-        s3={'addressing_style': 'path'},
-        # Отключаем автоматическое чанкирование
-        payload_signing_enabled=False
+        s3={'addressing_style': 'path'}
     )
 )
 
 
 def convert_to_webp(input_file, quality=80) -> bytes:
     try:
-        image = Image.open(input_file)
-        image.verify()
         image = Image.open(input_file)
         if image.mode != "RGB":
             image = image.convert("RGB")
@@ -58,9 +54,6 @@ def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "")
     s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
 
     try:
-        # Явное вычисление хеша содержимого
-        content_sha256 = hashlib.sha256(file_stream).hexdigest()
-
         response = s3_client.put_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
@@ -68,11 +61,8 @@ def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "")
             ACL='public-read',
             ContentType='image/webp',
             ContentLength=len(file_stream),
-            ContentMD5=base64.b64encode(hashlib.md5(file_stream).digest()).decode(),
-            # Явное указание SHA256
-            ChecksumSHA256=content_sha256
+            ContentMD5=base64.b64encode(hashlib.md5(file_stream).digest()).decode()
         )
-
         return f"{S3_ENDPOINT_URL}/{S3_BUCKET_NAME}/{s3_key}"
 
     except Exception as e:
@@ -82,7 +72,7 @@ def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "")
 
 def delete_s3_file(file_url: str):
     try:
-        s3_key = "/".join(file_url.split("/")[3:])  # Правильное извлечение ключа из URL
+        s3_key = "/".join(file_url.split("/")[3:])
         s3_client.delete_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key
