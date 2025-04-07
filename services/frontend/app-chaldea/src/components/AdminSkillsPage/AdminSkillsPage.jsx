@@ -1,65 +1,73 @@
 // src/components/AdminSkillsPage/AdminSkillsPage.jsx
-import React, { useEffect, useState } from 'react'
-import { useDispatch, useSelector } from 'react-redux'
-import axios from 'axios'
-import { fetchSkills, fetchSkillFullTree } from '../../redux/actions/skillsAdminActions'
-import { clearSelectedSkillTree } from '../../redux/slices/skillsAdminSlice'
-import styles from './AdminSkillsPage.module.scss'
-import FlowSkillsEditor from './FlowSkillsEditor'
+import React, { useEffect, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import axios from 'axios';
+import { fetchSkills, fetchSkillFullTree } from '../../redux/actions/skillsAdminActions';
+import { clearSelectedSkillTree } from '../../redux/slices/skillsAdminSlice';
+import styles from './AdminSkillsPage.module.scss';
+import FlowSkillsEditor from './FlowSkillsEditor';
 
 const AdminSkillsPage = () => {
-  const dispatch = useDispatch()
-  const { skillsList, selectedSkillTree, status, updateStatus, error } = useSelector(state => state.skills)
-
-  // Поисковая строка для списка навыков
-  const [searchQuery, setSearchQuery] = useState('')
+  const dispatch = useDispatch();
+  const { skillsList, selectedSkillTree, status, updateStatus, error } = useSelector(state => state.skills);
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    dispatch(fetchSkills())
-  }, [dispatch])
+    dispatch(fetchSkills());
+  }, [dispatch]);
 
-  // Выбор навыка
   const handleSelectSkill = (skillId) => {
-    dispatch(clearSelectedSkillTree())
-    dispatch(fetchSkillFullTree(skillId))
-  }
+    dispatch(clearSelectedSkillTree());
+    dispatch(fetchSkillFullTree(skillId));
+  };
 
-  // Фильтр по названию (регистронезависимый)
+  // Фильтр по названию навыка (регистронезависимый)
   const filteredSkills = skillsList.filter(skill =>
     skill.name.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  );
 
-  // -----------------------------
-  // Кнопка удаления навыка
-  // -----------------------------
-  const handleDeleteSkill = async () => {
-    if (!selectedSkillTree) return
-    const skillId = selectedSkillTree.id
-    // Подтверждение удаления
-    if (!window.confirm(`Вы действительно хотите удалить навык ID=${skillId}?`)) {
-      return
-    }
+  // Добавление нового навыка (POST /admin/skills/)
+  const handleAddSkill = async () => {
+    const newSkillPayload = {
+      name: "Новый навык",
+      skill_type: "attack",
+      description: "",
+    };
+
     try {
-      // DELETE запрос
-      await axios.delete(`http://4452515-co41851.twc1.net:8003/skills/admin/skills/${skillId}`)
-      // Обновляем список навыков, сбрасываем выделенный
-      dispatch(fetchSkills())
-      dispatch(clearSelectedSkillTree())
+      const res = await axios.post('http://4452515-co41851.twc1.net:8003/skills/admin/skills/', newSkillPayload);
+      // После создания обновляем список навыков и выбираем новый навык
+      dispatch(fetchSkills());
+      // Если необходимо сразу выбрать созданный навык, можно вызвать fetchSkillFullTree с новым id:
+      handleSelectSkill(res.data.id);
     } catch (err) {
-      console.error('Ошибка при удалении навыка:', err)
-      alert('Не удалось удалить навык. См. консоль.')
+      console.error("Ошибка при создании навыка:", err);
+      alert("Не удалось создать навык. См. консоль.");
     }
-  }
+  };
+
+  // Удаление выбранного навыка
+  const handleDeleteSkill = async () => {
+    if (!selectedSkillTree) return;
+    const skillId = selectedSkillTree.id;
+    if (!window.confirm(`Вы действительно хотите удалить навык ID=${skillId}?`)) return;
+    try {
+      await axios.delete(`http://4452515-co41851.twc1.net:8003/skills/admin/skills/${skillId}`);
+      dispatch(fetchSkills());
+      dispatch(clearSelectedSkillTree());
+    } catch (err) {
+      console.error("Ошибка при удалении навыка:", err);
+      alert("Не удалось удалить навык. См. консоль.");
+    }
+  };
 
   return (
     <div className={styles.adminPage}>
       <h1 style={{ textAlign: 'center', marginBottom: '20px' }}>Администрирование навыков</h1>
       <div className={styles.container}>
-
-        {/* Левая панель (список навыков) */}
+        {/* Левая панель – список навыков и кнопки управления */}
         <div className={styles.sidebar}>
           <h2>Список навыков</h2>
-
           <input
             type="text"
             placeholder="Поиск навыков..."
@@ -72,10 +80,23 @@ const AdminSkillsPage = () => {
               boxSizing: 'border-box'
             }}
           />
-
+          <button
+            style={{
+              backgroundColor: '#4CAF50',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              padding: '8px 12px',
+              marginBottom: '10px',
+              cursor: 'pointer',
+              width: '100%'
+            }}
+            onClick={handleAddSkill}
+          >
+            + Добавить навык
+          </button>
           {status === 'loading' && <p>Загрузка...</p>}
           {status === 'failed' && <p style={{ color: 'red' }}>Ошибка: {error}</p>}
-
           <div className={styles.skillsList}>
             {filteredSkills.map(skill => (
               <button
@@ -83,7 +104,6 @@ const AdminSkillsPage = () => {
                 className={styles.skillButton}
                 onClick={() => handleSelectSkill(skill.id)}
               >
-                {/* Отображение картинки навыка (или заливка) */}
                 {skill.skill_image_preview ? (
                   <img
                     src={skill.skill_image_preview}
@@ -108,7 +128,6 @@ const AdminSkillsPage = () => {
                     }}
                   />
                 )}
-
                 <span>{skill.name}</span>
                 <span style={{ color: '#999', marginLeft: '8px' }}>({skill.skill_type})</span>
               </button>
@@ -116,11 +135,10 @@ const AdminSkillsPage = () => {
           </div>
         </div>
 
-        {/* Правая область (FlowSkillsEditor) */}
+        {/* Правая панель – редактор навыка */}
         <div className={styles.editorContainer}>
           {selectedSkillTree ? (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-              {/* Кнопка удаления навыка */}
               <div style={{ marginBottom: '10px' }}>
                 <button
                   style={{
@@ -136,7 +154,6 @@ const AdminSkillsPage = () => {
                   Удалить навык
                 </button>
               </div>
-
               <div style={{ flex: '1' }}>
                 <FlowSkillsEditor skillTree={selectedSkillTree} updateStatus={updateStatus} />
               </div>
@@ -147,7 +164,7 @@ const AdminSkillsPage = () => {
         </div>
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default AdminSkillsPage
+export default AdminSkillsPage;
