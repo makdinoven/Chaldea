@@ -13,6 +13,7 @@ S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 
+
 s3_client = boto3.client(
     's3',
     endpoint_url=S3_ENDPOINT_URL,
@@ -37,6 +38,7 @@ def upload_file_to_s3(file_bytes: bytes, filename: str, subdirectory: str = "") 
     Загружает файл в S3 и возвращает URL для доступа к файлу.
     """
     s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
+    print(f"[DEBUG] upload_file_to_s3 — BUCKET={S3_BUCKET_NAME}, KEY={s3_key}")
     s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=file_bytes, ACL='public-read', ContentType='image/webp')
 
     # Возвращает публичный URL
