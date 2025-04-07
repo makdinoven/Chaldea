@@ -316,3 +316,4 @@ async def build_conflicts_for_skill(db: AsyncSession, skill_id: int) -> set[tupl
                 conflicts.add((c1, c2))
                 conflicts.add((c2, c1))
     return conflicts
+

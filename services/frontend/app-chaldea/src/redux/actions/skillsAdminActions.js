@@ -42,3 +42,34 @@ export const updateSkillFullTree = createAsyncThunk(
   }
 )
 
+// Загрузка изображения навыка
+export const uploadSkillImage = createAsyncThunk(
+  'skills/uploadSkillImage',
+  async ({ skillId, file }, { rejectWithValue }) => {
+    const formData = new FormData();
+    formData.append('skill_id', skillId);
+    formData.append('file', file);
+    try {
+      const res = await axios.post('http://4452515-co41851.twc1.net:8003/photo/change_skill_image', formData);
+      return { skillId, image_url: res.data.image_url };
+    } catch (err) {
+      return rejectWithValue(err.response?.data || err.message);
+    }
+  }
+);
+
+// Загрузка изображения ранга
+export const uploadSkillRankImage = createAsyncThunk(
+  'skills/uploadSkillRankImage',
+  async ({ skillRankId, file }, { rejectWithValue }) => {
+    const formData = new FormData();
+    formData.append('skill_rank_id', skillRankId);
+    formData.append('file', file);
+    try {
+      const res = await axios.post('http://4452515-co41851.twc1.net:8003/photo/change_skill_rank_image', formData);
+      return { skillRankId, image_url: res.data.image_url };
+    } catch (err) {
+      return rejectWithValue(err.response?.data || err.message);
+    }
+  }
+);

@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import axios from 'axios';
-import { fetchSkills, fetchSkillFullTree } from '../../redux/actions/skillsAdminActions';
+import { fetchSkills, fetchSkillFullTree, uploadSkillImage } from '../../redux/actions/skillsAdminActions';
 import { clearSelectedSkillTree } from '../../redux/slices/skillsAdminSlice';
 import styles from './AdminSkillsPage.module.scss';
 import FlowSkillsEditor from './FlowSkillsEditor';
@@ -20,6 +20,12 @@ const AdminSkillsPage = () => {
     dispatch(clearSelectedSkillTree());
     dispatch(fetchSkillFullTree(skillId));
   };
+
+  const handleSkillImageUpload = (e) => {
+  const file = e.target.files[0];
+  if (!file || !selectedSkillTree) return;
+  dispatch(uploadSkillImage({ skillId: selectedSkillTree.id, file }));
+};
 
   // Фильтр по названию навыка (регистронезависимый)
   const filteredSkills = skillsList.filter(skill =>
@@ -139,27 +145,37 @@ const AdminSkillsPage = () => {
         <div className={styles.editorContainer}>
           {selectedSkillTree ? (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-              <div style={{ marginBottom: '10px' }}>
+              <div style={{marginBottom: '10px'}}>
                 <button
-                  style={{
-                    backgroundColor: '#f44336',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '4px',
-                    padding: '8px 12px',
-                    cursor: 'pointer'
-                  }}
-                  onClick={handleDeleteSkill}
+                    style={{
+                      backgroundColor: '#f44336',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '4px',
+                      padding: '8px 12px',
+                      cursor: 'pointer'
+                    }}
+                    onClick={handleDeleteSkill}
                 >
                   Удалить навык
                 </button>
+                <div style={{marginBottom: '10px'}}>
+                  <input type="file" onChange={handleSkillImageUpload}/>
+                  {selectedSkillTree.skill_image && (
+                      <img
+                          src={selectedSkillTree.skill_image}
+                          alt="Skill"
+                          style={{width: '120px', marginTop: '10px', borderRadius: '4px'}}
+                      />
+                  )}
+                </div>
               </div>
-              <div style={{ flex: '1' }}>
-                <FlowSkillsEditor skillTree={selectedSkillTree} updateStatus={updateStatus} />
+              <div style={{flex: '1'}}>
+                <FlowSkillsEditor skillTree={selectedSkillTree} updateStatus={updateStatus}/>
               </div>
             </div>
           ) : (
-            <p>Выберите навык для редактирования</p>
+              <p>Выберите навык для редактирования</p>
           )}
         </div>
       </div>

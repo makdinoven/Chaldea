@@ -165,3 +165,29 @@ def update_location_image(location_id: int, image_url: str):
         raise
     finally:
         connection.close()
+
+def update_skill_image(skill_id: int, image_url: str):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = "UPDATE skills SET skill_image = %s WHERE id = %s"
+            cursor.execute(sql, (image_url, skill_id))
+        connection.commit()
+    except:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+def update_skill_rank_image(skill_rank_id: int, image_url: str):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = "UPDATE skill_ranks SET rank_image = %s WHERE id = %s"
+            cursor.execute(sql, (image_url, skill_rank_id))
+        connection.commit()
+    except:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()

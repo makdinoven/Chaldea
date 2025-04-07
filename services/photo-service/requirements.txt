@@ -3,3 +3,5 @@ uvicorn
 python-multipart
 pymysql
 Pillow
+boto3
+python-dotenv
