@@ -28,7 +28,9 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     config=Config(
         signature_version='s3v4',
-        s3={'addressing_style': 'path'}
+        s3={'addressing_style': 'path'},
+        # Добавляем параметр для отключения потоковой передачи
+        payload_signing_enabled=False
     )
 )
 
@@ -38,11 +40,21 @@ def convert_to_webp(input_file, quality=80) -> bytes:
         image = Image.open(input_file)
         if image.mode != "RGB":
             image = image.convert("RGB")
+
+        # Проверка целостности изображения
+        image.verify()
+
         output_stream = io.BytesIO()
-        image.save(output_stream, "webp", quality=quality)
-        return output_stream.getvalue()
+        image.save(output_stream, "webp", quality=quality, method=6)  # method=6 для лучшей совместимости
+        webp_data = output_stream.getvalue()
+
+        # Дополнительная проверка размера
+        if len(webp_data) == 0:
+            raise ValueError("Empty WEBP data")
+
+        return webp_data
     except Exception as e:
-        logging.error(f"Image conversion error: {str(e)}")
+        logging.error(f"Image conversion failed: {str(e)}")
         raise
 
 
@@ -54,6 +66,9 @@ def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "")
     s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
 
     try:
+        # Принудительное вычисление SHA256 хеша
+        content_sha256 = hashlib.sha256(file_stream).hexdigest()
+
         response = s3_client.put_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
@@ -61,8 +76,11 @@ def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "")
             ACL='public-read',
             ContentType='image/webp',
             ContentLength=len(file_stream),
-            ContentMD5=base64.b64encode(hashlib.md5(file_stream).digest()).decode()
+            ContentMD5=base64.b64encode(hashlib.md5(file_stream).digest()).decode(),
+            # Явное указание SHA256 через заголовок
+            Metadata={'Content-SHA256': content_sha256}
         )
+
         return f"{S3_ENDPOINT_URL}/{S3_BUCKET_NAME}/{s3_key}"
 
     except Exception as e:
