@@ -18,28 +18,29 @@ AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 S3_REGION = os.getenv("S3_REGION", "ru-1")
 
-config = Config(
-    signature_version='s3v4',
-    s3={'use_accelerate_endpoint': False, 'addressing_style': 'path', 'payload_signing_enabled': False, 'checksum_mode': 'disabled'}
-)
 
 s3_client = boto3.client(
     's3',
-    endpoint_url=S3_ENDPOINT_URL,
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-    config=config,
-    region_name=S3_REGION  # Добавлен явный регион
+    endpoint_url='https://s3.twcstorage.ru',  # Обязательно правильный эндпоинт
+    region_name='ru-1',                        # Регион должен быть ru-1
+    aws_access_key_id='ВАШ_ACCESS_KEY',        # Логин аккаунта
+    aws_secret_access_key='ВАШ_SECRET_KEY',    # Пароль администратора
+    config=Config(
+        signature_version='s3v4',             # Требуется версия подписи V4
+        s3={'addressing_style': 'path'}       # Критически важный параметр!
+    )
 )
 
-def convert_to_webp(input_file, quality=80):
-    image = Image.open(input_file)
-    if image.mode != "RGB":
-        image = image.convert("RGB")
-    output_stream = io.BytesIO()
-    image.save(output_stream, "webp", quality=quality)
-    output_stream.seek(0)
-    return output_stream.read()
+def convert_to_webp(input_file, quality=80) -> bytes:
+    try:
+        image = Image.open(input_file)
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        output_stream = io.BytesIO()
+        image.save(output_stream, "webp", quality=quality)
+        return output_stream.getvalue()  # Возвращаем bytes, а не поток
+    except Exception as e:
+        raise RuntimeError(f"Image conversion failed: {str(e)}")
 
 def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".webp") -> str:
     return f"{prefix}_{entity_id}_{uuid.uuid4().hex}{extension}"
@@ -48,18 +49,25 @@ def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".web
 def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "") -> str:
     s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
     file_obj = io.BytesIO(file_stream)
+    file_obj.seek(0)  # Сброс позиции в начало
 
-    s3_client.upload_fileobj(
-        Fileobj=file_obj,
-        Bucket=S3_BUCKET_NAME,
-        Key=s3_key,
-        ExtraArgs={
-            'ACL': 'public-read',
-            'ContentType': 'image/webp'
-        }
-    )
+    try:
+        s3_client.upload_fileobj(
+            Fileobj=file_obj,
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key,
+            ExtraArgs={
+                'ACL': 'public-read',
+                'ContentType': 'image/webp',
+                'ContentLength': len(file_stream)  # Явное указание длины контента
+            }
+        )
+    except Exception as e:
+        logging.error(f"S3 upload error: {str(e)}")
+        raise
 
     return f"{S3_ENDPOINT_URL}/{S3_BUCKET_NAME}/{s3_key}"
+
 def delete_s3_file(file_url: str):
     """
     Удаляет файл из S3 по переданному URL.
