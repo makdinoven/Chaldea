@@ -29,8 +29,6 @@ s3_client = boto3.client(
     config=Config(
         signature_version='s3v4',
         s3={'addressing_style': 'path'},
-        # Добавляем параметр для отключения потоковой передачи
-        payload_signing_enabled=False
     )
 )
 
