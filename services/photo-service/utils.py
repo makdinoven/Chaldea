@@ -28,7 +28,8 @@ s3_client = boto3.client(
     endpoint_url=S3_ENDPOINT_URL,
     aws_access_key_id=AWS_ACCESS_KEY_ID,
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-    config=config
+    config=config,
+    region_name=S3_REGION  # Добавлен явный регион
 )
 
 def convert_to_webp(input_file, quality=80):
@@ -43,16 +44,22 @@ def convert_to_webp(input_file, quality=80):
 def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".webp") -> str:
     return f"{prefix}_{entity_id}_{uuid.uuid4().hex}{extension}"
 
+
 def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "") -> str:
-    """
-    Загружает файл в S3 и возвращает URL для доступа к файлу.
-    """
     s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
-    s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=file_stream, ACL='public-read', ContentType='image/webp')
+    file_obj = io.BytesIO(file_stream)
 
-    # Возвращает публичный URL
+    s3_client.upload_fileobj(
+        Fileobj=file_obj,
+        Bucket=S3_BUCKET_NAME,
+        Key=s3_key,
+        ExtraArgs={
+            'ACL': 'public-read',
+            'ContentType': 'image/webp'
+        }
+    )
+
     return f"{S3_ENDPOINT_URL}/{S3_BUCKET_NAME}/{s3_key}"
-
 def delete_s3_file(file_url: str):
     """
     Удаляет файл из S3 по переданному URL.
