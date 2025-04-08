@@ -3,7 +3,7 @@
   font-size: 16px;
   text-transform: uppercase;
   color: #fff !important;
-  padding: 10px 50% 10px 20px;
+  padding: 10px 50px 10px 20px;
   text-decoration: none;
   backdrop-filter: blur(4px);
   border-radius: 20px;
@@ -38,3 +38,60 @@
     pointer-events: none;
   }
 }
+
+.link_blue {
+  font-weight: 500;
+  font-size: 16px;
+  text-transform: uppercase;
+  padding: 10px 50px 10px 20px;
+  text-decoration: none;
+  backdrop-filter: blur(4px);
+  border-radius: 20px;
+  position: relative;
+  display: inline-block;
+  color: #76A6BD !important;
+  border-top: 0.5px solid #76A6BD;
+  border-bottom: 0.5px solid #76A6BD;
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    right: 20px;
+    background-image: url("/two-blue-arrows.svg");
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: cover;
+    width: 17px;
+    height: 15px;
+  }
+}
+
+.link_gold {
+  font-weight: 500;
+  font-size: 16px;
+  text-transform: uppercase;
+  padding: 10px 50px 10px 20px;
+  text-decoration: none;
+  backdrop-filter: blur(4px);
+  position: relative;
+  display: inline-block;
+  color: #F0D95C !important;
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    right: 20px;
+    background-image: url("/gold-arrow.svg");
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: cover;
+    width: 20px;
+    height: 12px;
+  }
+}
+
+
