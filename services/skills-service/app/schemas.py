@@ -155,7 +155,7 @@ class SkillRankDamageInTree(BaseModel):
     amount: float
     description: Optional[str]
     chance: int = 100
-    target_side: str
+    target_side: str = "self"
 
 
 class SkillRankEffectInTree(BaseModel):
