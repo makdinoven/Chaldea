@@ -1,6 +1,7 @@
 // src/features/skills/skillsActions.js
 import { createAsyncThunk } from '@reduxjs/toolkit'
 import axios from 'axios'
+import {transformReceivedSkillTree} from "../../components/AdminSkillsPage/utils/transformSkillTree.jsx";
  const BASE_URL = 'http://4452515-co41851.twc1.net:8003/skills'
 
 // 1) Получить список навыков
@@ -22,7 +23,7 @@ export const fetchSkillFullTree = createAsyncThunk(
   async (skillId, { rejectWithValue }) => {
     try {
       const res = await axios.get(`${BASE_URL}/admin/skills/${skillId}/full_tree`)
-      return res.data
+      return transformReceivedSkillTree(res.data)
     } catch (err) {
       return rejectWithValue(err.response?.data || err.message)
     }

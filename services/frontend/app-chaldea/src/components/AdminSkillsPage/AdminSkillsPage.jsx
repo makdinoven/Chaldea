@@ -6,13 +6,11 @@ import {
   fetchSkills,
   fetchSkillFullTree,
   uploadSkillImage,
-  updateSkillFullTree  // импорт экшена для обновления
+  updateSkillFullTree
 } from '../../redux/actions/skillsAdminActions';
 import { clearSelectedSkillTree } from '../../redux/slices/skillsAdminSlice';
 import styles from './AdminSkillsPage.module.scss';
 import FlowSkillsEditor from './FlowSkillsEditor';
-
-// Импортируем функцию подготовки payload (скорректируйте путь, если требуется)
 import { prepareSkillPayload } from './utils/preparePayload';
 
 const AdminSkillsPage = () => {
@@ -44,7 +42,6 @@ const AdminSkillsPage = () => {
     skill.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Добавление нового навыка (POST /admin/skills/)
   const handleAddSkill = async () => {
     const newSkillPayload = {
       name: "Новый навык",
@@ -62,7 +59,6 @@ const AdminSkillsPage = () => {
     }
   };
 
-  // Удаление выбранного навыка
   const handleDeleteSkill = async () => {
     if (!selectedSkillTree) return;
     const skillId = selectedSkillTree.id;
@@ -77,12 +73,10 @@ const AdminSkillsPage = () => {
     }
   };
 
-  // Функция сохранения изменений в полном дереве навыка
   const handleSaveSkillTree = async () => {
     if (!selectedSkillTree) return;
 
     try {
-      // Готовим payload через утилиту, которая удаляет лишние поля и объединяет данные урона
       const payload = prepareSkillPayload(selectedSkillTree);
       await dispatch(updateSkillFullTree({ skillId: selectedSkillTree.id, payload })).unwrap();
       dispatch(fetchSkillFullTree(selectedSkillTree.id));
@@ -97,7 +91,6 @@ const AdminSkillsPage = () => {
     <div className={styles.adminPage}>
       <h1 style={{ textAlign: 'center', marginBottom: '20px' }}>Администрирование навыков</h1>
       <div className={styles.container}>
-        {/* Левая панель – список навыков и кнопки управления */}
         <div className={styles.sidebar}>
           <h2>Список навыков</h2>
           <input
@@ -166,8 +159,6 @@ const AdminSkillsPage = () => {
             ))}
           </div>
         </div>
-
-        {/* Правая панель – редактор навыка */}
         <div className={styles.editorContainer}>
           {selectedSkillTree ? (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -186,7 +177,6 @@ const AdminSkillsPage = () => {
                 >
                   Удалить навык
                 </button>
-
                 <button
                   style={{
                     backgroundColor: '#2196F3',
@@ -201,7 +191,6 @@ const AdminSkillsPage = () => {
                 >
                   Сохранить изменения
                 </button>
-
                 <div style={{ marginTop: '10px' }}>
                   <input type="file" onChange={handleSkillImageUpload} />
                   {selectedSkillTree.skill_image && (

@@ -1,7 +1,6 @@
 // src/utils/preparePayload.js
 
-// Функция объединяет данные урона из вкладок "Для себя" и "Для врага"
-// с добавлением поля target_side и игнорированием поля duration.
+// Функция объединения данных урона из UI: selfDamage и enemyDamage
 export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
   const self = selfDamage.map(item => ({
     damage_type: item.damage_type || item.type,
@@ -20,40 +19,38 @@ export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
   return [...self, ...enemy];
 };
 
-// Функция подготовки данных для одного ранга.
-// Здесь с помощью деструктуризации удаляются поля для UI: selfDamage, enemyDamage и прочие.
+// Подготовка данных для одного ранга
 export const prepareRankPayload = (rankData) => {
+  // Если UI сохраняет данные по урону в selfDamage и enemyDamage, используем их.
+  // Если их нет, можно попробовать использовать уже сохранённое поле damage_entries.
+  const selfDamage = rankData.selfDamage || [];
+  const enemyDamage = rankData.enemyDamage || [];
+
+  // Создаем копию базовых данных ранга, исключая UI-поля, которые не должны уходить в payload.
   const {
-    selfDamage = [],
-    enemyDamage = [],
-    selfDamageBuff,
-    selfResist,
-    enemyDamageBuff,
-    enemyResist,
-    enemyVulnerability,
-    selfVulnerability,
-    selfComplexEffects,
-    enemyComplexEffects,
+    selfDamage: _, enemyDamage: __, selfDamageBuff, selfResist, enemyDamageBuff, enemyResist,
+    enemyVulnerability, selfVulnerability, selfComplexEffects, enemyComplexEffects,
     ...baseData
   } = rankData;
 
   return {
     ...baseData,
-    // Если rank_image уже задан, оно останется в baseData
-    damage_entries: transformDamageData(selfDamage, enemyDamage),
-    effects: rankData.effects ? rankData.effects : []  // Передаем эффекты как есть
+    // Если есть данные из UI, используем их; иначе – оставляем damage_entries как есть.
+    damage_entries: (selfDamage.length || enemyDamage.length)
+      ? transformDamageData(selfDamage, enemyDamage)
+      : rankData.damage_entries,
+    effects: rankData.effects || []
   };
 };
 
-// Функция подготовки данных для всего навыка (полное дерево).
-// Здесь сохраняются основные поля, включая skill_image, и для каждого ранга вызывается prepareRankPayload.
+// Функция подготовки всего навыка (полное дерево)
 export const prepareSkillPayload = (skillTreeData) => {
   const { ranks, ...baseData } = skillTreeData;
   return {
     ...baseData,
     // Сохраняем фотографию навыка, если она уже есть
     skill_image: skillTreeData.skill_image,
-    // Для каждого ранга формируем корректный payload через prepareRankPayload
+    // Для каждого ранга вызываем prepareRankPayload
     ranks: ranks.map(rankData => prepareRankPayload(rankData))
   };
 };
