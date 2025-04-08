@@ -3,20 +3,25 @@
   position: absolute;
   width: 100%;
   max-width: 354px;
-  min-height: 188px;
+  min-height: 200px;
   border-radius: 20px;
   background: rgba(17, 17, 21, 0.8);
   right: 22px;
   bottom: 42px;
   z-index: 20;
+  gap: 20px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  overflow-y: auto;
 
   .tooltip_header {
+    display: flex;
+    gap: 20px;
 
     .image {
       position: relative;
+      min-width: 57px;
       width: 57px;
       height: 57px;
       margin: 6px;
@@ -43,9 +48,6 @@
       }
     }
 
-    display: flex;
-    gap: 20px;
-
     div {
       display: flex;
       flex-direction: column;
@@ -63,16 +65,10 @@
       }
 
       .tooltip_text {
-        color: #76a6bd;
-
-        span {
-          display: block;
-          width: 100%;
-          font-family: var(--font-family);
-          font-weight: 400;
-          font-size: 16px;
-          color: #fff;
-        }
+        font-family: var(--font-family);
+        font-weight: 400;
+        font-size: 16px;
+        color: #fff;
       }
 
 
