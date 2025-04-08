@@ -32,21 +32,29 @@ s3_client = boto3.client(
     )
 )
 
-
 def convert_to_webp(input_file, quality=80) -> bytes:
     try:
-        image = Image.open(input_file)
+        # Считываем данные из входного файла в буфер
+        input_data = input_file.read()
+        buffer = io.BytesIO(input_data)
+
+        # Проверка целостности изображения
+        try:
+            Image.open(buffer).verify()
+        except Exception as verify_error:
+            raise ValueError("Invalid image file") from verify_error
+
+        # Переоткрываем изображение после проверки
+        buffer.seek(0)
+        image = Image.open(buffer)
+
         if image.mode != "RGB":
             image = image.convert("RGB")
 
-        # Проверка целостности изображения
-        image.verify()
-
         output_stream = io.BytesIO()
-        image.save(output_stream, "webp", quality=quality, method=6)  # method=6 для лучшей совместимости
+        image.save(output_stream, "webp", quality=quality, method=6)
         webp_data = output_stream.getvalue()
 
-        # Дополнительная проверка размера
         if len(webp_data) == 0:
             raise ValueError("Empty WEBP data")
 
@@ -54,7 +62,6 @@ def convert_to_webp(input_file, quality=80) -> bytes:
     except Exception as e:
         logging.error(f"Image conversion failed: {str(e)}")
         raise
-
 
 def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".webp") -> str:
     return f"{prefix}_{entity_id}_{uuid.uuid4().hex}{extension}"
