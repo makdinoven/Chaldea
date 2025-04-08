@@ -130,6 +130,7 @@ async def get_country_details(session: AsyncSession, country_id: int) -> Optiona
         "regions": [
             {
                 "id": reg.id,
+                "country_id":country.id,
                 "name": reg.name,
                 "image_url": reg.image_url,
                 "x": reg.x,
