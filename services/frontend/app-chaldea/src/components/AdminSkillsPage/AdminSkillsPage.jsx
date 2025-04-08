@@ -177,20 +177,6 @@ const AdminSkillsPage = () => {
                 >
                   Удалить навык
                 </button>
-                <button
-                  style={{
-                    backgroundColor: '#2196F3',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '4px',
-                    padding: '8px 12px',
-                    cursor: 'pointer'
-                  }}
-                  onClick={handleSaveSkillTree}
-                  disabled={updateStatus === 'loading'}
-                >
-                  Сохранить изменения
-                </button>
                 <div style={{ marginTop: '10px' }}>
                   <input type="file" onChange={handleSkillImageUpload} />
                   {selectedSkillTree.skill_image && (
