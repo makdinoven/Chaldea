@@ -3,6 +3,6 @@ uvicorn
 python-multipart
 pymysql
 Pillow
-boto3
 python-dotenv
-botocore
+boto3==1.35.54
+botocore==1.35.54
