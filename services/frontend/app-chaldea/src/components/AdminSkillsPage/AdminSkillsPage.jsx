@@ -13,7 +13,7 @@ import styles from './AdminSkillsPage.module.scss';
 import FlowSkillsEditor from './FlowSkillsEditor';
 
 // Импортируем функцию подготовки payload (скорректируйте путь, если требуется)
-import { prepareSkillPayload } from '../../utils/preparePayload';
+import { prepareSkillPayload } from './utils/preparePayload';
 
 const AdminSkillsPage = () => {
   const dispatch = useDispatch();
