@@ -172,7 +172,6 @@ class SkillRankInTree(BaseModel):
     id: Union[int, str]  # Если None => создаём
     rank_name: Optional[str]
     rank_image: Optional[str]
-
     rank_number: int
     left_child_id: Optional[Union[int, str]] = None
     right_child_id: Optional[Union[int, str]] = None
