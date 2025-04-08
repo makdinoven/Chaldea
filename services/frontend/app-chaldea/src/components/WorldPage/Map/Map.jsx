@@ -68,6 +68,7 @@ export default function Map({type}) {
             ))}
             {activeMapPointId !== null && (
                 <MapTooltip
+                    type={"region"}
                     data={mapPoints.find((point) => point.id === activeMapPointId)}
                 />
             )}
