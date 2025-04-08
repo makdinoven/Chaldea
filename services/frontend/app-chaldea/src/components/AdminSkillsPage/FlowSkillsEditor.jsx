@@ -24,6 +24,9 @@ import {
 
 import { useDispatch } from 'react-redux';
 
+import { transformDamageData } from './utils/preparePayload';
+
+
 // Вспомогательные функции
 function findRoots(ranks) {
   const childIDs = new Set();
@@ -190,59 +193,64 @@ function FlowSkillsEditor({ skillTree, updateStatus }) {
   }, [setEdges, setNodes]);
 
   const handleSave = () => {
-    const updatedRanks = nodes.map(n => {
-      const isNew = typeof n.data.id === 'string' && n.data.id.startsWith('temp-');
-
-      return {
-        ...n.data,
-        id: isNew ? n.data.id : Number(n.data.id),
-        left_child_id: n.data.left_child_id
-          ? (typeof n.data.left_child_id === 'string' ? n.data.left_child_id : Number(n.data.left_child_id))
-          : null,
-        right_child_id: n.data.right_child_id
-          ? (typeof n.data.right_child_id === 'string' ? n.data.right_child_id : Number(n.data.right_child_id))
-          : null
-      };
-    });
-
-    const payload = {
-      id: skillTree?.id,
-      name: skillName,
-      skill_type: skillType,
-      description: skillDesc,
-      class_limitations: skillClassLim,
-      race_limitations: skillRaceLim,
-      subrace_limitations: skillSubraceLim,
-      min_level: skillMinLevel,
-      purchase_cost: skillPurchaseCost,
-      ranks: updatedRanks
+  const updatedRanks = nodes.map(n => {
+    const isNew = typeof n.data.id === 'string' && n.data.id.startsWith('temp-');
+    return {
+      ...n.data,
+      id: isNew ? n.data.id : Number(n.data.id),
+      left_child_id: n.data.left_child_id
+        ? (typeof n.data.left_child_id === 'string' ? n.data.left_child_id : Number(n.data.left_child_id))
+        : null,
+      right_child_id: n.data.right_child_id
+        ? (typeof n.data.right_child_id === 'string' ? n.data.right_child_id : Number(n.data.right_child_id))
+        : null,
+      // Объединяем поля selfDamage и enemyDamage в damage_entries.
+      damage_entries: transformDamageData(n.data.selfDamage, n.data.enemyDamage)
     };
+  });
 
-    dispatch(updateSkillFullTree({ skillId: skillTree?.id, payload }))
-      .unwrap()
-      .then(response => {
-        if (response.temp_id_map) {
-          const idMap = response.temp_id_map;
+  const payload = {
+    id: skillTree?.id,
+    name: skillName,
+    skill_type: skillType,
+    description: skillDesc,
+    class_limitations: skillClassLim,
+    race_limitations: skillRaceLim,
+    subrace_limitations: skillSubraceLim,
+    min_level: skillMinLevel,
+    purchase_cost: skillPurchaseCost,
+    // Сохраняем фотографию навыка, чтобы она не пропадала.
+    skill_image: skillTree?.skill_image,
+    ranks: updatedRanks
+  };
 
-          setNodes(prevNodes => prevNodes.map(n => ({
+  dispatch(updateSkillFullTree({ skillId: skillTree?.id, payload }))
+    .unwrap()
+    .then(response => {
+      if (response.temp_id_map) {
+        const idMap = response.temp_id_map;
+        setNodes(prevNodes =>
+          prevNodes.map(n => ({
             ...n,
             id: idMap[n.id] ? String(idMap[n.id]) : n.id,
             data: {
               ...n.data,
-              id: idMap[n.id] || n.data.id,
+              id: idMap[n.data.id] || n.data.id,
               left_child_id: idMap[n.data.left_child_id] || n.data.left_child_id,
               right_child_id: idMap[n.data.right_child_id] || n.data.right_child_id
             }
-          })));
-
-          setEdges(prevEdges => prevEdges.map(e => ({
+          }))
+        );
+        setEdges(prevEdges =>
+          prevEdges.map(e => ({
             ...e,
             source: idMap[e.source] ? String(idMap[e.source]) : e.source,
             target: idMap[e.target] ? String(idMap[e.target]) : e.target
-          })));
-        }
-      });
-  };
+          }))
+        );
+      }
+    });
+};
 
   let tempIdCounter = 1;
   const generateTempId = () => `temp-${tempIdCounter++}`;
