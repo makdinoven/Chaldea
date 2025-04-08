@@ -55,7 +55,7 @@ export default function NodeRankDetails({
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
-      onChangeNode(id, 'rankImagePreview', ev.target.result);
+      onChangeNode(id, 'rank_image', ev.target.result);
       dispatch(uploadSkillRankImage({ skillRankId: data.id, file }));
     };
     reader.readAsDataURL(file);
@@ -103,9 +103,9 @@ export default function NodeRankDetails({
           </strong>
 
           <div style={{marginTop: 4}}>
-            {data.rankImagePreview ? (
+            {data.rank_image? (
                 <img
-                    src={data.rankImagePreview}
+                    src={data.rank_image}
                 alt="Rank"
                 style={{
                   width: 80,

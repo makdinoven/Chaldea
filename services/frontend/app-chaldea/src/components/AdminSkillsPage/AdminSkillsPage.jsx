@@ -24,7 +24,11 @@ const AdminSkillsPage = () => {
   const handleSkillImageUpload = (e) => {
   const file = e.target.files[0];
   if (!file || !selectedSkillTree) return;
-  dispatch(uploadSkillImage({ skillId: selectedSkillTree.id, file }));
+  dispatch(uploadSkillImage({ skillId: selectedSkillTree.id, file }))
+      .then(() => {
+    dispatch(fetchSkills());
+    dispatch(fetchSkillFullTree(selectedSkillTree.id));
+    });
 };
 
   // Фильтр по названию навыка (регистронезависимый)
@@ -110,9 +114,9 @@ const AdminSkillsPage = () => {
                 className={styles.skillButton}
                 onClick={() => handleSelectSkill(skill.id)}
               >
-                {skill.skill_image_preview ? (
+                {skill.skill_image ? (
                   <img
-                    src={skill.skill_image_preview}
+                    src={skill.skill_image}
                     alt="skill"
                     style={{
                       width: '40px',
