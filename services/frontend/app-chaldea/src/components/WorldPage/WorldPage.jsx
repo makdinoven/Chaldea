@@ -15,7 +15,7 @@ export default function WorldPage() {
     const isLoaded = useSelector(state => state.countries.isLoaded);
     const loading = useSelector((state) => state.countries.loading);
     const navigateTo = useNavigateTo();
-    
+
 
     // useEffect(() => {
     //     console.log('rerender')
@@ -32,23 +32,24 @@ export default function WorldPage() {
     // })
 
     const renderDetailCards = () => {
-        return (<>
-            <DetailCard>
-                {
-                    'leader'
-                }
-            </DetailCard>
-            <DetailCard>
-                {
-                    'description'
-                }
-            </DetailCard>
-            <DetailCard>
-                {
-                    'vestnik'
-                }
-            </DetailCard>
-        </>)
+        return (
+            <>
+                <DetailCard>
+                    {
+                        'leader'
+                    }
+                </DetailCard>
+                <DetailCard>
+                    {
+                        'description'
+                    }
+                </DetailCard>
+                <DetailCard>
+                    {
+                        'vestnik'
+                    }
+                </DetailCard>
+            </>)
     }
 
     return (
@@ -65,7 +66,7 @@ export default function WorldPage() {
                                 name={country.name}
                             />
                         ))}
-                        <button 
+                        <button
                             className={s.admin_button}
                             onClick={() => navigateTo('/admin/locations')}
                         >

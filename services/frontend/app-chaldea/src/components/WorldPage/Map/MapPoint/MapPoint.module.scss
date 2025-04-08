@@ -2,8 +2,8 @@
   cursor: pointer;
   z-index: 15;
   position: absolute;
-  width: 60px;
-  height: 60px;
+  width: 40px;
+  height: 40px;
   margin: 6px;
   background-color: #3d3d3d;
   border-radius: 100%;
@@ -29,8 +29,8 @@
   }
 
   &.active {
-    width: 91px;
-    height: 91px;
+    width: 60px;
+    height: 60px;
 
     &::after {
       content: "";
@@ -39,7 +39,7 @@
       border-radius: inherit;
       //transform: rotate(90deg);
       border: 6px solid transparent;
-      background: linear-gradient(90deg, rgba(219,179,71,0) 0%, rgba(219,179,71,1) 100%);
+      background: linear-gradient(90deg, rgba(219, 179, 71, 0) 0%, rgba(219, 179, 71, 1) 100%);
       mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
       -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
       mask-composite: exclude;
