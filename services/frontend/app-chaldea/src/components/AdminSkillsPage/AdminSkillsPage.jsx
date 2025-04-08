@@ -6,13 +6,13 @@ import {
   fetchSkills,
   fetchSkillFullTree,
   uploadSkillImage,
-  updateSkillFullTree // импорт экшена для обновления дерева
+  updateSkillFullTree // Обновление полного дерева навыка
 } from '../../redux/actions/skillsAdminActions';
 import { clearSelectedSkillTree } from '../../redux/slices/skillsAdminSlice';
 import styles from './AdminSkillsPage.module.scss';
 import FlowSkillsEditor from './FlowSkillsEditor';
 
-// Импорт функции подготовки payload (скорректируйте путь, если требуется)
+// Импортируем утилиту подготовки payload (скорректируйте путь, если необходимо)
 import { prepareSkillPayload } from './utils/preparePayload';
 
 const AdminSkillsPage = () => {
@@ -54,7 +54,6 @@ const AdminSkillsPage = () => {
 
     try {
       const res = await axios.post('http://4452515-co41851.twc1.net:8003/skills/admin/skills/', newSkillPayload);
-      // После создания обновляем список навыков и выбираем новый навык
       dispatch(fetchSkills());
       handleSelectSkill(res.data.id);
     } catch (err) {
@@ -78,20 +77,17 @@ const AdminSkillsPage = () => {
     }
   };
 
-  // Функция для сохранения изменений в полном дереве навыка
+  // Функция для сохранения изменений в полном дереве навыка.
+  // Использует prepareSkillPayload для формирования корректного payload.
   const handleSaveSkillTree = async () => {
     if (!selectedSkillTree) return;
 
     try {
-      // Используем prepareSkillPayload для подготовки корректного payload
       const payload = prepareSkillPayload(selectedSkillTree);
-
-      // Отправляем payload в бекенд
+      // Отправляем payload на бекенд
       await dispatch(updateSkillFullTree({ skillId: selectedSkillTree.id, payload })).unwrap();
-
-      // Опционально: перезагружаем данные выбранного навыка
+      // Перезагружаем данные навыка для актуализации
       dispatch(fetchSkillFullTree(selectedSkillTree.id));
-
       alert('Изменения успешно сохранены!');
     } catch (err) {
       console.error("Ошибка при сохранении навыка:", err);
