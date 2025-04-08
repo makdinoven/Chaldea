@@ -6,7 +6,7 @@ export default function Input({
   type = 'text',
   maxLength = 200,
   minValue = 1,
-  maxValue = 400,
+  maxValue = 900,
   value,
   onChange,
   id,
