@@ -154,6 +154,8 @@ class SkillRankDamageInTree(BaseModel):
     damage_type: str
     amount: float
     description: Optional[str]
+    chance: int = 100
+
 
 class SkillRankEffectInTree(BaseModel):
     id: Optional[int]
