@@ -134,8 +134,7 @@ async def get_country_details(session: AsyncSession, country_id: int) -> Optiona
                 "image_url": reg.image_url,
                 "x": reg.x,
                 "y": reg.y,
-                "entrance_location_id": reg.entrance_location_id,
-                "entrance_location_name": None  # Будет заполнено при необходимости
+                "description":reg.description
             } for reg in country.regions
         ]
     }
