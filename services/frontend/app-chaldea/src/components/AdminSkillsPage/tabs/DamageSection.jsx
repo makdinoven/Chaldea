@@ -5,13 +5,14 @@ import styles from '../AdminSkillsPage.module.scss'
 
 const DamageSection = ({ title, damageArray, onChange }) => {
   const handleAdd = () => {
-    const newItem = { type: 'all', amount: 0, duration: 0, chance: 100 }
+    const newItem = { damage_type: 'all', amount: 0, duration: 0, chance: 100, description: ''}
     onChange([...(damageArray || []), newItem])
   }
 
   const handleUpdate = (index, field, value) => {
     const newArr = [...damageArray]
-    newArr[index] = { ...newArr[index], [field]: value }
+    const key = field === 'type' ? 'damage_type' : field
+    newArr[index] = { ...newArr[index], [key]: value }
     onChange(newArr)
   }
 

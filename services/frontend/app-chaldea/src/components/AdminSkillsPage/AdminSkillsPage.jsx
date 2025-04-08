@@ -2,10 +2,19 @@
 import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import axios from 'axios';
-import { fetchSkills, fetchSkillFullTree, uploadSkillImage } from '../../redux/actions/skillsAdminActions';
+import {
+  fetchSkills,
+  fetchSkillFullTree,
+  uploadSkillImage,
+  updateSkillFullTree // (1) Импортируем экшен
+} from '../../redux/actions/skillsAdminActions';
 import { clearSelectedSkillTree } from '../../redux/slices/skillsAdminSlice';
 import styles from './AdminSkillsPage.module.scss';
 import FlowSkillsEditor from './FlowSkillsEditor';
+
+// (2) Импортируем вашу функцию для подготовки payload
+import { prepareSkillPayload } from './utils/preparePayload';
+// путь корректируйте под свою структуру (например, '../utils/preparePayload' и т.д.)
 
 const AdminSkillsPage = () => {
   const dispatch = useDispatch();
@@ -22,14 +31,14 @@ const AdminSkillsPage = () => {
   };
 
   const handleSkillImageUpload = (e) => {
-  const file = e.target.files[0];
-  if (!file || !selectedSkillTree) return;
-  dispatch(uploadSkillImage({ skillId: selectedSkillTree.id, file }))
+    const file = e.target.files[0];
+    if (!file || !selectedSkillTree) return;
+    dispatch(uploadSkillImage({ skillId: selectedSkillTree.id, file }))
       .then(() => {
-    dispatch(fetchSkills());
-    dispatch(fetchSkillFullTree(selectedSkillTree.id));
-    });
-};
+        dispatch(fetchSkills());
+        dispatch(fetchSkillFullTree(selectedSkillTree.id));
+      });
+  };
 
   // Фильтр по названию навыка (регистронезависимый)
   const filteredSkills = skillsList.filter(skill =>
@@ -48,7 +57,6 @@ const AdminSkillsPage = () => {
       const res = await axios.post('http://4452515-co41851.twc1.net:8003/skills/admin/skills/', newSkillPayload);
       // После создания обновляем список навыков и выбираем новый навык
       dispatch(fetchSkills());
-      // Если необходимо сразу выбрать созданный навык, можно вызвать fetchSkillFullTree с новым id:
       handleSelectSkill(res.data.id);
     } catch (err) {
       console.error("Ошибка при создании навыка:", err);
@@ -68,6 +76,27 @@ const AdminSkillsPage = () => {
     } catch (err) {
       console.error("Ошибка при удалении навыка:", err);
       alert("Не удалось удалить навык. См. консоль.");
+    }
+  };
+
+  // (3) Функция для сохранения изменений в полном дереве навыка
+  const handleSaveSkillTree = async () => {
+    if (!selectedSkillTree) return;
+
+    try {
+      // Готовим payload с учётом объединения selfDamage/enemyDamage и т.д.
+      const payload = prepareSkillPayload(selectedSkillTree);
+
+      // Вызываем обновление дерева (PUT)
+      await dispatch(updateSkillFullTree({ skillId: selectedSkillTree.id, payload })).unwrap();
+
+      // По желанию, можно заново загрузить обновлённые данные навыка:
+      dispatch(fetchSkillFullTree(selectedSkillTree.id));
+
+      alert('Изменения успешно сохранены!');
+    } catch (err) {
+      console.error("Ошибка при сохранении навыка:", err);
+      alert("Произошла ошибка при сохранении. См. консоль.");
     }
   };
 
@@ -151,26 +180,44 @@ const AdminSkillsPage = () => {
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
               <div style={{marginBottom: '10px'}}>
                 <button
-                    style={{
-                      backgroundColor: '#f44336',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '4px',
-                      padding: '8px 12px',
-                      cursor: 'pointer'
-                    }}
-                    onClick={handleDeleteSkill}
+                  style={{
+                    backgroundColor: '#f44336',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                    marginRight: '8px'
+                  }}
+                  onClick={handleDeleteSkill}
                 >
                   Удалить навык
                 </button>
-                <div style={{marginBottom: '10px'}}>
+
+                {/* (4) Кнопка для сохранения изменений */}
+                <button
+                  style={{
+                    backgroundColor: '#2196F3',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '8px 12px',
+                    cursor: 'pointer'
+                  }}
+                  onClick={handleSaveSkillTree}
+                  disabled={updateStatus === 'loading'} // можно дизейблить при загрузке
+                >
+                  Сохранить изменения
+                </button>
+
+                <div style={{marginTop: '10px'}}>
                   <input type="file" onChange={handleSkillImageUpload}/>
                   {selectedSkillTree.skill_image && (
-                      <img
-                          src={selectedSkillTree.skill_image}
-                          alt="Skill"
-                          style={{width: '120px', marginTop: '10px', borderRadius: '4px'}}
-                      />
+                    <img
+                      src={selectedSkillTree.skill_image}
+                      alt="Skill"
+                      style={{width: '120px', marginTop: '10px', borderRadius: '4px'}}
+                    />
                   )}
                 </div>
               </div>
@@ -179,7 +226,7 @@ const AdminSkillsPage = () => {
               </div>
             </div>
           ) : (
-              <p>Выберите навык для редактирования</p>
+            <p>Выберите навык для редактирования</p>
           )}
         </div>
       </div>

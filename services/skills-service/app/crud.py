@@ -197,7 +197,6 @@ async def update_character_skill_rank(db: AsyncSession, cs_id: int, new_rank_id:
 # Синхронизация damage_entries и effects
 # -----------------------
 async def sync_damage_entries(db: AsyncSession, rank_obj: models.SkillRank, new_damage_list):
-    # Явно загружаем связанные damage_entries
     result = await db.execute(
         select(models.SkillRank)
         .options(selectinload(models.SkillRank.damage_entries))
@@ -210,35 +209,35 @@ async def sync_damage_entries(db: AsyncSession, rank_obj: models.SkillRank, new_
     old_entries = {d.id: d for d in rank.damage_entries}
     keep_ids = []
 
-    # Обрабатываем новые и существующие записи
     for dmg_data in new_damage_list:
-        if dmg_data.id is None:
+        # Если duration присутствует в dmg_data, просто игнорируем его
+        if not getattr(dmg_data, "id", None):
             new_dmg = models.SkillRankDamage(
                 skill_rank_id=rank.id,
                 damage_type=dmg_data.damage_type,
                 amount=dmg_data.amount,
-                description=dmg_data.description
+                description=dmg_data.description,
+                chance=dmg_data.chance,
+                target_side=dmg_data.target_side
             )
             db.add(new_dmg)
         else:
             if dmg_data.id not in old_entries:
                 raise HTTPException(400, f"Damage entry id={dmg_data.id} not found")
-
             old_entry = old_entries[dmg_data.id]
             old_entry.damage_type = dmg_data.damage_type
             old_entry.amount = dmg_data.amount
             old_entry.description = dmg_data.description
+            old_entry.chance = dmg_data.chance
+            old_entry.target_side = dmg_data.target_side
             keep_ids.append(dmg_data.id)
 
-    # Удаляем отсутствующие записи
     for old_id, old_entry in old_entries.items():
         if old_id not in keep_ids:
             await db.delete(old_entry)
 
-    # Фиксируем изменения
     await db.commit()
     await db.refresh(rank)
-
     return rank
 
 async def sync_effects(db: AsyncSession, rank_obj: models.SkillRank, new_effect_list):

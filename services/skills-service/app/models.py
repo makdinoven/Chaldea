@@ -87,6 +87,9 @@ class SkillRankDamage(Base):
     amount: Mapped[float] = mapped_column(Float, default=0.0)
     description: Mapped[str] = mapped_column(Text, nullable=True)
 
+    target_side: Mapped[str] = mapped_column(String(10), nullable=False, default="self")
+    chance: Mapped[int] = mapped_column(Integer, default=100)
+
     skill_rank = relationship("SkillRank", back_populates="damage_entries")
 
 
