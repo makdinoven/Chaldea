@@ -11,10 +11,7 @@ import {
 import { clearSelectedSkillTree } from '../../redux/slices/skillsAdminSlice';
 import styles from './AdminSkillsPage.module.scss';
 import FlowSkillsEditor from './FlowSkillsEditor';
-
-// (2) Импортируем вашу функцию для подготовки payload
 import { prepareSkillPayload } from './utils/preparePayload';
-// путь корректируйте под свою структуру (например, '../utils/preparePayload' и т.д.)
 
 const AdminSkillsPage = () => {
   const dispatch = useDispatch();

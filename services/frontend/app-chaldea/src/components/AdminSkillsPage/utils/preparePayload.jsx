@@ -1,6 +1,6 @@
 import transformDamageData from '../utils/transformDamageData';
 
-const prepareRankPayload = (rankData) => ({
+export const prepareRankPayload = (rankData) => ({
   id: rankData.id,
   rank_name: rankData.rank_name,
   rank_image: rankData.rank_image,
@@ -21,7 +21,7 @@ const prepareRankPayload = (rankData) => ({
   effects: rankData.effects // Эффекты уже должны содержать поле target_side
 });
 
-const prepareSkillPayload = (skillTreeData) => ({
+export const prepareSkillPayload = (skillTreeData) => ({
   id: skillTreeData.id,
   name: skillTreeData.name,
   skill_type: skillTreeData.skill_type,
