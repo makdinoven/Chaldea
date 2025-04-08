@@ -8,8 +8,17 @@ from crud import (
     update_skill_rank_image, update_skill_image
 )
 from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://4452515-co41851.twc1.net"],  # Или ["*"] для временного разрешения всех доменов
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.post("/photo/change_user_avatar_photo")
 async def change_user_avatar_photo(user_id: int = Form(...), file: UploadFile = File(...)):

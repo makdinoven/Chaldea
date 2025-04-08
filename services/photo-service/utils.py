@@ -90,8 +90,6 @@ def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "")
             raise TypeError("Expected bytes content")
 
         s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
-        if not s3_key.startswith(('images/', 'skills/')):
-            raise ValueError("Invalid file category")
 
         # Проверка MD5 для целостности данных
         md5_hash = hashlib.md5(file_stream).digest()
