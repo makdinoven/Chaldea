@@ -41,7 +41,7 @@ export const uploadDistrictImage = createAsyncThunk(
             formData.append('file', file);
 
             const response = await axios.post(
-                'http://4452515-co41851.twc1.net:8006/photo/change_district_image',
+                'http://4452515-co41851.twc1.net:8001/photo/change_district_image',
                 formData,
                 {
                     headers: { 'Content-Type': 'multipart/form-data' }

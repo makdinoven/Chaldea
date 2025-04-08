@@ -46,7 +46,7 @@ export const uploadRegionImage = createAsyncThunk(
             formData.append('file', file);
             
             const response = await axios.post(
-                'http://4452515-co41851.twc1.net:8006/photo/change_region_image',
+                'http://4452515-co41851.twc1.net:8001/photo/change_region_image',
                 formData,
                 {
                     headers: {
@@ -70,7 +70,7 @@ export const uploadRegionMap = createAsyncThunk(
             formData.append('file', file);
             
             const response = await axios.post(
-                'http://4452515-co41851.twc1.net:8006/photo/change_region_map',
+                'http://4452515-co41851.twc1.net:8001/photo/change_region_map',
                 formData,
                 {
                     headers: {

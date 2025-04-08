@@ -96,7 +96,7 @@ export const uploadLocationImage = createAsyncThunk(
             formData.append('location_id', locationId);
             
             const response = await axios.post(
-                'http://4452515-co41851.twc1.net:8006/photo/change_location_image',
+                'http://4452515-co41851.twc1.net:8001/photo/change_location_image',
                 formData,
                 {
                     headers: {
