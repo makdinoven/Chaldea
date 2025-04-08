@@ -6,14 +6,14 @@ import {
   fetchSkills,
   fetchSkillFullTree,
   uploadSkillImage,
-  updateSkillFullTree // Обновление полного дерева навыка
+  updateSkillFullTree  // импорт экшена для обновления
 } from '../../redux/actions/skillsAdminActions';
 import { clearSelectedSkillTree } from '../../redux/slices/skillsAdminSlice';
 import styles from './AdminSkillsPage.module.scss';
 import FlowSkillsEditor from './FlowSkillsEditor';
 
-// Импортируем утилиту подготовки payload (скорректируйте путь, если необходимо)
-import { prepareSkillPayload } from './utils/preparePayload';
+// Импортируем функцию подготовки payload (скорректируйте путь, если требуется)
+import { prepareSkillPayload } from '../../utils/preparePayload';
 
 const AdminSkillsPage = () => {
   const dispatch = useDispatch();
@@ -77,16 +77,14 @@ const AdminSkillsPage = () => {
     }
   };
 
-  // Функция для сохранения изменений в полном дереве навыка.
-  // Использует prepareSkillPayload для формирования корректного payload.
+  // Функция сохранения изменений в полном дереве навыка
   const handleSaveSkillTree = async () => {
     if (!selectedSkillTree) return;
 
     try {
+      // Готовим payload через утилиту, которая удаляет лишние поля и объединяет данные урона
       const payload = prepareSkillPayload(selectedSkillTree);
-      // Отправляем payload на бекенд
       await dispatch(updateSkillFullTree({ skillId: selectedSkillTree.id, payload })).unwrap();
-      // Перезагружаем данные навыка для актуализации
       dispatch(fetchSkillFullTree(selectedSkillTree.id));
       alert('Изменения успешно сохранены!');
     } catch (err) {
