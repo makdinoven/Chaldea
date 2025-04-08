@@ -209,7 +209,7 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         .where(Location.district_id.in_([d.id for d in region.districts]))
     )
     all_locations = locations_result.scalars().all()
-    
+
     # Создаем словарь для быстрого доступа к локациям
     locations_by_id = {loc.id: {
         "id": loc.id,
@@ -222,8 +222,8 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         "parent_id": loc.parent_id,
         "children": []
     } for loc in all_locations}
-    
-    # Строим дерево
+
+    # Строим дерево локаций
     root_locations = []
     for loc in all_locations:
         if loc.parent_id is None:
@@ -233,19 +233,29 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
             if parent:
                 parent["children"].append(locations_by_id[loc.id])
 
-    # Формируем ответ с районами
+    # Получаем данные для entrance_location, если он задан
+    entrance_location = None
+    if region.entrance_location_id is not None:
+        entrance_location = locations_by_id.get(region.entrance_location_id)
+        # Если нужно вернуть только id и name, можно использовать:
+        # entrance_location = {"id": entrance_location["id"], "name": entrance_location["name"]} if entrance_location else None
+
+    # Формируем данные по районам
     districts_data = []
     for district in region.districts:
         district_root_locations = [
-            loc for loc in root_locations 
+            loc for loc in root_locations
             if loc["id"] in [l.id for l in all_locations if l.district_id == district.id]
         ]
-        
+        entrance_location = None
+        if district.entrance_location_id:
+            entrance_location = locations_by_id.get(district.entrance_location_id)
+
         districts_data.append({
             "id": district.id,
             "name": district.name,
             "description": district.description,
-            "entrance_location_id": district.entrance_location_id,
+            "entrance_location": entrance_location,
             "x": district.x,
             "y": district.y,
             "image_url": district.image_url,
@@ -259,7 +269,8 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         "description": region.description,
         "image_url": region.image_url,
         "map_image_url": region.map_image_url,
-        "entrance_location_id": region.entrance_location_id,
+        # Возвращаем объект локации вместо простого id
+        "entrance_location": entrance_location,
         "leader_id": region.leader_id,
         "x": region.x,
         "y": region.y,
