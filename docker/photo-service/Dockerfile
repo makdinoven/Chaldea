@@ -19,8 +19,6 @@ COPY ./services/photo-service /app
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-RUN pip install --upgrade boto3 botocore
-
 # Указываем порт, который будет открыт для доступа к микросервису
 EXPOSE 8001
 
