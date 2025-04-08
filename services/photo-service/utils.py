@@ -32,35 +32,52 @@ s3_client = boto3.client(
     )
 )
 
+
 def convert_to_webp(input_file, quality=80) -> bytes:
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
     try:
-        # Считываем данные из входного файла в буфер
+        # Чтение и проверка размера файла
         input_data = input_file.read()
-        buffer = io.BytesIO(input_data)
+        if len(input_data) > MAX_FILE_SIZE:
+            raise ValueError(f"File size exceeds {MAX_FILE_SIZE // 1024 // 1024}MB limit")
+        if not input_data:
+            raise ValueError("Empty input file")
 
         # Проверка целостности изображения
-        try:
-            Image.open(buffer).verify()
-        except Exception as verify_error:
-            raise ValueError("Invalid image file") from verify_error
+        with io.BytesIO(input_data) as buffer:
+            try:
+                Image.open(buffer).verify()
+            except Exception as verify_error:
+                raise ValueError("Invalid image content") from verify_error
 
-        # Переоткрываем изображение после проверки
-        buffer.seek(0)
-        image = Image.open(buffer)
+            # Переоткрытие и конвертация
+            buffer.seek(0)
+            with Image.open(buffer) as image:
+                image = image.copy()  # Создаем копию для безопасности
 
-        if image.mode != "RGB":
-            image = image.convert("RGB")
+                if image.mode not in ("RGB", "RGBA"):
+                    image = image.convert("RGBA" if image.mode == "P" else "RGB")
 
-        output_stream = io.BytesIO()
-        image.save(output_stream, "webp", quality=quality, method=6)
-        webp_data = output_stream.getvalue()
+                # Оптимизация параметров сохранения
+                output_stream = io.BytesIO()
+                save_args = {
+                    "format": "WEBP",
+                    "quality": quality,
+                    "method": 6,
+                    "lossless": False
+                }
 
-        if len(webp_data) == 0:
-            raise ValueError("Empty WEBP data")
+                image.save(output_stream, **save_args)
+                webp_data = output_stream.getvalue()
 
-        return webp_data
+                if len(webp_data) < 100:  # Минимальный размер для WebP
+                    raise ValueError("Invalid WEBP conversion result")
+
+                return webp_data
+
     except Exception as e:
-        logging.error(f"Image conversion failed: {str(e)}")
+        logging.error(f"Image processing error: {str(e)}", exc_info=True)
         raise
 
 def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".webp") -> str:
@@ -68,22 +85,40 @@ def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".web
 
 
 def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "") -> str:
-    s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
-
     try:
+        if not isinstance(file_stream, bytes):
+            raise TypeError("Expected bytes content")
+
+        s3_key = f"{subdirectory}/{filename}" if subdirectory else filename
+        if not s3_key.startswith(('images/', 'skills/')):
+            raise ValueError("Invalid file category")
+
+        # Проверка MD5 для целостности данных
+        md5_hash = hashlib.md5(file_stream).digest()
+        content_md5 = base64.b64encode(md5_hash).decode()
+
         response = s3_client.put_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
             Body=file_stream,
             ACL='public-read',
             ContentType='image/webp',
-            ContentLength=len(file_stream),  # Важно!
-            ContentMD5=base64.b64encode(hashlib.md5(file_stream).digest()).decode()
+            ContentLength=len(file_stream),
+            ContentMD5=content_md5,
+            Metadata={
+                'Content-Encoding': 'binary',
+                'Cache-Control': 'max-age=31536000'  # Кеширование на год
+            }
         )
+
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise RuntimeError("S3 upload failed")
+
+        logging.info(f"Uploaded to S3: {s3_key}, Size: {len(file_stream)} bytes, ETag: {response['ETag']}")
         return f"{S3_ENDPOINT_URL}/{S3_BUCKET_NAME}/{s3_key}"
 
     except Exception as e:
-        logging.error(f"S3 Upload Error: {str(e)}")
+        logging.error(f"S3 Upload Error: {str(e)}", exc_info=True)
         raise
 
 def delete_s3_file(file_url: str):
