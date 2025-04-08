@@ -1,37 +1,64 @@
-import transformDamageData from '../utils/transformDamageData';
+// src/utils/preparePayload.js
 
-export const prepareRankPayload = (rankData) => ({
-  id: rankData.id,
-  rank_name: rankData.rank_name,
-  rank_image: rankData.rank_image,
-  rank_number: rankData.rank_number,
-  left_child_id: rankData.left_child_id,
-  right_child_id: rankData.right_child_id,
-  cost_energy: rankData.cost_energy,
-  cost_mana: rankData.cost_mana,
-  cooldown: rankData.cooldown,
-  level_requirement: rankData.level_requirement,
-  upgrade_cost: rankData.upgrade_cost,
-  class_limitations: rankData.class_limitations,
-  race_limitations: rankData.race_limitations,
-  subrace_limitations: rankData.subrace_limitations,
-  rank_description: rankData.rank_description,
-  // Объединяем данные урона из двух вкладок в один массив damage_entries
-  damage_entries: transformDamageData(rankData.selfDamage, rankData.enemyDamage),
-  effects: rankData.effects // Эффекты уже должны содержать поле target_side
-});
+// Функция для объединения данных урона из вкладок "Для себя" и "Для врага"
+export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
+  const self = selfDamage.map(item => ({
+    damage_type: item.damage_type || item.type, // если где-то ещё используется "type"
+    amount: item.amount,
+    chance: item.chance,
+    description: item.description || '',
+    target_side: 'self'
+  }));
+  const enemy = enemyDamage.map(item => ({
+    damage_type: item.damage_type || item.type,
+    amount: item.amount,
+    chance: item.chance,
+    description: item.description || '',
+    target_side: 'enemy'
+  }));
+  return [...self, ...enemy];
+};
 
-export const prepareSkillPayload = (skillTreeData) => ({
-  id: skillTreeData.id,
-  name: skillTreeData.name,
-  skill_type: skillTreeData.skill_type,
-  description: skillTreeData.description,
-  class_limitations: skillTreeData.class_limitations,
-  race_limitations: skillTreeData.race_limitations,
-  subrace_limitations: skillTreeData.subrace_limitations,
-  min_level: skillTreeData.min_level,
-  purchase_cost: skillTreeData.purchase_cost,
-  skill_image: skillTreeData.skill_image,
-  // Преобразуем каждый ранг с помощью функции prepareRankPayload
-  ranks: skillTreeData.ranks.map(rankData => prepareRankPayload(rankData))
-});
+// Функция подготовки данных для одного ранга
+export const prepareRankPayload = (rankData) => {
+  // Извлекаем поля, которые не должны попадать в payload
+  const {
+    selfDamage,    // данные из вкладки "для себя"
+    enemyDamage,   // данные из вкладки "для врага"
+    selfDamageBuff, // и другие поля, если не должны отправляться
+    selfResist,
+    enemyDamageBuff,
+    enemyResist,
+    enemyVulnerability,
+    selfVulnerability,
+    selfComplexEffects,
+    enemyComplexEffects,
+    ...baseData // сюда попадут все остальные поля, которые нам нужны
+  } = rankData;
+
+  return {
+    ...baseData,
+    // Формируем единственный массив damage_entries, объединяя selfDamage и enemyDamage
+    damage_entries: transformDamageData(selfDamage, enemyDamage)
+    // Поле effects оставляем так, как оно есть – предполагается, что они уже содержат target_side
+  };
+};
+
+// Функция подготовки данных для всего навыка (полное дерево)
+export const prepareSkillPayload = (skillTreeData) => {
+  return {
+    id: skillTreeData.id,
+    name: skillTreeData.name,
+    skill_type: skillTreeData.skill_type,
+    description: skillTreeData.description,
+    class_limitations: skillTreeData.class_limitations,
+    race_limitations: skillTreeData.race_limitations,
+    subrace_limitations: skillTreeData.subrace_limitations,
+    min_level: skillTreeData.min_level,
+    purchase_cost: skillTreeData.purchase_cost,
+    // Обязательно сохраняем skill_image, чтобы фотография не исчезала
+    skill_image: skillTreeData.skill_image,
+    // Для каждого ранга формируем корректный payload
+    ranks: skillTreeData.ranks.map(rankData => prepareRankPayload(rankData))
+  };
+};

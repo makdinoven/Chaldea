@@ -75,7 +75,7 @@ export default function NodeRankDetails({
         style={{
           background: selected ? '#fff7e6' : '#fff',
           border: '1px solid #ccc',
-          borderRadius: 6,
+          borderRadius: 50,
           padding: 6,
           minWidth: 120,
           textAlign: 'center',
@@ -93,7 +93,7 @@ export default function NodeRankDetails({
         <Handle
           type="source"
           id="left"
-          position={Position.Right}
+          position={Position.Left}
           style={{ top: '45%', right: -8, background: 'blue' }}
         />
         <Handle

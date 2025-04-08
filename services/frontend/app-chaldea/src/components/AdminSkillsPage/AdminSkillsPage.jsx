@@ -6,12 +6,14 @@ import {
   fetchSkills,
   fetchSkillFullTree,
   uploadSkillImage,
-  updateSkillFullTree // (1) Импортируем экшен
+  updateSkillFullTree // импорт экшена для обновления дерева
 } from '../../redux/actions/skillsAdminActions';
 import { clearSelectedSkillTree } from '../../redux/slices/skillsAdminSlice';
 import styles from './AdminSkillsPage.module.scss';
 import FlowSkillsEditor from './FlowSkillsEditor';
-import { prepareSkillPayload } from './utils/preparePayload';
+
+// Импорт функции подготовки payload (скорректируйте путь, если требуется)
+import { prepareSkillPayload } from '../../utils/preparePayload';
 
 const AdminSkillsPage = () => {
   const dispatch = useDispatch();
@@ -76,18 +78,18 @@ const AdminSkillsPage = () => {
     }
   };
 
-  // (3) Функция для сохранения изменений в полном дереве навыка
+  // Функция для сохранения изменений в полном дереве навыка
   const handleSaveSkillTree = async () => {
     if (!selectedSkillTree) return;
 
     try {
-      // Готовим payload с учётом объединения selfDamage/enemyDamage и т.д.
+      // Используем prepareSkillPayload для подготовки корректного payload
       const payload = prepareSkillPayload(selectedSkillTree);
 
-      // Вызываем обновление дерева (PUT)
+      // Отправляем payload в бекенд
       await dispatch(updateSkillFullTree({ skillId: selectedSkillTree.id, payload })).unwrap();
 
-      // По желанию, можно заново загрузить обновлённые данные навыка:
+      // Опционально: перезагружаем данные выбранного навыка
       dispatch(fetchSkillFullTree(selectedSkillTree.id));
 
       alert('Изменения успешно сохранены!');
@@ -175,7 +177,7 @@ const AdminSkillsPage = () => {
         <div className={styles.editorContainer}>
           {selectedSkillTree ? (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-              <div style={{marginBottom: '10px'}}>
+              <div style={{ marginBottom: '10px' }}>
                 <button
                   style={{
                     backgroundColor: '#f44336',
@@ -191,7 +193,6 @@ const AdminSkillsPage = () => {
                   Удалить навык
                 </button>
 
-                {/* (4) Кнопка для сохранения изменений */}
                 <button
                   style={{
                     backgroundColor: '#2196F3',
@@ -202,24 +203,24 @@ const AdminSkillsPage = () => {
                     cursor: 'pointer'
                   }}
                   onClick={handleSaveSkillTree}
-                  disabled={updateStatus === 'loading'} // можно дизейблить при загрузке
+                  disabled={updateStatus === 'loading'}
                 >
                   Сохранить изменения
                 </button>
 
-                <div style={{marginTop: '10px'}}>
-                  <input type="file" onChange={handleSkillImageUpload}/>
+                <div style={{ marginTop: '10px' }}>
+                  <input type="file" onChange={handleSkillImageUpload} />
                   {selectedSkillTree.skill_image && (
                     <img
                       src={selectedSkillTree.skill_image}
                       alt="Skill"
-                      style={{width: '120px', marginTop: '10px', borderRadius: '4px'}}
+                      style={{ width: '120px', marginTop: '10px', borderRadius: '4px' }}
                     />
                   )}
                 </div>
               </div>
-              <div style={{flex: '1'}}>
-                <FlowSkillsEditor skillTree={selectedSkillTree} updateStatus={updateStatus}/>
+              <div style={{ flex: '1' }}>
+                <FlowSkillsEditor skillTree={selectedSkillTree} updateStatus={updateStatus} />
               </div>
             </div>
           ) : (
