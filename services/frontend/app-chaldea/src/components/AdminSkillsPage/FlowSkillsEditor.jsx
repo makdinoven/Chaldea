@@ -192,36 +192,38 @@ function FlowSkillsEditor({ skillTree, updateStatus }) {
     }));
   }, [setEdges, setNodes]);
 
-  const handleSave = () => {
+ const handleSave = () => {
   const updatedRanks = nodes.map(n => {
-    const isNew = typeof n.data.id === 'string' && n.data.id.startsWith('temp-');
+    const formNode = skillTree.ranks.find(r => String(r.id) === String(n.data.id)) || {};
     return {
       ...n.data,
-      id: isNew ? n.data.id : Number(n.data.id),
-      left_child_id: n.data.left_child_id
-        ? (typeof n.data.left_child_id === 'string' ? n.data.left_child_id : Number(n.data.left_child_id))
-        : null,
-      right_child_id: n.data.right_child_id
-        ? (typeof n.data.right_child_id === 'string' ? n.data.right_child_id : Number(n.data.right_child_id))
-        : null,
-      // Объединяем поля selfDamage и enemyDamage в damage_entries.
-      damage_entries: transformDamageData(n.data.selfDamage, n.data.enemyDamage)
+      // Объединяем данные из стейта формы (formNode)
+      selfDamage: formNode.selfDamage || [],
+      enemyDamage: formNode.enemyDamage || [],
+      selfResist: formNode.selfResist || [],
+      enemyResist: formNode.enemyResist || [],
+      selfVulnerability: formNode.selfVulnerability || [],
+      enemyVulnerability: formNode.enemyVulnerability || [],
+      selfDamageBuff: formNode.selfDamageBuff || [],
+      enemyDamageBuff: formNode.enemyDamageBuff || [],
+      selfComplexEffects: formNode.selfComplexEffects || [],
+      enemyComplexEffects: formNode.enemyComplexEffects || [],
     };
   });
 
   const payload = prepareSkillPayload({
-  id: skillTree?.id,
-  name: skillName,
-  skill_type: skillType,
-  description: skillDesc,
-  class_limitations: skillClassLim,
-  race_limitations: skillRaceLim,
-  subrace_limitations: skillSubraceLim,
-  min_level: skillMinLevel,
-  purchase_cost: skillPurchaseCost,
-  skill_image: skillTree?.skill_image,
-  ranks: nodes.map(n => n.data)
-});
+    id: skillTree?.id,
+    name: skillName,
+    skill_type: skillType,
+    description: skillDesc,
+    class_limitations: skillClassLim,
+    race_limitations: skillRaceLim,
+    subrace_limitations: skillSubraceLim,
+    min_level: skillMinLevel,
+    purchase_cost: skillPurchaseCost,
+    skill_image: skillTree?.skill_image,
+    ranks: updatedRanks
+  });
 
   dispatch(updateSkillFullTree({ skillId: skillTree?.id, payload }))
     .unwrap()
