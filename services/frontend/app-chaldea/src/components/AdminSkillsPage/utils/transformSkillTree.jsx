@@ -7,7 +7,7 @@ export const transformReceivedSkillTree = (skillTree) => {
       .map(e => ({
         id: e.id,
         // берем всё, что после "Buff: ", "Resist: " или "Vulnerability: "
-        type: e.effect_name.replace(`${prefix}: `, ''),
+        damage_type: e.effect_name.replace(`${prefix}: `, ''),
         percent: e.magnitude,
         duration: e.duration,
         chance: e.chance,
