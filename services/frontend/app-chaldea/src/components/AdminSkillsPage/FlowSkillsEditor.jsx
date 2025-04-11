@@ -192,23 +192,19 @@ function FlowSkillsEditor({ skillTree, updateStatus }) {
   }, [setEdges, setNodes]);
 
  const handleSave = () => {
-  const updatedRanks = nodes.map(n => {
-    const formNode = skillTree.ranks.find(r => String(r.id) === String(n.data.id)) || {};
-    return {
-      ...n.data,
-      // Объединяем данные из стейта формы (formNode)
-      selfDamage: formNode.selfDamage || [],
-      enemyDamage: formNode.enemyDamage || [],
-      selfResist: formNode.selfResist || [],
-      enemyResist: formNode.enemyResist || [],
-      selfVulnerability: formNode.selfVulnerability || [],
-      enemyVulnerability: formNode.enemyVulnerability || [],
-      selfDamageBuff: formNode.selfDamageBuff || [],
-      enemyDamageBuff: formNode.enemyDamageBuff || [],
-      selfComplexEffects: formNode.selfComplexEffects || [],
-      enemyComplexEffects: formNode.enemyComplexEffects || [],
-    };
-  });
+  const updatedRanks = nodes.map(n => ({
+    ...n.data,
+    selfDamage: n.data.selfDamage || [],
+    enemyDamage: n.data.enemyDamage || [],
+    selfResist: n.data.selfResist || [],
+    enemyResist: n.data.enemyResist || [],
+    selfVulnerability: n.data.selfVulnerability || [],
+    enemyVulnerability: n.data.enemyVulnerability || [],
+    selfDamageBuff: n.data.selfDamageBuff || [],
+    enemyDamageBuff: n.data.enemyDamageBuff || [],
+    selfComplexEffects: n.data.selfComplexEffects || [],
+    enemyComplexEffects: n.data.enemyComplexEffects || [],
+  }));
 
   const payload = prepareSkillPayload({
     id: skillTree?.id,
