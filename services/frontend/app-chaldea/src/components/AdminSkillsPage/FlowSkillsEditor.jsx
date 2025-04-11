@@ -209,20 +209,19 @@ function FlowSkillsEditor({ skillTree, updateStatus }) {
     };
   });
 
-  const payload = {
-    id: skillTree?.id,
-    name: skillName,
-    skill_type: skillType,
-    description: skillDesc,
-    class_limitations: skillClassLim,
-    race_limitations: skillRaceLim,
-    subrace_limitations: skillSubraceLim,
-    min_level: skillMinLevel,
-    purchase_cost: skillPurchaseCost,
-    // Сохраняем фотографию навыка, чтобы она не пропадала.
-    skill_image: skillTree?.skill_image,
-    ranks: updatedRanks
-  };
+  const payload = prepareSkillPayload({
+  id: skillTree?.id,
+  name: skillName,
+  skill_type: skillType,
+  description: skillDesc,
+  class_limitations: skillClassLim,
+  race_limitations: skillRaceLim,
+  subrace_limitations: skillSubraceLim,
+  min_level: skillMinLevel,
+  purchase_cost: skillPurchaseCost,
+  skill_image: skillTree?.skill_image,
+  ranks: nodes.map(n => n.data)
+});
 
   dispatch(updateSkillFullTree({ skillId: skillTree?.id, payload }))
     .unwrap()
