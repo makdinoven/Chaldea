@@ -24,8 +24,7 @@ import {
 
 import { useDispatch } from 'react-redux';
 
-import { transformDamageData } from './utils/preparePayload';
-
+import { prepareSkillPayload } from './utils/preparePayload';
 
 // Вспомогательные функции
 function findRoots(ranks) {
