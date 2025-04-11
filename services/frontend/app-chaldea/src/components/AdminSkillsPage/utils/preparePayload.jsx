@@ -9,6 +9,7 @@ export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
     description: item.description || '',
     target_side: 'self'
   }));
+
   const enemy = enemyDamage.map(item => ({
     damage_type: item.damage_type || item.type,
     amount: item.amount,
@@ -16,6 +17,7 @@ export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
     description: item.description || '',
     target_side: 'enemy'
   }));
+
   return [...self, ...enemy];
 };
 

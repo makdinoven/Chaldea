@@ -4,9 +4,8 @@ import { DAMAGE_TYPES } from '../skillConstants'
 import styles from '../AdminSkillsPage.module.scss'
 
 const BuffDebuffSection = ({ title, buffArray, onChange }) => {
-
   const handleAdd = () => {
-    const newItem = { type: 'all', percent: 0, duration: 0, chance: 100 }
+    const newItem = { damage_type: 'physical', amount: 0, duration: 0, chance: 100, description: '' }
     onChange([...(buffArray || []), newItem])
   }
 
@@ -29,8 +28,8 @@ const BuffDebuffSection = ({ title, buffArray, onChange }) => {
           <div className={styles.inputGroup}>
             <label>Тип:</label>
             <select
-              value={item.type}
-              onChange={(e) => handleUpdate(idx, 'type', e.target.value)}
+              value={item.damage_type}
+              onChange={(e) => handleUpdate(idx, 'damage_type', e.target.value)}
             >
               {DAMAGE_TYPES.map(dt => (
                 <option key={dt.value} value={dt.value}>{dt.label}</option>
@@ -38,11 +37,11 @@ const BuffDebuffSection = ({ title, buffArray, onChange }) => {
             </select>
           </div>
           <div className={styles.inputGroup}>
-            <label>Процент(%):</label>
+            <label>Значение:</label>
             <input
               type="number"
-              value={item.percent}
-              onChange={(e) => handleUpdate(idx, 'percent', +e.target.value)}
+              value={item.amount}
+              onChange={(e) => handleUpdate(idx, 'amount', +e.target.value)}
             />
           </div>
           <div className={styles.inputGroup}>
@@ -72,5 +71,6 @@ const BuffDebuffSection = ({ title, buffArray, onChange }) => {
     </div>
   )
 }
+
 
 export default BuffDebuffSection
