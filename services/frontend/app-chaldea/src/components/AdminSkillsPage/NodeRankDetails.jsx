@@ -10,7 +10,7 @@ import {
 } from './skillConstants'
 
 import DamageSection from './tabs/DamageSection'
-import BuffDebuffSection from './tabs/DamageSection' // оставляем, как и было, если другой путь, исправьте
+import BuffDebuffSection from './tabs/BuffDebuffSection.jsx'
 import ResistSection from './tabs/ResistSection'
 import VulnerabilitySection from './tabs/VulnerabilitySection'
 import ComplexEffectsSection from './tabs/ComplexEffectsSection'
