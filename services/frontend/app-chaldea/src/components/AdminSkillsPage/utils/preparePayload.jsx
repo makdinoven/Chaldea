@@ -28,14 +28,13 @@ export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
 const transformBuff = (buffArray = [], targetSide = 'self') =>
   buffArray.map(item => ({
     target_side: targetSide,
-     effect_name: `Buff: ${item.type}`, // предполагаем, что для баффов используется damage_type
+    effect_name: `Buff: ${item.damage_type}`,
     description: item.description || '',
     chance: item.chance,
     duration: item.duration,
-    magnitude: item.amount,
+    magnitude: item.percent,
     attribute_key: null
   }));
-
 const transformResist = (resistArray = [], targetSide = 'self') =>
   resistArray.map(item => ({
     target_side: targetSide,
