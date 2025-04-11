@@ -1,4 +1,4 @@
-// src/utils/preparePayload.js
+// utils/preparePayload.js
 
 // Объединяем урон из вкладок "Для себя" и "Для врага"
 export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
@@ -65,26 +65,19 @@ const transformComplexEffects = (complexArray = [], targetSide = 'self') =>
 
 // Функция подготовки данных для одного ранга.
 // Здесь кроме объединения урона (damage_entries) мы объединяем дополнительные эффекты в единый массив effects.
+// utils/preparePayload.js
 export const prepareRankPayload = (rankData) => {
-  // Деструктурируем UI-поля, которые не должны уходить напрямую
   const {
-    selfDamage = [],
-    enemyDamage = [],
-    selfDamageBuff = [],
-    enemyDamageBuff = [],
-    selfResist = [],
-    enemyResist = [],
-    selfVulnerability = [],
-    enemyVulnerability = [],
-    selfComplexEffects = [],
-    enemyComplexEffects = [],
-    effects = [], // исходные эффекты (если они редактируются отдельно)
+    selfDamage = [], enemyDamage = [],
+    selfDamageBuff = [], enemyDamageBuff = [],
+    selfResist = [], enemyResist = [],
+    selfVulnerability = [], enemyVulnerability = [],
+    selfComplexEffects = [], enemyComplexEffects = [],
+    effects = [],
     ...baseData
   } = rankData;
 
-  // Объединяем эффекты из всех групп.
   const mergedEffects = [
-    ...effects, // уже заданные эффекты
     ...transformBuff(selfDamageBuff, 'self'),
     ...transformBuff(enemyDamageBuff, 'enemy'),
     ...transformResist(selfResist, 'self'),
@@ -92,19 +85,17 @@ export const prepareRankPayload = (rankData) => {
     ...transformVulnerability(selfVulnerability, 'self'),
     ...transformVulnerability(enemyVulnerability, 'enemy'),
     ...transformComplexEffects(selfComplexEffects, 'self'),
-    ...transformComplexEffects(enemyComplexEffects, 'enemy')
+    ...transformComplexEffects(enemyComplexEffects, 'enemy'),
+    ...effects
   ];
 
   return {
     ...baseData,
-    // Сохраняем rank_image, если оно задано
-    ...(rankData.rank_image ? { rank_image: rankData.rank_image } : {}),
-    // Формируем объединённое поле damage_entries
     damage_entries: transformDamageData(selfDamage, enemyDamage),
-    // Объединённое поле effects
     effects: mergedEffects
   };
 };
+
 
 // Функция подготовки данных для всего навыка (полное дерево).
 export const prepareSkillPayload = (skillTreeData) => {
