@@ -464,7 +464,7 @@ async def update_skill_full_tree(
         new_rank = models.SkillRank(
             skill_id=skill_id,
             **rank_data.dict(
-                exclude={"id", "damage_entries", "effects", "left_child_id", "right_child_id"}
+                exclude={"id", "damage_entries", "effects", "left_child_id", "right_child_id","skill_id"}
             )
         )
         db.add(new_rank)
@@ -484,7 +484,7 @@ async def update_skill_full_tree(
             raise HTTPException(status_code=400, detail=f"Rank {rank_data.id} not found")
         rank_obj = old_map[rank_data.id]
         for key, value in rank_data.dict(
-            exclude={"id", "damage_entries", "effects", "left_child_id", "right_child_id"}
+            exclude={"id", "damage_entries", "effects", "left_child_id", "right_child_id","skill_id"}
         ).items():
             setattr(rank_obj, key, value)
         await crud.sync_damage_entries(db, rank_obj, rank_data.damage_entries)
