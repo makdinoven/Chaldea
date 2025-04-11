@@ -21,10 +21,6 @@ export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
   return [...self, ...enemy];
 };
 
-// Преобразование дополнительных эффектов из групп в единый формат эффекта.
-// Здесь мы задаём, например, для баффов: effect_name = "Buff: <damage_type>",
-// для резистов: "Resist: <type>" и для уязвимостей: "Vulnerability: <type>".
-// Если у вас другая логика формирования названия эффекта — скорректируйте при необходимости.
 const transformBuff = (buffArray = [], targetSide = 'self') =>
   buffArray.map(item => ({
     target_side: targetSide,
