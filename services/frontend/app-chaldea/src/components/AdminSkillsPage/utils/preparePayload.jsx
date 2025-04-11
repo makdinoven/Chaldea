@@ -3,7 +3,7 @@
 // Объединяем урон из вкладок "Для себя" и "Для врага"
 export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
   const self = selfDamage.map(item => ({
-    damage_type: item.damage_type || item.type,
+    damage_type: item.damage_type,
     amount: item.amount,
     chance: item.chance,
     description: item.description || '',
@@ -11,7 +11,7 @@ export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
   }));
 
   const enemy = enemyDamage.map(item => ({
-    damage_type: item.damage_type || item.type,
+    damage_type: item.damage_type,
     amount: item.amount,
     chance: item.chance,
     description: item.description || '',

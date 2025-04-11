@@ -5,7 +5,7 @@ export const transformReceivedSkillTree = (skillTree) => {
     .filter(e => e.effect_name.startsWith(prefix))
     .map(e => ({
       id: e.id,
-      type: e.effect_name.replace(`${prefix}: `, ''),
+      type: e.damage_type.replace(`${prefix}: `, ''),
       percent: e.magnitude,
       duration: e.duration,
       chance: e.chance,
