@@ -16,10 +16,10 @@ const ResistSection = ({ title, resistArray, onChange }) => {
     onChange(newArr)
   }
 
-  const handleDelete = (index) => {
-    const newArr = resistArray.filter((_, i) => i !== index)
-    onChange(newArr)
-  }
+ const handleDelete = (index) => {
+  onChange(resistArray.filter((_, i) => i !== index));
+};
+
 
   return (
     <div className={styles.section}>

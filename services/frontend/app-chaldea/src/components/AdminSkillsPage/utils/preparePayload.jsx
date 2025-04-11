@@ -28,7 +28,7 @@ export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
 const transformBuff = (buffArray = [], targetSide = 'self') =>
   buffArray.map(item => ({
     target_side: targetSide,
-    effect_name: `Buff: ${item.damage_type}`, // предполагаем, что для баффов используется damage_type
+     effect_name: `Buff: ${item.type}`, // предполагаем, что для баффов используется damage_type
     description: item.description || '',
     chance: item.chance,
     duration: item.duration,

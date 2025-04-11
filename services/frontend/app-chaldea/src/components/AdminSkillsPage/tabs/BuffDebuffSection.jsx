@@ -1,11 +1,11 @@
-// src/features/skills/tabs/BuffDebuffSection.jsx
+// BuffDebuffSection.jsx
 import React from 'react'
 import { DAMAGE_TYPES } from '../skillConstants'
 import styles from '../AdminSkillsPage.module.scss'
 
 const BuffDebuffSection = ({ title, buffArray, onChange }) => {
   const handleAdd = () => {
-    const newItem = { damage_type: 'physical', amount: 0, duration: 0, chance: 100, description: '' }
+    const newItem = { damage_type: 'fire', percent: 0, duration: 0, chance: 100 }
     onChange([...(buffArray || []), newItem])
   }
 
@@ -16,8 +16,7 @@ const BuffDebuffSection = ({ title, buffArray, onChange }) => {
   }
 
   const handleDelete = (index) => {
-    const newArr = buffArray.filter((_, i) => i !== index)
-    onChange(newArr)
+    onChange(buffArray.filter((_, i) => i !== index))
   }
 
   return (
@@ -37,11 +36,11 @@ const BuffDebuffSection = ({ title, buffArray, onChange }) => {
             </select>
           </div>
           <div className={styles.inputGroup}>
-            <label>Значение:</label>
+            <label>Процент(%):</label>
             <input
               type="number"
-              value={item.amount}
-              onChange={(e) => handleUpdate(idx, 'amount', +e.target.value)}
+              value={item.percent}
+              onChange={(e) => handleUpdate(idx, 'percent', +e.target.value)}
             />
           </div>
           <div className={styles.inputGroup}>
@@ -71,6 +70,5 @@ const BuffDebuffSection = ({ title, buffArray, onChange }) => {
     </div>
   )
 }
-
 
 export default BuffDebuffSection

@@ -5,7 +5,7 @@ import styles from '../AdminSkillsPage.module.scss'
 
 const DamageSection = ({ title, damageArray, onChange }) => {
   const handleAdd = () => {
-    const newItem = { damage_type: 'all', amount: 0, duration: 0, chance: 100, description: ''}
+    const newItem = { damage_type: 'all', amount: 0, chance: 100, description: ''}
     onChange([...(damageArray || []), newItem])
   }
 
@@ -16,10 +16,10 @@ const DamageSection = ({ title, damageArray, onChange }) => {
     onChange(newArr)
   }
 
-  const handleDelete = (index) => {
-    const newArr = damageArray.filter((_, i) => i !== index)
-    onChange(newArr)
-  }
+ const handleDelete = (index) => {
+  onChange(damageArray.filter((_, i) => i !== index));
+};
+
 
   return (
     <div className={styles.section}>
@@ -43,14 +43,6 @@ const DamageSection = ({ title, damageArray, onChange }) => {
               type="number"
               value={item.amount}
               onChange={(e) => handleUpdate(idx, 'amount', +e.target.value)}
-            />
-          </div>
-          <div className={styles.inputGroup}>
-            <label>Длит.(ходы):</label>
-            <input
-              type="number"
-              value={item.duration}
-              onChange={(e) => handleUpdate(idx, 'duration', +e.target.value)}
             />
           </div>
           <div className={styles.inputGroup}>

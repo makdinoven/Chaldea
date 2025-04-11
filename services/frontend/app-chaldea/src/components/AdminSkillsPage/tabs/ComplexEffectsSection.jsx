@@ -22,9 +22,9 @@ const ComplexEffectsSection = ({ title, complexArray, onChange }) => {
   }
 
   const handleDelete = (index) => {
-    const newArr = complexArray.filter((_, i) => i !== index)
-    onChange(newArr)
-  }
+  onChange(complexArray.filter((_, i) => i !== index));
+};
+
 
   return (
     <div className={styles.section}>
