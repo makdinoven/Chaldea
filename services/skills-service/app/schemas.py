@@ -73,6 +73,7 @@ class SkillRankDamageBase(BaseModel):
     damage_type: str
     amount: float = 0.0
     description: Optional[str] = None
+    target_side: str
 
 class SkillRankDamageCreate(SkillRankDamageBase):
     pass
@@ -90,7 +91,7 @@ class SkillRankDamageRead(SkillRankDamageBase):
 # -----------------------
 class SkillRankEffectBase(BaseModel):
     skill_rank_id: int
-    target_side: str = "self"
+    target_side: str
     effect_name: str
     description: Optional[str] = None
     chance: int = 100
@@ -154,8 +155,8 @@ class SkillRankDamageInTree(BaseModel):
     damage_type: str
     amount: float
     description: Optional[str]
-    chance: int = 100
-    target_side: str = "self"
+    chance: int
+    target_side: str
 
 
 class SkillRankEffectInTree(BaseModel):
