@@ -69,43 +69,80 @@ export default function NodeRankDetails({
   )
 
   // Для свернутого (collapsed) вида
-  if (!expanded) {
+   if (!expanded) {
     return (
       <div
         style={{
+          // Делаем весь узел кругом:
+          width: 100,
+          height: 100,
+          borderRadius: '50%',
           background: selected ? '#fff7e6' : '#fff',
           border: '1px solid #ccc',
-          borderRadius: 50,
-          padding: 6,
-          minWidth: 120,
-          textAlign: 'center',
+          overflow: 'hidden',
           cursor: 'pointer',
-          position: 'relative'
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
         }}
         onClick={() => setExpanded(true)}
       >
-        {/* Хэндлы – все располагаем с правой стороны */}
+        {/* В качестве названия ранга – небольшой блок над / внутри круга */}
+        <div
+          style={{
+            position: 'absolute',
+            top: '-20px',
+            width: '100%',
+            textAlign: 'center',
+            fontWeight: 'bold'
+          }}
+        >
+          {data.rank_name || `ID:${id}`}
+        </div>
+
+        {/* Фоновая картинка ранга */}
+        {data.rank_image ? (
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              background: `url(${data.rank_image}) center/cover no-repeat`,
+            }}
+          />
+        ) : (
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              background: '#ddd',
+            }}
+          />
+        )}
+
+        {/* -- HANDLES --
+            type="target": чтобы этот узел мог стать чьим-то ребёнком
+            type="source": чтобы из этого узла можно было соединять "потомков" */}
         <Handle
           type="target"
-          position={Position.Right}
-          style={{ top: '10%', right: -8, background: '#555' }}
+          position={Position.Left}
+          style={{ background: '#555' }}
         />
         <Handle
           type="source"
           id="left"
-          position={Position.Left}
-          style={{ top: '45%', right: -8, background: 'blue' }}
+          position={Position.Right}
+          style={{ top: '40%', background: 'blue' }}
         />
         <Handle
           type="source"
           id="right"
           position={Position.Right}
-          style={{ top: '80%', right: -8, background: 'green' }}
+          style={{ top: '60%', background: 'green' }}
         />
-
-        {renderCircularHeader()}
+        {/* Можно и снизу, и сверху, если нужно больше вариантов */}
       </div>
-    )
+    );
   }
 
   // Для развернутого (expanded) вида – здесь можно сохранить форму редактирования

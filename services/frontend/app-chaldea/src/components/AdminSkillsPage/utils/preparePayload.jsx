@@ -36,7 +36,7 @@ const transformResist = (resistArray = [], targetSide = 'self') =>
   resistArray.map(item => ({
       id: item.id ?? null,
     target_side: targetSide,
-    effect_name: `Resist: ${item.type}`, // для резистов поле называется "type"
+    effect_name: `Resist: ${item.damage_type}`, // для резистов поле называется "type"
     description: '',
     chance: item.chance,
     duration: item.duration,
@@ -48,7 +48,7 @@ const transformVulnerability = (vulnArray = [], targetSide = 'self') =>
   vulnArray.map(item => ({
       id: item.id ?? null,
     target_side: targetSide,
-    effect_name: `Vulnerability: ${item.type}`, // для уязвимостей
+    effect_name: `Vulnerability: ${item.damage_type}`, // для уязвимостей
     description: '',
     chance: item.chance,
     duration: item.duration,

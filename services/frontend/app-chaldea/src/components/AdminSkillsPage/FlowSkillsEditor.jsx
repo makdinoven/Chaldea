@@ -177,19 +177,20 @@ function FlowSkillsEditor({ skillTree, updateStatus }) {
 
   const onConnect = useCallback((params) => {
     setEdges(eds => addEdge(params, eds));
-    setNodes(ns => ns.map(node => {
-      if (node.id === params.source) {
-        const newData = { ...node.data };
-        if (params.sourceHandle === 'left') {
-          newData.left_child_id = params.target;
-        } else {
-          newData.right_child_id = params.target;
-        }
-        return { ...node, data: newData };
+  setNodes(ns => ns.map(node => {
+    if (node.id === params.source) {
+      // Это "родитель"
+      const newData = { ...node.data };
+      if (params.sourceHandle === 'left') {
+        newData.left_child_id = params.target;
+      } else if (params.sourceHandle === 'right') {
+        newData.right_child_id = params.target;
       }
-      return node;
-    }));
-  }, [setEdges, setNodes]);
+      return { ...node, data: newData };
+    }
+    return node;
+  }));
+}, [setEdges, setNodes]);
 
  const handleSave = () => {
   const updatedRanks = nodes.map(n => ({
