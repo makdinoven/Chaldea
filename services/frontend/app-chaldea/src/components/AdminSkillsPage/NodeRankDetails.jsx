@@ -70,80 +70,93 @@ export default function NodeRankDetails({
 
   // Для свернутого (collapsed) вида
    if (!expanded) {
-    return (
+  return (
+    // Внешняя оболочка, которая не скрывает содержимое (overflow: visible)
+    <div
+      style={{
+        position: 'relative',
+        width: 100,
+        height: 120, // немного увеличили высоту, чтобы сверху было место для названия
+        cursor: 'pointer',
+      }}
+      onClick={() => setExpanded(true)}
+    >
+      {/* Элемент для названия, абсолютно позиционированный сверху */}
       <div
         style={{
-          // Делаем весь узел кругом:
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          textAlign: 'center',
+          fontWeight: 'bold',
+          zIndex: 3, // выше остальных элементов
+          // Дополнительные стили, чтобы текст не обрезался
+          whiteSpace: 'nowrap',
+          overflow: 'visible'
+        }}
+      >
+        {data.rank_name || `ID: ${id}`}
+      </div>
+
+      {/* Контейнер-круг, в котором будет изображение */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 20, // смещаем вниз, чтобы под сверху было название
+          left: 0,
           width: 100,
           height: 100,
           borderRadius: '50%',
-          background: selected ? '#fff7e6' : '#fff',
           border: '1px solid #ccc',
-          overflow: 'hidden',
-          cursor: 'pointer',
-          position: 'relative',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center'
+          overflow: 'hidden', // здесь обрезается только фон
+          background: data.rank_image
+                      ? `url(${data.rank_image}) center/cover no-repeat`
+                      : '#ddd'
         }}
-        onClick={() => setExpanded(true)}
-      >
-        {/* В качестве названия ранга – небольшой блок над / внутри круга */}
-        <div
-          style={{
-            position: 'absolute',
-            top: '-20px',
-            width: '100%',
-            textAlign: 'center',
-            fontWeight: 'bold'
-          }}
-        >
-          {data.rank_name || `ID:${id}`}
-        </div>
+      />
 
-        {/* Фоновая картинка ранга */}
-        {data.rank_image ? (
-          <div
-            style={{
-              width: '100%',
-              height: '100%',
-              background: `url(${data.rank_image}) center/cover no-repeat`,
-            }}
-          />
-        ) : (
-          <div
-            style={{
-              width: '100%',
-              height: '100%',
-              background: '#ddd',
-            }}
-          />
-        )}
-
-        {/* -- HANDLES --
-            type="target": чтобы этот узел мог стать чьим-то ребёнком
-            type="source": чтобы из этого узла можно было соединять "потомков" */}
-        <Handle
-          type="target"
-          position={Position.Left}
-          style={{ background: '#555' }}
-        />
-        <Handle
-          type="source"
-          id="left"
-          position={Position.Right}
-          style={{ top: '40%', background: 'blue' }}
-        />
-        <Handle
-          type="source"
-          id="right"
-          position={Position.Right}
-          style={{ top: '60%', background: 'green' }}
-        />
-        {/* Можно и снизу, и сверху, если нужно больше вариантов */}
-      </div>
-    );
-  }
+      {/* Handle для входящих соединений – отображается поверх всего */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={{
+          top: '50%',
+          left: -8,
+          transform: 'translateY(-50%)',
+          zIndex: 4, // выше всего
+          background: '#555',
+        }}
+      />
+      {/* Handle для исходящих соединений "left" */}
+      <Handle
+        type="source"
+        id="left"
+        position={Position.Right}
+        style={{
+          top: '40%',
+          right: -8,
+          transform: 'translateY(-50%)',
+          zIndex: 4,
+          background: 'blue',
+        }}
+      />
+      {/* Handle для исходящих соединений "right" */}
+      <Handle
+        type="source"
+        id="right"
+        position={Position.Right}
+        style={{
+          top: '60%',
+          right: -8,
+          transform: 'translateY(-50%)',
+          zIndex: 4,
+          background: 'green',
+        }}
+      />
+    </div>
+  );
+}
 
   // Для развернутого (expanded) вида – здесь можно сохранить форму редактирования
   return (
