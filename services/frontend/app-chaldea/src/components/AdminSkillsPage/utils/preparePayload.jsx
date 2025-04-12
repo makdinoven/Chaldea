@@ -86,7 +86,6 @@ export const prepareRankPayload = (rankData) => {
     ...transformVulnerability(enemyVulnerability, 'enemy'),
     ...transformComplexEffects(selfComplexEffects, 'self'),
     ...transformComplexEffects(enemyComplexEffects, 'enemy'),
-    ...effects
   ];
 
   return {
