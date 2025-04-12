@@ -23,6 +23,7 @@ export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
 
 const transformBuff = (buffArray = [], targetSide = 'self') =>
   buffArray.map(item => ({
+      id: item.id ?? null,
     target_side: targetSide,
     effect_name: `Buff: ${item.damage_type}`,
     description: item.description || '',
@@ -33,6 +34,7 @@ const transformBuff = (buffArray = [], targetSide = 'self') =>
   }));
 const transformResist = (resistArray = [], targetSide = 'self') =>
   resistArray.map(item => ({
+      id: item.id ?? null,
     target_side: targetSide,
     effect_name: `Resist: ${item.type}`, // для резистов поле называется "type"
     description: '',
@@ -44,6 +46,7 @@ const transformResist = (resistArray = [], targetSide = 'self') =>
 
 const transformVulnerability = (vulnArray = [], targetSide = 'self') =>
   vulnArray.map(item => ({
+      id: item.id ?? null,
     target_side: targetSide,
     effect_name: `Vulnerability: ${item.type}`, // для уязвимостей
     description: '',

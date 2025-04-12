@@ -34,7 +34,8 @@ export const fetchSkillFullTree = createAsyncThunk(
 export const updateSkillFullTree = createAsyncThunk(
   'skills/updateSkillFullTree',
   async ({ skillId, payload }, { rejectWithValue }) => {
-    try {
+    console.log(payload)
+      try {
       const res = await axios.put(`${BASE_URL}/admin/skills/${skillId}/full_tree`, payload)
       return res.data
     } catch (err) {

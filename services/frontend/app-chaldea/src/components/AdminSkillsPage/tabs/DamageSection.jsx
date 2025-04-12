@@ -11,8 +11,7 @@ const DamageSection = ({ title, damageArray, onChange }) => {
 
   const handleUpdate = (index, field, value) => {
     const newArr = [...damageArray]
-    const key = field === 'type' ? 'damage_type' : field
-    newArr[index] = { ...newArr[index], [key]: value }
+    newArr[index] = { ...newArr[index], [field]: value }
     onChange(newArr)
   }
 

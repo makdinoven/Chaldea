@@ -11,8 +11,7 @@ const BuffDebuffSection = ({ title, buffArray, onChange }) => {
 
   const handleUpdate = (index, field, value) => {
     const newArr = [...buffArray]
-     const key = field === 'type' ? 'damage_type' : field
-    newArr[index] = { ...newArr[index], [key]: value }
+    newArr[index] = { ...newArr[index], [field]: value }
     onChange(newArr)
   }
 
