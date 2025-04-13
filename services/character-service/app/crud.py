@@ -573,3 +573,34 @@ async def get_character_experience(character_id: int):
             return response.json()
         else:
             return None
+
+async def send_skills_presets_request(character_id: int, skill_ids: list[int]):
+    """
+    Массовое назначение нескольких навыков персонажу.
+    Каждый навык - rank_number=1 (первый ранг).
+    """
+    # Сформируем структуру данных под эндпоинт сервисе навыков
+    request_body = {
+        "character_id": character_id,
+        "skills": []
+    }
+    for skill_id in skill_ids:
+        request_body["skills"].append({
+            "skill_id": skill_id,
+            "rank_number": 1
+        })
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings.SKILLS_SERVICE_URL}/assign_multiple",
+                json=request_body
+            )
+            if response.status_code == 200:
+                return response.json()  # Возвращаем ответ от сервиса
+            else:
+                print(f"[ERROR] Ошибка при массовом назначении навыков: {response.status_code} - {response.text}")
+                return None
+    except Exception as e:
+        print(f"[ERROR] Ошибка при отправке запроса в сервис навыков: {e}")
+        return None

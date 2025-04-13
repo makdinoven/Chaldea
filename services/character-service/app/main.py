@@ -6,7 +6,7 @@ import asyncio
 import models, schemas, crud
 from database import SessionLocal, engine
 from config import settings
-from presets import SUBRACE_ATTRIBUTES, CLASS_ITEMS # Импортируем пресеты подрас
+from presets import SUBRACE_ATTRIBUTES, CLASS_ITEMS, CLASS_SKILLS, SUBRACE_SKILLS  # Импортируем пресеты подрас
 from typing import List, Dict
 from fastapi.middleware.cors import CORSMiddleware
 import logging
@@ -53,25 +53,41 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
 # Эндпоинт для одобрения заявки
 @router.post("/requests/{request_id}/approve")
 async def approve_character_request(request_id: int, db: Session = Depends(get_db)):
+    """
+    Одобряет заявку на создание персонажа:
+    1) Проверяем, что заявка существует.
+    2) Создаем запись персонажа в БД.
+    3) Генерируем атрибуты (через SUBRACE_ATTRIBUTES).
+    4) Определяем стартовый инвентарь (через CLASS_ITEMS) и вызываем inventory-service.
+    5) Формируем список навыков: 3 классовых + 1 расовый, вызываем сервис навыков.
+    6) Создаем атрибуты через attributes-service.
+    7) Обновляем персонажа (если нужно — прописываем id_attributes).
+    8) Меняем статус заявки на "approved".
+    9) Привязываем персонажа к пользователю (через user-service).
+    """
     try:
         print(f"[INFO] Начало обработки заявки с ID {request_id}")
 
+        # 1) Проверка существования заявки
         db_request = db.query(models.CharacterRequest).filter(models.CharacterRequest.id == request_id).first()
         if not db_request:
             print(f"[ERROR] Заявка с ID {request_id} не найдена")
             raise HTTPException(status_code=404, detail="Заявка не найдена")
         print(f"[INFO] Заявка с ID {request_id} найдена")
 
+        # 2) Создаем предварительную запись персонажа
         new_character = crud.create_preliminary_character(db, db_request)
         print(f"[INFO] Создан персонаж с ID {new_character.id}")
 
+        # 3) Генерируем атрибуты по подрасе
         attributes = crud.generate_attributes_for_subrace(db_request.id_subrace)
         print(f"[INFO] Сгенерированы атрибуты для подрасы {db_request.id_subrace}: {attributes}")
 
+        # Получаем стартовые предметы из пресета
         items_to_add = CLASS_ITEMS.get(new_character.id_class, [])
         print(f"[INFO] Стартовая экипировка для класса {new_character.id_class}: {items_to_add}")
 
-        # Отправка запроса на создание инвентаря
+        # 4) Отправка запроса на создание инвентаря
         inventory_response = await crud.send_inventory_request(new_character.id, items_to_add)
         if inventory_response:
             print(f"[INFO] Инвентарь создан: {inventory_response}")
@@ -79,14 +95,33 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             print("[ERROR] Ошибка при создании инвентаря")
             raise HTTPException(status_code=500, detail="Не удалось создать инвентарь")
 
-        # Отправка запросов на создание навыков и атрибутов
-        skills_response = await crud.send_skills_request(new_character.id)
+        # -------------------------------
+        # 5) Назначение навыков (новая логика)
+        # -------------------------------
+
+        # Получаем 3 навыка от класса
+        class_skill_ids = CLASS_SKILLS.get(new_character.id_class, [])
+        # И 1 навык от подрасы
+        subrace_skill_id = SUBRACE_SKILLS.get(new_character.id_subrace)
+
+        # Собираем итоговый список (3 + 1)
+        skill_ids_for_character = []
+        skill_ids_for_character.extend(class_skill_ids)
+        if subrace_skill_id is not None:
+            skill_ids_for_character.append(subrace_skill_id)
+
+        # Отправляем запрос на массовое назначение навыков (ранг=1)
+        skills_response = await crud.send_skills_presets_request(
+            character_id=new_character.id,
+            skill_ids=skill_ids_for_character
+        )
         if skills_response:
             print(f"[INFO] Навыки созданы: {skills_response}")
         else:
             print("[ERROR] Ошибка при создании навыков")
             raise HTTPException(status_code=500, detail="Не удалось создать навыки")
 
+        # 6) Создаем атрибуты через attributes-service
         attributes_response = await crud.send_attributes_request(new_character.id, attributes)
         if attributes_response:
             print(f"[INFO] Атрибуты созданы: {attributes_response}")
@@ -94,18 +129,19 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             print("[ERROR] Ошибка при создании атрибутов")
             raise HTTPException(status_code=500, detail="Не удалось создать атрибуты")
 
-        # Обновляем персонажа с зависимостями
+        # 7) Обновляем персонажа с зависимостями
         updated_character = crud.update_character_with_dependencies(
             db, new_character.id,
-            skills_id=skills_response['id'],
+            skills_id=None,  # при необходимости можно передать ID, если нужно
             attributes_id=attributes_response['id']
         )
         print(f"[INFO] Персонаж с ID {new_character.id} обновлен с зависимостями")
 
+        # 8) Ставим заявке статус "approved"
         crud.update_character_request_status(db, request_id, "approved")
         print(f"[INFO] Заявка с ID {request_id} одобрена")
 
-        # Присваиваем персонажа пользователю
+        # 9) Привязываем персонажа к пользователю
         assign_result = await crud.assign_character_to_user(db_request.user_id, updated_character.id)
         if assign_result:
             print(f"[INFO] Персонаж с ID {updated_character.id} успешно присвоен пользователю {db_request.user_id}")
@@ -119,6 +155,7 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
     except Exception as e:
         print(f"[ERROR] Ошибка при одобрении заявки: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
 
 # Эндпоинт для удаления персонажа
 @router.delete("/{character_id}")

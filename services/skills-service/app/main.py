@@ -532,5 +532,54 @@ async def update_skill_full_tree(
     await db.commit()
     return {"detail": "Skill tree updated successfully", "temp_id_map": temp_id_map}
 
+@router.post("/assign_multiple", response_model=dict)
+async def assign_multiple_skills(
+    data: schemas.MultipleSkillsAssignRequest,  # см. ниже
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Принимает массив {skill_id, rank_number} и назначает каждый навык (указанный ранг)
+    персонажу. Если SkillRank(id=??) нет, создаём.
+    Если SkillRank под skill_id с rank_number уже есть — просто берём его ID.
+    Создаём CharacterSkill(character_id, skill_rank_id).
+    """
+    char_id = data.character_id
+    assigned = []
+
+    for skill_info in data.skills:
+        skill_id = skill_info.skill_id
+        rank_number = skill_info.rank_number
+
+        # 1) Проверяем, что сам Skill с таким ID существует
+        skill_obj = await crud.get_skill(db, skill_id)
+        if not skill_obj:
+            raise HTTPException(status_code=404, detail=f"Skill {skill_id} not found")
+
+        # 2) Ищем SkillRank для этого skill_id и rank_number
+        existing_ranks = await crud.list_skill_ranks_by_skill(db, skill_id)
+        rank_obj = None
+        for r in existing_ranks:
+            if r.rank_number == rank_number:
+                rank_obj = r
+                break
+        # Если нет, создаём
+        if not rank_obj:
+            new_rank_data = schemas.SkillRankCreate(
+                skill_id=skill_id,
+                rank_number=rank_number
+            )
+            rank_obj = await crud.create_skill_rank(db, new_rank_data)
+
+        # 3) Создаём CharacterSkill
+        cs_data = schemas.CharacterSkillCreate(
+            character_id=char_id,
+            skill_rank_id=rank_obj.id
+        )
+        cs = await crud.create_character_skill(db, cs_data)
+        assigned.append({"character_skill_id": cs.id, "skill_id": skill_id, "rank_number": rank_number})
+
+    return {"assigned": assigned}
+
+
 
 app.include_router(router, prefix="")

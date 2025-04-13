@@ -261,3 +261,11 @@ class FullSkillTreeUpdateRequest(BaseModel):
     skill_image: Optional[str] = None
 
     ranks: List[SkillRankInTree]
+
+class AssignSkillEntry(BaseModel):
+    skill_id: int
+    rank_number: int
+
+class MultipleSkillsAssignRequest(BaseModel):
+    character_id: int
+    skills: List[AssignSkillEntry]
