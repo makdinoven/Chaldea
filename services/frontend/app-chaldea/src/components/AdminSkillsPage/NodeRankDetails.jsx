@@ -16,6 +16,7 @@ import VulnerabilitySection from './tabs/VulnerabilitySection'
 import ComplexEffectsSection from './tabs/ComplexEffectsSection'
 import { uploadSkillRankImage } from "../../redux/actions/skillsAdminActions.js";
 import { useDispatch } from "react-redux";
+import axios from "axios";
 
 export default function NodeRankDetails({
   id,
@@ -36,15 +37,23 @@ export default function NodeRankDetails({
   const dispatch = useDispatch()
 
   const handleRankImageChange = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      onChangeNode(id, 'rank_image', ev.target.result)
-      dispatch(uploadSkillRankImage({ skillRankId: data.id, file }))
-    }
-    reader.readAsDataURL(file)
-  }
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  const formData = new FormData();
+  formData.append('skill_rank_id', data.id);
+  formData.append('file', file);
+
+  axios.post('http://4452515-co41851.twc1.net:8001/photo/change_skill_rank_image', formData)
+    .then(res => {
+       // Обновляем поле rank_image URL'ом, полученным от сервера
+       onChangeNode(id, 'rank_image', res.data.image_url);
+    })
+    .catch(error => {
+       console.error("Ошибка при загрузке картинки:", error);
+    });
+};
+
 
   // Функция для рендеринга "шапки" узла – название, ID и круг с фото
   const renderCircularHeader = () => (
