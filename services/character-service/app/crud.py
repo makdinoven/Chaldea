@@ -593,7 +593,7 @@ async def send_skills_presets_request(character_id: int, skill_ids: list[int]):
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{settings.SKILLS_SERVICE_URL}/assign_multiple",
+                f"{settings.SKILLS_SERVICE_URL}assign_multiple",
                 json=request_body
             )
             if response.status_code == 200:
