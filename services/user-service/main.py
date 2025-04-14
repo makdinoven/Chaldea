@@ -136,8 +136,7 @@ async def upload_avatar(file: UploadFile, current_user: models.User = Depends(ge
 @router.put("/{user_id}/update_character")
 async def update_user_character(
     user_id: int, 
-    character_data: dict, 
-    current_user: models.User = Depends(get_current_user),
+    character_data: dict,
     db: Session = Depends(get_db)
 ):
     """
