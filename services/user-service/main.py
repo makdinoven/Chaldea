@@ -143,13 +143,6 @@ async def update_user_character(
     """
     Обновляет поле current_character пользователя.
     """
-    # Проверка прав доступа
-    if current_user.id != user_id and current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not enough permissions"
-        )
-
     character_id = character_data.get("current_character")
     if character_id is None:
         raise HTTPException(status_code=400, detail="current_character обязателен")
