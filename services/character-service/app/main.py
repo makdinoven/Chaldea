@@ -228,19 +228,19 @@ async def reject_character_request(request_id: int, db: Session = Depends(get_db
 #Возвращает список всех рас, их подрас и атрибуты для каждой подрасы.
 @router.get("/metadata", response_model=List[dict])
 async def get_races_and_subraces(db: Session = Depends(get_db)):
-
     try:
         races_data = crud.get_all_races_and_subraces(db)
-        # Добавляем атрибуты к каждой подрасе на основе ее id
+        # Добавляем атрибуты к каждой подрасе на основе её id
         for race_id, race_info in races_data.items():
             for subrace in race_info["subraces"]:
                 subrace_attributes = SUBRACE_ATTRIBUTES.get(subrace["id_subrace"], {})
                 subrace["attributes"] = subrace_attributes
-
-        return races_data
+        # Преобразуем словарь в список
+        return list(races_data.values())
     except Exception as e:
         print(f"Ошибка при получении рас и подрас: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при получении рас и подрас.")
+
 
 
 @router.get("/moderation-requests", response_model=Dict)
