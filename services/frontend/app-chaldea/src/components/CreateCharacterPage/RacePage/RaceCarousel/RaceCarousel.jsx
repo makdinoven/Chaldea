@@ -1,62 +1,60 @@
-import { useState, useEffect } from 'react';
+import {useState, useEffect} from 'react';
 import ArrowButton from './ArrowButton/ArrowButton';
 import styles from './RaceCarousel.module.scss';
 
-export default function RaceCarousel({ races, onRaceChange, selectedRace }) {
-  const [currentIndex, setCurrentIndex] = useState(selectedRace);
-  const [visibleImages, setVisibleImages] = useState([]);
+export default function RaceCarousel({races, onRaceChange, selectedRaceId}) {
+    const [currentRaceId, setCurrentRaceId] = useState(selectedRaceId);
+    const [visibleRaces, setVisibleRaces] = useState([]);
 
-  // useEffect(() => {
-  //   console.log('RaceId changed');
-  // }, [currentIndex]);
+    useEffect(() => {
+        setVisibleRaces(calculateVisibleRaces(currentRaceId));
+        onRaceChange?.(currentRaceId);
+    }, [currentRaceId, races]);
 
-  useEffect(() => {
-    setVisibleImages(calculateVisibleImages(currentIndex));
-    // console.log(currentIndex);
-    if (onRaceChange) {
-      onRaceChange(currentIndex);
-    }
-  }, [currentIndex, races]);
+    const getRaceIndexById = (id) => {
+        return races.findIndex((race) => race.id_race === id);
+    };
 
-  const handlePrev = () => {
-    setCurrentIndex((prevIndex) =>
-      prevIndex === 0 ? races.length - 1 : prevIndex - 1
+    const handlePrev = () => {
+        const currentIndex = getRaceIndexById(currentRaceId);
+        const prevIndex = (currentIndex - 1 + races.length) % races.length;
+        setCurrentRaceId(races[prevIndex].id_race);
+    };
+
+    const handleNext = () => {
+        const currentIndex = getRaceIndexById(currentRaceId);
+        const nextIndex = (currentIndex + 1) % races.length;
+        setCurrentRaceId(races[nextIndex].id_race);
+    };
+
+    const calculateVisibleRaces = (id) => {
+        const index = getRaceIndexById(id);
+        if (index === -1) return [];
+
+        const total = races.length;
+        const prev = (index - 1 + total) % total;
+        const next = (index + 1) % total;
+
+        return [races[prev], races[index], races[next]];
+    };
+
+    return (
+        <div className={styles.carousel}>
+            <div className={styles.buttons_container}>
+                <ArrowButton text='&lt;' onClick={handlePrev}/>
+                <ArrowButton text='&gt;' onClick={handleNext}/>
+            </div>
+
+            <div className={styles.images_container}>
+                {visibleRaces.map((race, index) => (
+                    <div
+                        key={race.id_race}
+                        className={`${styles.race_img} ${index === 1 ? styles.active : ''}`}
+                    >
+                        <img src={race.raceImg} alt={`Race ${race.id_race}`}/>
+                    </div>
+                ))}
+            </div>
+        </div>
     );
-  };
-
-  const handleNext = () => {
-    setCurrentIndex((prevIndex) =>
-      prevIndex === races.length - 1 ? 0 : prevIndex + 1
-    );
-  };
-
-  const calculateVisibleImages = (index) => {
-    const totalImages = races.length;
-    const prevIndex = (index - 1 + totalImages) % totalImages;
-    const nextIndex = (index + 1) % totalImages;
-
-    return [
-      races[prevIndex]?.raceImg,
-      races[index]?.raceImg,
-      races[nextIndex]?.raceImg,
-    ];
-  };
-
-  return (
-    <div className={styles.carousel}>
-      <div className={styles.buttons_container}>
-        <ArrowButton text='&lt;' onClick={handlePrev} />
-        <ArrowButton text='&gt;' onClick={handleNext} />
-      </div>
-
-      <div className={styles.images_container}>
-        {visibleImages.map((img, index) => (
-          <div
-            className={`${styles.race_img} ${index === 1 ? styles.active : ''}`}
-            key={index}
-          >{`Image ${index}`}</div>
-        ))}
-      </div>
-    </div>
-  );
 }

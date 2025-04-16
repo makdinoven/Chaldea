@@ -1,0 +1,1 @@
+export const BASE_URL = 'http://4452515-co41851.twc1.net:8006';

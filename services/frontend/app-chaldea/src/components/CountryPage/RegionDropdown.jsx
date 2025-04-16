@@ -64,7 +64,7 @@ export default function RegionDropdown({id, name}) {
                     key={location.id}
                     name={location.name}
                     type="gold"
-                    link={`/region/${location.id}`}
+                    link={`/location/${location.id}`}
                 />
             );
         });
