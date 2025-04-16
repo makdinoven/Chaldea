@@ -24,6 +24,33 @@ class Items(Base):
 
     fast_slot_bonus = Column(Integer, default=0)  # Сколько дополнительных быстрых слотов даёт предмет
 
+    armor_subclass = Column(
+        Enum('cloth', 'light_armor', 'medium_armor', 'heavy_armor', name="armor_subclass_enum"),
+        nullable=True,
+        comment="Подкласс брони: Ткань, Легкая, Средняя или Тяжелая"
+    )
+
+    weapon_subclass = Column(
+        Enum(
+            # Варианты для воинов:
+            'one_handed_weapon', 'two_handed_weapon', 'maces', 'axes', 'battle_axes', 'hammers', 'polearms', 'scythes',
+            # Варианты для плутов:
+            'daggers', 'twin_daggers', 'short_swords', 'rapiers', 'spears', 'bows', 'firearms', 'knuckledusters',
+            # Варианты для магов:
+            'one_handed_staffs', 'two_handed_staffs', 'grimoires', 'catalysts', 'spheres', 'wands', 'amulets',
+            'magic_weapon',
+            name="weapon_subclass_enum"
+        ),
+        nullable=True,
+        comment="Подкласс оружия, в зависимости от типа персонажа (воины, плуты, маги)"
+    )
+
+    primary_damage_type = Column(
+        Enum('physical','catting','crushing','piercing', 'magic', 'fire', 'ice','watering','electricity','wind','sainting','damning', name="primary_damage_type_enum"),
+        nullable=True,
+        comment="Основной тип урона, применимо для оружия (main_weapon, additional_weapons)"
+    )
+
     # Модификаторы характеристик
     strength_modifier = Column(Integer, default=0)
     agility_modifier = Column(Integer, default=0)

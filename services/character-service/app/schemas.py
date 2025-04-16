@@ -138,3 +138,17 @@ class CharacterBaseInfoResponse(BaseModel):
 
     class Config:
         orm_mode = True
+
+class PlayerInLocation(BaseModel):
+    character_name: str
+    character_title: str
+    character_photo: str
+
+class CharacterProfileResponse(BaseModel):
+        character_photo: str
+        character_title: str
+        user_id: Optional[int] = None
+        user_nickname: Optional[str] = None
+
+        class Config:
+            orm_mode = True

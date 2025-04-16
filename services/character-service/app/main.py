@@ -491,4 +491,102 @@ def get_basic_info(character_id: int, db: Session = Depends(get_db)):
         level=character.level
     )
 
+
+@router.get("/by_location", response_model=List[schemas.PlayerInLocation])
+def get_characters_by_location(location_id: int, db: Session = Depends(get_db)):
+    """
+    Возвращает список всех персонажей, находящихся в заданной локации.
+    Используется поле current_location_id у модели Character.
+
+    Ответ содержит для каждого персонажа:
+      - character_name: имя персонажа,
+      - character_title: имя текущего титула (если установлен; иначе пустая строка),
+      - character_photo: фотография персонажа (например, avatar).
+    """
+    characters = db.query(models.Character).filter(models.Character.current_location_id == location_id).all()
+    result = []
+    for ch in characters:
+        result.append({
+            "character_name": ch.name,
+            "character_title": ch.current_title.name if ch.current_title else "",
+            "character_photo": ch.avatar
+        })
+    return result
+
+
+@router.put("/{character_id}/update_location")
+def update_location(character_id: int, payload: dict, db: Session = Depends(get_db)):
+    """
+    Обновляет текущую локацию персонажа.
+
+    Запрос:
+      {
+          "new_location_id": <идентификатор новой локации>
+      }
+
+    Если персонаж не найден или не передан new_location_id, возвращает ошибку.
+    В случае успеха – обновляет поле current_location_id и возвращает подтверждение.
+    """
+    new_location_id = payload.get("new_location_id")
+    if new_location_id is None:
+        raise HTTPException(status_code=400, detail="Поле 'new_location_id' обязательно для передачи")
+
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    character.current_location_id = new_location_id
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении локации персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении локации")
+    db.refresh(character)
+
+    return {
+        "detail": "Текущая локация персонажа обновлена",
+        "character_id": character.id,
+        "current_location_id": character.current_location_id
+    }
+
+
+@router.get("/{character_id}/profile", response_model=schemas.CharacterProfileResponse)
+async def get_character_profile(character_id: int, db: Session = Depends(get_db)):
+    """
+    Возвращает профиль персонажа, включая:
+      - character_photo: фото персонажа (например, поле avatar),
+      - character_title: имя текущего титула (если установлен, иначе пустая строка),
+      - user_id: идентификатор пользователя, которому принадлежит персонаж,
+      - user_nickname: имя пользователя, полученное через вызов user‑service по эндпоинту GET /users/{user_id}.
+
+    Если персонаж не найден, возвращает 404.
+    """
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+
+    user_id = character.user_id
+    user_nickname = ""
+    if user_id:
+        user_profile_url = f"{settings.USER_SERVICE_URL}/users/{user_id}"
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            try:
+                resp = await client.get(user_profile_url)
+                resp.raise_for_status()
+                user_data = resp.json()
+                # Предполагаем, что в ответе есть ключ "username"
+                user_nickname = user_data.get("username", "")
+            except Exception as e:
+                logger.error(f"Ошибка при получении профиля пользователя с user_id {user_id}: {e}")
+                # Можно вернуть пустое значение или сообщить об ошибке – здесь выбираем оставить пустое имя.
+                user_nickname = ""
+
+    return {
+        "character_photo": character.avatar,
+        "character_title": character.current_title.name if character.current_title else "",
+        "user_id": user_id,
+        "user_nickname": user_nickname
+    }
+
 app.include_router(router)

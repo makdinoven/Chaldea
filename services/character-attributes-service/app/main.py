@@ -432,4 +432,43 @@ def update_active_experience(
         "active_experience": attr.active_experience
     }
 
+
+@router.post("/{character_id}/consume_stamina")
+def consume_stamina(character_id: int, payload: dict, db: Session = Depends(get_db)):
+    """
+    Списывает указанное количество выносливости (stamina) у персонажа.
+
+    Запрос:
+      {
+          "amount": <целое число>
+      }
+
+    Если у персонажа недостаточно выносливости, возвращается ошибка.
+    В случае успеха возвращается сообщение и оставшаяся выносливость.
+    """
+    amount = payload.get("amount")
+    if amount is None or not isinstance(amount, int):
+        raise HTTPException(status_code=400, detail="Поле 'amount' обязательно и должно быть целым числом")
+
+    attr = db.query(models.CharacterAttributes).filter(models.CharacterAttributes.character_id == character_id).first()
+    if not attr:
+        raise HTTPException(status_code=404, detail="Атрибуты персонажа не найдены")
+
+    if attr.current_stamina < amount:
+        raise HTTPException(status_code=400, detail="Недостаточно выносливости для списания")
+
+    attr.current_stamina -= amount
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ошибка при списании выносливости: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении выносливости")
+    db.refresh(attr)
+
+    return {
+        "detail": "Выносливость списана успешно",
+        "current_stamina": attr.current_stamina
+    }
+
 app.include_router(router)

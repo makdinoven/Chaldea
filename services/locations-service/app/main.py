@@ -4,8 +4,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import asyncio
 from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
+from config import settings
 
 import models
+import httpx
 import schemas
 import crud
 from database import engine, get_db
@@ -404,6 +406,106 @@ async def get_admin_panel_data_route(session: AsyncSession = Depends(get_db)):
     """
     return await crud.get_admin_panel_data(session)
 
+
+@router.get("/{location_id}/client/details", response_model=schemas.LocationClientDetails)
+async def get_location_client_details(location_id: int, session: AsyncSession = Depends(get_db)):
+    """
+    Возвращает детальную информацию о локации для клиента.
+    Помимо базовых данных локации, включает:
+      - Список соседей
+      - Список персонажей (игроков) в локации
+      - Посты пользователей, обогащенные информацией о профиле автора, полученной из Character‑service
+    """
+    data = await crud.get_client_location_details(session, location_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Location not found")
+    return data
+
+
+@router.post("/{destination_location_id}/move_and_post", response_model=schemas.PostResponse)
+async def move_and_post(
+        destination_location_id: int,
+        movement: schemas.MovementPostRequest,
+        session: AsyncSession = Depends(get_db)
+):
+    """
+    Эндпоинт для перемещения персонажа в новую локацию и одновременного создания поста.
+
+    Логика:
+      1. Получаем профиль персонажа через Character‑service, чтобы узнать его текущую локацию.
+      2. Если current_location_id не указан (NULL), разрешаем переход в любую локацию.
+         Иначе проверяем, является ли destination_location_id соседней локацией от текущей.
+      3. Получаем стоимость перехода (energy_cost).
+      4. Вызываем Attributes‑service для проверки наличия достаточной выносливости (current_stamina).
+      5. Создаём пост для destination_location_id.
+      6. Обновляем текущую локацию персонажа через Character‑service.
+      7. Вызываем Attributes‑service для списания выносливости на стоимость перехода.
+    """
+    # 1. Получаем профиль персонажа (чтобы узнать current_location_id)
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/profile"
+        profile_resp = await client.get(profile_url)
+        if profile_resp.status_code != 200:
+            raise HTTPException(status_code=404, detail="Character profile not found")
+        profile_data = profile_resp.json()
+    current_location = profile_data.get("current_location_id")  # может быть NULL
+
+    # 2. Проверяем, можно ли переходить в целевую локацию
+    movement_cost = 0
+    if current_location is not None:
+        # Если персонаж уже находится в локации, проверяем, является ли destination соседней
+        result = await session.execute(
+            select(models.LocationNeighbor).where(
+                models.LocationNeighbor.location_id == current_location,
+                models.LocationNeighbor.neighbor_id == destination_location_id
+            )
+        )
+        neighbor = result.scalars().first()
+        if neighbor is None:
+            raise HTTPException(status_code=400, detail="Destination location is not adjacent to the current location")
+        movement_cost = neighbor.energy_cost  # стоимость перехода
+    # Если current_location is NULL, переезд разрешён без дополнительной стоимости.
+
+    # 3. Проверяем, достаточно ли выносливости (stamina)
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        attr_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{movement.character_id}"
+        attr_resp = await client.get(attr_url)
+        if attr_resp.status_code != 200:
+            raise HTTPException(status_code=404, detail="Character attributes not found")
+        attr_data = attr_resp.json()
+        current_stamina = attr_data.get("current_stamina", 0)
+        if current_stamina < movement_cost:
+            raise HTTPException(status_code=400, detail="Not enough stamina to move")
+
+    # 4. Создаём пост для новой локации (destination_location_id)
+    # use the path parameter
+    payload = {
+        "character_id": movement.character_id,
+        "location_id": destination_location_id,
+        "content": movement.content
+    }
+
+    # обернуть в Pydantic-модель
+    post_in = schemas.PostCreate(**payload)
+
+    # и передать уже её
+    new_post = await crud.create_post(session, post_in)
+
+    # 5. Обновляем текущую локацию персонажа через Character‑service
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/update_location"
+        update_resp = await client.put(update_url, json={"new_location_id": destination_location_id})
+        if update_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Failed to update character location")
+
+    # 6. Списываем выносливость (вызываем эндпоинт consume_stamina в Attributes‑service)
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        consume_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{movement.character_id}/consume_stamina"
+        consume_resp = await client.post(consume_url, json={"amount": movement_cost})
+        if consume_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Failed to deduct stamina for movement")
+
+    return new_post
 # --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------

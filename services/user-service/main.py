@@ -200,5 +200,21 @@ def get_admin_users(db: Session = Depends(get_db)):
     admins = db.query(models.User).filter(models.User.role == "admin").all()
     return admins
 
+@router.get("/{user_id}", response_model=UserRead)
+def get_user_by_id(user_id: int, db: Session = Depends(get_db)):
+    """
+    Возвращает данные пользователя по его ID:
+      - id
+      - email
+      - username
+      - role
+      - avatar
+      - registered_at
+    """
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
 # Подключаем маршрутизатор к основному приложению FastAPI
 app.include_router(router)
