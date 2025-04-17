@@ -1,10 +1,13 @@
+import logging
+import httpx
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import List, Optional
 from sqlalchemy.orm import selectinload
 from sqlalchemy import text, delete
-
+from config import settings
+import models
 from models import (
     Country, Region, District, Location, LocationNeighbor, Post
 )
@@ -838,3 +841,118 @@ async def delete_region(session: AsyncSession, region_id: int):
     await session.execute(
         delete(Region).where(Region.id == region_id)
     )
+
+logger = logging.getLogger("location-service.crud")
+async def get_client_location_details(session: AsyncSession, location_id: int) -> Optional[dict]:
+    """
+    Собирает детальную информацию о локации для клиентской части:
+      - Извлекает базовые данные локации (без children)
+      - Собирает список соседей из БД
+      - Вызывает Character‑service для получения списка персонажей, находящихся в локации
+      - Получает посты локации и для каждого поста дополняет данные профиля персонажа через Character‑service
+    """
+    # 1. Получаем базовые данные локации
+    result = await session.execute(select(Location).where(Location.id == location_id))
+    loc = result.scalars().first()
+    if not loc:
+        return None
+
+    # 2. Извлекаем соседей
+    neighbors_result = await session.execute(
+        select(LocationNeighbor).where(LocationNeighbor.location_id == location_id)
+    )
+    neighbors = neighbors_result.scalars().all()
+    detailed_neighbors = []
+    for n in neighbors:
+        neighbor_res = await session.execute(select(Location).where(Location.id == n.neighbor_id))
+        neighbor_loc = neighbor_res.scalars().first()
+        if neighbor_loc:
+            detailed_neighbors.append({
+                "neighbor_id": neighbor_loc.id,
+                "name": neighbor_loc.name,
+                "recommended_level": neighbor_loc.recommended_level,
+                "image_url": neighbor_loc.image_url,
+                "energy_cost": n.energy_cost
+            })
+
+    # 3. Получаем список персонажей для локации через новый эндпоинт Character‑service
+    players = await get_players_in_location(location_id)
+
+    # 4. Получаем посты для локации
+    posts_db = await get_posts_by_location(session, location_id)
+    detailed_posts = []
+    for post in posts_db:
+        detailed_post = await get_post_details(post)
+        detailed_posts.append(detailed_post)
+
+    return {
+        "id": loc.id,
+        "name": loc.name,
+        "type": loc.type,
+        "parent_id": loc.parent_id,
+        "description": loc.description,
+        "image_url": loc.image_url,
+        "recommended_level": loc.recommended_level,
+        "quick_travel_marker": loc.quick_travel_marker,
+        "district_id": loc.district_id,
+        "neighbors": detailed_neighbors,
+        "players": players,
+        "posts": detailed_posts
+    }
+
+async def get_post_details(post: Post) -> dict:
+    """
+    Дополняет данные поста, получая профиль автора (персонажа) через Character‑service.
+    Ожидается, что по эндпоинту:
+      GET {settings.CHARACTER_SERVICE_URL}/characters/{character_id}/profile
+    возвращается JSON с ключами:
+      - character_photo
+      - character_title
+      - user_id
+      - user_nickname
+    Если вызов завершится ошибкой, используются пустые значения.
+    """
+    profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{post.character_id}/profile"
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            resp = await client.get(profile_url)
+            resp.raise_for_status()
+            profile_data = resp.json()
+        except Exception as e:
+            logger.error(f"Ошибка при получении профиля персонажа {post.character_id}: {e}")
+            profile_data = {
+                "character_photo": "",
+                "character_title": "",
+                "user_id": None,
+                "user_nickname": ""
+            }
+    return {
+        "character_id": post.character_id,
+        "character_photo": profile_data.get("character_photo", ""),
+        "character_title": profile_data.get("character_title", ""),
+        "user_id": profile_data.get("user_id"),
+        "user_nickname": profile_data.get("user_nickname", ""),
+        "content": post.content,
+        "length": len(post.content)
+    }
+
+async def get_players_in_location(location_id: int) -> List[dict]:
+    """
+    Получает список персонажей (игроков), находящихся в заданной локации, через Character‑service.
+    Используется новый эндпоинт:
+      GET {settings.CHARACTER_SERVICE_URL}/characters/by_location?location_id={location_id}
+    Ожидается, что сервис вернет список объектов с полями:
+      - character_name
+      - character_title
+      - character_photo
+    """
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/by_location?location_id={location_id}"
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            players_data = response.json()
+            return players_data
+        except Exception as e:
+            logger.error(f"Ошибка при получении персонажей для локации {location_id}: {e}")
+            return []

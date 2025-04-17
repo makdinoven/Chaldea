@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func
+from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -49,6 +49,7 @@ class Character(Base):
     current_title_id = Column(Integer, ForeignKey("titles.id_title"), nullable=True)
     level = Column(Integer, nullable=False, default=1)
     stat_points = Column(Integer, nullable=False, default=0)
+    current_location_id = Column(BigInteger, nullable=True)
 
     titles = relationship("CharacterTitle", back_populates="character")
     current_title = relationship("Title")

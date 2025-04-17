@@ -286,3 +286,46 @@ class LocationNeighborResponse(BaseModel):
 
 class LocationNeighborsUpdate(BaseModel):
     neighbors: List[LocationNeighborCreate]
+
+class PlayerInLocation(BaseModel):
+    character_name: str
+    character_title: str
+    character_photo: str
+
+class NeighborClient(BaseModel):
+    neighbor_id: int
+    name: str
+    recommended_level: int
+    image_url: Optional[str] = None
+    energy_cost: int
+
+class ClientPost(BaseModel):
+    character_id: int
+    character_photo: str
+    character_title: str
+    user_id: int
+    user_nickname: str
+    content: str
+    length: int
+
+class LocationClientDetails(BaseModel):
+    id: int
+    name: str
+    type: str
+    parent_id: Optional[int]
+    description: str
+    image_url: Optional[str]
+    recommended_level: int
+    quick_travel_marker: bool
+    district_id: int
+    neighbors: List[NeighborClient] = []
+    players: List[PlayerInLocation] = []
+    posts: List[ClientPost] = []
+
+    class Config:
+        orm_mode = True
+
+class MovementPostRequest(BaseModel):
+    character_id: int
+    content: str
+

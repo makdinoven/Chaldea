@@ -358,7 +358,8 @@ async def get_skill_full_tree(skill_id: int, db: AsyncSession = Depends(get_db))
                 "amount": dmg.amount,
                 "description": dmg.description,
                 "chance": dmg.chance,  # <-- нужно
-                "target_side": dmg.target_side
+                "target_side": dmg.target_side,
+                "weapon_slot": dmg.weapon_slot
             })
         effect_list = []
         for eff in rank.effects:

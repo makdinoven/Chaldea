@@ -83,6 +83,7 @@ class SkillRankDamageBase(BaseModel):
     amount: float = 0.0
     description: Optional[str] = None
     target_side: str
+    weapon_slot: str = "main_weapon"
     chance: int = 100  # не забудь, если у тебя есть chance
 
 

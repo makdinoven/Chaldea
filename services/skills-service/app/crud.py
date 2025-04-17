@@ -218,7 +218,8 @@ async def sync_damage_entries(db: AsyncSession, rank_obj: models.SkillRank, new_
                 amount=dmg_data.amount,
                 description=dmg_data.description,
                 chance=dmg_data.chance,
-                target_side=dmg_data.target_side
+                target_side=dmg_data.target_side,
+                weapon_slot=dmg_data.weapon_slot,
             )
             db.add(new_dmg)
         else:
@@ -230,6 +231,7 @@ async def sync_damage_entries(db: AsyncSession, rank_obj: models.SkillRank, new_
             old_entry.description = dmg_data.description
             old_entry.chance = dmg_data.chance
             old_entry.target_side = dmg_data.target_side
+            old_entry.weapon_slot = dmg_data.weapon_slot
             keep_ids.append(dmg_data.id)
 
     for old_id, old_entry in old_entries.items():

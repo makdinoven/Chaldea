@@ -12,9 +12,8 @@ import {
 import DamageSection from './tabs/DamageSection'
 import BuffDebuffSection from './tabs/BuffDebuffSection.jsx'
 import ResistSection from './tabs/ResistSection'
-import VulnerabilitySection from './tabs/VulnerabilitySection'
 import ComplexEffectsSection from './tabs/ComplexEffectsSection'
-import { uploadSkillRankImage } from "../../redux/actions/skillsAdminActions.js";
+import StatModifierSection from "./tabs/StatModifierSection.jsx";
 import { useDispatch } from "react-redux";
 import axios from "axios";
 
@@ -405,10 +404,10 @@ export default function NodeRankDetails({
             resistArray={data.selfResist || []}
             onChange={(arr) => handleChange('selfResist', arr)}
           />
-          <VulnerabilitySection
-            title="Уязвимости (Self)"
-            vulnerabilityArray={data.selfVulnerability || []}
-            onChange={(arr) => handleChange('selfVulnerability', arr)}
+          <StatModifierSection
+          title="Стат‑модификаторы (Self)"
+          modsArray={data.selfStatMods || []}
+          onChange={(arr) => handleChange("selfStatMods", arr)}
           />
           <ComplexEffectsSection
             title="Сложн. эффекты (Self)"
@@ -435,10 +434,10 @@ export default function NodeRankDetails({
             resistArray={data.enemyResist || []}
             onChange={(arr) => handleChange('enemyResist', arr)}
           />
-          <VulnerabilitySection
-            title="Уязвимости (Enemy)"
-            vulnerabilityArray={data.enemyVulnerability || []}
-            onChange={(arr) => handleChange('enemyVulnerability', arr)}
+          <StatModifierSection
+              title="Стат‑модификаторы (Enemy)"
+              modsArray={data.enemyStatMods || []}
+              onChange={(arr) => handleChange("enemyStatMods", arr)}
           />
           <ComplexEffectsSection
             title="Сложн. эффекты (Enemy)"

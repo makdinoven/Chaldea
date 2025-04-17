@@ -199,12 +199,12 @@ function FlowSkillsEditor({ skillTree, updateStatus }) {
     enemyDamage: n.data.enemyDamage || [],
     selfResist: n.data.selfResist || [],
     enemyResist: n.data.enemyResist || [],
-    selfVulnerability: n.data.selfVulnerability || [],
-    enemyVulnerability: n.data.enemyVulnerability || [],
     selfDamageBuff: n.data.selfDamageBuff || [],
     enemyDamageBuff: n.data.enemyDamageBuff || [],
     selfComplexEffects: n.data.selfComplexEffects || [],
     enemyComplexEffects: n.data.enemyComplexEffects || [],
+    selfStatMods: n.data.selfStatMods || [],
+    enemyStatMods: n.data.enemyStatMods || [],
   }));
 
   const payload = prepareSkillPayload({

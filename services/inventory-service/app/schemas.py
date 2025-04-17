@@ -51,6 +51,10 @@ class ItemBase(BaseModel):
     is_unique: bool
     description: Optional[str] = None
 
+    primary_damage_type: Optional[str] = None
+    armor_subclass: Optional[str] = None
+    weapon_subclass: Optional[str] = None
+
 
     # Модификаторы характеристик
     strength_modifier: Optional[int] = None
