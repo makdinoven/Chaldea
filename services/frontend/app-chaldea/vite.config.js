@@ -8,7 +8,9 @@ export default defineConfig({
     watch: {
       usePolling: true,       // если вам нужен polling
     },
-    allowedHosts: 'all'
+    allowedHosts: [
+      '4452515-co41851.twc1.net'
+    ],
     // или, чтобы разрешить _все_ хосты (менее безопасно):
     // allowedHosts: 'all',
   },
