@@ -1,0 +1,52 @@
+@import "../../../global.scss";
+
+.card {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  border-radius: 15px;
+  padding: 10px;
+  @include gold-outline(1px);
+  width: 100%;
+  height: 100%;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+
+  &::before {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 85px;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, #000 100%);
+    border-radius: inherit;
+  }
+
+  .names {
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+  }
+
+  .card_name {
+    @include gold-text;
+    font-size: 16px;
+    font-weight: 500;
+  }
+
+  .card_title {
+    color: var(--blue);
+    font-size: 14px;
+  }
+}
+
+.card_wrapper {
+  padding: 6px;
+  height: 225px;
+  width: 188px;
+}

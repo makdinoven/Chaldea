@@ -1,84 +1,193 @@
+@import "../../../global.scss";
+
+.back_button {
+  cursor: pointer;
+  width: 56px;
+  height: 56px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  background-image: url("/arrowWithCircle.svg");
+  margin-bottom: 16px;
+}
+
 .location_page {
+  display: flex;
+  flex-direction: column;
+  gap: 60px;
+}
 
 
-  button {
-    cursor: pointer;
-    width: 56px;
-    height: 56px;
-    background-repeat: no-repeat;
-    background-position: center;
-    background-size: contain;
-    background-image: url("/arrowWithCircle.svg");
-    margin-bottom: 16px;
-  }
+.content {
+  @include gray-background-br;
+  display: flex;
+  gap: 65px;
+  padding: 35px;
+  color: #fff;
+  width: 100%;
 
-  .content {
+  .bar {
     display: flex;
-    gap: 65px;
-    border-radius: 15px;
-    padding: 35px;
-    color: #fff;
-    width: 100%;
-    background-color: var(--gray-background);
+    justify-content: center;
+    min-width: 160px;
+    width: 160px;
 
-    .bar {
+    .bar_top {
       display: flex;
-      justify-content: center;
-      min-width: 160px;
-      width: 160px;
+      flex-direction: column;
+      align-items: center;
+      gap: 30px;
+    }
 
+    .lvl {
+      @include gold-text;
+      font-size: 16px;
+    }
 
-      .image {
-        position: relative;
-        min-width: 120px;
-        width: 120px;
-        height: 120px;
-        margin: 6px;
-        background-color: #3d3d3d;
-        border-radius: 100%;
-        background-position: center;
-        background-repeat: no-repeat;
-        background-size: cover;
+    .image {
+      position: relative;
+      min-width: 120px;
+      width: 120px;
+      height: 120px;
+      margin: 6px;
+      background-color: #3d3d3d;
+      border-radius: 100%;
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: cover;
 
-        &::after {
-          content: "";
-          position: absolute;
-          inset: -6px;
-          border-radius: inherit;
-          border: 3px solid transparent;
-          background: linear-gradient(180deg, rgba(255, 249, 184, 1) 0%, rgba(188, 171, 76, 1) 100%);
-          mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
-          -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
-          mask-composite: exclude;
-          -webkit-mask-composite: destination-out;
-          pointer-events: none;
-          border-top: 3px solid #fff9b8;
-          border-bottom: 3px solid #bcab4c;
-        }
-      }
+      @include gold-outline(3px);
     }
   }
+}
 
-  .content_inner {
+.content_inner {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+
+  h1 {
+    @include gold-text;
+  }
+
+  p {
+    font-size: 18px;
+  }
+}
+
+.players_container {
+  display: grid;
+  grid-template-columns: repeat(5, 188px);
+  gap: 20px;
+}
+
+.neighbours_container {
+  display: grid;
+  grid-template-columns: repeat(5, 179px);
+  gap: 20px;
+}
+
+.textarea_container {
+  padding: 35px;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  @include gray-background-br;
+}
+
+.post_container {
+  display: flex;
+  gap: 20px;
+}
+
+.post_author_container {
+  min-width: 440px;
+  width: 440px;
+  padding: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  align-items: center;
+  @include gray-background-br;
+  max-height: 428px;
+
+  .author_inner {
+    width: 100%;
+    display: flex;
+    gap: 20px;
+  }
+
+  .author_avatar_wrapper {
     display: flex;
     flex-direction: column;
+    align-items: center;
     gap: 20px;
 
-    h1 {
-      text-transform: uppercase;
-      font-size: 24px;
-      background: linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
-      background-clip: text;
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
+    h4 {
+      @include gold-text;
     }
+  }
 
-    p {
-      font-size: 18px;
-    }
 
-    textarea {
-      height: 150px;
-    }
+}
+
+
+.post {
+  @include gray-background-br;
+  padding: 80px 60px 40px;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  justify-content: space-between;
+  color: #fff;
+  font-size: 18px;
+
+  .post_bottom {
+    color: #fff;
+    font-size: 20px;
+  }
+}
+
+.buttons {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.button {
+  position: relative;
+  color: #fff;
+  font-weight: 500;
+  font-size: 20px;
+  padding: 15px 0;
+
+  &.active {
+    @include gold-text;
+    font-size: 20px;
+    text-transform: unset;
+  }
+
+  &:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    height: 1px;
+    background: linear-gradient(
+                    90deg,
+                    rgba(204, 204, 204, 0) 0%,
+                    #999 42.5%,
+                    rgba(255, 255, 255, 0) 100%
+    );
+    z-index: 1;
+    transform: translateX(-50%);
+    transition: width var(--transition02);
+    width: 100%;
+  }
+
+  &:hover {
+    @include gold-text;
+    font-size: 20px;
+    text-transform: unset;
   }
 }

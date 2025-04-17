@@ -1,0 +1,44 @@
+@import "../../../global.scss";
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  text-decoration: none;
+
+  p {
+    @include gold-text;
+    text-align: center;
+    font-size: 20px;
+  }
+}
+
+.img {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  border-radius: 100%;
+  padding: 10px;
+  @include gold-outline(1px);
+  width: 100%;
+  height: 100%;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+
+  .price {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    color: #fff;
+  }
+}
+
+.img_wrapper {
+  padding: 6px;
+  height: 179px;
+  width: 179px;
+}

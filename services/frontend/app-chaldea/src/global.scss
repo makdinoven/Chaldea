@@ -1,0 +1,32 @@
+@mixin gold-text {
+  text-transform: uppercase;
+  font-size: 24px;
+  background: linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+
+@mixin gold-outline($width) {
+  &::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+    border-radius: inherit;
+    border: $width solid transparent;
+    background: linear-gradient(180deg, rgba(255, 249, 184, 1) 0%, rgba(188, 171, 76, 1) 100%);
+    mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    -webkit-mask-composite: destination-out;
+    pointer-events: none;
+    border-top: $width solid #fff9b8;
+    border-bottom: $width solid #bcab4c;
+  }
+}
+
+@mixin gray-background-br {
+  border-radius: 15px;
+  background-color: var(--gray-background);
+}
