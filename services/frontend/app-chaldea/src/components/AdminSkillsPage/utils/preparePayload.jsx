@@ -1,109 +1,128 @@
 // utils/preparePayload.js
-
-// Объединяем урон из вкладок "Для себя" и "Для врага"
+/* ---------- damage ---------- */
 export const transformDamageData = (selfDamage = [], enemyDamage = []) => {
-  const self = selfDamage.map(item => ({
+  const map = (item, side) => ({
     damage_type: item.damage_type,
     amount: item.amount,
     chance: item.chance,
-    description: item.description || '',
-    target_side: 'self'
-  }));
-
-  const enemy = enemyDamage.map(item => ({
-    damage_type: item.damage_type,
-    amount: item.amount,
-    chance: item.chance,
-    description: item.description || '',
-    target_side: 'enemy'
-  }));
-
-  return [...self, ...enemy];
+    description: item.description || "",
+    target_side: side,
+    weapon_slot: item.weapon_slot || "main_weapon",
+  });
+  return [
+    ...selfDamage.map((i) => map(i, "self")),
+    ...enemyDamage.map((i) => map(i, "enemy")),
+  ];
 };
 
-const transformBuff = (buffArray = [], targetSide = 'self') =>
-  buffArray.map(item => ({
-      id: item.id ?? null,
-    target_side: targetSide,
-    effect_name: `Buff: ${item.damage_type}`,
-    description: item.description || '',
-    chance: item.chance,
-    duration: item.duration,
-    magnitude: item.percent,
-    attribute_key: null
-  }));
-const transformResist = (resistArray = [], targetSide = 'self') =>
-  resistArray.map(item => ({
-      id: item.id ?? null,
-    target_side: targetSide,
-    effect_name: `Resist: ${item.damage_type}`, // для резистов поле называется "type"
-    description: '',
-    chance: item.chance,
-    duration: item.duration,
-    magnitude: item.percent,
-    attribute_key: null
-  }));
+/* ---------- helpers ---------- */
+const makeEffectRow = ({
+  id = null,
+  target_side,
+  effect_name,
+  magnitude,
+  duration,
+  chance,
+  attribute_key = null,
+  description = "",
+}) => ({
+  id,
+  target_side,
+  effect_name,
+  description,
+  chance,
+  duration,
+  magnitude,
+  attribute_key,
+});
 
-const transformVulnerability = (vulnArray = [], targetSide = 'self') =>
-  vulnArray.map(item => ({
-      id: item.id ?? null,
-    target_side: targetSide,
-    effect_name: `Vulnerability: ${item.damage_type}`, // для уязвимостей
-    description: '',
-    chance: item.chance,
-    duration: item.duration,
-    magnitude: item.percent,
-    attribute_key: null
-  }));
+/* Buff / Resist */
+const transformBuff = (arr = [], side = "self") =>
+  arr.map((i) =>
+    makeEffectRow({
+      id: i.id,
+      target_side: side,
+      effect_name: `Buff: ${i.damage_type}`,
+      magnitude: i.percent,
+      duration: i.duration,
+      chance: i.chance,
+    })
+  );
 
-// Если комплексные эффекты уже имеют структуру, похожую на основную модель эффекта, то достаточно добавить target_side.
-const transformComplexEffects = (complexArray = [], targetSide = 'self') =>
-  complexArray.map(item => ({
-    ...item,
-    target_side: targetSide
-  }));
+const transformResist = (arr = [], side = "self") =>
+  arr.map((i) =>
+    makeEffectRow({
+      id: i.id,
+      target_side: side,
+      effect_name: `Resist: ${i.damage_type}`,
+      magnitude: i.percent,
+      duration: i.duration,
+      chance: i.chance,
+    })
+  );
 
-// Функция подготовки данных для одного ранга.
-// Здесь кроме объединения урона (damage_entries) мы объединяем дополнительные эффекты в единый массив effects.
-// utils/preparePayload.js
+/* ---------- Stat Modifiers ---------- */
+const transformStatMods = (arr = [], side = "self") =>
+  arr.map((i) =>
+    makeEffectRow({
+      id: i.id,
+      target_side: side,
+      effect_name: "StatModifier",
+      attribute_key: i.key,
+      magnitude: i.amount,
+      duration: i.duration,
+      chance: i.chance,
+    })
+  );
+
+/* ---------- complex ---------- */
+const transformComplex = (arr = [], side = "self") =>
+  arr.map((i) => ({ ...i, target_side: side }));
+
+/* ---------- rank ---------- */
 export const prepareRankPayload = (rankData) => {
   const {
-    selfDamage = [], enemyDamage = [],
-    selfDamageBuff = [], enemyDamageBuff = [],
-    selfResist = [], enemyResist = [],
-    selfVulnerability = [], enemyVulnerability = [],
-    selfComplexEffects = [], enemyComplexEffects = [],
-    effects = [],
-    ...baseData
+    selfDamage = [],
+    enemyDamage = [],
+
+    selfDamageBuff = [],
+    enemyDamageBuff = [],
+
+    selfResist = [],
+    enemyResist = [],
+
+    selfStatMods = [],
+    enemyStatMods = [],
+
+    selfComplexEffects = [],
+    enemyComplexEffects = [],
+
+    ...base
   } = rankData;
 
-  const mergedEffects = [
-    ...transformBuff(selfDamageBuff, 'self'),
-    ...transformBuff(enemyDamageBuff, 'enemy'),
-    ...transformResist(selfResist, 'self'),
-    ...transformResist(enemyResist, 'enemy'),
-    ...transformVulnerability(selfVulnerability, 'self'),
-    ...transformVulnerability(enemyVulnerability, 'enemy'),
-    ...transformComplexEffects(selfComplexEffects, 'self'),
-    ...transformComplexEffects(enemyComplexEffects, 'enemy'),
+  const effects = [
+    ...transformBuff(selfDamageBuff, "self"),
+    ...transformBuff(enemyDamageBuff, "enemy"),
+    ...transformResist(selfResist, "self"),
+    ...transformResist(enemyResist, "enemy"),
+    ...transformStatMods(selfStatMods, "self"),
+    ...transformStatMods(enemyStatMods, "enemy"),
+    ...transformComplex(selfComplexEffects, "self"),
+    ...transformComplex(enemyComplexEffects, "enemy"),
   ];
 
   return {
-    ...baseData,
+    ...base,
     damage_entries: transformDamageData(selfDamage, enemyDamage),
-    effects: mergedEffects
+    effects,
   };
 };
 
-
-// Функция подготовки данных для всего навыка (полное дерево).
-export const prepareSkillPayload = (skillTreeData) => {
-  const { ranks, ...baseData } = skillTreeData;
+/* ---------- skill‑tree ---------- */
+export const prepareSkillPayload = (skillTree) => {
+  const { ranks, ...skill } = skillTree;
   return {
-    ...baseData,
-    // Сохраняем фотографию навыка
-    skill_image: skillTreeData.skill_image,
-    // Для каждого ранга формируем корректный объект с помощью prepareRankPayload
-    ranks: ranks.map(rankData => prepareRankPayload(rankData))
+    ...skill,
+    ranks: ranks.map((r) => prepareRankPayload(r)),
   };
 };

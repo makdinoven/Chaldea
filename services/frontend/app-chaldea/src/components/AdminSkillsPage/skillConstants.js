@@ -54,6 +54,20 @@ export const DAMAGE_TYPES = [
   { label: "Проклятие", value: "damning" },
 ];
 
+export const WEAPON_SLOTS = [
+  { label: "Основное оружие", value: "main_weapon" },
+  { label: "Доп. оружие", value: "additional_weapons" },
+];
+
+export const STAT_MODIFIERS = [
+  { label: "Крит.шанс(%)", key: "crit_chance" },
+  { label: "Крит.урон(%)", key: "crit_damage" },
+  { label: "Шанс уклонения(%)", key: "dodge_chance" },
+  { label: "HP(±)", key: "hp" },
+  { label: "Mana(±)", key: "mana" },
+  { label: "Energy(±)", key: "energy" },
+];
+
 export const COMPLEX_EFFECTS = [
   { label: "Кровотечение", value: "Bleeding" },
   { label: "Отравление", value: "Poison" },
@@ -91,6 +105,7 @@ export const EMPTY_RANK_TEMPLATE = {
   selfResist: [],
   selfVulnerability: [],       // [{type, percent, duration, chance} ...]
   selfComplexEffects: [],
+  selfStatMods: [],
 
   // 5 секций (enemy)
   enemyDamage: [],
@@ -98,6 +113,7 @@ export const EMPTY_RANK_TEMPLATE = {
   enemyResist: [],
   enemyVulnerability: [],
   enemyComplexEffects: [],
+  enemyStatMods: [],
 
   // Доп. ограничения
   class_limitations: "",

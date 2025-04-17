@@ -1,49 +1,80 @@
-export const transformReceivedSkillTree = (skillTree) => {
-  // Для "Resist:", "Vulnerability:", "Buff:" мы вырезаем тип из effect_name
-  // prefix = "Resist"|"Vulnerability"|"Buff"
-  const parseEffects = (effects, prefix) => {
-    return effects
-      .filter(e => e.effect_name.startsWith(prefix))
-      .map(e => ({
-        id: e.id,
-        // берем всё, что после "Buff: ", "Resist: " или "Vulnerability: "
-        damage_type: e.effect_name.replace(`${prefix}: `, ''),
-        percent: e.magnitude,
-        duration: e.duration,
-        chance: e.chance,
-        description: e.description || ''
-      }));
-  };
+// utils/transformSkillTree.jsx
+import { STAT_MODIFIERS } from "../skillConstants";
 
-  return {
-    ...skillTree,
-    ranks: skillTree.ranks.map(rank => ({
-      ...rank,
-      // Урон
-      selfDamage: rank.damage_entries.filter(d => d.target_side === 'self'),
-      enemyDamage: rank.damage_entries.filter(d => d.target_side === 'enemy'),
+const pickDamageRows = (rows, side) =>
+  rows
+    .filter((d) => d.target_side === side)
+    .map((d) => ({
+      ...d,
+      weapon_slot: d.weapon_slot || "main_weapon",
+    }));
 
-      // Резисты
-      selfResist: parseEffects(rank.effects.filter(e => e.target_side === 'self'), 'Resist'),
-      enemyResist: parseEffects(rank.effects.filter(e => e.target_side === 'enemy'), 'Resist'),
+/* ---------- helpers ---------- */
+const parsePrefix = (effects, side, prefix) =>
+  effects
+    .filter(
+      (e) => e.target_side === side && e.effect_name.startsWith(prefix)
+    )
+    .map((e) => ({
+      id: e.id,
+      damage_type: e.effect_name.replace(`${prefix}: `, ""),
+      percent: e.magnitude,
+      duration: e.duration,
+      chance: e.chance,
+      description: e.description || "",
+    }));
 
-      // Уязвимости
-      selfVulnerability: parseEffects(rank.effects.filter(e => e.target_side === 'self'), 'Vulnerability'),
-      enemyVulnerability: parseEffects(rank.effects.filter(e => e.target_side === 'enemy'), 'Vulnerability'),
+/* NEW StatModifier parser */
+const parseStatMods = (effects, side) =>
+  effects
+    .filter(
+      (e) => e.target_side === side && e.effect_name === "StatModifier"
+    )
+    .map((e) => ({
+      id: e.id,
+      key: e.attribute_key,
+      amount: e.magnitude,
+      duration: e.duration,
+      chance: e.chance,
+    }));
 
-      // Баффы
-      selfDamageBuff: parseEffects(rank.effects.filter(e => e.target_side === 'self'), 'Buff'),
-      enemyDamageBuff: parseEffects(rank.effects.filter(e => e.target_side === 'enemy'), 'Buff'),
+/* Complex‑effects без изменений */
+const parseComplex = (effects, side) =>
+  effects.filter(
+    (e) =>
+      e.target_side === side &&
+      !e.effect_name.startsWith("Resist") &&
+      !e.effect_name.startsWith("Buff") &&
+      e.effect_name !== "StatModifier"
+  );
 
-      // Остальные эффекты
-      selfComplexEffects: rank.effects.filter(e =>
-        e.target_side === 'self' &&
-        !['Resist', 'Vulnerability', 'Buff'].some(prefix => e.effect_name.startsWith(prefix))
-      ),
-      enemyComplexEffects: rank.effects.filter(e =>
-        e.target_side === 'enemy' &&
-        !['Resist', 'Vulnerability', 'Buff'].some(prefix => e.effect_name.startsWith(prefix))
-      ),
-    }))
-  };
-};
+/* ---------- main ---------- */
+export const transformReceivedSkillTree = (skillTree) => ({
+  ...skillTree,
+  ranks: skillTree.ranks.map((rank) => {
+    const { damage_entries, effects, ...rest } = rank;
+
+    return {
+      ...rest,
+
+      /* damage */
+      selfDamage: pickDamageRows(damage_entries, "self"),
+      enemyDamage: pickDamageRows(damage_entries, "enemy"),
+
+      /* resist / buff */
+      selfResist: parsePrefix(effects, "self", "Resist"),
+      enemyResist: parsePrefix(effects, "enemy", "Resist"),
+
+      selfDamageBuff: parsePrefix(effects, "self", "Buff"),
+      enemyDamageBuff: parsePrefix(effects, "enemy", "Buff"),
+
+      /* NEW stat modifiers */
+      selfStatMods: parseStatMods(effects, "self"),
+      enemyStatMods: parseStatMods(effects, "enemy"),
+
+      /* complex */
+      selfComplexEffects: parseComplex(effects, "self"),
+      enemyComplexEffects: parseComplex(effects, "enemy"),
+    };
+  }),
+});

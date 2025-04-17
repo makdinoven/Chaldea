@@ -86,6 +86,7 @@ class SkillRankDamage(Base):
     damage_type: Mapped[str] = mapped_column(String(50), nullable=False)  # "physical", "fire", "ice", etc.
     amount: Mapped[float] = mapped_column(Float, default=0.0)
     description: Mapped[str] = mapped_column(Text, nullable=True)
+    weapon_slot = Column(String(20), default="main_weapon")
 
     target_side: Mapped[str] = mapped_column(String(10), nullable=False, default="self")
     chance: Mapped[int] = mapped_column(Integer, default=100)

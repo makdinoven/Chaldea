@@ -6,7 +6,7 @@ import styles from '../AdminSkillsPage.module.scss'
 const ResistSection = ({ title, resistArray, onChange }) => {
 
   const handleAdd = () => {
-    const newItem = { type: 'all', percent: 0, duration: 0, chance: 100 }
+    const newItem = { damage_type: 'all', percent: 0, duration: 0, chance: 100 }
     onChange([...(resistArray || []), newItem])
   }
 
@@ -29,8 +29,8 @@ const ResistSection = ({ title, resistArray, onChange }) => {
           <div className={styles.inputGroup}>
             <label>Тип:</label>
             <select
-              value={item.type}
-              onChange={(e) => handleUpdate(idx, 'type', e.target.value)}
+              value={item.damage_type}
+              onChange={(e) => handleUpdate(idx, 'damage_type', e.target.value)}
             >
               {DAMAGE_TYPES.map(dt => (
                 <option key={dt.value} value={dt.value}>{dt.label}</option>
