@@ -924,7 +924,8 @@ async def get_post_details(post: Post) -> dict:
                 "character_photo": "",
                 "character_title": "",
                 "user_id": None,
-                "user_nickname": ""
+                "user_nickname": "",
+                "character_name": ""
             }
     return {
         "character_id": post.character_id,
@@ -932,6 +933,7 @@ async def get_post_details(post: Post) -> dict:
         "character_title": profile_data.get("character_title", ""),
         "user_id": profile_data.get("user_id"),
         "user_nickname": profile_data.get("user_nickname", ""),
+        "character_name": profile_data.get("character_name", ""),
         "content": post.content,
         "length": len(post.content)
     }

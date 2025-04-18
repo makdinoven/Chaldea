@@ -147,6 +147,7 @@ class PlayerInLocation(BaseModel):
 class CharacterProfileResponse(BaseModel):
         character_photo: str
         character_title: str
+        character_name: str
         user_id: Optional[int] = None
         user_nickname: Optional[str] = None
 
