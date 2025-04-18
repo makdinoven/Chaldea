@@ -1,6 +1,6 @@
 import httpx
-from typing import List
-from fastapi import FastAPI, Depends, HTTPException, APIRouter
+from typing import List, Optional
+from fastapi import FastAPI, Depends, HTTPException, APIRouter, Query
 from sqlalchemy.orm import Session
 import models
 import schemas
@@ -390,5 +390,55 @@ async def use_item(character_id: int, req: schemas.InventoryItem, db: Session = 
 
     return {"status": "ok", "detail": "Предмет использован"}
 
+@router.get("/items", response_model=List[schemas.Item])
+def list_items(
+    q: Optional[str] = Query(None, description="Поиск по названию"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """
+    Возвращает список предметов.
 
+    * q — подстрочный поиск по полю name (ILIKE %q%).
+    * page, page_size — пагинация.
+    """
+    query = db.query(models.Items)
+
+    if q:
+        query = query.filter(models.Items.name.ilike(f"%{q}%"))
+
+    items = (
+        query
+        .order_by(models.Items.id.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    return items
+
+@router.post("/items", response_model=schemas.Item, status_code=201)
+def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db)):
+    """
+    Создаёт новый предмет.
+
+    • Проверяет уникальность `name`.
+    • При успехе возвращает сохранённый объект.
+    """
+
+    # 1) проверяем дубликат имени
+    if db.query(models.Items).filter(models.Items.name == item_in.name).first():
+        raise HTTPException(
+            status_code=400,
+            detail="Предмет с таким названием уже существует",
+        )
+
+    # 2) создаём объект (Pydantic → SQLAlchemy), пропуская неуказанные поля
+    db_item = models.Items(**item_in.dict(exclude_unset=True))
+    db.add(db_item)
+    db.commit()
+    db.refresh(db_item)
+
+    return db_item
 app.include_router(router)

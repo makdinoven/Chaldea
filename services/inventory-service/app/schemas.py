@@ -117,6 +117,8 @@ class Item(ItemBase):
     добавляет поле id и включает orm_mode.
     """
     id: int
+    name: str
+    item_type: str
 
     class Config:
         orm_mode = True
