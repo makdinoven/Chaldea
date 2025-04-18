@@ -550,7 +550,7 @@ async def create_post(session: AsyncSession, post_data: PostCreate) -> Post:
     return new_post
 
 async def get_posts_by_location(session: AsyncSession, location_id: int) -> list:
-    result = await session.execute(select(Post).where(Post.location_id == location_id))
+    result = await session.execute(select(Post).where(Post.location_id == location_id).order_by(Post.id.desc()))
     return result.scalars().all()
 
 async def get_admin_panel_data(session: AsyncSession) -> dict:
