@@ -73,9 +73,9 @@ export default function Header() {
         </Link>
 
         <div className={styles.menu_container_right}>
-          {character && (
+          {character?.current_location && (
             <Menu
-              title={character.current_location.name}
+              title={character.current_location?.name}
               menuButtons={[
                 {
                   name: "Перейти",
