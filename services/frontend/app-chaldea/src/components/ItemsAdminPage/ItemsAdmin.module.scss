@@ -1,187 +1,172 @@
-/* ========================================================================== */
-/*  AdminItems.module.scss – классовая версия                                 */
-/* ========================================================================== */
+/* ======================================================================= */
+/*  ItemsAdmin.module.scss – 100 % модульные (scoped) стили                */
+/* ======================================================================= */
 
-/* ---------- 1. Переменные ------------------------------------------------- */
+/* ---------- 1. Переменные ---------------------------------------------- */
 $clr-primary: #2556f6;
 $clr-danger:  #f44336;
 $clr-border:  #d0d7de;
-$clr-bg:      #ffffff;
+$clr-bg:      #fff;
 $clr-bg-alt:  #f5f7fa;
-$radius: 6px;
+$radius:      6px;
 
-/* ---------- 2. Кнопки ----------------------------------------------------- */
+/* ---------- 2. Универсальные кнопки ------------------------------------ */
 .btn {
-  display: inline-block;
-  padding: .5rem 1rem;
-  border: 1px solid transparent;
-  border-radius: $radius;
-  font: 500 .875rem/1.2 "Inter", sans-serif;
-  cursor: pointer;
-  transition: background .15s ease, border-color .15s ease;
-
-  &--primary   { background: $clr-primary; color:#fff;
-                 &:hover { background: darken($clr-primary,6%);} }
-
-  &--danger    { background: $clr-danger;  color:#fff;
-                 &:hover { background: darken($clr-danger,6%);} }
-
-  &--ghost     { background:$clr-bg-alt;
-                 &:hover { background: $clr-border; } }
-
-  &:disabled   { opacity:.5; cursor:not-allowed; }
-}
-
-/* ---------- 3. Формы ------------------------------------------------------ */
-.form {
-  display:grid;
-  gap:1rem;
-  grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
-  padding:1.5rem;
-  border:1px solid $clr-border;
+  display:inline-block;
+  padding:.5rem 1rem;
+  border:1px solid transparent;
   border-radius:$radius;
-  background:$clr-bg;
+  font:500 .875rem/1.2 "Inter",sans-serif;
+  cursor:pointer;
+  transition:background .15s ease, border-color .15s ease;
 
-  &__field {
-    display:flex;
-    flex-direction:column;
-    gap:.3rem;
+  &--ghost   { background:$clr-bg-alt; &:hover{background:$clr-border;} }
+  &--primary { background:$clr-primary; color:#fff;
+               &:hover{background:darken($clr-primary,6%);} }
+  &--danger  { background:$clr-danger;  color:#fff;
+               &:hover{background:darken($clr-danger,6%);} }
 
-    &--checkbox { flex-direction:row; align-items:center; }
-  }
-
-  &__input,
-  &__select,
-  &__textarea {
-    padding:.4rem .6rem;
-    border:1px solid $clr-border;
-    border-radius:$radius;
-    font:400 .875rem/1.4 "Inter",sans-serif;
-
-    &:focus {
-      outline:none;
-      border-color:$clr-primary;
-      box-shadow:0 0 0 1px $clr-primary;
-    }
-  }
-
-  &__textarea { resize:vertical; min-height:6rem; }
-
-  &__mods {
-    grid-column:1 / -1;
-    border:1px dashed $clr-border;
-    border-radius:$radius;
-    padding:1rem;
-
-    legend { padding:0 .3rem; font-weight:600; color:#6b778c; }
-  }
-
-  &__actions {
-    grid-column:1 / -1;
-    display:flex;
-    gap:1rem;
-  }
+  &:disabled { opacity:.5; cursor:not-allowed; }
 }
 
-/* ---------- 4. Таблица предметов ----------------------------------------- */
-.list {
-  display:flex;
-  flex-direction:column;
-  gap:1rem;
+/* «Старое» краткое имя, чтоб не править JSX */
+.primary { @extend .btn--primary; }
 
-  &__header {
-    display:flex;
-    justify-content:space-between;
-    gap:1rem;
-
-    .form__input { max-width:320px; }
-  }
-
-  &__table {
-    width:100%;
-    border-collapse:collapse;
-    border:1px solid $clr-border;
-    border-radius:$radius;
-    overflow:hidden;
-
-    thead {
-      background:$clr-bg-alt;
-
-      th { font-size:.875rem; font-weight:600; text-align:left;
-           padding:.6rem .8rem; }
-    }
-
-    tbody {
-      td { font-size:.875rem; padding:.6rem .8rem;
-           border-bottom:1px solid $clr-border; }
-
-      tr:last-child td { border-bottom:none; }
-      tr:hover { background:rgba($clr-primary,.05); }
-
-      .actions {
-        display:flex; gap:.5rem;
-
-        .btn { padding:.3rem .6rem; }
-
-        .btn--delete {
-          @extend .btn--ghost;
-          color:$clr-danger;
-
-          &:hover { background:rgba($clr-danger,.1); }
-        }
-      }
-    }
-  }
-}
-
-/* ---------- 5. Модальное окно выдачи ------------------------------------- */
-.modal {
-  &__backdrop {
-    position:fixed; inset:0;
-    background:rgba(#000,.4);
-    backdrop-filter:blur(2px);
-    display:flex; align-items:center; justify-content:center;
-    z-index:2000;
-  }
-
-  &__window {
-    background:$clr-bg;
-    border:1px solid $clr-border;
-    border-radius:$radius;
-    padding:2rem;
-    width:460px; max-height:80vh;
-    display:flex; flex-direction:column; gap:1rem;
-    overflow:auto;
-  }
-
-  &__title { font-size:1.2rem; font-weight:600; margin:0 0 .5rem; }
-
-  &__list {
-    list-style:none; margin:0; padding:0;
-    max-height:220px; overflow:auto;
-    border:1px solid $clr-border; border-radius:$radius;
-
-    &-item { padding:.5rem .8rem; cursor:pointer;
-
-      &:hover          { background:$clr-bg-alt; }
-      &--active        { background:rgba($clr-primary,.15); }
-    }
-  }
-
-  &__actions { display:flex; justify-content:flex-end; gap:1rem; }
-}
-
-/* ---------- 6. Страница --------------------------------------------------- */
+/* ---------- 3. Контейнер страницы -------------------------------------- */
 .page {
-  padding:2rem; max-width:1200px; margin:0 auto;
+  max-width:1200px; margin:0 auto; padding:2rem;
   display:flex; flex-direction:column; gap:2rem;
 }
 
-/* ---------- 7. Текст ошибки ---------------------------------------------- */
+/* ---------- 4. Таблица со списком -------------------------------------- */
+.wrapper { display:flex; flex-direction:column; gap:1rem; }
+
+.header  {
+  display:flex; justify-content:space-between; gap:1rem;
+
+  input {
+    max-width:320px;
+    padding:.4rem .6rem;
+    border:1px solid $clr-border; border-radius:$radius;
+    font:.875rem "Inter",sans-serif;
+  }
+}
+
+.table {
+  width:100%; border-collapse:collapse;
+  border:1px solid $clr-border; border-radius:$radius; overflow:hidden;
+
+  thead {
+    background:$clr-bg-alt;
+
+    th { padding:.6rem .8rem; font-size:.875rem; font-weight:600; text-align:left; }
+  }
+  tbody {
+    td { padding:.6rem .8rem; border-bottom:1px solid $clr-border; font-size:.875rem; }
+    tr:last-child td { border-bottom:none; }
+    tr:hover { background:rgba($clr-primary,.05); }
+  }
+}
+
+.actions {
+  display:flex; gap:.5rem;
+
+  button { @extend .btn; padding:.3rem .6rem; }
+
+  button:last-child {           /* кнопка удаления «✖» */
+    @extend .btn--ghost;
+    color:$clr-danger;
+    &:hover{background:rgba($clr-danger,.12);}
+  }
+}
+
+/* ---------- 5. Форма создания / редактирования ------------------------- */
+.form {
+  display:grid; gap:1rem;
+  grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
+  padding:1.5rem; background:$clr-bg;
+  border:1px solid $clr-border; border-radius:$radius;
+
+  label {
+    display:flex; flex-direction:column; gap:.3rem;
+    font-weight:500;
+
+    input, select, textarea {
+      padding:.4rem .6rem;
+      border:1px solid $clr-border; border-radius:$radius;
+      font:.875rem "Inter",sans-serif;
+
+      &:focus {
+        outline:none; border-color:$clr-primary; box-shadow:0 0 0 1px $clr-primary;
+      }
+    }
+    textarea { resize:vertical; min-height:6rem; }
+  }
+}
+
+.checkboxLabel {               /* для чекбокса «Уникальный» */
+  display:flex; align-items:center; gap:.5rem;
+  input[type="checkbox"] {
+    width:1.1rem; height:1.1rem; accent-color:$clr-primary;
+  }
+}
+
+.mods {
+  grid-column:1 / -1;
+  border:1px dashed $clr-border; border-radius:$radius; padding:1rem;
+
+  legend { padding:0 .3rem; font-weight:600; color:#6b778c; }
+  label  { grid-template-columns:1fr 80px; }  /* поле‑значение */
+}
+
+.form > .actions {             /* кнопки внизу формы */
+  grid-column:1 / -1;
+  display:flex; gap:1rem;
+}
+
+/* ---------- 6. Модальное окно выдачи ----------------------------------- */
+.backdrop {
+  position:fixed; inset:0; z-index:2000;
+  background:rgba(#000,.4); backdrop-filter:blur(2px);
+  display:flex; align-items:center; justify-content:center;
+}
+
+.modal {
+  width:460px; max-height:80vh;
+  padding:2rem; background:$clr-bg;
+  border:1px solid $clr-border; border-radius:$radius;
+  display:flex; flex-direction:column; gap:1rem; overflow:auto;
+
+  h2 { font-size:1.2rem; font-weight:600; margin:0 0 .5rem; }
+
+  input {
+    padding:.4rem .6rem; border:1px solid $clr-border; border-radius:$radius;
+  }
+}
+
+.list {
+  list-style:none; margin:0; padding:0; max-height:220px; overflow:auto;
+  border:1px solid $clr-border; border-radius:$radius;
+
+  li {
+    padding:.5rem .8rem; cursor:pointer;
+    &:hover   { background:$clr-bg-alt; }
+  }
+}
+
+.active { background:rgba($clr-primary,.15); }
+
+.modal .actions {
+  display:flex; justify-content:flex-end; gap:1rem;
+  button:first-child { @extend .btn--primary; }
+  button:last-child  { @extend .btn--ghost;   }
+}
+
+/* ---------- 7. Сообщение об ошибке -------------------------------------- */
 .error { color:$clr-danger; font-weight:600; margin:.5rem 0; }
 
-/* ---------- 8. Адаптив ---------------------------------------------------- */
-@media (max-width:640px) {
-  .form           { grid-template-columns:1fr; }
-  .modal__window  { width:90vw; padding:1rem; }
+/* ---------- 8. Адаптив --------------------------------------------------- */
+@media (max-width:640px){
+  .form          { grid-template-columns:1fr; }
+  .modal         { width:90vw; padding:1rem; }
 }
