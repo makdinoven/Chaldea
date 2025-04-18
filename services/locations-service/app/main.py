@@ -451,19 +451,20 @@ async def move_and_post(
     current_location = profile_data.get("current_location_id")  # может быть NULL
 
     # 2. Проверяем, можно ли переходить в целевую локацию
-    movement_cost = 0
-    if current_location is not None:
-        # Если персонаж уже находится в локации, проверяем, является ли destination соседней
-        result = await session.execute(
+    if current_location == destination_location_id:
+        movement_cost = 0
+    else:
+        q = await session.execute(
             select(models.LocationNeighbor).where(
                 models.LocationNeighbor.location_id == current_location,
                 models.LocationNeighbor.neighbor_id == destination_location_id
             )
         )
-        neighbor = result.scalars().first()
-        if neighbor is None:
-            raise HTTPException(status_code=400, detail="Destination location is not adjacent to the current location")
-        movement_cost = neighbor.energy_cost  # стоимость перехода
+        neighbor = q.scalars().first()
+        if not neighbor:
+            raise HTTPException(status_code=400,
+                                detail="Destination is not adjacent to current location")
+        movement_cost = neighbor.energy_cost
     # Если current_location is NULL, переезд разрешён без дополнительной стоимости.
 
     # 3. Проверяем, достаточно ли выносливости (stamina)
