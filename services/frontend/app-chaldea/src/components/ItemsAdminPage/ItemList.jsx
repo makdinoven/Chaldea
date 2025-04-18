@@ -3,16 +3,14 @@ import styles from "./ItemsAdmin.module.scss";
 import { deleteItem, fetchItems } from "../../api/items";
 import useDebounce from "../../hooks/useDebounce";
 
-export default function ItemList({ onSelect, onCreate }) {
+export default function ItemList({ onSelect, onCreate, onIssue }) {
   const [items, setItems] = useState([]);
   const [query, setQuery] = useState("");
   const debounced = useDebounce(query);
-  const [error, setError] = useState();
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    fetchItems(debounced)
-      .then(setItems)
-      .catch((e) => setError(e.message));
+    fetchItems(debounced).then(setItems).catch((e) => setError(e.message));
   }, [debounced]);
 
   const handleDelete = async (id) => {
@@ -28,14 +26,18 @@ export default function ItemList({ onSelect, onCreate }) {
   return (
     <div className={styles.wrapper}>
       {error && <p className={styles.error}>{error}</p>}
+
       <div className={styles.header}>
         <input
-          placeholder="Поиск"
+          placeholder="Поиск предметов"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <button onClick={onCreate}>Создать предмет</button>
+        <button className="btn btn--primary" onClick={onCreate}>
+          Создать предмет
+        </button>
       </div>
+
       <table className={styles.table}>
         <thead>
           <tr>
@@ -55,6 +57,7 @@ export default function ItemList({ onSelect, onCreate }) {
               <td>{i.item_rarity}</td>
               <td className={styles.actions}>
                 <button onClick={() => onSelect(i.id)}>Редактировать</button>
+                <button onClick={() => onIssue(i)}>Выдать</button>
                 <button onClick={() => handleDelete(i.id)}>✖</button>
               </td>
             </tr>

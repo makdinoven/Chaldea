@@ -1,32 +1,41 @@
 import { useEffect, useState } from "react";
 import styles from "./ItemsAdmin.module.scss";
 import { fetchCharacters } from "../../api/characters";
-import { issueItem } from "../../api/items";
+import { fetchItems, issueItem } from "../../api/items";
 import useDebounce from "../../hooks/useDebounce";
 
-export default function IssueItemModal({ open, onClose, itemId }) {
+export default function IssueItemModal({ open, onClose, initialItem }) {
+  const [itemQ, setItemQ] = useState("");
+  const [charQ, setCharQ] = useState("");
+  const [items, setItems] = useState([]);
   const [chars, setChars] = useState([]);
-  const [filter, setFilter] = useState("");
-  const [selected, setSelected] = useState();
+  const [selectedItem, setSelectedItem] = useState(initialItem || null);
+  const [selectedChar, setSelectedChar] = useState(null);
   const [qty, setQty] = useState(1);
-  const [error, setError] = useState();
+  const [error, setError] = useState("");
 
-  const deb = useDebounce(filter);
+  const debItem = useDebounce(itemQ);
+  const debChar = useDebounce(charQ);
 
+  /* — предметы — */
   useEffect(() => {
     if (!open) return;
-    fetchCharacters()
-      .then(setChars)
-      .catch((e) => setError(e.message));
+    fetchItems(debItem).then(setItems).catch((e) => setError(e.message));
+  }, [debItem, open]);
+
+  /* — персонажи — */
+  useEffect(() => {
+    if (!open) return;
+    fetchCharacters().then(setChars).catch((e) => setError(e.message));
   }, [open]);
 
-  const visible = chars.filter((c) =>
-    c.name.toLowerCase().includes(deb.toLowerCase()),
+  const visibleChars = chars.filter((c) =>
+    c.name.toLowerCase().includes(debChar.toLowerCase()),
   );
 
   const give = async () => {
     try {
-      await issueItem(selected.id, itemId, qty);
+      await issueItem(selectedChar.id, selectedItem.id, qty);
       onClose();
     } catch (e) {
       setError(e.message);
@@ -39,24 +48,53 @@ export default function IssueItemModal({ open, onClose, itemId }) {
       <div className={styles.modal}>
         <h2>Выдать предмет</h2>
         {error && <p className={styles.error}>{error}</p>}
-        <input
-          placeholder="Поиск персонажа"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-        />
-        <ul className={styles.list}>
-          {visible.map((c) => (
-            <li
-              key={c.id}
-              className={selected?.id === c.id ? styles.active : ""}
-              onClick={() => setSelected(c)}
-            >
-              {c.name}
-            </li>
-          ))}
-        </ul>
+
+        {/* --- поиск предмета --- */}
+        <div>
+          <label>Поиск предмета</label>
+          <input
+            placeholder="Название предмета"
+            value={itemQ}
+            onChange={(e) => setItemQ(e.target.value)}
+          />
+          <ul className={styles.list}>
+            {items.map((i) => (
+              <li
+                key={i.id}
+                className={
+                  selectedItem?.id === i.id ? styles.active : undefined
+                }
+                onClick={() => setSelectedItem(i)}
+              >
+                {i.name} (id {i.id})
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* --- поиск персонажа --- */}
+        <div>
+          <label>Поиск персонажа</label>
+          <input
+            placeholder="Имя персонажа"
+            value={charQ}
+            onChange={(e) => setCharQ(e.target.value)}
+          />
+          <ul className={styles.list}>
+            {visibleChars.map((c) => (
+              <li
+                key={c.id}
+                className={selectedChar?.id === c.id ? styles.active : undefined}
+                onClick={() => setSelectedChar(c)}
+              >
+                {c.name} (id {c.id})
+              </li>
+            ))}
+          </ul>
+        </div>
+
         <label>
-          Кол-во
+          Кол‑во
           <input
             type="number"
             min={1}
@@ -64,11 +102,18 @@ export default function IssueItemModal({ open, onClose, itemId }) {
             onChange={(e) => setQty(+e.target.value)}
           />
         </label>
+
         <div className={styles.actions}>
-          <button onClick={give} disabled={!selected}>
+          <button
+            className="btn btn--primary"
+            onClick={give}
+            disabled={!selectedChar || !selectedItem}
+          >
             Выдать
           </button>
-          <button onClick={onClose}>Отмена</button>
+          <button className="btn btn--ghost" onClick={onClose}>
+            Отмена
+          </button>
         </div>
       </div>
     </div>

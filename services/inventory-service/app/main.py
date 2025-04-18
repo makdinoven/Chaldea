@@ -441,4 +441,52 @@ def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db)):
     db.refresh(db_item)
 
     return db_item
+
+@router.get("/items/{item_id}", response_model=schemas.Item)
+def get_item(item_id: int, db: Session = Depends(get_db)):
+    db_item = db.query(models.Items).get(item_id)          # .get = by PK
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+    return db_item
+
+@router.put("/items/{item_id}", response_model=schemas.Item)
+def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends(get_db)):
+    """
+    Обновляет все переданные поля предмета (exclude_unset=True).
+    Проверка уникальности имени сохраняется.
+    """
+    db_item = db.query(models.Items).get(item_id)
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+
+    # если меняем name – проверяем дубликат
+    if item_in.name and item_in.name != db_item.name:
+        if db.query(models.Items).filter(models.Items.name == item_in.name).first():
+            raise HTTPException(
+                status_code=400,
+                detail="Предмет с таким названием уже существует",
+            )
+
+    # частичное обновление
+    for field, value in item_in.dict(exclude_unset=True).items():
+        setattr(db_item, field, value)
+
+    db.add(db_item)
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+
+@router.delete("/items/{item_id}", status_code=204)
+def delete_item(item_id: int, db: Session = Depends(get_db)):
+    """
+    Удаляет предмет. При необходимости можно добавить проверки на то,
+    используется ли предмет в инвентарях/слотах.
+    """
+    db_item = db.query(models.Items).get(item_id)
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+
+    db.delete(db_item)
+    db.commit()
+
 app.include_router(router)
