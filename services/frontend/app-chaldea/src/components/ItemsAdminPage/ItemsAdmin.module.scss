@@ -1,16 +1,12 @@
-/* ======================================================================= */
-/*  ItemsAdmin.module.scss – 100 % модульные (scoped) стили                */
-/* ======================================================================= */
-
 /* ---------- 1. Переменные ---------------------------------------------- */
 $clr-primary: #2556f6;
 $clr-danger:  #f44336;
 $clr-border:  #d0d7de;
-$clr-bg:      #fff;
+$clr-bg:      #ffffff;
 $clr-bg-alt:  #f5f7fa;
 $radius:      6px;
 
-/* ---------- 2. Универсальные кнопки ------------------------------------ */
+/* ---------- 2. Кнопки --------------------------------------------------- */
 .btn {
   display:inline-block;
   padding:.5rem 1rem;
@@ -21,152 +17,188 @@ $radius:      6px;
   transition:background .15s ease, border-color .15s ease;
 
   &--ghost   { background:$clr-bg-alt; &:hover{background:$clr-border;} }
-  &--primary { background:$clr-primary; color:#fff;
-               &:hover{background:darken($clr-primary,6%);} }
-  &--danger  { background:$clr-danger;  color:#fff;
-               &:hover{background:darken($clr-danger,6%);} }
+  &--primary { background:$clr-primary; color:#fff; &:hover{background:darken($clr-primary,6%);} }
+  &--danger  { background:$clr-danger;  color:#fff; &:hover{background:darken($clr-danger,6%);} }
 
   &:disabled { opacity:.5; cursor:not-allowed; }
 }
 
-/* «Старое» краткое имя, чтоб не править JSX */
+/* алиас для кода, где использовалось .primary */
 .primary { @extend .btn--primary; }
 
-/* ---------- 3. Контейнер страницы -------------------------------------- */
-.page {
-  max-width:1200px; margin:0 auto; padding:2rem;
-  display:flex; flex-direction:column; gap:2rem;
+/* ---------- 3. Карточка‑контейнер -------------------------------------- */
+.card {
+  background:$clr-bg;
+  border:1px solid $clr-border;
+  border-radius:$radius;
+  box-shadow:0 2px 6px rgba(#000,.05);
+  padding:1.5rem;
 }
 
-/* ---------- 4. Таблица со списком -------------------------------------- */
-.wrapper { display:flex; flex-direction:column; gap:1rem; }
+/* ---------- 4. Макет страницы ----------------------------------------- */
+.page {
+  max-width:1200px;
+  margin:0 auto;
+  padding:2rem;
+  display:flex;
+  flex-direction:column;
+  gap:2rem;
+}
 
-.header  {
-  display:flex; justify-content:space-between; gap:1rem;
+/* ---------- 5. Список предметов --------------------------------------- */
+.wrapper {
+  display:flex;
+  flex-direction:column;
+  gap:1rem;
+}
+
+.header {
+  display:flex;
+  justify-content:space-between;
+  gap:1rem;
 
   input {
     max-width:320px;
     padding:.4rem .6rem;
-    border:1px solid $clr-border; border-radius:$radius;
+    border:1px solid $clr-border;
+    border-radius:$radius;
     font:.875rem "Inter",sans-serif;
   }
 }
 
 .table {
-  width:100%; border-collapse:collapse;
-  border:1px solid $clr-border; border-radius:$radius; overflow:hidden;
+  width:100%;
+  border-collapse:collapse;
+  border:1px solid $clr-border;
+  border-radius:$radius;
+  overflow:hidden;
 
   thead {
     background:$clr-bg-alt;
 
-    th { padding:.6rem .8rem; font-size:.875rem; font-weight:600; text-align:left; }
+    th {
+      padding:.6rem .8rem;
+      font-size:.875rem;
+      font-weight:600;
+      text-align:left;
+    }
   }
+
   tbody {
-    td { padding:.6rem .8rem; border-bottom:1px solid $clr-border; font-size:.875rem; }
+    td {
+      padding:.6rem .8rem;
+      border-bottom:1px solid $clr-border;
+      font-size:.875rem;
+    }
     tr:last-child td { border-bottom:none; }
     tr:hover { background:rgba($clr-primary,.05); }
   }
 }
 
 .actions {
-  display:flex; gap:.5rem;
+  display:flex;
+  gap:.5rem;
 
   button { @extend .btn; padding:.3rem .6rem; }
 
-  button:last-child {           /* кнопка удаления «✖» */
-    @extend .btn--ghost;
-    color:$clr-danger;
-    &:hover{background:rgba($clr-danger,.12);}
+  button:last-child { @extend .btn--ghost; color:$clr-danger;
+    &:hover { background:rgba($clr-danger,.12); }
   }
 }
 
-/* ---------- 5. Форма создания / редактирования ------------------------- */
+/* ---------- 6. Форма предмета ----------------------------------------- */
 .form {
-  display:grid; gap:1rem;
+  display:grid;
+  gap:1rem;
   grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
-  padding:1.5rem; background:$clr-bg;
-  border:1px solid $clr-border; border-radius:$radius;
-
-  label {
-    display:flex; flex-direction:column; gap:.3rem;
-    font-weight:500;
-
-    input, select, textarea {
-      padding:.4rem .6rem;
-      border:1px solid $clr-border; border-radius:$radius;
-      font:.875rem "Inter",sans-serif;
-
-      &:focus {
-        outline:none; border-color:$clr-primary; box-shadow:0 0 0 1px $clr-primary;
-      }
-    }
-    textarea { resize:vertical; min-height:6rem; }
-  }
 }
 
-.checkboxLabel {               /* для чекбокса «Уникальный» */
-  display:flex; align-items:center; gap:.5rem;
-  input[type="checkbox"] {
-    width:1.1rem; height:1.1rem; accent-color:$clr-primary;
-  }
+.checkboxLabel {
+  display:flex;
+  align-items:center;
+  gap:.5rem;
+  input[type="checkbox"] { width:1.1rem; height:1.1rem; accent-color:$clr-primary; }
 }
 
 .mods {
   grid-column:1 / -1;
-  border:1px dashed $clr-border; border-radius:$radius; padding:1rem;
+  border:1px dashed $clr-border;
+  border-radius:$radius;
+  padding:1rem;
 
   legend { padding:0 .3rem; font-weight:600; color:#6b778c; }
-  label  { grid-template-columns:1fr 80px; }  /* поле‑значение */
+  label  { grid-template-columns:1fr 90px; }
 }
 
-.form > .actions {             /* кнопки внизу формы */
+.form > .actions {
   grid-column:1 / -1;
-  display:flex; gap:1rem;
+  display:flex;
+  gap:1rem;
 }
 
-/* ---------- 6. Модальное окно выдачи ----------------------------------- */
+/* ---------- 7. Модальное окно ----------------------------------------- */
 .backdrop {
-  position:fixed; inset:0; z-index:2000;
-  background:rgba(#000,.4); backdrop-filter:blur(2px);
-  display:flex; align-items:center; justify-content:center;
+  position:fixed;
+  inset:0;
+  background:rgba(#000,.4);
+  backdrop-filter:blur(2px);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  z-index:2000;
 }
 
 .modal {
-  width:460px; max-height:80vh;
-  padding:2rem; background:$clr-bg;
-  border:1px solid $clr-border; border-radius:$radius;
-  display:flex; flex-direction:column; gap:1rem; overflow:auto;
+  @extend .card;
+  width:460px;
+  max-height:80vh;
+  overflow:auto;
+  display:flex;
+  flex-direction:column;
+  gap:1rem;
 
-  h2 { font-size:1.2rem; font-weight:600; margin:0 0 .5rem; }
+  h2 { margin:0 0 .5rem; font-size:1.2rem; font-weight:600; }
 
   input {
-    padding:.4rem .6rem; border:1px solid $clr-border; border-radius:$radius;
+    padding:.4rem .6rem;
+    border:1px solid $clr-border;
+    border-radius:$radius;
   }
 }
 
 .list {
-  list-style:none; margin:0; padding:0; max-height:220px; overflow:auto;
-  border:1px solid $clr-border; border-radius:$radius;
+  list-style:none;
+  margin:0;
+  padding:0;
+  max-height:220px;
+  overflow:auto;
+  border:1px solid $clr-border;
+  border-radius:$radius;
 
   li {
-    padding:.5rem .8rem; cursor:pointer;
-    &:hover   { background:$clr-bg-alt; }
+    padding:.5rem .8rem;
+    cursor:pointer;
+    &:hover  { background:$clr-bg-alt; }
   }
 }
 
-.active { background:rgba($clr-primary,.15); }
+.active {
+  background:rgba($clr-primary,.15);
+}
 
 .modal .actions {
-  display:flex; justify-content:flex-end; gap:1rem;
+  display:flex;
+  justify-content:flex-end;
+  gap:1rem;
   button:first-child { @extend .btn--primary; }
   button:last-child  { @extend .btn--ghost;   }
 }
 
-/* ---------- 7. Сообщение об ошибке -------------------------------------- */
+/* ---------- 8. Ошибки -------------------------------------------------- */
 .error { color:$clr-danger; font-weight:600; margin:.5rem 0; }
 
-/* ---------- 8. Адаптив --------------------------------------------------- */
-@media (max-width:640px){
+/* ---------- 9. Адаптив ------------------------------------------------- */
+@media (max-width:640px) {
   .form          { grid-template-columns:1fr; }
   .modal         { width:90vw; padding:1rem; }
 }
