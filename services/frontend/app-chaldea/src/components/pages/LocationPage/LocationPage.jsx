@@ -25,7 +25,7 @@ const LocationPage = () => {
   );
   const [loading, setLoading] = useState(false);
   const [textareaValue, setTextareaValue] = useState("");
-  const { id } = useSelector((state) => state.user);
+  const { character } = useSelector((state) => state.user);
 
   useBodyBackground(location?.image_url);
 
@@ -57,13 +57,14 @@ const LocationPage = () => {
 
   const handleSubmitPost = async () => {
     try {
-      await axios.post(`${BASE_URL}/locations/posts`, {
-        character_id: 12,
+      await axios.post(`${BASE_URL}/locations/${locationId}/move_and_post`, {
+        character_id: character.id,
         location_id: locationId,
         content: textareaValue,
       });
       alert("пост отправлен");
       fetchLocationData();
+      dispatch(getMe());
       setTextareaValue("");
     } catch (error) {
       alert("ошибка пост не отправлен");
