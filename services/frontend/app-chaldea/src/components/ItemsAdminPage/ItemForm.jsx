@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
-import styles from "./ItemForm.module.scss";
+import styles from "./ItemsAdmin.modules.scss";
 import {
   createItem,
   updateItem,
   uploadItemImage,
   fetchItem,
-} from "../api/items";
+} from "../../api/items";
 
 const ITEM_TYPES = [
   "head",
