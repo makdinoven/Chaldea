@@ -4,8 +4,10 @@ export const fetchItems = async (query = "", page = 1, pageSize = 20) => {
   const { data } = await client.get("/items", {
     params: { q: query, page, page_size: pageSize },
   });
-  return data;
+
+  return Array.isArray(data) ? data : data.items ?? [];
 };
+
 
 export const fetchItem = async (id) => {
   const { data } = await client.get(`/items/${id}`);

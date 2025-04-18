@@ -34,7 +34,7 @@ s3_client = boto3.client(
 
 
 def convert_to_webp(input_file, quality=80) -> bytes:
-    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+    MAX_FILE_SIZE = 15 * 1024 * 1024  # 10MB
 
     try:
         # Чтение и проверка размера файла
