@@ -1,204 +1,215 @@
 /* ---------- 1. Переменные ---------------------------------------------- */
-$clr-primary: #2556f6;
-$clr-danger:  #f44336;
-$clr-border:  #d0d7de;
-$clr-bg:      #ffffff;
-$clr-bg-alt:  #f5f7fa;
-$radius:      6px;
+$clr-primary: #2563eb;      // яркий синий
+$clr-primary-light: lighten($clr-primary, 32%);
+$clr-danger:  #ef4444;      // красный для ошибок
+$clr-border:  #e2e8f0;      // светлый серый
+$clr-bg:      #ffffff;      // карточный фон
+$clr-bg-alt:  #f9fafb;      // фон таблиц / инпутов
+$text-main:   #111827;      // почти‑чёрный
+$text-muted:  #6b7280;      // серый текст
+$radius:      8px;
+$transition:  .2s ease;
 
-/* ---------- 2. Кнопки --------------------------------------------------- */
-.btn {
-  display:inline-block;
-  padding:.5rem 1rem;
-  border:1px solid transparent;
+/* ---------- 2. Миксины -------------------------------------------------- */
+@mixin control {
+  padding:.5rem .75rem;
+  border:1px solid $clr-border;
   border-radius:$radius;
-  font:500 .875rem/1.2 "Inter",sans-serif;
-  cursor:pointer;
-  transition:background .15s ease, border-color .15s ease;
-
-  &--ghost   { background:$clr-bg-alt; &:hover{background:$clr-border;} }
-  &--primary { background:$clr-primary; color:#fff; &:hover{background:darken($clr-primary,6%);} }
-  &--danger  { background:$clr-danger;  color:#fff; &:hover{background:darken($clr-danger,6%);} }
-
-  &:disabled { opacity:.5; cursor:not-allowed; }
+  font:.875rem/1.4 "Inter",sans-serif;
+  background:$clr-bg-alt;
+  color:$text-main;
+  transition:border-color $transition, box-shadow $transition;
+  &:focus {
+    outline:none;
+    border-color:$clr-primary;
+    box-shadow:0 0 0 3px rgba($clr-primary,.15);
+  }
 }
 
-/* алиас для кода, где использовалось .primary */
-.primary { @extend .btn--primary; }
+/* ---------- 3. Кнопки --------------------------------------------------- */
+.btn {
+  @include control;
+  background:$clr-bg;        // базовый ghost
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:600;
 
-/* ---------- 3. Карточка‑контейнер -------------------------------------- */
+  &--primary {
+    background:$clr-primary;
+    color:#fff;
+    border:none;
+    &:hover { background:darken($clr-primary,7%); }
+  }
+  &--danger {
+    background:$clr-danger;
+    color:#fff;
+    border:none;
+    &:hover { background:darken($clr-danger,7%); }
+  }
+  &--ghost {
+    &:hover { background:$clr-primary-light; color:$clr-primary; }
+  }
+  &:disabled { opacity:.55; cursor:not-allowed; }
+}
+
+.primary { @extend .btn--primary; } // старый алиас
+
+/* ---------- 4. Карточка ------------------------------------------------- */
 .card {
   background:$clr-bg;
   border:1px solid $clr-border;
   border-radius:$radius;
-  box-shadow:0 2px 6px rgba(#000,.05);
-  padding:1.5rem;
+  box-shadow:0 4px 10px rgba(#000,.05);
+  padding:1.75rem;
 }
 
-/* ---------- 4. Макет страницы ----------------------------------------- */
+/* ---------- 5. Страница ------------------------------------------------- */
 .page {
-  max-width:1200px;
+  max-width:1280px;
   margin:0 auto;
-  padding:2rem;
+  padding:2rem 1rem;
   display:flex;
   flex-direction:column;
-  gap:2rem;
+  gap:2.5rem;
 }
 
-/* ---------- 5. Список предметов --------------------------------------- */
-.wrapper {
-  display:flex;
-  flex-direction:column;
-  gap:1rem;
-}
+/* ---------- 6. Таблица списка ------------------------------------------ */
+.wrapper { display:flex; flex-direction:column; gap:1.25rem; }
 
 .header {
   display:flex;
   justify-content:space-between;
   gap:1rem;
 
-  input {
-    max-width:320px;
-    padding:.4rem .6rem;
-    border:1px solid $clr-border;
-    border-radius:$radius;
-    font:.875rem "Inter",sans-serif;
-  }
+  input { @include control; width:320px; }
+  button { @extend .btn--primary; }
 }
 
 .table {
   width:100%;
-  border-collapse:collapse;
-  border:1px solid $clr-border;
-  border-radius:$radius;
+  border-collapse:separate;
+  border-spacing:0;
   overflow:hidden;
+  border-radius:$radius;
 
   thead {
     background:$clr-bg-alt;
-
     th {
-      padding:.6rem .8rem;
-      font-size:.875rem;
-      font-weight:600;
       text-align:left;
+      font-size:.825rem;
+      font-weight:700;
+      color:$text-muted;
+      padding:.65rem .9rem;
     }
   }
-
   tbody {
+    background:$clr-bg;
     td {
-      padding:.6rem .8rem;
+      padding:.75rem .9rem;
       border-bottom:1px solid $clr-border;
       font-size:.875rem;
     }
     tr:last-child td { border-bottom:none; }
-    tr:hover { background:rgba($clr-primary,.05); }
+    tr:hover { background:$clr-primary-light; }
   }
 }
 
 .actions {
-  display:flex;
-  gap:.5rem;
+  display:flex; gap:.5rem;
+  button { @extend .btn; padding:.3rem .7rem; font-size:.75rem; }
+  button:last-child { @extend .btn--ghost; color:$clr-danger; }
+}
 
-  button { @extend .btn; padding:.3rem .6rem; }
+/* ---------- 7. Форма ---------------------------------------------------- */
+.form {
+  display:grid;
+  gap:1.25rem 1rem;
+  grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
 
-  button:last-child { @extend .btn--ghost; color:$clr-danger;
-    &:hover { background:rgba($clr-danger,.12); }
+  label {
+    display:flex; flex-direction:column; gap:.35rem;
+    font-weight:500; color:$text-main;
+
+    input, select, textarea { @include control; }
+    textarea { resize:vertical; min-height:6rem; }
   }
 }
 
-/* ---------- 6. Форма предмета ----------------------------------------- */
-.form {
-  display:grid;
-  gap:1rem;
-  grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
-}
-
 .checkboxLabel {
-  display:flex;
-  align-items:center;
-  gap:.5rem;
-  input[type="checkbox"] { width:1.1rem; height:1.1rem; accent-color:$clr-primary; }
+  flex-direction:row !important;
+  align-items:center; gap:.5rem;
+  input[type="checkbox"] {
+    width:1.1rem; height:1.1rem; accent-color:$clr-primary;
+  }
 }
 
+/* --- группы полей ------------------------------------------------------- */
 .mods {
   grid-column:1 / -1;
-  border:1px dashed $clr-border;
+  border:1px solid $clr-border;
   border-radius:$radius;
   padding:1rem;
+  background:$clr-bg-alt;
 
-  legend { padding:0 .3rem; font-weight:600; color:#6b778c; }
-  label  { grid-template-columns:1fr 90px; }
+  legend { padding:0 .4rem; font-weight:700; color:$text-muted; }
+  label  { grid-template-columns:1fr 100px; }
 }
 
 .form > .actions {
   grid-column:1 / -1;
-  display:flex;
-  gap:1rem;
-}
-
-/* ---------- 7. Модальное окно ----------------------------------------- */
-.backdrop {
-  position:fixed;
-  inset:0;
-  background:rgba(#000,.4);
-  backdrop-filter:blur(2px);
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  z-index:2000;
-}
-
-.modal {
-  @extend .card;
-  width:460px;
-  max-height:80vh;
-  overflow:auto;
-  display:flex;
-  flex-direction:column;
-  gap:1rem;
-
-  h2 { margin:0 0 .5rem; font-size:1.2rem; font-weight:600; }
-
-  input {
-    padding:.4rem .6rem;
-    border:1px solid $clr-border;
-    border-radius:$radius;
-  }
-}
-
-.list {
-  list-style:none;
-  margin:0;
-  padding:0;
-  max-height:220px;
-  overflow:auto;
-  border:1px solid $clr-border;
-  border-radius:$radius;
-
-  li {
-    padding:.5rem .8rem;
-    cursor:pointer;
-    &:hover  { background:$clr-bg-alt; }
-  }
-}
-
-.active {
-  background:rgba($clr-primary,.15);
-}
-
-.modal .actions {
-  display:flex;
-  justify-content:flex-end;
-  gap:1rem;
+  display:flex; gap:1rem; margin-top:.5rem;
   button:first-child { @extend .btn--primary; }
   button:last-child  { @extend .btn--ghost;   }
 }
 
-/* ---------- 8. Ошибки -------------------------------------------------- */
-.error { color:$clr-danger; font-weight:600; margin:.5rem 0; }
+/* ---------- 8. Модалка -------------------------------------------------- */
+.backdrop {
+  position:fixed; inset:0; z-index:2000;
+  background:rgba(#000,.45);
+  backdrop-filter:blur(1.5px);
+  display:flex; align-items:center; justify-content:center;
+  padding:1rem;
+}
 
-/* ---------- 9. Адаптив ------------------------------------------------- */
+.modal {
+  @extend .card;
+  width:460px; max-height:85vh;
+  display:flex; flex-direction:column; gap:1rem;
+  overflow:auto;
+
+  h2 { margin:0; font-size:1.25rem; font-weight:700; }
+  input { @include control; }
+}
+
+.list {
+  list-style:none; margin:0; padding:0;
+  max-height:240px; overflow:auto;
+  border:1px solid $clr-border; border-radius:$radius;
+
+  li {
+    padding:.55rem .9rem; cursor:pointer;
+    transition:background $transition;
+    &:hover { background:$clr-primary-light; }
+  }
+}
+
+.active { background:rgba($clr-primary,.25) !important; }
+
+.modal .actions {
+  display:flex; justify-content:flex-end; gap:1rem;
+  button:first-child { @extend .btn--primary; }
+  button:last-child  { @extend .btn--ghost;   }
+}
+
+/* ---------- 9. Ошибки --------------------------------------------------- */
+.error {
+  color:$clr-danger; font-weight:600; margin:.5rem 0; font-size:.9rem;
+}
+
+/* ---------- 10. Адаптив ------------------------------------------------- */
 @media (max-width:640px) {
-  .form          { grid-template-columns:1fr; }
-  .modal         { width:90vw; padding:1rem; }
+  .form  { grid-template-columns:1fr; }
+  .modal { width:100%; padding:1.25rem; }
 }
