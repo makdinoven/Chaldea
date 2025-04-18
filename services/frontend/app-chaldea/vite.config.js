@@ -1,17 +1,14 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: true,               // слушать на всех интерфейсах
+    host: true,
+    port: 5555,
     watch: {
-      usePolling: true,       // если вам нужен polling
+      usePolling: true,
     },
-    allowedHosts: [
-      '4452515-co41851.twc1.net'
-    ],
-    // или, чтобы разрешить _все_ хосты (менее безопасно):
-    // allowedHosts: 'all',
+    allowedHosts: ["4452515-co41851.twc1.net"],
   },
 });
