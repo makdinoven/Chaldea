@@ -1,0 +1,327 @@
+/* ========================================================================== */
+/*  AdminItems.module.scss                                                    */
+/*  Глобальная SCSS‑модель для админ‑панели предметов                         */
+/* ========================================================================== */
+
+/* ---------- 1. Переменные ------------------------------------------------- */
+$primary-color: #2556f6;
+$primary-hover: darken($primary-color, 6%);
+$danger-color: #f44336;
+$danger-hover: darken($danger-color, 6%);
+$border-color: #d0d7de;
+$bg-light: #f5f7fa;
+$bg-dark: #fff;
+$text-main: #0d1117;
+$text-light: #6b778c;
+$radius: 6px;
+
+/* ---------- 2. Базовые утилиты ------------------------------------------- */
+%btn {
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: $radius;
+  font: 500 0.875rem/1.2 "Inter", sans-serif;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.primary {
+  @extend %btn;
+  background: $primary-color;
+  color: #fff;
+
+  &:hover {
+    background: $primary-hover;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.danger {
+  @extend %btn;
+  background: $danger-color;
+  color: #fff;
+
+  &:hover {
+    background: $danger-hover;
+  }
+}
+
+.btn {
+  @extend %btn;
+  background: $bg-light;
+
+  &:hover {
+    background: $border-color;
+  }
+}
+
+/* Полоса прокрутки (внутри таблиц/списков) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba($primary-color, 0.35);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- 3. Общие элементы ввода -------------------------------------- */
+input,
+select,
+textarea {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid $border-color;
+  border-radius: $radius;
+  font: 400 0.875rem/1.4 "Inter", sans-serif;
+  color: $text-main;
+  background: $bg-dark;
+  width: 100%;
+
+  &:focus {
+    outline: none;
+    border-color: $primary-color;
+    box-shadow: 0 0 0 1px $primary-color;
+  }
+}
+
+label {
+  font: 500 0.8rem/1.3 "Inter", sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  color: $text-main;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 6rem;
+}
+
+/* ---------- 4. Сообщения об ошибке --------------------------------------- */
+.error {
+  color: $danger-color;
+  font-weight: 600;
+  margin: 0.5rem 0;
+}
+
+/* ========================================================================== */
+/*  ItemForm (создание/редактирование предмета)                               */
+/* ========================================================================== */
+.form {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  padding: 1.5rem;
+  background: $bg-dark;
+  border: 1px solid $border-color;
+  border-radius: $radius;
+}
+
+.checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+
+  input[type="checkbox"] {
+    width: 1.1rem;
+    height: 1.1rem;
+    accent-color: $primary-color;
+  }
+}
+
+.mods {
+  grid-column: 1 / -1;
+  border: 1px dashed $border-color;
+  border-radius: $radius;
+  padding: 1rem;
+
+  legend {
+    padding: 0 0.3rem;
+    font-weight: 600;
+    color: $text-light;
+  }
+
+  label {
+    grid-template-columns: 1fr 80px;
+  }
+}
+
+.actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 1rem;
+  justify-content: flex-start;
+}
+
+/* ========================================================================== */
+/*  ItemList (таблица предметов)                                              */
+/* ========================================================================== */
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+
+  input {
+    max-width: 320px;
+  }
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: $bg-dark;
+  border: 1px solid $border-color;
+  border-radius: $radius;
+  overflow: hidden;
+
+  th,
+  td {
+    padding: 0.6rem 0.8rem;
+    text-align: left;
+    border-bottom: 1px solid $border-color;
+    font-size: 0.875rem;
+  }
+
+  th {
+    background: $bg-light;
+    font-weight: 600;
+    color: $text-light;
+  }
+
+  tr:last-child td {
+    border-bottom: none;
+  }
+}
+
+.tableRowHover:hover {
+  background: rgba($primary-color, 0.05);
+}
+
+.table .actions {
+  display: flex;
+  gap: 0.5rem;
+
+  button {
+    @extend .btn;
+    padding: 0.3rem 0.6rem;
+  }
+
+  button:last-child {
+    background: transparent;
+    color: $danger-color;
+    border: 1px solid transparent;
+
+    &:hover {
+      background: rgba($danger-color, 0.1);
+    }
+  }
+}
+
+/* ========================================================================== */
+/*  IssueItemModal (выдать предмет)                                           */
+/* ========================================================================== */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  backdrop-filter: blur(2px);
+  background: rgba(#000, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.modal {
+  background: $bg-dark;
+  border: 1px solid $border-color;
+  border-radius: $radius;
+  padding: 2rem;
+  width: 460px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  overflow: auto;
+
+  h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.2rem;
+    font-weight: 600;
+  }
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid $border-color;
+  border-radius: $radius;
+
+  li {
+    padding: 0.5rem 0.8rem;
+    cursor: pointer;
+    transition: background 0.1s ease;
+
+    &:hover {
+      background: $bg-light;
+    }
+  }
+}
+
+.active {
+  background: rgba($primary-color, 0.15);
+}
+
+.modal .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+
+  button:first-child {
+    @extend .primary;
+  }
+  button:last-child {
+    @extend .btn;
+  }
+}
+
+/* ========================================================================== */
+/*  ItemsAdminPage                                                            */
+/* ========================================================================== */
+.page {
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* ========================================================================== */
+/*  Адаптив                                                                   */
+/* ========================================================================== */
+@media (max-width: 640px) {
+  .form {
+    grid-template-columns: 1fr;
+  }
+  .modal {
+    width: 90vw;
+    padding: 1rem;
+  }
+}

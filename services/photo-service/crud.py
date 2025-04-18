@@ -191,3 +191,16 @@ def update_skill_rank_image(skill_rank_id: int, image_url: str):
         raise
     finally:
         connection.close()
+
+def update_item_image(item_id: int, image_url: str):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = "UPDATE items SET image = %s WHERE id = %s"
+            cursor.execute(sql, (image_url, item_id))
+        connection.commit()
+    except:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()

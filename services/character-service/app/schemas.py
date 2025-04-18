@@ -152,3 +152,10 @@ class CharacterProfileResponse(BaseModel):
 
         class Config:
             orm_mode = True
+
+class CharacterShort(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        orm_mode = True

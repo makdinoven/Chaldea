@@ -600,4 +600,10 @@ def get_short_info(character_id: int, db: Session = Depends(get_db)):
         "avatar": ch.avatar,
         "current_location_id": ch.current_location_id
     }
+
+@router.get("/list", response_model=List[schemas.CharacterShort])
+def list_characters(db: Session = Depends(get_db)):
+    characters = db.query(models.Character).all()
+    return characters
+
 app.include_router(router)
