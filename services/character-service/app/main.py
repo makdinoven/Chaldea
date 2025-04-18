@@ -586,7 +586,8 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
         "character_photo": character.avatar,
         "character_title": character.current_title.name if character.current_title else "",
         "user_id": user_id,
-        "user_nickname": user_nickname
+        "user_nickname": user_nickname,
+        "character_name": character.name,
     }
 
 @router.get("/{character_id}/short_info")
