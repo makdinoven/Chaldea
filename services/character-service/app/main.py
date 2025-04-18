@@ -589,4 +589,15 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
         "user_nickname": user_nickname
     }
 
+@router.get("/{character_id}/short_info")
+def get_short_info(character_id: int, db: Session = Depends(get_db)):
+    ch = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not ch:
+        raise HTTPException(status_code=404, detail="Character not found")
+    return {
+        "id": ch.id,
+        "name": ch.name,
+        "avatar": ch.avatar,
+        "current_location_id": ch.current_location_id
+    }
 app.include_router(router)

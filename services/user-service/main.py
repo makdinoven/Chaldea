@@ -117,7 +117,14 @@ def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
 async def read_users_me(
     current_user: models.User = Depends(get_current_user)
 ):
-    # Базовая часть ответа
+    """
+    Возвращает расширенную информацию о пользователе:
+      • базовые поля пользователя;
+      • current_character_id;
+      • упрощённые данные персонажа (id, name, avatar);
+      • текущую локацию персонажа (id, name, image_url).
+    """
+    # ---------- 1. базовая часть -----------------------------------
     me_data = {
         "id": current_user.id,
         "email": current_user.email,
@@ -128,37 +135,48 @@ async def read_users_me(
         "character": None
     }
 
-    # Если у пользователя выбран персонаж – вытаскиваем данные из character‑service
+    # ---------- 2. если выбран персонаж – тянем short_info ----------
     if current_user.current_character:
-        char_url = f"{CHARACTER_SERVICE_URL}/characters/{current_user.current_character}/profile"
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            char_resp = await client.get(char_url)
-            if char_resp.status_code == 200:
-                char_json = char_resp.json()
-                # char_json содержит как минимум id, name, avatar, current_location_id
-                location_obj = None
+        char_id = current_user.current_character
+        char_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{char_id}/short_info"
 
-                loc_id = char_json.get("current_location_id")
-                if loc_id:
-                    loc_url = f"{LOCATION_SERVICE_URL}/locations/{loc_id}/details"
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # --- персонаж ---
+            try:
+                resp = await client.get(char_url)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError:
+                raise HTTPException(status_code=502, detail="Character‑service unavailable")
+
+            ch_json = resp.json()          # {"id":..,"name":..,"avatar":..,"current_location_id":..}
+
+            # --- локация (если задана) ---
+            loc_json = None
+            loc_id = ch_json.get("current_location_id")
+            if loc_id:
+                loc_url = f"{settings.LOCATION_SERVICE_URL}/locations/{loc_id}/details"
+                try:
                     loc_resp = await client.get(loc_url)
                     if loc_resp.status_code == 200:
-                        loc = loc_resp.json()
-                        location_obj = schemas.LocationShort(
-                            id   = loc["id"],
-                            name = loc["name"],
-                            image_url = loc.get("image_url") or ""
-                        )
+                        lj = loc_resp.json()
+                        loc_json = {
+                            "id": lj["id"],
+                            "name": lj["name"],
+                            "image_url": lj.get("image_url") or ""
+                        }
+                except Exception:
+                    # если location‑service упал – просто пропускаем
+                    pass
 
-                me_data["character"] = schemas.CharacterShort(
-                    id   = char_json["id"],
-                    name = char_json["name"],
-                    avatar = char_json["avatar"],
-                    current_location = location_obj
-                )
-            # если character‑service недоступен ‑‑ пропускаем, но
-            # всё равно отдаём базовые поля пользователя
+            # формируем объект CharacterShort
+            me_data["character"] = {
+                "id": ch_json["id"],
+                "name": ch_json["name"],
+                "avatar": ch_json["avatar"],
+                "current_location": loc_json
+            }
 
+    # ---------- 3. отдаём результат ---------------------------------
     return schemas.MeResponse(**me_data)
 # Маршрут для загрузки аватарки
 @router.post("/upload-avatar/")
