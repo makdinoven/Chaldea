@@ -31,3 +31,26 @@ class UserRead(BaseModel):
 
     class Config:
         orm_mode = True
+
+class LocationShort(BaseModel):
+    id: int
+    name: str
+    image_url: Optional[str] = ""
+
+class CharacterShort(BaseModel):
+    id: int
+    name: str
+    avatar: str
+    current_location: Optional[LocationShort] = None
+
+class MeResponse(BaseModel):
+    # базовые поля пользователя
+    id: int
+    email: EmailStr
+    username: str
+    avatar: Optional[str] = None
+    balance: Optional[int] = 0
+
+    # новые поля
+    current_character_id: Optional[int] = None
+    character: Optional[CharacterShort] = None

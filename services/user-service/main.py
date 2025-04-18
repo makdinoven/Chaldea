@@ -3,7 +3,7 @@ from typing import List
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, UploadFile
 from fastapi.staticfiles import StaticFiles
 import models
-from schemas import *
+import schemas
 from crud import create_user, get_user_by_email, get_user_by_username, authenticate_user  # Импорт CRUD функций
 from auth import *  # Импорт функций аутентификации
 from auth import SECRET_KEY, ALGORITHM
@@ -13,6 +13,7 @@ import os
 import shutil
 from fastapi.middleware.cors import CORSMiddleware
 from producer import send_notification_event
+import httpx
 
 app = FastAPI()
 
@@ -35,6 +36,8 @@ UPLOAD_DIR = "src/assets/avatars/"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
+CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8005")
+LOCATION_SERVICE_URL = os.getenv("LOCATION_SERVICE_URL", "http://locations-service:8006")
 # Регистрация нового пользователя
 @router.post("/register", response_model=UserRead)
 def register_user(user: UserCreate, db: Session = Depends(get_db)):
@@ -110,10 +113,53 @@ def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
     return {"access_token": new_access_token, "token_type": "bearer"}
 
 # Получение информации о текущем пользователе
-@router.get("/me", response_model=UserRead)
-def read_users_me(current_user: models.User = Depends(get_current_user)):
-    return current_user
+@router.get("/me", response_model=schemas.MeResponse)
+async def read_users_me(
+    current_user: models.User = Depends(get_current_user)
+):
+    # Базовая часть ответа
+    me_data = {
+        "id": current_user.id,
+        "email": current_user.email,
+        "username": current_user.username,
+        "avatar": current_user.avatar,
+        "balance": current_user.balance,
+        "current_character_id": current_user.current_character,
+        "character": None
+    }
 
+    # Если у пользователя выбран персонаж – вытаскиваем данные из character‑service
+    if current_user.current_character:
+        char_url = f"{CHARACTER_SERVICE_URL}/characters/{current_user.current_character}/profile"
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            char_resp = await client.get(char_url)
+            if char_resp.status_code == 200:
+                char_json = char_resp.json()
+                # char_json содержит как минимум id, name, avatar, current_location_id
+                location_obj = None
+
+                loc_id = char_json.get("current_location_id")
+                if loc_id:
+                    loc_url = f"{LOCATION_SERVICE_URL}/locations/{loc_id}/details"
+                    loc_resp = await client.get(loc_url)
+                    if loc_resp.status_code == 200:
+                        loc = loc_resp.json()
+                        location_obj = schemas.LocationShort(
+                            id   = loc["id"],
+                            name = loc["name"],
+                            image_url = loc.get("image_url") or ""
+                        )
+
+                me_data["character"] = schemas.CharacterShort(
+                    id   = char_json["id"],
+                    name = char_json["name"],
+                    avatar = char_json["avatar"],
+                    current_location = location_obj
+                )
+            # если character‑service недоступен ‑‑ пропускаем, но
+            # всё равно отдаём базовые поля пользователя
+
+    return schemas.MeResponse(**me_data)
 # Маршрут для загрузки аватарки
 @router.post("/upload-avatar/")
 async def upload_avatar(file: UploadFile, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -172,7 +218,7 @@ async def update_user_character(
 
 
 @router.post("/user_characters/")
-async def create_user_character_relation(user_character: UserCharacterCreate, db: Session = Depends(get_db)):
+async def create_user_character_relation(user_character: schemas.UserCharacterCreate, db: Session = Depends(get_db)):
     """
     Создает связь между пользователем и персонажем.
     """
