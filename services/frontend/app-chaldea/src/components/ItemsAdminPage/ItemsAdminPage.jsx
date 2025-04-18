@@ -2,7 +2,7 @@ import { useState } from "react";
 import ItemList from "./ItemList";
 import ItemForm from "./ItemForm";
 import IssueItemModal from "./IssueItemModal";
-import styles from "./ItemsAdminPage.module.scss";
+import styles from "./ItemsAdmin.module.scss";
 
 export default function ItemsAdminPage() {
   const [editingId, setEditingId] = useState();
@@ -32,7 +32,9 @@ export default function ItemsAdminPage() {
         />
       )}
 
-      {editingId && <button onClick={() => setIssue(editingId)}>Выдать предмет</button>}
+      {editingId && (
+        <button onClick={() => setIssue(editingId)}>Выдать предмет</button>
+      )}
       <IssueItemModal
         open={Boolean(issue)}
         onClose={() => setIssue(undefined)}

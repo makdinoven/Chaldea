@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import styles from "./ItemsAdmin.modules.scss";
+import styles from "./ItemsAdmin.module.scss";
 import { fetchCharacters } from "../../api/characters";
 import { issueItem } from "../../api/items";
 import useDebounce from "../../hooks/useDebounce";
@@ -20,7 +20,9 @@ export default function IssueItemModal({ open, onClose, itemId }) {
       .catch((e) => setError(e.message));
   }, [open]);
 
-  const visible = chars.filter((c) => c.name.toLowerCase().includes(deb.toLowerCase()));
+  const visible = chars.filter((c) =>
+    c.name.toLowerCase().includes(deb.toLowerCase()),
+  );
 
   const give = async () => {
     try {
@@ -55,7 +57,12 @@ export default function IssueItemModal({ open, onClose, itemId }) {
         </ul>
         <label>
           Кол-во
-          <input type="number" min={1} value={qty} onChange={(e) => setQty(+e.target.value)} />
+          <input
+            type="number"
+            min={1}
+            value={qty}
+            onChange={(e) => setQty(+e.target.value)}
+          />
         </label>
         <div className={styles.actions}>
           <button onClick={give} disabled={!selected}>

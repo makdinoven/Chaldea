@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
-import styles from "./ItemsAdmin.modules.scss";
+import { useEffect, useState } from "react";
+import styles from "./ItemsAdmin.module.scss";
 import {
   createItem,
+  fetchItem,
   updateItem,
   uploadItemImage,
-  fetchItem,
 } from "../../api/items";
 
 const ITEM_TYPES = [
@@ -31,7 +31,12 @@ const ITEM_RARITIES = [
   "divine",
   "demonic",
 ];
-const ARMOR_SUBCLASSES = ["cloth", "light_armor", "medium_armor", "heavy_armor"];
+const ARMOR_SUBCLASSES = [
+  "cloth",
+  "light_armor",
+  "medium_armor",
+  "heavy_armor",
+];
 const WEAPON_SUBCLASSES = [
   "one_handed_weapon",
   "two_handed_weapon",
@@ -126,9 +131,13 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
   };
 
   const showArmor = ["head", "body"].includes(item.item_type);
-  const showWeapon = ["main_weapon", "additional_weapons"].includes(item.item_type);
+  const showWeapon = ["main_weapon", "additional_weapons"].includes(
+    item.item_type,
+  );
   const showConsumable = item.item_type === "consumable";
-  const excludeMods = ["resource", "scroll", "misc", "consumable"].includes(item.item_type);
+  const excludeMods = ["resource", "scroll", "misc", "consumable"].includes(
+    item.item_type,
+  );
 
   const modifiers = [
     "strength_modifier",
@@ -196,7 +205,11 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
 
       <label>
         Редкость
-        <select name="item_rarity" value={item.item_rarity} onChange={handleChange}>
+        <select
+          name="item_rarity"
+          value={item.item_rarity}
+          onChange={handleChange}
+        >
           {ITEM_RARITIES.map((t) => (
             <option key={t} value={t}>
               {t}
@@ -207,7 +220,13 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
 
       <label>
         Цена
-        <input type="number" name="price" value={item.price} onChange={handleChange} min={0} />
+        <input
+          type="number"
+          name="price"
+          value={item.price}
+          onChange={handleChange}
+          min={0}
+        />
       </label>
 
       <label>
@@ -222,19 +241,32 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
       </label>
 
       <label className={styles.checkboxLabel}>
-        <input type="checkbox" name="is_unique" checked={item.is_unique} onChange={handleChange} />
+        <input
+          type="checkbox"
+          name="is_unique"
+          checked={item.is_unique}
+          onChange={handleChange}
+        />
         Уникальный
       </label>
 
       <label>
         Описание
-        <textarea name="description" value={item.description} onChange={handleChange} />
+        <textarea
+          name="description"
+          value={item.description}
+          onChange={handleChange}
+        />
       </label>
 
       {showArmor && (
         <label>
           Класс брони
-          <select name="armor_subclass" value={item.armor_subclass || ""} onChange={handleChange}>
+          <select
+            name="armor_subclass"
+            value={item.armor_subclass || ""}
+            onChange={handleChange}
+          >
             <option value="">—</option>
             {ARMOR_SUBCLASSES.map((t) => (
               <option key={t} value={t}>
@@ -331,7 +363,12 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
           {modifiers.map((m) => (
             <label key={m}>
               {m.replace("_modifier", "").replace("_", " ")}
-              <input name={m} type="number" value={item[m]} onChange={handleChange} />
+              <input
+                name={m}
+                type="number"
+                value={item[m]}
+                onChange={handleChange}
+              />
             </label>
           ))}
         </fieldset>
@@ -339,7 +376,11 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
 
       <label>
         Изображение
-        <input type="file" accept="image/*" onChange={(e) => setImgFile(e.target.files[0])} />
+        <input
+          type="file"
+          accept="image/*"
+          onChange={(e) => setImgFile(e.target.files[0])}
+        />
       </label>
 
       <div className={styles.actions}>

@@ -46,9 +46,12 @@ export default function Header() {
     },
     {
       id: 3,
-      menuButtons: [{ name: "Заявки", link: "/requestsPage" }],
+      menuButtons: [
+        { name: "Заявки", link: "requestsPage" },
+        { name: "Айтемы", link: "/admin/items" },
+      ],
       img: menuImg3,
-      title: "Заявки",
+      title: "Админка",
     },
   ];
 
