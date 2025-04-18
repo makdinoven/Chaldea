@@ -20,13 +20,18 @@ export default function IssueItemModal({ open, onClose, initialItem }) {
   /* — предметы — */
   useEffect(() => {
     if (!open) return;
-    fetchItems(debItem).then(setItems).catch((e) => setError(e.message));
+    fetchItems(debItem)
+      .then(setItems)
+      .catch((e) => setError(e.message));
   }, [debItem, open]);
 
   /* — персонажи — */
   useEffect(() => {
     if (!open) return;
-    fetchCharacters().then(setChars).catch((e) => setError(e.message));
+    setSelectedItem(initialItem);
+    fetchCharacters()
+      .then(setChars)
+      .catch((e) => setError(e.message));
   }, [open]);
 
   const visibleChars = chars.filter((c) =>
@@ -84,7 +89,9 @@ export default function IssueItemModal({ open, onClose, initialItem }) {
             {visibleChars.map((c) => (
               <li
                 key={c.id}
-                className={selectedChar?.id === c.id ? styles.active : undefined}
+                className={
+                  selectedChar?.id === c.id ? styles.active : undefined
+                }
                 onClick={() => setSelectedChar(c)}
               >
                 {c.name} (id {c.id})

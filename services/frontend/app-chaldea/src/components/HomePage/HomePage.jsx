@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React from "react";
 import Button from "./Button/Button";
 import Slider from "./Slider/Slider";
 import Stats from "./Stats/Stats";
@@ -15,16 +15,8 @@ import smallbuttonimg4 from "../../assets/smallhomebutton4.png";
 import sliderImg1 from "../../assets/sliderimg1.png";
 import statsBg from "../../assets/stats_bg.png";
 import statsUserImg from "../../assets/stats_user_img.png";
-import { useDispatch } from "react-redux";
-import { getMe } from "../../redux/slices/userSlice.js";
 
 export default function HomePage() {
-  const dispatch = useDispatch();
-
-  useEffect(() => {
-    dispatch(getMe());
-  }, []);
-
   const buttonsData = [
     {
       id: 1,

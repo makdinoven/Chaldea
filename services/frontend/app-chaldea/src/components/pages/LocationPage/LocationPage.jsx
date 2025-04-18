@@ -1,5 +1,5 @@
 import s from "./LocationPage.module.scss";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { BASE_URL } from "../../../api/api.js";
 import axios from "axios";
 import { useEffect, useState } from "react";
@@ -9,15 +9,13 @@ import BlueGradientButton from "../../CommonComponents/BlueGradientButton/BlueGr
 import PlayerCard from "../../CommonComponents/PlayerCard/PlayerCard.jsx";
 import NeighborCard from "../../CommonComponents/NeighborCard/NeighborCard.jsx";
 import Loader from "../../CommonComponents/Loader/Loader.jsx";
-import { useDispatch, useSelector } from "react-redux";
-import { getMe } from "../../../redux/slices/userSlice.js";
+import { useSelector } from "react-redux";
+import BackButton from "../../CommonComponents/BackButton/BackButton.jsx";
 
 const DEFAULT_TAB = "players";
 
 const LocationPage = () => {
-  const dispatch = useDispatch();
   const { locationId } = useParams();
-  const navigate = useNavigate();
   const [location, setLocation] = useState(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const [currentTab, setCurrentTab] = useState(
@@ -32,7 +30,6 @@ const LocationPage = () => {
   useEffect(() => {
     if (locationId) {
       fetchLocationData();
-      dispatch(getMe());
     }
   }, [locationId]);
 
@@ -64,7 +61,6 @@ const LocationPage = () => {
       });
       alert("пост отправлен");
       fetchLocationData();
-      dispatch(getMe());
       setTextareaValue("");
     } catch (error) {
       alert("ошибка пост не отправлен");
@@ -112,7 +108,7 @@ const LocationPage = () => {
   return (
     location && (
       <div>
-        <button className={s.back_button} onClick={() => navigate(-1)}></button>
+        <BackButton />
         {loading ? (
           <Loader />
         ) : (
