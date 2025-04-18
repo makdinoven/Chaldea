@@ -303,6 +303,7 @@ class ClientPost(BaseModel):
     character_id: int
     character_photo: str
     character_title: str
+    character_name: Optional[str]
     user_id: int
     user_nickname: str
     content: str
