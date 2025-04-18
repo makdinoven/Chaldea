@@ -23,7 +23,7 @@ async def startup():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5555", "http://localhost", "http://4452515-co41851.twc1.net", "http://4452515-co41851.twc1.net:8004"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
