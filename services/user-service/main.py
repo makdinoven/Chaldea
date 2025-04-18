@@ -138,7 +138,7 @@ async def read_users_me(
     # ---------- 2. если выбран персонаж – тянем short_info ----------
     if current_user.current_character:
         char_id = current_user.current_character
-        char_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{char_id}/short_info"
+        char_url = f"{CHARACTER_SERVICE_URL}/characters/{char_id}/short_info"
 
         async with httpx.AsyncClient(timeout=5.0) as client:
             # --- персонаж ---
@@ -154,7 +154,7 @@ async def read_users_me(
             loc_json = None
             loc_id = ch_json.get("current_location_id")
             if loc_id:
-                loc_url = f"{settings.LOCATION_SERVICE_URL}/locations/{loc_id}/details"
+                loc_url = f"{LOCATION_SERVICE_URL}/locations/{loc_id}/details"
                 try:
                     loc_resp = await client.get(loc_url)
                     if loc_resp.status_code == 200:
