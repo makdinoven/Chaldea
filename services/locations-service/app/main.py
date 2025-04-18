@@ -40,7 +40,6 @@ app.add_middleware(
         "http://localhost:8003",
         "http://localhost:8004",
         "http://localhost:8005",
-
                     ],
     allow_credentials=True,
     allow_methods=["*"],
