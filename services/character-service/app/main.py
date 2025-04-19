@@ -18,12 +18,28 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://4452515-co41851.twc1.net",
+        "http://4452515-co41851.twc1.net:5173",
+        "http://4452515-co41851.twc1.net:5555",
+        "http://4452515-co41851.twc1.net:8005",
+        "http://4452515-co41851.twc1.net:8004",
+        "http://4452515-co41851.twc1.net:8003",
+        "http://4452515-co41851.twc1.net:8002",
+        "http://4452515-co41851.twc1.net:8001",
+        "http://4452515-co41851.twc1.net:8000",
+        "http://localhost",
+        "http://localhost:8000",
+        "http://localhost:8001",
+        "http://localhost:8002",
+        "http://localhost:8003",
+        "http://localhost:8004",
+        "http://localhost:8005",
+                    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 models.Base.metadata.create_all(bind=engine)
 
 router = APIRouter(prefix="/characters")
