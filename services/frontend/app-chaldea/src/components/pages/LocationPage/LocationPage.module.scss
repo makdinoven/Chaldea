@@ -1,16 +1,5 @@
 @use "../../../global.scss" as *;
 
-.back_button {
-  cursor: pointer;
-  width: 56px;
-  height: 56px;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: contain;
-  background-image: url("/arrowWithCircle.svg");
-  margin-bottom: 16px;
-}
-
 .location_page {
   display: flex;
   flex-direction: column;

@@ -16,12 +16,9 @@ import warriorImg from "../../assets/classWarriorImg.png";
 import plutImg from "../../assets/classPlutImg.png";
 import magicianImg from "../../assets/classMagicianImg.png";
 import classInventoryImg from "../../assets/classInventoryImg.png";
-import { useDispatch } from "react-redux";
-import { getMe } from "../../redux/slices/userSlice.js";
 
 export default function CreateCharacterPage({}) {
   const navigateTo = useNavigateTo();
-  const dispatch = useDispatch();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedRaceId, setSelectedRaceId] = useState(1);
   const [selectedSubraceId, setSelectedSubraceId] = useState(0);
@@ -105,10 +102,6 @@ export default function CreateCharacterPage({}) {
   ]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
-  useEffect(() => {
-    dispatch(getMe());
-  }, []);
 
   useEffect(() => {
     const race = data[0].races.find((r) => r.id_race === selectedRaceId);

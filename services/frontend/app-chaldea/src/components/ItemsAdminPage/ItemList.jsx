@@ -10,7 +10,9 @@ export default function ItemList({ onSelect, onCreate, onIssue }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetchItems(debounced).then(setItems).catch((e) => setError(e.message));
+    fetchItems(debounced)
+      .then(setItems)
+      .catch((e) => setError(e.message));
   }, [debounced]);
 
   const handleDelete = async (id) => {
@@ -42,6 +44,7 @@ export default function ItemList({ onSelect, onCreate, onIssue }) {
         <thead>
           <tr>
             <th>ID</th>
+            <th>Фото</th>
             <th>Название</th>
             <th>Тип</th>
             <th>Редкость</th>
@@ -52,6 +55,9 @@ export default function ItemList({ onSelect, onCreate, onIssue }) {
           {items.map((i) => (
             <tr key={i.id}>
               <td>{i.id}</td>
+              <td>
+                <img src={i?.image ? i.image : ""} alt="" />
+              </td>
               <td>{i.name}</td>
               <td>{i.item_type}</td>
               <td>{i.item_rarity}</td>

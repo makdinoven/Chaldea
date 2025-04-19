@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 
 import Menu from "./Menu/Menu";
 
@@ -8,18 +8,18 @@ import logo from "../../../assets/logo.png";
 import menuImg1 from "../../../assets/menu1.png";
 import menuImg2 from "../../../assets/menu2.png";
 import menuImg3 from "../../../assets/menuImg.png";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
+import { getMe } from "../../../redux/slices/userSlice.js";
 
 export default function Header() {
-  const navigate = useNavigate();
+  const location = useLocation();
   const dispatch = useDispatch();
   const { username, avatar, character } = useSelector((state) => state.user);
 
-  // if (!username) {
-  //   dispatch(logout());
-  //   navigate("/");
-  // }
+  useEffect(() => {
+    dispatch(getMe());
+  }, [location.pathname]);
 
   const menuData = [
     {
@@ -49,6 +49,7 @@ export default function Header() {
       menuButtons: [
         { name: "Заявки", link: "requestsPage" },
         { name: "Айтемы", link: "/admin/items" },
+        { name: "Локации", link: "/admin/locations" },
       ],
       img: menuImg3,
       title: "Админка",

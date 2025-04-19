@@ -17,13 +17,14 @@ export default function ItemsAdminPage() {
 
   return (
     <div className={styles.page} key={refreshKey}>
+      {/*<BackButton />*/}
       {!editingId && !creating && (
         <ItemList
           onSelect={(id) => setEditingId(id)}
           onCreate={() => setCreating(true)}
+          onIssue={(id) => setIssue(id)}
         />
       )}
-
       {(editingId || creating) && (
         <ItemForm
           selected={editingId}
@@ -31,14 +32,10 @@ export default function ItemsAdminPage() {
           onCancel={closeForm}
         />
       )}
-
-      {editingId && (
-        <button onClick={() => setIssue(editingId)}>Выдать предмет</button>
-      )}
       <IssueItemModal
         open={Boolean(issue)}
         onClose={() => setIssue(undefined)}
-        itemId={issue}
+        initialItem={issue}
       />
     </div>
   );
