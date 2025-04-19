@@ -143,7 +143,7 @@ const DAMAGE_TYPES = [
 
 const DAMAGE_TYPE_LABELS = {
   physical: "Физический",
-  cutting: "Режущий",
+  catting: "Режущий",
   crushing: "Дробящий",
   piercing: "Колющий",
   magic: "Магический",
@@ -282,7 +282,7 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
         Редкость
         <select name="item_rarity" value={item.item_rarity} onChange={handleChange}>
           {ITEM_RARITIES.map((t) => (
-              <option key={r} value={r}>{ITEM_RARITY_LABELS[r]}</option>
+              <option key={t} value={t}>{ITEM_RARITY_LABELS[t]}</option>
           ))}
         </select>
         </label>
@@ -319,7 +319,7 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
           <select name="armor_subclass" value={item.armor_subclass || ""} onChange={handleChange}>
             <option value="">—</option>
             {ARMOR_SUBCLASSES.map((t) => (
-                <option key={a} value={a}>{ARMOR_SUBCLASS_LABELS[a]}</option>
+                <option key={t} value={t}>{ARMOR_SUBCLASS_LABELS[t]}</option>
             ))}
           </select>
         </label>
@@ -332,7 +332,7 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
             <select name="weapon_subclass" value={item.weapon_subclass || ""} onChange={handleChange}>
               <option value="">—</option>
               {WEAPON_SUBCLASSES.map((t) => (
-                  <option key={w} value={w}>{WEAPON_SUBCLASS_LABELS[w]}</option>
+                  <option key={t} value={t}>{WEAPON_SUBCLASS_LABELS[t]}</option>
               ))}
             </select>
           </label>
@@ -341,7 +341,7 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
             <select name="primary_damage_type" value={item.primary_damage_type || ""} onChange={handleChange}>
               <option value="">—</option>
               {DAMAGE_TYPES.map((t) => (
-                  <option key={d} value={d}>{DAMAGE_TYPE_LABELS[d]}</option>
+                  <option key={t} value={t}>{DAMAGE_TYPE_LABELS[t]}</option>
               ))}
             </select>
             </label>
