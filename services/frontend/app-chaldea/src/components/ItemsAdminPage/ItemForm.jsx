@@ -23,6 +23,23 @@ const ITEM_TYPES = [
   "scroll",
   "misc",
 ];
+
+const ITEM_TYPE_LABELS = {
+  head: "Голова",
+  body: "Тело",
+  cloak: "Плащ",
+  belt: "Пояс",
+  ring: "Кольцо",
+  necklace: "Ожерелье",
+  bracelet: "Браслет",
+  main_weapon: "Основное оружие",
+  additional_weapons: "Доп. оружие",
+  consumable: "Расходуемое",
+  resource: "Ресурс",
+  scroll: "Свиток",
+  misc: "Разное",
+};
+
 const ITEM_RARITIES = [
   "common",
   "rare",
@@ -32,12 +49,29 @@ const ITEM_RARITIES = [
   "divine",
   "demonic",
 ];
+
+const ITEM_RARITY_LABELS = {
+  common: "Обычное",
+  rare: "Редкое",
+  epic: "Эпическое",
+  legendary: "Легендарное",
+  mythical: "Мифическое",
+  divine: "Божественное",
+  demonic: "Демоническое",
+};
 const ARMOR_SUBCLASSES = [
   "cloth",
   "light_armor",
   "medium_armor",
   "heavy_armor",
 ];
+
+const ARMOR_SUBCLASS_LABELS = {
+  cloth: "Ткань",
+  light_armor: "Легкая броня",
+  medium_armor: "Средняя броня",
+  heavy_armor: "Тяжелая броня",
+};
 const WEAPON_SUBCLASSES = [
   "one_handed_weapon",
   "two_handed_weapon",
@@ -64,6 +98,34 @@ const WEAPON_SUBCLASSES = [
   "amulets",
   "magic_weapon",
 ];
+
+const WEAPON_SUBCLASS_LABELS = {
+  one_handed_weapon: "Одноручное оружие",
+  two_handed_weapon: "Двуручное оружие",
+  maces: "Булава",
+  axes: "Топоры",
+  battle_axes: "Боевые топоры",
+  hammers: "Молоты",
+  polearms: "Древковое оружие",
+  scythes: "Косы",
+  daggers: "Кинжалы",
+  twin_daggers: "Парные кинжалы",
+  short_swords: "Короткие мечи",
+  rapiers: "Рапиры",
+  spears: "Копья",
+  bows: "Луки",
+  firearms: "Огнестрельное оружие",
+  knuckledusters: "Кастеты",
+  one_handed_staffs: "Одноручные посохи",
+  two_handed_staffs: "Двуручные посохи",
+  grimoires: "Гримуары",
+  catalysts: "Катализаторы",
+  spheres: "Сферы",
+  wands: "Жезлы",
+  amulets: "Амулеты",
+  magic_weapon: "Магическое оружие",
+};
+
 const DAMAGE_TYPES = [
   "physical",
   "catting",
@@ -78,6 +140,21 @@ const DAMAGE_TYPES = [
   "sainting",
   "damning",
 ];
+
+const DAMAGE_TYPE_LABELS = {
+  physical: "Физический",
+  cutting: "Режущий",
+  crushing: "Дробящий",
+  piercing: "Колющий",
+  magic: "Магический",
+  fire: "Огненный",
+  ice: "Ледяной",
+  water: "Водный",
+  electricity: "Электрический",
+  wind: "Воздушный",
+  sainting: "Святой",
+  damning: "Проклятый",
+};
 
 // --- поля с переводом -----------------------------------------------------
 const ATTR_MODS = [
@@ -196,27 +273,27 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
         Тип
         <select name="item_type" value={item.item_type} onChange={handleChange}>
           {ITEM_TYPES.map((t) => (
-            <option key={t} value={t}>{t}</option>
+              <option key={t} value={t}>{ITEM_TYPE_LABELS[t]}</option>
           ))}
         </select>
       </label>
 
-      <label>
+        <label>
         Редкость
         <select name="item_rarity" value={item.item_rarity} onChange={handleChange}>
           {ITEM_RARITIES.map((t) => (
-            <option key={t} value={t}>{t}</option>
+              <option key={r} value={r}>{ITEM_RARITY_LABELS[r]}</option>
           ))}
         </select>
-      </label>
+        </label>
 
-      <label>
+        <label>
         Цена
         <input type="number" name="price" value={item.price} onChange={handleChange} min={0} />
       </label>
 
       <label>
-        Максимум в стаке
+        Максимум в стаке
         <input type="number" name="max_stack_size" value={item.max_stack_size} onChange={handleChange} min={1} />
       </label>
 
@@ -242,7 +319,7 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
           <select name="armor_subclass" value={item.armor_subclass || ""} onChange={handleChange}>
             <option value="">—</option>
             {ARMOR_SUBCLASSES.map((t) => (
-              <option key={t} value={t}>{t}</option>
+                <option key={a} value={a}>{ARMOR_SUBCLASS_LABELS[a]}</option>
             ))}
           </select>
         </label>
@@ -255,19 +332,19 @@ export default function ItemForm({ selected, onSuccess, onCancel }) {
             <select name="weapon_subclass" value={item.weapon_subclass || ""} onChange={handleChange}>
               <option value="">—</option>
               {WEAPON_SUBCLASSES.map((t) => (
-                <option key={t} value={t}>{t}</option>
+                  <option key={w} value={w}>{WEAPON_SUBCLASS_LABELS[w]}</option>
               ))}
             </select>
           </label>
-          <label>
+            <label>
             Тип урона
             <select name="primary_damage_type" value={item.primary_damage_type || ""} onChange={handleChange}>
               <option value="">—</option>
               {DAMAGE_TYPES.map((t) => (
-                <option key={t} value={t}>{t}</option>
+                  <option key={d} value={d}>{DAMAGE_TYPE_LABELS[d]}</option>
               ))}
             </select>
-          </label>
+            </label>
         </>
       )}
 
