@@ -190,6 +190,7 @@ class SkillRankDamageInTree(BaseModel):
     description: Optional[str]
     chance: int = 100
     target_side: str
+    weapon_slot: str
 
 
 class SkillRankEffectInTree(BaseModel):
