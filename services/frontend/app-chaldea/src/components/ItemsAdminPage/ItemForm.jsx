@@ -149,7 +149,7 @@ const DAMAGE_TYPE_LABELS = {
   magic: "Магический",
   fire: "Огненный",
   ice: "Ледяной",
-  water: "Водный",
+  watering: "Водный",
   electricity: "Электрический",
   wind: "Воздушный",
   sainting: "Святой",
