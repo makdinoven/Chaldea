@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from crud import create_battle, write_turn
 from schemas import BattleCreated, BattleCreate, ActionResponse, ActionRequest
-
+from mongo_client import get_mongo_db
 from database import get_db
 from buffs import decrement_durations, aggregate_modifiers, apply_new_effects
 from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, compute_damage_with_rolls
@@ -360,7 +360,7 @@ async def make_action(
 
 @router.get("/battles/{battle_id}/logs")
 async def list_turn_logs(battle_id: int, limit: int = 50):
-    db = get_db()
+    db = get_mongo_db()
     cursor = (
         db.battle_logs
           .find({"battle_id": battle_id})
