@@ -1,7 +1,7 @@
 import httpx, os, asyncio
 
 SKILLS_URL = os.getenv("SKILLS_SERVICE_URL", "http://skills-service:8003")
-INVENTORY_URL = os.getenv("INVENTORY_SERVICE_URL", "http://skills-service:8004")
+INVENTORY_URL = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
 
 async def get_rank(rank_id: int) -> dict:
     async with httpx.AsyncClient() as client:
