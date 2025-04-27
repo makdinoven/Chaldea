@@ -20,36 +20,50 @@ router = APIRouter(prefix="/battles", tags=["battles"])
 
 
 @router.post("/", response_model=BattleCreated, status_code=201)
-async def create_battle(
-    payload: BattleCreate,
+async def create_battle_endpoint(
+    battle_in: BattleCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    if len(payload.players) < 2:
-        raise HTTPException(400, "Need >=2 players")
-    battle, participants = await create_battle(db, payload.players)
+    """
+    Создаём бой и инициализируем состояние в Redis.
+    `battle_in.players` — список объектов
+    `{ character_id: int, team: int }`
+    """
 
-    first_actor_pid = participants[0].id
+    # 1. Проверка минимального количества участников
+    if len(battle_in.players) < 2:
+        raise HTTPException(400, "Нужно минимум два участника")
+
+    # 2. CRUD-создание записи в БД + участников
+    battle_obj, participant_objs = await create_battle(
+        db, battle_in.players
+    )
+
+    # 3. Кто ходит первым (первый в списке → team-логика может быть иной)
+    first_actor_pid = participant_objs[0].id
     deadline = datetime.utcnow() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
 
+    # 4. Собираем payload для Redis
     participants_payload = [
         {
             "participant_id": p.id,
             "character_id":  p.character_id,
             "team":          p.team,
         }
-        for p in participants
+        for p in participant_objs
     ]
 
     await init_battle_state(
-        battle.id,
-        participants_payload,
-        first_actor_pid,
-        deadline,
+        battle_id=battle_obj.id,
+        participants_payload=participants_payload,
+        first_actor_participant_id=first_actor_pid,
+        deadline_at=deadline,
     )
 
+    # 5. Возвращаем ответ
     return BattleCreated(
-        battle_id=battle.id,
-        participants=[p.id for p in participants],
+        battle_id=battle_obj.id,
+        participants=[p.id for p in participant_objs],
         next_actor=first_actor_pid,
         deadline_at=deadline,
     )
