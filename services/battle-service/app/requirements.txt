@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+celery
+redis
+pymongo
+python-dotenv
+httpx
+sqlalchemy
+pydantic<2.0.0
+asyncio
+aioredis
+redis
+aiomysql
+motor
