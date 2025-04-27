@@ -6,5 +6,5 @@ _client: AsyncIOMotorClient | None = None
 def get_mongo_db():
     global _client
     if _client is None:
-        _client = AsyncIOMotorClient(settings.MONGO_URL)
+        _client = AsyncIOMotorClient(settings.MONGO_URI)
     return _client.get_default_database()   # db = game
