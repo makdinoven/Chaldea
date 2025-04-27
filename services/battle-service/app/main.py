@@ -223,10 +223,11 @@ async def make_action(
     # ------------------------------------------------------------------------------
     # 8. Использование предмета из fast-слота
     # ------------------------------------------------------------------------------
-    if request.skills.item_id is not None:
-        item_json = await get_item(request.skills.item_id)
+    item_id = request.skills.item_id  # может быть None / 0 / >0
 
-        # карта вида {"health_recovery": N, ...}
+    if item_id and item_id > 0:  # ← пропускаем None или 0
+        item_json = await get_item(item_id)
+
         recovery_payload = {
             key: item_json[key]
             for key in (

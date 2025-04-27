@@ -19,7 +19,10 @@ async def character_has_rank(character_id: int, rank_id: int) -> bool:
     return rank_id in ranks
 
 async def get_item(item_id: int) -> dict:
-    async with httpx.AsyncClient() as c:
-        r = await c.get(f"{INVENTORY_URL}/inventory/items/{item_id}")
-        r.raise_for_status()
-        return r.json()
+    if not item_id:
+        raise ValueError("item_id must be > 0")
+    else:
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"{INVENTORY_URL}/inventory/items/{item_id}")
+            r.raise_for_status()
+            return r.json()
