@@ -358,4 +358,21 @@ async def make_action(
         deadline_at=new_deadline,
     )
 
+@router.get("/battles/{battle_id}/logs")
+async def list_turn_logs(battle_id: int, limit: int = 50):
+    db = get_db()
+    cursor = (
+        db.battle_logs
+          .find({"battle_id": battle_id})
+          .sort("turn_number", -1)
+          .limit(limit)
+    )
+    docs = [doc async for doc in cursor]
+    for d in docs:
+        d["_id"] = str(d["_id"])
+    if not docs:
+        raise HTTPException(404, "Нет логов для этого боя")
+    return docs
+
+
 app.include_router(router)
