@@ -23,13 +23,15 @@ _redis_client: redis.Redis | None = None
 
 
 async def get_redis_client() -> redis.Redis:
-    """Создаёт (или возвращает существующий) асинхронный клиент Redis."""
     global _redis_client
     if _redis_client is None:
-        _redis_client = redis.from_url(
-            settings.REDIS_URL,
-            decode_responses=True,          # сразу str, а не bytes
-        )
+        _redis_client = redis.from_url(settings.REDIS_URL,
+                                       decode_responses=True)
+        # если вдруг подключились к реплике кластера – включаем запись
+        try:
+            await _redis_client.execute_command("READWRITE")
+        except redis.ResponseError:
+            pass         # обычный одиночный Redis вернёт ERR unknown command
     return _redis_client
 
 

@@ -63,6 +63,7 @@ services:
   redis:
     container_name: redis
     image: redis:7-alpine
+    command: ["redis-server", "--slave-read-only", "no"]
     ports:
       - "6379:6379"
     volumes:
