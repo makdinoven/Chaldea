@@ -76,6 +76,7 @@ async def init_battle_state(
 
     # пишем состояние
     await redis_client.set(state_key(battle_id), json.dumps(battle_state))
+    print("[REDIS] write state", state_key(battle_id))
 
     # добавляем дедлайн первого хода в ZSET
     member = f"{battle_id}:{first_actor_participant_id}"
