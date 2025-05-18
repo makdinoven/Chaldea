@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     CHARACTER_SERVICE_URL: str = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8005")
     SKILLS_URL = os.getenv("SKILLS_SERVICE_URL", "http://skills-service:8003")
     INVENTORY_URL = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
+    INVENTORY_SERVICE_URL = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
 
     class Config:
         env_file = ".env"
