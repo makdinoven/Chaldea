@@ -395,6 +395,7 @@ async def make_action(
         turn_number=new_turn_number,
         next_actor=next_actor_participant_id,
         deadline_at=new_deadline,
+        events=turn_events
     )
 
 @router.get("/battles/{battle_id}/logs")

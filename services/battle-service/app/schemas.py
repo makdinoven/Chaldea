@@ -38,4 +38,5 @@ class ActionResponse(BaseModel):
     turn_number: int
     next_actor: int
     deadline_at: datetime
+    events: list[dict]
 
