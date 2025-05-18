@@ -2,6 +2,31 @@ from pydantic import BaseModel
 from typing import Optional, List, Union
 
 
+
+class SkillRankDamageRead(BaseModel):
+    id: int
+    damage_type: str
+    amount: float
+    chance: int
+    target_side: str
+    weapon_slot: str | None = None
+
+    class Config:
+        orm_mode = True
+
+
+class SkillRankEffectRead(BaseModel):
+    id: int
+    target_side: str
+    effect_name: str
+    description: str | None = None
+    chance: int
+    duration: int
+    magnitude: float
+    attribute_key: str | None = None
+
+    class Config:
+        orm_mode = True
 # ----------------------------------------------------
 # 1) Skill
 # ----------------------------------------------------
@@ -67,12 +92,30 @@ class SkillRankUpdate(SkillRankBase):
     pass
 
 
-class SkillRankRead(SkillRankBase):
+class SkillRankRead(BaseModel):
     id: int
+    skill_id: int
+    rank_number: int
+    rank_name: str | None = None
+    left_child_id: int | None
+    right_child_id: int | None
+    cost_energy: int
+    cost_mana: int
+    cooldown: int
+    level_requirement: int
+    upgrade_cost: int
+    class_limitations: str | None
+    race_limitations: str | None
+    subrace_limitations: str | None
+    rank_description: str | None = None
+    rank_image: str | None = None
+
+    # ▼ добавляем вложенные коллекции
+    damage_entries: list[SkillRankDamageRead] = []
+    effects: list[SkillRankEffectRead] = []
 
     class Config:
         orm_mode = True
-
 
 # ----------------------------------------------------
 # 3) SkillRankDamage (CRUD-модели)
@@ -95,11 +138,6 @@ class SkillRankDamageUpdate(SkillRankDamageBase):
     pass
 
 
-class SkillRankDamageRead(SkillRankDamageBase):
-    id: int
-
-    class Config:
-        orm_mode = True
 
 
 # ----------------------------------------------------
@@ -122,14 +160,6 @@ class SkillRankEffectCreate(SkillRankEffectBase):
 
 class SkillRankEffectUpdate(SkillRankEffectBase):
     pass
-
-
-class SkillRankEffectRead(SkillRankEffectBase):
-    id: int
-
-    class Config:
-        orm_mode = True
-
 
 # ----------------------------------------------------
 # 5) CharacterSkill

@@ -3,11 +3,13 @@ import os
 from datetime import datetime
 from celery import Celery
 from mongo_client import get_mongo_db
-
+import logging
+logger = logging.getLogger(__name__)
 celery_app = Celery("battle_tasks", broker=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/1"))
 
 @celery_app.task
 def save_log(battle_id: int, turn_number: int, events: list[dict]):
+    logger.debug(f"[MONGO] saving log battle={battle_id} turn={turn_number}")
     db = get_mongo_db()                         # AsyncIOMotorDatabase
     async def _insert():
         await db.battle_logs.insert_one({

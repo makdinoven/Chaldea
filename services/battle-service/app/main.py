@@ -16,7 +16,12 @@ from redis_state import init_battle_state, load_state, save_state, get_redis_cli
 from config import settings
 from tasks import save_log
 from skills_client import character_has_rank, get_rank, get_item
-
+import logging
+logging.basicConfig(
+    level=logging.DEBUG,               # DEBUG, чтобы видеть максимум
+    format="%(levelname)s | %(name)s | %(asctime)s | %(message)s",
+)
+logger = logging.getLogger("battle-service")
 app = FastAPI(title="Battle Service")
 
 app.add_middleware(
@@ -132,6 +137,7 @@ async def make_action(
     # 1. Получаем Redis-состояние боя
     # ------------------------------------------------------------------------------
     battle_state: Dict | None = await load_state(battle_id)
+    logger.debug(f"[ACTION] battle_id={battle_id}, request={request.dict()}")
     if battle_state is None:
         raise HTTPException(404, "Battle not found in Redis")
 
@@ -205,6 +211,8 @@ async def make_action(
 
     # суммарные %-баффы атаки (нужны compute_damage_with_rolls)
     percent_damage_buffs = attacker_buff_modifiers.get("percent_damage", {})
+    logger.debug(f"[ATTR] base_attacker_attr={base_attacker_attributes}")
+    logger.debug(f"[BUFF] attacker_mods={attacker_buff_modifiers}")
 
     # ------------------------------------------------------------------------------
     # 6. SUPPORT-навык (баффы на self)
@@ -296,13 +304,16 @@ async def make_action(
                 "recovery": recovery_payload,
             }
         )
+        logger.debug(f"[ITEM] requested item_id={item_id}")
 
     # ------------------------------------------------------------------------------
     # 9. ATTACK-навык
     # ------------------------------------------------------------------------------
     attack_id=request.skills.attack_rank_id
+    logger.debug(f"[SKILL] attack_rank_id={request.skills.attack_rank_id}")
     if attack_id and attack_id >0:
         attack_rank = await get_rank(request.skills.attack_rank_id)
+        logger.debug(f"[SKILL] attack_rank full_json={attack_rank}")
 
         # damage_entries
         for dmg in attack_rank.get("damage_entries", []):

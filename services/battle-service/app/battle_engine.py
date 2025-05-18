@@ -19,7 +19,8 @@ INVENTORY_SERVICE_URL = os.getenv(
     "INVENTORY_SERVICE_URL",
     "http://inventory-service:8004",
 )
-
+import logging
+logger = logging.getLogger(__name__)
 
 # ---------- helpers service calls -----------------------------------------
 async def fetch_full_attributes(character_id: int) -> Dict:
@@ -121,6 +122,10 @@ async def compute_damage_with_rolls(
     percent_buffs: Dict[str, float],
     defender_attr: Dict,
 ) -> Tuple[float, Dict]:
+    logger.debug(
+        f"[DMG] entry={damage_entry}, weapon={weapon}, "
+        f"percent_buffs={percent_buffs}"
+    )
     """
     • бросает dodge → chance → crit
     • возвращает (итоговый_урон_после_резистов, log_dict)
@@ -166,7 +171,7 @@ async def compute_damage_with_rolls(
     resist_field = f"res_{dmg_type}"
     resist_pct = defender_attr.get(resist_field, 0) + defender_attr.get("res_effects", 0)
     final = raw * (1 - resist_pct / 100.0)
-
+    logger.debug(f"[DMG] rolled={final}")
     log.update({
         "resist_pct": resist_pct,
         "final": round(final, 2),
