@@ -3,16 +3,18 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
-# ----- вход / выход -----
+# class BattleCreated(BaseModel):
+#     battle_id: int
+#     participants: List[int]
+#     next_actor: int
+#     deadline_at: datetime
+class PlayerIn(BaseModel):
+    character_id: int
+    team: int | None = None
+
+
 class BattleCreate(BaseModel):
-    players: List[int]  # список character_id; [A,B] = 1×1, [A,B,C] = FFA
-
-
-class BattleCreated(BaseModel):
-    battle_id: int
-    participants: List[int]
-    next_actor: int
-    deadline_at: datetime
+    players: List[PlayerIn]
 
 
 class SkillSelection(BaseModel):
@@ -35,3 +37,4 @@ class ActionResponse(BaseModel):
     turn_number: int
     next_actor: int
     deadline_at: datetime
+

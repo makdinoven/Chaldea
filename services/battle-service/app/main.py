@@ -29,15 +29,15 @@ async def create_battle_endpoint(
     `battle_in.players` — список объектов
     `{ character_id: int, team: int }`
     """
+    player_ids = [p.character_id for p in battle_in.players]
+    teams = [p.team if p.team is not None else idx % 2 for idx, p in enumerate(battle_in.players)]
 
     # 1. Проверка минимального количества участников
     if len(battle_in.players) < 2:
         raise HTTPException(400, "Нужно минимум два участника")
 
     # 2. CRUD-создание записи в БД + участников
-    battle_obj, participant_objs = await create_battle(
-        db, battle_in.players
-    )
+    battle_obj, participant_objs = await create_battle(db, player_ids, teams)
 
     # 3. Кто ходит первым (первый в списке → team-логика может быть иной)
     first_actor_pid = participant_objs[0].id
@@ -139,7 +139,13 @@ async def make_action(
     # ------------------------------------------------------------------------------
     # 5. Готовим атрибуты + активные модификаторы атакующего
     # ------------------------------------------------------------------------------
-    base_attacker_attributes = await fetch_full_attributes(attacker_character_id)
+    attr_cache: dict[int, dict] ={}
+    async def attrs(cid: int):
+        if cid not in attr_cache:
+            attr_cache[cid] = await fetch_full_attributes(cid)
+            return attr_cache[cid]
+
+    base_attacker_attributes = await attrs(attacker_character_id)
     attacker_buff_modifiers = aggregate_modifiers(
         battle_state.get("active_effects", {}).get(str(request.participant_id), [])
     )
@@ -159,7 +165,7 @@ async def make_action(
     defender_info = battle_state["participants"][str(defender_pid)]
     defender_character_id = defender_info["character_id"]
 
-    base_defender_attributes = await fetch_full_attributes(defender_character_id)
+    base_defender_attributes = await attrs(defender_character_id)
     defender_buff_modifiers = aggregate_modifiers(
         battle_state.get("active_effects", {}).get(str(defender_pid), [])
     )

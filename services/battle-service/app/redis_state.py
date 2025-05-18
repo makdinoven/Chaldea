@@ -25,13 +25,12 @@ _redis_client: redis.Redis | None = None
 async def get_redis_client() -> redis.Redis:
     global _redis_client
     if _redis_client is None:
-        _redis_client = redis.from_url(settings.REDIS_URL,
-                                       decode_responses=True)
-        # если вдруг подключились к реплике кластера – включаем запись
-        try:
-            await _redis_client.execute_command("READWRITE")
-        except redis.ResponseError:
-            pass         # обычный одиночный Redis вернёт ERR unknown command
+        _redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+        await _redis_client.execute_command("CLIENT", "SETNAME", "battle-service")
+        # Если accidental replica – валимся с явной ошибкой
+        role = await _redis_client.info("replication")
+        if role["role"] != "master":
+            raise RuntimeError("Connected to Redis replica, need master")
     return _redis_client
 
 

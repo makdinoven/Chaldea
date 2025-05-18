@@ -12,7 +12,8 @@ DEFAULT_DEADLINE_HOURS = 24
 async def create_battle(
     db: AsyncSession,
     player_ids: list[int],
-) -> tuple[models.Battle, list[models.BattleParticipant]]:
+    teams: list[int],) -> tuple[models.Battle, list[models.BattleParticipant]]:
+
     battle = models.Battle()
     db.add(battle)
     await db.flush()
@@ -22,7 +23,7 @@ async def create_battle(
         p = models.BattleParticipant(
             battle_id=battle.id,
             character_id=cid,
-            team=idx if len(player_ids) == 2 else 0,   # 1×1 -> команды 0/1
+            team=teams[idx],
         )
         participants.append(p)
     db.add_all(participants)

@@ -3,8 +3,8 @@ from config import settings
 
 _client: AsyncIOMotorClient | None = None
 
-def get_mongo_db():
+def get_mongo_db(name: str = "game"):
     global _client
     if _client is None:
         _client = AsyncIOMotorClient(settings.MONGO_URI)
-    return _client.get_default_database()   # db = game
+    return _client[name]
