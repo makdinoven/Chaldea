@@ -1,4 +1,6 @@
 # skills_client.py
+import asyncio
+
 import httpx
 from config import settings
 
@@ -31,35 +33,21 @@ async def character_has_rank(character_id: int, rank_id: int) -> bool:
 # 3.  Все ранги персонажа (добавили)
 #     пригодится для snapshot’а до старта боя
 # -----------------------------------------------------------
+BASE = settings.SKILLS_URL.rstrip("/")
+
 async def character_ranks(character_id: int) -> list[dict]:
     """
-    Возвращает «плоский» список рангов персонажа:
-        [
-          { "rank_id": 207,
-            "skill_id": 5,
-            "rank_number": 1,
-            "rank_name": "Удар воителя – 1 ранг" },
-          ...
-        ]
+    Возвращает полный список рангов персонажа
+    (каждый элемент = JSON, который приходит с /skill_ranks/{id})
     """
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{settings.SKILLS_URL}/skills/characters/{character_id}/skills"
-        )
+    async with httpx.AsyncClient() as c:
+        r = await c.get(f"{BASE}/skills/characters/{character_id}/skills")
         r.raise_for_status()
-        rows = r.json()                         # -> List[CharacterSkillRead]
-    flat: list[dict] = []
-    for cs in rows:
-        rk = cs["skill_rank"]
-        flat.append(
-            {
-                "rank_id":      rk["id"],
-                "skill_id":     rk["skill_id"],
-                "rank_number":  rk["rank_number"],
-                "rank_name":    rk.get("rank_name"),
-            }
-        )
-    return flat
+        char_skill_rows = r.json()          # [{'skill_rank_id': …}, …]
+
+    # параллельно скачиваем все ранги
+    coro_list = [get_rank(row["skill_rank_id"]) for row in char_skill_rows]
+    return await asyncio.gather(*coro_list)
 
 # -----------------------------------------------------------
 # 4.  Информация о предмете (как была)
