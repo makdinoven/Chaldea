@@ -167,8 +167,15 @@ async def get_character_skill(db: AsyncSession, cs_id: int) -> models.CharacterS
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
-async def list_character_skills_for_character(db: AsyncSession, character_id: int) -> list[models.CharacterSkill]:
-    stmt = select(models.CharacterSkill).where(models.CharacterSkill.character_id == character_id)
+async def list_character_skills_for_character(db, character_id: int):
+    stmt = (
+        select(models.CharacterSkill)
+        .where(models.CharacterSkill.character_id == character_id)
+        .options(
+            # <--- подгружаем skill_rank одним запросом
+            selectinload(models.CharacterSkill.skill_rank)
+        )
+    )
     result = await db.execute(stmt)
     return result.scalars().all()
 
