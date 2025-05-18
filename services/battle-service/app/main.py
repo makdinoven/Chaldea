@@ -6,16 +6,20 @@ from fastapi import FastAPI, Depends, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from crud import create_battle, write_turn
-from schemas import BattleCreated, BattleCreate, ActionResponse, ActionRequest
+from crud import create_battle, write_turn, get_logs_for_turn
+from schemas import BattleCreated, BattleCreate, ActionResponse, ActionRequest, LogResponse
 from mongo_client import get_mongo_db
 from database import get_db
+from inventory_client import get_fast_slots
+from character_client import get_character_profile
 from buffs import decrement_durations, aggregate_modifiers, apply_new_effects
 from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, compute_damage_with_rolls
-from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES
+from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
+    get_cached_snapshot, KEY_BATTLE_TURNS
 from config import settings
+from mongo_helpers import save_snapshot, load_snapshot
 from tasks import save_log
-from skills_client import character_has_rank, get_rank, get_item
+from skills_client import character_has_rank, get_rank, get_item, character_ranks
 import logging
 logging.basicConfig(
     level=logging.DEBUG,               # DEBUG, чтобы видеть максимум
@@ -53,6 +57,24 @@ app.add_middleware(
 
 router = APIRouter(prefix="/battles", tags=["battles"])
 
+async def build_participant_info(char_id: int, participant_id: int) -> dict:
+    """
+    Сбор ВСЕГО, что нужно зафиксировать на старте боя
+    (avatar, name, attributes, skills, fast-slots).
+    """
+    attr   = await fetch_full_attributes(char_id)
+    ranks  = await character_ranks (char_id)
+    slots  = await get_fast_slots(char_id)
+    profile = await get_character_profile(char_id)
+    return {
+        "participant_id": participant_id,
+        "character_id"  : char_id,
+        "name"          : profile["character_name"],
+        "avatar"        : profile["character_photo"],
+        "attributes"    : attr,
+        "skills"        : ranks,
+        "fast_slots"    : slots,
+    }
 
 @router.post("/", response_model=BattleCreated, status_code=201)
 async def create_battle_endpoint(
@@ -78,6 +100,12 @@ async def create_battle_endpoint(
     first_actor_pid = participant_objs[0].id
     deadline = datetime.utcnow() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
 
+    participants_info = []
+    for p in participant_objs:
+        participants_info.append(
+            await build_participant_info(p.character_id, p.id)
+        )
+
     # 4. Собираем payload для Redis
     participants_payload = [
         {
@@ -87,6 +115,9 @@ async def create_battle_endpoint(
         }
         for p in participant_objs
     ]
+    await save_snapshot(battle_obj.id, participants_info)
+    rds = await get_redis_client()
+    await cache_snapshot(rds, battle_obj.id, participants_info)
 
     await init_battle_state(
         battle_id=battle_obj.id,
@@ -94,6 +125,7 @@ async def create_battle_endpoint(
         first_actor_participant_id=first_actor_pid,
         deadline_at=deadline,
     )
+    await rds.zadd(KEY_BATTLE_TURNS.format(id=battle_obj.id), {"0": 1})
 
     # 5. Возвращаем ответ
     return BattleCreated(
@@ -104,12 +136,41 @@ async def create_battle_endpoint(
     )
 
 
+# battle_service/main.py
 @router.get("/{battle_id}/state")
 async def get_state(battle_id: int):
     state = await load_state(battle_id)
     if not state:
         raise HTTPException(404, "State not found")
-    return state
+
+    # snapshot кладём в ответ (берём из Redis, а если нет — из Mongo)
+    rds = await get_redis_client()
+    snapshot = await get_cached_snapshot(rds, battle_id)
+    if snapshot is None:
+        snap_doc = await load_snapshot(battle_id)
+        if snap_doc:
+            snapshot = snap_doc["participants"]
+            await cache_snapshot(rds, battle_id, snapshot)
+
+    runtime = {
+               "turn_number": state["turn_number"],
+               "next_actor": state["next_actor"],
+               "total_turns": state["total_turns"],
+               "last_turn": state["last_turn"],
+               "participants": {
+                      pid: {
+                            "hp": state["participants"][pid]["hp"],
+                            "mana": state["participants"][pid]["mana"],
+                            "energy": state["participants"][pid]["energy"],
+                            "stamina": state["participants"][pid]["stamina"],
+                            "cooldowns": state["participants"][pid]["cooldowns"],
+                        }
+                            for pid in state["participants"]
+                    },
+                "active_effects": state["active_effects"],
+                }
+
+    return {"snapshot": snapshot, "runtime": runtime}
 
 
 
@@ -383,12 +444,16 @@ async def make_action(
 
     await save_state(battle_id, battle_state)
 
-    redis_client = await get_redis_client()
-    await redis_client.zadd(
+    redis = await get_redis_client()
+
+    await redis.zadd(KEY_BATTLE_TURNS.format(id=battle_id),
+                     {str(new_turn_number): 1})
+
+    await redis.zadd(
         ZSET_DEADLINES,
         {f"{battle_id}:{next_actor_participant_id}": new_deadline.timestamp()},
     )
-    await redis_client.publish(
+    await redis.publish(
         f"battle:{battle_id}:your_turn", str(next_actor_participant_id)
     )
 
@@ -424,5 +489,12 @@ async def list_turn_logs(battle_id: int, limit: int = 50):
         raise HTTPException(404, "Нет логов для этого боя")
     return docs
 
+@router.get("/battles/{battle_id}/logs/{turn_number}",
+            response_model=LogResponse)
+async def logs_for_turn(battle_id: int, turn_number: int):
+    logs = await get_logs_for_turn(battle_id, turn_number)
+    if not logs:
+        return {"logs": []}              # возвращаем пустой список, не 404
+    return {"logs": logs}
 
 app.include_router(router)

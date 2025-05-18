@@ -40,3 +40,11 @@ class ActionResponse(BaseModel):
     deadline_at: datetime
     events: list[dict]
 
+class BattleLog(BaseModel):
+    battle_id: int
+    turn_number: int
+    events: list[dict]
+    timestamp: datetime
+
+class LogResponse(BaseModel):                # ← новый
+    logs: list[BattleLog]

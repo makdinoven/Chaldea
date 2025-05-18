@@ -12,11 +12,16 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import redis.asyncio as redis
 
 from config import settings
+
+KEY_BATTLE_SNAPSHOT = "battle:{id}:snapshot"      # hash
+KEY_BATTLE_TURNS    = "battle:{id}:turns"         # zset turn_number → 1
+
+SNAPSHOT_TTL = 24 * 3600   # сек – сутки
 
 # singleton-клиент, чтобы не открывать соединения при каждом вызове
 _redis_client: redis.Redis | None = None
@@ -91,14 +96,40 @@ async def init_battle_state(
 
 
 # ---------- вспомогательные операции --------------------------------------
-async def load_state(battle_id: int) -> Dict | None:
-    """Получить текущее состояние боя из Redis (dict) или None."""
-    redis_client = await get_redis_client()
-    raw_json: str | None = await redis_client.get(state_key(battle_id))
-    return json.loads(raw_json) if raw_json else None
+async def load_state(battle_id: int) -> Optional[Dict]:
+    """
+    Читает JSON-state из Redis, добавляет:
+        • total_turns – сколько ходов было,
+        • last_turn   – номер последнего хода.
+    """
+    redis = await get_redis_client()
 
+    raw_json: str | None = await redis.get(state_key(battle_id))
+    if raw_json is None:
+        return None          # ещё не инициировали бой
+
+    raw_state: Dict = json.loads(raw_json)
+
+    turn_ids: list[bytes] = await redis.zrange(
+        KEY_BATTLE_TURNS.format(id=battle_id), 0, -1
+    )
+    total_turns = len(turn_ids)
+    last_turn   = int(turn_ids[-1]) if turn_ids else 0
+
+    raw_state.update({"total_turns": total_turns, "last_turn": last_turn})
+    return raw_state
 
 async def save_state(battle_id: int, state: Dict) -> None:
     """Перезаписать состояние боя целиком."""
     redis_client = await get_redis_client()
     await redis_client.set(state_key(battle_id), json.dumps(state))
+
+async def cache_snapshot(rds, battle_id: int, snapshot: dict) -> None:
+    key = KEY_BATTLE_SNAPSHOT.format(id=battle_id)
+    # Redis hash → сохраняем сразу целиком «как строку»
+    await rds.set(key, json.dumps(snapshot), ex=SNAPSHOT_TTL)
+
+async def get_cached_snapshot(rds, battle_id: int) -> dict | None:
+    key = KEY_BATTLE_SNAPSHOT.format(id=battle_id)
+    data = await rds.get(key)
+    return json.loads(data) if data else None

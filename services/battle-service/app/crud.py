@@ -2,6 +2,9 @@
 from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Sequence
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from mongo_client import get_mongo_db
 
 import models, schemas
 
@@ -58,3 +61,22 @@ async def get_battle(db: AsyncSession, battle_id: int) -> models.Battle | None:
         select(models.Battle).where(models.Battle.id == battle_id)
     )
     return result.scalar_one_or_none()
+
+async def get_logs_for_turn(
+    battle_id: int,
+    turn_number: int,
+    db: AsyncIOMotorDatabase | None = None
+) -> Sequence[dict]:
+    """
+    Возвращает все события указанного хода, отсортированные по времени.
+
+    Если `db` не передан, берём дефолтный `game` через get_mongo_db().
+    """
+    if db is None:                      # ← чтобы не приходилось передавать явно
+        db = get_mongo_db("game")
+
+    cursor = db.battle_logs.find(
+        {"battle_id": battle_id, "turn_number": turn_number},
+        sort=[("timestamp", 1)]         # motor-syntax «sort=[…]»
+    )
+    return await cursor.to_list(length=None)
