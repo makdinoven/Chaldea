@@ -75,6 +75,32 @@ async def build_participant_info(char_id: int, participant_id: int) -> dict:
         "skills"        : ranks,
         "fast_slots"    : slots,
     }
+async def _pay_skill_costs(state: dict, pid: int, ranks: list[dict]) -> dict:
+    """
+    Проверяет и списывает cost_energy / cost_mana / cost_stamina
+    для переданных рангов. Возвращает словарь списанных величин,
+    чтобы записать в лог события.
+    """
+    spend = {"energy": 0, "mana": 0, "stamina": 0}
+    for r in ranks:
+        spend["energy"]  += r.get("cost_energy",   0)
+        spend["mana"]    += r.get("cost_mana",     0)
+        spend["stamina"] += r.get("cost_stamina",  0)
+
+    pstate = state["participants"][str(pid)]
+
+    # Проверка «хватает ли»
+    for res, value in spend.items():
+        if pstate[res] < value:
+            raise HTTPException(
+                400, f"Not enough {res}: need {value}, have {pstate[res]}"
+            )
+
+    # Списываем
+    for res, value in spend.items():
+        pstate[res] -= value
+
+    return spend
 
 @router.post("/", response_model=BattleCreated, status_code=201)
 async def create_battle_endpoint(
@@ -427,6 +453,19 @@ async def make_action(
                 "kind": "attack",
                 "effects": [e["effect_name"] for e in enemy_effects],
             })
+
+    attack_rank = await get_rank(request.skills.attack_rank_id) if request.skills.attack_rank_id else None
+    defense_rank = await get_rank(request.skills.defense_rank_id) if request.skills.defense_rank_id else None
+    support_rank = await get_rank(request.skills.support_rank_id) if request.skills.support_rank_id else None
+
+    spend = await _pay_skill_costs(
+        battle_state,
+        request.participant_id,
+        [r for r in (attack_rank, defense_rank, support_rank) if r]
+    )
+    turn_events.append(
+        {"event": "resource_spend", "who": request.participant_id, **spend}
+    )
     logger.debug("[EVENTS] turn_events=%s", turn_events)
     # ------------------------------------------------------------------------------
     # 10. Записываем ход в БД
