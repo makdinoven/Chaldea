@@ -91,7 +91,7 @@ services:
       context: .
       dockerfile: ./docker/battle-service/Dockerfile
     command: >
-      celery -A battle_service.app.tasks worker
+      celery -A tasks:celery_app worker
       --loglevel=info
     depends_on:
       rabbitmq:
