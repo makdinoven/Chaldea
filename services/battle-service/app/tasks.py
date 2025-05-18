@@ -5,7 +5,7 @@ from celery import Celery
 from mongo_client import get_mongo_db
 import logging
 logger = logging.getLogger(__name__)
-celery_app = Celery("battle_tasks", broker=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/1"))
+celery_app = Celery("battle_tasks", broker=os.getenv("CELERY_BROKER_URL", "amqp://guest:guest@rabbitmq:5672//"))
 
 @celery_app.task
 def save_log(battle_id: int, turn_number: int, events: list[dict]):
@@ -18,7 +18,6 @@ def save_log(battle_id: int, turn_number: int, events: list[dict]):
             "events":      events,
             "timestamp":   datetime.utcnow(),
         })
-
     # выполняем корутину в текущем процессе Celery
     try:
         loop = asyncio.get_running_loop()
