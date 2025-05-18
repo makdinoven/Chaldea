@@ -67,16 +67,20 @@ async def init_battle_state(
         "turn_number": 0,
         "next_actor": first_actor_participant_id,
         "participants": {
-            str(p["participant_id"]): {
-                "character_id": p["character_id"],
-                "team": p["team"],
-                # базовые текущие ресурсы — позже заменим реальными атрибутами
-                "hp": 100,
-                "mana": 75,
-                "energy": 50,
-                "stamina": 50,
+        str(p["participant_id"]): {
+            "character_id": p["character_id"],
+            "team"       : p["team"],
+            "hp"         : p["hp"],
+            "mana"       : p["mana"],
+            "energy"     : p["energy"],
+            "stamina"    : p["stamina"],
+            "max_hp"     : p["max_hp"],
+            "max_mana"   : p["max_mana"],
+            "max_energy" : p["max_energy"],
+            "max_stamina": p["max_stamina"],
+            "cooldowns"  : {},          # будет нужен дальше
             }
-            for p in participants_payload
+    for p in participants_payload
         },
     }
 

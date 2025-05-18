@@ -107,14 +107,26 @@ async def create_battle_endpoint(
         )
 
     # 4. Собираем payload для Redis
-    participants_payload = [
-        {
-            "participant_id": p.id,
-            "character_id":  p.character_id,
-            "team":          p.team,
-        }
-        for p in participant_objs
-    ]
+    participants_payload = []
+    for snap in participants_info:  # каждый snap = build_participant_info(...)
+        participants_payload.append({
+            "participant_id": snap["participant_id"],
+            "character_id": snap["character_id"],
+            "team": next(
+                pl.team for pl in participant_objs
+                if pl.id == snap["participant_id"]
+            ),
+            # реальные цифры
+            "hp": snap["attributes"]["current_health"],
+            "mana": snap["attributes"]["current_mana"],
+            "energy": snap["attributes"]["current_energy"],
+            "stamina": snap["attributes"]["current_stamina"],
+            # если хотите — max_*
+            "max_hp": snap["attributes"]["max_health"],
+            "max_mana": snap["attributes"]["max_mana"],
+            "max_energy": snap["attributes"]["max_energy"],
+            "max_stamina": snap["attributes"]["max_stamina"],
+        })
     await save_snapshot(battle_obj.id, participants_info)
     rds = await get_redis_client()
     await cache_snapshot(rds, battle_obj.id, participants_info)
