@@ -66,6 +66,7 @@ async def init_battle_state(
     battle_state: Dict = {
         "turn_number": 0,
         "next_actor": first_actor_participant_id,
+        "active_effects": {},
         "participants": {
         str(p["participant_id"]): {
             "character_id": p["character_id"],
@@ -79,7 +80,6 @@ async def init_battle_state(
             "max_energy" : p["max_energy"],
             "max_stamina": p["max_stamina"],
             "cooldowns"  : {},
-            "active_effects": {},
             }
     for p in participants_payload
         },
