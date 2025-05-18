@@ -78,7 +78,8 @@ async def init_battle_state(
             "max_mana"   : p["max_mana"],
             "max_energy" : p["max_energy"],
             "max_stamina": p["max_stamina"],
-            "cooldowns"  : {},          # будет нужен дальше
+            "cooldowns"  : {},
+            "active_effects": {},
             }
     for p in participants_payload
         },
