@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict
 
 from fastapi import FastAPI, Depends, HTTPException, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crud import create_battle, write_turn
@@ -16,6 +17,34 @@ from tasks import save_log
 from skills_client import character_has_rank, get_rank, get_item
 
 app = FastAPI(title="Battle Service")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://4452515-co41851.twc1.net",
+        "http://4452515-co41851.twc1.net:5173",
+        "http://4452515-co41851.twc1.net:5555",
+        "http://4452515-co41851.twc1.net:8005",
+        "http://4452515-co41851.twc1.net:8004",
+        "http://4452515-co41851.twc1.net:8003",
+        "http://4452515-co41851.twc1.net:8002",
+        "http://4452515-co41851.twc1.net:8001",
+        "http://4452515-co41851.twc1.net:8000",
+        "http://localhost",
+        "http://localhost:8000",
+        "http://localhost:8001",
+        "http://localhost:8002",
+        "http://localhost:8003",
+        "http://localhost:8004",
+        "http://localhost:8005",
+        "http://localhost:5555",
+
+                    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 router = APIRouter(prefix="/battles", tags=["battles"])
 
 
