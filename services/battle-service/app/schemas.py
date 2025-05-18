@@ -3,11 +3,12 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
-# class BattleCreated(BaseModel):
-#     battle_id: int
-#     participants: List[int]
-#     next_actor: int
-#     deadline_at: datetime
+class BattleCreated(BaseModel):
+    battle_id: int
+    participants: List[int]
+    next_actor: int
+    deadline_at: datetime
+
 class PlayerIn(BaseModel):
     character_id: int
     team: int | None = None
