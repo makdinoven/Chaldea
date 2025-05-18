@@ -53,7 +53,15 @@ async def create_skill_rank(db: AsyncSession, data: schemas.SkillRankCreate) -> 
     return new_rank
 
 async def get_skill_rank(db: AsyncSession, rank_id: int) -> models.SkillRank | None:
-    result = await db.execute(select(models.SkillRank).where(models.SkillRank.id == rank_id))
+    stmt = (
+        select(models.SkillRank)
+        .options(
+            selectinload(models.SkillRank.damage_entries),
+            selectinload(models.SkillRank.effects),
+        )
+        .where(models.SkillRank.id == rank_id)
+    )
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 async def list_skill_ranks_by_skill(db: AsyncSession, skill_id: int) -> list[models.SkillRank]:
