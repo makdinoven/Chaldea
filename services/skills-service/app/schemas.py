@@ -179,6 +179,7 @@ class CharacterSkillUpdate(CharacterSkillBase):
 
 class CharacterSkillRead(CharacterSkillBase):
     id: int
+    skill_rank: SkillRankRead
 
     class Config:
         orm_mode = True
