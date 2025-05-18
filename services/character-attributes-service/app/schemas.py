@@ -13,6 +13,7 @@ class CharacterAttributesBase(BaseModel):
     stamina: Optional[int] = Field(10, ge=0, description="Прокачка выносливости")
     charisma: Optional[int] = Field(1, ge=0, description="Харизма")
     luck: Optional[int] = Field(1, ge=0, description="Удача")
+    damage: Optional[int] = Field(0, ge=0, description = "Базовый урон персонажа")
 
     class Config:
         schema_extra = {
@@ -51,6 +52,9 @@ class CharacterAttributesResponse(CharacterAttributesBase):
     active_experience: int
     dodge: float
     critical_hit_chance: float
+    critical_damage: float
+    damage: int
+
     res_effects: float
     res_physical: float
     res_catting: float

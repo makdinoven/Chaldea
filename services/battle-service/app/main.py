@@ -354,13 +354,12 @@ async def make_action(
                 "kind": "attack",
                 "effects": [e["effect_name"] for e in enemy_effects],
             })
-
+    logger.debug("[EVENTS] turn_events=%s", turn_events)
     # ------------------------------------------------------------------------------
     # 10. Записываем ход в БД
     # ------------------------------------------------------------------------------
     new_turn_number = battle_state["turn_number"] + 1
     new_deadline = datetime.utcnow() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
-
     await write_turn(
         db_session,
         battle_id=battle_id,
