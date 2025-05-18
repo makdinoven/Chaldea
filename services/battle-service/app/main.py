@@ -300,7 +300,7 @@ async def make_action(
     # ------------------------------------------------------------------------------
     # 9. ATTACK-навык
     # ------------------------------------------------------------------------------
-    attack_id=request.skills.attacker_rank_id
+    attack_id=request.skills.attack_rank_id
     if attack_id and attack_id >0:
         attack_rank = await get_rank(request.skills.attack_rank_id)
 
