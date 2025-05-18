@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from os import supports_fd
 from typing import List, Dict
 
 from fastapi import FastAPI, Depends, HTTPException, APIRouter
@@ -208,7 +209,8 @@ async def make_action(
     # ------------------------------------------------------------------------------
     # 6. SUPPORT-навык (баффы на self)
     # ------------------------------------------------------------------------------
-    if request.skills.support_rank_id is not None:
+    support_id = request.skills.support_rank_id
+    if support_id and support_id > 0:
         support_rank = await get_rank(request.skills.support_rank_id)
 
         # self-эффекты
@@ -234,7 +236,8 @@ async def make_action(
     # ------------------------------------------------------------------------------
     # 7. DEFENSE-навык (баффы на self)
     # ------------------------------------------------------------------------------
-    if request.skills.defense_rank_id is not None:
+    defense_id=request.skills.defense_rank_id
+    if defense_id and defense_id > 0:
         defense_rank = await get_rank(request.skills.defense_rank_id)
 
         self_effects = [e for e in defense_rank.get("effects", [])
@@ -297,7 +300,8 @@ async def make_action(
     # ------------------------------------------------------------------------------
     # 9. ATTACK-навык
     # ------------------------------------------------------------------------------
-    if request.skills.attack_rank_id is not None:
+    attack_id=request.skills.attacker_rank_id
+    if attack_id and attack_id >0:
         attack_rank = await get_rank(request.skills.attack_rank_id)
 
         # damage_entries
