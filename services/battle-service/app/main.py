@@ -141,7 +141,6 @@ async def create_battle_endpoint(
     participants_payload = []
     for snap in participants_info:  # каждый snap = build_participant_info(...)
         participants_payload.append({
-            "started_at": snap["started_at"],
             "participant_id": snap["participant_id"],
             "character_id": snap["character_id"],
             "team": next(
@@ -198,6 +197,7 @@ async def get_state(battle_id: int):
 
     runtime = {
                "turn_number": state["turn_number"],
+               "deadline_at": state["deadline_at"],
                "current_actor": state["next_actor"],
                "next_actor": next_pid_after(state["next_actor"], state["turn_order"]),
                "first_actor": state["first_actor"],
