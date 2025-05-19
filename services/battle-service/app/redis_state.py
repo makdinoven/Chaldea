@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -22,6 +23,8 @@ KEY_BATTLE_SNAPSHOT = "battle:{id}:snapshot"      # hash
 KEY_BATTLE_TURNS    = "battle:{id}:turns"         # zset turn_number → 1
 
 SNAPSHOT_TTL = 24 * 3600   # сек – сутки
+STATE_TTL_HOURS = int(os.getenv("BATTLE_STATE_TTL_HOURS", 48))
+STATE_TTL = STATE_TTL_HOURS * 3600
 
 # singleton-клиент, чтобы не открывать соединения при каждом вызове
 _redis_client: redis.Redis | None = None
@@ -66,6 +69,8 @@ async def init_battle_state(
     battle_state: Dict = {
         "turn_number": 0,
         "next_actor": first_actor_participant_id,
+        "first_actor": first_actor_participant_id,  # ← кто начинает
+        "turn_order": [p["participant_id"] for p in participants_payload],
         "active_effects": {},
         "participants": {
         str(p["participant_id"]): {
@@ -86,7 +91,7 @@ async def init_battle_state(
     }
 
     # пишем состояние
-    await redis_client.set(state_key(battle_id), json.dumps(battle_state))
+    await redis_client.set(state_key(battle_id), json.dumps(battle_state), ex=STATE_TTL)
     print("[REDIS] write state", state_key(battle_id))
 
     # добавляем дедлайн первого хода в ZSET
@@ -127,7 +132,7 @@ async def load_state(battle_id: int) -> Optional[Dict]:
 async def save_state(battle_id: int, state: Dict) -> None:
     """Перезаписать состояние боя целиком."""
     redis_client = await get_redis_client()
-    await redis_client.set(state_key(battle_id), json.dumps(state))
+    await redis_client.set(state_key(battle_id), json.dumps(state), ex=STATE_TTL)
 
 async def cache_snapshot(rds, battle_id: int, snapshot: dict) -> None:
     key = KEY_BATTLE_SNAPSHOT.format(id=battle_id)

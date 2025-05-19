@@ -17,17 +17,36 @@ from __future__ import annotations
 from typing import Dict, List
 
 
-def aggregate_modifiers(
-    effects_for_participant: List[Dict]
-) -> Dict[str, float]:
+def aggregate_modifiers(effects_for_participant: List[Dict]) -> Dict[str, float]:
     """
-    Суммируем все оставшиеся эффекты в {attribute_key: total_delta}
+    Суммирует модификаторы; percent_damage_* агрегирует отдельно,
+    чтобы battle_engine смог использовать как {'all':…, 'fire':…}
     """
     summary: Dict[str, float] = {}
     for eff in effects_for_participant:
         key = eff["attribute"]
-        summary[key] = summary.get(key, 0.0) + eff["magnitude"]
+        mag = eff["magnitude"]
+        summary[key] = summary.get(key, 0.0) + mag
     return summary
+
+def build_percent_damage_buffs(mods: dict[str, float]) -> dict[str, float]:
+    """
+    Выдёргивает ключи вида
+      • percent_damage         → {'all': value}
+      • percent_damage_fire    → {'fire': value}
+    и возвращает {'all': …, 'fire': …}
+    """
+    out: dict[str, float] = {}
+    for key, val in mods.items():
+        if not key.startswith("percent_damage"):
+            continue
+        if key == "percent_damage":
+            out["all"] = val
+        else:
+            dmg_type = key[len("percent_damage_"):]
+            out[dmg_type] = val
+    return out
+
 
 
 def decrement_durations(state: Dict) -> None:

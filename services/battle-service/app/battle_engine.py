@@ -187,3 +187,27 @@ def apply_flat_modifiers(attributes: Dict, modifiers: Dict[str, float]) -> Dict:
     for key, delta in modifiers.items():
         new_attr[key] = new_attr.get(key, 0) + delta
     return new_attr
+
+def set_cooldown(state: dict, pid: int, rank_id: int, cd: int) -> None:
+    """Записываем новый кулдаун ранга."""
+    p = state["participants"][str(pid)]
+    p.setdefault("cooldowns", {})            # ← уже есть при init, но на всякий
+    p["cooldowns"][str(rank_id)] = cd
+
+
+def decrement_cooldowns(state: dict) -> None:
+    """
+    В конце хода пробегаемся по всем участникам и уменьшаем
+    оставшиеся кулдауны. 0 → удаляем ключ.
+    """
+    for p in state["participants"].values():
+        cd_map = p.get("cooldowns", {})
+        to_delete = []
+        for rank_id, remaining in cd_map.items():
+            remaining -= 1
+            if remaining <= 0:
+                to_delete.append(rank_id)
+            else:
+                cd_map[rank_id] = remaining
+        for rid in to_delete:
+            cd_map.pop(rid, None)

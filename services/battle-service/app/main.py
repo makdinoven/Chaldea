@@ -10,9 +10,10 @@ from crud import create_battle, write_turn, get_logs_for_turn
 from schemas import BattleCreated, BattleCreate, ActionResponse, ActionRequest, LogResponse
 from mongo_client import get_mongo_db
 from database import get_db
+from battle_engine import decrement_cooldowns, set_cooldown
 from inventory_client import get_fast_slots
 from character_client import get_character_profile
-from buffs import decrement_durations, aggregate_modifiers, apply_new_effects
+from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, build_percent_damage_buffs
 from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, compute_damage_with_rolls
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
     get_cached_snapshot, KEY_BATTLE_TURNS
@@ -56,6 +57,10 @@ app.add_middleware(
 )
 
 router = APIRouter(prefix="/battles", tags=["battles"])
+
+def next_pid_after(cur, order):            # order = [id,id,…]
+    idx = order.index(cur)
+    return order[(idx + 1) % len(order)]
 
 async def build_participant_info(char_id: int, participant_id: int) -> dict:
     """
@@ -136,6 +141,7 @@ async def create_battle_endpoint(
     participants_payload = []
     for snap in participants_info:  # каждый snap = build_participant_info(...)
         participants_payload.append({
+            "started_at": snap["started_at"],
             "participant_id": snap["participant_id"],
             "character_id": snap["character_id"],
             "team": next(
@@ -192,7 +198,10 @@ async def get_state(battle_id: int):
 
     runtime = {
                "turn_number": state["turn_number"],
-               "next_actor": state["next_actor"],
+               "current_actor": state["next_actor"],
+               "next_actor": next_pid_after(state["next_actor"], state["turn_order"]),
+               "first_actor": state["first_actor"],
+               "turn_order": state["turn_order"],
                "total_turns": state["total_turns"],
                "last_turn": state["last_turn"],
                "participants": {
@@ -250,6 +259,7 @@ async def make_action(
     # 3. Уменьшаем длительность старых баффов/дебаффов
     # ------------------------------------------------------------------------------
     decrement_durations(battle_state)
+    decrement_cooldowns(battle_state)
 
     # ------------------------------------------------------------------------------
     # 4. Валидация владения ранками
@@ -284,6 +294,8 @@ async def make_action(
     attacker_buff_modifiers = aggregate_modifiers(
         battle_state.get("active_effects", {}).get(str(request.participant_id), [])
     )
+    percent_damage_buffs = build_percent_damage_buffs(attacker_buff_modifiers)
+
     attacker_attributes = apply_flat_modifiers(
         base_attacker_attributes, attacker_buff_modifiers
     )
@@ -309,7 +321,6 @@ async def make_action(
     )
 
     # суммарные %-баффы атаки (нужны compute_damage_with_rolls)
-    percent_damage_buffs = attacker_buff_modifiers.get("percent_damage", {})
     logger.debug(f"[ATTR] base_attacker_attr={base_attacker_attributes}")
     logger.debug(f"[BUFF] attacker_mods={attacker_buff_modifiers}")
 
@@ -463,6 +474,16 @@ async def make_action(
         request.participant_id,
         [r for r in (attack_rank, defense_rank, support_rank) if r]
     )
+    if attack_rank and attack_rank.get("cooldown"):
+        set_cooldown(battle_state, request.participant_id,
+                      attack_rank["id"], attack_rank["cooldown"])
+    if defense_rank and defense_rank.get("cooldown"):
+        set_cooldown(battle_state, request.participant_id,
+                      defense_rank["id"], defense_rank["cooldown"])
+    if support_rank and support_rank.get("cooldown"):
+        set_cooldown(battle_state, request.participant_id,
+                      support_rank["id"], support_rank["cooldown"])
+
     turn_events.append(
         {"event": "resource_spend", "who": request.participant_id, **spend}
     )
