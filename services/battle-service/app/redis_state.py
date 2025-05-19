@@ -68,7 +68,7 @@ async def init_battle_state(
     # cформируем JSON-словарь состояния
     battle_state: Dict = {
         "turn_number": 0,
-        "deadline_at": deadline_at,
+        "deadline_at": deadline_at.isoformat(),
         "next_actor": first_actor_participant_id,
         "first_actor": first_actor_participant_id,  # ← кто начинает
         "turn_order": [p["participant_id"] for p in participants_payload],

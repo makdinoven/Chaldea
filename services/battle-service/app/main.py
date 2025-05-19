@@ -166,7 +166,7 @@ async def create_battle_endpoint(
         battle_id=battle_obj.id,
         participants_payload=participants_payload,
         first_actor_participant_id=first_actor_pid,
-        deadline_at=deadline,
+        deadline_at=deadline.isoformat(),
     )
     await rds.zadd(KEY_BATTLE_TURNS.format(id=battle_obj.id), {"0": 1})
 
