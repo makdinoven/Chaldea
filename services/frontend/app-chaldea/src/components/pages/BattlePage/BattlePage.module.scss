@@ -1,0 +1,6 @@
+.battlePage_container {
+  display: grid;
+  grid-template-columns: 1fr 440px 1fr;
+  gap: 15px;
+  color: var(--zoloto);
+}

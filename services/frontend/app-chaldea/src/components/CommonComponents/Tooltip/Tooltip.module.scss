@@ -1,0 +1,22 @@
+@use "../../../global.scss" as *;
+
+.tooltip_container {
+  color: #fff;
+  font-weight: 500;
+  font-size: 12px;
+  text-transform: uppercase;
+  position: absolute;
+  top: 120%;
+  z-index: 20;
+  left: 50%;
+  transform: translateX(-50%);
+  @include gray-background-br;
+  border-radius: 10px;
+  min-width: 100px;
+  padding: 5px;
+  text-align: center;
+  opacity: 0;
+  display: none;
+  transition: opacity 0.2s;
+  @include gold-outline($width: 1px, $inset: -3px)
+}

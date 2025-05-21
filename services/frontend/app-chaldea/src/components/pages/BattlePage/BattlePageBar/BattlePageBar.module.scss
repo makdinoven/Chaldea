@@ -1,0 +1,285 @@
+@use "../../../../global.scss" as *;
+
+.container {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  font-weight: 500;
+}
+
+.battle_bar_top {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  @include gray-background-br;
+  min-height: 160px;
+
+  h3 {
+    @include gold-text;
+    font-size: 18px;
+  }
+
+  .opponent_turn_sign {
+    font-size: 16px;
+    text-transform: uppercase;
+  }
+
+  .icons {
+    display: flex;
+    gap: 18px;
+
+    .line {
+      @include vertical-gradient-line($top: 0, $height: 100%, $right: 0, $width: 100%);
+      width: 1px;
+      height: 100%;
+    }
+  }
+}
+
+.auto_battle_btns {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 60px;
+  gap: 20px;
+}
+
+.mode_btns {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.auto_battle_mode_btn {
+  position: relative;
+  width: 30px;
+  height: 40px;
+  transition: width 0.2s ease, height 0.2s ease;
+
+  svg {
+    transition: width 0.2s ease, height 0.2s ease;
+  }
+
+  &:hover {
+    .tooltip {
+      display: block;
+      opacity: 1;
+    }
+  }
+
+  &.attack {
+    svg {
+      path {
+        stroke: #f37753;
+      }
+    }
+  }
+
+  &.defend {
+    svg {
+      path {
+        stroke: #76a6bd;
+      }
+    }
+  }
+
+  &.active {
+    svg {
+      width: 45px;
+      height: 57px;
+    }
+
+    width: 45px;
+    height: 57px;
+  }
+}
+
+.auto_battle_btn {
+  height: fit-content;
+  margin-left: auto;
+  font-weight: 500;
+  position: relative;
+  border-radius: 15px;
+  font-size: 14px;
+  text-transform: uppercase;
+  padding: 10px 13.5px;
+
+  @include gradient-line-overlay;
+}
+
+.battle_turns_container {
+  @include gray-background-br;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-height: 140px;
+  padding: 35px 30px;
+  text-transform: uppercase;
+  transition: max-height 0.3s ease-in-out;
+
+  &.opened {
+    max-height: 286px;
+
+    .turns_list {
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+  }
+
+  .battle_turns_container_top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .turns_list {
+    display: grid;
+    row-gap: 40px;
+    column-gap: 10px;
+    grid-template-columns:  repeat(5, 1fr);
+    align-items: center;
+    justify-items: center;
+
+    li {
+      position: relative;
+      display: flex;
+      width: 100%;
+      justify-content: flex-start;
+      align-items: flex-start;
+      gap: 5px;
+
+      &:not(:last-child), &:not(:nth-last-child(-n + 5)) {
+        @include vertical-gradient-line($top: 0, $height: 100%, $right: -5px, $width: 1px);
+      }
+    }
+
+    .turn_circle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 500;
+      position: relative;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.4);
+
+      &.my {
+        color: #76a6bd;
+        background: #fff;
+        cursor: pointer;
+      }
+
+      &.opponent {
+        background: #76a6bd;
+        cursor: pointer;
+      }
+
+      &.active {
+        @include gold-outline($width: 3px, $inset: 0);
+      }
+    }
+  }
+}
+
+.battle_logs_container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 35px 30px;
+  text-transform: uppercase;
+  @include gray-background-br;
+  height: 286px;
+
+  .battle_logs_list {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 10px;
+
+    &::-webkit-scrollbar {
+      width: 3px;
+      border-radius: 10px;
+      background: linear-gradient(207deg, rgba(255, 255, 255, 0) 0%, #fff 49%, rgba(255, 255, 255, 0) 100%);
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+      border-radius: 10px;
+    }
+
+    li {
+      width: 100%;
+      gap: 5px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: flex-end;
+      font-size: 12px;
+      text-transform: none;
+
+      .event {
+        width: 100%;
+        text-align: left;
+
+        .gold {
+          @include gold-text;
+          font-size: 12px;
+        }
+
+        .blue {
+          color: var(--blue);
+        }
+
+        .red {
+          color: var(--red);
+        }
+      }
+    }
+  }
+}
+
+.doYouLike {
+  font-size: 14px;
+
+  .blue {
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--blue);
+    text-decoration: underline 1.5px;
+  }
+
+  .red {
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--red);
+    text-decoration: underline 1.5px;
+  }
+}
+
+.turn_btn {
+  position: relative;
+  border-radius: 40px;
+  padding: 10px 20px;
+  font-weight: 500;
+  font-size: 24px;
+  text-transform: uppercase;
+  @include gold-outline(2px, 0);
+
+  &.blocked {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  &:hover:not(.blocked) {
+    @include gold-text;
+  }
+}

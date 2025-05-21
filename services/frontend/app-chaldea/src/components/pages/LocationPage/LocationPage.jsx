@@ -1,6 +1,6 @@
 import s from "./LocationPage.module.scss";
-import { useParams, useSearchParams } from "react-router-dom";
-import { BASE_URL } from "../../../api/api.js";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { BASE_URL, BASE_URL_BATTLES } from "../../../api/api.js";
 import axios from "axios";
 import { useEffect, useState } from "react";
 import { useBodyBackground } from "../../../hooks/useBodyBackground.js";
@@ -15,6 +15,7 @@ import BackButton from "../../CommonComponents/BackButton/BackButton.jsx";
 const DEFAULT_TAB = "players";
 
 const LocationPage = () => {
+  const navigate = useNavigate();
   const { locationId } = useParams();
   const [location, setLocation] = useState(null);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -23,7 +24,7 @@ const LocationPage = () => {
   );
   const [loading, setLoading] = useState(false);
   const [textareaValue, setTextareaValue] = useState("");
-  const { character } = useSelector((state) => state.user);
+  const { character, username } = useSelector((state) => state.user);
 
   useBodyBackground(location?.image_url);
 
@@ -71,6 +72,25 @@ const LocationPage = () => {
   const handleTextareaChange = (e) => {
     const { value } = e.target;
     setTextareaValue(value);
+  };
+
+  const handleClickCallengeToFightBtn = (opponentId) => {
+    createBattle(opponentId);
+    // const battleId = 123;
+  };
+
+  const createBattle = async (opponentId) => {
+    try {
+      const res = await axios.post(`${BASE_URL_BATTLES}/battles/`, {
+        players: [{ character_id: opponentId }, { character_id: character.id }],
+      });
+      console.log(res.data);
+      navigate(`battle/${res.data.battle_id}`);
+      alert("битва началась");
+    } catch (error) {
+      alert("ошибка битва не началась");
+      console.log(error);
+    }
   };
 
   const renderTab = () => {
@@ -176,12 +196,21 @@ const LocationPage = () => {
                         <h4>{post.user_nickname}</h4>
                       </div>
 
-                      <div className={s.buttons}>
-                        <button className={s.button}>Пожаловаться</button>
-                        <button className={s.button}>Уведомить</button>
-                        <button className={s.button}>Написать</button>
-                        <button className={s.button}>Позвать историка</button>
-                      </div>
+                      {post.user_nickname !== username && (
+                        <div className={s.buttons}>
+                          <button className={s.button}>Пожаловаться</button>
+                          <button className={s.button}>Уведомить</button>
+                          <button className={s.button}>Написать</button>
+                          <button
+                            onClick={() =>
+                              handleClickCallengeToFightBtn(post.character_id)
+                            }
+                            className={s.button}
+                          >
+                            Вызвать на бой
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className={s.post}>

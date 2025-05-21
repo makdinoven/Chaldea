@@ -12,6 +12,7 @@ import AdminLocationsPage from "../AdminLocationsPage/AdminLocationsPage.jsx";
 import AdminSkillsPage from "../AdminSkillsPage/AdminSkillsPage.jsx";
 import LocationPage from "../pages/LocationPage/LocationPage.jsx";
 import ItemsAdminPage from "../ItemsAdminPage/ItemsAdminPage.jsx";
+import BattlePage from "../pages/BattlePage/BattlePage.jsx";
 
 const App = () => {
   return (
@@ -28,6 +29,10 @@ const App = () => {
           <Route path="admin/locations" element={<AdminLocationsPage />} />
           <Route path="home/admin/skills" element={<AdminSkillsPage />} />
           <Route path="admin/items" element={<ItemsAdminPage />} />
+          <Route
+            path="location/:locationdId/battle/:battleId"
+            element={<BattlePage />}
+          />
         </Route>
       </Routes>
     </Router>

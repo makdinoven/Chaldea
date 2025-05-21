@@ -8,11 +8,11 @@
 }
 
 
-@mixin gold-outline($width) {
+@mixin gold-outline($width, $inset: null) {
   &::after {
     content: "";
     position: absolute;
-    inset: -6px;
+    inset: if($inset != null, $inset, -6px);
     border-radius: inherit;
     border: $width solid transparent;
     background: linear-gradient(180deg, rgba(255, 249, 184, 1) 0%, rgba(188, 171, 76, 1) 100%);
@@ -30,3 +30,62 @@
   border-radius: 15px;
   background-color: var(--gray-background);
 }
+
+@mixin gradient-line-overlay {
+  position: relative;
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    border: 2px solid transparent;
+    background: linear-gradient(
+                    90deg,
+                    rgba(255, 255, 255, 0) 0%,
+                    rgb(255, 255, 255) 50%,
+                    rgba(255, 255, 255, 0) 100%
+    );
+    mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    -webkit-mask-composite: destination-out;
+    pointer-events: none;
+  }
+}
+
+@mixin vertical-gradient-line(
+  $top: 0,
+  $right: 0,
+  $bottom: auto,
+  $left: auto,
+  $width: 2px,
+  $height: 100%,
+  $z-index: 1,
+  $start-color: rgba(204, 204, 204, 0),
+  $middle-color: #999,
+  $end-color: rgba(255, 255, 255, 0),
+  $angle: 180deg
+) {
+  position: relative;
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: $top;
+    right: $right;
+    bottom: $bottom;
+    left: $left;
+    width: $width;
+    height: $height;
+    background: linear-gradient(
+                    $angle,
+                    $start-color 0%,
+                    $middle-color 50%,
+                    $end-color 100%
+    );
+    z-index: $z-index;
+    pointer-events: none;
+  }
+}
+

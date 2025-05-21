@@ -1,0 +1,44 @@
+@use "../../../../../../global.scss" as *;
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 60px;
+  height: 60px;
+  border-radius: 100%;
+  @include gold-outline(2px, 0);
+  transition: width 0.2s ease-in-out, height 0.2s ease-in-out;
+
+  &::after {
+    transition: border-width 0.2s ease-in-out
+  }
+
+  svg {
+    width: 32px;
+    height: 48px;
+    transition: width 0.2s ease-in-out, height 0.2s ease-in-out;
+  }
+
+  &:hover {
+    .tooltip {
+      display: block;
+      opacity: 1;
+    }
+  }
+
+  &.active {
+    width: 68px;
+    height: 68px;
+
+    svg {
+      width: 38px;
+      height: 54px;
+    }
+
+    &::after {
+      border-width: 3px;
+    }
+  }
+}
