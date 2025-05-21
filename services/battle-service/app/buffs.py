@@ -1,87 +1,97 @@
-"""
-Хранение и пересчёт баффов/дебаффов.
-Каждый эффект мы кладём в Redis-state:
-
-state["active_effects"] = {
-    "<participant_id>": [
-        {
-            "effect_id":   17,
-            "attribute":   "res_fire",   # attribute_key
-            "magnitude":   10,           # величина (пока «плоская»)
-            "remaining":   3             # ходов до исчезновения
-        }, ...
-    ]
-}
-"""
-from __future__ import annotations
+# buffs.py
 from typing import Dict, List
 
 
-def aggregate_modifiers(effects_for_participant: List[Dict]) -> Dict[str, float]:
+# ──────────────────────────────────────────────────────────
+# 1.  «Разворачиваем» JSON-эффект из БД → рабочий формат
+# ──────────────────────────────────────────────────────────
+def _normalize_effect(row: Dict) -> Dict:
     """
-    Суммирует модификаторы; percent_damage_* агрегирует отдельно,
-    чтобы battle_engine смог использовать как {'all':…, 'fire':…}
-    """
-    summary: Dict[str, float] = {}
-    for eff in effects_for_participant:
-        key = eff["attribute"]
-        mag = eff["magnitude"]
-        summary[key] = summary.get(key, 0.0) + mag
-    return summary
+    БД хранит строки вида:
+        effect_name      = "Buff: all" / "Resist: physical" / "StatModifier"
+        attribute_key    = dodge_chance / crit_chance / NULL
+        magnitude        = ±N
+        duration         = ходов
+    На выходе должно быть:
+        {"name":…, "attribute":…, "magnitude":…, "duration":…}
 
-def build_percent_damage_buffs(mods: dict[str, float]) -> dict[str, float]:
+    Правила:
+      • Buff: all            → attribute = "percent_damage"
+      • Buff: <type>         → percent_damage_<type>
+      • Resist: all|magic…   → percent_resist_<type>
+      • StatModifier         → attribute_key (из колонки)
     """
-    Выдёргивает ключи вида
-      • percent_damage         → {'all': value}
-      • percent_damage_fire    → {'fire': value}
-    и возвращает {'all': …, 'fire': …}
-    """
-    out: dict[str, float] = {}
-    for key, val in mods.items():
-        if not key.startswith("percent_damage"):
-            continue
-        if key == "percent_damage":
-            out["all"] = val
-        else:
-            dmg_type = key[len("percent_damage_"):]
-            out[dmg_type] = val
-    return out
+    name      = row["effect_name"]
+    magnitude = row["magnitude"]
+    duration  = row["duration"]
 
+    if row.get("attribute_key"):                     # StatModifier
+        attribute = row["attribute_key"]
+    else:
+        kind, tail = [s.strip().lower() for s in name.split(":", 1)]
+        if kind == "buff":
+            attribute = (
+                "percent_damage"
+                if tail == "all"
+                else f"percent_damage_{tail}"
+            )
+        elif kind == "resist":
+            attribute = f"percent_resist_{tail}"
+        else:                                        # Poison, etc.
+            attribute = name.replace(" ", "_").lower()
+
+    return {
+        "name"      : name,
+        "attribute" : attribute,
+        "magnitude" : magnitude,
+        "duration"  : duration,
+    }
+
+
+# ──────────────────────────────────────────────────────────
+def apply_new_effects(state: Dict, pid: int, raw_effect_rows: List[Dict]) -> None:
+    """
+    Добавляет эффекты к `active_effects[pid]`, разворачивая их через
+    _normalize_effect().  Если группа для участника отсутствует ─ создаём.
+    """
+    norm = [_normalize_effect(row) for row in raw_effect_rows]
+    eff_list = state.setdefault("active_effects", {}).setdefault(str(pid), [])
+    eff_list.extend(norm)
 
 
 def decrement_durations(state: Dict) -> None:
     """
-    Для каждого участника уменьшаем remaining; если 0 — удаляем.
+    Каждый ход уменьшаем duration всех активных эффектов,
+    удаляем, когда duration == 0.
     """
-    if "active_effects" not in state:
-        return
-    for pid, eff_list in state["active_effects"].items():
-        updated = []
-        for eff in eff_list:
-            eff["remaining"] -= 1
-            if eff["remaining"] > 0:
-                updated.append(eff)
-        state["active_effects"][pid] = updated
+    for pid, lst in list(state.get("active_effects", {}).items()):
+        new_lst = []
+        for eff in lst:
+            eff["duration"] -= 1
+            if eff["duration"] > 0:
+                new_lst.append(eff)
+        state["active_effects"][pid] = new_lst
 
 
-def apply_new_effects(
-    state: Dict,
-    target_participant_id: int,
-    new_effects: List[Dict],
-) -> None:
+def aggregate_modifiers(effects_for_participant: List[Dict]) -> Dict[str, float]:
     """
-    Добавляет эффекты (из SkillRankEffect) к участнику.
-    new_effects: [{effect_id, attribute_key, magnitude, duration}, ...]
+    Суммируем модификаторы (attribute → Σ magnitude)
     """
-    if "active_effects" not in state:
-        state["active_effects"] = {}
-    eff_list = state["active_effects"].setdefault(str(target_participant_id), [])
-    for eff in new_effects:
-        eff_list.append(
-            {
-                "effect_id": eff["id"],
-                "attribute": eff["attribute_key"],
-                "magnitude": eff["magnitude"],
-                "remaining": eff["duration"],
-            }
-        )
+    summary: Dict[str, float] = {}
+    for eff in effects_for_participant:
+        key = eff["attribute"]
+        summary[key] = summary.get(key, 0.0) + eff["magnitude"]
+    return summary
+
+
+def build_percent_damage_buffs(mods: Dict[str, float]) -> Dict[str, float]:
+    """
+    Из агрегированного словаря достаём только percent_damage*.
+    """
+    out = {}
+    for k, v in mods.items():
+        if k == "percent_damage":
+            out["all"] = v
+        elif k.startswith("percent_damage_"):
+            out[k[len("percent_damage_"):]] = v
+    return out

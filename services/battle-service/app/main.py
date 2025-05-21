@@ -62,6 +62,16 @@ def next_pid_after(cur, order):            # order = [id,id,…]
     idx = order.index(cur)
     return order[(idx + 1) % len(order)]
 
+def _ensure_not_on_cooldown(state: Dict, pid: int, rank_ids: list[int]) -> None:
+    """
+    Если у участника pid для любого rank_id из списка
+    cooldowns[rank_id] > 0  → HTTP 400.
+    """
+    cd = state["participants"][str(pid)]["cooldowns"]
+    for rid in rank_ids:
+        if cd.get(str(rid), 0) > 0:
+            raise HTTPException(400, f"Rank {rid} is on cooldown")
+
 async def build_participant_info(char_id: int, participant_id: int) -> dict:
     """
     Сбор ВСЕГО, что нужно зафиксировать на старте боя
@@ -280,6 +290,14 @@ async def make_action(
                 400,
                 f"Character {attacker_character_id} does not own rank {rank_id}",
             )
+    rank_ids = [
+        r_id for r_id in [
+            request.skills.attack_rank_id,
+            request.skills.defense_rank_id,
+            request.skills.support_rank_id,
+        ] if r_id
+    ]
+    _ensure_not_on_cooldown(battle_state, request.participant_id, rank_ids)
 
     # ------------------------------------------------------------------------------
     # 5. Готовим атрибуты + активные модификаторы атакующего
