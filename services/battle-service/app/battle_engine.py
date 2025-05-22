@@ -121,61 +121,59 @@ async def compute_damage_with_rolls(
     weapon: Dict | None,
     percent_buffs: Dict[str, float],
     defender_attr: Dict,
+    percent_resists: Dict[str, float],    # ← НОВОЕ
 ) -> Tuple[float, Dict]:
-    logger.debug(
-        f"[DMG] entry={damage_entry}, weapon={weapon}, "
-        f"percent_buffs={percent_buffs}"
-    )
     """
-    • бросает dodge → chance → crit
-    • возвращает (итоговый_урон_после_резистов, log_dict)
+    • roll_dodge, roll_chance, roll_crit
+    • применяет +%баффы, криты, −%резисты
     """
-    # ----- base attack value -----
-    base_attack = attacker_attr["damage"] + (weapon["damage_modifier"] if weapon else 0)
-
+    # 1) базовый урон
+    base = attacker_attr["damage"] + (weapon["damage_modifier"] if weapon else 0)
     dmg_type = damage_entry["damage_type"]
     if dmg_type == "all":
         dmg_type = weapon["primary_damage_type"] if weapon else "physical"
 
-    raw = base_attack + damage_entry["amount"]
-    raw *= 1 + (percent_buffs.get("all", 0) + percent_buffs.get(dmg_type, 0)) / 100
+    raw = base + damage_entry["amount"]
+    buff_pct = percent_buffs.get("all", 0) + percent_buffs.get(dmg_type, 0)
+    raw *= 1 + buff_pct / 100
 
     log = {
         "damage_type": dmg_type,
-        "base_attack": base_attack,
-        "entry_amount": damage_entry["amount"],
-        "buff_pct": percent_buffs.get("all", 0) + percent_buffs.get(dmg_type, 0),
+        "base": base,
+        "entry": damage_entry["amount"],
+        "buff_pct": buff_pct,
         "after_buffs": round(raw, 2),
     }
 
-    # ---------- dodge ----------
+    # dodge
     if roll_dodge(defender_attr["dodge"]):
         log["dodged"] = True
         return 0.0, log
     log["dodged"] = False
 
-    # ---------- chance roll ----------
+    # hit chance
     if not roll_chance(damage_entry["chance"]):
         log["hit_chance_failed"] = True
         return 0.0, log
     log["hit_chance_failed"] = False
 
-    # ---------- crit ----------
+    # crit
     if roll_crit(attacker_attr["critical_hit_chance"]):
-        raw *= attacker_attr["critical_damage"] / 100.0
+        crit_mul = attacker_attr["critical_damage"] / 100.0
+        raw *= crit_mul
         log["critical"] = True
+        log["crit_mul"] = crit_mul
     else:
         log["critical"] = False
 
-    # ---------- resist ----------
-    resist_field = f"res_{dmg_type}"
-    resist_pct = defender_attr.get(resist_field, 0) + defender_attr.get("res_effects", 0)
+    # resist
+    resist_pct = percent_resists.get("all", 0) + percent_resists.get(dmg_type, 0)
     final = raw * (1 - resist_pct / 100.0)
-    logger.debug(f"[DMG] rolled={final}")
     log.update({
         "resist_pct": resist_pct,
         "final": round(final, 2),
     })
+
     return final, log
 
 

@@ -13,7 +13,8 @@ from database import get_db
 from battle_engine import decrement_cooldowns, set_cooldown
 from inventory_client import get_fast_slots
 from character_client import get_character_profile
-from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, build_percent_damage_buffs
+from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, build_percent_damage_buffs, \
+    build_percent_resist_buffs
 from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, compute_damage_with_rolls
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
     get_cached_snapshot, KEY_BATTLE_TURNS
@@ -303,20 +304,13 @@ async def make_action(
     # 5. Готовим атрибуты + активные модификаторы атакующего
     # ------------------------------------------------------------------------------
     attr_cache: dict[int, dict] ={}
-    async def attrs(cid: int):
+
+    async def attrs(cid: int) -> dict:
         if cid not in attr_cache:
             attr_cache[cid] = await fetch_full_attributes(cid)
-            return attr_cache[cid]
+        return attr_cache[cid]
 
     base_attacker_attributes = await attrs(attacker_character_id)
-    attacker_buff_modifiers = aggregate_modifiers(
-        battle_state.get("active_effects", {}).get(str(request.participant_id), [])
-    )
-    percent_damage_buffs = build_percent_damage_buffs(attacker_buff_modifiers)
-
-    attacker_attributes = apply_flat_modifiers(
-        base_attacker_attributes, attacker_buff_modifiers
-    )
     attacker_weapon = await fetch_main_weapon(attacker_character_id)
 
     # События этого хода копим в список
@@ -337,10 +331,6 @@ async def make_action(
     defender_attributes = apply_flat_modifiers(
         base_defender_attributes, defender_buff_modifiers
     )
-
-    # суммарные %-баффы атаки (нужны compute_damage_with_rolls)
-    logger.debug(f"[ATTR] base_attacker_attr={base_attacker_attributes}")
-    logger.debug(f"[BUFF] attacker_mods={attacker_buff_modifiers}")
 
     # ------------------------------------------------------------------------------
     # 6. SUPPORT-навык (баффы на self)
@@ -443,6 +433,20 @@ async def make_action(
         attack_rank = await get_rank(request.skills.attack_rank_id)
         logger.debug(f"[SKILL] attack_rank full_json={attack_rank}")
 
+        attacker_buff_modifiers = aggregate_modifiers(
+            battle_state.get("active_effects", {}).get(str(request.participant_id), [])
+        )
+        percent_damage_buffs = build_percent_damage_buffs(attacker_buff_modifiers)
+
+        attacker_attributes = apply_flat_modifiers(
+            base_attacker_attributes, attacker_buff_modifiers
+        )
+
+        defender_buff_modifiers = aggregate_modifiers(
+            battle_state.get("active_effects", {}).get(str(defender_pid), [])
+        )
+        defender_percent_resists = build_percent_resist_buffs(defender_buff_modifiers)
+
         # damage_entries
         for dmg in attack_rank.get("damage_entries", []):
             dealt, log = await compute_damage_with_rolls(
@@ -451,6 +455,7 @@ async def make_action(
                 weapon=attacker_weapon,
                 percent_buffs=percent_damage_buffs,
                 defender_attr=defender_attributes,
+                percent_resists=defender_percent_resists,
             )
             battle_state["participants"][str(defender_pid)]["hp"] -= dealt
             turn_events.append({
