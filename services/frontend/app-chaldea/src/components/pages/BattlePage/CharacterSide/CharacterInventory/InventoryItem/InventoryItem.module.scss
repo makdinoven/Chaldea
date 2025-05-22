@@ -1,3 +1,5 @@
+@use "../../../../../../global.scss" as *;
+
 .item_wrapper {
   position: relative;
   width: 60px;
@@ -30,7 +32,7 @@
 
   &.cooldown {
     position: relative;
-    opacity: 0.7;
+    opacity: 0.3;
   }
 }
 
@@ -52,4 +54,62 @@
   background-repeat: no-repeat;
   background-position: center;
   background-size: cover;
+}
+
+.tooltip_content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+
+  h4 {
+    @include gold-text;
+    font-size: 16px;
+  }
+
+  .all_list {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+
+    span {
+      color: #76A6BD;
+    }
+
+    ul {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .inner_list {
+      gap: 5px;
+
+      li {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        position: relative;
+
+        &:not(:last-child) {
+          @include vertical-gradient-line($bottom: -3px, $top: unset, $left: 0, $right: 0, $width: 100%, $height: 1px);
+
+        }
+      }
+    }
+
+    .blue {
+      color: var(--blue);
+    }
+
+    .red {
+      color: var(--red);
+    }
+
+    li {
+      display: flex;
+      gap: 5px;
+    }
+  }
 }

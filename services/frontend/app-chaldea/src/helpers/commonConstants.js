@@ -27,7 +27,7 @@ export const RESOURCES_COLORS = {
 };
 
 export const BATTLE_EVENTS_TRANSLATE = {
-  apply_effects: "Применяет боевые эффекты",
+  apply_effects: "Получил эффекты: ",
   damage: "Наносит удар противнику",
   resource_spend: "Расходует ресурсы: ",
 };

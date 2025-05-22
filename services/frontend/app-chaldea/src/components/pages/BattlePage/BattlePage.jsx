@@ -111,7 +111,6 @@ const BattlePage = () => {
       const now = Date.now();
       const turnEnd = new Date(runtime.deadline_at).getTime();
       const timeLeft = Math.max(0, turnEnd - now);
-      console.log(timeLeft);
 
       setCurrentTurn({
         currentCharacterParticipant: {
@@ -134,13 +133,13 @@ const BattlePage = () => {
   useEffect(() => {
     if (!character) return;
 
-    // const intervalId = setInterval(() => {
-    //   getBattleState();
-    // }, 5000);
+    const intervalId = setInterval(() => {
+      getBattleState();
+    }, 5000);
 
     getBattleState();
 
-    // return () => clearInterval(intervalId);
+    return () => clearInterval(intervalId);
   }, [battleId, character]);
 
   // useEffect(() => {
@@ -151,9 +150,9 @@ const BattlePage = () => {
   //   console.log(snapshotData);
   // }, [snapshotData]);
 
-  useEffect(() => {
-    console.log(opponentData);
-  }, [opponentData]);
+  // useEffect(() => {
+  //   console.log(opponentData);
+  // }, [opponentData]);
 
   // useEffect(() => {
   //   console.log(currentTurn);
@@ -204,6 +203,7 @@ const BattlePage = () => {
           characterData={myData}
           isOpponent={false}
           setTurnData={setTurnData}
+          runtimeData={runtimeData}
         />
         <BattlePageBar
           battleId={battleId}
@@ -220,7 +220,11 @@ const BattlePage = () => {
           snapshotData={snapshotData}
           runtimeData={runtimeData}
         />
-        <CharacterSide characterData={opponentData} isOpponent={true} />
+        <CharacterSide
+          runtimeData={runtimeData}
+          characterData={opponentData}
+          isOpponent={true}
+        />
       </div>
     )
   );

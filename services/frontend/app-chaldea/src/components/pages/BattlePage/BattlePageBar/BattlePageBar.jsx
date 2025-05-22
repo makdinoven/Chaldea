@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import AutobattleModeIcon from "../../../../assets/Icons/AutobattleModeIcon.jsx";
 import Tooltip from "../../../CommonComponents/Tooltip/Tooltip.jsx";
 import {
-  BATTLE_EFFECTS,
   BATTLE_EVENTS_TRANSLATE,
   SKILLS_KEYS,
 } from "../../../../helpers/commonConstants.js";
@@ -62,7 +61,6 @@ const BattlePageBar = ({
 
   useEffect(() => {
     if (!runtimeData || !myData) return;
-    console.log(runtimeData);
 
     const { turn_order, total_turns, first_actor } = runtimeData;
     const myId = myData.participant_id;
@@ -101,7 +99,7 @@ const BattlePageBar = ({
     }
 
     setTurns(generatedTurns);
-    setActiveTurnIndex(runtimeData.turn_number - 1);
+    // setActiveTurnIndex(runtimeData.turn_number - 1);
   }, [runtimeData, myData]);
 
   useEffect(() => {
@@ -138,16 +136,15 @@ const BattlePageBar = ({
       return <span className={s.white}>{String(value)}</span>;
     };
 
-    const bold = (label, value) =>
+    const bold = (label, value, isPercent) =>
       value !== undefined ? (
-        <>
+        <div className={s.row}>
           {" "}
-          <span className={s.gray}>{label}:</span>{" "}
+          <span className={s.gray}>{label ? label : ""}</span>
           <span className={`${value === 0 ? s.red : ""}`}>
-            {formatValue(value)}
+            {isPercent ? formatValue(value / 100) : formatValue(value)}
           </span>
-          .
-        </>
+        </div>
       ) : null;
 
     const action = BATTLE_EVENTS_TRANSLATE[event.event] || event.event;
@@ -156,8 +153,8 @@ const BattlePageBar = ({
       return (
         <>
           {getName(event.who)} {action}
-          {bold("Тип", BATTLE_EFFECTS[event.kind] || event.kind)}
-          {bold("Эффекты", event.effects?.join(", "))}
+          {/*{bold("Тип", BATTLE_EFFECTS[event.kind] || event.kind)}*/}
+          {bold("", event.effects?.join(", "))}
         </>
       );
     }
@@ -173,24 +170,19 @@ const BattlePageBar = ({
         <>
           {getName(event.source)} {action} {getName(event.target)}
           {bold(
-            "Тип урона",
+            "Тип урона: ",
             DAMAGE_TYPES_MAP[event.damage_type] || event.damage_type,
           )}
-          {bold("Базовая атака", event.base_attack)}
-          {bold("Входящий урон", event.entry_amount)}
-          {bold("Бонус от баффов (%)", event.buff_pct)}
-          {bold("После баффов", event.after_buffs)}
+          {bold("Базовая атака: ", event.base_attack)}
+          {bold("Входящий урон: ", event.entry_amount)}
+          {!!event.buff_pct && bold("Бонус от баффов (%): ", event.buff_pct)}
+          {!!event.after_buffs && bold("После баффов: ", event.after_buffs)}
           {event.dodged ? (
             <>
               <span className={s.gray}>{getName(event.target)}</span>{" "}
               <span className={s.red}>уклонился. </span>
             </>
-          ) : (
-            <>
-              <span className={s.gray}>{getName(event.target)}</span>{" "}
-              <span className={s.blue}>не уклонился. </span>
-            </>
-          )}
+          ) : null}
           {event.hit_chance_failed ? (
             <>
               {" "}
@@ -206,12 +198,12 @@ const BattlePageBar = ({
           )}
           {event.critical && (
             <>
-              {bold("С шансом", critChance)}
-              {bold("нанесен критический урон:", critDamage)}
+              {bold("С шансом (%) ", critChance)}
+              {bold("нанесен критический урон (множитель) ", critDamage, true)}
             </>
           )}
-          {bold("Сопротивление (%)", event.resist_pct)}
-          {bold("Финальный урон", event.final)}
+          {!!event.resist_pct && bold("Сопротивление (%) ", event.resist_pct)}
+          {bold("Финальный урон: ", event.final)}
         </>
       );
     }
@@ -220,9 +212,9 @@ const BattlePageBar = ({
       return (
         <>
           {getName(event.who)} {action}
-          {bold("Энергия", event.energy)}
-          {bold("Мана", event.mana)}
-          {bold("Выносливость", event.stamina)}
+          {!!event.energy && bold("Энергия: ", event.energy)}
+          {!!event.mana && bold("Мана: ", event.mana)}
+          {!!event.stamina && bold("Выносливость: ", event.stamina)}
         </>
       );
     }
@@ -303,7 +295,7 @@ const BattlePageBar = ({
         className={`${s.battle_turns_container} ${isAllTurnsOpen ? s.opened : ""}`}
       >
         <div className={s.battle_turns_container_top}>
-          <span>Ходы</span>
+          <span>История ходов</span>
           {turns.length > 5 && (
             <button onClick={toggleAllTurnsVisibility}>
               {isAllTurnsOpen ? "Скрыть" : "Показать все"}
@@ -339,7 +331,7 @@ const BattlePageBar = ({
       </div>
       <div className={s.battle_logs_container}>
         <div className={s.battle_logs_top}>
-          <span>Логи</span>
+          <span>Логи: Ход {activeTurnIndex + 1}</span>
         </div>
 
         {turnLogs && (

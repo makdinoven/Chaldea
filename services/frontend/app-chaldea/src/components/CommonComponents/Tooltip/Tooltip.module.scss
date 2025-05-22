@@ -7,7 +7,7 @@
   text-transform: uppercase;
   position: absolute;
   top: 120%;
-  z-index: 20;
+  z-index: 10000;
   left: 50%;
   transform: translateX(-50%);
   @include gray-background-br;

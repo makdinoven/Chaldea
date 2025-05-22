@@ -110,6 +110,10 @@
   @include gradient-line-overlay;
 }
 
+.row {
+  margin-left: 10px;
+}
+
 .battle_turns_container {
   @include gray-background-br;
   overflow: hidden;

@@ -5,7 +5,7 @@ import InventorySection from "./InventorySection/InventorySection.jsx";
 import InventoryItemsBtnIcon from "../../../../../assets/Icons/InventoryItemsBtnIcon.jsx";
 import InventorySkillsBtnIcon from "../../../../../assets/Icons/InventorySkillsBtnIcon.jsx";
 
-const CharacterInventory = ({ items, isOpponent, setTurnData }) => {
+const CharacterInventory = ({ items, isOpponent, setTurnData, cooldowns }) => {
   const INVENTORY_SECTIONS = [
     {
       name: "Навыки",
@@ -47,6 +47,7 @@ const CharacterInventory = ({ items, isOpponent, setTurnData }) => {
         setTurnData={setTurnData}
         isOpponent={isOpponent}
         items={openedSection.items}
+        cooldowns={cooldowns}
       />
     </div>
   );
