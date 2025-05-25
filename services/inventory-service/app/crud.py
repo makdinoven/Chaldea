@@ -95,40 +95,54 @@ def is_item_compatible_with_slot(item_type: str, slot_type: str) -> bool:
     return item_type in slot_to_item_mapping.get(slot_type, [])
 
 def find_equipment_slot_for_item(db: Session, character_id: int, item_obj: models.Items):
-    """
-    Логика автоматического подбора слота (если item_type = head -> head, и т.д.
-    Если consumable/scroll/misc -> первый свободный fast_slot).
-    """
-    # Для фиксированных типов
-    fixed_types_map = {
-        'head': 'head',
-        'body': 'body',
-        'cloak': 'cloak',
-        'belt': 'belt',
-        'ring': 'ring',
-        'necklace': 'necklace',
-        'main_weapon': 'main_weapon',
-        'additional_weapons': 'additional_weapons',
-        'bracelet': 'bracelet',
+    fixed = {
+        'head': 'head', 'body': 'body', 'cloak': 'cloak', 'belt': 'belt',
+        'ring': 'ring', 'necklace': 'necklace', 'bracelet': 'bracelet',
+        'main_weapon': 'main_weapon', 'additional_weapons': 'additional_weapons',
     }
-    slot_type = fixed_types_map.get(item_obj.item_type)
+    if item_obj.item_type in fixed:
+        return db.query(models.EquipmentSlot).filter_by(
+            character_id=character_id,
+            slot_type=fixed[item_obj.item_type]
+        ).first()
 
-    if slot_type:
-        slot = db.query(models.EquipmentSlot).filter(
-            models.EquipmentSlot.character_id == character_id,
-            models.EquipmentSlot.slot_type == slot_type
-        ).first()
+    # для consumable/scroll/misc
+    fast_slots = [f"fast_slot_{i}" for i in range(1, 11)]
+
+    # 1) пробуем активные
+    slot = (
+        db.query(models.EquipmentSlot)
+          .filter(
+              models.EquipmentSlot.character_id == character_id,
+              models.EquipmentSlot.slot_type.in_(fast_slots),
+              models.EquipmentSlot.is_enabled == True,
+              models.EquipmentSlot.item_id.is_(None),
+          )
+          .order_by(models.EquipmentSlot.slot_type)
+          .first()
+    )
+    if slot:
         return slot
-    else:
-        # Ищем первый свободный fast_slot
-        fast_slots = ['fast_slot_1', 'fast_slot_2', 'fast_slot_3', 'fast_slot_4', 'fast_slot_5', 'fast_slot_6', 'fast_slot_7', 'fast_slot_8', 'fast_slot_9', 'fast_slot_10']
-        slot = db.query(models.EquipmentSlot).filter(
-            models.EquipmentSlot.character_id == character_id,
-            models.EquipmentSlot.slot_type.in_(fast_slots),
-            models.EquipmentSlot.is_enabled == True,
-            models.EquipmentSlot.item_id.is_(None)
-        ).first()
+
+    # 2) если нет активных — берём _первый_ свободный и включаем его
+    slot = (
+        db.query(models.EquipmentSlot)
+          .filter(
+              models.EquipmentSlot.character_id == character_id,
+              models.EquipmentSlot.slot_type.in_(fast_slots),
+              models.EquipmentSlot.item_id.is_(None),
+          )
+          .order_by(models.EquipmentSlot.slot_type)
+          .first()
+    )
+    if slot:
+        slot.is_enabled = True
+        db.add(slot)
+        db.commit()
         return slot
+
+    return None
+
 
 def return_item_to_inventory(db: Session, character_id: int, item_obj: models.Items):
     """
