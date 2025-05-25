@@ -507,4 +507,54 @@ def delete_item(item_id: int, db: Session = Depends(get_db)):
     db.delete(db_item)
     db.commit()
 
+@router.get(
+    "/characters/{character_id}/fast_slots",
+    response_model=List[schemas.FastSlot]
+)
+def get_fast_slots(
+    character_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Возвращает список включённых fast_slot_* для этого персонажа.
+    Для каждого слота отдаёт:
+      - slot_type: fast_slot_1…fast_slot_10
+      - item_id   : id надетого consumable
+      - quantity  : сколько штук этого item_id осталось в инвентаре
+    """
+    # 1) Берём все enabled fast-слоты
+    slots = db.query(models.EquipmentSlot).filter(
+        models.EquipmentSlot.character_id == character_id,
+        models.EquipmentSlot.slot_type.like("fast_slot_%"),
+        models.EquipmentSlot.is_enabled == True,
+    ).all()
+
+    result = []
+    for slot in slots:
+        if not slot.item_id:
+            # пропускаем пустые
+            continue
+
+        # 2) Считаем в инвентаре оставшееся количество этого item_id
+        total_qty = (
+            db.query(models.CharacterInventory)
+              .filter(
+                  models.CharacterInventory.character_id == character_id,
+                  models.CharacterInventory.item_id == slot.item_id,
+              )
+              .with_entities(models.CharacterInventory.quantity)
+              .all()
+        )
+        # total_qty — список кортежей [(qty1,), (qty2,), …]
+        qty = sum(q[0] for q in total_qty)
+
+        # 3) Добавляем в ответ
+        result.append(schemas.FastSlot(
+            slot_type=slot.slot_type,
+            item_id=slot.item_id,
+            quantity=qty,
+        ))
+
+    return result
+
 app.include_router(router)

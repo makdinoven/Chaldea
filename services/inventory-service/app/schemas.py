@@ -284,3 +284,9 @@ class EquipItemRequest(BaseModel):
     В логике микросервиса мы автоматически подбираем слот по типу.
     """
     item_id: int
+
+
+class FastSlot(BaseModel):
+    slot_type: str
+    item_id: int
+    quantity: int

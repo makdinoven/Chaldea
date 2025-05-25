@@ -230,6 +230,7 @@ SUBRACE_ATTRIBUTES = {
 
 CLASS_ITEMS = {
     1: [  # Стартовая экипировка для Воина
+        {"item_id": 3, "quantity": 10},
         {"item_id": 6, "quantity": 1},
         {"item_id": 9, "quantity": 1},
     ],
@@ -238,8 +239,9 @@ CLASS_ITEMS = {
         {"item_id": 10, "quantity": 1},
     ],
     3: [  # Стартовая экипировка для Мага
-        {"item_id": 8, "quantity": 1},
+        {"item_id": 12, "quantity": 10},
         {"item_id": 11, "quantity": 1},
+        {"item_id": 8, "quantity": 1},
     ]
 }
 
