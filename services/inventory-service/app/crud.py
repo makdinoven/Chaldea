@@ -267,7 +267,7 @@ def recalc_fast_slots(db: Session, character_id: int):
     ).all()
 
     # 2) Суммируем бонусы
-    BASE_FAST_SLOTS = 0  # если хотите, что по умолчанию 4 слота, то ставьте 4
+    BASE_FAST_SLOTS = 4  # если хотите, что по умолчанию 4 слота, то ставьте 4
     total_bonus = 0
     for s in eq_slots:
         # Находим item_id => item => item.fast_slot_bonus
