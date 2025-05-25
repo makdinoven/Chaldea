@@ -168,6 +168,7 @@ async def create_battle_endpoint(
             "max_mana": snap["attributes"]["max_mana"],
             "max_energy": snap["attributes"]["max_energy"],
             "max_stamina": snap["attributes"]["max_stamina"],
+            "fast_slots": snap["fast_slots"],
         })
     await save_snapshot(battle_obj.id, participants_info)
     rds = await get_redis_client()
@@ -423,6 +424,37 @@ async def make_action(
             }
         )
         logger.debug(f"[ITEM] requested item_id={item_id}")
+
+    me = str(request.participant_id)
+    part = battle_state["participants"][me]
+    for slot in part.get("fast_slots", []):
+        qty = slot.get("quantity", 0)
+        if qty <= 0:
+            continue
+
+        # собираем recovery-пейлоад
+        recovery = {}
+        for key in ("health_recovery", "mana_recovery", "energy_recovery", "stamina_recovery"):
+            if slot.get(key):
+                resource = key.replace("_recovery", "")
+                old = part[resource]
+                mx = part[f"max_{resource}"]
+                new = min(old + slot[key], mx)
+                part[resource] = new
+                recovery[resource] = new - old
+
+        # списываем одну единицу предмета
+        slot["quantity"] = qty - 1
+
+        # логируем событие
+        turn_events.append({
+            "event": "fast_slot_use",
+            "who": request.participant_id,
+            "slot_type": slot["slot_type"],
+            "item_id": slot["item_id"],
+            "recovery": recovery,
+            "remaining": slot["quantity"],
+        })
 
     # ------------------------------------------------------------------------------
     # 9. ATTACK-навык
