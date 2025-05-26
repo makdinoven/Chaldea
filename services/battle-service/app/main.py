@@ -427,26 +427,33 @@ async def make_action(
 
     me = str(request.participant_id)
     part = battle_state["participants"][me]
+
+    # маппинг имён
+    RESOURCE_ALIAS = {"health": "hp"}
+
     for slot in part.get("fast_slots", []):
         qty = slot.get("quantity", 0)
         if qty <= 0:
             continue
 
-        # собираем recovery-пейлоад
+        # recovery payload + списание quantity
         recovery = {}
         for key in ("health_recovery", "mana_recovery", "energy_recovery", "stamina_recovery"):
-            if slot.get(key):
-                resource = key.replace("_recovery", "")
-                old = part[resource]
-                mx = part[f"max_{resource}"]
-                new = min(old + slot[key], mx)
-                part[resource] = new
-                recovery[resource] = new - old
+            if not slot.get(key):
+                continue
 
-        # списываем одну единицу предмета
+            raw = key.replace("_recovery", "")  # “health”, “mana”…
+            resource = RESOURCE_ALIAS.get(raw, raw)  # “hp” вместо “health”
+            old = part[resource]
+            mx = part[f"max_{resource}"]
+            delta = slot[key]
+            new = min(old + delta, mx)
+            part[resource] = new
+            recovery[resource] = new - old
+
+        # уменьшаем одну единицу
         slot["quantity"] = qty - 1
 
-        # логируем событие
         turn_events.append({
             "event": "fast_slot_use",
             "who": request.participant_id,
