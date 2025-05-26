@@ -72,32 +72,48 @@ class Strategy:
     # ──────────────────────────────────────────────────────────────
     # internal helpers
     # ──────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────
     def _filter_available(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
         """
         Убираем навыки на кулдауне + недоступные по ресурсам.
+        Универсально раскладываем skills, даже если там list-of-list.
         """
+
+        def _flatten(obj) -> list[dict]:
+            """Рекурсивно превращает [ [...], {...}, ...] → list[dict]."""
+            out: list[dict] = []
+            stack = [obj]
+            while stack:
+                cur = stack.pop()
+                if isinstance(cur, dict):
+                    out.append(cur)
+                elif isinstance(cur, list):
+                    stack.extend(cur)
+            return out
+
         me = str(ctx["runtime"]["current_actor"])
-        p = ctx["runtime"]["participants"][me]
-        raw = next(
+
+        raw_skills = next(
             snap["skills"]
             for snap in ctx["snapshot"]["participants"]
             if snap["participant_id"] == int(me)
         )
-        skills: list[dict] = []
-        for item in raw:
-            skills.extend(item if isinstance(item, list) else [item])
-        cooldowns = p["cooldowns"]
-        # skills – list[dict]; сделаем id->rank_json
+        skills: list[dict] = _flatten(raw_skills)  # ← теперь гарантированно list[dict]
+
+        # строим id ➜ json
         skills_map = {r["id"]: r for r in skills}
-        available = {
+
+        cooldowns = ctx["runtime"]["participants"][me]["cooldowns"]
+        available_skills = {
             rid: r
             for rid, r in skills_map.items()
-            if cooldowns.get(str(rid), 0) == 0  # нет кулдауна
+            if cooldowns.get(str(rid), 0) == 0
         }
+
         return {
-            "skills": available,
-            "resources": p,
-            "fast_slots": p["fast_slots"],
+            "skills": available_skills,
+            "resources": ctx["runtime"]["participants"][me],
+            "fast_slots": ctx["runtime"]["participants"][me].get("fast_slots", []),
         }
 
     def _calc_weights(self, ctx: Dict[str, Any], available: Dict[str, Any]) -> Dict[int, float]:
