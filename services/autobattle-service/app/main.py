@@ -1,153 +1,159 @@
-# main.py  ────────────────────────────────────────────────────────
-"""
-Микросервис «автобой» на FastAPI.
- • подписывается на Redis battle:*:your_turn
- • ходит только за participant_id, зарегистрированные через /register
-"""
+from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict, Set, TypedDict
+from typing import Any, Dict, Set
 
 import aioredis
+import uvicorn
 from fastapi import Body, FastAPI, HTTPException
+from pydantic import BaseModel
 
 from clients import get_battle_state, post_battle_action
 from config import settings
 from strategy import Strategy
 
-# ───────────────────────────────
-# Логирование
-# ───────────────────────────────
+# ──────────────────────  logging  ──────────────────────
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger("auto-battle")
 
-# ───────────────────────────────
-# FastAPI-приложение
-# ───────────────────────────────
+# ──────────────────────  FastAPI  ──────────────────────
 app = FastAPI(title="Auto-Battle AI")
 strategy = Strategy()
 
-# ───────────────────────────────
-# Типизация app.state
-# ───────────────────────────────
-class State(TypedDict):
-    redis: aioredis.Redis
-    allowed: Set[int]            # участники, за которых бот играет
-    pid_battle_map: Dict[int, int]  # participant_id → последний battle_id
+# ──────────────────────  runtime state  ──────────────────────
+class RuntimeState:
+    redis: aioredis.Redis                        # подключение к Redis
+    allowed: Set[int] = set()                    # pid, за которые играет бот
+    pid_battle_map: Dict[int, int] = {}          # pid → последний battle_id
 
-app.state: State = {             # type: ignore[assignment]
-    "redis": None,
-    "allowed": set(),
-    "pid_battle_map": {},
-}
+app.state = RuntimeState()  # type: ignore[attr-defined]
 
-# ───────────────────────────────
-# STARTUP  (можно оставить on_event, IDE-warning безопасен)
-# ───────────────────────────────
+# ──────────────────────  models  ──────────────────────
+class ModePayload(BaseModel):
+    mode: str  # attack / defense / balance
+
+
+class RegisterPayload(BaseModel):
+    participant_id: int
+    battle_id: int = 0   # можно не знать battle_id (0 = определить позднее)
+
+
+# ──────────────────────  startup  ──────────────────────
 @app.on_event("startup")
-async def startup() -> None:
-    """
-    • Создаём Redis-клиент.
-    • Подписываемся на battle:*:your_turn.
-    """
-    app.state["redis"] = await aioredis.from_url(
+async def on_startup() -> None:
+    app.state.redis = await aioredis.from_url(
         settings.REDIS_URL, decode_responses=True
     )
+    asyncio.create_task(_redis_reader())
+    log.info("auto-battle started, mode=%s", strategy.mode)
 
-    async def reader() -> None:
-        sub = app.state["redis"].pubsub()
-        await sub.psubscribe("battle:*:your_turn")
-        async for msg in sub.listen():
-            if msg["type"] != "pmessage":
-                continue
+
+async def _redis_reader() -> None:
+    """
+    Слушаем battle:*:your_turn и запускаем handle_turn,
+    если pid зарегистрирован в allowed.
+    """
+    pub = app.state.redis.pubsub()
+    await pub.psubscribe("battle:*:your_turn")
+
+    async for msg in pub.listen():
+        if msg["type"] != "pmessage":
+            continue
+
+        try:
             battle_id = int(msg["channel"].split(":")[1])
             participant_id = int(msg["data"])
-            app.state["pid_battle_map"][participant_id] = battle_id
-            if participant_id in app.state["allowed"]:
-                asyncio.create_task(handle_turn(battle_id, participant_id))
+        except (ValueError, IndexError):
+            continue
 
-    asyncio.create_task(reader())
-    log.info("auto-battle started. mode=%s", strategy.mode)
+        # запоминаем «последний обнаруженный» бой для pid
+        app.state.pid_battle_map[participant_id] = battle_id
 
-# ───────────────────────────────
-# Хелпер: получить state по participant_id
-# ───────────────────────────────
-async def get_battle_state_of_pid(pid: int):
-    """Ищем последний известный battle_id -> state; None если не знаем."""
-    battle_id = app.state["pid_battle_map"].get(pid)
-    if battle_id is None:
-        return None
-    try:
-        state = await get_battle_state(battle_id)
-        state["battle_id"] = battle_id
-        return state
-    except Exception:  # сеть упала / бой закончился
-        return None
+        # делаем ход, только если бот включён
+        if participant_id in app.state.allowed:
+            asyncio.create_task(handle_turn(battle_id, participant_id))
 
-# ───────────────────────────────
-# REST-эндпоинты
-# ───────────────────────────────
+
+# ──────────────────────  REST-API  ──────────────────────
 @app.get("/health")
-async def health():
-    pong = await app.state["redis"].ping()
+async def health() -> Dict[str, Any]:
+    pong = await app.state.redis.ping()
     return {
         "status": "ok",
         "redis": pong,
         "mode": strategy.mode,
-        "allowed": list(app.state["allowed"]),
+        "allowed": list(app.state.allowed),
     }
 
+
 @app.post("/mode")
-async def set_mode(mode: str = Body(..., embed=True)):
+def set_mode(p: ModePayload):
     try:
-        strategy.set_mode(mode)
+        strategy.set_mode(p.mode)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "mode": strategy.mode}
 
+
 @app.post("/register")
-async def register(participant_id: int = Body(..., embed=True)):
-    app.state["allowed"].add(participant_id)
-    # возможно, прямо сейчас очередь уже за этим персонажем
-    ctx = await get_battle_state_of_pid(participant_id)
-    if ctx and ctx["runtime"]["current_actor"] == participant_id:
-        asyncio.create_task(handle_turn(ctx["battle_id"], participant_id))
-    return {"ok": True, "allowed": list(app.state["allowed"])}
+async def register(p: RegisterPayload):
+    """
+    Включаем автобой для participant_id.
+    Если battle_id=0  → ждём первого сообщения your_turn.
+    Если battle_id передан  → сразу проверяем, не пора ли ходить.
+    """
+    app.state.allowed.add(p.participant_id)
+
+    if p.battle_id:
+        app.state.pid_battle_map[p.participant_id] = p.battle_id
+
+    # пробуем сразу сделать ход, если уже очередь этого pid
+    battle_id = app.state.pid_battle_map.get(p.participant_id)
+    if battle_id:
+        ctx = await get_battle_state(battle_id)
+        if ctx["runtime"]["current_actor"] == p.participant_id:
+            asyncio.create_task(handle_turn(battle_id, p.participant_id))
+
+    return {"ok": True, "allowed": list(app.state.allowed)}
+
 
 @app.post("/unregister")
-async def unregister(participant_id: int = Body(..., embed=True)):
-    app.state["allowed"].discard(participant_id)
-    return {"ok": True, "allowed": list(app.state["allowed"])}
+def unregister(participant_id: int = Body(..., embed=True)):
+    """Выключаем автобой для participant_id."""
+    app.state.allowed.discard(participant_id)
+    return {"ok": True, "allowed": list(app.state.allowed)}
 
-# ───────────────────────────────
-# Один ход
-# ───────────────────────────────
+
+# ──────────────────────  core  ──────────────────────
 async def handle_turn(battle_id: int, participant_id: int) -> None:
+    """
+    Один «авто-ход».
+    """
     try:
-        state = await get_battle_state(battle_id)
-        if state["runtime"]["current_actor"] != participant_id:
-            return  # кто-то уже походил вручную
+        ctx = await get_battle_state(battle_id)
+        if ctx["runtime"]["current_actor"] != participant_id:
+            return  # ход уже сделали вручную
 
-        skills, item_id = strategy.select_actions(state)
-        payload = {"participant_id": participant_id, "skills": skills}
+        skills, item_id = strategy.select_actions(ctx)
+        payload = {
+            "participant_id": participant_id,
+            "skills": skills,
+        }
         if item_id:
             payload["skills"]["item_id"] = item_id
 
         res = await post_battle_action(battle_id, payload)
-        log.info(
-            "[battle %s] turn=%s actor=%s ok=%s",
-            battle_id,
-            res["turn_number"],
-            participant_id,
-            res["ok"],
-        )
-    except Exception as exc:  # pylint: disable=broad-except
-        log.error("handle_turn: %s", exc)
 
-# ───────────────────────────────
-# CLI-запуск
-# ───────────────────────────────
+        log.info(
+            "battle=%s turn=%s pid=%s ok=%s",
+            battle_id, res["turn_number"], participant_id, res["ok"]
+        )
+
+    except Exception as exc:  # pylint: disable=broad-except
+        log.error("handle_turn error: %s", exc)
+
+
+# ──────────────────────  cli run  ──────────────────────
 if __name__ == "__main__":  # pragma: no cover
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8020)
+    uvicorn.run("main:app", host="0.0.0.0", port=8020, reload=False)
