@@ -85,9 +85,17 @@ class Strategy:
 
         # фильтруем кулдауны
         cooldowns = ctx["runtime"]["participants"][str(me_pid)]["cooldowns"]
+        me_stat = ctx["runtime"]["participants"][str(me_pid)]
+
+        def _enough(r: dict) -> bool:
+            return (
+                    me_stat["energy"] >= r.get("cost_energy", 0) and
+                    me_stat["mana"] >= r.get("cost_mana", 0) and
+                    me_stat["stamina"] >= r.get("cost_stamina", 0)
+            )
         available_skills = {
             rid: r for rid, r in skills_map.items()
-            if cooldowns.get(str(rid), 0) == 0
+            if cooldowns.get(str(rid), 0) == 0 and _enough(r)
         }
 
         return {
