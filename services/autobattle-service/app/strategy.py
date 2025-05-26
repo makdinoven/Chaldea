@@ -84,6 +84,7 @@ class Strategy:
         out: Dict[int, float] = {}
         for rid, r in available["skills"].items():
             if not isinstance(r, dict):
+                raise RuntimeError(f"NOT DICT: {type(r)} → {r!r}")
                 continue
             t = r.get("skill_type", "attack")
             w = base.get(t, 0.5) + boost[self.mode] + random.uniform(-0.1, 0.1)
