@@ -14,7 +14,12 @@ const CharacterInventory = ({ items, isOpponent, setTurnData, cooldowns }) => {
     },
     {
       name: "Предметы",
-      items: items.items,
+      items: items.items.flatMap((item) =>
+        Array.from({ length: item.quantity || 1 }, (_, index) => ({
+          ...item,
+          _cloneKey: `${item.id}-item-${index}`,
+        })),
+      ),
       icon: <InventoryItemsBtnIcon />,
     },
   ];
@@ -31,9 +36,8 @@ const CharacterInventory = ({ items, isOpponent, setTurnData, cooldowns }) => {
     <div className={`${s.character_inventory} ${isOpponent ? s.opponent : ""}`}>
       <div className={s.inventory_sections_btns}>
         {INVENTORY_SECTIONS.map((sec) => (
-          <div className={s.btn_wrapper}>
+          <div key={sec.name} className={s.btn_wrapper}>
             <InventorySectionBtn
-              key={sec.name}
               handleClick={handleSelectSection}
               isActive={openedSection.name === sec.name}
               name={sec.name}

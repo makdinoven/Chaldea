@@ -11,6 +11,8 @@
 }
 
 .effects_circle_container {
+  max-height: 90%;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 5px;

@@ -20,8 +20,8 @@ const InventorySkillsBtnIcon = () => {
           y2="46.8829"
           gradientUnits="userSpaceOnUse"
         >
-          <stop stop-color="#FFF9B8" />
-          <stop offset="1" stop-color="#BCAB4C" />
+          <stop stopColor="#FFF9B8" />
+          <stop offset="1" stopColor="#BCAB4C" />
         </linearGradient>
       </defs>
     </svg>

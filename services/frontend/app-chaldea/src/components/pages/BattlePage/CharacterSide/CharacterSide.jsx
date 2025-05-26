@@ -21,9 +21,22 @@ const CharacterSide = ({
           <div
             className={`${s.effects_circle_container} ${isOpponent ? s.opponent : ""}`}
           >
-            {effects?.length > 0 &&
-              effects.map((effect, i) => (
-                <EffectCircle key={i} effect={effect} />
+            {effects &&
+              Object.entries(
+                effects.reduce((acc, effect) => {
+                  const name = effect?.name || "";
+                  const key = name.includes("StatModifier")
+                    ? "StatModifier"
+                    : name.includes("Resist")
+                      ? "Resist"
+                      : "Buff";
+
+                  if (!acc[key]) acc[key] = [];
+                  acc[key].push(effect);
+                  return acc;
+                }, {}),
+              ).map(([type, groupedEffects]) => (
+                <EffectCircle key={type} effects={groupedEffects} type={type} />
               ))}
           </div>
           <PlayerCard

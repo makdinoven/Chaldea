@@ -21,7 +21,7 @@ const AUTOBATTLE_MODE_BTNS = [
     icon: <AutobattleModeIcon />,
   },
   { mode: "attack", name: "Атакующий режим", icon: <AutobattleModeIcon /> },
-  { mode: "defend", name: "Защитный режим", icon: <AutobattleModeIcon /> },
+  { mode: "defence", name: "Защитный режим", icon: <AutobattleModeIcon /> },
 ];
 
 const SKILLS_BTNS = [

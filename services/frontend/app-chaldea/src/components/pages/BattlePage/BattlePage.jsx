@@ -7,7 +7,7 @@ import { useSelector } from "react-redux";
 import axios from "axios";
 
 import { useBodyBackground } from "../../../hooks/useBodyBackground.js";
-import { BASE_URL_BATTLES } from "../../../api/api.js";
+import { BASE_URL_AUTOBATTLES, BASE_URL_BATTLES } from "../../../api/api.js";
 import battleBg from "/battle-img-3.png";
 import BattlePageBar from "./BattlePageBar/BattlePageBar.jsx";
 import { SKILLS_KEYS } from "../../../helpers/commonConstants.js";
@@ -214,9 +214,46 @@ const BattlePage = () => {
     }
   };
 
-  const toggleAutoBattle = () => {
+  const toggleAutoBattle = async () => {
+    if (isAutoBattleOn) {
+      await postAutoBattleOff();
+    } else {
+      await postAutoBattleOn();
+    }
+
     setIsAutoBattleOn((prev) => !prev);
   };
+
+  const postAutoBattleOn = async () => {
+    try {
+      await axios.post(`${BASE_URL_AUTOBATTLES}/register`, {
+        participant_id: myData.participant_id,
+        battle_id: Number(battleId),
+      });
+    } catch (error) {}
+  };
+
+  const postAutoBattleOff = async () => {
+    try {
+      await axios.post(`${BASE_URL_AUTOBATTLES}/unregister`, {
+        participant_id: myData.participant_id,
+      });
+    } catch (error) {}
+  };
+
+  const handleSetAutobattleMode = async () => {
+    try {
+      await axios.post(`${BASE_URL_AUTOBATTLES}/mode`, {
+        mode: autobattleMode,
+      });
+    } catch (error) {}
+  };
+
+  useEffect(() => {
+    if (isAutoBattleOn) {
+      handleSetAutobattleMode();
+    }
+  }, [autobattleMode, isAutoBattleOn]);
 
   if (loading) return <Loader />;
 

@@ -84,7 +84,6 @@ const LocationPage = () => {
       const res = await axios.post(`${BASE_URL_BATTLES}/battles/`, {
         players: [{ character_id: opponentId }, { character_id: character.id }],
       });
-      console.log(res.data);
       navigate(`battle/${res.data.battle_id}`);
       alert("битва началась");
     } catch (error) {
@@ -193,7 +192,7 @@ const LocationPage = () => {
                           img={post.character_photo}
                           key={index}
                         />
-                        <h4>{post.user_nickname}</h4>
+                        {/*<h4>{post.user_nickname}</h4>*/}
                       </div>
 
                       {post.user_nickname !== username && (

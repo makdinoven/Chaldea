@@ -15,7 +15,9 @@ import { getMe } from "../../../redux/slices/userSlice.js";
 export default function Header() {
   const location = useLocation();
   const dispatch = useDispatch();
-  const { username, avatar, character } = useSelector((state) => state.user);
+  const { username, avatar, character, role } = useSelector(
+    (state) => state.user,
+  );
 
   useEffect(() => {
     dispatch(getMe());
@@ -44,7 +46,10 @@ export default function Header() {
       img: character ? character.avatar : menuImg2,
       title: character?.name,
     },
-    {
+  ];
+
+  if (role === "admin") {
+    menuData.push({
       id: 3,
       menuButtons: [
         { name: "Заявки", link: "requestsPage" },
@@ -53,8 +58,8 @@ export default function Header() {
       ],
       img: menuImg3,
       title: "Админка",
-    },
-  ];
+    });
+  }
 
   return (
     <>
