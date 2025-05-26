@@ -64,6 +64,7 @@ async def _redis_reader() -> None:
         try:
             battle_id = int(msg["channel"].split(":")[1])
             participant_id = int(msg["data"])
+            log.debug("⏺  msg from Redis  battle=%s  pid=%s", battle_id, participant_id)
         except (ValueError, IndexError):
             continue
 
@@ -133,6 +134,7 @@ async def handle_turn(battle_id: int, participant_id: int) -> None:
     try:
         ctx = await get_battle_state(battle_id)
         if ctx["runtime"]["current_actor"] != participant_id:
+            log.debug("skip: not my turn (battle %s, pid %s)", battle_id, participant_id)
             return  # ход уже сделали вручную
 
         skills, item_id = strategy.select_actions(ctx)

@@ -78,11 +78,14 @@ class Strategy:
         """
         me = str(ctx["runtime"]["current_actor"])
         p = ctx["runtime"]["participants"][me]
-        skills = next(
+        raw = next(
             snap["skills"]
-            for snap in ctx["snapshot"]["participants"]
+            for snap in ctx["snapshots"]["participants"]
             if snap["participant_id"] == int(me)
         )
+        skills: list[dict] = []
+        for item in raw:
+            skills.extend(item if isinstance(item, list) else [item])
         cooldowns = p["cooldowns"]
         # skills – list[dict]; сделаем id->rank_json
         skills_map = {r["id"]: r for r in skills}
@@ -105,7 +108,9 @@ class Strategy:
         mode_boost = {"attack": 0.4, "balance": 0.2, "defense": -0.2}
         weights = {}
         for rid, r in available["skills"].items():
-            t = r["skill_type"]  # "attack" / "support" / "defense"
+            if not isinstance(r, dict):
+                continue
+            t = r.get("skill_type", "attack")  # "attack" / "support" / "defense"
             w = base_weight.get(t, 0.5) + mode_boost[self.mode]
             # + случайный фактор
             w += random.uniform(-0.1, 0.1)
