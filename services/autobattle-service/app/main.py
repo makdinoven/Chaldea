@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import traceback
 from typing import Any, Dict, Set
 
 import aioredis
@@ -154,6 +155,7 @@ async def handle_turn(battle_id: int, participant_id: int) -> None:
 
     except Exception as exc:  # pylint: disable=broad-except
         log.error("handle_turn error: %s", exc)
+        log.error("TRACE:\n%s", traceback.format_exc())
 
 
 # ──────────────────────  cli run  ──────────────────────
