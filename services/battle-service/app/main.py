@@ -430,8 +430,8 @@ async def make_action(
             "event": "item_use",
             "who": request.participant_id,
             "item_id": item_id,
+            "item_name": item_json["name"],
             "recovery": recovery_payload,
-            "remaining": slot.get("quantity", 0),
         })
         logger.debug(f"[ITEM] used item_id={item_id}, rec={recovery_payload}, rem={slot.get('quantity')}")
 
