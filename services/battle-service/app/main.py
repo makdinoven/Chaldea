@@ -223,6 +223,7 @@ async def get_state(battle_id: int):
                             "energy": state["participants"][pid]["energy"],
                             "stamina": state["participants"][pid]["stamina"],
                             "cooldowns": state["participants"][pid]["cooldowns"],
+                            "fast_slots": state["participants"][pid].get("fast_slots", []),
                         }
                             for pid in state["participants"]
                     },
@@ -388,13 +389,18 @@ async def make_action(
     # ------------------------------------------------------------------------------
     # 8. Использование предмета из fast-слота
     # ------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------
+    # 8. Использование предмета из fast-слота (только по выбору игрока)
+    # ------------------------------------------------------------------------------
     item_id = request.skills.item_id  # может быть None / 0 / >0
 
-    if item_id and item_id > 0:  # ← пропускаем None или 0
+    if item_id and item_id > 0:
+        # 1) Берём полный JSON по предмету (там же recovery-поля)
         item_json = await get_item(item_id)
 
+        # 2) Собираем recovery-payload
         recovery_payload = {
-            key: item_json[key]
+            key.replace("_recovery", ""): item_json[key]
             for key in (
                 "health_recovery",
                 "mana_recovery",
@@ -404,64 +410,30 @@ async def make_action(
             if item_json.get(key)
         }
 
-        # обновляем текущие ресурсы прямо в Redis-state
-        for recovery_key, delta in recovery_payload.items():
-            resource = recovery_key.replace("_recovery", "")   # health, mana …
-            current_value = battle_state["participants"][str(request.participant_id)][
-                resource
-            ]
-            max_value = base_attacker_attributes[f"max_{resource}"]
-            battle_state["participants"][str(request.participant_id)][resource] = min(
-                current_value + delta, max_value
-            )
-
-        turn_events.append(
-            {
-                "event": "item_use",
-                "who": request.participant_id,
-                "item_id": item_json["id"],
-                "recovery": recovery_payload,
-            }
-        )
-        logger.debug(f"[ITEM] requested item_id={item_id}")
-
-    me = str(request.participant_id)
-    part = battle_state["participants"][me]
-
-    # маппинг имён
-    RESOURCE_ALIAS = {"health": "hp"}
-
-    for slot in part.get("fast_slots", []):
-        qty = slot.get("quantity", 0)
-        if qty <= 0:
-            continue
-
-        # recovery payload + списание quantity
-        recovery = {}
-        for key in ("health_recovery", "mana_recovery", "energy_recovery", "stamina_recovery"):
-            if not slot.get(key):
-                continue
-
-            raw = key.replace("_recovery", "")  # “health”, “mana”…
-            resource = RESOURCE_ALIAS.get(raw, raw)  # “hp” вместо “health”
-            old = part[resource]
-            mx = part[f"max_{resource}"]
-            delta = slot[key]
+        # 3) Применяем к ресурсам персонажа в state
+        me = str(request.participant_id)
+        part = battle_state["participants"][me]
+        for res, delta in recovery_payload.items():
+            old = part[res if res != "health" else "hp"]
+            mx = part[f"max_{res if res != 'health' else 'hp'}"]
             new = min(old + delta, mx)
-            part[resource] = new
-            recovery[resource] = new - old
+            part[res if res != "health" else "hp"] = new
 
-        # уменьшаем одну единицу
-        slot["quantity"] = qty - 1
+        # 4) Уменьшаем 1 шт. в соответствующем fast_slot
+        for slot in part.get("fast_slots", []):
+            if slot["item_id"] == item_id and slot.get("quantity", 0) > 0:
+                slot["quantity"] -= 1
+                break
 
+        # 5) Логируем событие
         turn_events.append({
-            "event": "fast_slot_use",
+            "event": "item_use",
             "who": request.participant_id,
-            "slot_type": slot["slot_type"],
-            "item_id": slot["item_id"],
-            "recovery": recovery,
-            "remaining": slot["quantity"],
+            "item_id": item_id,
+            "recovery": recovery_payload,
+            "remaining": slot.get("quantity", 0),
         })
+        logger.debug(f"[ITEM] used item_id={item_id}, rec={recovery_payload}, rem={slot.get('quantity')}")
 
     # ------------------------------------------------------------------------------
     # 9. ATTACK-навык
