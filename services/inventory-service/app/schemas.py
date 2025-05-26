@@ -290,3 +290,5 @@ class FastSlot(BaseModel):
     slot_type: str
     item_id: int
     quantity: int
+    name : str
+    image : str

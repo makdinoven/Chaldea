@@ -547,12 +547,17 @@ def get_fast_slots(
         )
         # total_qty — список кортежей [(qty1,), (qty2,), …]
         qty = sum(q[0] for q in total_qty)
+        item = slot.item  # благодаря relationship
+        if not item:
+            continue  # на всякий случай
 
         # 3) Добавляем в ответ
         result.append(schemas.FastSlot(
             slot_type=slot.slot_type,
             item_id=slot.item_id,
             quantity=qty,
+            name=item.name,
+            image=item.image or "",
         ))
 
     return result

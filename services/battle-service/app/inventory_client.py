@@ -47,8 +47,6 @@ async def get_fast_slots(character_id: int) -> list[dict]:
             "slot_type": slot["slot_type"],
             "item_id": slot["item_id"],
             "quantity": slot.get("quantity", 0),
-            "image": slot["image"],
-            "name": slot["name"],
             **rec
         })
     return out
