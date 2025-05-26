@@ -43,7 +43,7 @@ async def fetch_main_weapon(character_id: int) -> Dict | None:
             if slot["slot_type"] == "main_weapon" and slot["item_id"]:
                 # 2) сведения о самом предмете
                 item_resp = await client.get(
-                    f"{INVENTORY_SERVICE_URL}/items/{slot['item_id']}"
+                    f"{INVENTORY_SERVICE_URL}/inventory/items/{slot['item_id']}"
                 )
                 item_resp.raise_for_status()
                 return item_resp.json()
