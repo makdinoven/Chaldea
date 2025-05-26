@@ -30,7 +30,7 @@ const App = () => {
           <Route path="home/admin/skills" element={<AdminSkillsPage />} />
           <Route path="admin/items" element={<ItemsAdminPage />} />
           <Route
-            path="location/:locationdId/battle/:battleId"
+            path="location/:locationId/battle/:battleId"
             element={<BattlePage />}
           />
         </Route>

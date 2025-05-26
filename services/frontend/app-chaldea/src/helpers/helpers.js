@@ -19,7 +19,9 @@ export const formatTime = (totalSeconds) => {
 };
 
 export const formatDateTime = (datetimeStr) => {
-  const dateObj = new Date(datetimeStr);
+  const safeUtcStr = datetimeStr.split(".")[0] + "Z";
+  const dateObj = new Date(safeUtcStr);
+
   const hours = String(dateObj.getHours()).padStart(2, "0");
   const minutes = String(dateObj.getMinutes()).padStart(2, "0");
   const day = String(dateObj.getDate()).padStart(2, "0");

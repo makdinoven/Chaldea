@@ -220,6 +220,22 @@
       border-radius: 10px;
     }
 
+    .date_time_container {
+      margin-top: 10px;
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+
+      p {
+        @include gold-text;
+        font-size: 14px;
+      }
+
+      div {
+        margin-left: auto;
+      }
+    }
+
     li {
       width: 100%;
       gap: 5px;

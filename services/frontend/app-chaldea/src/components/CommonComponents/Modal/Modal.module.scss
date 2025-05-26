@@ -1,0 +1,36 @@
+@use "../../../global.scss" as *;
+
+.modal_overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal_content {
+  position: relative;
+  @include gold-outline($width: 3px, $inset: -6px);
+  @include gray-background-br;
+  padding: 2rem;
+  max-width: 700px;
+  width: 100%;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.2);
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}

@@ -2,7 +2,7 @@ import s from "./BattlePage.module.scss";
 import CharacterSide from "./CharacterSide/CharacterSide.jsx";
 import Loader from "../../CommonComponents/Loader/Loader.jsx";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useSelector } from "react-redux";
 import axios from "axios";
 
@@ -11,13 +11,17 @@ import { BASE_URL_BATTLES } from "../../../api/api.js";
 import battleBg from "/battle-img-3.png";
 import BattlePageBar from "./BattlePageBar/BattlePageBar.jsx";
 import { SKILLS_KEYS } from "../../../helpers/commonConstants.js";
+import Modal from "../../CommonComponents/Modal/Modal.jsx";
+import BlueGradientButton from "../../CommonComponents/BlueGradientButton/BlueGradientButton.jsx";
 
 const TURN_DURATION = 24 * 60 * 60 * 1000;
 
 const BattlePage = () => {
   useBodyBackground(battleBg);
-  const { battleId } = useParams();
+  const navigate = useNavigate();
+  const { locationId, battleId } = useParams();
   const character = useSelector((state) => state.user.character);
+  const [battleResult, setBattleResult] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [currentTurn, setCurrentTurn] = useState(null);
@@ -93,7 +97,7 @@ const BattlePage = () => {
         avatar: mySnapshot.avatar,
         skills: mySnapshot.skills,
         attributes: mySnapshot.attributes,
-        // items: mySnapshot.items,
+        items: runtime.participants[myParticipantId].fast_slots,
         resources: getResources(mySnapshot, runtime, myParticipantId),
       });
 
@@ -104,7 +108,7 @@ const BattlePage = () => {
         avatar: oppSnapshot.avatar,
         skills: oppSnapshot.skills,
         attributes: oppSnapshot.attributes,
-        // items: oppSnapshot.items,
+        items: runtime.participants[oppParticipantId].fast_slots,
         resources: getResources(oppSnapshot, runtime, oppParticipantId),
       });
 
@@ -132,6 +136,7 @@ const BattlePage = () => {
 
   useEffect(() => {
     if (!character) return;
+    if (battleResult) return;
 
     const intervalId = setInterval(() => {
       getBattleState();
@@ -141,6 +146,19 @@ const BattlePage = () => {
 
     return () => clearInterval(intervalId);
   }, [battleId, character]);
+
+  useEffect(() => {
+    if (opponentData && myData) {
+      const oppHealth = opponentData.resources[0].health.current;
+      const myHealth = myData.resources[0].health.current;
+
+      if (myHealth <= 0) {
+        setBattleResult({ winner: opponentData.name, isLose: true });
+      } else if (oppHealth <= 0) {
+        setBattleResult({ winner: myData.name, isLose: false });
+      }
+    }
+  }, [opponentData, myData]);
 
   // useEffect(() => {
   //   console.log(runtimeData);
@@ -162,18 +180,25 @@ const BattlePage = () => {
   //   console.log(turnData);
   // }, [turnData]);
 
-  const handleSendTurn = () => {
+  const handleSendTurn = async () => {
     const turnDataApi = {
       participant_id: runtimeData.current_actor,
       skills: {
         attack_rank_id: turnData.attack ? turnData.attack.id : null,
         defense_rank_id: turnData.defense ? turnData.defense.id : null,
         support_rank_id: turnData.support ? turnData.support.id : null,
-        item_id: turnData.item ? turnData.item.id : null,
+        item_id: turnData.item ? turnData.item.item_id : null,
       },
     };
 
-    setTurnApi(turnDataApi);
+    await setTurnApi(turnDataApi);
+
+    setTurnData({
+      [SKILLS_KEYS.attack]: null,
+      [SKILLS_KEYS.defense]: null,
+      [SKILLS_KEYS.support]: null,
+      [SKILLS_KEYS.item]: null,
+    });
   };
 
   const setTurnApi = async (turnData) => {
@@ -225,6 +250,22 @@ const BattlePage = () => {
           characterData={opponentData}
           isOpponent={true}
         />
+        {battleResult && (
+          <Modal>
+            <div className={s.modal_container}>
+              <h2 className={`${battleResult.isLose ? s.lose : s.win}`}>
+                {battleResult.isLose ? "Поражение" : "Вы выиграли"}
+              </h2>
+              <p>
+                Победитель: <span>{battleResult.winner}</span>
+              </p>
+              <BlueGradientButton
+                onClick={() => navigate(`/location/${locationId}`)}
+                text={"Вернуться на страницу локации"}
+              />
+            </div>
+          </Modal>
+        )}
       </div>
     )
   );
