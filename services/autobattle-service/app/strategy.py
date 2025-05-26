@@ -50,32 +50,49 @@ class Strategy:
         return chosen["skills"], chosen["item_id"]
 
     # ────────── helpers ──────────
+    # ──────────────────────────────────────────────────────────
     def _filter_available(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
-        me = str(ctx["runtime"]["current_actor"])
+        """
+        Достаём из снапшота навыки и fast-слоты текущего участника,
+        убираем навыки на кулдауне.
+        """
 
-        # навыки
-        raw_skills = next(
-            snap["skills"]
-            for snap in ctx["snapshot"]["participants"]
-            if snap["participant_id"] == int(me)
+        def _flatten(tree) -> list[dict]:
+            out, stack = [], [tree]
+            while stack:
+                cur = stack.pop()
+                if isinstance(cur, dict):
+                    out.append(cur)
+                elif isinstance(cur, list):
+                    stack.extend(cur)
+            return out
+
+        me_pid = int(ctx["runtime"]["current_actor"])
+
+        # <─── СНАПШОТ теперь список ─────────────────────────>
+        my_snapshot = next(
+            snap for snap in ctx["snapshot"] if snap["participant_id"] == me_pid
         )
-        skills_list = _flatten(raw_skills)        # <-- гарантировано list[dict]
-        skills_map  = {r["id"]: r for r in skills_list}
 
-        cooldowns = ctx["runtime"]["participants"][me]["cooldowns"]
+        # skills: list[..., {...}, [...]]
+        raw_skills = my_snapshot["skills"]
+        skills_list = _flatten(raw_skills)  # гарантированно list[dict]
+        skills_map = {r["id"]: r for r in skills_list}
+
+        # fast-слоты берём из runtime, там же quantities актуальны
+        raw_slots = ctx["runtime"]["participants"][str(me_pid)].get("fast_slots", [])
+        fast_slots = _flatten(raw_slots)
+
+        # фильтруем кулдауны
+        cooldowns = ctx["runtime"]["participants"][str(me_pid)]["cooldowns"]
         available_skills = {
-            rid: r
-            for rid, r in skills_map.items()
+            rid: r for rid, r in skills_map.items()
             if cooldowns.get(str(rid), 0) == 0
         }
 
-        # fast-слоты тоже может прилететь вложенно
-        raw_slots = ctx["runtime"]["participants"][me].get("fast_slots", [])
-        fast_slots = _flatten(raw_slots)          # list[dict]
-
         return {
-            "skills": available_skills,
-            "fast_slots": fast_slots,
+            "skills": available_skills,  # dict[id] → json
+            "fast_slots": fast_slots,  # list[dict]
         }
 
     def _calc_weights(self, available: Dict[str, Any]) -> Dict[int, float]:
