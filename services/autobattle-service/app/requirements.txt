@@ -9,3 +9,6 @@ sqlalchemy
 pydantic<2.0.0
 aioredis
 asyncio
+lightgbm
+scikit-learn
+numpy
