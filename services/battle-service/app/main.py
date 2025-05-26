@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from os import supports_fd
 from typing import List, Dict
 
@@ -140,7 +140,8 @@ async def create_battle_endpoint(
 
     # 3. Кто ходит первым (первый в списке → team-логика может быть иной)
     first_actor_pid = participant_objs[0].id
-    deadline = datetime.utcnow() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
+    moscow_tz = timezone(timedelta(hours=3))
+    deadline = datetime.now(timezone.utc).astimezone(moscow_tz) + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
 
     participants_info = []
     for p in participant_objs:
@@ -526,7 +527,9 @@ async def make_action(
     # 10. Записываем ход в БД
     # ------------------------------------------------------------------------------
     new_turn_number = battle_state["turn_number"] + 1
-    new_deadline = datetime.utcnow() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
+    moscow_tz = timezone(timedelta(hours=3))
+    started_at = datetime.now(timezone.utc).astimezone(moscow_tz)
+    new_deadline = started_at + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
     await write_turn(
         db_session,
         battle_id=battle_id,
@@ -547,6 +550,7 @@ async def make_action(
 
     battle_state["turn_number"] = new_turn_number
     battle_state["next_actor"] = next_actor_participant_id
+    battle_state["deadline_at"] = new_deadline.isoformat()
 
     await save_state(battle_id, battle_state)
 
