@@ -80,7 +80,7 @@ class Strategy:
         p = ctx["runtime"]["participants"][me]
         raw = next(
             snap["skills"]
-            for snap in ctx["snapshots"]["participants"]
+            for snap in ctx["snapshot"]["participants"]
             if snap["participant_id"] == int(me)
         )
         skills: list[dict] = []
