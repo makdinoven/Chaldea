@@ -1,6 +1,6 @@
 import s from "./InventoryItem.module.scss";
 import TooltipPortal from "../../../../../CommonComponents/TooltipPortal/TooltipPortal.jsx";
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { SKILLS_KEYS } from "../../../../../../helpers/commonConstants.js";
 import { translateSkillSign } from "../../../../../../helpers/helpers.js";
 import {
@@ -12,6 +12,7 @@ export const getDamageLabel = (value) =>
   DAMAGE_TYPES.find((el) => el.value === value)?.label || value;
 
 const InventoryItem = ({
+  type,
   item,
   isCooldown,
   cooldownValue,
@@ -20,6 +21,23 @@ const InventoryItem = ({
 }) => {
   const itemRef = useRef(null);
   const [isHovered, setIsHovered] = useState(false);
+  const [tooltipOpenedManually, setTooltipOpenedManually] = useState(false);
+
+  const showTooltip = isHovered || tooltipOpenedManually;
+
+  const handleContextMenu = useCallback((e) => {
+    e.preventDefault();
+    setTooltipOpenedManually(true);
+  }, []);
+
+  const handleMouseLeave = () => {
+    setIsHovered(false);
+    // если открыто вручную — не закрываем
+  };
+
+  const handleCloseManualTooltip = () => {
+    setTooltipOpenedManually(false);
+  };
 
   const renderEntries = (entries, isEffect = false) => (
     <ul className={s.inner_list}>
@@ -29,7 +47,7 @@ const InventoryItem = ({
             {isEffect ? "Тип эффекта" : "Тип урона"}:{" "}
             <span>
               {entry?.effect_name?.includes("StatModifier")
-                ? "Модификатор характеристик"
+                ? "Модификатор"
                 : getDamageLabel(
                     isEffect
                       ? entry?.effect_name?.includes("Resist")
@@ -49,7 +67,7 @@ const InventoryItem = ({
                     : entry?.effect_name?.includes("StatModifier")
                       ? STAT_MODIFIERS.find(
                           (mod) => mod.key === entry?.attribute_key,
-                        )?.label
+                        )?.label.replace("(%)", "")
                       : entry?.effect_name}
                 )
               </span>
@@ -80,17 +98,27 @@ const InventoryItem = ({
       <div
         ref={itemRef}
         onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
+        onMouseLeave={handleMouseLeave}
+        onContextMenu={handleContextMenu}
         onClick={(e) => {
           if (isDraggable && isCooldown) {
             e.preventDefault();
             e.stopPropagation();
             return;
           }
-          setTurnData((prev) => ({
-            ...prev,
-            [SKILLS_KEYS[item.skill_type]]: item,
-          }));
+          setTurnData((prev) => {
+            if (item.skill_type) {
+              return {
+                ...prev,
+                [SKILLS_KEYS[item.skill_type]]: item,
+              };
+            } else {
+              return {
+                ...prev,
+                [SKILLS_KEYS.item]: item,
+              };
+            }
+          });
         }}
         draggable={!isCooldown && isDraggable}
         onDragStart={(e) => {
@@ -100,19 +128,50 @@ const InventoryItem = ({
         className={` ${s.item_wrapper} ${isCooldown ? s.cooldown_item : ""}`}
       >
         <div className={`${s.item} ${isCooldown ? s.cooldown : ""}`}>
-          <img src={item.rank_image} alt="" />
+          {item.rank_image && <img src={item.rank_image} alt="" />}
+          {item.image && <img src={item.image} alt="" />}
         </div>
         {isCooldown && <div className={s.cooldown_status}>{cooldownValue}</div>}
       </div>
-      {isHovered && (
+      {showTooltip && (
         <TooltipPortal targetRef={itemRef}>
           <div className={s.tooltip_content}>
-            <h4>{item.rank_name}</h4>
+            <div className={s.tooltip_header}>
+              {item.rank_name && <h4>{item.rank_name}</h4>}
+              {item.name && <h4>{item.name}</h4>}
+
+              {tooltipOpenedManually && (
+                <button
+                  onClick={handleCloseManualTooltip}
+                  className={s.tooltip_close}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+
             <ul className={s.all_list}>
-              <li>Тип: {translateSkillSign(item.skill_type)}</li>
-              <li>Перезарядка: {item.cooldown}</li>
-              <li>Затрата энергии: {item.cost_energy}</li>
-              <li>Затрата маны: {item.cost_mana}</li>
+              {item.skill_type && (
+                <li>Тип: {translateSkillSign(item.skill_type)}</li>
+              )}
+              {!!item.cooldown && <li>Перезарядка: {item.cooldown}</li>}
+              {!!item.cost_energy && (
+                <li>Затрата энергии: {item.cost_energy}</li>
+              )}
+              {!!item.cost_mana && <li>Затрата маны: {item.cost_mana}</li>}
+
+              {item.health_recovery && (
+                <li>Восстановление здоровья: {item.health_recovery}</li>
+              )}
+              {item.mana_recovery && (
+                <li>Восстановление маны: {item.mana_recovery}</li>
+              )}
+              {item.stamina_recovery && (
+                <li>Восстановление выносливости: {item.stamina_recovery}</li>
+              )}
+              {item.energy_recovery && (
+                <li>Восстановление маны: {item.energy_recovery}</li>
+              )}
 
               {item?.damage_entries?.length > 0 && (
                 <li>

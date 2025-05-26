@@ -1,6 +1,35 @@
+@use "../../../global.scss" as *;
+
 .battlePage_container {
   display: grid;
   grid-template-columns: 1fr 440px 1fr;
   gap: 15px;
   color: var(--zoloto);
+}
+
+.modal_container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 30px;
+
+  .win {
+    @include gold-text;
+    font-size: 40px;
+  }
+
+  .lose {
+    text-transform: uppercase;
+    color: var(--red);
+    font-size: 40px;
+  }
+
+  p {
+    font-size: 24px;
+
+    span {
+      @include gold-text;
+      font-size: 24px;
+    }
+  }
 }

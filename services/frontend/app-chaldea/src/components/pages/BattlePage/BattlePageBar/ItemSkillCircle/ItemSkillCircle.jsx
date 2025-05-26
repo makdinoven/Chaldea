@@ -15,11 +15,10 @@ const ItemSkillCircle = ({ isClosed, type, onDropItem, choosedItem }) => {
     const data = e.dataTransfer.getData("application/json");
     try {
       const item = JSON.parse(data);
-      console.log(item);
-      console.log(type);
-      if (item.skill_type === type) {
-        onDropItem(item);
-      }
+      // console.log(item);
+      // console.log(type);
+
+      onDropItem(item);
     } catch {
       console.warn("Invalid item data dropped");
     }

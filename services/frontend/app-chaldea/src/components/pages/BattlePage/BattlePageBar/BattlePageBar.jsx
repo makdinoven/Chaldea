@@ -12,6 +12,7 @@ import axios from "axios";
 import { BASE_URL_BATTLES } from "../../../../api/api.js";
 import { formatDateTime } from "../../../../helpers/helpers.js";
 import { DAMAGE_TYPES } from "../../../AdminSkillsPage/skillConstants.js";
+import { getDamageLabel } from "../CharacterSide/CharacterInventory/InventoryItem/InventoryItem.jsx";
 
 const AUTOBATTLE_MODE_BTNS = [
   {
@@ -99,7 +100,7 @@ const BattlePageBar = ({
     }
 
     setTurns(generatedTurns);
-    // setActiveTurnIndex(runtimeData.turn_number - 1);
+    setActiveTurnIndex(runtimeData.turn_number - 1);
   }, [runtimeData, myData]);
 
   useEffect(() => {
@@ -136,13 +137,14 @@ const BattlePageBar = ({
       return <span className={s.white}>{String(value)}</span>;
     };
 
-    const bold = (label, value, isPercent) =>
+    const bold = (label, value, isPercent, percentSign) =>
       value !== undefined ? (
         <div className={s.row}>
           {" "}
           <span className={s.gray}>{label ? label : ""}</span>
           <span className={`${value === 0 ? s.red : ""}`}>
             {isPercent ? formatValue(value / 100) : formatValue(value)}
+            {percentSign ? <span className={s.blue}>%</span> : ""}
           </span>
         </div>
       ) : null;
@@ -153,8 +155,34 @@ const BattlePageBar = ({
       return (
         <>
           {getName(event.who)} {action}
-          {/*{bold("Тип", BATTLE_EFFECTS[event.kind] || event.kind)}*/}
-          {bold("", event.effects?.join(", "))}
+          {/*{bold("Тип: ", BATTLE_EFFECTS[event.kind] || event.kind)}*/}
+          {/*{bold("", event.effects?.join(", "))}*/}
+          {event.effects.map((effect, i) => (
+            <span key={i}>
+              {getEffectData(effect)}{" "}
+              {i !== 0 || (i !== event.effects.length - 1 && ", ")}
+            </span>
+          ))}
+        </>
+      );
+    }
+
+    if (event.event === "item_use") {
+      return (
+        <>
+          {getName(event.who)} {action} {event.item_name}
+          {event.recovery.health && (
+            <span> и восстанавливает {event.recovery.health} здоровья</span>
+          )}
+          {event.recovery.mana && (
+            <span>и восстанавливает {event.recovery.mana} маны</span>
+          )}
+          {event.recovery.energy && (
+            <span>и восстанавливает {event.recovery.energy} энергии</span>
+          )}
+          {event.recovery.stamina && (
+            <span>и восстанавливает {event.recovery.stamina} выносливости</span>
+          )}
         </>
       );
     }
@@ -175,7 +203,8 @@ const BattlePageBar = ({
           )}
           {bold("Базовая атака: ", event.base_attack)}
           {bold("Входящий урон: ", event.entry_amount)}
-          {!!event.buff_pct && bold("Бонус от баффов (%): ", event.buff_pct)}
+          {!!event.buff_pct &&
+            bold("Бонус от баффов: ", event.buff_pct, false, true)}
           {!!event.after_buffs && bold("После баффов: ", event.after_buffs)}
           {event.dodged ? (
             <>
@@ -198,8 +227,13 @@ const BattlePageBar = ({
           )}
           {event.critical && (
             <>
-              {bold("С шансом (%) ", critChance)}
-              {bold("нанесен критический урон (множитель) ", critDamage, true)}
+              {bold("С шансом ", critChance, false, true)}
+              {bold(
+                "нанесен критический урон (множитель) ",
+                critDamage,
+                true,
+                true,
+              )}
             </>
           )}
           {!!event.resist_pct && bold("Сопротивление (%) ", event.resist_pct)}
@@ -209,6 +243,10 @@ const BattlePageBar = ({
     }
 
     if (event.event === "resource_spend") {
+      if (event.energy === 0 && event.mana === 0 && event.stamina === 0) {
+        return null;
+      }
+
       return (
         <>
           {getName(event.who)} {action}
@@ -219,7 +257,6 @@ const BattlePageBar = ({
       );
     }
 
-    // fallback
     return (
       <>
         {getName(event.who) || getName(event.source)} {action}{" "}
@@ -232,6 +269,24 @@ const BattlePageBar = ({
           );
         })}
       </>
+    );
+  };
+
+  const getEffectData = (effectName) => {
+    const isStatMod = effectName.includes("StatModifier");
+    const isResist = effectName.includes("Resist");
+    const isBuff = effectName.includes("Buff");
+
+    const title = isStatMod
+      ? "Модификатор"
+      : getDamageLabel(effectName.replace(/^(Resist|Buff): /, ""));
+
+    return (
+      <span>
+        {isBuff && `Изменение урона (${title})`}
+        {isResist && `Изменение защиты (${title})`}
+        {isStatMod && `${title}`}
+      </span>
     );
   };
 
@@ -262,6 +317,7 @@ const BattlePageBar = ({
           <ItemSkillCircle
             choosedItem={turnData[SKILLS_KEYS.item]}
             onDropItem={(data) => {
+              console.log(data);
               setTurnData((prev) => ({
                 ...prev,
                 [SKILLS_KEYS.item]: data,
@@ -331,7 +387,12 @@ const BattlePageBar = ({
       </div>
       <div className={s.battle_logs_container}>
         <div className={s.battle_logs_top}>
-          <span>Логи: Ход {activeTurnIndex + 1}</span>
+          <span>
+            Логи
+            {activeTurnIndex + 1 > 0 && (
+              <span>: Ход {activeTurnIndex + 1}</span>
+            )}
+          </span>
         </div>
 
         {turnLogs && (
@@ -343,7 +404,8 @@ const BattlePageBar = ({
                     {formatBattleEvent(event, snapshotData, s)}
                   </div>
                 ))}
-                <div>
+                <div className={s.date_time_container}>
+                  {isAutoBattleOn && <p>АВТОБОЙ</p>}
                   <div>{formatDateTime(log.timestamp)}</div>
                 </div>
                 {isTurnLikeTextShown && isAutoBattleOn && (

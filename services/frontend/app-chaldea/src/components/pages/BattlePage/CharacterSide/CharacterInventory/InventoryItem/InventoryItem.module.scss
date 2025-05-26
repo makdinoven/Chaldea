@@ -56,6 +56,21 @@
   background-size: cover;
 }
 
+.tooltip_close {
+  border: none;
+  background: none;
+  font-size: 32px;
+  cursor: pointer;
+  color: #fff;
+  z-index: 200;
+}
+
+.tooltip_header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .tooltip_content {
   display: flex;
   flex-direction: column;

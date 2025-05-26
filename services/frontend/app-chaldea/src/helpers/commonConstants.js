@@ -30,6 +30,7 @@ export const BATTLE_EVENTS_TRANSLATE = {
   apply_effects: "Получил эффекты: ",
   damage: "Наносит удар противнику",
   resource_spend: "Расходует ресурсы: ",
+  item_use: "Использует предмет: ",
 };
 
 export const BATTLE_EFFECTS = {

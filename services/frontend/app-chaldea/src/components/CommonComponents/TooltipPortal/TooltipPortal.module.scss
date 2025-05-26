@@ -10,7 +10,6 @@
   white-space: nowrap;
   z-index: 9999;
   transform: translateX(-50%);
-  pointer-events: none;
   opacity: 0.95;
   @include gray-background-br;
   @include gold-outline($width: 1px, $inset: -3px)

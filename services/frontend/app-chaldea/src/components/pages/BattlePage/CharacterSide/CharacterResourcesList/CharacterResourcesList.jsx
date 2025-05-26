@@ -7,17 +7,15 @@ const CharacterResourcesList = ({ resources }) => {
     <ul className={s.list}>
       {resources.map((res, index) => {
         const [name, data] = Object.entries(res)[0];
-        const percent = Math.min(
-          100,
-          Math.round((data.current / data.max) * 100),
-        );
+        const current = Math.max(0, data.current);
+        const percent = Math.min(100, Math.round((current / data.max) * 100));
 
         return (
           <li key={index} className={s.item}>
             <div className={s.label_row}>
               <span>{translateCharacterResource(name)}</span>
               <span>
-                {data.current}/{data.max}
+                {current}/{data.max}
               </span>
             </div>
             <div className={s.barWrapper}>
