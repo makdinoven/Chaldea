@@ -8,6 +8,7 @@ from typing import Any, Dict, Set
 import aioredis
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from clients import get_battle_state, post_battle_action
@@ -20,6 +21,31 @@ log = logging.getLogger("auto-battle")
 
 # ──────────────────────  FastAPI  ──────────────────────
 app = FastAPI(title="Auto-Battle AI")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://4452515-co41851.twc1.net",
+        "http://4452515-co41851.twc1.net:5173",
+        "http://4452515-co41851.twc1.net:5555",
+        "http://4452515-co41851.twc1.net:8005",
+        "http://4452515-co41851.twc1.net:8004",
+        "http://4452515-co41851.twc1.net:8003",
+        "http://4452515-co41851.twc1.net:8002",
+        "http://4452515-co41851.twc1.net:8001",
+        "http://4452515-co41851.twc1.net:8000",
+        "http://localhost",
+        "http://localhost:8000",
+        "http://localhost:8001",
+        "http://localhost:8002",
+        "http://localhost:8003",
+        "http://localhost:8004",
+        "http://localhost:8005",
+        "http://localhost:5555",
+                    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 strategy = Strategy()
 
 # ──────────────────────  runtime state  ──────────────────────
