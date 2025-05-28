@@ -1,149 +1,152 @@
-# strategy.py  ───────────────────────────────────────────────
+"""
+Простейшая эвристика + лайки/дизлайки + расширенные фичи.
+Никаких файлов: всё хранится в оперативной памяти процесса.
+"""
 from __future__ import annotations
-import random
-from typing import Any, Dict, Tuple, List
+import math, random, statistics
+from typing import Dict, Any, List, Tuple
 
-import lightgbm as lgb
-import numpy as np
+# какие бонусы давать базовым типам в разных режимах
+_MODE_BONUS = {
+    "attack":  {"attack": +0.5, "support": +0.1, "defense": -0.2},
+    "defense": {"attack": -0.2, "support": +0.1, "defense": +0.5},
+    "balance": {"attack": +0.2, "support": +0.2, "defense": +0.2},
+}
+_MODE_CHOICES = set(_MODE_BONUS)
 
-# путь к файлу модели
-from pathlib import Path
-_MODEL_PATH = Path("/mnt/data/auto_battle_lgbm.txt")
-
-_MODE_CHOICES = {"attack", "defense", "balance"}
-
-
+# ────────────────────────────────────────────────────────────────
 def _flatten(tree) -> List[dict]:
-    """
-    Универсально «расплющивает» любое количество вложенных списков:
-        [{..}, [{..}, {..}], …]  ->  list[dict]
-    """
-    out: list[dict] = []
-    stack = [tree]
-    while stack:
-        cur = stack.pop()
+    out, st = [], [tree]
+    while st:
+        cur = st.pop()
         if isinstance(cur, dict):
             out.append(cur)
         elif isinstance(cur, list):
-            stack.extend(cur)
+            st.extend(cur)
     return out
 
-
+# ────────────────────────────────────────────────────────────────
 class Strategy:
-    def __init__(self):
-        self.mode = "balance"
-        self.model: lgb.Booster | None = None
-        self._load_model()
+    def __init__(self) -> None:
+        self.mode    : str = "balance"
+        self.rating  : Dict[int, Tuple[int, int]] = {}   # rank_id → (likes, dislikes)
 
-    def set_mode(self, mode: str):
+    # ───────────── публичное API ─────────────
+    def set_mode(self, mode: str) -> None:
         if mode not in _MODE_CHOICES:
-            raise ValueError(f"Unknown mode {mode}")
+            raise ValueError(f"unknown mode {mode}")
         self.mode = mode
 
-    # ────────── публичный вызов из main.py ──────────
+    def feedback(self, rank_ids: List[int], liked: bool) -> None:
+        for rid in rank_ids:
+            good, bad = self.rating.get(rid, (0, 0))
+            self.rating[rid] = (good + (1 if liked else 0),
+                                bad  + (0 if liked else 1))
+
     def select_actions(
         self, ctx: Dict[str, Any]
     ) -> Tuple[Dict[str, int | None], int | None]:
-        available = self._filter_available(ctx)
-        weights   = self._calc_weights(available)
-        chosen    = self._pick_best(weights, available)
-        return chosen["skills"], chosen["item_id"]
 
-    # ────────── helpers ──────────
-    # ──────────────────────────────────────────────────────────
+        avail   = self._filter_available(ctx)
+        feats   = ctx.get("features", {})
+        weights = self._calc_weights(avail, feats)
+        choice  = self._pick_best(weights, avail, feats)
+        return choice["skills"], choice["item_id"]
+
+    # ───────────── helpers ─────────────
+    # ------------------------------------------------------------------
     def _filter_available(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Достаём из снапшота навыки и fast-слоты текущего участника,
-        убираем навыки на кулдауне.
-        """
+        pid   = int(ctx["runtime"]["current_actor"])
+        me_rt = ctx["runtime"]["participants"][str(pid)]
 
-        def _flatten(tree) -> list[dict]:
-            out, stack = [], [tree]
-            while stack:
-                cur = stack.pop()
-                if isinstance(cur, dict):
-                    out.append(cur)
-                elif isinstance(cur, list):
-                    stack.extend(cur)
-            return out
+        snap  = next(s for s in ctx["snapshot"] if s["participant_id"] == pid)
+        skills = {r["id"]: r for r in _flatten(snap["skills"])}
 
-        me_pid = int(ctx["runtime"]["current_actor"])
+        slots  = _flatten(me_rt.get("fast_slots", []))
+        cdict  = me_rt["cooldowns"]
 
-        # <─── СНАПШОТ теперь список ─────────────────────────>
-        my_snapshot = next(
-            snap for snap in ctx["snapshot"] if snap["participant_id"] == me_pid
-        )
-
-        # skills: list[..., {...}, [...]]
-        raw_skills = my_snapshot["skills"]
-        skills_list = _flatten(raw_skills)  # гарантированно list[dict]
-        skills_map = {r["id"]: r for r in skills_list}
-
-        # fast-слоты берём из runtime, там же quantities актуальны
-        raw_slots = ctx["runtime"]["participants"][str(me_pid)].get("fast_slots", [])
-        fast_slots = _flatten(raw_slots)
-
-        # фильтруем кулдауны
-        cooldowns = ctx["runtime"]["participants"][str(me_pid)]["cooldowns"]
-        me_stat = ctx["runtime"]["participants"][str(me_pid)]
-
-        def _enough(r: dict) -> bool:
+        def enough(r: dict) -> bool:
             return (
-                    me_stat["energy"] >= r.get("cost_energy", 0) and
-                    me_stat["mana"] >= r.get("cost_mana", 0) and
-                    me_stat["stamina"] >= r.get("cost_stamina", 0)
+                me_rt["energy"]  >= r.get("cost_energy", 0) and
+                me_rt["mana"]    >= r.get("cost_mana", 0) and
+                me_rt["stamina"] >= r.get("cost_stamina", 0)
             )
-        available_skills = {
-            rid: r for rid, r in skills_map.items()
-            if cooldowns.get(str(rid), 0) == 0 and _enough(r)
-        }
 
-        return {
-            "skills": available_skills,  # dict[id] → json
-            "fast_slots": fast_slots,  # list[dict]
-        }
+        available = {rid: r for rid, r in skills.items()
+                     if cdict.get(str(rid), 0) == 0 and enough(r)}
 
-    def _calc_weights(self, available: Dict[str, Any]) -> Dict[int, float]:
-        base = {"attack": 1.0, "support": 0.8, "defense": 0.6}
-        boost = {"attack": 0.4, "balance": 0.2, "defense": -0.2}
+        return {"skills": available, "fast_slots": slots}
+
+    # ------------------------------------------------------------------
+    def _wilson(self, likes: int, dislikes: int) -> float:
+        n = likes + dislikes
+        if n == 0:
+            return 0.5
+        z = 1.96
+        p = likes / n
+        return (
+            p + z*z/(2*n)
+            - z * math.sqrt(p*(1-p)/n + z*z/(4*n))
+        ) / (1 + z*z/n)       # 0…1
+
+    def _calc_weights(
+        self, avail: Dict[str, Any], f: Dict[str, float]
+    ) -> Dict[int, float]:
+
         out: Dict[int, float] = {}
-        for rid, r in available["skills"].items():
-            if not isinstance(r, dict):
-                raise RuntimeError(f"NOT DICT: {type(r)} → {r!r}")
-                continue
-            t = r.get("skill_type", "attack")
-            w = base.get(t, 0.5) + boost[self.mode] + random.uniform(-0.1, 0.1)
-            out[rid] = w
+        for rid, row in avail["skills"].items():
+            base  = 1.0
+            bonus = _MODE_BONUS[self.mode].get(row.get("skill_type", "attack"), 0.0)
+
+            # влияние HP: чем меньше, тем важнее support/defense
+            if row.get("skill_type") == "support":
+                bonus += (1.0 - f.get("hp_ratio", 1.0)) * 0.5
+            if row.get("skill_type") == "defense":
+                bonus += (1.0 - f.get("hp_ratio", 1.0)) * 0.3
+
+            # пользовательские лайки
+            likes, dislikes = self.rating.get(rid, (0, 0))
+            rating = self._wilson(likes, dislikes)    # 0..1
+
+            noise = random.uniform(-0.05, 0.05)
+            out[rid] = base + bonus + rating + noise
         return out
 
-    def _pick_best(self, w: Dict[int, float], avail: Dict[str, Any]) -> Dict[str, Any]:
-        by_type = {"attack": [], "defense": [], "support": []}
+    # ------------------------------------------------------------------
+    def _pick_best(
+        self, w: Dict[int, float],
+        avail: Dict[str, Any],
+        f: Dict[str, float]
+    ) -> Dict[str, Any]:
+
+        # ------------- выбор навыков -----------------
+        buckets = {"attack": [], "defense": [], "support": []}
         for rid, weight in w.items():
             t = avail["skills"][rid].get("skill_type", "attack")
-            by_type.setdefault(t, []).append((rid, weight))
-        for lst in by_type.values():
-            lst.sort(key=lambda x: x[1], reverse=True)
+            buckets.setdefault(t, []).append((rid, weight))
 
-        skills = {
-            "attack_rank_id": by_type["attack"][0][0] if by_type["attack"] else None,
-            "defense_rank_id": by_type["defense"][0][0] if by_type["defense"] else None,
-            "support_rank_id": by_type["support"][0][0] if by_type["support"] else None,
-        }
+        skills = {"attack_rank_id": None, "defense_rank_id": None, "support_rank_id": None}
+        for t, lst in buckets.items():
+            if lst:
+                rid, _ = max(lst, key=lambda x: x[1])
+                skills[f"{t}_rank_id"] = rid
+
+        # ------------- выбор предмета ----------------
+        need_hp   = max(0.0, f.get("hp_ratio",1.0)  - 0.7)   # >0 если <70 %
+        need_mana = max(0.0, f.get("mana_ratio",1.0)- 0.6)
+        need_energy = max(0.0, f.get("energy_ratio",1.0)-0.6)
+
+        def value(slot):
+            v  = need_hp   * slot.get("health_recovery", 0)
+            v += need_mana * slot.get("mana_recovery",   0)
+            v += need_energy * slot.get("energy_recovery", 0)
+            v += 0.01 * slot.get("quantity",0)
+            return v
 
         item_id = None
-        for slot in avail["fast_slots"]:
-            if slot.get("quantity", 0) > 0:
-                item_id = slot["item_id"]
-                break
+        if avail["fast_slots"]:
+            best = max(avail["fast_slots"], key=value)
+            if value(best) > 0:
+                item_id = best["item_id"]
 
         return {"skills": skills, "item_id": item_id}
-
-    # ────────── загрузка / сохранение модели ──────────
-    def _load_model(self):
-        if _MODEL_PATH.exists():
-            self.model = lgb.Booster(model_file=str(_MODEL_PATH))
-
-    def _save_model(self):
-        if self.model:
-            _MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.model.save_model(str(_MODEL_PATH))
