@@ -279,7 +279,10 @@ const BattlePageBar = ({
 
     const title = isStatMod
       ? "Модификатор"
-      : getDamageLabel(effectName.replace(/^(Resist|Buff): /, ""));
+      : // ? STAT_MODIFIERS.find(
+        //     (mod) => mod.key === effect?.attribute,
+        //   )?.label.replace("(%)", "") || "Модификатор"
+        getDamageLabel(effectName.replace(/^(Resist|Buff): /, ""));
 
     return (
       <span>
@@ -393,6 +396,20 @@ const BattlePageBar = ({
               <span>: Ход {activeTurnIndex + 1}</span>
             )}
           </span>
+          <span className={s.logs_character_name}>
+            {(() => {
+              const currentParticipantId =
+                runtimeData.turn_order[
+                  (activeTurnIndex + 1) % runtimeData.turn_order.length
+                ];
+
+              if (currentParticipantId === myData.participant_id) {
+                return myData.name;
+              } else if (currentParticipantId === opponentData.participant_id) {
+                return opponentData.name;
+              }
+            })()}
+          </span>
         </div>
 
         {turnLogs && (
@@ -405,26 +422,55 @@ const BattlePageBar = ({
                   </div>
                 ))}
                 <div className={s.date_time_container}>
-                  {isAutoBattleOn && <p>АВТОБОЙ</p>}
+                  {isAutoBattleOn &&
+                    (() => {
+                      const currentParticipantId =
+                        runtimeData.turn_order[
+                          (activeTurnIndex + 1) % runtimeData.turn_order.length
+                        ];
+
+                      if (currentParticipantId === myData.participant_id) {
+                        return <p>АВТОБОЙ</p>;
+                      } else if (
+                        currentParticipantId === opponentData.participant_id
+                      ) {
+                        return null;
+                      }
+                    })()}
                   <div>{formatDateTime(log.timestamp)}</div>
                 </div>
-                {isTurnLikeTextShown && isAutoBattleOn && (
-                  <div className={s.doYouLike}>
-                    Понравился ли вам ход?{" "}
-                    <span
-                      onClick={() => setIsTurnLikeTextShown(false)}
-                      className={s.blue}
-                    >
-                      Да
-                    </span>{" "}
-                    <span
-                      onClick={() => setIsTurnLikeTextShown(false)}
-                      className={s.red}
-                    >
-                      Нет
-                    </span>
-                  </div>
-                )}
+                {isTurnLikeTextShown &&
+                  isAutoBattleOn &&
+                  (() => {
+                    const currentParticipantId =
+                      runtimeData.turn_order[
+                        (activeTurnIndex + 1) % runtimeData.turn_order.length
+                      ];
+
+                    if (currentParticipantId === myData.participant_id) {
+                      return (
+                        <div className={s.doYouLike}>
+                          Понравился ли вам ход?{" "}
+                          <span
+                            onClick={() => setIsTurnLikeTextShown(false)}
+                            className={s.blue}
+                          >
+                            Да
+                          </span>{" "}
+                          <span
+                            onClick={() => setIsTurnLikeTextShown(false)}
+                            className={s.red}
+                          >
+                            Нет
+                          </span>
+                        </div>
+                      );
+                    } else if (
+                      currentParticipantId === opponentData.participant_id
+                    ) {
+                      return null;
+                    }
+                  })()}
               </li>
             ))}
           </ul>

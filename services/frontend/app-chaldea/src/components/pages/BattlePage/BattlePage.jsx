@@ -14,8 +14,6 @@ import { SKILLS_KEYS } from "../../../helpers/commonConstants.js";
 import Modal from "../../CommonComponents/Modal/Modal.jsx";
 import BlueGradientButton from "../../CommonComponents/BlueGradientButton/BlueGradientButton.jsx";
 
-const TURN_DURATION = 24 * 60 * 60 * 1000;
-
 const BattlePage = () => {
   useBodyBackground(battleBg);
   const navigate = useNavigate();
@@ -159,26 +157,6 @@ const BattlePage = () => {
       }
     }
   }, [opponentData, myData]);
-
-  // useEffect(() => {
-  //   console.log(runtimeData);
-  // }, [runtimeData]);
-
-  // useEffect(() => {
-  //   console.log(snapshotData);
-  // }, [snapshotData]);
-
-  // useEffect(() => {
-  //   console.log(opponentData);
-  // }, [opponentData]);
-
-  // useEffect(() => {
-  //   console.log(currentTurn);
-  // }, [currentTurn]);
-
-  // useEffect(() => {
-  //   console.log(turnData);
-  // }, [turnData]);
 
   const handleSendTurn = async () => {
     const turnDataApi = {

@@ -30,7 +30,6 @@ export const SUBRACE_OPTIONS = [
   { label: "Северный", value: "14", race: "6" },
   { label: "Темный", value: "15", race: "7" },
   { label: "Золотой", value: "16", race: "7" },
-
 ];
 export const SKILL_TYPES = [
   { label: "Атакующий", value: "attack" },
@@ -60,7 +59,7 @@ export const WEAPON_SLOTS = [
 ];
 
 export const STAT_MODIFIERS = [
-  { label: "Крит.шанс(%)", key: "crit_chance" },
+  { label: "Крит.шанс(%)", key: "critical_hit_chance" },
   { label: "Крит.урон(%)", key: "crit_damage" },
   { label: "Шанс уклонения(%)", key: "dodge_chance" },
   { label: "HP(±)", key: "hp" },
@@ -96,14 +95,14 @@ export const EMPTY_RANK_TEMPLATE = {
   rank_description: "",
 
   // Локальное хранение изображения ранга (base64 / blob)
-  rankImageFile: null,   // сам File
-  rankImagePreview: "",  // base64 или blob url
+  rankImageFile: null, // сам File
+  rankImagePreview: "", // base64 или blob url
 
   // 5 секций (self)
   selfDamage: [],
   selfDamageBuff: [],
   selfResist: [],
-  selfVulnerability: [],       // [{type, percent, duration, chance} ...]
+  selfVulnerability: [], // [{type, percent, duration, chance} ...]
   selfComplexEffects: [],
   selfStatMods: [],
 
@@ -118,7 +117,7 @@ export const EMPTY_RANK_TEMPLATE = {
   // Доп. ограничения
   class_limitations: "",
   race_limitations: "",
-  subrace_limitations: ""
+  subrace_limitations: "",
 };
 
 export function cloneRankAsNew(originalRank) {
@@ -128,12 +127,13 @@ export function cloneRankAsNew(originalRank) {
     id: null,
     isNew: true,
     rankImageFile: null,
-    rankImagePreview: "",  // сбрасываем при копировании
+    rankImagePreview: "", // сбрасываем при копировании
   };
 }
 
-let rankIdCounter = 1
+let rankIdCounter = 1;
+
 export function generateRankId() {
-  const newId = String(rankIdCounter++)
-  return newId
+  const newId = String(rankIdCounter++);
+  return newId;
 }

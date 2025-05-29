@@ -170,7 +170,7 @@ const InventoryItem = ({
                 <li>Восстановление выносливости: {item.stamina_recovery}</li>
               )}
               {item.energy_recovery && (
-                <li>Восстановление маны: {item.energy_recovery}</li>
+                <li>Восстановление энергии: {item.energy_recovery}</li>
               )}
 
               {item?.damage_entries?.length > 0 && (

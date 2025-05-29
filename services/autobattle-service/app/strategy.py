@@ -1,12 +1,7 @@
-"""
-Простейшая эвристика + лайки/дизлайки + расширенные фичи.
-Никаких файлов: всё хранится в оперативной памяти процесса.
-"""
 from __future__ import annotations
 import math, random, statistics
 from typing import Dict, Any, List, Tuple
 
-# какие бонусы давать базовым типам в разных режимах
 _MODE_BONUS = {
     "attack":  {"attack": +0.5, "support": +0.1, "defense": -0.2},
     "defense": {"attack": -0.2, "support": +0.1, "defense": +0.5},

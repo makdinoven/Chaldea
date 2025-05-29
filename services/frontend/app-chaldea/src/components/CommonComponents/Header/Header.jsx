@@ -48,18 +48,16 @@ export default function Header() {
     },
   ];
 
-  if (role === "admin") {
-    menuData.push({
-      id: 3,
-      menuButtons: [
-        { name: "Заявки", link: "requestsPage" },
-        { name: "Айтемы", link: "/admin/items" },
-        { name: "Локации", link: "/admin/locations" },
-      ],
-      img: menuImg3,
-      title: "Админка",
-    });
-  }
+  menuData.push({
+    id: 3,
+    menuButtons: [
+      { name: "Заявки", link: "requestsPage" },
+      { name: "Айтемы", link: "/admin/items" },
+      { name: "Локации", link: "/admin/locations" },
+    ],
+    img: menuImg3,
+    title: "Админка",
+  });
 
   return (
     <>

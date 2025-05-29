@@ -200,6 +200,16 @@
   @include gray-background-br;
   height: 286px;
 
+  .battle_logs_top {
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .logs_character_name {
+    @include gold-text;
+    font-size: 16px;
+  }
+
   .battle_logs_list {
     flex: 1;
     display: flex;
