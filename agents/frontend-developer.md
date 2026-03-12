@@ -94,6 +94,8 @@ This includes:
 
 ## Coding Rules
 
+**⚠️ CRITICAL: The Tailwind and TypeScript migration rules below are MANDATORY.** They apply to ALL changes — features, bug fixes, hotfixes, refactors. There are NO exceptions for "small fixes" or "quick patches." If you touch a `.jsx` file's logic — migrate it to `.tsx`. If you add styles — use Tailwind, not SCSS. Violating these rules will result in FAIL at review.
+
 ### TypeScript (T3 — organic migration)
 
 **New files** — always `.tsx` / `.ts`:
@@ -111,11 +113,12 @@ const CharacterCard: React.FC<{ character: Character }> = ({ character }) => {
 };
 ```
 
-**Modifying logic in an existing `.jsx`** — migrate to `.tsx` in the same PR:
+**Modifying logic in an existing `.jsx`** (including bug fixes!) — migrate to `.tsx` in the same PR:
 - Rename file `.jsx` → `.tsx`
 - Add types for props, state, API responses
 - Do not use `any` without reason (use `unknown` + `// TODO: type this`)
 - This is a separate commit from logic changes
+- **No exceptions for "small" changes — even a 1-line fix triggers migration**
 
 **Task does not touch file's logic** — do not touch, leave `.jsx` as is.
 
@@ -132,10 +135,11 @@ const CharacterCard: React.FC<{ character: Character }> = ({ character }) => {
 import './NewComponent.scss';
 ```
 
-**Modifying styles of an existing component** — migrate to Tailwind:
+**Modifying styles of an existing component** (including bug fixes!) — migrate to Tailwind:
 - Move all styles to className
 - Delete old CSS/SCSS file (check that it's not imported elsewhere)
 - This is a separate commit from logic changes
+- **Adding new styles to SCSS/CSS is NEVER allowed — always use Tailwind**
 
 **Task does not touch styles** — do not touch, leave CSS/SCSS as is.
 
@@ -221,8 +225,10 @@ Write brief **Russian** log entries in the feature file's Logging section:
 
 ## Checklist Before Completion
 
+- [ ] **Modified `.jsx` files migrated to `.tsx`** (even for bug fixes!)
 - [ ] New files — TypeScript (`.tsx` / `.ts`)
 - [ ] Types for all props, state, API responses
+- [ ] **No new styles in SCSS/CSS — Tailwind only** (even for bug fixes!)
 - [ ] New components — Tailwind CSS (no CSS/SCSS)
 - [ ] Redux slice typed (state, actions, selectors)
 - [ ] API calls match contracts from Architecture Decision

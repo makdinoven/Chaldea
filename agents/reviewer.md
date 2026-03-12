@@ -41,8 +41,10 @@ Use the **cross-service-validator** skill:
 - [ ] No hardcoded secrets, URLs, ports (except inter-service in Docker)
 - [ ] No `any` in TypeScript without explicit reason
 - [ ] No stubs (`TODO`, `FIXME`, `HACK`) without tracking in ISSUES.md
-- [ ] New frontend files — `.tsx`/`.ts` (T3)
-- [ ] New styles — Tailwind CSS, no CSS/SCSS (T1)
+- [ ] **Modified `.jsx` files migrated to `.tsx`?** (T3 — BLOCKING, even for bug fixes)
+- [ ] **New/modified styles use Tailwind, not SCSS/CSS?** (T1 — BLOCKING, even for bug fixes)
+- [ ] No new `.jsx` files created (must be `.tsx`)
+- [ ] No new styles added to SCSS/CSS files (must use Tailwind)
 - [ ] Alembic migration present (if needed, T2)
 
 ### 4. Security Review Checklist
