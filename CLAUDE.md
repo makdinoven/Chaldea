@@ -276,7 +276,7 @@ Feature tracking is done in the `features/` directory:
 
 | Agent | File | Responsibility |
 |-------|------|----------------|
-| Orchestrator (PM) | `agents/orchestrator.md` | Single point of contact for user, pipeline management |
+| Orchestrator (PM) | `agents/orchestrator.md` | Single point of contact for user, pipeline management. **NEVER analyzes/reads/debugs code — delegates ALL technical work to agents.** |
 | Codebase Analyst | `agents/codebase-analyst.md` | READ-ONLY code analysis, dependencies, patterns |
 | Architect | `agents/architect.md` | Solution design, API contracts, task breakdown |
 | Backend Developer | `agents/backend-developer.md` | Python service code (FastAPI, SQLAlchemy, Celery) |
