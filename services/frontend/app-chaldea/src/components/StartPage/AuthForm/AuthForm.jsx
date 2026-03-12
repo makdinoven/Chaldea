@@ -154,7 +154,7 @@ export default function AuthForm({activeForm}) {
             </span>
                     </label>
                 </div>
-                {/* Отображение сообщения об ошибке */}
+                {error && <p className={styles.error_message}>{error}</p>}
                 {activeForm === 'login' ? (
                     <FormButton text='Вход' onClick={handleSubmit}/>
                 ) : (
