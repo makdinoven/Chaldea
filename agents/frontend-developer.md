@@ -223,8 +223,29 @@ Write brief **Russian** log entries in the feature file's Logging section:
 
 ---
 
+## Verification Before Completion
+
+**⚠️ MANDATORY: Run these checks before marking your task as done. If any fail — fix the issue, don't just report it.**
+
+```bash
+# 1. TypeScript type check — must pass with zero errors
+cd services/frontend/app-chaldea && npx tsc --noEmit
+
+# 2. Production build — must succeed
+cd services/frontend/app-chaldea && npm run build
+```
+
+**If you added a new npm package** (e.g., `react-hot-toast`, `react-icons`), verify it's installed:
+```bash
+cd services/frontend/app-chaldea && npm install <package-name>
+```
+**Never import a package without installing it first.**
+
 ## Checklist Before Completion
 
+- [ ] **`npx tsc --noEmit` passes** (zero errors)
+- [ ] **`npm run build` succeeds** (no unresolved imports, no bundling errors)
+- [ ] **All new npm packages are installed** (in package.json)
 - [ ] **Modified `.jsx` files migrated to `.tsx`** (even for bug fixes!)
 - [ ] New files — TypeScript (`.tsx` / `.ts`)
 - [ ] Types for all props, state, API responses

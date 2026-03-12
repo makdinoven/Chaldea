@@ -69,26 +69,47 @@ Use the **cross-service-validator** skill:
 
 **If backend was changed but no QA task exists or no tests were written → FAIL.** This is a blocking issue. Note it in the Issues Found table and assign to "QA Test".
 
-### 6. Automated Checks
+### 6. Automated Checks — MANDATORY
 
-Run and verify results:
+**⚠️ These checks are NOT optional. You MUST run every applicable check. If any check fails → FAIL the review. If you skip a check that was applicable → your review is invalid.**
 
+**If frontend code was changed**, run BOTH (in this order):
 ```bash
-# Python — syntax check for affected files
-python -m py_compile services/<service>/app/<file>.py
-
-# TypeScript — type check (if tsconfig exists)
+# 1. TypeScript type check — catches type errors, missing imports
 cd services/frontend/app-chaldea && npx tsc --noEmit
 
-# Frontend — build
+# 2. Production build — catches unresolved imports, bundling errors
 cd services/frontend/app-chaldea && npm run build
+```
+**If either fails → FAIL.** Missing npm packages, unresolved imports, type errors — all are blocking.
 
-# Docker — compose validity
-docker-compose config > /dev/null
+**If backend code was changed**, run:
+```bash
+# 1. Python syntax check for EVERY modified file
+python -m py_compile services/<service>/app/<file>.py
 
-# Tests — in affected services
+# 2. Tests in affected services
 cd services/<service> && pytest app/tests/ -v
 ```
+**If either fails → FAIL.**
+
+**Always run:**
+```bash
+# Docker compose validity
+docker-compose config > /dev/null
+```
+
+**After running checks, include results in the Review Log:**
+```markdown
+#### Automated Check Results
+- [ ] `npx tsc --noEmit` — PASS/FAIL (or N/A)
+- [ ] `npm run build` — PASS/FAIL (or N/A)
+- [ ] `py_compile` — PASS/FAIL (or N/A)
+- [ ] `pytest` — PASS/FAIL (or N/A)
+- [ ] `docker-compose config` — PASS/FAIL
+```
+
+**A review without automated check results is incomplete and must not be marked PASS.**
 
 ### 7. Visual Check (if there are frontend changes)
 

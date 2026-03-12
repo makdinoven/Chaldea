@@ -345,6 +345,15 @@ All agents must consider security in their domain:
 
 **Mandatory rule for Frontend Developer and Reviewer:** Every API call in the frontend MUST have visible error handling. Never silently swallow errors. Network errors, 4xx, 5xx — all must be displayed to the user with a Russian-language message.
 
+### Build Verification — Mandatory
+
+**Developers must verify their work compiles/builds before marking tasks done. Reviewer must re-verify.**
+
+- **Frontend Developer:** Run `npx tsc --noEmit` AND `npm run build` before completion. Both must pass.
+- **Backend Developer:** Run `python -m py_compile` on all modified files before completion. Must pass.
+- **Reviewer:** Re-run all applicable checks. A review without automated check results is invalid and must not be marked PASS.
+- **New dependencies:** If you import a package, you MUST install/add it first (`npm install` / `requirements.txt`). Unresolved imports = broken app.
+
 ### Sub-agent Execution
 
 **All sub-agents MUST be launched as separate background agents** (using the Agent tool with `run_in_background: true`). Sub-agents never run inline in PM's conversation. This ensures isolation and allows parallel execution.

@@ -161,8 +161,30 @@ Write brief **Russian** log entries in the feature file's Logging section:
 
 ---
 
+## Verification Before Completion
+
+**⚠️ MANDATORY: Run these checks before marking your task as done. If any fail — fix the issue.**
+
+```bash
+# 1. Syntax check for every modified file
+python -m py_compile services/<service>/app/<file>.py
+
+# 2. If tests exist — run them
+cd services/<service> && pytest app/tests/ -v
+```
+
+**If you added a new Python package**, verify it's in `requirements.txt`:
+```bash
+# Check the package is listed
+grep <package-name> services/<service>/app/requirements.txt
+```
+**Never import a package without adding it to requirements.txt first.**
+
 ## Checklist Before Completion
 
+- [ ] **`py_compile` passes** for all modified files
+- [ ] **Tests pass** (if they exist)
+- [ ] **All new packages are in `requirements.txt`**
 - [ ] Code follows the service's pattern (sync/async)
 - [ ] Pydantic <2.0 syntax (`class Config: orm_mode = True`)
 - [ ] No hardcoded secrets
