@@ -178,6 +178,13 @@ When any agent discovers a bug **unrelated to the current feature** during their
 
 Bugs found during a feature are tracked but **not fixed in the same feature** unless they directly block the current work. They become separate future tasks.
 
+**When a bug gets fixed** (in any feature or dedicated fix task):
+1. The fixing agent removes or marks the entry as DONE in `docs/ISSUES.md`
+2. The agent logs it: `[LOG] ... — Agent: баг B-NNN исправлен, удалён из ISSUES.md`
+3. PM verifies the entry was cleaned up
+
+`docs/ISSUES.md` must always reflect current state — no stale entries for fixed bugs.
+
 ---
 
 ## What PM Does NOT Do

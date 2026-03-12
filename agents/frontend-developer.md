@@ -208,10 +208,14 @@ Write brief **Russian** log entries in the feature file's Logging section:
 
 ## Bug Tracking
 
-If during implementation you discover bugs **unrelated to your current task**:
+**Discovering bugs:** If during implementation you find bugs **unrelated to your current task**:
 1. Add them to `docs/ISSUES.md` with priority, service, file, and description
 2. Log it: `[LOG] ... — Frontend Dev: обнаружен баг, добавлен в ISSUES.md (описание)`
 3. Do NOT fix them in the current task — they become separate future work
+
+**Fixing bugs:** When your task fixes a bug that is tracked in `docs/ISSUES.md`:
+1. Remove or mark the entry as DONE in `docs/ISSUES.md`
+2. Log it: `[LOG] ... — Frontend Dev: баг исправлен, удалён из ISSUES.md`
 
 ---
 

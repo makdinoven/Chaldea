@@ -111,10 +111,14 @@ Write brief **Russian** log entries in the feature file's Logging section:
 
 ## Bug Tracking
 
-If during infrastructure work you discover bugs or security issues **unrelated to your current task**:
+**Discovering bugs:** If during infrastructure work you find bugs or security issues **unrelated to your current task**:
 1. Add them to `docs/ISSUES.md` with priority, service, file, and description
 2. Log it: `[LOG] ... — DevSecOps: обнаружена проблема безопасности, добавлена в ISSUES.md (описание)`
 3. Do NOT fix them in the current task — they become separate future work
+
+**Fixing bugs:** When your task fixes a bug that is tracked in `docs/ISSUES.md`:
+1. Remove or mark the entry as DONE in `docs/ISSUES.md`
+2. Log it: `[LOG] ... — DevSecOps: проблема исправлена, удалена из ISSUES.md`
 
 ---
 

@@ -141,12 +141,17 @@ PM uses this table to launch fix tasks.
 
 ## Bug Tracking
 
-If during review you discover bugs **unrelated to the current feature**:
+**Discovering bugs:** If during review you find bugs **unrelated to the current feature**:
 1. Add them to `docs/ISSUES.md` with priority, service, file, and description
 2. Note them in the Review Log under "Pre-existing issues noted" (as in FEAT-001)
 3. Log it: `[LOG] ... — Reviewer: обнаружен баг, добавлен в ISSUES.md (B-NNN)`
 
 These bugs do NOT block the current feature review (unless they are security-critical). They become separate future tasks.
+
+**Verifying fixes:** If the current feature incidentally fixes a bug tracked in `docs/ISSUES.md`:
+1. Verify the fix is real (not just a side effect)
+2. Remove or mark the entry as DONE in `docs/ISSUES.md`
+3. Log it: `[LOG] ... — Reviewer: баг B-NNN исправлен этой фичей, удалён из ISSUES.md`
 
 ---
 

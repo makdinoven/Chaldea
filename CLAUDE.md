@@ -356,7 +356,11 @@ When any agent discovers a bug **unrelated to the current feature**, they must:
 2. Log it in the feature file: `[LOG] ... — Agent: обнаружен баг, добавлен в ISSUES.md`
 3. NOT fix it in the current feature (unless it's a direct blocker)
 
-Discovered bugs become separate future tasks tracked in `docs/ISSUES.md`.
+When any agent fixes a bug (as part of a feature or dedicated fix task), they must:
+1. **Remove or mark as DONE** the corresponding entry in `docs/ISSUES.md`
+2. Log it: `[LOG] ... — Agent: баг исправлен, удалён из ISSUES.md`
+
+`docs/ISSUES.md` must always reflect the **current** state of known issues — no stale entries for already-fixed bugs.
 
 ---
 

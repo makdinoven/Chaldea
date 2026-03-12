@@ -101,10 +101,14 @@ Write brief **Russian** log entries in the feature file's Logging section:
 
 ## Bug Tracking
 
-If during analysis you find bugs or issues unrelated to the current feature:
+**Discovering bugs:** If during analysis you find bugs or issues unrelated to the current feature:
 1. Add them to `docs/ISSUES.md` with priority, service, file, and description
 2. Update `docs/services/<service>.md` if documentation is outdated
 3. Log each discovery: `[LOG] ... — Analyst: обнаружен баг, добавлен в ISSUES.md (описание)`
+
+**Checking for stale entries:** During analysis, if you notice a bug in `docs/ISSUES.md` that has already been fixed:
+1. Remove or mark the entry as DONE in `docs/ISSUES.md`
+2. Log it: `[LOG] ... — Analyst: баг уже исправлен, удалён из ISSUES.md`
 
 These bugs are tracked for future work, not fixed in the current feature.
 
