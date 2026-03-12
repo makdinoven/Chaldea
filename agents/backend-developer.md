@@ -136,6 +136,8 @@ raise HTTPException(status_code=404, detail="Character not found")
 
 **If the Architecture Decision is ambiguous or you see a conflict with existing code, ask PM before implementing.** Do not make assumptions about business logic or API contracts.
 
+**This includes technical choices:** if you're hesitant about adding a new dependency, using a new tool/library, or changing infrastructure (e.g., adding `watchfiles` for Celery auto-reload) — **ask PM instead of silently deciding not to do it.** The user would rather answer a question than miss a feature because you were being cautious.
+
 ---
 
 ## Logging

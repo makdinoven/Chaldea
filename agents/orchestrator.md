@@ -66,6 +66,8 @@ USER → PM (clarify requirements — non-technical questions only)
 ### Sub-agent Questions → User
 When any sub-agent returns a question or uncertainty, translate it to a **non-technical Russian question** and ask the user. Never expose technical jargon to the user.
 
+**Technical questions are OK to relay.** If a sub-agent is unsure about adding a dependency, using a new tool, or changing infrastructure — translate it into a user-friendly question and ask. Example: sub-agent asks "Should I add `watchfiles` to enable Celery auto-reload?" → you ask: "Хотите, чтобы Celery тоже автоматически перезагружался при изменениях? Для этого нужно добавить дополнительную библиотеку."
+
 ---
 
 ## Ask When in Doubt

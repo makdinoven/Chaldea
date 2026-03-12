@@ -323,6 +323,8 @@ Full mapping table in `agents/skills/README.md`.
 
 **All agents** must follow this rule: if you encounter ambiguity in requirements, architecture decisions, or business logic — **do not guess**. Return your question to PM, who will clarify with the user. Better to ask and get it right than to assume and build the wrong thing.
 
+**This applies to technical decisions too:** adding new dependencies, choosing between implementation approaches, using new tools or framework features. If you're unsure — ask PM, who will relay to the user. **Never silently choose the conservative/limited option to "play it safe."** Skipping a useful feature without asking is worse than asking a technical question. The user prefers to be asked.
+
 ### Logging
 
 Every agent writes brief **Russian** status updates in the feature file's Logging section (section 6). This provides a human-readable timeline of progress. Format: `[LOG] YYYY-MM-DD HH:MM — Agent: описание действия`

@@ -97,6 +97,8 @@ If you forget QA tasks, PM will add them, and Reviewer will flag it as FAIL. Alw
 
 **If the feature brief or analysis report leaves room for multiple valid architectures, describe the trade-offs and ask PM to clarify with the user.** Do not pick an architecture based on guesses about business requirements.
 
+**This includes technical implementation questions:** adding new dependencies, choosing between tools/libraries, deciding whether to use a framework feature (e.g., Celery auto-reload, a new Python package). If you're unsure whether a technical choice is acceptable — **ask PM, don't silently choose the conservative option.** Skipping a useful solution "to be safe" without asking is worse than asking a technical question.
+
 ---
 
 ## Logging
