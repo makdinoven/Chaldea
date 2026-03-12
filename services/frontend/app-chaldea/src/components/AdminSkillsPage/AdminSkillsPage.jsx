@@ -50,7 +50,7 @@ const AdminSkillsPage = () => {
     };
 
     try {
-      const res = await axios.post('http://4452515-co41851.twc1.net:8003/skills/admin/skills/', newSkillPayload);
+      const res = await axios.post('/skills/admin/skills/', newSkillPayload);
       dispatch(fetchSkills());
       handleSelectSkill(res.data.id);
     } catch (err) {
@@ -64,7 +64,7 @@ const AdminSkillsPage = () => {
     const skillId = selectedSkillTree.id;
     if (!window.confirm(`Вы действительно хотите удалить навык ID=${skillId}?`)) return;
     try {
-      await axios.delete(`http://4452515-co41851.twc1.net:8003/skills/admin/skills/${skillId}`);
+      await axios.delete(`/skills/admin/skills/${skillId}`);
       dispatch(fetchSkills());
       dispatch(clearSelectedSkillTree());
     } catch (err) {

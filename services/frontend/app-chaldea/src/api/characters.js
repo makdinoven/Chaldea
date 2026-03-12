@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const charClient = axios.create({
-  baseURL: "http://4452515-co41851.twc1.net:8005",
+  baseURL: "",
   timeout: 10000,
 });
 

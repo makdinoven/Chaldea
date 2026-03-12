@@ -43,7 +43,7 @@ export default function NodeRankDetails({
   formData.append('skill_rank_id', data.id);
   formData.append('file', file);
 
-  axios.post('http://4452515-co41851.twc1.net:8001/photo/change_skill_rank_image', formData)
+  axios.post('/photo/change_skill_rank_image', formData)
     .then(res => {
        // Обновляем поле rank_image URL'ом, полученным от сервера
        onChangeNode(id, 'rank_image', res.data.image_url);

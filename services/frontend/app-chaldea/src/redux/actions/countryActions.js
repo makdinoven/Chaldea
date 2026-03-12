@@ -5,7 +5,7 @@ export const fetchCountries = createAsyncThunk(
     'world/fetchCountries',
     async (_, {rejectWithValue}) => {
         try {
-            const response = await axios.get('http://4452515-co41851.twc1.net:8006/locations/countries/lookup', {
+            const response = await axios.get('/locations/countries/lookup', {
                 headers: {Accept: 'application/json'},
             });
             return response.data;
@@ -24,7 +24,7 @@ export const fetchCountryDetails = createAsyncThunk(
         }
 
         try {
-            const response = await axios.get(`http://4452515-co41851.twc1.net:8006/locations/countries/${countryId}/details`, {
+            const response = await axios.get(`/locations/countries/${countryId}/details`, {
                 headers: {Accept: 'application/json'},
             });
 

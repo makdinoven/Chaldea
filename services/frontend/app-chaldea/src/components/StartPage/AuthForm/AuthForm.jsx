@@ -30,7 +30,7 @@ export default function AuthForm({activeForm}) {
 
         try {
             // Определяем URL в зависимости от формы входа или регистрации
-            const url = activeForm === 'login' ? 'http://4452515-co41851.twc1.net/users/login' : 'http://4452515-co41851.twc1.net/users/register';
+            const url = activeForm === 'login' ? '/users/login' : '/users/register';
 
             // Формируем данные для отправки
             const data =

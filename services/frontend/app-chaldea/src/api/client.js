@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const client = axios.create({
-  baseURL: "http://4452515-co41851.twc1.net:8004/inventory",
+  baseURL: "/inventory",
   withCredentials: true,
   timeout: 10000,
 });

@@ -32,7 +32,7 @@ export const uploadItemImage = async (itemId, file) => {
   form.append("file", file);
 
   const { data } = await axios.post(
-    `http://4452515-co41851.twc1.net/photo/change_item_image`,
+    `/photo/change_item_image`,
     form,
     { headers: { "Content-Type": "multipart/form-data" } }
   );

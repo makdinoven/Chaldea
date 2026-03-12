@@ -42,7 +42,7 @@ export default function SubmitPage({
     console.log(data);
 
     axios
-      .post("http://4452515-co41851.twc1.net:8005/characters/requests/", data)
+      .post("/characters/requests/", data)
       .then((response) => {
         response.status === 200 ? navigateTo("/home") : console.log(response);
       })

@@ -114,7 +114,7 @@ export default function CreateCharacterPage({}) {
 
   useEffect(() => {
     axios
-      .get("http://4452515-co41851.twc1.net:8005/characters/metadata", {
+      .get("/characters/metadata", {
         headers: {
           Accept: "application/json",
         },

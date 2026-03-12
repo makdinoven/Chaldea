@@ -5,7 +5,7 @@ export const deleteCountry = createAsyncThunk(
     'countryEdit/deleteCountry',
     async (countryId, { rejectWithValue }) => {
         try {
-            await axios.delete(`http://4452515-co41851.twc1.net:8006/locations/countries/${countryId}/delete`);
+            await axios.delete(`/locations/countries/${countryId}/delete`);
             return countryId;
         } catch (error) {
             return rejectWithValue(error.response?.data || error.message);
@@ -17,7 +17,7 @@ export const createCountry = createAsyncThunk(
     'countryEdit/createCountry',
     async (countryData, { rejectWithValue }) => {
         try {
-            const response = await axios.post('http://4452515-co41851.twc1.net:8006/locations/countries/create', countryData);
+            const response = await axios.post('/locations/countries/create', countryData);
             return response.data;
         } catch (error) {
             return rejectWithValue(error.response?.data || error.message);
@@ -29,7 +29,7 @@ export const updateCountry = createAsyncThunk(
     'countryEdit/updateCountry',
     async ({ id, ...countryData }, { rejectWithValue }) => {
         try {
-            const response = await axios.put(`http://4452515-co41851.twc1.net:8006/locations/countries/${id}/update`, countryData);
+            const response = await axios.put(`/locations/countries/${id}/update`, countryData);
             return response.data;
         } catch (error) {
             return rejectWithValue(error.response?.data || error.message);
@@ -46,7 +46,7 @@ export const uploadCountryMap = createAsyncThunk(
             formData.append('file', file);
             
             const response = await axios.post(
-                'http://4452515-co41851.twc1.net:8006/photo/change_country_map',
+                '/photo/change_country_map',
                 formData,
                 {
                     headers: {

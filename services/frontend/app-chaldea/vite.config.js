@@ -10,6 +10,6 @@ export default defineConfig({
     watch: {
       usePolling: true,
     },
-    allowedHosts: ["4452515-co41851.twc1.net"],
+    allowedHosts: true,
   },
 });
