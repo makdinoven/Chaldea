@@ -100,6 +100,23 @@ These logs help the user track progress without reading technical details.
 
 ## Launching Sub-agents
 
+### CRITICAL: Always Launch as Background Agents
+
+**Every sub-agent MUST be launched as a separate background agent** using the Agent tool with `run_in_background: true`. Sub-agents must NEVER run inline in the PM's conversation session.
+
+This means:
+- Each agent runs in its own isolated context
+- PM waits for the agent to complete, then reads results from the feature file
+- Multiple independent agents can run in parallel (e.g., Backend Dev + Frontend Dev)
+- PM's conversation with the user is never blocked by long-running agent work
+
+```
+# CORRECT — launch as background agent
+Agent(prompt="Read agents/backend-developer.md...", run_in_background=true)
+
+# INCORRECT — never run agent work inline in PM's session
+```
+
 ### Prompt Format for Sub-agents
 
 Pass to each sub-agent:
@@ -114,8 +131,17 @@ Pass to each sub-agent:
 1. **Codebase Analyst** — always first. Cannot design without analysis.
 2. **Architect** — after Analyst. Receives analysis_report.
 3. **Backend Developer / Frontend Developer / DevSecOps** — after Architect. Launch in parallel if tasks are independent (check `depends_on` in task_specs).
-4. **QA Test** — after development is complete. Writes tests for backend only.
+4. **QA Test** — after development is complete. Writes tests for backend only. **QA is MANDATORY — never skip this step.** If Architect did not create QA tasks, PM must add them before proceeding to Review.
 5. **Reviewer** — last. Reviews everything.
+
+### QA Enforcement
+
+**Tests are non-negotiable.** Before launching Reviewer, PM must verify:
+- QA Test tasks exist in the feature file's task list
+- QA Test tasks have status DONE
+- If QA tasks are missing (Architect oversight), PM creates them and launches QA Test agent
+
+If backend code was changed but no tests were written, the feature is NOT ready for review.
 
 ### Review-Fix Loop
 
@@ -140,6 +166,17 @@ After completion (PASS from Reviewer), report **in Russian**:
 ## Skills
 
 - **feature-file-manager** — create/update/close feature files
+
+---
+
+## Bug Tracking
+
+When any agent discovers a bug **unrelated to the current feature** during their work:
+1. The agent adds it to `docs/ISSUES.md` with priority, service, file, and description
+2. The agent logs it: `[LOG] ... — Agent: обнаружен баг B-NNN, добавлен в ISSUES.md`
+3. PM verifies the bug was recorded and logs confirmation: `[LOG] ... — PM: баг B-NNN подтверждён в ISSUES.md`
+
+Bugs found during a feature are tracked but **not fixed in the same feature** unless they directly block the current work. They become separate future tasks.
 
 ---
 

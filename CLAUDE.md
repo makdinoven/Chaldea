@@ -341,6 +341,23 @@ All agents must consider security in their domain:
 
 **Mandatory rule for Frontend Developer and Reviewer:** Every API call in the frontend MUST have visible error handling. Never silently swallow errors. Network errors, 4xx, 5xx — all must be displayed to the user with a Russian-language message.
 
+### Sub-agent Execution
+
+**All sub-agents MUST be launched as separate background agents** (using the Agent tool with `run_in_background: true`). Sub-agents never run inline in PM's conversation. This ensures isolation and allows parallel execution.
+
+### QA Is Mandatory
+
+Every feature that modifies backend Python code **must** include QA Test tasks. Architect must always create them. PM must verify they exist before launching Reviewer. Reviewer must FAIL the review if backend was changed but no tests were written.
+
+### Bug Tracking
+
+When any agent discovers a bug **unrelated to the current feature**, they must:
+1. Add it to `docs/ISSUES.md` with priority, service, file, description
+2. Log it in the feature file: `[LOG] ... — Agent: обнаружен баг, добавлен в ISSUES.md`
+3. NOT fix it in the current feature (unless it's a direct blocker)
+
+Discovered bugs become separate future tasks tracked in `docs/ISSUES.md`.
+
 ---
 
 ## 12. Документация (для людей и агентов)

@@ -80,6 +80,17 @@ For each task specify:
 5. **QA Test** — always after Backend, writes tests for backend only
 6. **Reviewer** — always last, depends on all other tasks
 
+### QA Tasks Are Mandatory
+
+**CRITICAL: Every feature that modifies backend code MUST include QA Test tasks.** This is non-negotiable.
+
+- If backend endpoints are added or changed → QA task to test those endpoints
+- If CRUD logic is added or changed → QA task to test that logic
+- If inter-service calls are added or changed → QA task to test with mocked calls
+- The ONLY exception: features that touch ZERO backend Python code (e.g., pure frontend or pure infrastructure changes)
+
+If you forget QA tasks, PM will add them, and Reviewer will flag it as FAIL. Always include at least one QA task when backend is involved.
+
 ---
 
 ## Ask When in Doubt

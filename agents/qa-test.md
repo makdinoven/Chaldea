@@ -150,6 +150,15 @@ Write brief **Russian** log entries in the feature file's Logging section:
 
 ---
 
+## Bug Tracking
+
+If during testing you discover bugs **unrelated to your current task**:
+1. Add them to `docs/ISSUES.md` with priority, service, file, and description
+2. Log it: `[LOG] ... — QA: обнаружен баг, добавлен в ISSUES.md (описание)`
+3. Do NOT fix them — report to PM for future tracking
+
+---
+
 ## Checklist Before Completion
 
 - [ ] Tests cover all new/modified endpoints

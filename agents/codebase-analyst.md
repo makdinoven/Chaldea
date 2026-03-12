@@ -99,11 +99,14 @@ Write brief **Russian** log entries in the feature file's Logging section:
 
 ---
 
-## Side Effects
+## Bug Tracking
 
-If during analysis you find an issue unrelated to the current feature:
-- Add it to `docs/ISSUES.md` with priority and description
-- Update `docs/services/<service>.md` if documentation is outdated
+If during analysis you find bugs or issues unrelated to the current feature:
+1. Add them to `docs/ISSUES.md` with priority, service, file, and description
+2. Update `docs/services/<service>.md` if documentation is outdated
+3. Log each discovery: `[LOG] ... — Analyst: обнаружен баг, добавлен в ISSUES.md (описание)`
+
+These bugs are tracked for future work, not fixed in the current feature.
 
 ---
 

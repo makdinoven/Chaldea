@@ -109,6 +109,15 @@ Write brief **Russian** log entries in the feature file's Logging section:
 
 ---
 
+## Bug Tracking
+
+If during infrastructure work you discover bugs or security issues **unrelated to your current task**:
+1. Add them to `docs/ISSUES.md` with priority, service, file, and description
+2. Log it: `[LOG] ... — DevSecOps: обнаружена проблема безопасности, добавлена в ISSUES.md (описание)`
+3. Do NOT fix them in the current task — they become separate future work
+
+---
+
 ## Checklist Before Completion
 
 - [ ] `docker-compose config` — valid YAML

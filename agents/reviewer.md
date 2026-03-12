@@ -57,7 +57,17 @@ Use the **cross-service-validator** skill:
 - [ ] **Frontend displays all errors to user?** (no silently swallowed errors)
 - [ ] **User-facing strings in Russian?** (UI text, API error messages, game content)
 
-### 5. Automated Checks
+### 5. QA Coverage Verification
+
+**If backend code was modified, verify that QA tests exist and cover the changes:**
+- [ ] QA Test task exists in the task list (section 4)
+- [ ] QA Test task has status DONE
+- [ ] Tests cover all new/modified endpoints
+- [ ] Tests exist in `services/<service>/app/tests/`
+
+**If backend was changed but no QA task exists or no tests were written → FAIL.** This is a blocking issue. Note it in the Issues Found table and assign to "QA Test".
+
+### 6. Automated Checks
 
 Run and verify results:
 
@@ -78,7 +88,7 @@ docker-compose config > /dev/null
 cd services/<service> && pytest app/tests/ -v
 ```
 
-### 6. Visual Check (if there are frontend changes)
+### 7. Visual Check (if there are frontend changes)
 
 Check via MCP chrome-devtools (if available):
 - Component renders correctly
@@ -126,6 +136,17 @@ All checks passed. Changes are ready for completion.
 ```
 
 PM uses this table to launch fix tasks.
+
+---
+
+## Bug Tracking
+
+If during review you discover bugs **unrelated to the current feature**:
+1. Add them to `docs/ISSUES.md` with priority, service, file, and description
+2. Note them in the Review Log under "Pre-existing issues noted" (as in FEAT-001)
+3. Log it: `[LOG] ... — Reviewer: обнаружен баг, добавлен в ISSUES.md (B-NNN)`
+
+These bugs do NOT block the current feature review (unless they are security-critical). They become separate future tasks.
 
 ---
 

@@ -146,6 +146,15 @@ Write brief **Russian** log entries in the feature file's Logging section:
 
 ---
 
+## Bug Tracking
+
+If during implementation you discover bugs **unrelated to your current task**:
+1. Add them to `docs/ISSUES.md` with priority, service, file, and description
+2. Log it: `[LOG] ... — Backend Dev: обнаружен баг, добавлен в ISSUES.md (описание)`
+3. Do NOT fix them in the current task — they become separate future work
+
+---
+
 ## Checklist Before Completion
 
 - [ ] Code follows the service's pattern (sync/async)
