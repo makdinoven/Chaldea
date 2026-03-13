@@ -107,16 +107,51 @@ docker-compose config > /dev/null
 - [ ] `py_compile` — PASS/FAIL (or N/A)
 - [ ] `pytest` — PASS/FAIL (or N/A)
 - [ ] `docker-compose config` — PASS/FAIL
+- [ ] Live verification (chrome-devtools / curl) — PASS/FAIL
 ```
 
-**A review without automated check results is incomplete and must not be marked PASS.**
+**A review without BOTH automated check results AND live verification is incomplete and must not be marked PASS.**
 
-### 7. Visual Check (if there are frontend changes)
+### 7. Live Verification — MANDATORY
 
-Check via MCP chrome-devtools (if available):
-- Component renders correctly
-- No console.error
-- Responsive layout works
+**⚠️ You MUST verify the feature actually works in the running application. Static code review is NOT enough. Features that pass code review but fail at runtime are unacceptable.**
+
+**Use MCP `chrome-devtools` to verify the feature in the browser:**
+
+1. **Open the relevant page** where the feature was implemented
+2. **Check browser console** — there must be ZERO errors (`console.error`, network 4xx/5xx)
+   ```
+   # What to look for:
+   - No 500 Internal Server Error on any endpoint
+   - No 404 for new API routes (missing nginx config, wrong URL)
+   - No CORS errors
+   - No unhandled promise rejections
+   - No "undefined is not a function" or similar JS errors
+   ```
+3. **Test the feature workflow** — click through the actual user flow:
+   - Does the UI render correctly?
+   - Do forms submit successfully?
+   - Does data appear/update as expected?
+   - Do error states display properly (try invalid input)?
+4. **Check network tab** — verify API calls return expected status codes and data
+
+**If chrome-devtools MCP is unavailable**, use `curl` to verify backend endpoints directly:
+```bash
+# Test each new/modified endpoint
+curl -s -o /dev/null -w "%{http_code}" http://localhost/<endpoint>
+# Must return expected status (200, 201, etc.), NOT 500
+```
+
+**Include live verification results in the Review Log:**
+```markdown
+#### Live Verification Results
+- Page tested: `/path/to/page`
+- Console errors: NONE / [list errors]
+- Feature workflow: PASS / FAIL (description)
+- API responses: all 200 OK / [list failures]
+```
+
+**A review without live verification results CANNOT be marked PASS.** If the feature causes runtime errors (500s, console errors, broken UI), the review is FAIL regardless of how clean the code looks.
 
 ---
 

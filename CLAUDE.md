@@ -351,8 +351,9 @@ All agents must consider security in their domain:
 
 - **Frontend Developer:** Run `npx tsc --noEmit` AND `npm run build` before completion. Both must pass.
 - **Backend Developer:** Run `python -m py_compile` on all modified files before completion. Must pass.
-- **Reviewer:** Re-run all applicable checks. A review without automated check results is invalid and must not be marked PASS.
+- **Reviewer:** Re-run all applicable checks AND verify the feature works live (via MCP `chrome-devtools` or `curl`). A review without automated check results AND live verification is invalid and must not be marked PASS.
 - **New dependencies:** If you import a package, you MUST install/add it first (`npm install` / `requirements.txt`). Unresolved imports = broken app.
+- **Live verification is mandatory:** Code that passes static checks but fails at runtime (500 errors, console errors, broken UI) is a FAIL. Reviewer must open the page and confirm zero errors.
 
 ### Sub-agent Execution
 
