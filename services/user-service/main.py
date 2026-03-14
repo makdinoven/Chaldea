@@ -131,6 +131,7 @@ async def read_users_me(
         "username": current_user.username,
         "avatar": current_user.avatar,
         "balance": current_user.balance,
+        "role": current_user.role,
         "current_character_id": current_user.current_character,
         "character": None
     }

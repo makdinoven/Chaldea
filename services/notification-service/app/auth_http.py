@@ -2,13 +2,13 @@
 import requests
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.orm import Session
+from pydantic import BaseModel
 from typing import Optional
 
-class UserRead:
+class UserRead(BaseModel):
     id: int
     username: str
-    role: str
+    role: Optional[str] = None
 
 OAUTH2_SCHEME = OAuth2PasswordBearer(tokenUrl="token")
 

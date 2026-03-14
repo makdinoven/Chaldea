@@ -11,5 +11,10 @@ export default defineConfig({
       usePolling: true,
     },
     allowedHosts: true,
+    hmr: {
+      host: 'localhost',
+      port: 5555,
+      protocol: 'ws',
+    },
   },
 });

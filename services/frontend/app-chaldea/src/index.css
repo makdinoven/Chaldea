@@ -1,3 +1,560 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   DESIGN SYSTEM — Reusable Component Classes
+   See docs/DESIGN-SYSTEM.md for documentation
+   ============================================ */
+
+@layer components {
+
+  /* --- Gold Gradient Text --- */
+  /* Usage: <h2 className="gold-text text-2xl">Title</h2> */
+  .gold-text {
+    background: linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  /* --- Gold Outline Border (via ::after pseudo) --- */
+  /* Usage: <div className="gold-outline relative rounded-card">...</div> */
+  /* Requires: position: relative + border-radius on the element */
+  .gold-outline {
+    position: relative;
+  }
+  .gold-outline::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: inherit;
+    border: 1px solid transparent;
+    background: linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    -webkit-mask-composite: destination-out;
+    pointer-events: none;
+    border-top: 1px solid #fff9b8;
+    border-bottom: 1px solid #bcab4c;
+  }
+
+  /* Thicker variant (2px) for modals, active states */
+  .gold-outline-thick::after {
+    border-width: 2px;
+    border-top-width: 2px;
+    border-bottom-width: 2px;
+    inset: -6px;
+  }
+
+  /* --- Gray Background Container --- */
+  /* Usage: <div className="gray-bg">...</div> */
+  .gray-bg {
+    background-color: rgba(35, 35, 41, 0.9);
+    border-radius: 15px;
+  }
+
+  /* --- Gradient Line Border (white glow) --- */
+  /* Usage: <button className="gradient-line-border relative">...</button> */
+  .gradient-line-border {
+    position: relative;
+  }
+  .gradient-line-border::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    border: 2px solid transparent;
+    background: linear-gradient(90deg, rgba(255,255,255,0) 0%, #fff 50%, rgba(255,255,255,0) 100%);
+    mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    -webkit-mask-composite: destination-out;
+    pointer-events: none;
+  }
+
+  /* --- Vertical Gradient Divider --- */
+  /* Usage: <div className="gradient-divider">...</div> (adds right-side divider) */
+  .gradient-divider {
+    position: relative;
+  }
+  .gradient-divider::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 1px;
+    height: 100%;
+    background: linear-gradient(180deg, rgba(204,204,204,0) 0%, #999 50%, rgba(255,255,255,0) 100%);
+    pointer-events: none;
+  }
+
+  /* --- Horizontal Gradient Divider --- */
+  /* Usage: <div className="gradient-divider-h">...</div> (adds bottom divider) */
+  .gradient-divider-h {
+    position: relative;
+  }
+  .gradient-divider-h::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 70%;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(204,204,204,0) 0%, #999 50%, rgba(255,255,255,0) 100%);
+    pointer-events: none;
+  }
+
+  /* --- Hover Gold Overlay --- */
+  /* Usage: <div className="hover-gold-overlay">...</div> */
+  /* Adds a subtle gold gradient on hover (like HomePageButton) */
+  .hover-gold-overlay {
+    position: relative;
+    overflow: hidden;
+  }
+  .hover-gold-overlay::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to bottom, rgba(255,249,184,0) 0%, rgba(153,149,110,0.26) 100%);
+    opacity: 0;
+    transition: opacity 0.3s ease-in-out;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .hover-gold-overlay:hover::before {
+    opacity: 1;
+  }
+
+  /* --- Dark Bottom Gradient (for image cards) --- */
+  /* Usage: <div className="dark-bottom-gradient">...</div> */
+  .dark-bottom-gradient {
+    position: relative;
+  }
+  .dark-bottom-gradient::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 80px;
+    background: linear-gradient(180deg, rgba(0,0,0,0) 0%, #000 100%);
+    pointer-events: none;
+    border-radius: inherit;
+  }
+
+  /* --- Blue Gradient Button --- */
+  /* Usage: <button className="btn-blue">Text</button> */
+  .btn-blue {
+    padding: 12px 48px;
+    font-weight: 500;
+    font-size: 20px;
+    text-align: center;
+    color: #fff;
+    border-radius: 10px;
+    text-transform: uppercase;
+    background: linear-gradient(90deg, #2e353e 0%, #537895 100%);
+    transition: box-shadow 0.2s ease-in-out;
+  }
+  .btn-blue:hover {
+    box-shadow: 0 8px 10px rgba(0,0,0,0.15), 0 4px 6px rgba(0,0,0,0.1);
+  }
+  .btn-blue:active {
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2), 0 1px 2px rgba(0,0,0,0.1);
+  }
+
+  /* --- Line Button (top gradient border) --- */
+  /* Usage: <button className="btn-line">Text</button> */
+  .btn-line {
+    position: relative;
+    font-weight: 500;
+    font-size: 16px;
+    text-transform: uppercase;
+    color: #fff;
+    padding: 7px 0 9px;
+    width: 100%;
+    text-align: center;
+  }
+  .btn-line::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 1px;
+    width: 95%;
+    background: linear-gradient(90deg, rgba(204,204,204,0) 0%, #999 42.5%, rgba(255,255,255,0) 100%);
+  }
+
+  /* --- Site Link (standard link with blue hover) --- */
+  /* Usage: <a className="site-link">Text</a> */
+  .site-link {
+    color: #fff;
+    text-decoration: none;
+    transition: color 0.2s ease-in-out;
+  }
+  .site-link:hover {
+    color: #76a6bd;
+  }
+
+  /* --- Nav Link (uppercase, tracking, blue hover) --- */
+  /* Usage: <a className="nav-link">ТЕКСТ</a> */
+  .nav-link {
+    font-family: 'Montserrat', sans-serif;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #fff;
+    transition: color 0.2s ease-in-out;
+  }
+  .nav-link:hover {
+    color: #76a6bd;
+  }
+
+  /* --- Dropdown Container --- */
+  /* Usage: <div className="dropdown-menu">...</div> */
+  .dropdown-menu {
+    background-color: rgba(35, 35, 41, 0.9);
+    border-radius: 15px;
+    padding: 8px 4px;
+    min-width: 160px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+  }
+
+  /* --- Dropdown Item --- */
+  /* Usage: <a className="dropdown-item">Text</a> */
+  .dropdown-item {
+    display: block;
+    padding: 8px 16px;
+    font-family: 'Montserrat', sans-serif;
+    font-size: 14px;
+    color: #fff;
+    border-radius: 10px;
+    transition: background-color 0.2s ease-in-out;
+  }
+  .dropdown-item:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+  }
+
+  /* --- Modal Overlay --- */
+  /* Usage: <div className="modal-overlay">...</div> */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  /* --- Modal Content --- */
+  /* Usage: <div className="modal-content">...</div> */
+  .modal-content {
+    background: rgba(35, 35, 41, 0.9);
+    border-radius: 15px;
+    padding: 2rem;
+    max-width: 700px;
+    width: 100%;
+    box-shadow: 0 0 12px rgba(0,0,0,0.2);
+    animation: fade-in 0.2s ease-out;
+  }
+
+  /* --- Form Input (bottom-border style) --- */
+  /* Usage: <input className="input-underline" /> */
+  .input-underline {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #fff;
+    padding: 8px;
+    font-size: 16px;
+    color: #c6c4c4;
+    width: 100%;
+    outline: none;
+    transition: border-color 0.2s ease-in-out;
+  }
+  .input-underline:focus {
+    border-color: #76a6bd;
+  }
+  .input-underline::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  /* --- Textarea (bordered) --- */
+  /* Usage: <textarea className="textarea-bordered" /> */
+  .textarea-bordered {
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-radius: 15px;
+    background: transparent;
+    color: #fff;
+    padding: 12px 16px;
+    resize: none;
+    outline: none;
+    transition: border-color 0.2s ease-in-out;
+  }
+  .textarea-bordered:hover,
+  .textarea-bordered:focus {
+    border-color: #fff;
+  }
+
+  /* --- Gold Scrollbar --- */
+  /* Usage: <div className="gold-scrollbar overflow-y-auto">...</div> */
+  .gold-scrollbar::-webkit-scrollbar {
+    width: 3px;
+  }
+  .gold-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .gold-scrollbar::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, #fff9b8, #bcab4c);
+    border-radius: 3px;
+  }
+
+  /* --- Tooltip --- */
+  /* Usage: <div className="site-tooltip">...</div> */
+  .site-tooltip {
+    background: rgba(35, 35, 41, 0.95);
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    color: #fff;
+    min-width: 100px;
+  }
+
+  /* --- Card with background image --- */
+  /* Usage: <div className="image-card rounded-card shadow-card">...</div> */
+  .image-card {
+    overflow: hidden;
+    background-color: black;
+    background-size: cover;
+    background-position: center;
+  }
+
+  /* ============================================
+     INVENTORY / PROFILE — Design System Classes
+     ============================================ */
+
+  /* --- Item Cell (circular slot with gold border) --- */
+  /* Usage: <div className="item-cell">...</div> */
+  .item-cell {
+    width: 80px;
+    height: 80px;
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-image: linear-gradient(rgba(0,0,0,0.3), rgba(0,0,0,0.3)), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    transition: box-shadow 0.2s ease-in-out, transform 0.2s ease-in-out;
+  }
+
+  /* --- Item Cell Empty (darker variant for empty slots) --- */
+  /* Usage: <div className="item-cell item-cell-empty">...</div> */
+  .item-cell-empty {
+    background-image: linear-gradient(rgba(0,0,0,0.25), rgba(0,0,0,0.25)), linear-gradient(180deg, rgba(24,30,32,0.5) 0%, rgba(24,30,32,0.5) 100%);
+    border-color: rgba(24,30,32,0.5);
+  }
+
+  /* --- Rarity Background Gradients --- */
+  /* Usage: <div className="item-cell rarity-rare">...</div> */
+  .rarity-common {
+    background-image: linear-gradient(180deg, rgba(255,255,255,0) 0%, #FFFFFF 100%), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+  }
+  .rarity-rare {
+    background-image: linear-gradient(180deg, rgba(118,166,189,0) 0%, #76A6BD 100%), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+  }
+  .rarity-epic {
+    background-image: linear-gradient(180deg, rgba(184,117,189,0) 0%, #B875BD 100%), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+  }
+  .rarity-mythical {
+    background-image: linear-gradient(180deg, rgba(240,105,91,0) 0%, #F0695B 100%), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+  }
+  .rarity-legendary {
+    background-image: linear-gradient(180deg, rgba(240,217,92,0) 0%, #F0D95C 100%), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+  }
+
+  /* --- Stat Bar (progress bar container) --- */
+  /* Usage: <div className="stat-bar"><div className="stat-bar-fill stat-bar-hp" style={{width:'75%'}}></div></div> */
+  /* From Figma: 9px height, 1px white border, border-radius 10px */
+  .stat-bar {
+    height: 9px;
+    border-radius: 10px;
+    border: 1px solid #FFFFFF;
+    background: transparent;
+    overflow: hidden;
+    position: relative;
+    width: 100%;
+  }
+
+  /* --- Stat Bar Fill (inner colored bar) --- */
+  .stat-bar-fill {
+    height: 100%;
+    border-radius: 10px;
+    transition: width 0.4s ease-in-out;
+  }
+
+  /* --- Stat Bar Color Variants (Figma exact colors) --- */
+  .stat-bar-hp {
+    background: #E94545;
+  }
+  .stat-bar-mana {
+    background: #76A6BD;
+  }
+  .stat-bar-energy {
+    background: #88B332;
+  }
+  .stat-bar-stamina {
+    background: #FFF9B8;
+  }
+
+  /* --- Category Icon (sidebar icon) --- */
+  /* Usage: <button className="category-icon">...</button> */
+  .category-icon {
+    width: 43px;
+    height: 43px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.2s ease-in-out;
+  }
+  .category-icon img,
+  .category-icon svg {
+    width: 28px;
+    height: 28px;
+    filter: brightness(0.7);
+  }
+  .category-icon:hover {
+    opacity: 1;
+  }
+
+  /* --- Category Icon Active --- */
+  /* Usage: <button className="category-icon category-icon-active">...</button> */
+  .category-icon-active {
+    opacity: 1;
+    position: relative;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background-image: linear-gradient(rgba(35,35,41,0.9), rgba(35,35,41,0.9)), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+  }
+  .category-icon-active img,
+  .category-icon-active svg {
+    filter: brightness(1.2);
+  }
+
+  /* --- Skill Point Dot --- */
+  /* Usage: <div className="skill-point-dot">...</div> */
+  .skill-point-dot {
+    width: 30px;
+    height: 30px;
+    border-radius: 9999px;
+    background: radial-gradient(50% 50% at 50% 50%, #76A6BD 0%, rgba(118, 166, 189, 0) 92%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  .skill-point-dot::before {
+    content: "";
+    width: 11.6px;
+    height: 11.6px;
+    border-radius: 9999px;
+    border: 0.5px solid rgba(255, 255, 255, 0.8);
+    position: absolute;
+  }
+  .skill-point-dot::after {
+    content: "";
+    width: 5.6px;
+    height: 5.6px;
+    border-radius: 9999px;
+    border: 1px solid #fff;
+    position: absolute;
+  }
+
+  /* --- Context Menu (positioned dropdown for item actions) --- */
+  /* Usage: <div className="context-menu">...</div> */
+  .context-menu {
+    position: absolute;
+    background-color: rgba(35, 35, 41, 0.95);
+    border-radius: 15px;
+    padding: 8px 4px;
+    min-width: 180px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    border: 1px solid transparent;
+    background-image: linear-gradient(rgba(35,35,41,0.95), rgba(35,35,41,0.95)), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+    z-index: 50;
+  }
+
+  /* --- Hover Divider (shows subtle bottom line on hover) --- */
+  /* Usage: <div className="hover-divider">...</div> */
+  .hover-divider {
+    position: relative;
+  }
+  .hover-divider::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(204,204,204,0) 0%, rgba(153,153,153,0.4) 50%, rgba(255,255,255,0) 100%);
+    opacity: 0;
+    transition: opacity 0.2s ease-in-out;
+    pointer-events: none;
+  }
+  .hover-divider:hover::after {
+    opacity: 1;
+  }
+
+  /* --- Gold Scrollbar Wide (8px wide, centered 2px track, gold thumb) --- */
+  /* Usage: <div className="gold-scrollbar-wide overflow-y-auto">...</div> */
+  .gold-scrollbar-wide {
+    overflow-y: auto;
+  }
+  .gold-scrollbar-wide::-webkit-scrollbar {
+    width: 8px;
+  }
+  .gold-scrollbar-wide::-webkit-scrollbar-track {
+    background: transparent;
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.3) 49%, rgba(255, 255, 255, 0) 100%);
+    background-size: 2px 100%;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+  .gold-scrollbar-wide::-webkit-scrollbar-thumb {
+    background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+    border-radius: 10px;
+  }
+  .gold-scrollbar-wide::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(176.46deg, #BCAB4C 2.91%, #FFF9B8 237.31%);
+  }
+
+}
+
 @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Anonymous+Pro:ital,wght@0,400;0,700;1,400;1,700&display=swap');
 
@@ -24,6 +581,7 @@
 
 body {
     font-family: var(--font-family);
+    color: #fff;
     background-color: black;
     background-image: url('./assets/Бэкграунд.png');
     background-size: cover;
@@ -34,109 +592,108 @@ body {
     min-height: 100vh;
 }
 
-/* Reset and base styles  */
-* {
-    padding: 0px;
-    margin: 0px;
-    border: none;
-}
+@layer base {
+  /* Reset and base styles  */
+  * {
+      padding: 0px;
+      margin: 0px;
+      border: none;
+  }
 
-*,
-*::before,
-*::after {
-    box-sizing: border-box;
-}
+  *,
+  *::before,
+  *::after {
+      box-sizing: border-box;
+  }
 
-/* Links */
+  /* Links */
+  a,
+  a:link,
+  a:visited {
+      color: inherit;
+  }
 
-a,
-a:link,
-a:visited {
-    color: inherit;
-}
+  /* Common */
+  aside,
+  nav,
+  footer,
+  header,
+  section,
+  main {
+      display: block;
+  }
 
-/* Common */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  p {
+      font-size: inherit;
+      font-weight: inherit;
+  }
 
-aside,
-nav,
-footer,
-header,
-section,
-main {
-    display: block;
-}
+  ul,
+  ul li {
+      list-style: none;
+  }
 
-h1,
-h2,
-h3,
-h4,
-h5,
-h6,
-p {
-    font-size: inherit;
-    font-weight: inherit;
-}
+  img {
+      vertical-align: top;
+  }
 
-ul,
-ul li {
-    list-style: none;
-}
+  img,
+  svg {
+      max-width: 100%;
+      height: auto;
+  }
 
-img {
-    vertical-align: top;
-}
+  address {
+      font-style: normal;
+  }
 
-img,
-svg {
-    max-width: 100%;
-    height: auto;
-}
+  /* Form */
+  input,
+  textarea,
+  button,
+  select {
+      font-family: inherit;
+      font-size: inherit;
+      color: inherit;
+      background-color: transparent;
+  }
 
-address {
-    font-style: normal;
-}
+  input::-ms-clear {
+      display: none;
+  }
 
-/* Form */
+  button,
+  input[type='submit'] {
+      display: inline-block;
+      box-shadow: none;
+      background-color: transparent;
+      background: none;
+      cursor: pointer;
+  }
 
-input,
-textarea,
-button,
-select {
-    font-family: inherit;
-    font-size: inherit;
-    color: inherit;
-    background-color: transparent;
-}
+  input:focus,
+  input:active,
+  button:focus,
+  button:active {
+      outline: none;
+  }
 
-input::-ms-clear {
-    display: none;
-}
+  button::-moz-focus-inner {
+      padding: 0;
+      border: 0;
+  }
 
-button,
-input[type='submit'] {
-    display: inline-block;
-    box-shadow: none;
-    background-color: transparent;
-    background: none;
-    cursor: pointer;
-}
+  label {
+      cursor: pointer;
+  }
 
-input:focus,
-input:active,
-button:focus,
-button:active {
-    outline: none;
-}
-
-button::-moz-focus-inner {
-    padding: 0;
-    border: 0;
-}
-
-label {
-    cursor: pointer;
-}
-
-legend {
-    display: block;
+  legend {
+      display: block;
+  }
 }

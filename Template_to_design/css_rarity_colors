@@ -1,0 +1,551 @@
+/* редкость */
+
+position: relative;
+width: 686px;
+height: 645px;
+
+background: #000000;
+
+
+/* Frame 198 */
+
+/* Auto layout */
+display: flex;
+flex-direction: column;
+align-items: center;
+padding: 0px;
+gap: 12px;
+
+position: absolute;
+width: 95px;
+height: 117px;
+left: 58px;
+top: 52px;
+
+
+
+/* Ellipse 89 */
+
+width: 85px;
+height: 85px;
+
+/* обычный */
+background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, #FFFFFF 100%);
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* обычный */
+
+width: 95px;
+height: 20px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 16px;
+line-height: 20px;
+/* identical to box height */
+text-align: center;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+/* Inside auto layout */
+flex: none;
+order: 1;
+align-self: stretch;
+flex-grow: 0;
+
+
+/* Frame 199 */
+
+/* Auto layout */
+display: flex;
+flex-direction: column;
+align-items: center;
+padding: 0px;
+gap: 12px;
+
+position: absolute;
+width: 95px;
+height: 117px;
+left: 178px;
+top: 52px;
+
+
+
+/* Ellipse 89 */
+
+width: 85px;
+height: 85px;
+
+/* редкий */
+background: linear-gradient(180deg, rgba(118, 166, 189, 0) 0%, #76A6BD 100%);
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* редкий */
+
+width: 95px;
+height: 20px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 16px;
+line-height: 20px;
+/* identical to box height */
+text-align: center;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+/* Inside auto layout */
+flex: none;
+order: 1;
+align-self: stretch;
+flex-grow: 0;
+
+
+/* Frame 200 */
+
+/* Auto layout */
+display: flex;
+flex-direction: column;
+align-items: center;
+padding: 0px;
+gap: 12px;
+
+position: absolute;
+width: 95px;
+height: 117px;
+left: 309px;
+top: 52px;
+
+
+
+/* Ellipse 89 */
+
+width: 85px;
+height: 85px;
+
+/* эпический */
+background: linear-gradient(180deg, rgba(184, 117, 189, 0) 0%, #B875BD 100%);
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* эпический */
+
+width: 135px;
+height: 20px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 16px;
+line-height: 20px;
+/* identical to box height */
+text-align: center;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+/* Inside auto layout */
+flex: none;
+order: 1;
+flex-grow: 0;
+
+
+/* Frame 201 */
+
+/* Auto layout */
+display: flex;
+flex-direction: column;
+align-items: center;
+padding: 0px;
+gap: 12px;
+
+position: absolute;
+width: 95px;
+height: 117px;
+left: 203px;
+top: 206px;
+
+
+
+/* Ellipse 89 */
+
+width: 85px;
+height: 85px;
+
+/* легендарный */
+background: linear-gradient(180deg, rgba(240, 217, 92, 0) 0%, #F0D95C 100%);
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* легендарный */
+
+width: 135px;
+height: 20px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 16px;
+line-height: 20px;
+/* identical to box height */
+text-align: center;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+/* Inside auto layout */
+flex: none;
+order: 1;
+flex-grow: 0;
+
+
+/* Frame 202 */
+
+/* Auto layout */
+display: flex;
+flex-direction: column;
+align-items: center;
+padding: 0px;
+gap: 12px;
+
+position: absolute;
+width: 95px;
+height: 117px;
+left: 58px;
+top: 206px;
+
+
+
+/* Ellipse 89 */
+
+width: 85px;
+height: 85px;
+
+/* мифический */
+background: linear-gradient(180deg, rgba(240, 105, 91, 0) 0%, #F0695B 100%);
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* мифический */
+
+width: 135px;
+height: 20px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 16px;
+line-height: 20px;
+/* identical to box height */
+text-align: center;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+/* Inside auto layout */
+flex: none;
+order: 1;
+flex-grow: 0;
+
+
+/* Frame 216 */
+
+/* Auto layout */
+display: flex;
+flex-direction: column;
+align-items: center;
+padding: 0px;
+gap: 1px;
+
+position: absolute;
+width: 115px;
+height: 106px;
+left: 58px;
+top: 360px;
+
+
+
+/* Rectangle 302 */
+
+width: 85px;
+height: 85px;
+
+/* обычный 2 */
+background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, #FFFFFF 50.19%, rgba(255, 255, 255, 0) 100%);
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* обычный 2 */
+
+width: 115px;
+height: 20px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 16px;
+line-height: 20px;
+/* identical to box height */
+text-align: center;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+/* Inside auto layout */
+flex: none;
+order: 1;
+align-self: stretch;
+flex-grow: 0;
+
+
+/* Frame 219 */
+
+/* Auto layout */
+display: flex;
+flex-direction: column;
+align-items: center;
+padding: 0px;
+gap: 1px;
+
+position: absolute;
+width: 115px;
+height: 106px;
+left: 58px;
+top: 481px;
+
+
+
+/* Rectangle 302 */
+
+width: 85px;
+height: 85px;
+
+/* мифический 2 */
+background: linear-gradient(180deg, rgba(240, 105, 91, 0) 0%, rgba(240, 105, 91, 0.6) 49.66%, rgba(240, 105, 91, 0) 100%);
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* мифический 2 */
+
+width: 155px;
+height: 20px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 16px;
+line-height: 20px;
+/* identical to box height */
+text-align: center;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+/* Inside auto layout */
+flex: none;
+order: 1;
+flex-grow: 0;
+
+
+/* Frame 220 */
+
+/* Auto layout */
+display: flex;
+flex-direction: column;
+align-items: center;
+padding: 0px;
+gap: 1px;
+
+position: absolute;
+width: 115px;
+height: 106px;
+left: 218px;
+top: 481px;
+
+
+
+/* Rectangle 302 */
+
+width: 85px;
+height: 85px;
+
+/* легендарный 2 */
+background: linear-gradient(180deg, rgba(240, 217, 92, 0) 0%, rgba(240, 217, 92, 0.6) 50.16%, rgba(240, 217, 92, 0) 100%);
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* легендарный 2 */
+
+width: 169px;
+height: 20px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 16px;
+line-height: 20px;
+/* identical to box height */
+text-align: center;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+/* Inside auto layout */
+flex: none;
+order: 1;
+flex-grow: 0;
+
+
+/* Frame 217 */
+
+/* Auto layout */
+display: flex;
+flex-direction: column;
+align-items: center;
+padding: 0px;
+gap: 1px;
+
+position: absolute;
+width: 115px;
+height: 106px;
+left: 193px;
+top: 360px;
+
+
+
+/* Rectangle 302 */
+
+width: 85px;
+height: 85px;
+
+/* редкий 2 */
+background: linear-gradient(179.66deg, rgba(118, 166, 189, 0) 0.29%, rgba(118, 166, 189, 0.6) 50.24%, rgba(118, 166, 189, 0) 99.71%);
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* редкий 2 */
+
+width: 115px;
+height: 20px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 16px;
+line-height: 20px;
+/* identical to box height */
+text-align: center;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+/* Inside auto layout */
+flex: none;
+order: 1;
+align-self: stretch;
+flex-grow: 0;
+
+
+/* Frame 218 */
+
+/* Auto layout */
+display: flex;
+flex-direction: column;
+align-items: center;
+padding: 0px;
+gap: 1px;
+
+position: absolute;
+width: 115px;
+height: 106px;
+left: 318px;
+top: 360px;
+
+
+
+/* Rectangle 302 */
+
+width: 85px;
+height: 85px;
+
+/* эпический 2 */
+background: linear-gradient(180deg, rgba(184, 117, 189, 0) 0%, rgba(184, 117, 189, 0.6) 49.8%, rgba(184, 117, 189, 0) 100%);
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* эпический 2 */
+
+width: 133px;
+height: 20px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 16px;
+line-height: 20px;
+/* identical to box height */
+text-align: center;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+/* Inside auto layout */
+flex: none;
+order: 1;
+flex-grow: 0;

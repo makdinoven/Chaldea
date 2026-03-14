@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger
+from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -7,10 +7,10 @@ class CharacterRequest(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(20), index=True)
-    id_subrace = Column(Integer, foreign_key="subraces.id_subrace")
+    id_subrace = Column(Integer, ForeignKey("subraces.id_subrace"))
     biography = Column(Text)
     personality = Column(Text)
-    id_class = Column(Integer, foreign_key="classes.id_class")
+    id_class = Column(Integer, ForeignKey("classes.id_class"))
     status = Column(Enum('pending', 'approved', 'rejected'), default='pending')
     created_at = Column(TIMESTAMP, server_default=func.now())
     user_id = Column(Integer, nullable=True)
@@ -20,7 +20,7 @@ class CharacterRequest(Base):
     age = Column(Integer, nullable=True)
     weight = Column(String(10), nullable=True)
     height = Column(String(10), nullable=True)
-    id_race = Column(Integer,foreign_key='races.id_race', nullable=False)
+    id_race = Column(Integer, ForeignKey('races.id_race'), nullable=False)
     avatar = Column(String(255), nullable=True)
 
 
@@ -111,5 +111,15 @@ class LevelThreshold(Base):
     id = Column(Integer, primary_key=True, index=True)
     level_number = Column(Integer, unique=True, nullable=False)
     required_experience = Column(Integer, nullable=False)
+
+
+class StarterKit(Base):
+    __tablename__ = "starter_kits"
+
+    id = Column(Integer, primary_key=True, index=True)
+    class_id = Column(Integer, ForeignKey("classes.id_class"), unique=True, nullable=False)
+    items = Column(JSON, nullable=False, default=list)
+    skills = Column(JSON, nullable=False, default=list)
+    currency_amount = Column(Integer, nullable=False, default=0)
 
 

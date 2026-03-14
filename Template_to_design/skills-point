@@ -1,0 +1,47 @@
+/* Group 172 */
+
+width: 30px;
+height: 30px;
+
+
+/* Inside auto layout */
+flex: none;
+order: 0;
+flex-grow: 0;
+
+
+/* Ellipse 90 */
+
+position: absolute;
+width: 30px;
+height: 30px;
+left: 0px;
+top: 0px;
+
+background: radial-gradient(50% 50% at 50% 50%, #76A6BD 0%, rgba(118, 166, 189, 0) 92%);
+
+
+/* Ellipse 91 */
+
+box-sizing: border-box;
+
+position: absolute;
+width: 5.6px;
+height: 5.6px;
+left: 12.4px;
+top: 12.4px;
+
+border: 1px solid #FFFFFF;
+
+
+/* Ellipse 92 */
+
+box-sizing: border-box;
+
+position: absolute;
+width: 11.6px;
+height: 11.6px;
+left: 9.2px;
+top: 9.2px;
+
+border: 0.5px solid #FFFFFF;

@@ -21,7 +21,7 @@ INSERT IGNORE INTO `Regions` (`id`, `name`, `country_id`, `description`, `map_im
 (7, 'Сихолт', 2, 'Описание для Сихолта', NULL, '', NULL, NULL, NULL, NULL);
 
 -- Districts
-INSERT IGNORE INTO `Districts` (`id`, `name`, `region_id`, `description`, `image_url`, `entry_location`, `recommended_level`, `x`, `y`) VALUES
+INSERT IGNORE INTO `Districts` (`id`, `name`, `region_id`, `description`, `image_url`, `entrance_location_id`, `recommended_level`, `x`, `y`) VALUES
 (1, 'Оливковые луга', 1, 'Текстовое описание оливковы лугов', '', NULL, NULL, NULL, NULL),
 (2, 'Старая Гать', 1, 'Текстовое описание Старая Гать', '', NULL, NULL, NULL, NULL),
 (3, 'Золотой лес', 1, 'Текстовое описание Золотой лес', '', NULL, NULL, NULL, NULL),
@@ -61,6 +61,76 @@ INSERT IGNORE INTO `races` (`id_race`, `name`, `description`) VALUES
 (5, 'Демон', 'Коренной народ Халдеи, который сейчас населяет в основном – собственное государство Кроймага. Отличается гуманоидными чертами, которые существенно искажаются. Демоны – самая долгоживущая раса Ло-Ка, они могут жить до 500 лет, а чаще всего и вообще не сталкиваются с естественной смертью от старости. Разделяются на два вида – альбы и левиафаны. '),
 (6, 'Бистмен', 'Зверораса, гуманоиды, что имеют отличительные звериные черты. Обычно имеют человеческий срок жизни, чуть выше остальных гуманоидов, как эльфы или люди. Ведут своё происхождение почти всегда – из собственной страны на юге Халдеи, Тулунгу. Могут отличаться тем, на какой вид зверей больше похожи, что не влияет на их возможность размножения. '),
 (7, 'Урук', 'Некогда варварский народ, что населяет восток Халдеи и Берег Ножей, в итоге основав государства Улус и одноимённую региону страну – Берег Ножей. Отличаются очень коротким сроком жизни (до 40 лет), высоким ростом (до 250 сантиметров) и особыми чертами лица и цветом кожи. Разделяются на северных уруков, и тёмных уруков. ');
+
+-- Items (starter gear for all classes)
+INSERT IGNORE INTO `items` (`id`, `name`, `image`, `item_level`, `item_type`, `item_rarity`, `max_stack_size`, `description`, `weapon_subclass`, `armor_subclass`, `primary_damage_type`) VALUES
+(1, 'Зелье здоровья (малое)', NULL, 0, 'consumable', 'common', 20, 'Восстанавливает немного здоровья', NULL, NULL, NULL),
+(2, 'Зелье маны (малое)', NULL, 0, 'consumable', 'common', 20, 'Восстанавливает немного маны', NULL, NULL, NULL),
+(3, 'Зелье энергии (малое)', NULL, 0, 'consumable', 'common', 20, 'Восстанавливает немного энергии', NULL, NULL, NULL),
+(4, 'Железный меч', NULL, 0, 'main_weapon', 'common', 1, 'Стандартный одноручный меч воина', 'one_handed_weapon', NULL, 'physical'),
+(5, 'Кожаный нагрудник', NULL, 0, 'body', 'common', 1, 'Лёгкая кожаная броня', NULL, 'light_armor', NULL),
+(6, 'Кинжал', NULL, 0, 'main_weapon', 'common', 1, 'Быстрый кинжал для плута', 'daggers', NULL, 'physical'),
+(7, 'Плащ вора', NULL, 0, 'cloak', 'common', 1, 'Тёмный плащ, помогающий скрыться', NULL, NULL, NULL),
+(8, 'Деревянный посох', NULL, 0, 'main_weapon', 'common', 1, 'Начальный посох мага', 'one_handed_staffs', NULL, 'magic'),
+(9, 'Мантия ученика', NULL, 0, 'body', 'common', 1, 'Простая тканевая мантия мага', NULL, 'cloth', NULL);
+
+-- Skills (starter skills for all classes + universal subrace skill)
+INSERT IGNORE INTO `skills` (`id`, `name`, `skill_type`, `description`, `class_limitations`, `race_limitations`, `subrace_limitations`, `min_level`, `purchase_cost`) VALUES
+(1, 'Мощный удар', 'Attack', 'Сильный удар мечом, наносящий повышенный физический урон', '1', NULL, NULL, 1, 0),
+(2, 'Защитная стойка', 'Defense', 'Воин принимает оборонительную позицию, снижая входящий урон', '1', NULL, NULL, 1, 0),
+(3, 'Удар из тени', 'Attack', 'Скрытная атака из тени, наносящая повышенный урон', '2', NULL, NULL, 1, 0),
+(4, 'Уклонение', 'Defense', 'Повышает шанс уклонения от атак', '2', NULL, NULL, 1, 0),
+(5, 'Огненная вспышка', 'Attack', 'Магическая атака огнём', '3', NULL, NULL, 1, 0),
+(6, 'Магический щит', 'Defense', 'Создаёт магический барьер, поглощающий урон', '3', NULL, NULL, 1, 0),
+(7, 'Выживание', 'Support', 'Универсальный навык выживания', NULL, NULL, NULL, 1, 0);
+
+-- Skill ranks (rank 1 for each starter skill)
+INSERT IGNORE INTO `skill_ranks` (`id`, `skill_id`, `rank_name`, `rank_number`, `cost_energy`, `cost_mana`, `cooldown`, `level_requirement`, `upgrade_cost`, `rank_description`) VALUES
+(1, 1, 'Ранг 1', 1, 15, 0, 1, 1, 0, 'Базовый мощный удар'),
+(2, 2, 'Ранг 1', 1, 10, 0, 2, 1, 0, 'Базовая защитная стойка'),
+(3, 3, 'Ранг 1', 1, 12, 0, 1, 1, 0, 'Базовый удар из тени'),
+(4, 4, 'Ранг 1', 1, 10, 0, 2, 1, 0, 'Базовое уклонение'),
+(5, 5, 'Ранг 1', 1, 0, 20, 1, 1, 0, 'Базовая огненная вспышка'),
+(6, 6, 'Ранг 1', 1, 0, 15, 2, 1, 0, 'Базовый магический щит'),
+(7, 7, 'Ранг 1', 1, 8, 0, 3, 1, 0, 'Базовый навык выживания');
+
+-- Skill ranks (rank 2 for selected skills)
+INSERT IGNORE INTO `skill_ranks` (`id`, `skill_id`, `rank_name`, `rank_number`, `cost_energy`, `cost_mana`, `cooldown`, `level_requirement`, `upgrade_cost`, `rank_description`) VALUES
+(8, 1, 'Ранг 2', 2, 20, 0, 1, 3, 50, 'Усиленный мощный удар с повышенным уроном'),
+(9, 2, 'Ранг 2', 2, 14, 0, 2, 3, 50, 'Улучшенная защитная стойка, сильнее снижает урон'),
+(10, 3, 'Ранг 2', 2, 16, 0, 1, 3, 50, 'Глубокий удар из тени с повышенным уроном'),
+(11, 5, 'Ранг 2', 2, 0, 28, 2, 3, 50, 'Усиленная огненная вспышка, обжигает сильнее'),
+(12, 6, 'Ранг 2', 2, 0, 22, 2, 3, 50, 'Укреплённый магический щит, поглощает больше урона');
+
+-- Skill ranks (rank 3 for selected skills)
+INSERT IGNORE INTO `skill_ranks` (`id`, `skill_id`, `rank_name`, `rank_number`, `cost_energy`, `cost_mana`, `cooldown`, `level_requirement`, `upgrade_cost`, `rank_description`) VALUES
+(13, 1, 'Ранг 3', 3, 28, 0, 2, 5, 150, 'Сокрушительный удар, наносящий огромный физический урон'),
+(14, 3, 'Ранг 3', 3, 22, 0, 2, 5, 150, 'Смертельный удар из тени, критический урон из невидимости'),
+(15, 5, 'Ранг 3', 3, 0, 38, 2, 5, 150, 'Испепеляющая вспышка, мощнейший огненный урон');
+
+-- Skill rank damage (rank 1 combat skills)
+INSERT IGNORE INTO `skill_rank_damage` (`id`, `skill_rank_id`, `damage_type`, `amount`, `description`, `weapon_slot`, `target_side`, `chance`) VALUES
+(1, 1, 'physical', 12.0, 'Физический урон мощного удара', 'main_weapon', 'enemy', 100),
+(2, 3, 'physical', 14.0, 'Физический урон удара из тени', 'main_weapon', 'enemy', 100),
+(3, 5, 'fire', 18.0, 'Огненный урон вспышки', 'main_weapon', 'enemy', 100);
+
+-- Skill rank damage (rank 2 combat skills)
+INSERT IGNORE INTO `skill_rank_damage` (`id`, `skill_rank_id`, `damage_type`, `amount`, `description`, `weapon_slot`, `target_side`, `chance`) VALUES
+(4, 8, 'physical', 20.0, 'Усиленный физический урон мощного удара', 'main_weapon', 'enemy', 100),
+(5, 10, 'physical', 22.0, 'Усиленный физический урон удара из тени', 'main_weapon', 'enemy', 100),
+(6, 11, 'fire', 30.0, 'Усиленный огненный урон вспышки', 'main_weapon', 'enemy', 100);
+
+-- Skill rank damage (rank 3 combat skills)
+INSERT IGNORE INTO `skill_rank_damage` (`id`, `skill_rank_id`, `damage_type`, `amount`, `description`, `weapon_slot`, `target_side`, `chance`) VALUES
+(7, 13, 'physical', 32.0, 'Сокрушительный физический урон', 'main_weapon', 'enemy', 100),
+(8, 14, 'physical', 34.0, 'Смертельный урон из тени', 'main_weapon', 'enemy', 100),
+(9, 15, 'fire', 45.0, 'Испепеляющий огненный урон', 'main_weapon', 'enemy', 100);
+
+-- Starter kits (one per class)
+INSERT IGNORE INTO `starter_kits` (`id`, `class_id`, `items`, `skills`, `currency_amount`) VALUES
+(1, 1, '[{"item_id": 4, "quantity": 1}, {"item_id": 5, "quantity": 1}, {"item_id": 1, "quantity": 5}]', '[{"skill_id": 1}, {"skill_id": 2}]', 100),
+(2, 2, '[{"item_id": 6, "quantity": 1}, {"item_id": 7, "quantity": 1}, {"item_id": 3, "quantity": 5}]', '[{"skill_id": 3}, {"skill_id": 4}]', 100),
+(3, 3, '[{"item_id": 8, "quantity": 1}, {"item_id": 9, "quantity": 1}, {"item_id": 2, "quantity": 5}]', '[{"skill_id": 5}, {"skill_id": 6}]', 100);
 
 -- Subraces
 INSERT IGNORE INTO `subraces` (`id_subrace`, `id_race`, `name`, `description`) VALUES

@@ -19,6 +19,7 @@ Each skill is a separate `.md` file in this directory.
 | Cross-Service Validator | `cross-service-validator.md` | Reviewer | Codebase Analyst |
 | Alembic Migration Guide | `alembic-migration-guide.md` | Backend Developer | — |
 | Feature File Manager | `feature-file-manager.md` | Orchestrator (PM) | — |
+| Live Verification Auth | `live-verification-auth.md` | Reviewer | QA Test, Frontend Dev, Backend Dev |
 
 ## Skill File Format
 

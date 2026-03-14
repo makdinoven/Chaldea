@@ -1,5 +1,5 @@
 from inspect import classify_class_attrs
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -160,3 +160,30 @@ class CharacterShort(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+# Starter Kit schemas
+class StarterKitItem(BaseModel):
+    item_id: int
+    quantity: int = 1
+
+
+class StarterKitSkill(BaseModel):
+    skill_id: int
+
+
+class StarterKitResponse(BaseModel):
+    id: int
+    class_id: int
+    items: List[StarterKitItem]
+    skills: List[StarterKitSkill]
+    currency_amount: int
+
+    class Config:
+        orm_mode = True
+
+
+class StarterKitUpdate(BaseModel):
+    items: List[StarterKitItem] = []
+    skills: List[StarterKitSkill] = []
+    currency_amount: int = 0

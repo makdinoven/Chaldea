@@ -235,6 +235,18 @@ notification-service ──> user-service
    - **Задача не касается логики файла** — не трогать, оставить как есть.
    - `.tsx` и `.jsx` сосуществуют в переходный период.
    - **Нарушение этого правила = FAIL на ревью.**
+10. **⚠️ MANDATORY: Frontend дизайн — Design System** (см. `docs/DESIGN-SYSTEM.md`):
+   - **Прочитать `docs/DESIGN-SYSTEM.md` ПЕРЕД созданием/изменением любого фронтенд-компонента.**
+   - **Использовать готовые классы** из `@layer components` в `index.css`: `gold-text`, `gray-bg`, `dropdown-menu`, `dropdown-item`, `nav-link`, `site-link`, `btn-blue`, `btn-line`, `gold-outline`, `hover-gold-overlay`, `input-underline`, `modal-overlay`, `modal-content` и т.д.
+   - **Использовать Tailwind-токены** из `tailwind.config.js`: `text-site-blue`, `bg-site-bg`, `rounded-card`, `shadow-card` и т.д.
+   - **Дизайн "воздушный"** — фоны часто прозрачные, не перегружать элементы тяжёлыми бекграундами.
+   - **Разрешено** — создание новых стилей, если такие нужны, а также расширение дизайн системы.
+   - **Нарушение этого правила = FAIL на ревью.**
+11. **⚠️ MANDATORY: Запрет `React.FC`** — не использовать `React.FC` / `React.FunctionComponent` в компонентах.
+   - **Вместо** `const Foo: React.FC<Props> = ({ x }) => {` **писать** `const Foo = ({ x }: Props) => {`
+   - **Вместо** `const Bar: React.FC = () => {` **писать** `const Bar = () => {`
+   - `React.FC` неявно добавляет `children` в пропсы, усложняет типизацию и считается анти-паттерном в современном React.
+   - **Нарушение этого правила = FAIL на ревью.**
 
 ---
 
@@ -306,6 +318,7 @@ Full mapping table in `agents/skills/README.md`.
 | cross-service-validator | Reviewer | Codebase Analyst |
 | alembic-migration-guide | Backend Developer | — |
 | feature-file-manager | Orchestrator (PM) | — |
+| live-verification-auth | Reviewer | QA Test, Frontend Dev, Backend Dev |
 
 ### Language Policy
 

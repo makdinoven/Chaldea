@@ -45,6 +45,7 @@ Use the **cross-service-validator** skill:
 - [ ] **New/modified styles use Tailwind, not SCSS/CSS?** (T1 — BLOCKING, even for bug fixes)
 - [ ] No new `.jsx` files created (must be `.tsx`)
 - [ ] No new styles added to SCSS/CSS files (must use Tailwind)
+- [ ] **No `React.FC` usage?** (BLOCKING — use `const Foo = ({ x }: Props) => {` instead)
 - [ ] Alembic migration present (if needed, T2)
 
 ### 4. Security Review Checklist
@@ -217,6 +218,7 @@ These bugs do NOT block the current feature review (unless they are security-cri
 
 - **cross-service-validator** — verifying cross-service contracts
 - **typescript-expert** — checking TypeScript types and patterns
+- **live-verification-auth** — get JWT token for authenticated testing (use when you get 401/403)
 
 ---
 

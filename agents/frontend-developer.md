@@ -107,8 +107,8 @@ interface Character {
   level: number;
 }
 
-// components/CharacterCard.tsx
-const CharacterCard: React.FC<{ character: Character }> = ({ character }) => {
+// components/CharacterCard.tsx — NEVER use React.FC
+const CharacterCard = ({ character }: { character: Character }) => {
   return <div>{character.name}</div>;
 };
 ```
@@ -117,6 +117,7 @@ const CharacterCard: React.FC<{ character: Character }> = ({ character }) => {
 - Rename file `.jsx` → `.tsx`
 - Add types for props, state, API responses
 - Do not use `any` without reason (use `unknown` + `// TODO: type this`)
+- **NEVER use `React.FC`** — use `const Foo = ({ x }: Props) => {` pattern instead
 - This is a separate commit from logic changes
 - **No exceptions for "small" changes — even a 1-line fix triggers migration**
 

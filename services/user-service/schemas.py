@@ -50,6 +50,7 @@ class MeResponse(BaseModel):
     username: str
     avatar: Optional[str] = None
     balance: Optional[int] = 0
+    role: Optional[str] = "user"
 
     # новые поля
     current_character_id: Optional[int] = None

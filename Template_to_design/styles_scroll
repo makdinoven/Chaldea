@@ -1,0 +1,33 @@
+/* Group 168 */
+
+position: absolute;
+width: 16px;
+height: 766px;
+left: 1621px;
+top: 263px;
+
+
+
+/* Rectangle 222 */
+
+position: absolute;
+width: 6px;
+height: 765px;
+left: 1626px;
+top: 264px;
+
+background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, #FFFFFF 49%, rgba(255, 255, 255, 0) 100%);
+border-radius: 20px;
+
+
+/* Rectangle 238 */
+
+position: absolute;
+width: 16px;
+height: 69px;
+left: 1621px;
+top: 263px;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+border-radius: 10px;

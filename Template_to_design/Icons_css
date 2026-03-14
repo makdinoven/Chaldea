@@ -1,0 +1,713 @@
+/* Frame 136 */
+
+position: relative;
+width: 686px;
+height: 932px;
+
+background: #8B3131;
+
+
+/* Шлем */
+
+position: absolute;
+width: 113px;
+height: 39px;
+left: 419px;
+top: 49px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* УНИКАЛЬНОСТЬ */
+
+position: absolute;
+width: 287px;
+height: 39px;
+left: 0px;
+top: 53px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* Броня */
+
+position: absolute;
+width: 124px;
+height: 39px;
+left: 420px;
+top: 125px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* Плащ */
+
+position: absolute;
+width: 112px;
+height: 39px;
+left: 420px;
+top: 189px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* пояс */
+
+position: absolute;
+width: 99px;
+height: 39px;
+left: 420px;
+top: 247px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* Кольцо */
+
+position: absolute;
+width: 151px;
+height: 39px;
+left: 409px;
+top: 302px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* ожерелье */
+
+position: absolute;
+width: 193px;
+height: 39px;
+left: 358px;
+top: 378px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* Основное оружие */
+
+position: absolute;
+width: 361px;
+height: 39px;
+left: 196px;
+top: 472px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* Дополнительное */
+
+position: absolute;
+width: 347px;
+height: 39px;
+left: 200px;
+top: 550px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* Расходник */
+
+position: absolute;
+width: 216px;
+height: 39px;
+left: 328px;
+top: 641px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* Свиток */
+
+position: absolute;
+width: 143px;
+height: 39px;
+left: 390px;
+top: 719px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* РЕСУРС */
+
+position: absolute;
+width: 134px;
+height: 39px;
+left: 399px;
+top: 797px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* Прочее */
+
+position: absolute;
+width: 142px;
+height: 39px;
+left: 390px;
+top: 875px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 32px;
+line-height: 39px;
+/* identical to box height */
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* game-icons:cloak */
+
+position: absolute;
+width: 48px;
+height: 48px;
+left: 561px;
+top: 182px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 12.05%;
+right: 12.05%;
+top: 4.55%;
+bottom: 4.55%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* game-icons:belt-armor */
+
+position: absolute;
+width: 66px;
+height: 66px;
+left: 557px;
+top: 228px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 4.88%;
+right: 4.88%;
+top: 29.12%;
+bottom: 29.12%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* game-icons:elf-helmet */
+
+position: absolute;
+width: 65px;
+height: 65px;
+left: 551px;
+top: 53px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 15.31%;
+right: 15.31%;
+top: 5.08%;
+bottom: 5.08%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* game-icons:shoulder-armor */
+
+position: absolute;
+width: 64px;
+height: 64px;
+left: 551px;
+top: 118px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 3.12%;
+right: 3.12%;
+top: 11.06%;
+bottom: 11.06%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* game-icons:power-ring */
+
+position: absolute;
+width: 58px;
+height: 58px;
+left: 557px;
+top: 286px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 5.96%;
+right: 6.7%;
+top: 6.7%;
+bottom: 5.97%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* game-icons:gem-necklace */
+
+position: absolute;
+width: 70px;
+height: 70px;
+left: 553px;
+top: 365px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 4.87%;
+right: 10.3%;
+top: 3.65%;
+bottom: 4.24%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* game-icons:winged-sword */
+
+position: absolute;
+width: 65px;
+height: 65px;
+left: 557px;
+top: 456px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 4.75%;
+right: 4.78%;
+top: 3.64%;
+bottom: 3.53%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* emojione-monotone:shield */
+
+position: absolute;
+width: 62px;
+height: 62px;
+left: 561px;
+top: 542px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 22.49%;
+right: 22.5%;
+top: 14.44%;
+bottom: 14.31%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+left: 12.5%;
+right: 12.5%;
+top: 3.13%;
+bottom: 3.13%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+left: 48.08%;
+right: 48.08%;
+top: 8.26%;
+bottom: 87.88%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+left: 74.28%;
+right: 21.88%;
+top: 15.02%;
+bottom: 81.11%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+left: 79.08%;
+right: 17.09%;
+top: 33.2%;
+bottom: 62.93%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+left: 76.25%;
+right: 19.91%;
+top: 55.86%;
+bottom: 40.28%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+left: 64.72%;
+right: 31.44%;
+top: 73.56%;
+bottom: 22.57%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+left: 48.07%;
+right: 48.07%;
+top: 87.69%;
+bottom: 8.46%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+left: 31.45%;
+right: 64.72%;
+top: 73.56%;
+bottom: 22.57%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+left: 19.9%;
+right: 76.26%;
+top: 55.86%;
+bottom: 40.27%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+left: 17.09%;
+right: 79.08%;
+top: 33.2%;
+bottom: 62.93%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+left: 21.79%;
+right: 74.37%;
+top: 15.02%;
+bottom: 81.11%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* game-icons:magic-potion */
+
+position: absolute;
+width: 58px;
+height: 58px;
+left: 567px;
+top: 625px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 6.74%;
+right: 7.03%;
+top: 5.8%;
+bottom: 5.44%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* game-icons:tied-scroll */
+
+position: absolute;
+width: 61px;
+height: 61px;
+left: 562px;
+top: 704px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 4%;
+right: 3.79%;
+top: 3.59%;
+bottom: 3.93%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* game-icons:open-chest */
+
+position: absolute;
+width: 55px;
+height: 55px;
+left: 119px;
+top: 859px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 5.69%;
+right: 87.74%;
+top: 92.7%;
+bottom: 1.95%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Инвентарь(весь) */
+
+position: absolute;
+width: 203px;
+height: 24px;
+left: 39px;
+top: 836px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 20px;
+line-height: 24px;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* Быстрые слоты */
+
+position: absolute;
+width: 192px;
+height: 48px;
+left: 42px;
+top: 710px;
+
+font-family: 'Montserrat';
+font-style: normal;
+font-weight: 500;
+font-size: 20px;
+line-height: 24px;
+text-transform: uppercase;
+
+color: #FFFFFF;
+
+
+
+/* game-icons:swap-bag */
+
+position: absolute;
+width: 56px;
+height: 56px;
+left: 34px;
+top: 745px;
+
+
+
+/* Vector */
+
+position: absolute;
+left: 14.03%;
+right: 15.92%;
+top: 4.6%;
+bottom: 3.64%;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);
+
+
+/* Vector */
+
+position: absolute;
+width: 71px;
+height: 58px;
+left: 292px;
+top: 44px;
+
+/* ЗОЛОТО */
+background: linear-gradient(176.46deg, #FFF9B8 2.91%, #BCAB4C 237.31%);

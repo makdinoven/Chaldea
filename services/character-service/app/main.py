@@ -6,10 +6,14 @@ import asyncio
 import models, schemas, crud
 from database import SessionLocal, engine
 from config import settings
-from presets import SUBRACE_ATTRIBUTES, CLASS_ITEMS, CLASS_SKILLS, SUBRACE_SKILLS  # Импортируем пресеты подрас
+from presets import SUBRACE_ATTRIBUTES
+from producer import send_character_approved_notification
 from typing import List, Dict
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+
+# Universal subrace skill applied to all subraces (1-16)
+SUBRACE_SKILL_ID = 7  # "Выживание"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("character-service")
@@ -45,8 +49,8 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
         user_id = request.user_id
         db_request = crud.create_character_request(db, request, user_id)
         return db_request
-    except Exception as e:
-        print(f"Ошибка при создании заявки: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при создании заявки: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при создании заявки на персонажа.")
 
 # Эндпоинт для одобрения заявки
@@ -54,105 +58,132 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
 async def approve_character_request(request_id: int, db: Session = Depends(get_db)):
     """
     Одобряет заявку на создание персонажа:
-    1) Проверяем, что заявка существует.
-    2) Создаем запись персонажа в БД.
-    3) Генерируем атрибуты (через SUBRACE_ATTRIBUTES).
-    4) Определяем стартовый инвентарь (через CLASS_ITEMS) и вызываем inventory-service.
-    5) Формируем список навыков: 3 классовых + 1 расовый, вызываем сервис навыков.
-    6) Создаем атрибуты через attributes-service.
-    7) Обновляем персонажа (если нужно — прописываем id_attributes).
-    8) Меняем статус заявки на "approved".
-    9) Привязываем персонажа к пользователю (через user-service).
+    1) Проверяем, что заявка существует и имеет статус 'pending'.
+    2) Читаем стартовый набор из БД (таблица starter_kits) по class_id.
+    3) Создаем запись персонажа в БД с currency_balance из стартового набора.
+    4) Генерируем атрибуты (через SUBRACE_ATTRIBUTES).
+    5) Отправляем стартовые предметы в inventory-service (graceful).
+    6) Формируем список навыков: класс + подрасовый (SUBRACE_SKILL_ID=7), вызываем skills-service (graceful).
+    7) Создаем атрибуты через attributes-service.
+    8) Обновляем персонажа (id_attributes).
+    9) Меняем статус заявки на "approved".
+    10) Привязываем персонажа к пользователю (через user-service).
+    11) Отправляем SSE-уведомление через RabbitMQ.
     """
     try:
-        print(f"[INFO] Начало обработки заявки с ID {request_id}")
+        logger.info(f"Начало обработки заявки с ID {request_id}")
 
-        # 1) Проверка существования заявки
+        # 1) Проверка существования заявки + double-approve guard
         db_request = db.query(models.CharacterRequest).filter(models.CharacterRequest.id == request_id).first()
         if not db_request:
-            print(f"[ERROR] Заявка с ID {request_id} не найдена")
             raise HTTPException(status_code=404, detail="Заявка не найдена")
-        print(f"[INFO] Заявка с ID {request_id} найдена")
+        if db_request.status != "pending":
+            raise HTTPException(status_code=400, detail="Заявка уже обработана")
 
-        # 2) Создаем предварительную запись персонажа
-        new_character = crud.create_preliminary_character(db, db_request)
-        print(f"[INFO] Создан персонаж с ID {new_character.id}")
+        logger.info(f"Заявка с ID {request_id} найдена, статус: {db_request.status}")
 
-        # 3) Генерируем атрибуты по подрасе
+        # 2) Читаем стартовый набор из БД
+        class_id = db_request.id_class
+        starter_kit = db.query(models.StarterKit).filter(models.StarterKit.class_id == class_id).first()
+
+        if starter_kit:
+            kit_items = starter_kit.items or []
+            kit_skills = starter_kit.skills or []
+            currency_amount = starter_kit.currency_amount or 0
+            logger.info(f"Стартовый набор для класса {class_id}: {len(kit_items)} предметов, {len(kit_skills)} навыков, {currency_amount} валюты")
+        else:
+            kit_items = []
+            kit_skills = []
+            currency_amount = 0
+            logger.warning(f"Стартовый набор для класса {class_id} не найден, персонаж создаётся без предметов/навыков")
+
+        # 3) Создаем предварительную запись персонажа с currency_balance
+        new_character = crud.create_preliminary_character(db, db_request, currency_balance=currency_amount)
+        logger.info(f"Создан персонаж с ID {new_character.id}, currency_balance={currency_amount}")
+
+        # 4) Генерируем атрибуты по подрасе
         attributes = crud.generate_attributes_for_subrace(db_request.id_subrace)
-        print(f"[INFO] Сгенерированы атрибуты для подрасы {db_request.id_subrace}: {attributes}")
+        logger.info(f"Сгенерированы атрибуты для подрасы {db_request.id_subrace}")
 
-        # Получаем стартовые предметы из пресета
-        items_to_add = CLASS_ITEMS.get(new_character.id_class, [])
-        print(f"[INFO] Стартовая экипировка для класса {new_character.id_class}: {items_to_add}")
-
-        # 4) Отправка запроса на создание инвентаря
-        inventory_response = await crud.send_inventory_request(new_character.id, items_to_add)
-        if inventory_response:
-            print(f"[INFO] Инвентарь создан: {inventory_response}")
+        # 5) Отправка запроса на создание инвентаря (graceful — не блокирует одобрение)
+        if kit_items:
+            # Transform starter kit format to inventory-service format
+            items_to_add = [{"item_id": item["item_id"], "quantity": item.get("quantity", 1)} for item in kit_items]
+            try:
+                inventory_response = await crud.send_inventory_request(new_character.id, items_to_add)
+                if inventory_response:
+                    logger.info(f"Инвентарь создан для персонажа {new_character.id}")
+                else:
+                    logger.warning(f"Не удалось создать инвентарь для персонажа {new_character.id}, продолжаем без предметов")
+            except Exception as e:
+                logger.warning(f"Ошибка при создании инвентаря для персонажа {new_character.id}: {e}")
         else:
-            print("[ERROR] Ошибка при создании инвентаря")
-            raise HTTPException(status_code=500, detail="Не удалось создать инвентарь")
+            logger.info("Нет стартовых предметов для добавления")
 
-        # -------------------------------
-        # 5) Назначение навыков (новая логика)
-        # -------------------------------
+        # 6) Назначение навыков (graceful — не блокирует одобрение)
+        # Extract skill IDs from starter kit skills JSON
+        skill_ids_for_character = [skill["skill_id"] for skill in kit_skills]
+        # Add universal subrace skill
+        skill_ids_for_character.append(SUBRACE_SKILL_ID)
 
-        # Получаем 3 навыка от класса
-        class_skill_ids = CLASS_SKILLS.get(new_character.id_class, [])
-        # И 1 навык от подрасы
-        subrace_skill_id = SUBRACE_SKILLS.get(new_character.id_subrace)
+        if skill_ids_for_character:
+            try:
+                skills_response = await crud.send_skills_presets_request(
+                    character_id=new_character.id,
+                    skill_ids=skill_ids_for_character
+                )
+                if skills_response:
+                    logger.info(f"Навыки назначены для персонажа {new_character.id}")
+                else:
+                    logger.warning(f"Не удалось назначить навыки для персонажа {new_character.id}, продолжаем без навыков")
+            except Exception as e:
+                logger.warning(f"Ошибка при назначении навыков для персонажа {new_character.id}: {e}")
 
-        # Собираем итоговый список (3 + 1)
-        skill_ids_for_character = []
-        skill_ids_for_character.extend(class_skill_ids)
-        if subrace_skill_id is not None:
-            skill_ids_for_character.append(subrace_skill_id)
-
-        # Отправляем запрос на массовое назначение навыков (ранг=1)
-        skills_response = await crud.send_skills_presets_request(
-            character_id=new_character.id,
-            skill_ids=skill_ids_for_character
-        )
-        if skills_response:
-            print(f"[INFO] Навыки созданы: {skills_response}")
-        else:
-            print("[ERROR] Ошибка при создании навыков")
-            raise HTTPException(status_code=500, detail="Не удалось создать навыки")
-
-        # 6) Создаем атрибуты через attributes-service
+        # 7) Создаем атрибуты через attributes-service
         attributes_response = await crud.send_attributes_request(new_character.id, attributes)
         if attributes_response:
-            print(f"[INFO] Атрибуты созданы: {attributes_response}")
+            logger.info(f"Атрибуты созданы для персонажа {new_character.id}")
         else:
-            print("[ERROR] Ошибка при создании атрибутов")
+            logger.error("Ошибка при создании атрибутов")
             raise HTTPException(status_code=500, detail="Не удалось создать атрибуты")
 
-        # 7) Обновляем персонажа с зависимостями
+        # 8) Обновляем персонажа с зависимостями
         updated_character = crud.update_character_with_dependencies(
             db, new_character.id,
-            skills_id=None,  # при необходимости можно передать ID, если нужно
+            skills_id=None,
             attributes_id=attributes_response['id']
         )
-        print(f"[INFO] Персонаж с ID {new_character.id} обновлен с зависимостями")
+        logger.info(f"Персонаж с ID {new_character.id} обновлен с id_attributes={attributes_response['id']}")
 
-        # 8) Ставим заявке статус "approved"
+        # 9) Ставим заявке статус "approved"
         crud.update_character_request_status(db, request_id, "approved")
-        print(f"[INFO] Заявка с ID {request_id} одобрена")
+        logger.info(f"Заявка с ID {request_id} одобрена")
 
-        # 9) Привязываем персонажа к пользователю
+        # 10) Привязываем персонажа к пользователю
         assign_result = await crud.assign_character_to_user(db_request.user_id, updated_character.id)
         if assign_result:
-            print(f"[INFO] Персонаж с ID {updated_character.id} успешно присвоен пользователю {db_request.user_id}")
+            logger.info(f"Персонаж с ID {updated_character.id} успешно присвоен пользователю {db_request.user_id}")
         else:
-            print("[ERROR] Не удалось присвоить персонажа пользователю")
+            logger.error("Не удалось присвоить персонажа пользователю")
             raise HTTPException(status_code=500, detail="Не удалось присвоить персонажа пользователю")
 
-        print(f"[INFO] Завершение обработки заявки с ID {request_id}")
+        # 11) Отправляем уведомление через RabbitMQ (non-blocking)
+        try:
+            send_character_approved_notification(db_request.user_id, new_character.name)
+            logger.info(f"Уведомление отправлено пользователю {db_request.user_id}")
+        except Exception as e:
+            logger.warning(f"Не удалось отправить уведомление: {e}")
+
+        logger.info(f"Завершение обработки заявки с ID {request_id}")
         return {"message": f"Персонаж с ID {new_character.id} успешно создан и присвоен пользователю."}
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при одобрении заявки: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
     except Exception as e:
-        print(f"[ERROR] Ошибка при одобрении заявки: {e}")
+        logger.error(f"Непредвиденная ошибка при одобрении заявки: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
@@ -167,8 +198,8 @@ async def delete_character(character_id: int, db: Session = Depends(get_db)):
         if not result:
             raise HTTPException(status_code=404, detail="Персонаж не найден")
         return {"message": f"Персонаж с ID {character_id} успешно удален."}
-    except Exception as e:
-        print(f"Ошибка при удалении персонажа: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при удалении персонажа: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 # Отправка запроса на обновление пользователя в user-service
@@ -176,35 +207,35 @@ async def update_user_with_character(user_id: int, character_id: int):
     try:
         # Отправляем запрос в микросервис пользователей для добавления записи в таблицу user_characters
         async with httpx.AsyncClient() as client:
-            print(f"Отправляем запрос на создание связи между пользователем {user_id} и персонажем {character_id}")
+            logger.info(f"Отправляем запрос на создание связи между пользователем {user_id} и персонажем {character_id}")
             create_relation_response = await client.post(
                 f"{settings.USER_SERVICE_URL}/users/user_characters/",
                 json={"user_id": user_id, "character_id": character_id}
             )
 
             if create_relation_response.status_code not in [200, 201]:
-                print(f"Ошибка при создании записи в user_characters: {create_relation_response.status_code}")
+                logger.error(f"Ошибка при создании записи в user_characters: {create_relation_response.status_code}")
                 return False
 
-            print(f"Запись в user_characters успешно создана для пользователя {user_id} и персонажа {character_id}")
+            logger.info(f"Запись в user_characters успешно создана для пользователя {user_id} и персонажа {character_id}")
 
             # Второй запрос: обновляем поле current_character у пользователя
-            print(f"Отправляем запрос на обновление current_character для пользователя {user_id} с персонажем {character_id}")
+            logger.info(f"Отправляем запрос на обновление current_character для пользователя {user_id} с персонажем {character_id}")
             update_user_response = await client.put(
                 f"{settings.USER_SERVICE_URL}/users/{user_id}/update_character",
                 json={"current_character": character_id}
             )
 
             if update_user_response.status_code == 200:
-                print(f"Пользователь с ID {user_id} успешно обновлен с персонажем ID {character_id}")
+                logger.info(f"Пользователь с ID {user_id} успешно обновлен с персонажем ID {character_id}")
                 return True
             else:
-                print(f"Ошибка при обновлении пользователя: {update_user_response.status_code}")
-                print(f"Ответ от сервера: {update_user_response.text}")
+                logger.error(f"Ошибка при обновлении пользователя: {update_user_response.status_code}")
+                logger.error(f"Ответ от сервера: {update_user_response.text}")
                 return False
 
-    except Exception as e:
-        print(f"Ошибка при отправке запросов на обновление пользователя: {e}")
+    except httpx.RequestError as e:
+        logger.error(f"Ошибка при отправке запросов на обновление пользователя: {e}")
         return False
 
 
@@ -220,8 +251,8 @@ async def reject_character_request(request_id: int, db: Session = Depends(get_db
 
         return {"message": f"Заявка с ID {request_id} была отклонена."}
 
-    except Exception as e:
-        print(f"Ошибка при отклонении заявки: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при отклонении заявки: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при отклонении заявки")
 
 #Возвращает список всех рас, их подрас и атрибуты для каждой подрасы.
@@ -236,8 +267,8 @@ async def get_races_and_subraces(db: Session = Depends(get_db)):
                 subrace["attributes"] = subrace_attributes
         # Преобразуем словарь в список
         return list(races_data.values())
-    except Exception as e:
-        print(f"Ошибка при получении рас и подрас: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении рас и подрас: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при получении рас и подрас.")
 
 
@@ -251,12 +282,45 @@ async def get_moderation_requests(db: Session = Depends(get_db)):
         requests = crud.get_moderation_requests(db)  # Вызов функции из CRUD для получения заявок
 
         if not requests:
-            raise HTTPException(status_code=404, detail="Заявки на модерацию не найдены")
+            return {}
 
         return requests
-    except Exception as e:
-        print(f"Ошибка при получении заявок на модерацию: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении заявок на модерацию: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при получении заявок на модерацию.")
+
+
+@router.get("/starter-kits", response_model=List[schemas.StarterKitResponse])
+async def get_starter_kits(db: Session = Depends(get_db)):
+    """
+    Возвращает все стартовые наборы (по одному на каждый класс).
+    """
+    try:
+        kits = crud.get_all_starter_kits(db)
+        return kits
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении стартовых наборов: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при получении стартовых наборов.")
+
+
+@router.put("/starter-kits/{class_id}", response_model=schemas.StarterKitResponse)
+async def upsert_starter_kit(class_id: int, data: schemas.StarterKitUpdate, db: Session = Depends(get_db)):
+    """
+    Создаёт или обновляет стартовый набор для указанного класса.
+    """
+    try:
+        # Validate that the class exists
+        db_class = db.query(models.Class).filter(models.Class.id_class == class_id).first()
+        if not db_class:
+            raise HTTPException(status_code=404, detail=f"Класс с ID {class_id} не найден")
+
+        kit = crud.upsert_starter_kit(db, class_id, data)
+        return kit
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при обновлении стартового набора для класса {class_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении стартового набора.")
 
 
 @router.post("/titles/", response_model=schemas.Title)
@@ -267,8 +331,8 @@ async def create_title(request: schemas.TitleCreate, db: Session = Depends(get_d
     try:
         title = crud.create_title(db, request.name, request.description)
         return title
-    except Exception as e:
-        print(f"Ошибка при создании титула: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при создании титула: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при создании титула.")
 
 @router.post("/{character_id}/titles/{title_id}")
@@ -281,8 +345,8 @@ async def assign_title(character_id: int, title_id: int, db: Session = Depends(g
         if not assignment:
             raise HTTPException(status_code=404, detail="Персонаж или титул не найден")
         return {"message": f"Титул с ID {title_id} успешно присвоен персонажу с ID {character_id}."}
-    except Exception as e:
-        print(f"Ошибка при присвоении титула: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при присвоении титула: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при присвоении титула персонажу.")
 
 
@@ -296,8 +360,8 @@ async def set_current_title(character_id: int, title_id: int, db: Session = Depe
         if not character:
             raise HTTPException(status_code=404, detail="Персонаж не найден")
         return {"message": f"Титул с ID {title_id} успешно установлен как текущий для персонажа с ID {character_id}."}
-    except Exception as e:
-        print(f"Ошибка при установке текущего титула: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при установке текущего титула: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при установке титула.")
 
 @router.get("/titles/", response_model=List[schemas.Title])
@@ -308,8 +372,8 @@ async def get_titles(db: Session = Depends(get_db)):
     try:
         titles = crud.get_all_titles(db)
         return titles
-    except Exception as e:
-        print(f"Ошибка при получении титулов: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении титулов: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при получении титулов.")
 
 @router.get("/{character_id}/titles", response_model=List[schemas.Title])
@@ -322,8 +386,8 @@ async def get_titles_for_character(character_id: int, db: Session = Depends(get_
         if not titles:
             raise HTTPException(status_code=404, detail="Персонаж не имеет титулов")
         return titles
-    except Exception as e:
-        print(f"Ошибка при получении титулов для персонажа {character_id}: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении титулов для персонажа {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при получении титулов для персонажа.")
 
 @router.put("/{character_id}/deduct_points")
@@ -572,11 +636,14 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
         async with httpx.AsyncClient(timeout=5.0) as client:
             try:
                 resp = await client.get(user_profile_url)
-                resp.raise_for_status()
-                user_data = resp.json()
-                # Предполагаем, что в ответе есть ключ "username"
-                user_nickname = user_data.get("username", "")
-            except Exception as e:
+                if resp.status_code == 200:
+                    user_data = resp.json()
+                    # Предполагаем, что в ответе есть ключ "username"
+                    user_nickname = user_data.get("username", "")
+                else:
+                    logger.error(f"Не удалось получить профиль пользователя user_id {user_id}: {resp.status_code} - {resp.text}")
+                    user_nickname = ""
+            except httpx.RequestError as e:
                 logger.error(f"Ошибка при получении профиля пользователя с user_id {user_id}: {e}")
                 # Можно вернуть пустое значение или сообщить об ошибке – здесь выбираем оставить пустое имя.
                 user_nickname = ""

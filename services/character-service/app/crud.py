@@ -1,11 +1,11 @@
 import httpx
 import models, schemas
 from config import settings
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
 from models import CharacterRequest, Race, Subrace, Class, Character, LevelThreshold
-from sqlalchemy.orm import Session
-from presets import SUBRACE_ATTRIBUTES, CLASS_ITEMS
+from presets import SUBRACE_ATTRIBUTES
 import logging
 
 logger = logging.getLogger("character-service.crud")
@@ -39,9 +39,10 @@ def create_character_request(db: Session, request: schemas.CharacterRequestCreat
 
 
 ## Функция для создания предварительного персонажа (с указанием user_id)
-def create_preliminary_character(db: Session, character_request: models.CharacterRequest):
+def create_preliminary_character(db: Session, character_request: models.CharacterRequest, currency_balance: int = 0):
     """
     Создает предварительную запись персонажа с указанием user_id из заявки.
+    currency_balance задаётся из стартового набора класса.
     """
     new_character = models.Character(
         id_attributes=None,
@@ -59,7 +60,8 @@ def create_preliminary_character(db: Session, character_request: models.Characte
         personality=character_request.personality,
         id_class=character_request.id_class,
         sex=character_request.sex,
-        appearance=character_request.appearance
+        appearance=character_request.appearance,
+        currency_balance=currency_balance
     )
     db.add(new_character)
     db.commit()
@@ -201,10 +203,10 @@ async def send_equipment_slots_request(character_id: int):
             if response.status_code == 200:
                 return response.json()
             else:
-                print(f"Ошибка при запросе слотов экипировки: {response.status_code} - {response.text}")
+                logger.error(f"Ошибка при запросе слотов экипировки: {response.status_code} - {response.text}")
                 return None
-    except Exception as e:
-        print(f"Ошибка при отправке запроса на слоты экипировки: {e}")
+    except httpx.RequestError as e:
+        logger.error(f"Ошибка при отправке запроса на слоты экипировки: {e}")
         return None
 
 
@@ -312,9 +314,9 @@ def get_moderation_requests(db: Session):
         # Возвращаем результат как словарь с ключом id заявки
         return results
 
-    except Exception as e:
-        print(f"Ошибка при получении заявок на модерацию: {e}")
-        return {}
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении заявок на модерацию: {e}")
+        raise
 
 
 # Функция для создания титула
@@ -415,19 +417,19 @@ async def send_inventory_request(character_id: int, items: list):
         "items": items  # Формат: [{'item_id': int, 'quantity': int}, ...]
     }
 
-    print(f"[INFO] Отправка запроса на создание инвентаря для персонажа {character_id} с данными: {inventory_data}")
+    logger.info(f"Отправка запроса на создание инвентаря для персонажа {character_id} с данными: {inventory_data}")
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(f"{settings.INVENTORY_SERVICE_URL}", json=inventory_data)
-            print(f"[INFO] Ответ от inventory-service: статус {response.status_code}, тело {response.text}")
+            logger.info(f"Ответ от inventory-service: статус {response.status_code}, тело {response.text}")
             if response.status_code == 200:
                 return response.json()
             else:
-                print(f"[ERROR] Ошибка при создании инвентаря: {response.status_code} - {response.text}")
+                logger.error(f"Ошибка при создании инвентаря: {response.status_code} - {response.text}")
                 return None
-    except Exception as e:
-        print(f"[ERROR] Ошибка при отправке запроса на инвентарь: {e}")
+    except httpx.RequestError as e:
+        logger.error(f"Ошибка при отправке запроса на инвентарь: {e}")
         return None
 
 
@@ -440,23 +442,21 @@ async def send_skills_request(character_id: int):
     """
     try:
         async with httpx.AsyncClient() as client:
-            print(f"[INFO] Отправка запроса на создание навыков для персонажа {character_id}")
+            logger.info(f"Отправка запроса на создание навыков для персонажа {character_id}")
             response = await client.post(f"{settings.SKILLS_SERVICE_URL}", json={"character_id": character_id})
 
-            print(f"[INFO] Статус-код ответа от сервиса навыков: {response.status_code}")
-            print(f"[INFO] Тело ответа от сервиса навыков: {response.text}")
+            logger.info(f"Статус-код ответа от сервиса навыков: {response.status_code}")
+            logger.info(f"Тело ответа от сервиса навыков: {response.text}")
 
             if response.status_code == 200:
                 return response.json()
             else:
-                print(f"[ERROR] Ошибка при создании навыков: {response.status_code} - {response.text}")
+                logger.error(f"Ошибка при создании навыков: {response.status_code} - {response.text}")
                 return None
-    except Exception as e:
-        print(f"[ERROR] Ошибка при отправке запроса на навыки: {e}")
+    except httpx.RequestError as e:
+        logger.error(f"Ошибка при отправке запроса на навыки: {e}")
         return None
 
-
-logger = logging.getLogger("character-service.utils")
 
 async def send_attributes_request(character_id: int, attributes: dict):
     """
@@ -482,7 +482,7 @@ async def send_attributes_request(character_id: int, attributes: dict):
             else:
                 logger.error(f"Ошибка при создании атрибутов: {response.status_code} - {response.text}")
                 return None
-    except Exception as e:
+    except httpx.RequestError as e:
         logger.error(f"Ошибка при отправке запроса на атрибуты: {e}")
         return None
 
@@ -494,36 +494,36 @@ async def assign_character_to_user(user_id: int, character_id: int):
     try:
         async with httpx.AsyncClient() as client:
             # Шаг 1: Создание записи в user_characters
-            print(f"Отправляем запрос на создание связи между пользователем {user_id} и персонажем {character_id}")
+            logger.info(f"Отправляем запрос на создание связи между пользователем {user_id} и персонажем {character_id}")
             create_relation_response = await client.post(
                 f"{settings.USER_SERVICE_URL}/users/user_characters/",
                 json={"user_id": user_id, "character_id": character_id}
             )
 
             if create_relation_response.status_code not in [200, 201]:
-                print(f"Ошибка при создании записи в user_characters: {create_relation_response.status_code}")
-                print(f"Ответ от сервера: {create_relation_response.text}")
+                logger.error(f"Ошибка при создании записи в user_characters: {create_relation_response.status_code}")
+                logger.error(f"Ответ от сервера: {create_relation_response.text}")
                 return False
 
-            print(f"Запись в user_characters успешно создана для пользователя {user_id} и персонажа {character_id}")
+            logger.info(f"Запись в user_characters успешно создана для пользователя {user_id} и персонажа {character_id}")
 
             # Шаг 2: Обновление поля current_character у пользователя
-            print(f"Отправляем запрос на обновление current_character для пользователя {user_id} с персонажем {character_id}")
+            logger.info(f"Отправляем запрос на обновление current_character для пользователя {user_id} с персонажем {character_id}")
             update_user_response = await client.put(
                 f"{settings.USER_SERVICE_URL}/users/{user_id}/update_character",
                 json={"current_character": character_id}
             )
 
             if update_user_response.status_code == 200:
-                print(f"Пользователь с ID {user_id} успешно обновлен с персонажем ID {character_id}")
+                logger.info(f"Пользователь с ID {user_id} успешно обновлен с персонажем ID {character_id}")
                 return True
             else:
-                print(f"Ошибка при обновлении пользователя: {update_user_response.status_code}")
-                print(f"Ответ от сервера: {update_user_response.text}")
+                logger.error(f"Ошибка при обновлении пользователя: {update_user_response.status_code}")
+                logger.error(f"Ответ от сервера: {update_user_response.text}")
                 return False
 
-    except Exception as e:
-        print(f"Ошибка при отправке запросов на обновление пользователя: {e}")
+    except httpx.RequestError as e:
+        logger.error(f"Ошибка при отправке запросов на обновление пользователя: {e}")
         return False
 
 
@@ -567,12 +567,47 @@ def check_and_update_level(db: Session, character_id: int, passive_experience: i
     return character
 
 async def get_character_experience(character_id: int):
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{settings.ATTRIBUTES_SERVICE_URL}/{character_id}/experience")
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return None
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{settings.ATTRIBUTES_SERVICE_URL}/{character_id}/experience")
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"Ошибка при получении опыта персонажа {character_id}: {response.status_code} - {response.text}")
+                return None
+    except httpx.RequestError as e:
+        logger.error(f"Ошибка при отправке запроса на получение опыта персонажа {character_id}: {e}")
+        return None
+
+def get_all_starter_kits(db: Session):
+    """
+    Возвращает все стартовые наборы (по одному на каждый класс).
+    """
+    return db.query(models.StarterKit).all()
+
+
+def upsert_starter_kit(db: Session, class_id: int, data: schemas.StarterKitUpdate):
+    """
+    Создаёт или обновляет стартовый набор для указанного класса.
+    Если запись для class_id уже существует — обновляет, иначе создаёт новую.
+    """
+    db_kit = db.query(models.StarterKit).filter(models.StarterKit.class_id == class_id).first()
+    if db_kit:
+        db_kit.items = [item.dict() for item in data.items]
+        db_kit.skills = [skill.dict() for skill in data.skills]
+        db_kit.currency_amount = data.currency_amount
+    else:
+        db_kit = models.StarterKit(
+            class_id=class_id,
+            items=[item.dict() for item in data.items],
+            skills=[skill.dict() for skill in data.skills],
+            currency_amount=data.currency_amount,
+        )
+        db.add(db_kit)
+    db.commit()
+    db.refresh(db_kit)
+    return db_kit
+
 
 async def send_skills_presets_request(character_id: int, skill_ids: list[int]):
     """
@@ -599,8 +634,8 @@ async def send_skills_presets_request(character_id: int, skill_ids: list[int]):
             if response.status_code == 200:
                 return response.json()  # Возвращаем ответ от сервиса
             else:
-                print(f"[ERROR] Ошибка при массовом назначении навыков: {response.status_code} - {response.text}")
+                logger.error(f"Ошибка при массовом назначении навыков: {response.status_code} - {response.text}")
                 return None
-    except Exception as e:
-        print(f"[ERROR] Ошибка при отправке запроса в сервис навыков: {e}")
+    except httpx.RequestError as e:
+        logger.error(f"Ошибка при отправке запроса в сервис навыков: {e}")
         return None
