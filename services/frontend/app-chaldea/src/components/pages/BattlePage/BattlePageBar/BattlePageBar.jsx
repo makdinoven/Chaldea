@@ -2,7 +2,7 @@ import s from "./BattlePageBar.module.scss";
 import CountdownTimer from "./CountdownTimer/CountdownTimer";
 import ItemSkillCircle from "./ItemSkillCircle/ItemSkillCircle";
 import { useEffect, useState } from "react";
-import AutobattleModeIcon from "../../../../assets/Icons/AutobattleModeIcon";
+import AutobattleModeIcon from "../../../../assets/IconComponents/AutobattleModeIcon";
 import Tooltip from "../../../CommonComponents/Tooltip/Tooltip";
 import {
   BATTLE_EVENTS_TRANSLATE,

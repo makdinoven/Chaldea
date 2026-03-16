@@ -1,7 +1,7 @@
 import s from "./ItemSkillCircle.module.scss";
-import ClosedItemSkillIcon from "../../../../../assets/Icons/ClosedItemSkillIcon";
-import SkillIcon from "../../../../../assets/Icons/SkillIcon";
-import ItemIcon from "../../../../../assets/Icons/ItemIcon";
+import ClosedItemSkillIcon from "../../../../../assets/IconComponents/ClosedItemSkillIcon";
+import SkillIcon from "../../../../../assets/IconComponents/SkillIcon";
+import ItemIcon from "../../../../../assets/IconComponents/ItemIcon";
 import Tooltip from "../../../../CommonComponents/Tooltip/Tooltip";
 import { translateSkillSign } from "../../../../../helpers/helpers";
 import InventoryItem from "../../CharacterSide/CharacterInventory/InventoryItem/InventoryItem";
