@@ -597,7 +597,7 @@ body {
     font-family: var(--font-family);
     color: #fff;
     background-color: black;
-    background-image: url('./assets/Бэкграунд.png');
+    background-image: url('./assets/background-main.png');
     background-size: cover;
     background-repeat: no-repeat;
     background-position: center;
