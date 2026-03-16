@@ -1,8 +1,10 @@
 import { motion } from 'motion/react';
+import { useDroppable } from '@dnd-kit/core';
 import { useAppSelector } from '../../../redux/store';
 import { selectFilteredInventory } from '../../../redux/slices/profileSlice';
 import ItemCell from './ItemCell';
 import { MIN_GRID_CELLS } from '../constants';
+import { useActiveDrag } from './dnd/InventoryDndContext';
 
 const containerVariants = {
   hidden: {},
@@ -18,12 +20,26 @@ const cellVariants = {
 
 const ItemGrid = () => {
   const items = useAppSelector(selectFilteredInventory);
+  const activeDrag = useActiveDrag();
+
+  const { setNodeRef, isOver } = useDroppable({
+    id: 'drop-inventory-grid',
+  });
 
   const emptyCellsCount = Math.max(0, MIN_GRID_CELLS - items.length);
 
+  // Show visual feedback only when dragging from equipment/fast_slot
+  const isFromEquipment =
+    activeDrag !== null &&
+    (activeDrag.source === 'equipment' || activeDrag.source === 'fast_slot');
+  const showDropHighlight = isFromEquipment && isOver;
+
   return (
     <motion.div
-      className="gold-scrollbar-wide overflow-y-auto max-h-[516px] pr-1"
+      ref={setNodeRef}
+      className={`gold-scrollbar-wide overflow-y-auto max-h-[516px] pr-1 rounded-lg transition-colors duration-200 ${
+        showDropHighlight ? 'slot-pulse-compatible' : ''
+      }`}
       initial="hidden"
       animate="visible"
       variants={containerVariants}

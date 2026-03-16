@@ -1,6 +1,6 @@
 import {createSlice, createAsyncThunk} from "@reduxjs/toolkit";
 import axios from "axios";
-import {fetchRegionDetails} from "../actions/regionsActions.js";
+import {fetchRegionDetails} from "../actions/regionsActions";
 
 const regionsSlice = createSlice({
     name: "regions",

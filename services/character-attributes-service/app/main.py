@@ -1,3 +1,6 @@
+import os
+import asyncio
+import threading
 from fastapi import FastAPI, Depends, HTTPException, APIRouter
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -8,21 +11,36 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 import httpx
 import logging
+from rabbitmq_consumer import start_consumer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 models.Base.metadata.create_all(bind=engine)
+
+
+def _run_consumer_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(start_consumer())
+
+
+@app.on_event("startup")
+def startup():
+    thread = threading.Thread(target=_run_consumer_thread, daemon=True)
+    thread.start()
+
 
 router = APIRouter(prefix="/attributes")
 

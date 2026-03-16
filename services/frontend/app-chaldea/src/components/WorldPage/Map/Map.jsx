@@ -1,9 +1,9 @@
 import s from './Map.module.scss';
 import {useEffect, useState} from 'react';
 import axios from 'axios';
-import MapPoint from './MapPoint/MapPoint.jsx';
-import MapTooltip from './MapTooltip/MapTooltip.jsx';
-import DetailCard from "../DetailCard/DetailCard.jsx";
+import MapPoint from './MapPoint/MapPoint';
+import MapTooltip from './MapTooltip/MapTooltip';
+import DetailCard from "../DetailCard/DetailCard";
 import {useSelector} from "react-redux";
 
 export default function Map({type}) {

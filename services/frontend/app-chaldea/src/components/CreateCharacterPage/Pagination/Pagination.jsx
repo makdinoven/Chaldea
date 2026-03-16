@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
-import CircleButton from '../../HomePage/Slider/CircleButton/CircleButton.jsx';
-import PaginationButton from './PaginationButton/PaginationButton.jsx';
+import CircleButton from '../../HomePage/Slider/CircleButton/CircleButton';
+import PaginationButton from './PaginationButton/PaginationButton';
 
 import styles from './Pagination.module.scss';
 

@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { BASE_URL, BASE_URL_BATTLES } from '../../../api/api.js';
+import { BASE_URL, BASE_URL_BATTLES } from '../../../api/api';
 import axios from 'axios';
-import { useBodyBackground } from '../../../hooks/useBodyBackground.js';
-import Textarea from '../../CommonComponents/Textarea/Textarea.jsx';
-import BlueGradientButton from '../../CommonComponents/BlueGradientButton/BlueGradientButton.jsx';
-import PlayerCard from '../../CommonComponents/PlayerCard/PlayerCard.jsx';
-import NeighborCard from '../../CommonComponents/NeighborCard/NeighborCard.jsx';
-import Loader from '../../CommonComponents/Loader/Loader.jsx';
+import { useBodyBackground } from '../../../hooks/useBodyBackground';
+import Textarea from '../../CommonComponents/Textarea/Textarea';
+import BlueGradientButton from '../../CommonComponents/BlueGradientButton/BlueGradientButton';
+import PlayerCard from '../../CommonComponents/PlayerCard/PlayerCard';
+import NeighborCard from '../../CommonComponents/NeighborCard/NeighborCard';
+import Loader from '../../CommonComponents/Loader/Loader';
 import { useSelector } from 'react-redux';
-import BackButton from '../../CommonComponents/BackButton/BackButton.jsx';
+import BackButton from '../../CommonComponents/BackButton/BackButton';
 
 const DEFAULT_TAB = 'players';
 

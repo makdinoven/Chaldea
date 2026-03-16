@@ -2,7 +2,8 @@
 
 import asyncio
 import json
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status
+import logging
+from fastapi import BackgroundTasks, FastAPI, APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from typing import List
 from sqlalchemy.orm import Session
@@ -22,6 +23,8 @@ from consumers.user_registration import start_user_registration_consumer
 from consumers.general_notification import start_general_notifications_consumer
 
 import pika
+
+logger = logging.getLogger("notification-service")
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -55,10 +58,35 @@ async def sse_notifications_stream(
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+def _publish_admin_notification(payload: dict):
+    """Internal function that performs the blocking RabbitMQ publish for admin notifications."""
+    try:
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(
+                host="rabbitmq",
+                socket_timeout=5,
+                connection_attempts=1,
+                retry_delay=1,
+            )
+        )
+        channel = connection.channel()
+        channel.queue_declare(queue="general_notifications", durable=True)
+        channel.basic_publish(
+            exchange='',
+            routing_key="general_notifications",
+            body=json.dumps(payload),
+            properties=pika.BasicProperties(delivery_mode=2)
+        )
+        connection.close()
+    except Exception as e:
+        logger.warning(f"Failed to publish admin notification to RabbitMQ: {e}")
+
+
 # Эндпоинт для админского уведомления (добавляет сообщение в очередь general_notifications)
 @router.post("/create")
 def create_admin_notification(
     data: GeneralNotificationPayload,
+    background_tasks: BackgroundTasks,
     current_user: UserRead = Depends(get_current_user_via_http)
 ):
     if current_user.role != "admin":
@@ -67,46 +95,48 @@ def create_admin_notification(
             detail="Only admins can create notifications"
         )
 
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host="rabbitmq"))
-    channel = connection.channel()
-    channel.queue_declare(queue="general_notifications", durable=True)
-
     payload = {
         "target_type": data.target_type.value,
         "target_value": data.target_value,
         "message": data.message
     }
-    channel.basic_publish(
-        exchange='',
-        routing_key="general_notifications",
-        body=json.dumps(payload),
-        properties=pika.BasicProperties(delivery_mode=2)
-    )
-    connection.close()
+    background_tasks.add_task(_publish_admin_notification, payload)
 
     return {"detail": "Notification creation request sent to queue."}
 
 # Остальные эндпоинты: get_unread_notifications, get_all_notifications, mark-as-read...
-@router.get("/{user_id}/unread", response_model=List[NotificationSchema])
-def get_unread_notifications(user_id: int, db: Session = Depends(get_db)):
-    notifications = db.query(Notification).filter(
+@router.get("/{user_id}/unread")
+def get_unread_notifications(
+    user_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Notification).filter(
         Notification.user_id == user_id,
         Notification.status == "unread"
-    ).order_by(Notification.created_at.asc()).all()
+    ).order_by(Notification.created_at.asc())
 
-    if not notifications:
-        raise HTTPException(status_code=404, detail="No unread notifications found.")
-    return notifications
+    total = query.count()
+    notifications = query.offset((page - 1) * page_size).limit(page_size).all()
 
-@router.get("/{user_id}/full", response_model=List[NotificationSchema])
-def get_all_notifications(user_id: int, db: Session = Depends(get_db)):
-    notifications = db.query(Notification).filter(
+    return {"items": notifications, "total": total, "page": page, "page_size": page_size}
+
+@router.get("/{user_id}/full")
+def get_all_notifications(
+    user_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Notification).filter(
         Notification.user_id == user_id
-    ).order_by(Notification.created_at.asc()).all()
+    ).order_by(Notification.created_at.asc())
 
-    if not notifications:
-        raise HTTPException(status_code=404, detail="No notifications found.")
-    return notifications
+    total = query.count()
+    notifications = query.offset((page - 1) * page_size).limit(page_size).all()
+
+    return {"items": notifications, "total": total, "page": page, "page_size": page_size}
 
 @router.put("/{user_id}/mark-as-read", response_model=List[NotificationSchema])
 def mark_multiple_notifications_as_read(

@@ -1,6 +1,6 @@
 import s from "./CountdownTimer.module.scss";
 import { useEffect, useRef, useState } from "react";
-import { formatTime } from "../../../../../helpers/helpers.js";
+import { formatTime } from "../../../../../helpers/helpers";
 
 const CountdownTimer = ({ startMilliseconds, onComplete }) => {
   const [secondsLeft, setSecondsLeft] = useState(

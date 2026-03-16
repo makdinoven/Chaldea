@@ -11,6 +11,6 @@ class Settings(BaseSettings):
     SKILLS_SERVICE_URL = os.getenv("SKILLS_SERVICE_URL","http://skills-service:8003/skills/")
     ATTRIBUTES_SERVICE_URL = os.getenv("ATTRIBUTES_SERVICE_URL", "http://character-attributes-service:8002/attributes/")
     USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user-service:8000")
-    # RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672")
+    RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
 
 settings = Settings()

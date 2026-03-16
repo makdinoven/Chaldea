@@ -1,20 +1,20 @@
 import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 
-import StartPage from "../StartPage/StartPage.jsx";
-import HomePage from "../HomePage/HomePage.jsx";
-import CreateCharacterPage from "../CreateCharacterPage/CreateCharacterPage.jsx";
-import RequestsPage from "../Admin/RequestsPage/RequestsPage.tsx";
-import Layout from "./Layout/Layout.tsx";
-import WorldPage from "../WorldPage/WorldPage.jsx";
-import CountryPage from "../CountryPage/CountryPage.jsx";
-import AdminLocationsPage from "../AdminLocationsPage/AdminLocationsPage.jsx";
-import AdminSkillsPage from "../AdminSkillsPage/AdminSkillsPage.tsx";
-import LocationPage from "../pages/LocationPage/LocationPage.tsx";
+import StartPage from "../StartPage/StartPage";
+import HomePage from "../HomePage/HomePage";
+import CreateCharacterPage from "../CreateCharacterPage/CreateCharacterPage";
+import RequestsPage from "../Admin/RequestsPage/RequestsPage";
+import Layout from "./Layout/Layout";
+import WorldPage from "../WorldPage/WorldPage";
+import CountryPage from "../CountryPage/CountryPage";
+import AdminLocationsPage from "../AdminLocationsPage/AdminLocationsPage";
+import AdminSkillsPage from "../AdminSkillsPage/AdminSkillsPage";
+import LocationPage from "../pages/LocationPage/LocationPage";
 import ItemsAdminPage from "../ItemsAdminPage/ItemsAdminPage";
 import AdminPage from "../Admin/AdminPage";
 import StarterKitsPage from "../Admin/StarterKitsPage/StarterKitsPage";
-import BattlePage from "../pages/BattlePage/BattlePage.jsx";
+import BattlePage from "../pages/BattlePage/BattlePage";
 import ProfilePage from "../ProfilePage/ProfilePage";
 
 const App = () => {

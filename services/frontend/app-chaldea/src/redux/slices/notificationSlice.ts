@@ -1,6 +1,6 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import axios from 'axios';
-import { BASE_URL_DEFAULT } from '../../api/api.js';
+import { BASE_URL_DEFAULT } from '../../api/api';
 
 // --- Types ---
 
@@ -10,6 +10,13 @@ export interface NotificationItem {
   message: string;
   status: 'unread' | 'read';
   created_at: string;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export interface NotificationState {
@@ -33,7 +40,7 @@ const initialState: NotificationState = {
 // --- Async Thunks ---
 
 export const fetchUnreadNotifications = createAsyncThunk<
-  NotificationItem[],
+  PaginatedResponse<NotificationItem>,
   number,
   { rejectValue: string }
 >(
@@ -41,7 +48,7 @@ export const fetchUnreadNotifications = createAsyncThunk<
   async (userId, thunkAPI) => {
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get<NotificationItem[]>(
+      const response = await axios.get<PaginatedResponse<NotificationItem>>(
         `${BASE_URL_DEFAULT}/notifications/${userId}/unread`,
         {
           headers: { Authorization: `Bearer ${token}` },
@@ -51,7 +58,7 @@ export const fetchUnreadNotifications = createAsyncThunk<
     } catch (error: unknown) {
       if (axios.isAxiosError(error) && error.response?.status === 404) {
         // 404 means no unread notifications — not an error
-        return [] as NotificationItem[];
+        return { items: [], total: 0, page: 1, page_size: 50 } as PaginatedResponse<NotificationItem>;
       }
       return thunkAPI.rejectWithValue('Не удалось загрузить уведомления');
     }
@@ -139,8 +146,8 @@ const notificationSlice = createSlice({
       })
       .addCase(fetchUnreadNotifications.fulfilled, (state, action) => {
         state.status = 'succeeded';
-        state.items = action.payload;
-        state.unreadCount = action.payload.filter((n) => n.status === 'unread').length;
+        state.items = action.payload.items;
+        state.unreadCount = action.payload.total;
       })
       .addCase(fetchUnreadNotifications.rejected, (state, action) => {
         state.status = 'failed';

@@ -1,8 +1,8 @@
 import s from "./CharacterSide.module.scss";
-import PlayerCard from "../../../CommonComponents/PlayerCard/PlayerCard.jsx";
-import CharacterResourcesList from "./CharacterResourcesList/CharacterResourcesList.jsx";
-import CharacterInventory from "./CharacterInventory/CharacterInventory.jsx";
-import EffectCircle from "./EffectCircle/EffectCircle.jsx";
+import PlayerCard from "../../../CommonComponents/PlayerCard/PlayerCard";
+import CharacterResourcesList from "./CharacterResourcesList/CharacterResourcesList";
+import CharacterInventory from "./CharacterInventory/CharacterInventory";
+import EffectCircle from "./EffectCircle/EffectCircle";
 
 const CharacterSide = ({
   isOpponent,

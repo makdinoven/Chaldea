@@ -1,12 +1,12 @@
 import s from './WorldPage.module.scss';
 import {useEffect} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
-import {fetchCountries} from '../../redux/actions/countryActions.js';
-import Map from './Map/Map.jsx';
-import CountryDropdown from './CountryDropdown/CountryDropdown.jsx';
+import {fetchCountries} from '../../redux/actions/countryActions';
+import Map from './Map/Map';
+import CountryDropdown from './CountryDropdown/CountryDropdown';
 import backgroundImage from '../../assets/background.png';
-import {useBodyBackground} from '../../hooks/useBodyBackground.js';
-import DetailCard from "./DetailCard/DetailCard.jsx";
+import {useBodyBackground} from '../../hooks/useBodyBackground';
+import DetailCard from "./DetailCard/DetailCard";
 import useNavigateTo from '../../hooks/useNavigateTo';
 
 export default function WorldPage() {

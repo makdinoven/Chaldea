@@ -1,15 +1,15 @@
 import s from './CountryPage.module.scss';
 import {useParams} from "react-router-dom";
 import {useDispatch, useSelector} from "react-redux";
-import CountryDropdown from "../WorldPage/CountryDropdown/CountryDropdown.jsx";
-import {useBodyBackground} from "../../hooks/useBodyBackground.js";
+import CountryDropdown from "../WorldPage/CountryDropdown/CountryDropdown";
+import {useBodyBackground} from "../../hooks/useBodyBackground";
 import backgroundImage from "../../assets/countryBackground.png";
 import {useEffect} from "react";
-import Map from "../WorldPage/Map/Map.jsx";
-import DetailCard from "../WorldPage/DetailCard/DetailCard.jsx";
-import BackToWorldBtn from "./BackToWorldBtn/BackToWorldBtn.jsx";
-import {fetchCountries, fetchCountryDetails} from "../../redux/actions/countryActions.js";
-import RegionDropdown from "./RegionDropdown.jsx";
+import Map from "../WorldPage/Map/Map";
+import DetailCard from "../WorldPage/DetailCard/DetailCard";
+import BackToWorldBtn from "./BackToWorldBtn/BackToWorldBtn";
+import {fetchCountries, fetchCountryDetails} from "../../redux/actions/countryActions";
+import RegionDropdown from "./RegionDropdown";
 
 export default function CountryPage() {
     const dispatch = useDispatch();

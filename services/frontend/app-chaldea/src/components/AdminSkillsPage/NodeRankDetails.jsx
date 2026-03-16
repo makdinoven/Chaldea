@@ -10,10 +10,10 @@ import {
 } from './skillConstants'
 
 import DamageSection from './tabs/DamageSection'
-import BuffDebuffSection from './tabs/BuffDebuffSection.jsx'
+import BuffDebuffSection from './tabs/BuffDebuffSection'
 import ResistSection from './tabs/ResistSection'
 import ComplexEffectsSection from './tabs/ComplexEffectsSection'
-import StatModifierSection from "./tabs/StatModifierSection.jsx";
+import StatModifierSection from "./tabs/StatModifierSection";
 import { useDispatch } from "react-redux";
 import axios from "axios";
 

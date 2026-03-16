@@ -1,18 +1,22 @@
+import os
 from fastapi import FastAPI, APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+import asyncio
+
 from database import get_db, create_tables
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import httpx
-import os
 
 import models
 import schemas
 import crud
+from rabbitmq_consumer import start_consumer
+from auth_http import get_admin_user
 
 # Пример, если нужно
 CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8000/characters")
@@ -20,9 +24,10 @@ ATTRIBUTES_SERVICE_URL = os.getenv("ATTRIBUTES_SERVICE_URL", "http://attribute-s
 
 app = FastAPI(title="Async Skill Service")
 
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,6 +38,7 @@ router = APIRouter(prefix="/skills", tags=["skills"])
 @app.on_event("startup")
 async def startup_event():
     await create_tables()
+    asyncio.create_task(start_consumer())
 
 # -----------------------------------------------------------
 # 0) Legacy endpoint
@@ -86,7 +92,8 @@ async def legacy_create_skills_for_new_character(
 @router.post("/admin/skills/", response_model=schemas.SkillRead)
 async def admin_create_skill(
     data: schemas.SkillCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     return await crud.create_skill(db, data)
 
@@ -108,7 +115,8 @@ async def admin_get_skill(
 async def admin_update_skill(
     skill_id: int,
     data: schemas.SkillUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     updated = await crud.update_skill(db, skill_id, data)
     if not updated:
@@ -118,7 +126,8 @@ async def admin_update_skill(
 @router.delete("/admin/skills/{skill_id}")
 async def admin_delete_skill(
     skill_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     success = await crud.delete_skill(db, skill_id)
     if not success:
@@ -131,7 +140,8 @@ async def admin_delete_skill(
 @router.post("/admin/skill_ranks/", response_model=schemas.SkillRankRead)
 async def admin_create_skill_rank(
     data: schemas.SkillRankCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     return await crud.create_skill_rank(db, data)
 
@@ -149,7 +159,8 @@ async def admin_get_skill_rank(
 async def admin_update_skill_rank(
     rank_id: int,
     data: schemas.SkillRankUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     updated = await crud.update_skill_rank(db, rank_id, data)
     if not updated:
@@ -159,7 +170,8 @@ async def admin_update_skill_rank(
 @router.delete("/admin/skill_ranks/{rank_id}")
 async def admin_delete_skill_rank(
     rank_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     success = await crud.delete_skill_rank(db, rank_id)
     if not success:
@@ -172,7 +184,8 @@ async def admin_delete_skill_rank(
 @router.post("/admin/damages/", response_model=schemas.SkillRankDamageRead)
 async def admin_create_damage(
     data: schemas.SkillRankDamageCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     return await crud.create_skill_rank_damage(db, data)
 
@@ -190,7 +203,8 @@ async def admin_get_damage(
 async def admin_update_damage(
     damage_id: int,
     data: schemas.SkillRankDamageUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     updated = await crud.update_skill_rank_damage(db, damage_id, data)
     if not updated:
@@ -200,7 +214,8 @@ async def admin_update_damage(
 @router.delete("/admin/damages/{damage_id}")
 async def admin_delete_damage(
     damage_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     success = await crud.delete_skill_rank_damage(db, damage_id)
     if not success:
@@ -213,7 +228,8 @@ async def admin_delete_damage(
 @router.post("/admin/effects/", response_model=schemas.SkillRankEffectRead)
 async def admin_create_effect(
     data: schemas.SkillRankEffectCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     return await crud.create_skill_rank_effect(db, data)
 
@@ -231,7 +247,8 @@ async def admin_get_effect(
 async def admin_update_effect(
     effect_id: int,
     data: schemas.SkillRankEffectUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     updated = await crud.update_skill_rank_effect(db, effect_id, data)
     if not updated:
@@ -241,7 +258,8 @@ async def admin_update_effect(
 @router.delete("/admin/effects/{effect_id}")
 async def admin_delete_effect(
     effect_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     success = await crud.delete_skill_rank_effect(db, effect_id)
     if not success:
@@ -254,14 +272,16 @@ async def admin_delete_effect(
 @router.post("/admin/character_skills/", response_model=schemas.CharacterSkillRead)
 async def admin_give_character_skill(
     data: schemas.CharacterSkillCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     return await crud.create_character_skill(db, data)
 
 @router.delete("/admin/character_skills/{cs_id}")
 async def admin_remove_character_skill(
     cs_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     success = await crud.delete_character_skill(db, cs_id)
     if not success:
@@ -415,7 +435,8 @@ async def get_skill_full_tree(skill_id: int, db: AsyncSession = Depends(get_db))
 async def update_skill_full_tree(
     skill_id: int,
     data: schemas.FullSkillTreeUpdateRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     if skill_id != data.id:
         raise HTTPException(status_code=400, detail="Path skill_id != data.id")

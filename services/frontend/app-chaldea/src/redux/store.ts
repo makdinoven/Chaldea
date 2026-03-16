@@ -1,17 +1,17 @@
 import { configureStore } from '@reduxjs/toolkit';
 import { TypedUseSelectorHook, useDispatch, useSelector } from 'react-redux';
-import countriesReducer from './slices/countriesSlice.js';
-import countryDetailsReducer from './slices/countryDetailsSlice.js';
-import regionsSliceReducer from './slices/regionsSlice.js';
-import adminLocationsReducer from './slices/adminLocationsSlice.js';
-import countryEditReducer from './slices/countryEditSlice.js';
-import regionEditReducer from './slices/regionEditSlice.js';
-import districtEditReducer from './slices/districtEditSlice.js';
-import locationEditReducer from './slices/locationEditSlice.js';
-import skillsSlice from './slices/skillsAdminSlice.js';
-import userSlice from './slices/userSlice.js';
-import notificationReducer from './slices/notificationSlice.ts';
-import profileReducer from './slices/profileSlice.ts';
+import countriesReducer from './slices/countriesSlice';
+import countryDetailsReducer from './slices/countryDetailsSlice';
+import regionsSliceReducer from './slices/regionsSlice';
+import adminLocationsReducer from './slices/adminLocationsSlice';
+import countryEditReducer from './slices/countryEditSlice';
+import regionEditReducer from './slices/regionEditSlice';
+import districtEditReducer from './slices/districtEditSlice';
+import locationEditReducer from './slices/locationEditSlice';
+import skillsSlice from './slices/skillsAdminSlice';
+import userSlice from './slices/userSlice';
+import notificationReducer from './slices/notificationSlice';
+import profileReducer from './slices/profileSlice';
 
 export const store = configureStore({
   reducer: {

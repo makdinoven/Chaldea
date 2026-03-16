@@ -1,3 +1,4 @@
+import os
 import httpx
 from fastapi import FastAPI, Depends, APIRouter, HTTPException
 from sqlalchemy.exc import SQLAlchemyError
@@ -7,9 +8,15 @@ import models, schemas, crud
 from database import SessionLocal, engine
 from config import settings
 from presets import SUBRACE_ATTRIBUTES
-from producer import send_character_approved_notification
+from producer import (
+    send_character_approved_notification,
+    publish_character_inventory,
+    publish_character_skills,
+    publish_character_attributes,
+)
 from typing import List, Dict
 from fastapi.middleware.cors import CORSMiddleware
+from auth_http import get_admin_user
 import logging
 
 # Universal subrace skill applied to all subraces (1-16)
@@ -20,9 +27,10 @@ logger = logging.getLogger("character-service")
 
 app = FastAPI()
 
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,7 +63,7 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
 
 # Эндпоинт для одобрения заявки
 @router.post("/requests/{request_id}/approve")
-async def approve_character_request(request_id: int, db: Session = Depends(get_db)):
+async def approve_character_request(request_id: int, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
     """
     Одобряет заявку на создание персонажа:
     1) Проверяем, что заявка существует и имеет статус 'pending'.
@@ -167,12 +175,34 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             logger.error("Не удалось присвоить персонажа пользователю")
             raise HTTPException(status_code=500, detail="Не удалось присвоить персонажа пользователю")
 
-        # 11) Отправляем уведомление через RabbitMQ (non-blocking)
+        # 11) Отправляем уведомление через RabbitMQ (non-blocking, async)
         try:
-            send_character_approved_notification(db_request.user_id, new_character.name)
+            await send_character_approved_notification(db_request.user_id, new_character.name)
             logger.info(f"Уведомление отправлено пользователю {db_request.user_id}")
         except Exception as e:
             logger.warning(f"Не удалось отправить уведомление: {e}")
+
+        # 12) Публикуем в RabbitMQ очереди для параллельной обработки (alongside HTTP calls)
+        # Inventory queue
+        if kit_items:
+            try:
+                items_to_publish = [{"item_id": item["item_id"], "quantity": item.get("quantity", 1)} for item in kit_items]
+                await publish_character_inventory(new_character.id, items_to_publish)
+            except Exception as e:
+                logger.warning(f"Не удалось опубликовать инвентарь в RabbitMQ: {e}")
+
+        # Skills queue
+        if skill_ids_for_character:
+            try:
+                await publish_character_skills(new_character.id, skill_ids_for_character)
+            except Exception as e:
+                logger.warning(f"Не удалось опубликовать навыки в RabbitMQ: {e}")
+
+        # Attributes queue
+        try:
+            await publish_character_attributes(new_character.id, attributes)
+        except Exception as e:
+            logger.warning(f"Не удалось опубликовать атрибуты в RabbitMQ: {e}")
 
         logger.info(f"Завершение обработки заявки с ID {request_id}")
         return {"message": f"Персонаж с ID {new_character.id} успешно создан и присвоен пользователю."}
@@ -189,7 +219,7 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
 
 # Эндпоинт для удаления персонажа
 @router.delete("/{character_id}")
-async def delete_character(character_id: int, db: Session = Depends(get_db)):
+async def delete_character(character_id: int, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
     """
     Удаление персонажа по его ID.
     """
@@ -240,7 +270,7 @@ async def update_user_with_character(user_id: int, character_id: int):
 
 
 @router.post("/requests/{request_id}/reject")
-async def reject_character_request(request_id: int, db: Session = Depends(get_db)):
+async def reject_character_request(request_id: int, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
     """
     Отклоняет заявку на создание персонажа и обновляет статус на 'rejected'.
     """
@@ -304,7 +334,7 @@ async def get_starter_kits(db: Session = Depends(get_db)):
 
 
 @router.put("/starter-kits/{class_id}", response_model=schemas.StarterKitResponse)
-async def upsert_starter_kit(class_id: int, data: schemas.StarterKitUpdate, db: Session = Depends(get_db)):
+async def upsert_starter_kit(class_id: int, data: schemas.StarterKitUpdate, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
     """
     Создаёт или обновляет стартовый набор для указанного класса.
     """
@@ -324,7 +354,7 @@ async def upsert_starter_kit(class_id: int, data: schemas.StarterKitUpdate, db: 
 
 
 @router.post("/titles/", response_model=schemas.Title)
-async def create_title(request: schemas.TitleCreate, db: Session = Depends(get_db)):
+async def create_title(request: schemas.TitleCreate, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
     """
     Создание нового титула.
     """

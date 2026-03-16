@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { BASE_URL_DEFAULT } from '../api/api.js';
+import { BASE_URL_DEFAULT } from '../api/api';
 
 const MAX_RECONNECT_DELAY = 30000;
 const INITIAL_RECONNECT_DELAY = 1000;

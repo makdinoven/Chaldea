@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { MessageSquare, User } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
-import { getMe, logout } from '../../../redux/slices/userSlice.js';
+import { getMe, logout } from '../../../redux/slices/userSlice';
 import NavLinks from './NavLinks';
 import SearchInput from './SearchInput';
 import AvatarDropdown from './AvatarDropdown';

@@ -1,6 +1,6 @@
 // src/features/skills/skillsSlice.js
 import { createSlice } from '@reduxjs/toolkit'
-import { fetchSkills, fetchSkillFullTree, updateSkillFullTree, uploadSkillImage, uploadSkillRankImage } from '../actions/skillsAdminActions.js'
+import { fetchSkills, fetchSkillFullTree, updateSkillFullTree, uploadSkillImage, uploadSkillRankImage } from '../actions/skillsAdminActions'
 
 const skillsSlice = createSlice({
   name: 'skills',

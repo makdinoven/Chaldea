@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
@@ -9,7 +10,7 @@ from schemas import UserRead, UserCreate, Login
 from database import get_db
 
 # Секретный ключ и алгоритм шифрования
-SECRET_KEY = "your-secret-key"
+SECRET_KEY = os.environ["JWT_SECRET_KEY"]
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1200
 REFRESH_TOKEN_EXPIRE_DAYS = 7  # Срок жизни рефреш-токена

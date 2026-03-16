@@ -1,9 +1,9 @@
 import s from "./CharacterInventory.module.scss";
-import InventorySectionBtn from "./InventorySectionBtn/InventorySectionBtn.jsx";
+import InventorySectionBtn from "./InventorySectionBtn/InventorySectionBtn";
 import { useState } from "react";
-import InventorySection from "./InventorySection/InventorySection.jsx";
-import InventoryItemsBtnIcon from "../../../../../assets/Icons/InventoryItemsBtnIcon.jsx";
-import InventorySkillsBtnIcon from "../../../../../assets/Icons/InventorySkillsBtnIcon.jsx";
+import InventorySection from "./InventorySection/InventorySection";
+import InventoryItemsBtnIcon from "../../../../../assets/Icons/InventoryItemsBtnIcon";
+import InventorySkillsBtnIcon from "../../../../../assets/Icons/InventorySkillsBtnIcon";
 
 const CharacterInventory = ({ items, isOpponent, setTurnData, cooldowns }) => {
   const INVENTORY_SECTIONS = [

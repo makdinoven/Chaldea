@@ -1,5 +1,5 @@
 import s from "./InventorySectionBtn.module.scss";
-import Tooltip from "../../../../../CommonComponents/Tooltip/Tooltip.jsx";
+import Tooltip from "../../../../../CommonComponents/Tooltip/Tooltip";
 
 const InventorySectionBtn = ({ isActive, handleClick, icon, name }) => {
   return (

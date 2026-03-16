@@ -1,5 +1,16 @@
 /// <reference types="vite/client" />
 
+interface ImportMetaEnv {
+  readonly VITE_BASE_URL: string;
+  readonly VITE_BASE_URL_DEFAULT: string;
+  readonly VITE_BASE_URL_BATTLES: string;
+  readonly VITE_BASE_URL_AUTOBATTLES: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+
 declare module '*.svg' {
   const src: string;
   export default src;

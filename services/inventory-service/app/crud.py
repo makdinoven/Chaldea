@@ -104,7 +104,7 @@ def find_equipment_slot_for_item(db: Session, character_id: int, item_obj: model
         return db.query(models.EquipmentSlot).filter_by(
             character_id=character_id,
             slot_type=fixed[item_obj.item_type]
-        ).first()
+        ).with_for_update().first()
 
     # для consumable/scroll/misc
     fast_slots = [f"fast_slot_{i}" for i in range(1, 11)]
@@ -119,6 +119,7 @@ def find_equipment_slot_for_item(db: Session, character_id: int, item_obj: model
               models.EquipmentSlot.item_id.is_(None),
           )
           .order_by(models.EquipmentSlot.slot_type)
+          .with_for_update()
           .first()
     )
     if slot:
@@ -133,6 +134,7 @@ def find_equipment_slot_for_item(db: Session, character_id: int, item_obj: model
               models.EquipmentSlot.item_id.is_(None),
           )
           .order_by(models.EquipmentSlot.slot_type)
+          .with_for_update()
           .first()
     )
     if slot:
@@ -155,7 +157,7 @@ def return_item_to_inventory(db: Session, character_id: int, item_obj: models.It
             models.CharacterInventory.character_id == character_id,
             models.CharacterInventory.item_id == item_obj.id,
             models.CharacterInventory.quantity < item_obj.max_stack_size
-        ).order_by(models.CharacterInventory.quantity.asc()).first()
+        ).order_by(models.CharacterInventory.quantity.desc()).first()
         if inv_slot:
             inv_slot.quantity += 1
             db.add(inv_slot)

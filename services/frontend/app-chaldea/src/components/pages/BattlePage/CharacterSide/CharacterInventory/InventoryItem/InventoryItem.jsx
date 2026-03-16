@@ -1,12 +1,12 @@
 import s from "./InventoryItem.module.scss";
-import TooltipPortal from "../../../../../CommonComponents/TooltipPortal/TooltipPortal.jsx";
+import TooltipPortal from "../../../../../CommonComponents/TooltipPortal/TooltipPortal";
 import { useCallback, useRef, useState } from "react";
-import { SKILLS_KEYS } from "../../../../../../helpers/commonConstants.js";
-import { translateSkillSign } from "../../../../../../helpers/helpers.js";
+import { SKILLS_KEYS } from "../../../../../../helpers/commonConstants";
+import { translateSkillSign } from "../../../../../../helpers/helpers";
 import {
   DAMAGE_TYPES,
   STAT_MODIFIERS,
-} from "../../../../../AdminSkillsPage/skillConstants.js";
+} from "../../../../../AdminSkillsPage/skillConstants";
 
 export const getDamageLabel = (value) =>
   DAMAGE_TYPES.find((el) => el.value === value)?.label || value;

@@ -1,10 +1,10 @@
 import {useEffect, useState} from "react";
-import DropdownItem from "../WorldPage/CountryDropdown/DropdownItem/DropdownItem.jsx";
+import DropdownItem from "../WorldPage/CountryDropdown/DropdownItem/DropdownItem";
 import {useDispatch, useSelector} from "react-redux";
-import DropdownLayout from "../WorldPage/DropdownLayout/DropdownLayout.jsx";
-import {setOpenedRegionId} from "../../redux/slices/regionsSlice.js";
-import {fetchRegionDetails} from "../../redux/actions/regionsActions.js";
-import DropdownLayoutLocations from "../WorldPage/DropdownLayoutLocations/DropdownLayoutLocations.jsx";
+import DropdownLayout from "../WorldPage/DropdownLayout/DropdownLayout";
+import {setOpenedRegionId} from "../../redux/slices/regionsSlice";
+import {fetchRegionDetails} from "../../redux/actions/regionsActions";
+import DropdownLayoutLocations from "../WorldPage/DropdownLayoutLocations/DropdownLayoutLocations";
 
 export default function RegionDropdown({id, name}) {
     const dispatch = useDispatch();

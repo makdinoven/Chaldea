@@ -1,6 +1,7 @@
+import os
 import traceback
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends
 from crud import (
     update_user_avatar, get_user_avatar, update_user_avatar_preview,
     update_character_avatar, get_character_avatar, update_character_avatar_preview, update_location_image,
@@ -9,12 +10,14 @@ from crud import (
 )
 from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file
 from fastapi.middleware.cors import CORSMiddleware
+from auth_http import get_admin_user
 
 app = FastAPI()
 
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -82,7 +85,7 @@ async def user_avatar_preview(user_id: int = Form(...), file: UploadFile = File(
 
 
 @app.post("/photo/change_country_map")
-async def change_country_map_photo(country_id: int = Form(...), file: UploadFile = File(...)):
+async def change_country_map_photo(country_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_admin_user)):
     """
     Загружает карту страны (map_image_url) в таблице Countries.
     Сохранение файлов происходит в папке /media/maps/.
@@ -108,7 +111,7 @@ async def change_country_map_photo(country_id: int = Form(...), file: UploadFile
 
 # 2) Добавить фотографию карты региона
 @app.post("/photo/change_region_map")
-async def change_region_map_photo(region_id: int = Form(...), file: UploadFile = File(...)):
+async def change_region_map_photo(region_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_admin_user)):
     """
     Загружает карту региона (map_image_url) в таблице Regions.
     Сохранение файлов происходит в папке /media/maps/.
@@ -130,7 +133,7 @@ async def change_region_map_photo(region_id: int = Form(...), file: UploadFile =
 
 # 3) Добавить изображение для региона (image_url)
 @app.post("/photo/change_region_image")
-async def change_region_image(region_id: int = Form(...), file: UploadFile = File(...)):
+async def change_region_image(region_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_admin_user)):
     """
     Загружает обычное изображение региона (image_url) в таблице Regions.
     Сохранение файлов происходит в папке /media/locations/.
@@ -152,7 +155,7 @@ async def change_region_image(region_id: int = Form(...), file: UploadFile = Fil
 
 # 4) Добавить изображение для района (District, image_url)
 @app.post("/photo/change_district_image")
-async def change_district_image(district_id: int = Form(...), file: UploadFile = File(...)):
+async def change_district_image(district_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_admin_user)):
     """
     Загружает изображение для района (image_url) в таблице Districts.
     Сохранение файлов происходит в папке /media/locations/.
@@ -174,7 +177,7 @@ async def change_district_image(district_id: int = Form(...), file: UploadFile =
 
 # 5) Добавить изображение для локации (Location, image_url)
 @app.post("/photo/change_location_image")
-async def change_location_image(location_id: int = Form(...), file: UploadFile = File(...)):
+async def change_location_image(location_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_admin_user)):
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("location_image", location_id)
@@ -190,7 +193,7 @@ async def change_location_image(location_id: int = Form(...), file: UploadFile =
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/photo/change_skill_image")
-async def change_skill_image(skill_id: int = Form(...), file: UploadFile = File(...)):
+async def change_skill_image(skill_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_admin_user)):
     """
     Загружает или заменяет изображение для навыка (Skill).
     """
@@ -211,7 +214,7 @@ async def change_skill_image(skill_id: int = Form(...), file: UploadFile = File(
 
 
 @app.post("/photo/change_skill_rank_image")
-async def change_skill_rank_image(skill_rank_id: int = Form(...), file: UploadFile = File(...)):
+async def change_skill_rank_image(skill_rank_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_admin_user)):
     """
     Загружает или заменяет изображение для ранга навыка (SkillRank).
     """
@@ -231,7 +234,7 @@ async def change_skill_rank_image(skill_rank_id: int = Form(...), file: UploadFi
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/photo/change_item_image")
-async def change_item_image(item_id: int = Form(...), file: UploadFile = File(...)):
+async def change_item_image(item_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_admin_user)):
     """
     Загружает или заменяет изображение для ранга навыка (SkillRank).
     """

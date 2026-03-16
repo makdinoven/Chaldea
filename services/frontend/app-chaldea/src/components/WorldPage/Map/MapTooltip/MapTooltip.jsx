@@ -1,6 +1,6 @@
 import s from './MapTooltip.module.scss'
-import LineButton from "../../../CommonComponents/LineButton/LineButton.jsx";
-import {setOpenedRegionId} from "../../../../redux/slices/regionsSlice.js";
+import LineButton from "../../../CommonComponents/LineButton/LineButton";
+import {setOpenedRegionId} from "../../../../redux/slices/regionsSlice";
 import {useDispatch} from "react-redux";
 
 export default function MapTooltip({data, type}) {

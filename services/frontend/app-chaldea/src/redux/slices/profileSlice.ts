@@ -1,6 +1,6 @@
 import { createSlice, createAsyncThunk, createSelector, PayloadAction } from '@reduxjs/toolkit';
 import axios from 'axios';
-import type { RootState, AppDispatch } from '../store.ts';
+import type { RootState, AppDispatch } from '../store';
 
 // --- Types ---
 
@@ -125,6 +125,7 @@ export interface ContextMenuState {
   x: number;
   y: number;
   item: InventoryItem | null;
+  slotType?: string;
 }
 
 export interface ProfileState {
@@ -394,12 +395,13 @@ const profileSlice = createSlice({
     setSelectedCategory(state, action: PayloadAction<string>) {
       state.selectedCategory = action.payload;
     },
-    openContextMenu(state, action: PayloadAction<{ x: number; y: number; item: InventoryItem }>) {
+    openContextMenu(state, action: PayloadAction<{ x: number; y: number; item: InventoryItem; slotType?: string }>) {
       state.contextMenu = {
         isOpen: true,
         x: action.payload.x,
         y: action.payload.y,
         item: action.payload.item,
+        slotType: action.payload.slotType,
       };
     },
     closeContextMenu(state) {
@@ -408,6 +410,7 @@ const profileSlice = createSlice({
         x: 0,
         y: 0,
         item: null,
+        slotType: undefined,
       };
     },
   },

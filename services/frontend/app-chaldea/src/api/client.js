@@ -6,6 +6,16 @@ const client = axios.create({
   timeout: 10000,
 });
 
+// ── Request interceptor: attach JWT token ──
+client.interceptors.request.use((config) => {
+  const token = localStorage.getItem("accessToken");
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 client.interceptors.response.use(
   (r) => r,
   (e) => {

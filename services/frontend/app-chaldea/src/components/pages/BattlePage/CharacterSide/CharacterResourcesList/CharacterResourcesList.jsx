@@ -1,6 +1,6 @@
 import s from "./CharacterResourcesList.module.scss";
-import { translateCharacterResource } from "../../../../../helpers/helpers.js";
-import { RESOURCES_COLORS } from "../../../../../helpers/commonConstants.js";
+import { translateCharacterResource } from "../../../../../helpers/helpers";
+import { RESOURCES_COLORS } from "../../../../../helpers/commonConstants";
 
 const CharacterResourcesList = ({ resources }) => {
   return (

@@ -1,18 +1,18 @@
 import s from "./BattlePageBar.module.scss";
-import CountdownTimer from "./CountdownTimer/CountdownTimer.jsx";
-import ItemSkillCircle from "./ItemSkillCircle/ItemSkillCircle.jsx";
+import CountdownTimer from "./CountdownTimer/CountdownTimer";
+import ItemSkillCircle from "./ItemSkillCircle/ItemSkillCircle";
 import { useEffect, useState } from "react";
-import AutobattleModeIcon from "../../../../assets/Icons/AutobattleModeIcon.jsx";
-import Tooltip from "../../../CommonComponents/Tooltip/Tooltip.jsx";
+import AutobattleModeIcon from "../../../../assets/Icons/AutobattleModeIcon";
+import Tooltip from "../../../CommonComponents/Tooltip/Tooltip";
 import {
   BATTLE_EVENTS_TRANSLATE,
   SKILLS_KEYS,
-} from "../../../../helpers/commonConstants.js";
+} from "../../../../helpers/commonConstants";
 import axios from "axios";
-import { BASE_URL_BATTLES } from "../../../../api/api.js";
-import { formatDateTime } from "../../../../helpers/helpers.js";
-import { DAMAGE_TYPES } from "../../../AdminSkillsPage/skillConstants.js";
-import { getDamageLabel } from "../CharacterSide/CharacterInventory/InventoryItem/InventoryItem.jsx";
+import { BASE_URL_BATTLES } from "../../../../api/api";
+import { formatDateTime } from "../../../../helpers/helpers";
+import { DAMAGE_TYPES } from "../../../AdminSkillsPage/skillConstants";
+import { getDamageLabel } from "../CharacterSide/CharacterInventory/InventoryItem/InventoryItem";
 
 const AUTOBATTLE_MODE_BTNS = [
   {

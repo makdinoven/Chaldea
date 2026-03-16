@@ -1,5 +1,5 @@
 import s from "./InventorySection.module.scss";
-import InventoryItem from "../InventoryItem/InventoryItem.jsx";
+import InventoryItem from "../InventoryItem/InventoryItem";
 
 const InventorySection = ({ items, isOpponent, setTurnData, cooldowns }) => {
   return (

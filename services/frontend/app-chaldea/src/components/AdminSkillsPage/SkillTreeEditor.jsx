@@ -4,7 +4,7 @@ import { useDispatch } from 'react-redux'
 import { updateSkillFullTree } from '../../redux/actions/skillsAdminActions'
 import { cloneRankAsNew, EMPTY_RANK_TEMPLATE, SKILL_TYPES } from './skillConstants'
 import styles from './AdminSkillsPage.module.scss'
-import RankNode from "./RankNode.jsx";
+import RankNode from "./RankNode";
 
 // Пример классов (вы можете загрузить динамически)
 const CLASS_OPTIONS = [

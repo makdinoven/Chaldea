@@ -530,6 +530,20 @@
     opacity: 1;
   }
 
+  /* --- Slot Pulse Animation (compatible drop targets during drag) --- */
+  /* Usage: <div className="slot-pulse-compatible">...</div> */
+  @keyframes slot-pulse {
+    0%, 100% {
+      box-shadow: 0 0 4px rgba(240, 217, 92, 0.3);
+    }
+    50% {
+      box-shadow: 0 0 16px rgba(240, 217, 92, 0.8), inset 0 0 8px rgba(240, 217, 92, 0.2);
+    }
+  }
+  .slot-pulse-compatible {
+    animation: slot-pulse 1.2s ease-in-out infinite;
+  }
+
   /* --- Gold Scrollbar Wide (8px wide, centered 2px track, gold thumb) --- */
   /* Usage: <div className="gold-scrollbar-wide overflow-y-auto">...</div> */
   .gold-scrollbar-wide {

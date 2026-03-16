@@ -1,3 +1,4 @@
+import os
 from typing import List
 from fastapi import FastAPI, Depends, HTTPException, APIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ import schemas
 import crud
 from database import engine, get_db
 from fastapi.middleware.cors import CORSMiddleware
+from auth_http import get_admin_user
 
 app = FastAPI()
 
@@ -21,9 +23,10 @@ async def startup():
     async with engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
 
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -59,7 +62,7 @@ async def countries_lookup(session: AsyncSession = Depends(get_db)):
 # COUNTRY
 # --------------------------------------------------------------------
 @router.post("/countries/create", response_model=schemas.CountryRead)
-async def create_country_route(body: schemas.CountryCreate, session: AsyncSession = Depends(get_db)):
+async def create_country_route(body: schemas.CountryCreate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
     new_c = await crud.create_new_country(
         session,
         name=body.name,
@@ -70,7 +73,7 @@ async def create_country_route(body: schemas.CountryCreate, session: AsyncSessio
     return new_c
 
 @router.put("/countries/{country_id}/update", response_model=schemas.CountryRead)
-async def update_country_route(country_id: int, body: schemas.CountryUpdate, session: AsyncSession = Depends(get_db)):
+async def update_country_route(country_id: int, body: schemas.CountryUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
     db_obj = await crud.update_country(session, country_id, body)
     return db_obj
 
@@ -92,12 +95,12 @@ async def get_country_details_route(country_id: int, session: AsyncSession = Dep
 # REGION
 # --------------------------------------------------------------------
 @router.post("/regions/create", response_model=schemas.RegionCreateResponse)
-async def create_region_route(body: schemas.RegionCreate, session: AsyncSession = Depends(get_db)):
+async def create_region_route(body: schemas.RegionCreate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
     new_r = await crud.create_new_region(session, body)
     return new_r
 
 @router.put("/regions/{region_id}/update", response_model=schemas.RegionUpdateResponse)
-async def update_region_route(region_id: int, body: schemas.RegionUpdate, session: AsyncSession = Depends(get_db)):
+async def update_region_route(region_id: int, body: schemas.RegionUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
     return await crud.update_region(session, region_id, body)
 
 @router.get("/regions/{region_id}/details")
@@ -111,7 +114,8 @@ async def get_region_details_route(region_id: int, session: AsyncSession = Depen
 @router.delete("/regions/{region_id}/delete", response_model=dict)
 async def delete_region_route(
     region_id: int,
-    session: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     """
     Удаляет регион вместе со всеми его районами и локациями.
@@ -131,7 +135,8 @@ async def delete_region_route(
 @router.post("/districts", response_model=schemas.DistrictRead)
 async def create_district(
     district: schemas.DistrictCreate,
-    session: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     try:
         return await crud.create_district(session, district)
@@ -142,7 +147,7 @@ async def create_district(
         )
 
 @router.put("/districts/{district_id}/update", response_model=schemas.DistrictRead)
-async def update_district_route(district_id: int, body: schemas.DistrictUpdate, session: AsyncSession = Depends(get_db)):
+async def update_district_route(district_id: int, body: schemas.DistrictUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
     return await crud.update_district(session, district_id, body)
 
 @router.get("/districts/{district_id}/details", response_model=schemas.DistrictRead)
@@ -187,7 +192,8 @@ async def get_district_locations(
 @router.delete("/districts/{district_id}/delete", response_model=dict)
 async def delete_district_route(
     district_id: int,
-    session: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     """
     Удаляет район вместе со всеми его локациями.
@@ -205,7 +211,7 @@ async def delete_district_route(
 # LOCATION
 # --------------------------------------------------------------------
 @router.post("/", response_model=schemas.LocationCreateResponse)
-async def create_location(location: schemas.LocationCreate, db: AsyncSession = Depends(get_db)):
+async def create_location(location: schemas.LocationCreate, db: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
     try:
         db_location = await crud.create_location(db, location)
         # Возвращаем только базовые поля без связанных данных
@@ -224,7 +230,7 @@ async def create_location(location: schemas.LocationCreate, db: AsyncSession = D
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/{location_id}/update", response_model=schemas.LocationRead)
-async def update_location_route(location_id: int, body: schemas.LocationUpdate, session: AsyncSession = Depends(get_db)):
+async def update_location_route(location_id: int, body: schemas.LocationUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
     try:
         db_location = await crud.update_location(session, location_id, body)
         # Возвращаем только базовые поля без связанных данных
@@ -270,7 +276,8 @@ async def get_location_children(location_id: int, db: AsyncSession = Depends(get
 @router.delete("/{location_id}/delete", response_model=dict)
 async def delete_location_route(
     location_id: int,
-    session: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     """
     Удаляет локацию вместе со всеми её дочерними локациями (рекурсивно)
@@ -289,7 +296,7 @@ async def delete_location_route(
 # NEIGHBORS
 # --------------------------------------------------------------------
 @router.post("/{location_id}/neighbors/", response_model=schemas.LocationNeighborResponse)
-async def create_neighbor(location_id: int, neighbor_data: schemas.LocationNeighborCreate, session: AsyncSession = Depends(get_db)):
+async def create_neighbor(location_id: int, neighbor_data: schemas.LocationNeighborCreate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
     loc = await crud.get_location_by_id(session, location_id)
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
@@ -325,7 +332,7 @@ async def get_location_neighbors(location_id: int, session: AsyncSession = Depen
     ]
 
 @router.delete("/{location_id}/neighbors/{neighbor_id}", response_model=dict)
-async def delete_neighbor(location_id: int, neighbor_id: int, session: AsyncSession = Depends(get_db)):
+async def delete_neighbor(location_id: int, neighbor_id: int, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
     """Удаляет связь между локациями"""
     loc = await crud.get_location_by_id(session, location_id)
     if not loc:
@@ -367,9 +374,10 @@ async def delete_neighbor(location_id: int, neighbor_id: int, session: AsyncSess
 
 @router.post("/{location_id}/neighbors/update", response_model=List[schemas.LocationNeighborResponse])
 async def update_location_neighbors(
-    location_id: int, 
+    location_id: int,
     neighbors_data: schemas.LocationNeighborsUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
 ):
     """Обновляет список соседей локации"""
     # Проверяем существование локации

@@ -1,11 +1,11 @@
 import {useEffect} from "react";
 import {useDispatch, useSelector} from "react-redux";
-import {setOpenedCountryId} from "../../../redux/slices/countriesSlice.js";
-import {fetchCountryDetails} from "../../../redux/actions/countryActions.js";
-import DropdownLayout from "../DropdownLayout/DropdownLayout.jsx";
+import {setOpenedCountryId} from "../../../redux/slices/countriesSlice";
+import {fetchCountryDetails} from "../../../redux/actions/countryActions";
+import DropdownLayout from "../DropdownLayout/DropdownLayout";
 import s from "./CountryDropdown.module.scss";
 import {Link} from "react-router-dom";
-import {setOpenedRegionId} from "../../../redux/slices/regionsSlice.js";
+import {setOpenedRegionId} from "../../../redux/slices/regionsSlice";
 
 export default function CountryDropdown({id, name}) {
     const dispatch = useDispatch();

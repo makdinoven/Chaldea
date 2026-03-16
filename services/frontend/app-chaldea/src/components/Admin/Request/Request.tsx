@@ -3,7 +3,7 @@ import UserAvatar from '../../CommonComponents/UserAvatar/UserAvatar';
 import CharacterInfo from '../../CreateCharacterPage/SubmitPage/CharacterInfo/CharacterInfo';
 import axios from 'axios';
 import RequestButton from './RequestButton/RequestButton';
-import CharacterInfoSmall from '../../CreateCharacterPage/SubmitPage/CharacterInfoSmall/CharacterInfoSmall.jsx';
+import CharacterInfoSmall from '../../CreateCharacterPage/SubmitPage/CharacterInfoSmall/CharacterInfoSmall';
 
 interface RequestData {
   request_id: number;

@@ -8,4 +8,6 @@ requests
 aio_pika
 cryptography
 httpx
-aiomysql
+aiomysql>=0.3.0
+pytest
+pytest-asyncio

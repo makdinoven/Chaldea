@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
-import LogButton from './LogButton/LogButton.jsx';
-import AuthForm from './AuthForm/AuthForm.jsx';
+import LogButton from './LogButton/LogButton';
+import AuthForm from './AuthForm/AuthForm';
 
 import styles from './StartPage.module.scss';
 

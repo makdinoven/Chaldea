@@ -1,9 +1,9 @@
 import React, {useState, useEffect} from 'react';
 import axios from 'axios';
-import Input from '../../CommonComponents/Input/Input.jsx';
-import FormButton from '../../CommonComponents/BlueGradientButton/BlueGradientButton.jsx';
+import Input from '../../CommonComponents/Input/Input';
+import FormButton from '../../CommonComponents/BlueGradientButton/BlueGradientButton';
 
-import useNavigateTo from '../../../hooks/useNavigateTo.js';
+import useNavigateTo from '../../../hooks/useNavigateTo';
 
 import styles from './AuthForm.module.scss';
 

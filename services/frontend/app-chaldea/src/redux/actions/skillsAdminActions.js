@@ -1,7 +1,7 @@
 // src/features/skills/skillsActions.js
 import { createAsyncThunk } from '@reduxjs/toolkit'
 import axios from 'axios'
-import {transformReceivedSkillTree} from "../../components/AdminSkillsPage/utils/transformSkillTree.jsx";
+import {transformReceivedSkillTree} from "../../components/AdminSkillsPage/utils/transformSkillTree";
  const BASE_URL = '/skills'
 
 // 1) Получить список навыков

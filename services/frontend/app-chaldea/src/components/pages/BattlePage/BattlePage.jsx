@@ -1,18 +1,18 @@
 import s from "./BattlePage.module.scss";
-import CharacterSide from "./CharacterSide/CharacterSide.jsx";
-import Loader from "../../CommonComponents/Loader/Loader.jsx";
+import CharacterSide from "./CharacterSide/CharacterSide";
+import Loader from "../../CommonComponents/Loader/Loader";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useSelector } from "react-redux";
 import axios from "axios";
 
-import { useBodyBackground } from "../../../hooks/useBodyBackground.js";
-import { BASE_URL_AUTOBATTLES, BASE_URL_BATTLES } from "../../../api/api.js";
+import { useBodyBackground } from "../../../hooks/useBodyBackground";
+import { BASE_URL_AUTOBATTLES, BASE_URL_BATTLES } from "../../../api/api";
 import battleBg from "/battle-img-3.png";
-import BattlePageBar from "./BattlePageBar/BattlePageBar.jsx";
-import { SKILLS_KEYS } from "../../../helpers/commonConstants.js";
-import Modal from "../../CommonComponents/Modal/Modal.jsx";
-import BlueGradientButton from "../../CommonComponents/BlueGradientButton/BlueGradientButton.jsx";
+import BattlePageBar from "./BattlePageBar/BattlePageBar";
+import { SKILLS_KEYS } from "../../../helpers/commonConstants";
+import Modal from "../../CommonComponents/Modal/Modal";
+import BlueGradientButton from "../../CommonComponents/BlueGradientButton/BlueGradientButton";
 
 const BattlePage = () => {
   useBodyBackground(battleBg);

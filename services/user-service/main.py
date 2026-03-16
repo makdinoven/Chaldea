@@ -1,6 +1,6 @@
 from typing import List
 
-from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, UploadFile
+from fastapi import BackgroundTasks, FastAPI, Depends, HTTPException, status, APIRouter, UploadFile, Query
 from fastapi.staticfiles import StaticFiles
 import models
 import schemas
@@ -17,9 +17,10 @@ import httpx
 
 app = FastAPI()
 
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,7 +41,7 @@ CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://character-ser
 LOCATION_SERVICE_URL = os.getenv("LOCATION_SERVICE_URL", "http://locations-service:8006")
 # Регистрация нового пользователя
 @router.post("/register", response_model=UserRead)
-def register_user(user: UserCreate, db: Session = Depends(get_db)):
+def register_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     # Проверка уникальности email
     db_user_email = get_user_by_email(db, email=user.email)
     if db_user_email:
@@ -54,8 +55,8 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
     # Создание нового пользователя
     new_user = create_user(db=db, user=user)
 
-    # Отправка сообщения в RabbitMQ
-    send_notification_event(new_user.id)
+    # Отправка сообщения в RabbitMQ (non-blocking, в фоне)
+    background_tasks.add_task(send_notification_event, new_user.id)
 
     return new_user
 
@@ -249,13 +250,23 @@ async def create_user_character_relation(user_character: schemas.UserCharacterCr
 # Настройка статических файлов
 app.mount("/assets", StaticFiles(directory="src/assets"), name="assets")
 
-@router.get("/all", response_model=List[UserRead])
-def get_all_users(db: Session = Depends(get_db)):
+@router.get("/all")
+def get_all_users(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
     """
-    Возвращает список всех пользователей из базы.
+    Возвращает список всех пользователей из базы с пагинацией.
     """
-    users = db.query(models.User).all()
-    return users
+    total = db.query(models.User).count()
+    users = (
+        db.query(models.User)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {"items": users, "total": total, "page": page, "page_size": page_size}
 
 @router.get("/admins", response_model=List[UserRead])
 def get_admin_users(db: Session = Depends(get_db)):

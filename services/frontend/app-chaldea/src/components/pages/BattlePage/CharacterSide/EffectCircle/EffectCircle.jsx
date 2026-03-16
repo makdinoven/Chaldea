@@ -1,8 +1,8 @@
 import s from "./EffectCircle.module.scss";
-import TooltipPortal from "../../../../CommonComponents/TooltipPortal/TooltipPortal.jsx";
+import TooltipPortal from "../../../../CommonComponents/TooltipPortal/TooltipPortal";
 import { useRef, useState } from "react";
-import { getDamageLabel } from "../CharacterInventory/InventoryItem/InventoryItem.jsx";
-import { STAT_MODIFIERS } from "../../../../AdminSkillsPage/skillConstants.js";
+import { getDamageLabel } from "../CharacterInventory/InventoryItem/InventoryItem";
+import { STAT_MODIFIERS } from "../../../../AdminSkillsPage/skillConstants";
 
 const EffectCircle = ({ effects, type }) => {
   const itemRef = useRef();

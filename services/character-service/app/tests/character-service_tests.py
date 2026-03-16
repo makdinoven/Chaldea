@@ -58,7 +58,7 @@ async def test_create_character_request(client):
         "id_class": 2
     }
 
-    response = await client.post("/character/requests/", json=request_data)
+    response = await client.post("/characters/requests/", json=request_data)
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == request_data["name"]
@@ -85,7 +85,7 @@ async def test_approve_character_request_with_real_services(client, db_session):
     db_session.commit()
 
     # Отправляем запрос на одобрение
-    response = await client.post(f"/character/requests/{new_request.id}/approve")
+    response = await client.post(f"/characters/requests/{new_request.id}/approve")
     assert response.status_code == 200
     data = response.json()
 
@@ -115,7 +115,7 @@ async def test_reject_character_request(client, db_session):
     db_session.commit()
 
     # Отправляем запрос на отклонение
-    response = await client.post(f"/character/requests/{new_request.id}/reject")
+    response = await client.post(f"/characters/requests/{new_request.id}/reject")
     assert response.status_code == 200
 
     # Проверка, что статус заявки изменен на 'rejected'
@@ -140,7 +140,7 @@ async def test_assign_character_to_user(client, db_session):
     db_session.commit()
 
     # Одобряем заявку, что автоматически создает персонажа и присваивает его пользователю
-    response = await client.post(f"/character/requests/{new_request.id}/approve")
+    response = await client.post(f"/characters/requests/{new_request.id}/approve")
     assert response.status_code == 200
 
     # Проверяем, что персонаж присвоен пользователю
@@ -168,7 +168,7 @@ async def test_delete_character(client, db_session):
     db_session.commit()
 
     # Отправляем запрос на удаление персонажа
-    response = await client.delete(f"/character/characters/{new_character.id}")
+    response = await client.delete(f"/characters/{new_character.id}")
     assert response.status_code == 200
 
     # Проверяем, что персонажа нет в базе данных

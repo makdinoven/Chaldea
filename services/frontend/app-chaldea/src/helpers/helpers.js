@@ -1,4 +1,4 @@
-import { CHARACTER_RESOURCES, SKILLS_SIGNS } from "./commonConstants.js";
+import { CHARACTER_RESOURCES, SKILLS_SIGNS } from "./commonConstants";
 
 export const translateCharacterResource = (key) => {
   return CHARACTER_RESOURCES[key] || key;

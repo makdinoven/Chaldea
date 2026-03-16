@@ -1,69 +1,76 @@
-# import aio_pika
-# import asyncio
-# import json
-# from crud import create_character_attributes
-# from database import SessionLocal
-# from config import settings
-# import time
-#
-#
-# async def process_message(message: aio_pika.IncomingMessage):
-#     async with message.process():
-#         db = SessionLocal()
-#         try:
-#             data = json.loads(message.body.decode())
-#             character_id = data.get("character_id")
-#             print(f"Получено сообщение для создания атрибутов персонажа с ID: {character_id}")
-#             if character_id:
-#                 create_character_attributes(db, character_id)
-#                 print(f"Атрибуты для персонажа с ID {character_id} созданы.")
-#
-#                 response = {"attributes_id": character_id}
-#                 try:
-#                     connection = await aio_pika.connect_robust(settings.RABBITMQ_URL)
-#                     async with connection:
-#                         channel = await connection.channel()
-#
-#                         # Явно создаем очередь для ответа
-#                         await channel.declare_queue("attributes_response_queue", durable=True)
-#
-#                         print(f"Отправка ответа с атрибутами в очередь attributes_response_queue: {response}")
-#                         await channel.default_exchange.publish(
-#                             aio_pika.Message(body=json.dumps(response).encode()),
-#                             routing_key="attributes_response_queue"
-#                         )
-#                     print(f"Ответ отправлен успешно")
-#                 except Exception as e:
-#                     print(f"Ошибка при отправке ответа в очередь: {e}")
-#         except Exception as e:
-#             print(f"Ошибка при обработке сообщения: {e}")
-#         finally:
-#             db.close()
-#
-#
-# async def consume():
-#     """
-#     Потребляет сообщения из очереди RabbitMQ.
-#     """
-#     while True:
-#         try:
-#             connection = await aio_pika.connect_robust(settings.RABBITMQ_URL)
-#             print("Успешное подключение к RabbitMQ")
-#             break  # Выход из цикла, если подключение удалось
-#         except Exception as e:
-#             print(f"Ошибка подключения к RabbitMQ: {e}. Повтор через 5 секунд...")
-#             time.sleep(5)  # Ожидание перед повторной попыткой
-#
-#     async with connection:
-#         try:
-#             channel = await connection.channel()
-#             queue = await channel.declare_queue("character_attributes_queue", durable=True)  # Уникальная очередь для атрибутов
-#             print(f"Ожидание сообщений в очереди character_attributes_queue...")
-#             async for message in queue:
-#                 await process_message(message)
-#         except Exception as e:
-#             print(f"Ошибка при обработке сообщений: {e}")
-#
-# if __name__ == "__main__":
-#     print("Запуск консюмера для character_attributes_service...")
-#     asyncio.run(consume())
+import aio_pika
+import asyncio
+import json
+import logging
+
+from config import settings
+from database import SessionLocal
+import crud
+import schemas
+import models
+
+logger = logging.getLogger(__name__)
+
+
+async def process_message(message: aio_pika.IncomingMessage):
+    """
+    Processes messages from RabbitMQ to create character attributes.
+    Message format: {"character_id": 123, "attributes": {"strength": 10, "agility": 8, ...}}
+    Idempotent: checks if character already has attributes before creating.
+    """
+    async with message.process():
+        data = json.loads(message.body.decode())
+        character_id = data.get("character_id")
+        attributes = data.get("attributes", {})
+
+        if not character_id:
+            logger.warning("Received message without character_id, skipping")
+            return
+
+        logger.info(f"Processing attributes creation for character {character_id}")
+
+        db = SessionLocal()
+        try:
+            # Idempotency check: if character already has attributes, skip
+            existing = db.query(models.CharacterAttributes).filter(
+                models.CharacterAttributes.character_id == character_id
+            ).first()
+            if existing:
+                logger.info(f"Character {character_id} already has attributes, skipping")
+                return
+
+            # Build the schema object with character_id and provided attributes
+            attrs_data = schemas.CharacterAttributesCreate(
+                character_id=character_id,
+                **attributes,
+            )
+            crud.create_character_attributes(db, attrs_data)
+
+            logger.info(f"Attributes created for character {character_id}")
+        except Exception as e:
+            logger.error(f"Error creating attributes for character {character_id}: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+
+async def start_consumer():
+    """
+    Connects to RabbitMQ and consumes messages from character_attributes_queue.
+    Reconnects automatically on failure.
+    """
+    while True:
+        try:
+            connection = await aio_pika.connect_robust(settings.RABBITMQ_URL)
+            async with connection:
+                channel = await connection.channel()
+                queue = await channel.declare_queue("character_attributes_queue", durable=True)
+                logger.info("Attributes consumer connected, waiting for messages...")
+                async for message in queue:
+                    try:
+                        await process_message(message)
+                    except Exception as e:
+                        logger.error(f"Error processing message: {e}")
+        except Exception as e:
+            logger.error(f"RabbitMQ connection error: {e}, retrying in 5s...")
+            await asyncio.sleep(5)

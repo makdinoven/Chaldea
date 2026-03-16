@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
@@ -12,6 +12,7 @@ import {
   InventoryItem,
 } from '../../../redux/slices/profileSlice';
 import { EQUIPMENT_TYPES } from '../constants';
+import ConfirmationModal from '../../ui/ConfirmationModal';
 
 interface ItemContextMenuProps {
   characterId: number;
@@ -26,6 +27,13 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
   const dispatch = useAppDispatch();
   const contextMenu = useAppSelector(selectContextMenu);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Confirmation modal state for drop actions
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    message: string;
+    onConfirm: () => void;
+  }>({ isOpen: false, message: '', onConfirm: () => {} });
 
   // Close on click outside
   useEffect(() => {
@@ -79,8 +87,20 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
       },
     });
 
-    // Надеть — only for equipment types
-    if (EQUIPMENT_TYPES.has(itemType)) {
+    // Снять — only when opened from an equipment/fast slot
+    if (contextMenu.slotType) {
+      actions.push({
+        label: 'Снять',
+        handler: () =>
+          handleAction(
+            () => dispatch(unequipItem({ characterId, slotType: contextMenu.slotType! })),
+            'Предмет снят',
+          ),
+      });
+    }
+
+    // Надеть — only for equipment types and only when NOT already equipped
+    if (!contextMenu.slotType && EQUIPMENT_TYPES.has(itemType)) {
       actions.push({
         label: 'Надеть',
         handler: () =>
@@ -106,35 +126,53 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
       });
     }
 
-    // Выбросить — drop 1
+    // Выбросить — drop 1 (with confirmation)
     actions.push({
       label: 'Выбросить',
-      handler: () =>
-        handleAction(
-          () =>
-            dispatch(
-              dropItem({ characterId, itemId: item.id, quantity: 1 }),
-            ),
-          'Предмет выброшен',
-        ),
+      handler: () => {
+        dispatch(closeContextMenu());
+        setConfirmModal({
+          isOpen: true,
+          message: `Предмет "${item.name}" (x1) будет выброшен.`,
+          onConfirm: () => {
+            setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+            handleAction(
+              () =>
+                dispatch(
+                  dropItem({ characterId, itemId: item.id, quantity: 1 }),
+                ),
+              'Предмет выброшен',
+            );
+          },
+        });
+      },
     });
 
-    // Удалить — drop all
+    // Удалить — drop all (with confirmation)
     if (inventoryItem.quantity > 1) {
       actions.push({
         label: 'Удалить',
-        handler: () =>
-          handleAction(
-            () =>
-              dispatch(
-                dropItem({
-                  characterId,
-                  itemId: item.id,
-                  quantity: inventoryItem.quantity,
-                }),
-              ),
-            'Предметы удалены',
-          ),
+        handler: () => {
+          dispatch(closeContextMenu());
+          setConfirmModal({
+            isOpen: true,
+            message: `Все предметы "${item.name}" (x${inventoryItem.quantity}) будут выброшены.`,
+            onConfirm: () => {
+              setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+              handleAction(
+                () =>
+                  dispatch(
+                    dropItem({
+                      characterId,
+                      itemId: item.id,
+                      quantity: inventoryItem.quantity,
+                    }),
+                  ),
+                'Предметы удалены',
+              );
+            },
+          });
+        },
       });
     }
 
@@ -155,42 +193,55 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
     (menuRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
   }, []);
 
+  const closeConfirmModal = () => {
+    setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+  };
+
   return (
-    <AnimatePresence>
-      {contextMenu.isOpen && contextMenu.item && (
-        <motion.div
-          key="item-context-menu"
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          transition={{ duration: 0.15 }}
-          className="context-menu"
-          style={{
-            position: 'fixed',
-            top: contextMenu.y,
-            left: contextMenu.x,
-            zIndex: 100,
-          }}
-        >
-          <div ref={setMenuRef}>
-            <div className="px-3 py-1.5 mb-1">
-              <span className="gold-text text-sm font-medium">
-                {contextMenu.item.item.name}
-              </span>
+    <>
+      <AnimatePresence>
+        {contextMenu.isOpen && contextMenu.item && (
+          <motion.div
+            key="item-context-menu"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ duration: 0.15 }}
+            className="context-menu"
+            style={{
+              position: 'fixed',
+              top: contextMenu.y,
+              left: contextMenu.x,
+              zIndex: 100,
+            }}
+          >
+            <div ref={setMenuRef}>
+              <div className="px-3 py-1.5 mb-1">
+                <span className="gold-text text-sm font-medium">
+                  {contextMenu.item.item.name}
+                </span>
+              </div>
+              {getActions(contextMenu.item).map((action) => (
+                <button
+                  key={action.label}
+                  onClick={action.handler}
+                  className="dropdown-item w-full text-left"
+                >
+                  {action.label}
+                </button>
+              ))}
             </div>
-            {getActions(contextMenu.item).map((action) => (
-              <button
-                key={action.label}
-                onClick={action.handler}
-                className="dropdown-item w-full text-left"
-              >
-                {action.label}
-              </button>
-            ))}
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        message={confirmModal.message}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={closeConfirmModal}
+      />
+    </>
   );
 };
 

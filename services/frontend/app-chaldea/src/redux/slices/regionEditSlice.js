@@ -5,7 +5,7 @@ import {
     fetchRegionDetails,
     uploadRegionImage,
     uploadRegionMap 
-} from '../actions/regionEditActions.js';
+} from '../actions/regionEditActions';
 
 const regionEditSlice = createSlice({
     name: 'regionEdit',

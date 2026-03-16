@@ -1,5 +1,5 @@
 import {createSlice} from '@reduxjs/toolkit';
-import {fetchCountries} from '../actions/countryActions.js';
+import {fetchCountries} from '../actions/countryActions';
 
 const countriesSlice = createSlice({
     name: 'countries',

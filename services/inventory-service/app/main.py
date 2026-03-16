@@ -1,3 +1,6 @@
+import os
+import asyncio
+import threading
 import httpx
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, APIRouter, Query
@@ -8,12 +11,15 @@ import crud
 from database import SessionLocal, engine
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings
+from rabbitmq_consumer import start_consumer
+from auth_http import get_admin_user
 
 app = FastAPI()
 
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -21,6 +27,19 @@ app.add_middleware(
 
 # Создаем таблицы, если не существуют
 models.Base.metadata.create_all(bind=engine)
+
+
+def _run_consumer_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(start_consumer())
+
+
+@app.on_event("startup")
+def startup():
+    thread = threading.Thread(target=_run_consumer_thread, daemon=True)
+    thread.start()
+
 
 router = APIRouter(prefix="/inventory")
 
@@ -115,10 +134,12 @@ def add_item_to_inventory(character_id: int, item_data: schemas.InventoryItem, d
             quantity=to_add
         )
         db.add(new_slot)
-        db.commit()
-        db.refresh(new_slot)
         inventory_items.append(new_slot)
         remaining -= to_add
+
+    db.commit()
+    for item in inventory_items:
+        db.refresh(item)
 
     return inventory_items
 
@@ -211,7 +232,7 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
         inv_slot = db.query(models.CharacterInventory).filter(
             models.CharacterInventory.character_id == character_id,
             models.CharacterInventory.item_id == req.item_id
-        ).order_by(models.CharacterInventory.quantity.desc()).first()
+        ).order_by(models.CharacterInventory.quantity.desc()).with_for_update().first()
 
         if not inv_slot or inv_slot.quantity < 1:
             db.rollback()
@@ -419,7 +440,7 @@ def list_items(
     return items
 
 @router.post("/items", response_model=schemas.Item, status_code=201)
-def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db)):
+def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
     """
     Создаёт новый предмет.
 
@@ -450,7 +471,7 @@ def get_item(item_id: int, db: Session = Depends(get_db)):
     return db_item
 
 @router.put("/items/{item_id}", response_model=schemas.Item)
-def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends(get_db)):
+def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
     """
     Обновляет все переданные поля предмета (exclude_unset=True).
     Проверка уникальности имени сохраняется.
@@ -477,7 +498,7 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends
     return db_item
 
 @router.delete("/items/{item_id}", status_code=204)
-def delete_item(item_id: int, db: Session = Depends(get_db)):
+def delete_item(item_id: int, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
     """
     Удаляет предмет. При необходимости можно добавить проверки на то,
     используется ли предмет в инвентарях/слотах.

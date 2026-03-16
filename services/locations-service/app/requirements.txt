@@ -3,7 +3,10 @@ uvicorn==0.34.0
 sqlalchemy==2.0.39
 pymysql==1.1.1
 pydantic<2.0.0
-aiohttp==3.11.14
-aiomysql==0.2.0
+aiohttp>=3.13.3
+aiomysql>=0.3.0
 pymysql==1.1.1
 httpx
+requests
+pytest
+pytest-asyncio

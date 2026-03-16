@@ -1,11 +1,11 @@
 import s from "./ItemSkillCircle.module.scss";
-import ClosedItemSkillIcon from "../../../../../assets/Icons/ClosedItemSkillIcon.jsx";
-import SkillIcon from "../../../../../assets/Icons/SkillIcon.jsx";
-import ItemIcon from "../../../../../assets/Icons/ItemIcon.jsx";
-import Tooltip from "../../../../CommonComponents/Tooltip/Tooltip.jsx";
-import { translateSkillSign } from "../../../../../helpers/helpers.js";
-import InventoryItem from "../../CharacterSide/CharacterInventory/InventoryItem/InventoryItem.jsx";
-import { SKILLS_KEYS } from "../../../../../helpers/commonConstants.js";
+import ClosedItemSkillIcon from "../../../../../assets/Icons/ClosedItemSkillIcon";
+import SkillIcon from "../../../../../assets/Icons/SkillIcon";
+import ItemIcon from "../../../../../assets/Icons/ItemIcon";
+import Tooltip from "../../../../CommonComponents/Tooltip/Tooltip";
+import { translateSkillSign } from "../../../../../helpers/helpers";
+import InventoryItem from "../../CharacterSide/CharacterInventory/InventoryItem/InventoryItem";
+import { SKILLS_KEYS } from "../../../../../helpers/commonConstants";
 
 const ItemSkillCircle = ({ isClosed, type, onDropItem, choosedItem }) => {
   const typeIcon = type === SKILLS_KEYS.item ? <ItemIcon /> : <SkillIcon />;
