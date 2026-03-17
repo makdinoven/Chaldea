@@ -6,7 +6,6 @@ Tests for FEAT-021 admin endpoints in user-service:
 
 import pytest
 from unittest.mock import MagicMock
-from conftest import _TestSessionLocal, _test_engine
 from database import Base
 import models
 
@@ -68,14 +67,14 @@ def _override_auth(app, get_db_func, user_obj):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
-def db():
-    Base.metadata.create_all(bind=_test_engine)
-    session = _TestSessionLocal()
+def db(test_engine, test_session_local):
+    Base.metadata.create_all(bind=test_engine)
+    session = test_session_local()
     try:
         yield session
     finally:
         session.close()
-        Base.metadata.drop_all(bind=_test_engine)
+        Base.metadata.drop_all(bind=test_engine)
 
 
 @pytest.fixture()

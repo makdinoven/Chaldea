@@ -32,6 +32,18 @@ _TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_test_e
 
 
 @pytest.fixture()
+def test_engine():
+    """Expose the in-memory SQLite engine for tests that need it directly."""
+    return _test_engine
+
+
+@pytest.fixture()
+def test_session_local():
+    """Expose the sessionmaker factory for tests that need it directly."""
+    return _TestSessionLocal
+
+
+@pytest.fixture()
 def db_session():
     """Yield a clean DB session; tables are created/dropped per test."""
     Base.metadata.create_all(bind=_test_engine)

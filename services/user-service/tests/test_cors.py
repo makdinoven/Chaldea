@@ -36,17 +36,24 @@ def _reload_app_with_env(env_overrides: dict):
 # ---------------------------------------------------------------------------
 
 def test_default_cors_allows_any_origin(client):
-    """When CORS_ORIGINS is not set, the service defaults to '*' (allow all)."""
+    """When CORS_ORIGINS is not set, the service defaults to '*' (allow all).
+
+    Note: Starlette's CORSMiddleware with allow_credentials=True echoes the
+    requesting Origin instead of returning a literal '*'.
+    """
+    origin = "http://random-origin.example.com"
     response = client.options(
         "/users/all",
         headers={
-            "Origin": "http://random-origin.example.com",
+            "Origin": origin,
             "Access-Control-Request-Method": "GET",
         },
     )
     # The middleware should respond to the preflight request
     assert response.status_code == 200
-    assert response.headers.get("access-control-allow-origin") == "*"
+    allow_origin = response.headers.get("access-control-allow-origin")
+    # With allow_credentials=True, the middleware echoes the request origin
+    assert allow_origin == origin
 
 
 def test_default_cors_env_parsing():

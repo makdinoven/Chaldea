@@ -3,7 +3,8 @@ from sqlalchemy.ext.declarative import declarative_base
 from config import settings
 
 # Используем асинхронный драйвер (asyncmy или aiomysql вместо pymysql)
-SQLALCHEMY_DATABASE_URL = f"mysql+aiomysql://{settings.DB_USER}:{settings.DB_PASSWORD}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
+# DATABASE_URL можно переопределить через переменную окружения (например, для тестов)
+SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
 
 # Создаем асинхронный движок
 engine = create_async_engine(

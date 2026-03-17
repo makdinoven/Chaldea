@@ -14,8 +14,6 @@ import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from sqlalchemy import String
 
-from conftest import _test_engine, _TestSessionLocal
-
 import database
 import models
 
@@ -99,14 +97,15 @@ def _seed_level_threshold(db, level_number, required_experience):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
-def db_session():
-    database.Base.metadata.create_all(bind=_test_engine)
-    session = _TestSessionLocal()
+def db_session(test_engine, test_session_factory, seed_fk_data):
+    database.Base.metadata.create_all(bind=test_engine)
+    session = test_session_factory()
+    seed_fk_data(session)
     try:
         yield session
     finally:
         session.close()
-        database.Base.metadata.drop_all(bind=_test_engine)
+        database.Base.metadata.drop_all(bind=test_engine)
 
 
 @pytest.fixture()

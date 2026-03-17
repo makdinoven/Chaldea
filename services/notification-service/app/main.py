@@ -28,8 +28,6 @@ import pika
 
 logger = logging.getLogger("notification-service")
 
-models.Base.metadata.create_all(bind=engine)
-
 app = FastAPI()
 
 cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
@@ -43,6 +41,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
+    models.Base.metadata.create_all(bind=engine)
     # Запускаем консьюмеры
     start_user_registration_consumer()
     start_general_notifications_consumer()

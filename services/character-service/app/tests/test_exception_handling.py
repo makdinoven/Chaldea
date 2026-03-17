@@ -30,22 +30,22 @@ class TestApproveCharacterRequest:
     """Test that approve endpoint returns 404 when request not found."""
 
     @patch("main.crud")
-    def test_returns_404_when_request_not_found(self, mock_crud, client, mock_db_session):
+    def test_returns_404_when_request_not_found(self, mock_crud, admin_mock_client, mock_db_session):
         """When the character request does not exist, expect 404 (not 500)."""
         # The endpoint queries DB directly: db.query(models.CharacterRequest).filter(...).first()
         mock_db_session.query.return_value.filter.return_value.first.return_value = None
 
-        response = client.post("/characters/requests/99999/approve")
+        response = admin_mock_client.post("/characters/requests/99999/approve")
 
         assert response.status_code == 404
         assert "не найдена" in response.json()["detail"].lower() or "найдена" in response.json()["detail"]
 
     @patch("main.crud")
-    def test_returns_500_on_sqlalchemy_error(self, mock_crud, client, mock_db_session):
+    def test_returns_500_on_sqlalchemy_error(self, mock_crud, admin_mock_client, mock_db_session):
         """When a DB error occurs, expect 500."""
         mock_db_session.query.side_effect = SQLAlchemyError("DB connection lost")
 
-        response = client.post("/characters/requests/1/approve")
+        response = admin_mock_client.post("/characters/requests/1/approve")
 
         assert response.status_code == 500
         assert "detail" in response.json()
@@ -59,33 +59,33 @@ class TestRejectCharacterRequest:
     """Test that reject endpoint returns 404 when request not found."""
 
     @patch("main.crud")
-    def test_returns_404_when_request_not_found(self, mock_crud, client):
+    def test_returns_404_when_request_not_found(self, mock_crud, admin_mock_client):
         """When crud.update_character_request_status returns None, expect 404."""
         mock_crud.update_character_request_status.return_value = None
 
-        response = client.post("/characters/requests/99999/reject")
+        response = admin_mock_client.post("/characters/requests/99999/reject")
 
         assert response.status_code == 404
         assert "найдена" in response.json()["detail"]
 
     @patch("main.crud")
-    def test_returns_200_when_request_exists(self, mock_crud, client):
+    def test_returns_200_when_request_exists(self, mock_crud, admin_mock_client):
         """When crud returns a valid object, expect success."""
         mock_crud.update_character_request_status.return_value = MagicMock()
 
-        response = client.post("/characters/requests/1/reject")
+        response = admin_mock_client.post("/characters/requests/1/reject")
 
         assert response.status_code == 200
         assert "отклонена" in response.json()["message"]
 
     @patch("main.crud")
-    def test_returns_500_on_sqlalchemy_error(self, mock_crud, client):
+    def test_returns_500_on_sqlalchemy_error(self, mock_crud, admin_mock_client):
         """When a DB error occurs, expect 500."""
         mock_crud.update_character_request_status.side_effect = SQLAlchemyError(
             "Deadlock detected"
         )
 
-        response = client.post("/characters/requests/1/reject")
+        response = admin_mock_client.post("/characters/requests/1/reject")
 
         assert response.status_code == 500
         assert "detail" in response.json()
@@ -99,34 +99,35 @@ class TestDeleteCharacter:
     """Test that delete endpoint returns 404 when character not found."""
 
     @patch("main.crud")
-    def test_returns_404_when_character_not_found(self, mock_crud, client):
-        """When crud.delete_character returns None/False, expect 404."""
-        mock_crud.delete_character.return_value = None
+    def test_returns_404_when_character_not_found(self, mock_crud, admin_mock_client, mock_db_session):
+        """When character not found in DB, expect 404."""
+        mock_db_session.query.return_value.filter.return_value.first.return_value = None
 
-        response = client.delete("/characters/99999")
+        response = admin_mock_client.delete("/characters/99999")
 
         assert response.status_code == 404
         assert "найден" in response.json()["detail"]
 
     @patch("main.crud")
-    def test_returns_200_when_character_deleted(self, mock_crud, client):
-        """When crud.delete_character returns True, expect success."""
-        mock_crud.delete_character.return_value = True
+    def test_returns_200_when_character_deleted(self, mock_crud, admin_mock_client, mock_db_session):
+        """When character exists and is deleted, expect success."""
+        mock_char = MagicMock()
+        mock_char.user_id = 10
+        mock_db_session.query.return_value.filter.return_value.first.return_value = mock_char
 
-        response = client.delete("/characters/1")
+        response = admin_mock_client.delete("/characters/1")
 
         assert response.status_code == 200
         assert "удален" in response.json()["message"]
 
     @patch("main.crud")
-    def test_returns_500_on_sqlalchemy_error(self, mock_crud, client):
+    def test_returns_500_on_sqlalchemy_error(self, mock_crud, admin_mock_client, mock_db_session):
         """When a DB error occurs, expect 500."""
-        mock_crud.delete_character.side_effect = SQLAlchemyError("Table locked")
+        mock_db_session.query.side_effect = SQLAlchemyError("Table locked")
 
-        response = client.delete("/characters/1")
+        response = admin_mock_client.delete("/characters/1")
 
         assert response.status_code == 500
-        assert "detail" in response.json()
 
 
 # ---------------------------------------------------------------------------

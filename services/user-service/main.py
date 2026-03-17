@@ -26,7 +26,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-models.Base.metadata.create_all(bind=engine)
+@app.on_event("startup")
+def on_startup():
+    models.Base.metadata.create_all(bind=engine)
 
 # Создаем роутер с префиксом /api
 router = APIRouter(prefix="/users")

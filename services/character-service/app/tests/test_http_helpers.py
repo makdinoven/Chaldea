@@ -29,6 +29,11 @@ import pytest
 import httpx
 from unittest.mock import patch, AsyncMock, MagicMock
 
+# Ensure settings has EQUIPMENT_SERVICE_URL for send_equipment_slots_request tests
+from config import settings as _settings
+if not hasattr(_settings, "EQUIPMENT_SERVICE_URL"):
+    object.__setattr__(_settings, "EQUIPMENT_SERVICE_URL", "http://inventory-service:8004/inventory")
+
 
 # ---------------------------------------------------------------------------
 # Helpers

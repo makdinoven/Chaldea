@@ -34,6 +34,9 @@ database.engine = MagicMock()
 database.create_tables = AsyncMock()
 
 from main import app  # noqa: E402
+
+# Clear startup event handlers to prevent RabbitMQ connection attempts during tests
+app.router.on_startup.clear()
 from database import get_db  # noqa: E402
 
 

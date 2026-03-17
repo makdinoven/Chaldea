@@ -16,7 +16,7 @@ import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock, AsyncMock  # noqa: F401
 from sqlalchemy.orm import sessionmaker
 
 # database.engine and database.SessionLocal have been patched in conftest.py
@@ -24,9 +24,12 @@ from sqlalchemy.orm import sessionmaker
 import database
 from database import Base
 from main import app, get_db
+from auth_http import get_admin_user, OAUTH2_SCHEME, UserRead
 from fastapi.testclient import TestClient
 import models
 import schemas
+
+_ADMIN_USER = UserRead(id=1, username="admin", role="admin")
 
 
 # ---------------------------------------------------------------------------
@@ -34,10 +37,11 @@ import schemas
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def db_session():
+def db_session(seed_fk_data):
     """Create fresh tables for every test, yield a session, then tear down."""
     Base.metadata.create_all(bind=database.engine)
     session = database.SessionLocal()
+    seed_fk_data(session)
     try:
         yield session
     finally:
@@ -47,12 +51,20 @@ def db_session():
 
 @pytest.fixture
 def client(db_session):
-    """FastAPI TestClient wired to the real SQLite test session."""
+    """FastAPI TestClient wired to the real SQLite test session with admin auth."""
 
     def override_get_db():
         yield db_session
 
+    def override_admin():
+        return _ADMIN_USER
+
+    def override_token():
+        return "fake-admin-token"
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_admin_user] = override_admin
+    app.dependency_overrides[OAUTH2_SCHEME] = override_token
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -62,6 +74,9 @@ def client(db_session):
 # ---------------------------------------------------------------------------
 
 def _seed_class(db, class_id=1, name="Воин"):
+    existing = db.query(models.Class).filter_by(id_class=class_id).first()
+    if existing:
+        return existing
     cls = models.Class(id_class=class_id, name=name)
     db.add(cls)
     db.commit()
@@ -70,12 +85,16 @@ def _seed_class(db, class_id=1, name="Воин"):
 
 
 def _seed_race_and_subrace(db, race_id=1, subrace_id=1):
-    race = models.Race(id_race=race_id, name=f"Race{race_id}")
-    db.add(race)
-    db.commit()
-    subrace = models.Subrace(id_subrace=subrace_id, id_race=race_id, name=f"Subrace{subrace_id}")
-    db.add(subrace)
-    db.commit()
+    race = db.query(models.Race).filter_by(id_race=race_id).first()
+    if not race:
+        race = models.Race(id_race=race_id, name=f"Race{race_id}")
+        db.add(race)
+        db.commit()
+    subrace = db.query(models.Subrace).filter_by(id_subrace=subrace_id).first()
+    if not subrace:
+        subrace = models.Subrace(id_subrace=subrace_id, id_race=race_id, name=f"Subrace{subrace_id}")
+        db.add(subrace)
+        db.commit()
     return race, subrace
 
 
@@ -406,47 +425,61 @@ class TestDoubleApproveGuard:
 
 
 class TestSendNotificationSuccess:
-    """Mock pika, verify correct message published."""
+    """Mock aio_pika, verify correct message published."""
 
-    @patch("producer.BlockingConnection")
-    def test_send_notification_success(self, mock_conn_class):
+    @pytest.mark.asyncio
+    @patch("producer.aio_pika")
+    async def test_send_notification_success(self, mock_aio_pika):
         from producer import send_character_approved_notification
 
-        mock_connection = MagicMock()
-        mock_channel = MagicMock()
-        mock_conn_class.return_value = mock_connection
+        # Setup mock chain: connect_robust -> connection -> channel -> publish
+        mock_channel = AsyncMock()
+        mock_connection = AsyncMock()
         mock_connection.channel.return_value = mock_channel
+        mock_connection.__aenter__ = AsyncMock(return_value=mock_connection)
+        mock_connection.__aexit__ = AsyncMock(return_value=False)
+        mock_aio_pika.connect_robust = AsyncMock(return_value=mock_connection)
+        mock_aio_pika.DeliveryMode.PERSISTENT = 2
 
-        send_character_approved_notification(user_id=42, character_name="Артас")
+        mock_message_instance = MagicMock()
+        mock_aio_pika.Message.return_value = mock_message_instance
+
+        mock_exchange = AsyncMock()
+        mock_channel.default_exchange = mock_exchange
+
+        await send_character_approved_notification(user_id=42, character_name="Артас")
 
         # Verify queue declared
-        mock_channel.queue_declare.assert_called_once_with(
-            queue="general_notifications", durable=True
+        mock_channel.declare_queue.assert_called_once_with(
+            "general_notifications", durable=True
         )
 
-        # Verify message published with correct routing key and body
-        mock_channel.basic_publish.assert_called_once()
-        call_kwargs = mock_channel.basic_publish.call_args[1]
-        assert call_kwargs["routing_key"] == "general_notifications"
+        # Verify message published with correct routing key
+        mock_exchange.publish.assert_called_once()
+        call_args = mock_exchange.publish.call_args
+        assert call_args[1]["routing_key"] == "general_notifications"
 
-        parsed = json.loads(call_kwargs["body"])
+        # Verify message body
+        msg_call = mock_aio_pika.Message.call_args
+        body_bytes = msg_call[1].get("body") or msg_call[0][0]
+        parsed = json.loads(body_bytes.decode() if isinstance(body_bytes, bytes) else body_bytes)
         assert parsed["target_type"] == "user"
         assert parsed["target_value"] == 42
         assert "Артас" in parsed["message"]
 
-        # Verify connection closed
-        mock_connection.close.assert_called_once()
-
 
 class TestSendNotificationFailure:
-    """Mock pika to raise exception, verify function doesn't throw."""
+    """Mock aio_pika to raise exception, verify function doesn't throw."""
 
-    @patch("producer.BlockingConnection")
-    def test_send_notification_failure_non_blocking(self, mock_conn_class):
+    @pytest.mark.asyncio
+    @patch("producer.aio_pika")
+    async def test_send_notification_failure_non_blocking(self, mock_aio_pika):
         from producer import send_character_approved_notification
 
-        mock_conn_class.side_effect = Exception("Connection refused")
+        mock_aio_pika.connect_robust = AsyncMock(
+            side_effect=Exception("Connection refused")
+        )
 
         # Should NOT raise — function handles exception internally
-        send_character_approved_notification(user_id=42, character_name="Артас")
+        await send_character_approved_notification(user_id=42, character_name="Артас")
         # If we get here, the function did not throw

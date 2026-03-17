@@ -42,6 +42,12 @@ _AsyncTestSessionLocal = async_sessionmaker(
 # Patch database before importing main
 # ---------------------------------------------------------------------------
 import database  # noqa: E402
+
+# Save the original get_db reference BEFORE overwriting it — this is the
+# function object captured by Depends(get_db) inside main.py, so we must
+# use it as the key in app.dependency_overrides.
+_original_get_db = database.get_db
+
 database.engine = _async_test_engine
 database.async_session = _AsyncTestSessionLocal
 
@@ -63,9 +69,11 @@ database.create_tables = _test_create_tables
 
 import models  # noqa: E402
 
-# Patch the startup event to avoid RabbitMQ connection
 import main as main_module  # noqa: E402
 from main import app  # noqa: E402
+
+# Clear startup event handlers to prevent RabbitMQ connection attempts during tests
+app.router.on_startup.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +114,7 @@ async def db_session(setup_db):
 
 @pytest_asyncio.fixture()
 async def admin_client(setup_db):
-    app.dependency_overrides[database.get_db] = _override_get_db
+    app.dependency_overrides[_original_get_db] = _override_get_db
     app.dependency_overrides[get_admin_user] = _override_admin
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -116,7 +124,7 @@ async def admin_client(setup_db):
 
 @pytest_asyncio.fixture()
 async def non_admin_client(setup_db):
-    app.dependency_overrides[database.get_db] = _override_get_db
+    app.dependency_overrides[_original_get_db] = _override_get_db
     app.dependency_overrides[get_admin_user] = _override_non_admin
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

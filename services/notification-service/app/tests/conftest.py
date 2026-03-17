@@ -13,6 +13,9 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
+# ── Set DATABASE_URL BEFORE any app module import ────────────────────────
+os.environ["DATABASE_URL"] = "sqlite://"
+
 # ── Patch consumers BEFORE importing main.py ────────────────────────────
 # main.py calls start_user_registration_consumer() and
 # start_general_notifications_consumer() at module level during startup,
@@ -22,14 +25,10 @@ sys.modules.setdefault("pika", MagicMock())
 # Ensure app package is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from database import Base, get_db  # noqa: E402
+from database import Base, engine, get_db  # noqa: E402
 from auth_http import UserRead  # noqa: E402
 
-# ── SQLite in-memory engine ──────────────────────────────────────────────
-SQLALCHEMY_DATABASE_URL = "sqlite://"
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
+# ── Use the engine from database.py (now SQLite via env var) ─────────────
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -56,11 +55,7 @@ def db_session():
 
 def _make_user(user_id: int = 1, username: str = "testuser", role: str = "user"):
     """Helper: build a UserRead instance with given attributes."""
-    user = UserRead()
-    user.id = user_id
-    user.username = username
-    user.role = role
-    return user
+    return UserRead(id=user_id, username=username, role=role)
 
 
 @pytest.fixture()

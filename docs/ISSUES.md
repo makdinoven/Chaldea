@@ -82,6 +82,42 @@
 **Описание:** BattlePage опрашивает `GET /battles/{id}/state` каждые 5 секунд. Redis Pub/Sub уже используется на бэкенде, но фронтенд его не слушает. Лишняя нагрузка и задержка до 5 сек.
 **Решение:** Реализовать WebSocket или SSE для push-обновлений состояния боя.
 
+### B-027-1. user-service: main.py connects to MySQL at import time, breaking tests in CI
+**Service:** user-service
+**File:** `services/user-service/main.py:29`, `services/user-service/database.py:7`
+**Description:** `main.py:29` calls `models.Base.metadata.create_all(bind=engine)` at module import time. The `database.py` engine is hardcoded to `mysql+pymysql://...@mysql:3306/...`. In CI (no MySQL), importing `main.py` fails with `OperationalError: Can't connect to MySQL server`. The conftest overrides `get_db()` but cannot prevent the import-time connection.
+**Solution:** Guard `create_all` behind `if __name__ == "__main__"` or use a FastAPI startup event, or make the engine lazy. Alternatively, use `DATABASE_URL` env var with a fallback.
+
+### B-027-2. character-service: 2 test files use invalid `from conftest import`
+**Service:** character-service
+**Files:** `services/character-service/app/tests/test_admin_character_management.py:13`, `services/character-service/app/tests/test_admin_update_level_xp.py:17`
+**Description:** Both files do `from conftest import _test_engine, _TestSessionLocal` which fails with `ModuleNotFoundError: No module named 'conftest'`. In pytest, conftest.py is auto-loaded but not importable as a module.
+**Solution:** Use pytest fixtures instead of direct imports from conftest, or add `__init__.py` to make conftest importable.
+
+### B-027-3. skills-service: tests hang indefinitely due to async engine at import
+**Service:** skills-service
+**File:** `services/skills-service/app/database.py:9`
+**Description:** `database.py` creates `create_async_engine("mysql+aiomysql://...")` at import time. While the test files patch `database.engine`, the async engine creation to an unreachable MySQL host causes tests to hang indefinitely (connection timeout).
+**Solution:** Make the engine creation lazy or configurable via env var.
+
+### B-027-4. notification-service: conftest creates Pydantic model without required fields
+**Service:** notification-service
+**File:** `services/notification-service/app/tests/conftest.py:59`
+**Description:** `_make_user()` calls `UserRead()` without `user_id` and `username` params, causing `pydantic.error_wrappers.ValidationError: 2 validation errors for UserRead`. This breaks 38 out of 42 tests.
+**Solution:** Pass required fields: `UserRead(id=user_id, username=username, ...)`.
+
+### B-027-5. locations-service: test_sql_injection_in_rule_id_delete fails
+**Service:** locations-service
+**File:** `services/locations-service/app/tests/test_rules.py::TestRulesSecurity::test_sql_injection_in_rule_id_delete`
+**Description:** This security test fails. Likely the endpoint does not properly handle SQL injection in rule ID for delete operations.
+**Solution:** Investigate and fix the endpoint's input validation.
+
+### B-027-6. character-attributes-service: test_admin_endpoints.py fails to collect
+**Service:** character-attributes-service
+**File:** `services/character-attributes-service/app/tests/test_admin_endpoints.py:43`
+**Description:** Importing `main.py` triggers `from rabbitmq_consumer import start_consumer` which does `import aio_pika`. While `aio_pika` is in requirements.txt, the module-level import chain causes collection errors in CI environments where the import triggers RabbitMQ connection attempts.
+**Solution:** Lazy-import rabbitmq_consumer or mock it in conftest.
+
 ---
 
 ## LOW
@@ -203,7 +239,7 @@
 | Приоритет | Количество |
 |-----------|-----------|
 | CRITICAL | 1 |
-| HIGH | 4 |
+| HIGH | 10 |
 | MEDIUM | 6 |
 | LOW | 4 |
-| **Итого** | **15** |
+| **Итого** | **21** |
