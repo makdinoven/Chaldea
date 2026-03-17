@@ -133,6 +133,29 @@ notification-service ──> user-service (список юзеров для ра
 
 **Примечание:** RabbitMQ consumers в character-service, skills-service, inventory-service и character-attributes-service **закомментированы**. Изначально планировалась асинхронная коммуникация, но сервисы перешли на HTTP.
 
+## CI/CD Pipeline
+
+GitHub Actions (`.github/workflows/ci.yml`):
+
+```
+Push to main
+    ↓
+[Test] — parallel pytest for each backend service
+    ↓ all pass
+[Deploy] — SSH to VPS → git pull → docker compose up --build -d
+```
+
+### Environments
+
+- **Dev** (`docker-compose.yml`): Vite dev server, hot reload, exposed ports, dev tools (Adminer, MongoExpress, RedisInsight)
+- **Prod** (`docker-compose.yml` + `docker-compose.prod.yml`): static frontend build in Nginx, HTTPS (Let's Encrypt), no volume mounts, no exposed service ports, no dev tools
+
+### Prod Server
+
+- Domain: `fallofgods.top`
+- VPS path: `~/rpgroll`
+- SSL: Let's Encrypt via certbot container (auto-renewal every 12h)
+
 ## Authentication
 
 - **JWT tokens** (HS256) с access (20h) и refresh (7d) токенами

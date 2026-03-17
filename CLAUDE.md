@@ -21,9 +21,11 @@ Chaldea — браузерная RPG-игра с микросервисной а
 | Кэш / State | Redis 7 (состояние боёв, Pub/Sub) |
 | Очереди | RabbitMQ (уведомления, Celery broker) |
 | Фоновые задачи | Celery (worker + beat, только для battle-service) |
-| API Gateway | Nginx (port 80) |
+| API Gateway | Nginx (port 80 dev, 80+443 prod) |
 | Файловое хранилище | S3-совместимое (s3.twcstorage.ru), boto3 |
 | Оркестрация | Docker Compose |
+| CI/CD | GitHub Actions (`.github/workflows/ci.yml`) |
+| Хостинг (prod) | VPS (fallofgods.top), деплой по SSH |
 
 ### Сервисы и порты
 
@@ -47,9 +49,12 @@ Chaldea — браузерная RPG-игра с микросервисной а
 ```
 chaldea/
 ├── CLAUDE.md                    # Этот файл (глобальные правила для AI-агентов)
-├── docker-compose.yml           # Оркестрация всех сервисов
+├── .github/workflows/ci.yml     # CI/CD пайплайн (тесты + деплой)
+├── docker-compose.yml           # Оркестрация всех сервисов (dev)
 ├── docker/                      # Dockerfile и конфиги для каждого сервиса
-│   ├── api-gateway/nginx.conf   # Маршрутизация Nginx
+│   ├── api-gateway/nginx.conf   # Маршрутизация Nginx (dev)
+│   ├── api-gateway/nginx.prod.conf # Маршрутизация Nginx (prod, SSL)
+│   ├── api-gateway/Dockerfile.prod # Dockerfile для prod (со сборкой frontend)
 │   ├── mysql/                   # MySQL init, backup, restore
 │   └── <service>/Dockerfile     # Dockerfile каждого сервиса
 ├── services/                    # Исходный код сервисов
@@ -196,6 +201,37 @@ notification-service ──> user-service
 - Секреты только через `.env` / переменные окружения.
 - В примерах — только маскированные значения.
 - При добавлении нового секрета — добавить его в docker-compose.yml через `environment:`.
+
+---
+
+## 8.1. CI/CD и деплой
+
+### Пайплайн (`.github/workflows/ci.yml`)
+
+При push в `main` автоматически запускается:
+
+1. **Test** — параллельные pytest для каждого backend-сервиса на ubuntu-latest
+2. **Deploy** (после успешных тестов) — SSH на VPS, `git pull`, `docker compose up --build -d`
+
+### Два окружения
+
+| | Dev (localhost) | Prod (fallofgods.top) |
+|---|---|---|
+| Compose-файлы | `docker-compose.yml` | `docker-compose.yml` + `docker-compose.prod.yml` |
+| Frontend | Vite dev server (:5555) | Статическая сборка в Nginx |
+| Nginx | `nginx.conf` (HTTP :80) | `nginx.prod.conf` (HTTPS :443 + SSL) |
+| SSL | Нет | Let's Encrypt (certbot) |
+| Volume mounts | Да (hot reload) | Нет (код в образе) |
+| Порты сервисов | Открыты наружу | Закрыты (только через Nginx) |
+| Dev-инструменты | Adminer, MongoExpress, RedisInsight | Отключены |
+
+### Правила для агентов
+
+- **Новый Python-пакет** → добавить в `requirements.txt` соответствующего сервиса. Пакет будет установлен при сборке Docker-образа (`docker compose build`). Без пересборки образа пакет не появится.
+- **Новый npm-пакет** → добавить в `package.json` фронтенда. В dev устанавливается при старте контейнера (`npm install`). В prod — при сборке образа.
+- **Изменение Nginx-конфига** → обновить оба файла: `nginx.conf` (dev) и `nginx.prod.conf` (prod).
+- **Изменение Docker-конфига** → обновить оба файла: `docker-compose.yml` и `docker-compose.prod.yml` (если затронутый сервис там переопределён).
+- **Новый сервис** → добавить в оба compose-файла, в `nginx.conf` / `nginx.prod.conf`, и в CI/CD матрицу тестов.
 
 ---
 

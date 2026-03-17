@@ -123,7 +123,7 @@ services:
         dockerfile: ./docker/battle-service/Dockerfile
       command: >
         watchfiles --filter python
-        'celery -A battle_service.tasks beat --loglevel=info'
+        'celery -A tasks:celery_app beat --loglevel=info'
         /app
       volumes:
         - ./services/battle-service/app:/app
