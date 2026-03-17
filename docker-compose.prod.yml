@@ -3,7 +3,7 @@
 #
 # Before first run, obtain SSL certificate:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm certbot \
-#     certonly --webroot -w /var/www/certbot -d vps87331.majorcore.host
+#     certonly --webroot -w /var/www/certbot -d fallofgods.top
 
 services:
   # --- Frontend: not needed in prod (built into api-gateway) ---
@@ -109,7 +109,7 @@ services:
       DB_DATABASE: mydatabase
       DB_USERNAME: myuser
       DB_PASSWORD: mypassword
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://vps87331.majorcore.host}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
       AUTH_SERVICE_URL: http://user-service:8000
 
   battle-service:
@@ -124,7 +124,7 @@ services:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       REDIS_URL: redis://redis:6379/0
       MONGODB_URL: mongodb://mongo:27017/mydatabase
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://vps87331.majorcore.host}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
 
   autobattle-service:
     command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8011 --app-dir /app"
@@ -135,7 +135,7 @@ services:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       REDIS_URL: redis://redis:6379/0
       MONGODB_URL: mongodb://mongo:27017/mydatabase
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://vps87331.majorcore.host}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
 
   # --- Celery: no watchfiles wrapper ---
   celery-worker:
