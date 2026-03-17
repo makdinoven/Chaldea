@@ -1,0 +1,13 @@
+# Stage 1: Build frontend
+FROM node:22-alpine AS frontend-build
+WORKDIR /app
+COPY services/frontend/app-chaldea/package*.json ./
+RUN npm install --legacy-peer-deps
+COPY services/frontend/app-chaldea/ .
+RUN npm run build
+
+# Stage 2: Production nginx
+FROM nginx:alpine
+COPY --from=frontend-build /app/dist /usr/share/nginx/html
+COPY docker/api-gateway/nginx.prod.conf /etc/nginx/nginx.conf
+EXPOSE 80 443
