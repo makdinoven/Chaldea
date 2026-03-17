@@ -981,6 +981,7 @@ def get_short_info(character_id: int, db: Session = Depends(get_db)):
         "id": ch.id,
         "name": ch.name,
         "avatar": ch.avatar,
+        "level": ch.level,
         "current_location_id": ch.current_location_id
     }
 

@@ -30,7 +30,8 @@ const Header = () => {
   };
 
   const userLinks: DropdownLink[] = [
-    { label: 'Профиль', path: '/profile' },
+    { label: 'Мой профиль', path: '/user-profile' },
+    { label: 'Персонаж', path: '/profile' },
     { label: 'Сообщения', path: '/messages' },
     { label: 'Выход', path: '/', onClick: handleLogout },
   ];
