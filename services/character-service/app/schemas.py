@@ -187,3 +187,34 @@ class StarterKitUpdate(BaseModel):
     items: List[StarterKitItem] = []
     skills: List[StarterKitSkill] = []
     currency_amount: int = 0
+
+
+# Admin character management schemas
+class AdminCharacterListItem(BaseModel):
+    id: int
+    name: str
+    level: int
+    id_race: int
+    id_class: int
+    id_subrace: int
+    user_id: Optional[int]
+    avatar: Optional[str]
+    currency_balance: int
+    stat_points: int
+    current_location_id: Optional[int]
+
+    class Config:
+        orm_mode = True
+
+
+class AdminCharacterListResponse(BaseModel):
+    items: List[AdminCharacterListItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class AdminCharacterUpdate(BaseModel):
+    level: Optional[int] = None
+    stat_points: Optional[int] = None
+    currency_balance: Optional[int] = None

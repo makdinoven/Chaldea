@@ -1,6 +1,6 @@
 import os
 import httpx
-from fastapi import FastAPI, Depends, APIRouter, HTTPException
+from fastapi import FastAPI, Depends, APIRouter, HTTPException, Query
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 import asyncio
@@ -14,9 +14,9 @@ from producer import (
     publish_character_skills,
     publish_character_attributes,
 )
-from typing import List, Dict
+from typing import List, Dict, Optional
 from fastapi.middleware.cors import CORSMiddleware
-from auth_http import get_admin_user
+from auth_http import get_admin_user, OAUTH2_SCHEME
 import logging
 
 # Universal subrace skill applied to all subraces (1-16)
@@ -217,20 +217,306 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
-# Эндпоинт для удаления персонажа
-@router.delete("/{character_id}")
-async def delete_character(character_id: int, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
+# ============================================================
+# Admin endpoints — must be placed BEFORE /{character_id} routes
+# ============================================================
+
+@router.get("/admin/list", response_model=schemas.AdminCharacterListResponse)
+def admin_list_characters(
+    q: str = Query("", description="Search by character name"),
+    user_id: Optional[int] = Query(None),
+    level_min: Optional[int] = Query(None),
+    level_max: Optional[int] = Query(None),
+    id_race: Optional[int] = Query(None),
+    id_class: Optional[int] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_admin_user),
+):
     """
-    Удаление персонажа по его ID.
+    Paginated list of all characters with search and filters. Admin only.
     """
     try:
-        result = crud.delete_character(db, character_id)
-        if not result:
-            raise HTTPException(status_code=404, detail="Персонаж не найден")
-        return {"message": f"Персонаж с ID {character_id} успешно удален."}
+        query = db.query(models.Character)
+
+        if q:
+            query = query.filter(models.Character.name.ilike(f"%{q}%"))
+        if user_id is not None:
+            query = query.filter(models.Character.user_id == user_id)
+        if level_min is not None:
+            query = query.filter(models.Character.level >= level_min)
+        if level_max is not None:
+            query = query.filter(models.Character.level <= level_max)
+        if id_race is not None:
+            query = query.filter(models.Character.id_race == id_race)
+        if id_class is not None:
+            query = query.filter(models.Character.id_class == id_class)
+
+        total = query.count()
+        offset = (page - 1) * page_size
+        items = query.order_by(models.Character.id).offset(offset).limit(page_size).all()
+
+        return schemas.AdminCharacterListResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
     except SQLAlchemyError as e:
-        logger.error(f"Ошибка при удалении персонажа: {e}")
+        logger.error(f"Error fetching admin character list: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.put("/admin/{character_id}")
+async def admin_update_character(
+    character_id: int,
+    data: schemas.AdminCharacterUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_admin_user),
+    token: str = Depends(OAUTH2_SCHEME),
+):
+    """
+    Admin update of character fields (level, stat_points, currency_balance).
+    When level is changed, syncs passive_experience in attributes-service
+    so that XP is never below the minimum threshold for the new level.
+    """
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    update_data = data.dict(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="Нет данных для обновления")
+
+    # Validation
+    if "level" in update_data and update_data["level"] < 1:
+        raise HTTPException(status_code=400, detail="Уровень должен быть >= 1")
+    if "stat_points" in update_data and update_data["stat_points"] < 0:
+        raise HTTPException(status_code=400, detail="Очки характеристик должны быть >= 0")
+    if "currency_balance" in update_data and update_data["currency_balance"] < 0:
+        raise HTTPException(status_code=400, detail="Баланс валюты должен быть >= 0")
+
+    for field, value in update_data.items():
+        setattr(character, field, value)
+
+    try:
+        db.commit()
+        db.refresh(character)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Error updating character {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+    # Sync passive_experience when level is changed
+    if "level" in update_data:
+        new_level = update_data["level"]
+        threshold = db.query(models.LevelThreshold).filter(
+            models.LevelThreshold.level_number == new_level
+        ).first()
+        required_experience = threshold.required_experience if threshold else 0
+
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Fetch current passive_experience
+                resp = await client.get(
+                    f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}/passive_experience",
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    passive_experience = resp.json().get("passive_experience", 0)
+                    # Only update if current XP is below the threshold for the new level
+                    if passive_experience < required_experience:
+                        put_resp = await client.put(
+                            f"{settings.ATTRIBUTES_SERVICE_URL}admin/{character_id}",
+                            json={"passive_experience": required_experience},
+                            headers=headers,
+                        )
+                        if put_resp.status_code == 200:
+                            logger.info(
+                                f"Synced passive_experience for character {character_id} "
+                                f"to {required_experience} (level {new_level})"
+                            )
+                        else:
+                            logger.warning(
+                                f"Failed to update passive_experience for character {character_id}: "
+                                f"{put_resp.status_code} - {put_resp.text}"
+                            )
+                else:
+                    logger.warning(
+                        f"Failed to fetch passive_experience for character {character_id}: "
+                        f"{resp.status_code} - {resp.text}"
+                    )
+        except Exception as e:
+            logger.warning(f"Error syncing XP for character {character_id} after level change: {e}")
+
+    return {"detail": "Character updated", "character_id": character.id}
+
+
+@router.post("/admin/{character_id}/unlink")
+async def admin_unlink_character(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_admin_user),
+    token: str = Depends(OAUTH2_SCHEME),
+):
+    """
+    Unlink a character from its owning user.
+    """
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    if character.user_id is None:
+        raise HTTPException(status_code=400, detail="Персонаж не привязан к пользователю")
+
+    previous_user_id = character.user_id
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Call user-service to delete the user-character relation
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{settings.USER_SERVICE_URL}/users/user_characters/{previous_user_id}/{character_id}",
+                headers=headers,
+            )
+            if resp.status_code not in (200, 404):
+                logger.error(f"Failed to delete user-character relation: {resp.status_code} - {resp.text}")
+                raise HTTPException(status_code=502, detail="Ошибка при удалении связи пользователь-персонаж")
+    except httpx.RequestError as e:
+        logger.error(f"Error calling user-service to delete relation: {e}")
+        raise HTTPException(status_code=502, detail="Сервис пользователей недоступен")
+
+    # Call user-service to clear current_character
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{settings.USER_SERVICE_URL}/users/{previous_user_id}/clear_current_character",
+                json={"character_id": character_id},
+                headers=headers,
+            )
+            if resp.status_code not in (200, 404):
+                logger.warning(f"Failed to clear current_character: {resp.status_code} - {resp.text}")
+    except httpx.RequestError as e:
+        logger.warning(f"Error calling user-service to clear current_character: {e}")
+
+    # Set user_id to None locally
+    character.user_id = None
+    try:
+        db.commit()
+        db.refresh(character)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Error unlinking character {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+    return {
+        "detail": "Character unlinked from user",
+        "character_id": character_id,
+        "previous_user_id": previous_user_id,
+    }
+
+
+# Эндпоинт для удаления персонажа (enhanced with cascade cleanup)
+@router.delete("/{character_id}")
+async def delete_character(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_admin_user),
+    token: str = Depends(OAUTH2_SCHEME),
+):
+    """
+    Удаление персонажа по его ID с каскадной очисткой зависимых сервисов.
+    """
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    headers = {"Authorization": f"Bearer {token}"}
+    user_id = character.user_id
+
+    # 1. Delete all inventory (graceful)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{settings.INVENTORY_SERVICE_URL}{character_id}/all",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Inventory cleared for character {character_id}")
+            else:
+                logger.warning(f"Failed to clear inventory for character {character_id}: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        logger.warning(f"Error clearing inventory for character {character_id}: {e}")
+
+    # 2. Delete all character skills (graceful)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{settings.SKILLS_SERVICE_URL}admin/character_skills/by_character/{character_id}",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Skills cleared for character {character_id}")
+            else:
+                logger.warning(f"Failed to clear skills for character {character_id}: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        logger.warning(f"Error clearing skills for character {character_id}: {e}")
+
+    # 3. Delete character attributes (graceful)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Attributes cleared for character {character_id}")
+            else:
+                logger.warning(f"Failed to clear attributes for character {character_id}: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        logger.warning(f"Error clearing attributes for character {character_id}: {e}")
+
+    # 4. If user_id exists, clean up user-character relation (graceful)
+    if user_id:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.delete(
+                    f"{settings.USER_SERVICE_URL}/users/user_characters/{user_id}/{character_id}",
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    logger.info(f"User-character relation deleted for user {user_id}, character {character_id}")
+                else:
+                    logger.warning(f"Failed to delete user-character relation: {resp.status_code} - {resp.text}")
+        except Exception as e:
+            logger.warning(f"Error deleting user-character relation: {e}")
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{settings.USER_SERVICE_URL}/users/{user_id}/clear_current_character",
+                    json={"character_id": character_id},
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Current character cleared for user {user_id}")
+                else:
+                    logger.warning(f"Failed to clear current_character for user {user_id}: {resp.status_code} - {resp.text}")
+        except Exception as e:
+            logger.warning(f"Error clearing current_character for user {user_id}: {e}")
+
+    # 5. Delete the character row
+    try:
+        db.delete(character)
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Error deleting character {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+    return {"message": f"Персонаж с ID {character_id} успешно удален."}
 
 # Отправка запроса на обновление пользователя в user-service
 async def update_user_with_character(user_id: int, character_id: int):

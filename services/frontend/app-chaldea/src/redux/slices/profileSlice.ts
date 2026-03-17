@@ -1,6 +1,7 @@
 import { createSlice, createAsyncThunk, createSelector, PayloadAction } from '@reduxjs/toolkit';
 import axios from 'axios';
 import type { RootState, AppDispatch } from '../store';
+import { getMe } from './userSlice';
 
 // --- Types ---
 
@@ -139,6 +140,7 @@ export interface ProfileState {
   contextMenu: ContextMenuState;
   loading: boolean;
   error: string | null;
+  avatarUploading: boolean;
 }
 
 // --- Initial State ---
@@ -159,6 +161,7 @@ const initialState: ProfileState = {
   },
   loading: false,
   error: null,
+  avatarUploading: false,
 };
 
 // --- Async Thunks ---
@@ -386,6 +389,38 @@ export const loadProfileData = createAsyncThunk<
   },
 );
 
+export const uploadCharacterAvatar = createAsyncThunk<
+  string,
+  { characterId: number; userId: number; file: File },
+  { rejectValue: string; dispatch: AppDispatch }
+>(
+  'profile/uploadCharacterAvatar',
+  async ({ characterId, userId, file }, thunkAPI) => {
+    try {
+      const formData = new FormData();
+      formData.append('character_id', String(characterId));
+      formData.append('user_id', String(userId));
+      formData.append('file', file);
+
+      const response = await axios.post('/photo/change_character_avatar_photo', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      const avatarUrl: string = response.data.avatar_url;
+
+      // Refresh header avatar via userSlice
+      thunkAPI.dispatch(getMe());
+
+      return avatarUrl;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        return thunkAPI.rejectWithValue(error.response.data.detail);
+      }
+      return thunkAPI.rejectWithValue('Не удалось загрузить аватарку');
+    }
+  },
+);
+
 // --- Slice ---
 
 const profileSlice = createSlice({
@@ -485,6 +520,19 @@ const profileSlice = createSlice({
       // dropItem
       .addCase(dropItem.rejected, (state, action) => {
         state.error = action.payload ?? 'Не удалось удалить предмет';
+      })
+      // uploadCharacterAvatar
+      .addCase(uploadCharacterAvatar.pending, (state) => {
+        state.avatarUploading = true;
+      })
+      .addCase(uploadCharacterAvatar.fulfilled, (state, action) => {
+        state.avatarUploading = false;
+        if (state.character) {
+          state.character.avatar = action.payload;
+        }
+      })
+      .addCase(uploadCharacterAvatar.rejected, (state) => {
+        state.avatarUploading = false;
       });
   },
 });
@@ -503,6 +551,7 @@ export const selectSelectedCategory = (state: RootState) => state.profile.select
 export const selectContextMenu = (state: RootState) => state.profile.contextMenu;
 export const selectProfileLoading = (state: RootState) => state.profile.loading;
 export const selectProfileError = (state: RootState) => state.profile.error;
+export const selectAvatarUploading = (state: RootState) => state.profile.avatarUploading;
 
 export const selectFilteredInventory = createSelector(
   [selectInventory, selectSelectedCategory],

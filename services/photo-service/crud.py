@@ -204,3 +204,16 @@ def update_item_image(item_id: int, image_url: str):
         raise
     finally:
         connection.close()
+
+def update_rule_image(rule_id: int, image_url: str):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = "UPDATE game_rules SET image_url = %s WHERE id = %s"
+            cursor.execute(sql, (image_url, rule_id))
+        connection.commit()
+    except:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()

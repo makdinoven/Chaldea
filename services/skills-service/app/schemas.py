@@ -302,3 +302,10 @@ class AssignSkillEntry(BaseModel):
 class MultipleSkillsAssignRequest(BaseModel):
     character_id: int
     skills: List[AssignSkillEntry]
+
+
+# ----------------------------------------------------
+# 11) Admin CharacterSkill update (change rank)
+# ----------------------------------------------------
+class AdminCharacterSkillUpdate(BaseModel):
+    skill_rank_id: int

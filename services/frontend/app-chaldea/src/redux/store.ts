@@ -12,6 +12,7 @@ import skillsSlice from './slices/skillsAdminSlice';
 import userSlice from './slices/userSlice';
 import notificationReducer from './slices/notificationSlice';
 import profileReducer from './slices/profileSlice';
+import adminCharactersReducer from './slices/adminCharactersSlice';
 
 export const store = configureStore({
   reducer: {
@@ -27,6 +28,7 @@ export const store = configureStore({
     user: userSlice,
     notifications: notificationReducer,
     profile: profileReducer,
+    adminCharacters: adminCharactersReducer,
   },
 });
 

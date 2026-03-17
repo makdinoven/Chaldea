@@ -202,6 +202,19 @@ async def get_character_skill_by_skill_id(db: AsyncSession, character_id: int, s
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
+async def delete_all_character_skills(db: AsyncSession, character_id: int) -> int:
+    """Delete all CharacterSkill rows for the given character_id. Returns count deleted."""
+    stmt = select(models.CharacterSkill).where(models.CharacterSkill.character_id == character_id)
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    count = len(rows)
+    for row in rows:
+        await db.delete(row)
+    if count > 0:
+        await db.commit()
+    return count
+
+
 async def update_character_skill_rank(db: AsyncSession, cs_id: int, new_rank_id: int) -> models.CharacterSkill:
     cs = await get_character_skill(db, cs_id)
     if not cs:

@@ -275,6 +275,25 @@ def build_modifiers_dict(item_obj: models.Items, negative: bool = False) -> dict
     # Соответственно, здесь не добавляем их.
     return mods
 
+def delete_all_inventory_for_character(db: Session, character_id: int) -> dict:
+    """
+    Bulk delete all equipment_slots and character_inventory rows for a character.
+    Returns counts of deleted rows.
+    """
+    slots_deleted = (
+        db.query(models.EquipmentSlot)
+        .filter(models.EquipmentSlot.character_id == character_id)
+        .delete(synchronize_session="fetch")
+    )
+    items_deleted = (
+        db.query(models.CharacterInventory)
+        .filter(models.CharacterInventory.character_id == character_id)
+        .delete(synchronize_session="fetch")
+    )
+    db.commit()
+    return {"items_deleted": items_deleted, "slots_deleted": slots_deleted}
+
+
 def recalc_fast_slots(db: Session, character_id: int):
     # 1) Смотрим, какие предметы надеты
     eq_slots = db.query(models.EquipmentSlot).filter(

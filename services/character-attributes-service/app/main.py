@@ -12,6 +12,7 @@ from config import settings
 import httpx
 import logging
 from rabbitmq_consumer import start_consumer
+from auth_http import get_admin_user, UserRead
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -488,5 +489,62 @@ def consume_stamina(character_id: int, payload: dict, db: Session = Depends(get_
         "detail": "Выносливость списана успешно",
         "current_stamina": attr.current_stamina
     }
+
+# -----------------------------
+# 7. Admin: обновление атрибутов (partial update, без ограничений прокачки)
+# -----------------------------
+@router.put("/admin/{character_id}", response_model=schemas.CharacterAttributesResponse)
+def admin_update_attributes(
+    character_id: int,
+    data: schemas.AdminAttributeUpdate,
+    db: Session = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    attr = db.query(models.CharacterAttributes).filter(
+        models.CharacterAttributes.character_id == character_id
+    ).first()
+    if not attr:
+        raise HTTPException(status_code=404, detail="Attributes not found")
+
+    update_data = data.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(attr, field, value)
+
+    try:
+        db.commit()
+        db.refresh(attr)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при админском обновлении атрибутов: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update attributes")
+
+    return attr
+
+
+# -----------------------------
+# 8. Admin: удаление атрибутов
+# -----------------------------
+@router.delete("/{character_id}")
+def admin_delete_attributes(
+    character_id: int,
+    db: Session = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    attr = db.query(models.CharacterAttributes).filter(
+        models.CharacterAttributes.character_id == character_id
+    ).first()
+    if not attr:
+        raise HTTPException(status_code=404, detail="Attributes not found")
+
+    try:
+        db.delete(attr)
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при удалении атрибутов: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete attributes")
+
+    return {"detail": "Attributes deleted"}
+
 
 app.include_router(router)

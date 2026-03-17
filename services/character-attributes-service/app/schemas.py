@@ -114,3 +114,63 @@ class PassiveExperienceResponse(BaseModel):
 
 class UpdateActiveExperienceRequest(BaseModel):
     amount: int  # Положительное число означает "добавить", отрицательное — "снять".
+
+
+# Схема для админского обновления атрибутов (все поля Optional — partial update)
+class AdminAttributeUpdate(BaseModel):
+    # Resources
+    health: Optional[int] = None
+    max_health: Optional[int] = None
+    current_health: Optional[int] = None
+    mana: Optional[int] = None
+    max_mana: Optional[int] = None
+    current_mana: Optional[int] = None
+    energy: Optional[int] = None
+    max_energy: Optional[int] = None
+    current_energy: Optional[int] = None
+    stamina: Optional[int] = None
+    max_stamina: Optional[int] = None
+    current_stamina: Optional[int] = None
+    # Base stats
+    strength: Optional[int] = None
+    agility: Optional[int] = None
+    intelligence: Optional[int] = None
+    endurance: Optional[int] = None
+    charisma: Optional[int] = None
+    luck: Optional[int] = None
+    # Combat
+    damage: Optional[int] = None
+    dodge: Optional[float] = None
+    critical_hit_chance: Optional[float] = None
+    critical_damage: Optional[float] = None
+    # Experience
+    passive_experience: Optional[int] = None
+    active_experience: Optional[int] = None
+    # Resistances
+    res_effects: Optional[float] = None
+    res_physical: Optional[float] = None
+    res_catting: Optional[float] = None
+    res_crushing: Optional[float] = None
+    res_piercing: Optional[float] = None
+    res_magic: Optional[float] = None
+    res_fire: Optional[float] = None
+    res_ice: Optional[float] = None
+    res_watering: Optional[float] = None
+    res_electricity: Optional[float] = None
+    res_sainting: Optional[float] = None
+    res_wind: Optional[float] = None
+    res_damning: Optional[float] = None
+    # Vulnerabilities
+    vul_effects: Optional[float] = None
+    vul_physical: Optional[float] = None
+    vul_catting: Optional[float] = None
+    vul_crushing: Optional[float] = None
+    vul_piercing: Optional[float] = None
+    vul_magic: Optional[float] = None
+    vul_fire: Optional[float] = None
+    vul_ice: Optional[float] = None
+    vul_watering: Optional[float] = None
+    vul_electricity: Optional[float] = None
+    vul_sainting: Optional[float] = None
+    vul_wind: Optional[float] = None
+    vul_damning: Optional[float] = None

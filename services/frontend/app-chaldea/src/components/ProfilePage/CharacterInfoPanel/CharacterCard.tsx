@@ -1,11 +1,53 @@
-import { useAppSelector } from '../../../redux/store';
-import { selectProfile, selectRaceInfo } from '../../../redux/slices/profileSlice';
+import { useRef } from 'react';
+import toast from 'react-hot-toast';
+import { useAppSelector, useAppDispatch } from '../../../redux/store';
+import {
+  selectProfile,
+  selectRaceInfo,
+  selectAvatarUploading,
+  uploadCharacterAvatar,
+} from '../../../redux/slices/profileSlice';
 import { RACE_NAMES, CLASS_NAMES } from '../constants';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
 
+const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
+
 export default function CharacterCard() {
+  const dispatch = useAppDispatch();
   const profile = useAppSelector(selectProfile);
   const raceInfo = useAppSelector(selectRaceInfo);
+  const avatarUploading = useAppSelector(selectAvatarUploading);
+  const userId = useAppSelector((state) => state.user.id) as number | null;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAvatarClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset input so the same file can be re-selected
+    e.target.value = '';
+
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error('Файл слишком большой. Максимальный размер: 15 МБ');
+      return;
+    }
+
+    if (!raceInfo?.id || !userId) return;
+
+    try {
+      await dispatch(
+        uploadCharacterAvatar({ characterId: raceInfo.id, userId, file }),
+      ).unwrap();
+      toast.success('Аватарка обновлена');
+    } catch (err) {
+      const message = typeof err === 'string' ? err : 'Не удалось загрузить аватарку';
+      toast.error(message);
+    }
+  };
 
   if (!profile) {
     return (
@@ -22,7 +64,17 @@ export default function CharacterCard() {
   return (
     <div className="flex flex-col items-center gap-3 p-4">
       {/* Portrait / Avatar */}
-      <div className="gold-outline relative rounded-card w-[180px] h-[220px] overflow-hidden bg-black/30">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+      <div
+        className="gold-outline relative rounded-card w-[180px] h-[220px] overflow-hidden bg-black/30 cursor-pointer group"
+        onClick={handleAvatarClick}
+      >
         {profile.avatar ? (
           <img
             src={profile.avatar}
@@ -34,6 +86,22 @@ export default function CharacterCard() {
             <svg xmlns="http://www.w3.org/2000/svg" className="w-20 h-20" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
             </svg>
+          </div>
+        )}
+
+        {/* Hover overlay */}
+        {!avatarUploading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity">
+            <span className="text-white text-sm font-medium text-center px-2">
+              Изменить фото
+            </span>
+          </div>
+        )}
+
+        {/* Loading spinner overlay */}
+        {avatarUploading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+            <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin" />
           </div>
         )}
       </div>

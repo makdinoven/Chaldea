@@ -522,7 +522,72 @@ async def move_and_post(
 
     return new_post
 # --------------------------------------------------------------------
+# RULES
+# --------------------------------------------------------------------
+rules_router = APIRouter(prefix="/rules")
+
+
+@rules_router.get("/list", response_model=List[schemas.GameRuleRead])
+async def get_rules_list(session: AsyncSession = Depends(get_db)):
+    """Возвращает все правила игры (публичный)."""
+    return await crud.get_all_rules(session)
+
+
+@rules_router.get("/{rule_id}", response_model=schemas.GameRuleRead)
+async def get_rule(rule_id: int, session: AsyncSession = Depends(get_db)):
+    """Возвращает правило по ID (публичный)."""
+    rule = await crud.get_rule_by_id(session, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Правило не найдено")
+    return rule
+
+
+@rules_router.post("/create", response_model=schemas.GameRuleRead)
+async def create_rule(
+    body: schemas.GameRuleCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_admin_user),
+):
+    """Создаёт новое правило (только админ)."""
+    return await crud.create_rule(session, body)
+
+
+@rules_router.put("/reorder")
+async def reorder_rules(
+    body: schemas.GameRuleReorder,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_admin_user),
+):
+    """Массовое обновление sort_order (только админ)."""
+    await crud.reorder_rules(session, body.order)
+    return {"status": "success"}
+
+
+@rules_router.put("/{rule_id}/update", response_model=schemas.GameRuleRead)
+async def update_rule(
+    rule_id: int,
+    body: schemas.GameRuleUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_admin_user),
+):
+    """Обновляет правило (только админ, partial update)."""
+    return await crud.update_rule(session, rule_id, body)
+
+
+@rules_router.delete("/{rule_id}/delete")
+async def delete_rule(
+    rule_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_admin_user),
+):
+    """Удаляет правило (только админ)."""
+    await crud.delete_rule(session, rule_id)
+    return {"status": "success", "message": f"Rule {rule_id} has been deleted."}
+
+
+# --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------
 app.include_router(router)
+app.include_router(rules_router)
 

@@ -9,10 +9,11 @@ from sqlalchemy import text, delete
 from config import settings
 import models
 from models import (
-    Country, Region, District, Location, LocationNeighbor, Post
+    Country, Region, District, Location, LocationNeighbor, Post, GameRule
 )
 from schemas import (
-    DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate
+    DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
+    GameRuleCreate, GameRuleUpdate, GameRuleReorderItem
 )
 
 # -------------------------------
@@ -958,3 +959,79 @@ async def get_players_in_location(location_id: int) -> List[dict]:
         except Exception as e:
             logger.error(f"Ошибка при получении персонажей для локации {location_id}: {e}")
             return []
+
+
+# -------------------------------
+#   GAME RULES
+# -------------------------------
+async def get_all_rules(session: AsyncSession) -> List[GameRule]:
+    """Возвращает все правила, отсортированные по sort_order ASC, id ASC."""
+    result = await session.execute(
+        select(GameRule).order_by(GameRule.sort_order.asc(), GameRule.id.asc())
+    )
+    return result.scalars().all()
+
+
+async def get_rule_by_id(session: AsyncSession, rule_id: int) -> Optional[GameRule]:
+    """Возвращает правило по ID или None."""
+    result = await session.execute(
+        select(GameRule).where(GameRule.id == rule_id)
+    )
+    return result.scalars().first()
+
+
+async def create_rule(session: AsyncSession, data: GameRuleCreate) -> GameRule:
+    """Создаёт новое правило."""
+    new_rule = GameRule(
+        title=data.title,
+        content=data.content,
+        sort_order=data.sort_order,
+    )
+    session.add(new_rule)
+    await session.commit()
+    await session.refresh(new_rule)
+    return new_rule
+
+
+async def update_rule(session: AsyncSession, rule_id: int, data: GameRuleUpdate) -> GameRule:
+    """Частично обновляет правило (exclude_unset)."""
+    result = await session.execute(
+        select(GameRule).where(GameRule.id == rule_id)
+    )
+    db_rule = result.scalars().first()
+    if not db_rule:
+        raise HTTPException(status_code=404, detail="Правило не найдено")
+
+    for field, value in data.dict(exclude_unset=True).items():
+        setattr(db_rule, field, value)
+
+    await session.commit()
+    await session.refresh(db_rule)
+    return db_rule
+
+
+async def delete_rule(session: AsyncSession, rule_id: int) -> None:
+    """Удаляет правило по ID."""
+    result = await session.execute(
+        select(GameRule).where(GameRule.id == rule_id)
+    )
+    db_rule = result.scalars().first()
+    if not db_rule:
+        raise HTTPException(status_code=404, detail="Правило не найдено")
+
+    await session.execute(
+        delete(GameRule).where(GameRule.id == rule_id)
+    )
+    await session.commit()
+
+
+async def reorder_rules(session: AsyncSession, order_items: List[GameRuleReorderItem]) -> None:
+    """Массово обновляет sort_order для списка правил."""
+    for item in order_items:
+        result = await session.execute(
+            select(GameRule).where(GameRule.id == item.id)
+        )
+        db_rule = result.scalars().first()
+        if db_rule:
+            db_rule.sort_order = item.sort_order
+    await session.commit()

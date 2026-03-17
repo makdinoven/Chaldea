@@ -277,6 +277,35 @@ async def admin_give_character_skill(
 ):
     return await crud.create_character_skill(db, data)
 
+@router.delete("/admin/character_skills/by_character/{character_id}")
+async def admin_delete_all_character_skills(
+    character_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
+):
+    """Bulk delete all skills for a character (admin only)."""
+    count = await crud.delete_all_character_skills(db, character_id)
+    return {"detail": "All character skills deleted", "count": count}
+
+@router.put("/admin/character_skills/{cs_id}", response_model=schemas.CharacterSkillRead)
+async def admin_update_character_skill_rank(
+    cs_id: int,
+    data: schemas.AdminCharacterSkillUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_admin_user)
+):
+    """Change the rank of an existing character skill (admin only)."""
+    cs = await crud.get_character_skill(db, cs_id)
+    if not cs:
+        raise HTTPException(status_code=404, detail="CharacterSkill not found")
+    updated_cs = await crud.update_character_skill_rank(db, cs_id, data.skill_rank_id)
+    # Re-fetch with full relationship loading for CharacterSkillRead response
+    result = await crud.list_character_skills_for_character(db, updated_cs.character_id)
+    for item in result:
+        if item.id == cs_id:
+            return item
+    return updated_cs
+
 @router.delete("/admin/character_skills/{cs_id}")
 async def admin_remove_character_skill(
     cs_id: int,

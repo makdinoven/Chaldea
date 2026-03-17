@@ -16,6 +16,10 @@ import AdminPage from "../Admin/AdminPage";
 import StarterKitsPage from "../Admin/StarterKitsPage/StarterKitsPage";
 import BattlePage from "../pages/BattlePage/BattlePage";
 import ProfilePage from "../ProfilePage/ProfilePage";
+import AdminCharactersPage from "../Admin/CharactersPage/AdminCharactersPage";
+import AdminCharacterDetailPage from "../Admin/CharactersPage/AdminCharacterDetailPage";
+import RulesPage from "../RulesPage/RulesPage";
+import RulesAdminPage from "../Admin/RulesAdminPage/RulesAdminPage";
 
 const App = () => {
   return (
@@ -45,6 +49,10 @@ const App = () => {
             <Route path="home/admin/skills" element={<AdminSkillsPage />} />
             <Route path="admin/items" element={<ItemsAdminPage />} />
             <Route path="admin/starter-kits" element={<StarterKitsPage />} />
+            <Route path="admin/characters" element={<AdminCharactersPage />} />
+            <Route path="admin/characters/:characterId" element={<AdminCharacterDetailPage />} />
+            <Route path="rules" element={<RulesPage />} />
+            <Route path="admin/rules" element={<RulesAdminPage />} />
             <Route path="profile" element={<ProfilePage />} />
             <Route
               path="location/:locationId/battle/:battleId"

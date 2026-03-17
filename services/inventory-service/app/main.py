@@ -565,4 +565,23 @@ def get_fast_slots(
 
     return result
 
+@router.delete("/{character_id}/all")
+def delete_all_inventory(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_admin_user),
+):
+    """
+    Bulk delete all inventory items and equipment slots for a character.
+    Admin-only. Idempotent: returns 200 with counts=0 if no data found.
+    Does NOT reverse attribute modifiers from equipped items.
+    """
+    result = crud.delete_all_inventory_for_character(db, character_id)
+    return {
+        "detail": "All inventory cleared",
+        "items_deleted": result["items_deleted"],
+        "slots_deleted": result["slots_deleted"],
+    }
+
+
 app.include_router(router)

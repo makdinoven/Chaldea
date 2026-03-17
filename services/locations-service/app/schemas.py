@@ -330,3 +330,36 @@ class MovementPostRequest(BaseModel):
     character_id: int
     content: str
 
+
+# -------------------------------
+#   GAME RULE SCHEMAS
+# -------------------------------
+class GameRuleCreate(BaseModel):
+    title: str
+    content: Optional[str] = None
+    sort_order: int = 0
+
+class GameRuleUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    sort_order: Optional[int] = None
+
+class GameRuleRead(BaseModel):
+    id: int
+    title: str
+    image_url: Optional[str] = None
+    content: Optional[str] = None
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+class GameRuleReorderItem(BaseModel):
+    id: int
+    sort_order: int
+
+class GameRuleReorder(BaseModel):
+    order: List[GameRuleReorderItem]
+

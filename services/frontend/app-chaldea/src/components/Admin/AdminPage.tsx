@@ -12,6 +12,8 @@ const sections: AdminSection[] = [
   { label: 'Локации', path: '/admin/locations', description: 'Редактирование мира, регионов и локаций' },
   { label: 'Навыки', path: '/home/admin/skills', description: 'Редактирование деревьев навыков' },
   { label: 'Стартовые наборы', path: '/admin/starter-kits', description: 'Настройка стартовых предметов и навыков по классам' },
+  { label: 'Персонажи', path: '/admin/characters', description: 'Управление персонажами всех игроков' },
+  { label: 'Правила', path: '/admin/rules', description: 'Управление блоками правил игры' },
 ];
 
 const AdminPage = () => {

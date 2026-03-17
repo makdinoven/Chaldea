@@ -6,7 +6,7 @@ from crud import (
     update_user_avatar, get_user_avatar, update_user_avatar_preview,
     update_character_avatar, get_character_avatar, update_character_avatar_preview, update_location_image,
     update_district_image, update_region_image, update_region_map_image, update_country_map_image,
-    update_skill_rank_image, update_skill_image, update_item_image
+    update_skill_rank_image, update_skill_image, update_item_image, update_rule_image
 )
 from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file
 from fastapi.middleware.cors import CORSMiddleware
@@ -247,6 +247,26 @@ async def change_item_image(item_id: int = Form(...), file: UploadFile = File(..
 
         return {
             "message": "Изображение предмета успешно загружено",
+            "image_url": image_url
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/photo/change_rule_image")
+async def change_rule_image(rule_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_admin_user)):
+    """
+    Загружает или заменяет изображение для блока правил (GameRule).
+    """
+    try:
+        file_stream = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("rule_image", rule_id)
+        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="rules")
+
+        update_rule_image(rule_id, image_url)
+
+        return {
+            "message": "Изображение правила успешно загружено",
             "image_url": image_url
         }
     except Exception as e:

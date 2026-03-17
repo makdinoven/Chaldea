@@ -247,6 +247,58 @@ async def create_user_character_relation(user_character: schemas.UserCharacterCr
     db.commit()
     return {"message": "Связь между пользователем и персонажем создана"}
 
+
+@router.delete("/user_characters/{user_id}/{character_id}")
+def delete_user_character_relation(
+    user_id: int,
+    character_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Admin-only: удаляет связь между пользователем и персонажем.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    relation = db.query(models.UserCharacter).filter(
+        models.UserCharacter.user_id == user_id,
+        models.UserCharacter.character_id == character_id,
+    ).first()
+
+    if not relation:
+        raise HTTPException(status_code=404, detail="User-character relation not found")
+
+    db.delete(relation)
+    db.commit()
+    return {"detail": "User-character relation deleted"}
+
+
+@router.post("/{user_id}/clear_current_character")
+def clear_current_character(
+    user_id: int,
+    body: schemas.ClearCurrentCharacterRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Admin-only: сбрасывает current_character у пользователя,
+    если он совпадает с переданным character_id.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.current_character == body.character_id:
+        user.current_character = None
+        db.commit()
+
+    return {"detail": "Current character cleared"}
+
+
 # Настройка статических файлов
 app.mount("/assets", StaticFiles(directory="src/assets"), name="assets")
 

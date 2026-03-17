@@ -43,6 +43,9 @@ class CharacterShort(BaseModel):
     avatar: str
     current_location: Optional[LocationShort] = None
 
+class ClearCurrentCharacterRequest(BaseModel):
+    character_id: int
+
 class MeResponse(BaseModel):
     # базовые поля пользователя
     id: int

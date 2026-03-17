@@ -65,16 +65,6 @@ const navItems: NavItem[] = [
   {
     label: 'ПРАВИЛА',
     path: '/rules',
-    megaMenu: [
-      {
-        title: 'ПРАВИЛА',
-        links: [
-          { label: 'Общие правила', path: '/rules/general' },
-          { label: 'Правила боя', path: '/rules/combat' },
-          { label: 'Правила отыгровки', path: '/rules/roleplay' },
-        ],
-      },
-    ],
   },
   {
     label: 'СОБЫТИЯ',
