@@ -1,0 +1,151 @@
+# Production overlay for docker-compose.yml
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Before first run, obtain SSL certificate:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm certbot \
+#     certonly --webroot -w /var/www/certbot -d vps87331.majorcore.host
+
+services:
+  # --- Frontend: not needed in prod (built into api-gateway) ---
+  frontend:
+    profiles: ["dev"]
+
+  # --- Dev tools: disabled in production ---
+  adminer:
+    profiles: ["dev"]
+
+  redis-insight:
+    profiles: ["dev"]
+
+  mongo-express:
+    profiles: ["dev"]
+
+  # --- API Gateway: production build with SSL ---
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./docker/api-gateway/Dockerfile.prod
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - certbot-webroot:/var/www/certbot:ro
+      - certbot-certs:/etc/letsencrypt:ro
+    depends_on: !override
+      user-service:
+        condition: service_started
+      battle-service:
+        condition: service_started
+      autobattle-service:
+        condition: service_started
+
+  # --- Certbot: SSL certificate management ---
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - certbot-webroot:/var/www/certbot
+      - certbot-certs:/etc/letsencrypt
+    entrypoint: sh -c "while :; do certbot renew --quiet; sleep 12h; done"
+
+  # --- MySQL: remove exposed port ---
+  mysql:
+    ports: !reset []
+
+  # --- Redis: remove exposed port ---
+  redis:
+    ports: !reset []
+
+  # --- MongoDB: remove exposed port ---
+  mongo:
+    ports: !reset []
+
+  # --- RabbitMQ: remove exposed ports ---
+  rabbitmq:
+    ports: !reset []
+
+  # --- Backend services: no --reload, no volume mounts, no exposed ports ---
+  user-service:
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+
+  photo-service:
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8001 --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+
+  character-attributes-service:
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8002 --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+
+  skills-service:
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8003 --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+
+  inventory-service:
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8004 --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+
+  character-service:
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+
+  locations-service:
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8006 --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+
+  notification-service:
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8007 --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      DB_HOST: mysql
+      DB_DATABASE: mydatabase
+      DB_USERNAME: myuser
+      DB_PASSWORD: mypassword
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://vps87331.majorcore.host}
+      AUTH_SERVICE_URL: http://user-service:8000
+
+  battle-service:
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8010 --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+    environment:
+      DB_HOST: mysql
+      DB_DATABASE: mydatabase
+      DB_USERNAME: myuser
+      DB_PASSWORD: mypassword
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      REDIS_URL: redis://redis:6379/0
+      MONGODB_URL: mongodb://mongo:27017/mydatabase
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://vps87331.majorcore.host}
+
+  autobattle-service:
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8011 --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+    environment:
+      BATTLE_SERVICE_URL: http://battle-service:8010
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      REDIS_URL: redis://redis:6379/0
+      MONGODB_URL: mongodb://mongo:27017/mydatabase
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://vps87331.majorcore.host}
+
+  # --- Celery: no watchfiles wrapper ---
+  celery-worker:
+    command: celery -A tasks:celery_app worker --loglevel=info
+    volumes: !reset []
+
+  celery-beat:
+    command: celery -A battle_service.tasks beat --loglevel=info
+    volumes: !reset []
+
+volumes:
+  certbot-webroot:
+  certbot-certs:
