@@ -16,35 +16,35 @@ jobs:
           - service: user-service
             working-dir: services/user-service
             requirements: services/user-service/requirements.txt
-            test-dir: services/user-service/tests
+            pytest-args: ''
           - service: photo-service
             working-dir: services/photo-service
             requirements: services/photo-service/requirements.txt
-            test-dir: services/photo-service/tests
+            pytest-args: ''
           - service: character-service
             working-dir: services/character-service/app
             requirements: services/character-service/app/requirements.txt
-            test-dir: services/character-service/app/tests
+            pytest-args: '--asyncio-mode=auto'
           - service: skills-service
             working-dir: services/skills-service/app
             requirements: services/skills-service/app/requirements.txt
-            test-dir: services/skills-service/app/tests
+            pytest-args: '--asyncio-mode=auto'
           - service: inventory-service
             working-dir: services/inventory-service/app
             requirements: services/inventory-service/app/requirements.txt
-            test-dir: services/inventory-service/app/tests
+            pytest-args: '--asyncio-mode=auto'
           - service: character-attributes-service
             working-dir: services/character-attributes-service/app
             requirements: services/character-attributes-service/app/requirements.txt
-            test-dir: services/character-attributes-service/app/tests
+            pytest-args: '--asyncio-mode=auto'
           - service: locations-service
             working-dir: services/locations-service/app
             requirements: services/locations-service/app/requirements.txt
-            test-dir: services/locations-service/app/tests
+            pytest-args: '--asyncio-mode=auto'
           - service: notification-service
             working-dir: services/notification-service/app
             requirements: services/notification-service/app/requirements.txt
-            test-dir: services/notification-service/app/tests
+            pytest-args: ''
 
     steps:
       - name: Checkout code
@@ -64,7 +64,7 @@ jobs:
         run: pip install -r ${{ matrix.requirements }}
 
       - name: Run tests
-        run: cd ${{ matrix.working-dir }} && python -m pytest tests/ --asyncio-mode=auto -v
+        run: cd ${{ matrix.working-dir }} && python -m pytest tests/ ${{ matrix.pytest-args }} -v
 
   deploy:
     name: Deploy to Production
