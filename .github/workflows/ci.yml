@@ -70,17 +70,20 @@ jobs:
     name: Deploy to Production
     runs-on: ubuntu-latest
     needs: test
+
     steps:
+      - name: Setup SSH key
+        run: |
+          echo "${{ secrets.SSH_PRIVATE_KEY_BASE64 }}" | base64 -d > key
+          chmod 600 key
+
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          script: |
+        run: |
+          ssh -o StrictHostKeyChecking=no -i key \
+          ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
             cd ~/rpgroll
             git pull origin main
             docker compose down
             docker compose up --build -d
             docker system prune -f
+          EOF
