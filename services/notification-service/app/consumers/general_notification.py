@@ -21,7 +21,14 @@ logger.setLevel(logging.INFO)
 QUEUE_NAME = "general_notifications"
 
 def consume():
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host="rabbitmq"))
+    import time
+    while True:
+        try:
+            connection = pika.BlockingConnection(pika.ConnectionParameters(host="rabbitmq"))
+            break
+        except pika.exceptions.AMQPConnectionError:
+            logger.warning("RabbitMQ not ready, retrying in 5s...")
+            time.sleep(5)
     channel = connection.channel()
     channel.queue_declare(queue=QUEUE_NAME, durable=True)
 

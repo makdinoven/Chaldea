@@ -11,7 +11,14 @@ from sse_manager import send_to_sse
 QUEUE_NAME = "user_registration"
 
 def consume():
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host="rabbitmq"))
+    import time
+    while True:
+        try:
+            connection = pika.BlockingConnection(pika.ConnectionParameters(host="rabbitmq"))
+            break
+        except pika.exceptions.AMQPConnectionError:
+            print("[user_registration_consumer] RabbitMQ not ready, retrying in 5s...")
+            time.sleep(5)
     channel = connection.channel()
     channel.queue_declare(queue=QUEUE_NAME, durable=True)
 
