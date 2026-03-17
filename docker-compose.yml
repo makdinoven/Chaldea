@@ -23,10 +23,10 @@ services:
       context: .
       dockerfile: ./docker/mysql/Dockerfile
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: mydatabase
-      MYSQL_USER: myuser
-      MYSQL_PASSWORD: mypassword
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_DATABASE:-mydatabase}
+      MYSQL_USER: ${DB_USERNAME:-myuser}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-mypassword}
     ports:
       - "3306:3306"
     volumes:
@@ -167,7 +167,7 @@ services:
       container_name: mongo-express
       image: mongo-express:latest
       environment:
-        ME_CONFIG_MONGODB_URL: "mongodb://mongo:27017/mydatabase"
+        ME_CONFIG_MONGODB_URL: "mongodb://mongo:27017/${DB_DATABASE:-mydatabase}"
         ME_CONFIG_BASICAUTH_USERNAME: admin
         ME_CONFIG_BASICAUTH_PASSWORD: secret
       ports:
@@ -216,10 +216,10 @@ services:
     volumes:
       - ./services/user-service:/app
     environment:
-      DB_HOST: mysql
-      DB_DATABASE: mydatabase
-      DB_USERNAME: myuser
-      DB_PASSWORD: mypassword
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_DATABASE: ${DB_DATABASE:-mydatabase}
+      DB_USERNAME: ${DB_USERNAME:-myuser}
+      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     ports:
@@ -246,10 +246,10 @@ services:
     env_file:
       - .env
     environment:
-      DB_HOST: mysql
-      DB_DATABASE: mydatabase
-      DB_USERNAME: myuser
-      DB_PASSWORD: mypassword
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_DATABASE: ${DB_DATABASE:-mydatabase}
+      DB_USERNAME: ${DB_USERNAME:-myuser}
+      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     depends_on:
       mysql:
@@ -271,10 +271,10 @@ services:
     volumes:
       - ./services/character-attributes-service/app:/app
     environment:
-      DB_HOST: mysql
-      DB_DATABASE: mydatabase
-      DB_USERNAME: myuser
-      DB_PASSWORD: mypassword
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_DATABASE: ${DB_DATABASE:-mydatabase}
+      DB_USERNAME: ${DB_USERNAME:-myuser}
+      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     depends_on:
@@ -298,10 +298,10 @@ services:
       - ./services/skills-service/app:/app
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      DB_HOST: mysql
-      DB_DATABASE: mydatabase
-      DB_USERNAME: myuser
-      DB_PASSWORD: mypassword
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_DATABASE: ${DB_DATABASE:-mydatabase}
+      DB_USERNAME: ${DB_USERNAME:-myuser}
+      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     depends_on:
       mysql:
@@ -324,10 +324,10 @@ services:
       - ./services/inventory-service/app:/app
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      DB_HOST: mysql
-      DB_DATABASE: mydatabase
-      DB_USERNAME: myuser
-      DB_PASSWORD: mypassword
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_DATABASE: ${DB_DATABASE:-mydatabase}
+      DB_USERNAME: ${DB_USERNAME:-myuser}
+      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     depends_on:
       mysql:
@@ -350,10 +350,10 @@ services:
       - ./services/character-service/app:/app
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      DB_HOST: mysql
-      DB_DATABASE: mydatabase
-      DB_USERNAME: myuser
-      DB_PASSWORD: mypassword
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_DATABASE: ${DB_DATABASE:-mydatabase}
+      DB_USERNAME: ${DB_USERNAME:-myuser}
+      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     depends_on:
       mysql:
@@ -376,10 +376,10 @@ services:
       - ./services/locations-service/app:/app
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      DB_HOST: mysql
-      DB_DATABASE: mydatabase
-      DB_USERNAME: myuser
-      DB_PASSWORD: mypassword
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_DATABASE: ${DB_DATABASE:-mydatabase}
+      DB_USERNAME: ${DB_USERNAME:-myuser}
+      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     depends_on:
       mysql:
@@ -402,10 +402,10 @@ services:
       - ./services/notification-service/app:/app
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      DB_HOST: mysql
-      DB_DATABASE: mydatabase
-      DB_USERNAME: myuser
-      DB_PASSWORD: mypassword
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_DATABASE: ${DB_DATABASE:-mydatabase}
+      DB_USERNAME: ${DB_USERNAME:-myuser}
+      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -428,13 +428,13 @@ services:
     volumes:
       - ./services/battle-service/app:/app
     environment:
-      DB_HOST: mysql
-      DB_DATABASE: mydatabase
-      DB_USERNAME: myuser
-      DB_PASSWORD: mypassword
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_DATABASE: ${DB_DATABASE:-mydatabase}
+      DB_USERNAME: ${DB_USERNAME:-myuser}
+      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       REDIS_URL: redis://redis:6379/0
-      MONGODB_URL: mongodb://mongo:27017/mydatabase
+      MONGODB_URL: mongodb://mongo:27017/${DB_DATABASE:-mydatabase}
     depends_on:
       - mysql
       - rabbitmq
@@ -460,7 +460,7 @@ services:
       BATTLE_SERVICE_URL: http://battle-service:8010
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       REDIS_URL: redis://redis:6379/0
-      MONGODB_URL: mongodb://mongo:27017/mydatabase
+      MONGODB_URL: mongodb://mongo:27017/${DB_DATABASE:-mydatabase}
     depends_on:
       - battle-service
       - rabbitmq
