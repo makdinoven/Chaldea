@@ -16,6 +16,34 @@ from fastapi.testclient import TestClient
 # Add the service root to sys.path so bare imports (models, crud, etc.) work.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# Pydantic v1/v2 compatibility: config.py uses `from pydantic import BaseSettings`
+# which works in Pydantic v1 but was moved to pydantic-settings in v2.
+# This shim ensures tests work in both environments.
+try:
+    from pydantic import BaseSettings  # noqa: F401 — Pydantic v1, nothing to do
+except ImportError:
+    try:
+        from pydantic_settings import BaseSettings as _BS  # noqa: F401
+        import pydantic as _pydantic
+        _pydantic.BaseSettings = _BS
+    except ImportError:
+        # Pydantic v2 without pydantic-settings: provide a minimal BaseSettings shim.
+        import pydantic as _pydantic
+
+        class _BaseSettings(_pydantic.BaseModel):
+            """Minimal BaseSettings shim for Pydantic v2 test environments."""
+
+            def __init__(self, **kwargs):
+                # Read values from env vars (matching Pydantic v1 BaseSettings behavior)
+                for field_name in self.model_fields:
+                    if field_name not in kwargs:
+                        env_val = os.environ.get(field_name)
+                        if env_val is not None:
+                            kwargs[field_name] = env_val
+                super().__init__(**kwargs)
+
+        _pydantic.BaseSettings = _BaseSettings
+
 # We must set JWT_SECRET_KEY before importing auth.py (it reads os.environ on import).
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-tests")
 
