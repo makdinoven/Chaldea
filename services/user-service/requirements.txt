@@ -1,7 +1,7 @@
 fastapi==0.115.11
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.39
-pydantic[email]
+pydantic[email]<2.0.0
 mysqlclient==2.2.7
 passlib[bcrypt]==1.7.4
 bcrypt==3.2.2
