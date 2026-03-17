@@ -16,6 +16,20 @@ def get_db_connection():
         cursorclass=DictCursor
     )
 
+def get_character_owner_id(character_id: int):
+    """Returns user_id of character owner, or None if not found."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT user_id FROM characters WHERE id = %s", (character_id,))
+            result = cursor.fetchone()
+            return result['user_id'] if result else None
+    except Exception:
+        return None
+    finally:
+        connection.close()
+
+
 def update_user_avatar(user_id: int, avatar_url: str):
     connection = get_db_connection()
     try:
@@ -26,7 +40,7 @@ def update_user_avatar(user_id: int, avatar_url: str):
             query_preview = "UPDATE users_avatar_preview SET avatar = %s WHERE user_id = %s"
             cursor.execute(query_preview, (avatar_url, user_id))
         connection.commit()
-    except:
+    except Exception:
         connection.rollback()
         raise
     finally:
@@ -63,7 +77,7 @@ def update_character_avatar(character_id: int, avatar_url: str, user_id: int):
             query_preview = "UPDATE users_avatar_character_preview SET avatar = %s WHERE user_id = %s"
             cursor.execute(query_preview, (avatar_url, user_id))
         connection.commit()
-    except:
+    except Exception:
         connection.rollback()
         raise
     finally:
@@ -100,7 +114,7 @@ def update_country_map_image(country_id: int, map_url: str):
             sql = "UPDATE Countries SET map_image_url = %s WHERE id = %s"
             cursor.execute(sql, (map_url, country_id))
         connection.commit()
-    except:
+    except Exception:
         connection.rollback()
         raise
     finally:
@@ -115,7 +129,7 @@ def update_region_map_image(region_id: int, map_url: str):
             sql = "UPDATE Regions SET map_image_url = %s WHERE id = %s"
             cursor.execute(sql, (map_url, region_id))
         connection.commit()
-    except:
+    except Exception:
         connection.rollback()
         raise
     finally:
@@ -130,7 +144,7 @@ def update_region_image(region_id: int, image_url: str):
             sql = "UPDATE Regions SET image_url = %s WHERE id = %s"
             cursor.execute(sql, (image_url, region_id))
         connection.commit()
-    except:
+    except Exception:
         connection.rollback()
         raise
     finally:
@@ -145,7 +159,7 @@ def update_district_image(district_id: int, image_url: str):
             sql = "UPDATE Districts SET image_url = %s WHERE id = %s"
             cursor.execute(sql, (image_url, district_id))
         connection.commit()
-    except:
+    except Exception:
         connection.rollback()
         raise
     finally:
@@ -160,7 +174,7 @@ def update_location_image(location_id: int, image_url: str):
             sql = "UPDATE Locations SET image_url = %s WHERE id = %s"
             cursor.execute(sql, (image_url, location_id))
         connection.commit()
-    except:
+    except Exception:
         connection.rollback()
         raise
     finally:
@@ -173,7 +187,7 @@ def update_skill_image(skill_id: int, image_url: str):
             sql = "UPDATE skills SET skill_image = %s WHERE id = %s"
             cursor.execute(sql, (image_url, skill_id))
         connection.commit()
-    except:
+    except Exception:
         connection.rollback()
         raise
     finally:
@@ -186,7 +200,7 @@ def update_skill_rank_image(skill_rank_id: int, image_url: str):
             sql = "UPDATE skill_ranks SET rank_image = %s WHERE id = %s"
             cursor.execute(sql, (image_url, skill_rank_id))
         connection.commit()
-    except:
+    except Exception:
         connection.rollback()
         raise
     finally:
@@ -199,7 +213,7 @@ def update_item_image(item_id: int, image_url: str):
             sql = "UPDATE items SET image = %s WHERE id = %s"
             cursor.execute(sql, (image_url, item_id))
         connection.commit()
-    except:
+    except Exception:
         connection.rollback()
         raise
     finally:
@@ -212,7 +226,7 @@ def update_rule_image(rule_id: int, image_url: str):
             sql = "UPDATE game_rules SET image_url = %s WHERE id = %s"
             cursor.execute(sql, (image_url, rule_id))
         connection.commit()
-    except:
+    except Exception:
         connection.rollback()
         raise
     finally:

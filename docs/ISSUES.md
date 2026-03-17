@@ -54,9 +54,9 @@
 
 ### 10. photo-service: bare except и отсутствие валидации файлов
 **Сервис:** photo-service
-**Файл:** `services/photo-service/main.py`
-**Описание:** Используются `except:` без типа исключения (ловит SystemExit, KeyboardInterrupt). Нет валидации MIME-type загружаемых файлов — принимается любой файл.
-**Решение:** Использовать `except Exception:`, добавить проверку content-type и расширения файла.
+**Файл:** `services/photo-service/crud.py` (main.py уже исправлен на `except Exception`)
+**Описание:** В `crud.py` используются `except:` без типа исключения (10 мест — ловит SystemExit, KeyboardInterrupt). Нет валидации MIME-type загружаемых файлов — принимается любой файл.
+**Решение:** Использовать `except Exception:` в crud.py, добавить проверку content-type и расширения файла.
 
 ### 11. Celery подавляет ошибки при записи логов боёв
 **Сервис:** battle-service
@@ -92,6 +92,24 @@
 - `lightgbm`, `scikit-learn` в autobattle-service — не импортируются
 - `credentials/gcs-credentials.json` в photo-service — не используется
 **Решение:** Удалить неиспользуемый код и зависимости.
+
+### 20. photo-service: delete_s3_file включает имя бакета в ключ
+**Сервис:** photo-service
+**Файл:** `services/photo-service/utils.py:124`
+**Описание:** `"/".join(file_url.split("/")[3:])` для URL вида `https://host/bucket/subdir/file.webp` возвращает `bucket/subdir/file.webp` вместо `subdir/file.webp`. Т.к. `Bucket` передаётся отдельно в `delete_object()`, ключ включает имя бакета и удаление молча не находит файл.
+**Решение:** Пропускать 4 сегмента вместо 3: `"/".join(file_url.split("/")[4:])`, или парсить URL корректно.
+
+### 21. frontend: SubmitPage.tsx hardcoded user_id = 1
+**Сервис:** frontend
+**Файл:** `services/frontend/app-chaldea/src/components/CreateCharacterPage/SubmitPage/SubmitPage.tsx:88`
+**Описание:** При загрузке превью аватара персонажа используется `const user_id = 1` вместо реального ID пользователя из Redux store.
+**Решение:** Использовать `id` из `useSelector(state => state.user)`, который уже импортируется в компоненте.
+
+### 22. user-service: legacy endpoint upload-avatar сохраняет файлы локально
+**Сервис:** user-service
+**Файл:** `services/user-service/main.py:184-199`
+**Описание:** `POST /users/upload-avatar/` сохраняет файлы на локальную файловую систему (`/assets/avatars/`) вместо S3. Дублирует функционал photo-service. Фронтенд использует photo-service для загрузки аватаров.
+**Решение:** Удалить legacy endpoint или перенаправить на photo-service.
 
 ### 19. Несогласованность типов participant_id в battle-service
 **Сервис:** battle-service
@@ -186,6 +204,6 @@
 |-----------|-----------|
 | CRITICAL | 1 |
 | HIGH | 4 |
-| MEDIUM | 5 |
-| LOW | 2 |
-| **Итого** | **12** |
+| MEDIUM | 6 |
+| LOW | 4 |
+| **Итого** | **15** |

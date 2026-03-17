@@ -1,4 +1,5 @@
 # auth_http.py (файл в сервисе уведомлений)
+import os
 import requests
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
@@ -12,7 +13,7 @@ class UserRead(BaseModel):
 
 OAUTH2_SCHEME = OAuth2PasswordBearer(tokenUrl="token")
 
-AUTH_SERVICE_URL = "http://user-service:8000"
+AUTH_SERVICE_URL = os.environ.get("AUTH_SERVICE_URL", "http://user-service:8000")
 
 def get_current_user_via_http(token: str = Depends(OAUTH2_SCHEME)) -> UserRead:
     """

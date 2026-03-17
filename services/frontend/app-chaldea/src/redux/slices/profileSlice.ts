@@ -402,9 +402,7 @@ export const uploadCharacterAvatar = createAsyncThunk<
       formData.append('user_id', String(userId));
       formData.append('file', file);
 
-      const response = await axios.post('/photo/change_character_avatar_photo', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      const response = await axios.post('/photo/change_character_avatar_photo', formData);
 
       const avatarUrl: string = response.data.avatar_url;
 

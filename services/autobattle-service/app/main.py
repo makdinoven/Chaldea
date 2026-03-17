@@ -4,6 +4,7 @@ import asyncio, math, random, statistics, logging, traceback
 from collections import defaultdict, deque
 from typing import Any, Dict, Tuple, Deque
 
+import os
 import aioredis, uvicorn
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,9 +20,10 @@ log = logging.getLogger("auto-battle")
 
 # ────────────────────────────  FastAPI  ───────────────────────────
 app = FastAPI(title="Auto-Battle AI")
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    allow_origins=cors_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
 strategy = Strategy()

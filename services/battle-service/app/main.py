@@ -23,6 +23,7 @@ from mongo_helpers import save_snapshot, load_snapshot
 from tasks import save_log
 from skills_client import character_has_rank, get_rank, get_item, character_ranks
 import logging
+import os
 logging.basicConfig(
     level=logging.DEBUG,               # DEBUG, чтобы видеть максимум
     format="%(levelname)s | %(name)s | %(asctime)s | %(message)s",
@@ -30,9 +31,10 @@ logging.basicConfig(
 logger = logging.getLogger("battle-service")
 app = FastAPI(title="Battle Service")
 
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

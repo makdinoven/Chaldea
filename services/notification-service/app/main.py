@@ -3,7 +3,9 @@
 import asyncio
 import json
 import logging
+import os
 from fastapi import BackgroundTasks, FastAPI, APIRouter, Depends, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from typing import List
 from sqlalchemy.orm import Session
@@ -29,6 +31,15 @@ logger = logging.getLogger("notification-service")
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup_event():

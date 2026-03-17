@@ -19,8 +19,8 @@ from rabbitmq_consumer import start_consumer
 from auth_http import get_admin_user
 
 # Пример, если нужно
-CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8000/characters")
-ATTRIBUTES_SERVICE_URL = os.getenv("ATTRIBUTES_SERVICE_URL", "http://attribute-service:8000/attributes")
+CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8005/characters")
+ATTRIBUTES_SERVICE_URL = os.getenv("ATTRIBUTES_SERVICE_URL", "http://character-attributes-service:8002/attributes")
 
 app = FastAPI(title="Async Skill Service")
 

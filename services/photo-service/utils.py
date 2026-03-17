@@ -8,9 +8,20 @@ from botocore.config import Config
 import logging
 import hashlib
 import base64
+from fastapi import UploadFile, HTTPException
 
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
+
+ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+
+def validate_image_mime(file: UploadFile):
+    if file.content_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Недопустимый формат файла. Разрешены: JPEG, PNG, WebP, GIF"
+        )
 
 # Настройки из окружения
 S3_ENDPOINT_URL = os.getenv('S3_ENDPOINT_URL', 'https://s3.twcstorage.ru')
@@ -121,7 +132,7 @@ def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "")
 
 def delete_s3_file(file_url: str):
     try:
-        s3_key = "/".join(file_url.split("/")[3:])
+        s3_key = "/".join(file_url.split("/")[4:])
         s3_client.delete_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key

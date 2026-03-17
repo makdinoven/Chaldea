@@ -8,9 +8,10 @@ from crud import (
     update_district_image, update_region_image, update_region_map_image, update_country_map_image,
     update_skill_rank_image, update_skill_image, update_item_image, update_rule_image
 )
-from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file
+from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime
 from fastapi.middleware.cors import CORSMiddleware
-from auth_http import get_admin_user
+from auth_http import get_admin_user, get_current_user_via_http
+from crud import get_character_owner_id
 
 app = FastAPI()
 
@@ -24,7 +25,10 @@ app.add_middleware(
 )
 
 @app.post("/photo/change_user_avatar_photo")
-async def change_user_avatar_photo(user_id: int = Form(...), file: UploadFile = File(...)):
+async def change_user_avatar_photo(user_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_current_user_via_http)):
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Вы можете загружать только свой аватар")
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("profile_photo", user_id)
@@ -50,7 +54,13 @@ async def delete_user_avatar_photo(user_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/photo/change_character_avatar_photo")
-async def change_character_avatar_photo(character_id: int = Form(...), user_id: int = Form(...), file: UploadFile = File(...)):
+async def change_character_avatar_photo(character_id: int = Form(...), user_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_current_user_via_http)):
+    owner_id = get_character_owner_id(character_id)
+    if owner_id is None:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Вы можете загружать аватар только своего персонажа")
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("profile_photo", character_id)
@@ -62,7 +72,10 @@ async def change_character_avatar_photo(character_id: int = Form(...), user_id: 
 
 
 @app.post("/photo/character_avatar_preview")
-async def character_avatar_preview(user_id: int = Form(...), file: UploadFile = File(...)):
+async def character_avatar_preview(user_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_current_user_via_http)):
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Вы можете загружать только свой аватар")
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("profile_photo", user_id)
@@ -73,7 +86,10 @@ async def character_avatar_preview(user_id: int = Form(...), file: UploadFile = 
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/photo/user_avatar_preview")
-async def user_avatar_preview(user_id: int = Form(...), file: UploadFile = File(...)):
+async def user_avatar_preview(user_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_current_user_via_http)):
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Вы можете загружать только свой аватар")
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("profile_photo", user_id)
@@ -90,6 +106,7 @@ async def change_country_map_photo(country_id: int = Form(...), file: UploadFile
     Загружает карту страны (map_image_url) в таблице Countries.
     Сохранение файлов происходит в папке /media/maps/.
     """
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("country_map", country_id)
@@ -116,6 +133,7 @@ async def change_region_map_photo(region_id: int = Form(...), file: UploadFile =
     Загружает карту региона (map_image_url) в таблице Regions.
     Сохранение файлов происходит в папке /media/maps/.
     """
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("region_map", region_id)
@@ -138,6 +156,7 @@ async def change_region_image(region_id: int = Form(...), file: UploadFile = Fil
     Загружает обычное изображение региона (image_url) в таблице Regions.
     Сохранение файлов происходит в папке /media/locations/.
     """
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("region_image", region_id)
@@ -160,6 +179,7 @@ async def change_district_image(district_id: int = Form(...), file: UploadFile =
     Загружает изображение для района (image_url) в таблице Districts.
     Сохранение файлов происходит в папке /media/locations/.
     """
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("district_image", district_id)
@@ -178,6 +198,7 @@ async def change_district_image(district_id: int = Form(...), file: UploadFile =
 # 5) Добавить изображение для локации (Location, image_url)
 @app.post("/photo/change_location_image")
 async def change_location_image(location_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_admin_user)):
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("location_image", location_id)
@@ -197,6 +218,7 @@ async def change_skill_image(skill_id: int = Form(...), file: UploadFile = File(
     """
     Загружает или заменяет изображение для навыка (Skill).
     """
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("skill_image", skill_id)
@@ -218,6 +240,7 @@ async def change_skill_rank_image(skill_rank_id: int = Form(...), file: UploadFi
     """
     Загружает или заменяет изображение для ранга навыка (SkillRank).
     """
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("skill_rank_image", skill_rank_id)
@@ -238,6 +261,7 @@ async def change_item_image(item_id: int = Form(...), file: UploadFile = File(..
     """
     Загружает или заменяет изображение для ранга навыка (SkillRank).
     """
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("item_image", item_id)
@@ -258,6 +282,7 @@ async def change_rule_image(rule_id: int = Form(...), file: UploadFile = File(..
     """
     Загружает или заменяет изображение для блока правил (GameRule).
     """
+    validate_image_mime(file)
     try:
         file_stream = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("rule_image", rule_id)

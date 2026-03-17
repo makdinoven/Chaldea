@@ -196,11 +196,11 @@ class TestRuleImageUploadMissingFields:
 # ===========================================================================
 
 class TestRuleImageUploadInvalidImage:
-    """Non-image content is rejected by PIL."""
+    """Non-image content is rejected by MIME validation (400) or PIL (500)."""
 
     @patch("auth_http.requests.get")
-    def test_non_image_file_returns_500(self, mock_auth, client):
-        """Random bytes that are not a valid image -> 500."""
+    def test_non_image_mime_returns_400(self, mock_auth, client):
+        """Non-image MIME type is rejected by validate_image_mime -> 400."""
         mock_auth.return_value = _mock_response(200, ADMIN_USER_RESPONSE)
         fake_content = b"This is not an image at all. Just plain text."
 
@@ -210,7 +210,7 @@ class TestRuleImageUploadInvalidImage:
             files=[_multipart_file(fake_content, filename="fake.txt", content_type="text/plain")],
             headers=ADMIN_HEADERS,
         )
-        assert response.status_code == 500
+        assert response.status_code == 400
 
 
 # ===========================================================================

@@ -6,6 +6,10 @@ vendor/
 
 # Environment variables
 .env
+.env.production
+
+# Service credentials (secrets)
+services/photo-service/credentials/
 
 # Build output
 dist/

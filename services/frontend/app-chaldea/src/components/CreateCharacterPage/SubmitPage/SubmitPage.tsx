@@ -96,11 +96,7 @@ export default function SubmitPage({
     formData.append('user_id', String(user_id));
 
     axios
-      .post('/photo/character_avatar_preview', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      })
+      .post('/photo/character_avatar_preview', formData)
       .then((response) => {
         const { avatar_url } = response.data;
         setAvatarUrl(avatar_url);
