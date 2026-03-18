@@ -242,7 +242,7 @@ services:
     build:
       context: .
       dockerfile: ./docker/photo-service/Dockerfile
-    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8001 --app-dir /app --reload"
+    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8001 --app-dir /app --reload"
     volumes:
       - ./services/photo-service:/app
     environment:
@@ -251,6 +251,11 @@ services:
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-https://s3.twcstorage.ru}
+      S3_REGION: ${S3_REGION:-ru-1}
       AWS_EC2_METADATA_DISABLED: "true"
     depends_on:
       mysql:
@@ -268,7 +273,7 @@ services:
     build:
       context: .
       dockerfile: ./docker/character-attributes-service/Dockerfile
-    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8002 --app-dir /app --reload"
+    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8002 --app-dir /app --reload"
     volumes:
       - ./services/character-attributes-service/app:/app
     environment:
@@ -294,7 +299,7 @@ services:
     build:
       context: .
       dockerfile: ./docker/skills-service/Dockerfile
-    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8003 --app-dir /app --reload"
+    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8003 --app-dir /app --reload"
     volumes:
       - ./services/skills-service/app:/app
     environment:
@@ -320,7 +325,7 @@ services:
     build:
       context: .
       dockerfile: ./docker/inventory-service/Dockerfile
-    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8004 --app-dir /app --reload"
+    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8004 --app-dir /app --reload"
     volumes:
       - ./services/inventory-service/app:/app
     environment:
@@ -346,7 +351,7 @@ services:
     build:
       context: .
       dockerfile: ./docker/character-service/Dockerfile
-    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app --reload"
+    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app --reload"
     volumes:
       - ./services/character-service/app:/app
     environment:
@@ -372,7 +377,7 @@ services:
     build:
       context: .
       dockerfile: ./docker/locations-service/Dockerfile
-    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8006 --app-dir /app --reload"
+    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8006 --app-dir /app --reload"
     volumes:
       - ./services/locations-service/app:/app
     environment:
