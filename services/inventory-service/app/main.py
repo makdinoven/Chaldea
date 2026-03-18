@@ -227,7 +227,6 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
       6) По окончании — пересчитываем быстрые слоты (recalc_fast_slots).
     """
     verify_character_ownership(db, character_id, current_user.id)
-    db.begin()  # начинаем транзакцию вручную
 
     try:
         # 1) Проверяем предмет

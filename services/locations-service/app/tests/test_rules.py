@@ -29,8 +29,11 @@ def _mock_response(status_code: int, json_data: dict = None):
 
 ADMIN_HEADERS = {"Authorization": "Bearer admin-token"}
 
-ADMIN_USER_RESPONSE = {"id": 1, "username": "admin", "role": "admin"}
-REGULAR_USER_RESPONSE = {"id": 2, "username": "user", "role": "user"}
+ADMIN_USER_RESPONSE = {"id": 1, "username": "admin", "role": "admin", "permissions": [
+    "locations:create", "locations:read", "locations:update", "locations:delete",
+    "rules:create", "rules:read", "rules:update", "rules:delete",
+]}
+REGULAR_USER_RESPONSE = {"id": 2, "username": "user", "role": "user", "permissions": []}
 
 
 def _make_rule(rule_id=1, title="Test Rule", content="<p>Content</p>", sort_order=0, image_url=None):

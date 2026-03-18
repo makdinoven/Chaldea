@@ -38,7 +38,7 @@ database.SessionLocal = _TestSessionLocal
 
 import models  # noqa: E402
 import schemas  # noqa: E402
-from auth_http import get_admin_user, UserRead  # noqa: E402
+from auth_http import get_admin_user, get_current_user_via_http, UserRead  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from main import app, get_db  # noqa: E402
 
@@ -47,8 +47,14 @@ from main import app, get_db  # noqa: E402
 # Helpers
 # ---------------------------------------------------------------------------
 
-_ADMIN_USER = UserRead(id=1, username="admin", role="admin")
-_REGULAR_USER = UserRead(id=2, username="player", role="user")
+_ADMIN_USER = UserRead(
+    id=1, username="admin", role="admin",
+    permissions=[
+        "characters:create", "characters:read", "characters:update", "characters:delete",
+        "characters:approve",
+    ],
+)
+_REGULAR_USER = UserRead(id=2, username="player", role="user", permissions=[])
 
 
 def _create_attributes(db, character_id=1, **overrides):
@@ -108,6 +114,7 @@ def admin_client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_admin_user] = override_admin
+    app.dependency_overrides[get_current_user_via_http] = override_admin
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -118,15 +125,16 @@ def non_admin_client(db_session):
     def override_get_db():
         yield db_session
 
-    # Do not override get_admin_user: the real auth_http will be called
-    # but there's no real user-service, so it will fail with 401/503.
-    # Instead, we override to return a non-admin user.
     def override_non_admin():
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Только администраторы могут выполнять это действие")
 
+    def override_non_admin_user():
+        return _REGULAR_USER
+
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_admin_user] = override_non_admin
+    app.dependency_overrides[get_current_user_via_http] = override_non_admin_user
     yield TestClient(app)
     app.dependency_overrides.clear()
 

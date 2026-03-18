@@ -28,9 +28,9 @@ class TestGetUnreadNotifications:
         assert all(n["status"] == "unread" for n in items)
         assert all(n["user_id"] == 1 for n in items)
 
-    def test_returns_empty_when_no_unread(self, client, seed_notifications):
-        # user 3 has no notifications at all — paginated endpoint returns empty list
-        resp = client.get("/notifications/3/unread")
+    def test_returns_empty_when_no_unread(self, client, db_session):
+        # user 1 has no notifications — paginated endpoint returns empty list
+        resp = client.get("/notifications/1/unread")
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
 
@@ -66,8 +66,9 @@ class TestGetAllNotifications:
         statuses = {n["status"] for n in resp.json()["items"]}
         assert statuses == {"read", "unread"}
 
-    def test_returns_empty_when_user_has_no_notifications(self, client, seed_notifications):
-        resp = client.get("/notifications/999/full")
+    def test_returns_empty_when_user_has_no_notifications(self, client, db_session):
+        # user 1 has no notifications at all (no seeded data in this test)
+        resp = client.get("/notifications/1/full")
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
 
@@ -179,7 +180,7 @@ class TestCreateNotification:
             },
         )
         assert resp.status_code == 403
-        assert "admin" in resp.json()["detail"].lower()
+        assert "прав" in resp.json()["detail"].lower()
 
     @patch("main.pika")
     def test_create_with_target_type_all(self, mock_pika, admin_client):
@@ -314,9 +315,11 @@ class TestSecurity:
     def test_negative_user_id(self, client):
         """Negative user_id does not crash."""
         resp = client.get("/notifications/-1/unread")
-        assert resp.status_code in (200, 404, 422)
+        # Ownership check returns 403 for mismatched user_id, or 422 for invalid
+        assert resp.status_code in (200, 403, 404, 422)
 
     def test_very_large_user_id(self, client):
         """Very large user_id does not crash."""
         resp = client.get("/notifications/99999999999/unread")
-        assert resp.status_code in (200, 404, 422)
+        # Ownership check returns 403 for mismatched user_id
+        assert resp.status_code in (200, 403, 404, 422)

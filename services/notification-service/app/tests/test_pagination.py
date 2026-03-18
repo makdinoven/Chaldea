@@ -174,7 +174,7 @@ class TestFullPagination:
 
     def test_empty_result(self, client, db_session):
         """No notifications returns empty items."""
-        response = client.get("/notifications/999/full")
+        response = client.get("/notifications/1/full")
         data = response.json()
 
         assert data["items"] == []

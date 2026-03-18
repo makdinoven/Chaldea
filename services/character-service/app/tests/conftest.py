@@ -49,7 +49,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from unittest.mock import MagicMock  # noqa: E402
 
 import models  # noqa: E402
-from auth_http import get_admin_user, OAUTH2_SCHEME, UserRead  # noqa: E402
+from auth_http import get_admin_user, get_current_user_via_http, OAUTH2_SCHEME, UserRead  # noqa: E402
 from main import app, get_db  # noqa: E402
 
 
@@ -103,7 +103,13 @@ def seed_fk_data():
 # Shared admin user constant for test fixtures
 # ---------------------------------------------------------------------------
 
-_ADMIN_USER = UserRead(id=1, username="admin", role="admin")
+_ADMIN_USER = UserRead(
+    id=1, username="admin", role="admin",
+    permissions=[
+        "characters:create", "characters:read", "characters:update",
+        "characters:delete", "characters:approve",
+    ],
+)
 
 
 @pytest.fixture
@@ -157,6 +163,7 @@ def admin_mock_client(mock_db_session):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_admin_user] = override_admin
+    app.dependency_overrides[get_current_user_via_http] = override_admin
     app.dependency_overrides[OAUTH2_SCHEME] = override_token
     yield TestClient(app, raise_server_exceptions=False)
     app.dependency_overrides.clear()

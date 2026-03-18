@@ -138,33 +138,33 @@ class TestAssignTitle:
     """Test that assign_title endpoint returns 404 when character/title not found."""
 
     @patch("main.crud")
-    def test_returns_404_when_not_found(self, mock_crud, client):
+    def test_returns_404_when_not_found(self, mock_crud, admin_mock_client, mock_db_session):
         """When crud.assign_title_to_character returns None, expect 404."""
         mock_crud.assign_title_to_character.return_value = None
 
-        response = client.post("/characters/1/titles/999")
+        response = admin_mock_client.post("/characters/1/titles/999")
 
         assert response.status_code == 404
         assert "найден" in response.json()["detail"]
 
     @patch("main.crud")
-    def test_returns_200_when_assigned(self, mock_crud, client):
+    def test_returns_200_when_assigned(self, mock_crud, admin_mock_client, mock_db_session):
         """When crud returns a valid assignment, expect success."""
         mock_crud.assign_title_to_character.return_value = MagicMock()
 
-        response = client.post("/characters/1/titles/1")
+        response = admin_mock_client.post("/characters/1/titles/1")
 
         assert response.status_code == 200
         assert "присвоен" in response.json()["message"]
 
     @patch("main.crud")
-    def test_returns_500_on_sqlalchemy_error(self, mock_crud, client):
+    def test_returns_500_on_sqlalchemy_error(self, mock_crud, admin_mock_client, mock_db_session):
         """When a DB error occurs, expect 500."""
         mock_crud.assign_title_to_character.side_effect = SQLAlchemyError(
             "Foreign key constraint"
         )
 
-        response = client.post("/characters/1/titles/1")
+        response = admin_mock_client.post("/characters/1/titles/1")
 
         assert response.status_code == 500
         assert "detail" in response.json()
@@ -177,32 +177,35 @@ class TestAssignTitle:
 class TestSetCurrentTitle:
     """Test that set_current_title endpoint returns 404 when character not found."""
 
+    @patch("main.verify_character_ownership")
     @patch("main.crud")
-    def test_returns_404_when_character_not_found(self, mock_crud, client):
+    def test_returns_404_when_character_not_found(self, mock_crud, mock_verify, admin_mock_client, mock_db_session):
         """When crud.set_current_title returns None, expect 404."""
         mock_crud.set_current_title.return_value = None
 
-        response = client.post("/characters/1/current-title/999")
+        response = admin_mock_client.post("/characters/1/current-title/999")
 
         assert response.status_code == 404
         assert "найден" in response.json()["detail"]
 
+    @patch("main.verify_character_ownership")
     @patch("main.crud")
-    def test_returns_200_when_title_set(self, mock_crud, client):
+    def test_returns_200_when_title_set(self, mock_crud, mock_verify, admin_mock_client, mock_db_session):
         """When crud returns a valid character, expect success."""
         mock_crud.set_current_title.return_value = MagicMock()
 
-        response = client.post("/characters/1/current-title/1")
+        response = admin_mock_client.post("/characters/1/current-title/1")
 
         assert response.status_code == 200
         assert "установлен" in response.json()["message"]
 
+    @patch("main.verify_character_ownership")
     @patch("main.crud")
-    def test_returns_500_on_sqlalchemy_error(self, mock_crud, client):
+    def test_returns_500_on_sqlalchemy_error(self, mock_crud, mock_verify, admin_mock_client, mock_db_session):
         """When a DB error occurs, expect 500."""
         mock_crud.set_current_title.side_effect = SQLAlchemyError("Connection reset")
 
-        response = client.post("/characters/1/current-title/1")
+        response = admin_mock_client.post("/characters/1/current-title/1")
 
         assert response.status_code == 500
         assert "detail" in response.json()

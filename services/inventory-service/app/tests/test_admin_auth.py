@@ -60,7 +60,7 @@ class TestCreateItemAuth:
     def test_admin_returns_201(self, mock_get, client: TestClient, db_session):
         """Valid admin token → 201 (item created)."""
         mock_get.return_value = _mock_response(
-            200, {"id": 1, "username": "admin", "role": "admin"}
+            200, {"id": 1, "username": "admin", "role": "admin", "permissions": ["items:create", "items:read", "items:update", "items:delete"]}
         )
         response = client.post(
             "/inventory/items",

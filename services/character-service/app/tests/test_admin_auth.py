@@ -36,7 +36,7 @@ class TestApproveCharacterRequestAuth:
     def test_non_admin_returns_403(self, mock_get, client: TestClient):
         """Valid token but role != admin → 403."""
         mock_get.return_value = _mock_response(
-            200, {"id": 2, "username": "user", "role": "user"}
+            200, {"id": 2, "username": "user", "role": "user", "permissions": []}
         )
         response = client.post(
             "/characters/requests/1/approve",
@@ -68,7 +68,7 @@ class TestDeleteCharacterAuth:
     @patch("auth_http.requests.get")
     def test_non_admin_returns_403(self, mock_get, client: TestClient):
         mock_get.return_value = _mock_response(
-            200, {"id": 2, "username": "user", "role": "user"}
+            200, {"id": 2, "username": "user", "role": "user", "permissions": []}
         )
         response = client.delete(
             "/characters/1",
@@ -80,7 +80,10 @@ class TestDeleteCharacterAuth:
     def test_admin_can_access(self, mock_get, client: TestClient, mock_db_session):
         """Valid admin token → endpoint is reached (404 because request doesn't exist)."""
         mock_get.return_value = _mock_response(
-            200, {"id": 1, "username": "admin", "role": "admin"}
+            200, {"id": 1, "username": "admin", "role": "admin", "permissions": [
+                "characters:create", "characters:read", "characters:update",
+                "characters:delete", "characters:approve",
+            ]}
         )
         # With a mock DB session, crud.delete_character returns None → 404
         mock_db_session.query.return_value.filter.return_value.first.return_value = None

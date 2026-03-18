@@ -22,7 +22,7 @@ for col in models.CharacterRequest.__table__.columns:
         col.type = String(50)
 
 from fastapi.testclient import TestClient
-from auth_http import get_admin_user, OAUTH2_SCHEME, UserRead
+from auth_http import get_admin_user, get_current_user_via_http, OAUTH2_SCHEME, UserRead
 from main import app, get_db
 
 
@@ -30,7 +30,13 @@ from main import app, get_db
 # Helpers
 # ---------------------------------------------------------------------------
 
-_ADMIN_USER = UserRead(id=1, username="admin", role="admin")
+_ADMIN_USER = UserRead(
+    id=1, username="admin", role="admin",
+    permissions=[
+        "characters:create", "characters:read", "characters:update",
+        "characters:delete", "characters:approve",
+    ],
+)
 
 
 def _seed_request(db, request_id=1):
@@ -106,6 +112,7 @@ def admin_client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_admin_user] = override_admin
+    app.dependency_overrides[get_current_user_via_http] = override_admin
     app.dependency_overrides[OAUTH2_SCHEME] = override_token
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -120,8 +127,12 @@ def non_admin_client(db_session):
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Admin access required")
 
+    def override_non_admin_user():
+        return UserRead(id=2, username="player", role="user", permissions=[])
+
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_admin_user] = override_non_admin
+    app.dependency_overrides[get_current_user_via_http] = override_non_admin_user
     yield TestClient(app)
     app.dependency_overrides.clear()
 

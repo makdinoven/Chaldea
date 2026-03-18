@@ -12,6 +12,31 @@ import inspect
 import textwrap
 
 import pytest
+from sqlalchemy import text
+from auth_http import get_current_user_via_http, UserRead
+
+
+@pytest.fixture()
+def authed_client(client, db_session):
+    """Client with auth overridden to a regular user (for ownership-checked endpoints).
+    Also creates the `characters` table needed by verify_character_ownership and
+    inserts a character owned by user_id=1.
+    """
+    from main import app
+    # Create characters table using db_session (same connection in StaticPool)
+    db_session.execute(text(
+        """CREATE TABLE IF NOT EXISTS characters (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER
+        )"""
+    ))
+    db_session.execute(text("INSERT OR IGNORE INTO characters (id, user_id) VALUES (1, 1)"))
+    db_session.commit()
+
+    _user = UserRead(id=1, username="testuser", role="user", permissions=[])
+    app.dependency_overrides[get_current_user_via_http] = lambda: _user
+    yield client
+    app.dependency_overrides.pop(get_current_user_via_http, None)
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +123,8 @@ def test_unequip_item_has_for_update():
 # Test 5: Functional test — equip item reduces inventory
 # ---------------------------------------------------------------------------
 
-def test_equip_item_reduces_inventory(client, db_session):
+def test_equip_item_reduces_inventory(authed_client, db_session):
+    client = authed_client
     """
     Equipping an item must reduce inventory quantity by 1
     and place the item in the appropriate equipment slot.
@@ -153,7 +179,8 @@ def test_equip_item_reduces_inventory(client, db_session):
 # Test 6: Equip with insufficient inventory fails
 # ---------------------------------------------------------------------------
 
-def test_equip_item_insufficient_inventory(client, db_session):
+def test_equip_item_insufficient_inventory(authed_client, db_session):
+    client = authed_client
     """
     Equipping an item when inventory quantity is 0 must return 400.
     """

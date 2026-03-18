@@ -59,9 +59,9 @@ def db_session():
         Base.metadata.drop_all(bind=engine)
 
 
-def _make_user(user_id: int = 1, username: str = "testuser", role: str = "user"):
+def _make_user(user_id: int = 1, username: str = "testuser", role: str = "user", permissions: list = None):
     """Helper: build a UserRead instance with given attributes."""
-    return UserRead(id=user_id, username=username, role=role)
+    return UserRead(id=user_id, username=username, role=role, permissions=permissions or [])
 
 
 @pytest.fixture()
@@ -73,7 +73,9 @@ def test_user():
 @pytest.fixture()
 def admin_user():
     """An admin user."""
-    return _make_user(user_id=99, username="admin", role="admin")
+    return _make_user(user_id=99, username="admin", role="admin", permissions=[
+        "notifications:create", "notifications:read", "notifications:update", "notifications:delete",
+    ])
 
 
 @pytest.fixture()

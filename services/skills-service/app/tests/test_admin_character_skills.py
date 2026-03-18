@@ -19,7 +19,7 @@ import httpx
 from httpx import ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
-from auth_http import get_admin_user, UserRead
+from auth_http import get_admin_user, get_current_user_via_http, UserRead
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +80,12 @@ app.router.on_startup.clear()
 # Auth overrides
 # ---------------------------------------------------------------------------
 
-_ADMIN_USER = UserRead(id=1, username="admin", role="admin")
+_ADMIN_USER = UserRead(
+    id=1, username="admin", role="admin",
+    permissions=[
+        "skills:create", "skills:read", "skills:update", "skills:delete",
+    ],
+)
 
 
 def _override_admin():
@@ -116,6 +121,7 @@ async def db_session(setup_db):
 async def admin_client(setup_db):
     app.dependency_overrides[_original_get_db] = _override_get_db
     app.dependency_overrides[get_admin_user] = _override_admin
+    app.dependency_overrides[get_current_user_via_http] = _override_admin
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
@@ -126,6 +132,7 @@ async def admin_client(setup_db):
 async def non_admin_client(setup_db):
     app.dependency_overrides[_original_get_db] = _override_get_db
     app.dependency_overrides[get_admin_user] = _override_non_admin
+    app.dependency_overrides[get_current_user_via_http] = _override_non_admin
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client

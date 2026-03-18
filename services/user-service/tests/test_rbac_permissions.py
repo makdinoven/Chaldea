@@ -369,8 +369,8 @@ class TestUsersMeEndpoint:
 
     def _make_auth_client(self, db, user):
         """Create a TestClient authenticated as the given user."""
+        import main as main_module
         from main import app
-        from auth import get_current_user
         from fastapi.testclient import TestClient
 
         def override_get_db():
@@ -380,7 +380,11 @@ class TestUsersMeEndpoint:
             return user
 
         app.dependency_overrides[get_db] = override_get_db
-        app.dependency_overrides[get_current_user] = override_auth
+        # Use main.get_current_user (the original function object captured by
+        # `from auth import *`) instead of importing from auth directly,
+        # because test_jwt_secret.py reloads the auth module creating new
+        # function objects that don't match Depends() keys in main.py.
+        app.dependency_overrides[main_module.get_current_user] = override_auth
         client = TestClient(app)
         return client
 

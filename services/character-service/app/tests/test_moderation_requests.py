@@ -20,21 +20,21 @@ class TestModerationRequestsEmpty:
     """Test that endpoint returns 200 with empty dict when no requests exist."""
 
     @patch("main.crud")
-    def test_returns_200_with_empty_dict(self, mock_crud, client):
+    def test_returns_200_with_empty_dict(self, mock_crud, admin_mock_client):
         mock_crud.get_moderation_requests.return_value = {}
 
-        response = client.get("/characters/moderation-requests")
+        response = admin_mock_client.get("/characters/moderation-requests")
 
         assert response.status_code == 200
         assert response.json() == {}
         mock_crud.get_moderation_requests.assert_called_once()
 
     @patch("main.crud")
-    def test_returns_200_with_none_treated_as_empty(self, mock_crud, client):
+    def test_returns_200_with_none_treated_as_empty(self, mock_crud, admin_mock_client):
         """When crud returns a falsy value, endpoint should return empty dict."""
         mock_crud.get_moderation_requests.return_value = None
 
-        response = client.get("/characters/moderation-requests")
+        response = admin_mock_client.get("/characters/moderation-requests")
 
         assert response.status_code == 200
         assert response.json() == {}
@@ -44,7 +44,7 @@ class TestModerationRequestsWithData:
     """Test that endpoint returns 200 with populated dict when requests exist."""
 
     @patch("main.crud")
-    def test_returns_200_with_single_pending_request(self, mock_crud, client):
+    def test_returns_200_with_single_pending_request(self, mock_crud, admin_mock_client):
         sample_data = {
             1: {
                 "request_id": 1,
@@ -71,7 +71,7 @@ class TestModerationRequestsWithData:
         }
         mock_crud.get_moderation_requests.return_value = sample_data
 
-        response = client.get("/characters/moderation-requests")
+        response = admin_mock_client.get("/characters/moderation-requests")
 
         assert response.status_code == 200
         data = response.json()
@@ -87,7 +87,7 @@ class TestModerationRequestsWithData:
         assert entry["user_id"] == 42
 
     @patch("main.crud")
-    def test_returns_200_with_multiple_requests(self, mock_crud, client):
+    def test_returns_200_with_multiple_requests(self, mock_crud, admin_mock_client):
         sample_data = {
             1: {
                 "request_id": 1,
@@ -136,7 +136,7 @@ class TestModerationRequestsWithData:
         }
         mock_crud.get_moderation_requests.return_value = sample_data
 
-        response = client.get("/characters/moderation-requests")
+        response = admin_mock_client.get("/characters/moderation-requests")
 
         assert response.status_code == 200
         data = response.json()
@@ -145,7 +145,7 @@ class TestModerationRequestsWithData:
         assert "2" in data
 
     @patch("main.crud")
-    def test_response_contains_all_expected_fields(self, mock_crud, client):
+    def test_response_contains_all_expected_fields(self, mock_crud, admin_mock_client):
         """Verify all expected fields are present in the response."""
         expected_fields = {
             "request_id", "user_id", "name", "biography", "appearance",
@@ -179,7 +179,7 @@ class TestModerationRequestsWithData:
         }
         mock_crud.get_moderation_requests.return_value = sample_data
 
-        response = client.get("/characters/moderation-requests")
+        response = admin_mock_client.get("/characters/moderation-requests")
 
         assert response.status_code == 200
         entry = response.json()["1"]
@@ -190,12 +190,12 @@ class TestModerationRequestsDBError:
     """Test that endpoint returns 500 when a DB error occurs."""
 
     @patch("main.crud")
-    def test_returns_500_on_sqlalchemy_error(self, mock_crud, client):
+    def test_returns_500_on_sqlalchemy_error(self, mock_crud, admin_mock_client):
         mock_crud.get_moderation_requests.side_effect = SQLAlchemyError(
             "Connection refused"
         )
 
-        response = client.get("/characters/moderation-requests")
+        response = admin_mock_client.get("/characters/moderation-requests")
 
         assert response.status_code == 500
         data = response.json()
@@ -203,13 +203,13 @@ class TestModerationRequestsDBError:
         assert "модерацию" in data["detail"].lower() or "модерации" in data["detail"].lower()
 
     @patch("main.crud")
-    def test_500_response_does_not_leak_db_details(self, mock_crud, client):
+    def test_500_response_does_not_leak_db_details(self, mock_crud, admin_mock_client):
         """Ensure the error response does not expose internal DB error details."""
         mock_crud.get_moderation_requests.side_effect = SQLAlchemyError(
             "FATAL: password authentication failed for user 'myuser'"
         )
 
-        response = client.get("/characters/moderation-requests")
+        response = admin_mock_client.get("/characters/moderation-requests")
 
         assert response.status_code == 500
         body = response.text

@@ -24,12 +24,15 @@ from sqlalchemy.orm import sessionmaker
 import database
 from database import Base
 from main import app, get_db
-from auth_http import get_admin_user, OAUTH2_SCHEME, UserRead
+from auth_http import get_admin_user, get_current_user_via_http, OAUTH2_SCHEME, UserRead
 from fastapi.testclient import TestClient
 import models
 import schemas
 
-_ADMIN_USER = UserRead(id=1, username="admin", role="admin")
+_ADMIN_USER = UserRead(id=1, username="admin", role="admin", permissions=[
+    "characters:create", "characters:read", "characters:update",
+    "characters:delete", "characters:approve",
+])
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +67,7 @@ def client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_admin_user] = override_admin
+    app.dependency_overrides[get_current_user_via_http] = override_admin
     app.dependency_overrides[OAUTH2_SCHEME] = override_token
     yield TestClient(app)
     app.dependency_overrides.clear()

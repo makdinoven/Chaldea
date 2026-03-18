@@ -61,10 +61,12 @@ def _create_equipment_slot(db, character_id=1, slot_type="main_weapon", item_id=
 def admin_client(db_session):
     """Client with mocked admin auth."""
     from main import app, get_db as main_get_db
-    from auth_http import get_admin_user, UserRead
+    from auth_http import get_admin_user, get_current_user_via_http, UserRead
     from fastapi.testclient import TestClient
 
-    admin = UserRead(id=1, username="admin", role="admin")
+    admin = UserRead(id=1, username="admin", role="admin", permissions=[
+        "items:create", "items:read", "items:update", "items:delete",
+    ])
 
     def override_get_db():
         yield db_session
@@ -74,6 +76,7 @@ def admin_client(db_session):
 
     app.dependency_overrides[main_get_db] = override_get_db
     app.dependency_overrides[get_admin_user] = override_admin
+    app.dependency_overrides[get_current_user_via_http] = override_admin
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -82,7 +85,7 @@ def admin_client(db_session):
 def non_admin_client(db_session):
     """Client with admin auth that raises 403."""
     from main import app, get_db as main_get_db
-    from auth_http import get_admin_user
+    from auth_http import get_admin_user, get_current_user_via_http, UserRead
     from fastapi.testclient import TestClient
     from fastapi import HTTPException
 
@@ -92,8 +95,12 @@ def non_admin_client(db_session):
     def override_non_admin():
         raise HTTPException(status_code=403, detail="Admin access required")
 
+    def override_non_admin_user():
+        return UserRead(id=2, username="player", role="user", permissions=[])
+
     app.dependency_overrides[main_get_db] = override_get_db
     app.dependency_overrides[get_admin_user] = override_non_admin
+    app.dependency_overrides[get_current_user_via_http] = override_non_admin_user
     yield TestClient(app)
     app.dependency_overrides.clear()
 

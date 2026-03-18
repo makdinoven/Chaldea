@@ -39,7 +39,7 @@ def _mock_response(status_code: int, json_data: dict = None):
 
 AUTH_HEADERS = {"Authorization": "Bearer test-token"}
 USER_RESPONSE = {"id": 42, "username": "testuser", "role": "user"}
-ADMIN_RESPONSE = {"id": 1, "username": "admin", "role": "admin"}
+ADMIN_RESPONSE = {"id": 1, "username": "admin", "role": "admin", "permissions": ["photos:upload", "photos:delete"]}
 
 
 # ===========================================================================

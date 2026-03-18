@@ -11,6 +11,19 @@ import models
 
 
 # ---------------------------------------------------------------------------
+# RBAC seed data — required because require_permission() queries the
+# permissions table to compute effective permissions for the user.
+# ---------------------------------------------------------------------------
+
+def _seed_rbac(db):
+    """Seed minimal RBAC tables so that admin users get 'users:manage' permission."""
+    # Permission that the admin endpoints require
+    perm = models.Permission(id=1, module="users", action="manage")
+    db.add(perm)
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -70,6 +83,7 @@ def _override_auth(app, get_db_func, user_obj):
 def db(test_engine, test_session_local):
     Base.metadata.create_all(bind=test_engine)
     session = test_session_local()
+    _seed_rbac(session)
     try:
         yield session
     finally:
