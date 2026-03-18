@@ -262,6 +262,21 @@
     animation: fade-in 0.2s ease-out;
   }
 
+  /* --- Gold Checkbox (custom checkbox with gold gradient fill) --- */
+  /* Usage: <input className="peer ..." type="checkbox" /><span className="gold-checkbox ..."></span> */
+  .gold-checkbox::before {
+    content: '';
+    width: 16px;
+    height: 16px;
+    position: absolute;
+    background: linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    transform: scale(0);
+    transition: transform 0.1s ease-in;
+  }
+  .peer:checked ~ .gold-checkbox::before {
+    transform: scale(1);
+  }
+
   /* --- Form Input (bottom-border style) --- */
   /* Usage: <input className="input-underline" /> */
   .input-underline {

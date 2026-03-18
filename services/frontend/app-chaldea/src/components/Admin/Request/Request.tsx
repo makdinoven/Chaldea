@@ -82,7 +82,6 @@ const Request = ({ data }: RequestProps) => {
               item.text && (
                 <CharacterInfoSmall
                   key={index}
-                  title={undefined}
                   text={item.text}
                 />
               )

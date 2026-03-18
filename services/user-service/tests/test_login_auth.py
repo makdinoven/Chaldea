@@ -86,27 +86,38 @@ class TestPasswordHashing:
 # ---------------------------------------------------------------------------
 
 class TestConfig:
-    """Verify Settings class reads env vars and has correct defaults."""
+    """Verify Settings class reads env vars and fails fast when they are missing."""
 
-    def test_default_values(self):
-        """Settings must have sensible defaults matching docker-compose values."""
+    def test_missing_env_vars_raises_validation_error(self):
+        """Settings must raise ValidationError when required DB env vars are missing."""
+        from pydantic import ValidationError
         from config import Settings
 
-        # Remove DB env vars so defaults are used
+        # Remove all DB env vars so Settings cannot be created
         env_clean = {
             k: v for k, v in os.environ.items()
             if k not in ("DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD", "DB_DATABASE")
         }
         with patch.dict(os.environ, env_clean, clear=True):
-            s = Settings()
-            assert s.DB_HOST == "mysql"
-            assert s.DB_PORT == 3306
-            assert s.DB_USERNAME == "myuser"
-            assert s.DB_PASSWORD == "mypassword"
-            assert s.DB_DATABASE == "mydatabase"
+            with pytest.raises(ValidationError):
+                Settings()
 
-    def test_env_vars_override_defaults(self):
-        """Settings must pick up env var overrides."""
+    def test_db_port_has_default(self):
+        """DB_PORT has a default of 3306 — Settings should not require it."""
+        from config import Settings
+
+        env_with_required = {
+            "DB_HOST": "testhost",
+            "DB_USERNAME": "testuser",
+            "DB_PASSWORD": "testpass",
+            "DB_DATABASE": "testdb",
+        }
+        with patch.dict(os.environ, env_with_required):
+            s = Settings()
+            assert s.DB_PORT == 3306
+
+    def test_env_vars_are_read_correctly(self):
+        """Settings must pick up env var values."""
         from config import Settings
 
         custom_env = {
@@ -252,15 +263,16 @@ class TestLoginEndpoint:
             "password": "WrongPassword",
         })
         assert response.status_code == 401
-        assert response.json()["detail"] == "Invalid credentials"
+        assert response.json()["detail"] == "Неверный email или пароль"
 
     def test_login_nonexistent_user_returns_401(self, client):
-        """POST /users/login with unknown user returns 401."""
+        """POST /users/login with unknown user returns 401 with Russian message."""
         response = client.post("/users/login", json={
             "identifier": "nobody",
             "password": "whatever",
         })
         assert response.status_code == 401
+        assert response.json()["detail"] == "Неверный email или пароль"
 
     def test_login_missing_fields_returns_422(self, client):
         """POST /users/login with missing fields returns 422 validation error."""
@@ -276,3 +288,146 @@ class TestLoginEndpoint:
             "password": "anything",
         })
         assert response.status_code in (401, 422)
+
+
+# ---------------------------------------------------------------------------
+# 6. Registration endpoint (integration) — FEAT-032
+# ---------------------------------------------------------------------------
+
+class TestRegistrationEndpoint:
+    """Integration tests for POST /users/register — error messages and validation."""
+
+    @patch("main.send_notification_event")
+    def test_register_valid_user_succeeds(self, mock_notify, client, db_session):
+        """POST /users/register with valid data returns 200 and user object."""
+        response = client.post("/users/register", json={
+            "email": "newuser@example.com",
+            "username": "newuser",
+            "password": "ValidPass123",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["email"] == "newuser@example.com"
+        assert data["username"] == "newuser"
+        assert "id" in data
+
+    @patch("main.send_notification_event")
+    def test_register_duplicate_email_returns_400(self, mock_notify, client, db_session):
+        """POST /users/register with duplicate email returns 400 with Russian message."""
+        # Create first user
+        client.post("/users/register", json={
+            "email": "dup@example.com",
+            "username": "first_user",
+            "password": "ValidPass123",
+        })
+        # Try to register with the same email
+        response = client.post("/users/register", json={
+            "email": "dup@example.com",
+            "username": "second_user",
+            "password": "ValidPass123",
+        })
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Этот email уже зарегистрирован"
+
+    @patch("main.send_notification_event")
+    def test_register_duplicate_username_returns_400(self, mock_notify, client, db_session):
+        """POST /users/register with duplicate username returns 400 with Russian message."""
+        # Create first user
+        client.post("/users/register", json={
+            "email": "user1@example.com",
+            "username": "sameuser",
+            "password": "ValidPass123",
+        })
+        # Try to register with the same username
+        response = client.post("/users/register", json={
+            "email": "user2@example.com",
+            "username": "sameuser",
+            "password": "ValidPass123",
+        })
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Этот никнейм уже занят"
+
+    def test_register_password_too_short_returns_422(self, client):
+        """POST /users/register with password < 6 chars returns 422 with Russian message."""
+        response = client.post("/users/register", json={
+            "email": "short@example.com",
+            "username": "shortpw",
+            "password": "abc",
+        })
+        assert response.status_code == 422
+        body = response.json()
+        # Pydantic validation error contains the message in the detail array
+        errors = body["detail"]
+        password_errors = [e for e in errors if "password" in e.get("loc", [])]
+        assert len(password_errors) > 0
+        assert "минимум 6 символов" in password_errors[0]["msg"]
+
+    def test_register_password_too_long_returns_422(self, client):
+        """POST /users/register with password > 128 chars returns 422 with Russian message."""
+        long_password = "A" * 129
+        response = client.post("/users/register", json={
+            "email": "long@example.com",
+            "username": "longpw",
+            "password": long_password,
+        })
+        assert response.status_code == 422
+        body = response.json()
+        errors = body["detail"]
+        password_errors = [e for e in errors if "password" in e.get("loc", [])]
+        assert len(password_errors) > 0
+        assert "длинный" in password_errors[0]["msg"]
+
+    @patch("main.send_notification_event")
+    def test_register_password_exactly_6_chars_succeeds(self, mock_notify, client, db_session):
+        """POST /users/register with password of exactly 6 chars succeeds (boundary)."""
+        response = client.post("/users/register", json={
+            "email": "exact6@example.com",
+            "username": "exact6user",
+            "password": "abcdef",
+        })
+        assert response.status_code == 200
+        assert response.json()["username"] == "exact6user"
+
+    def test_register_username_too_short_returns_422(self, client):
+        """POST /users/register with username < 2 chars returns 422 with Russian message."""
+        response = client.post("/users/register", json={
+            "email": "shortu@example.com",
+            "username": "a",
+            "password": "ValidPass123",
+        })
+        assert response.status_code == 422
+        body = response.json()
+        errors = body["detail"]
+        username_errors = [e for e in errors if "username" in e.get("loc", [])]
+        assert len(username_errors) > 0
+        assert "минимум 2 символа" in username_errors[0]["msg"]
+
+    def test_register_username_too_long_returns_422(self, client):
+        """POST /users/register with username > 30 chars returns 422 with Russian message."""
+        long_username = "u" * 31
+        response = client.post("/users/register", json={
+            "email": "longu@example.com",
+            "username": long_username,
+            "password": "ValidPass123",
+        })
+        assert response.status_code == 422
+        body = response.json()
+        errors = body["detail"]
+        username_errors = [e for e in errors if "username" in e.get("loc", [])]
+        assert len(username_errors) > 0
+        assert "30 символов" in username_errors[0]["msg"]
+
+    @patch("main.send_notification_event")
+    def test_register_password_exactly_128_chars_succeeds(self, mock_notify, client, db_session):
+        """POST /users/register with password of exactly 128 chars succeeds (boundary)."""
+        response = client.post("/users/register", json={
+            "email": "max128@example.com",
+            "username": "max128user",
+            "password": "P" * 128,
+        })
+        assert response.status_code == 200
+
+    def test_register_missing_fields_returns_422(self, client):
+        """POST /users/register with empty body returns 422."""
+        response = client.post("/users/register", json={})
+        assert response.status_code == 422

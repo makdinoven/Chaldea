@@ -11,6 +11,8 @@ export default function Input({
   onChange,
   id,
   isRequired,
+  name,
+  autoComplete,
 }) {
   const handleChange = (e) => {
     const { value } = e.target;
@@ -33,6 +35,8 @@ export default function Input({
       onChange={handleChange}
       className={styles.input}
       id={id}
+      name={name}
+      autoComplete={autoComplete}
       min={type === 'number' ? minValue : undefined}
       max={type === 'number' ? maxValue : undefined}
     />

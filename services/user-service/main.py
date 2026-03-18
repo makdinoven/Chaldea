@@ -1,17 +1,15 @@
 from typing import List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, Depends, HTTPException, status, APIRouter, UploadFile, Query
-from fastapi.staticfiles import StaticFiles
+from fastapi import BackgroundTasks, FastAPI, Depends, HTTPException, status, APIRouter, Query
 from fastapi.security import OAuth2PasswordBearer
 import models
 import schemas
-from crud import create_user, get_user_by_email, get_user_by_username, authenticate_user
+from crud import create_user, get_user_by_email, get_user_by_username, authenticate_user, get_effective_permissions, require_permission, require_admin, is_admin
 from auth import *
 from auth import SECRET_KEY, ALGORITHM
 from database import SessionLocal, engine, get_db
 from jose import JWTError, jwt
 import os
-import shutil
 from fastapi.middleware.cors import CORSMiddleware
 from producer import send_notification_event
 import httpx
@@ -77,16 +75,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-def on_startup():
-    models.Base.metadata.create_all(bind=engine)
-
 router = APIRouter(prefix="/users")
-
-UPLOAD_DIR = "src/assets/avatars/"
-
-if not os.path.exists(UPLOAD_DIR):
-    os.makedirs(UPLOAD_DIR)
 
 CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8005")
 LOCATION_SERVICE_URL = os.getenv("LOCATION_SERVICE_URL", "http://locations-service:8006")
@@ -156,11 +145,11 @@ async def _fetch_character_short(char_id: int):
 def register_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     db_user_email = get_user_by_email(db, email=user.email)
     if db_user_email:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(status_code=400, detail="Этот email уже зарегистрирован")
 
     db_user_username = get_user_by_username(db, username=user.username)
     if db_user_username:
-        raise HTTPException(status_code=400, detail="Username already taken")
+        raise HTTPException(status_code=400, detail="Этот никнейм уже занят")
 
     new_user = create_user(db=db, user=user)
     background_tasks.add_task(send_notification_event, new_user.id)
@@ -173,7 +162,7 @@ def login_user(data: Login, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials"
+            detail="Неверный email или пароль"
         )
 
     token_data = {"sub": user.email}
@@ -225,13 +214,24 @@ async def read_users_me(current_user: models.User = Depends(get_current_user), d
     except Exception:
         db.rollback()
 
+    # Compute role name from roles table, fallback to legacy string column
+    role_name = current_user.role or "user"
+    if current_user.role_id:
+        role_obj = db.query(models.Role).filter(models.Role.id == current_user.role_id).first()
+        if role_obj:
+            role_name = role_obj.name
+
+    permissions = get_effective_permissions(db, current_user)
+
     me_data = {
         "id": current_user.id,
         "email": current_user.email,
         "username": current_user.username,
         "avatar": current_user.avatar,
         "balance": current_user.balance,
-        "role": current_user.role,
+        "role": role_name,
+        "role_display_name": current_user.role_display_name,
+        "permissions": permissions,
         "current_character_id": current_user.current_character,
         "character": None
     }
@@ -242,18 +242,6 @@ async def read_users_me(current_user: models.User = Depends(get_current_user), d
             me_data["character"] = char_data
 
     return schemas.MeResponse(**me_data)
-
-
-@router.post("/upload-avatar/")
-async def upload_avatar(file: UploadFile, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    file_path = os.path.join(UPLOAD_DIR, f"{current_user.id}_{file.filename}")
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    relative_path = f"/assets/avatars/{current_user.id}_{file.filename}"
-    current_user.avatar = relative_path
-    db.commit()
-    return {"avatar_url": relative_path}
 
 
 # ==================== PROFILE SETTINGS & USERNAME ====================
@@ -374,7 +362,9 @@ def update_username(
 # ==================== CHARACTER RELATIONS ====================
 
 @router.put("/{user_id}/update_character")
-async def update_user_character(user_id: int, character_data: dict, db: Session = Depends(get_db)):
+async def update_user_character(user_id: int, character_data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Вы можете менять только своего активного персонажа")
     character_id = character_data.get("current_character")
     if character_id is None:
         raise HTTPException(status_code=400, detail="current_character обязателен")
@@ -414,8 +404,7 @@ def delete_user_character_relation(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_permission(db, current_user, "users:manage")
 
     relation = db.query(models.UserCharacter).filter(
         models.UserCharacter.user_id == user_id,
@@ -437,8 +426,7 @@ def clear_current_character(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_permission(db, current_user, "users:manage")
 
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
@@ -449,10 +437,6 @@ def clear_current_character(
         db.commit()
 
     return {"detail": "Current character cleared"}
-
-
-# Static files
-app.mount("/assets", StaticFiles(directory="src/assets"), name="assets")
 
 
 # ==================== USER LISTS & STATS ====================
@@ -530,8 +514,434 @@ def get_all_users(
 
 @router.get("/admins", response_model=List[UserRead])
 def get_admin_users(db: Session = Depends(get_db)):
-    admins = db.query(models.User).filter(models.User.role == "admin").all()
+    # Query by role_id (admin role_id=4) with fallback to legacy role string
+    admin_role = db.query(models.Role).filter(models.Role.name == "admin").first()
+    if admin_role:
+        admins = db.query(models.User).filter(models.User.role_id == admin_role.id).all()
+    else:
+        # Fallback if roles table not yet populated
+        admins = db.query(models.User).filter(models.User.role == "admin").all()
     return admins
+
+
+# ==================== RBAC MANAGEMENT ====================
+
+@router.get("/roles", response_model=List[schemas.RoleResponse])
+def list_roles(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Список всех ролей. Только для администраторов."""
+    require_admin(db, current_user)
+    roles = db.query(models.Role).order_by(models.Role.level.asc()).all()
+    return roles
+
+
+@router.put("/{user_id}/role", response_model=schemas.UserRoleResponse)
+def assign_user_role(
+    user_id: int,
+    body: schemas.RoleAssignRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Назначить роль пользователю. Только для администраторов."""
+    require_admin(db, current_user)
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    new_role = db.query(models.Role).filter(models.Role.id == body.role_id).first()
+    if not new_role:
+        raise HTTPException(status_code=404, detail="Роль не найдена")
+
+    # Last admin protection
+    if user.role_id:
+        current_role = db.query(models.Role).filter(models.Role.id == user.role_id).first()
+        if current_role and current_role.name == "admin" and new_role.name != "admin":
+            admin_role = db.query(models.Role).filter(models.Role.name == "admin").first()
+            if admin_role:
+                admin_count = db.query(models.User).filter(
+                    models.User.role_id == admin_role.id
+                ).count()
+                if admin_count <= 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Нельзя снять роль администратора с последнего админа"
+                    )
+
+    # Update role
+    user.role_id = new_role.id
+    user.role = new_role.name  # Sync legacy string column
+    user.role_display_name = body.display_name
+
+    db.commit()
+    db.refresh(user)
+
+    permissions = get_effective_permissions(db, user)
+
+    return schemas.UserRoleResponse(
+        id=user.id,
+        username=user.username,
+        role=new_role.name,
+        role_display_name=user.role_display_name,
+        permissions=permissions,
+    )
+
+
+@router.get("/permissions", response_model=schemas.PermissionsGroupedResponse)
+def list_permissions(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Список всех разрешений, сгруппированных по модулю. Только для администраторов."""
+    require_admin(db, current_user)
+
+    all_perms = db.query(models.Permission).order_by(
+        models.Permission.module, models.Permission.action
+    ).all()
+
+    modules: dict = {}
+    for perm in all_perms:
+        if perm.module not in modules:
+            modules[perm.module] = []
+        modules[perm.module].append(schemas.PermissionItem(
+            id=perm.id,
+            module=perm.module,
+            action=perm.action,
+            description=perm.description,
+        ))
+
+    return schemas.PermissionsGroupedResponse(modules=modules)
+
+
+@router.put("/{user_id}/permissions", response_model=schemas.UserPermissionsResponse)
+def set_user_permission_overrides(
+    user_id: int,
+    body: schemas.PermissionOverridesRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Установить индивидуальные разрешения пользователю. Только для администраторов."""
+    require_admin(db, current_user)
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    # Cannot set overrides for admin-role users
+    if is_admin(db, user):
+        raise HTTPException(
+            status_code=400,
+            detail="Невозможно изменить разрешения администратора"
+        )
+
+    # Validate all permission strings and collect Permission objects
+    grant_perms = []
+    for perm_str in body.grants:
+        if ":" not in perm_str:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Некорректный формат разрешения: '{perm_str}'. Ожидается 'модуль:действие'"
+            )
+        module, action = perm_str.split(":", 1)
+        perm = db.query(models.Permission).filter(
+            models.Permission.module == module,
+            models.Permission.action == action,
+        ).first()
+        if not perm:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Разрешение '{perm_str}' не найдено"
+            )
+        grant_perms.append(perm)
+
+    revoke_perms = []
+    for perm_str in body.revokes:
+        if ":" not in perm_str:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Некорректный формат разрешения: '{perm_str}'. Ожидается 'модуль:действие'"
+            )
+        module, action = perm_str.split(":", 1)
+        perm = db.query(models.Permission).filter(
+            models.Permission.module == module,
+            models.Permission.action == action,
+        ).first()
+        if not perm:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Разрешение '{perm_str}' не найдено"
+            )
+        revoke_perms.append(perm)
+
+    # Clear existing overrides
+    db.query(models.UserPermission).filter(
+        models.UserPermission.user_id == user_id
+    ).delete()
+
+    # Insert new overrides
+    for perm in grant_perms:
+        db.add(models.UserPermission(
+            user_id=user_id,
+            permission_id=perm.id,
+            granted=True,
+        ))
+
+    for perm in revoke_perms:
+        db.add(models.UserPermission(
+            user_id=user_id,
+            permission_id=perm.id,
+            granted=False,
+        ))
+
+    db.commit()
+
+    # Build response
+    effective = get_effective_permissions(db, user)
+
+    # Get role name
+    role_name = user.role or "user"
+    if user.role_id:
+        role_obj = db.query(models.Role).filter(models.Role.id == user.role_id).first()
+        if role_obj:
+            role_name = role_obj.name
+
+    return schemas.UserPermissionsResponse(
+        id=user.id,
+        username=user.username,
+        role=role_name,
+        permissions=effective,
+        overrides={
+            "grants": [f"{p.module}:{p.action}" for p in grant_perms],
+            "revokes": [f"{p.module}:{p.action}" for p in revoke_perms],
+        },
+    )
+
+
+@router.get("/{user_id}/effective-permissions", response_model=schemas.EffectivePermissionsResponse)
+def get_user_effective_permissions(
+    user_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Получить эффективные разрешения пользователя. Только для администраторов."""
+    require_admin(db, current_user)
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    # Get role info
+    role_name = user.role or "user"
+    if user.role_id:
+        role_obj = db.query(models.Role).filter(models.Role.id == user.role_id).first()
+        if role_obj:
+            role_name = role_obj.name
+
+    # Get role permissions
+    role_perms = []
+    if user.role_id:
+        rows = (
+            db.query(models.Permission)
+            .join(models.RolePermission, models.RolePermission.permission_id == models.Permission.id)
+            .filter(models.RolePermission.role_id == user.role_id)
+            .all()
+        )
+        role_perms = [f"{p.module}:{p.action}" for p in rows]
+
+    # Get overrides
+    user_overrides = (
+        db.query(models.UserPermission, models.Permission)
+        .join(models.Permission, models.Permission.id == models.UserPermission.permission_id)
+        .filter(models.UserPermission.user_id == user.id)
+        .all()
+    )
+
+    grants = []
+    revokes = []
+    for override, perm in user_overrides:
+        perm_str = f"{perm.module}:{perm.action}"
+        if override.granted:
+            grants.append(perm_str)
+        else:
+            revokes.append(perm_str)
+
+    # Effective permissions
+    effective = get_effective_permissions(db, user)
+
+    return schemas.EffectivePermissionsResponse(
+        user_id=user.id,
+        username=user.username,
+        role=role_name,
+        role_display_name=user.role_display_name,
+        role_permissions=sorted(role_perms),
+        overrides={
+            "grants": sorted(grants),
+            "revokes": sorted(revokes),
+        },
+        effective_permissions=effective,
+    )
+
+
+# ==================== ADMIN USER LIST ====================
+
+@router.get("/admin/list", response_model=schemas.AdminUserListResponse)
+def admin_list_users(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    role_id: Optional[int] = Query(None),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Список пользователей с ролями и разрешениями для админ-панели."""
+    require_admin(db, current_user)
+
+    query = db.query(models.User)
+
+    # Search by username or email
+    if search:
+        search_pattern = f"%{search}%"
+        query = query.filter(
+            (models.User.username.ilike(search_pattern)) |
+            (models.User.email.ilike(search_pattern))
+        )
+
+    # Filter by role_id
+    if role_id is not None:
+        query = query.filter(models.User.role_id == role_id)
+
+    total = query.count()
+
+    users = (
+        query.order_by(models.User.id.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    items = []
+    for user in users:
+        # Get role name from roles table, fallback to legacy string
+        role_name = user.role or "user"
+        if user.role_id:
+            role_obj = db.query(models.Role).filter(models.Role.id == user.role_id).first()
+            if role_obj:
+                role_name = role_obj.name
+
+        permissions = get_effective_permissions(db, user)
+
+        items.append(schemas.AdminUserItem(
+            id=user.id,
+            username=user.username,
+            email=user.email,
+            avatar=user.avatar,
+            role=role_name,
+            role_id=user.role_id,
+            role_display_name=user.role_display_name,
+            registered_at=user.registered_at,
+            last_active_at=user.last_active_at,
+            permissions=permissions,
+        ))
+
+    return schemas.AdminUserListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+# ==================== ROLE PERMISSIONS ====================
+
+@router.get("/roles/{role_id}/permissions", response_model=schemas.RolePermissionsResponse)
+def get_role_permissions(
+    role_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Получить разрешения для конкретной роли. Только для администраторов."""
+    require_admin(db, current_user)
+
+    role = db.query(models.Role).filter(models.Role.id == role_id).first()
+    if not role:
+        raise HTTPException(status_code=404, detail="Роль не найдена")
+
+    role_perms = (
+        db.query(models.Permission)
+        .join(models.RolePermission, models.RolePermission.permission_id == models.Permission.id)
+        .filter(models.RolePermission.role_id == role_id)
+        .order_by(models.Permission.module, models.Permission.action)
+        .all()
+    )
+
+    return schemas.RolePermissionsResponse(
+        role_id=role.id,
+        role_name=role.name,
+        permissions=[f"{p.module}:{p.action}" for p in role_perms],
+    )
+
+
+@router.put("/roles/{role_id}/permissions", response_model=schemas.RolePermissionsResponse)
+def set_role_permissions(
+    role_id: int,
+    body: schemas.RolePermissionsRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Установить разрешения для роли. Только для администраторов."""
+    require_admin(db, current_user)
+
+    role = db.query(models.Role).filter(models.Role.id == role_id).first()
+    if not role:
+        raise HTTPException(status_code=404, detail="Роль не найдена")
+
+    # Cannot modify admin role permissions
+    if role.name == "admin":
+        raise HTTPException(
+            status_code=400,
+            detail="Невозможно изменить разрешения администратора — администратор всегда имеет все права",
+        )
+
+    # Validate all permission strings and collect Permission objects
+    perm_objects = []
+    for perm_str in body.permissions:
+        if ":" not in perm_str:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Некорректный формат разрешения: '{perm_str}'. Ожидается 'модуль:действие'",
+            )
+        module, action = perm_str.split(":", 1)
+        perm = db.query(models.Permission).filter(
+            models.Permission.module == module,
+            models.Permission.action == action,
+        ).first()
+        if not perm:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Разрешение '{perm_str}' не найдено",
+            )
+        perm_objects.append(perm)
+
+    # Replace all existing role_permissions for this role
+    db.query(models.RolePermission).filter(
+        models.RolePermission.role_id == role_id
+    ).delete()
+
+    for perm in perm_objects:
+        db.add(models.RolePermission(
+            role_id=role_id,
+            permission_id=perm.id,
+        ))
+
+    db.commit()
+
+    return schemas.RolePermissionsResponse(
+        role_id=role.id,
+        role_name=role.name,
+        permissions=[f"{p.module}:{p.action}" for p in perm_objects],
+    )
 
 
 # ==================== WALL POSTS ====================
