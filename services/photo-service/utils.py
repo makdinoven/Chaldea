@@ -10,7 +10,10 @@ import hashlib
 import base64
 from fastapi import UploadFile, HTTPException
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("botocore").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("boto3").setLevel(logging.WARNING)
 load_dotenv()
 
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}

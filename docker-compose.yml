@@ -251,6 +251,7 @@ services:
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      AWS_EC2_METADATA_DISABLED: "true"
     depends_on:
       mysql:
         condition: service_healthy

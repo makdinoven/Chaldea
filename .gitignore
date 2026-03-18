@@ -34,7 +34,7 @@ services/locations-service/app/__pycache__
 services/skills-service/app/__pycache__
 services/user-service/__pycache__
 services/photo-service/__pycache__
-services/user-service/alembic/versions
+services/user-service/alembic/versions/__pycache__
 services/notification-service/app/__pycache__
 services/notification-service/app/consumers/__pycache__
 **/__pycache__/
