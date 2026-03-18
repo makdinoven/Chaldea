@@ -12,7 +12,8 @@ from config import settings
 import httpx
 import logging
 from rabbitmq_consumer import start_consumer
-from auth_http import get_admin_user, UserRead
+from auth_http import get_admin_user, get_current_user_via_http, require_permission, UserRead
+from sqlalchemy import text
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,9 +29,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-models.Base.metadata.create_all(bind=engine)
-
-
 def _run_consumer_thread():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -44,6 +42,16 @@ def startup():
 
 
 router = APIRouter(prefix="/attributes")
+
+
+def verify_character_ownership(db: Session, character_id: int, user_id: int):
+    """Check that the character belongs to the given user."""
+    result = db.execute(text("SELECT user_id FROM characters WHERE id = :cid"), {"cid": character_id}).fetchone()
+    if not result:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if result[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
 
 def get_db():
     db = SessionLocal()
@@ -91,7 +99,13 @@ def get_full_attributes(character_id: int, db: Session = Depends(get_db)):
 # 4. Прокачка (upgrade)
 # -----------------------------
 @router.post("/{character_id}/upgrade", response_model=schemas.AttributesResponse)
-async def upgrade_attributes(character_id: int, upgrade_request: schemas.StatsUpgradeRequest, db: Session = Depends(get_db)):
+async def upgrade_attributes(
+    character_id: int,
+    upgrade_request: schemas.StatsUpgradeRequest,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    verify_character_ownership(db, character_id, current_user.id)
     logger.info(f"Запрос на прокачку статов у персонажа {character_id}")
     # --- Логика прокачки из вашего примера (запрос в character-service, списание stat_points, и т.д.) ---
     try:
@@ -498,7 +512,7 @@ def admin_update_attributes(
     character_id: int,
     data: schemas.AdminAttributeUpdate,
     db: Session = Depends(get_db),
-    admin: UserRead = Depends(get_admin_user),
+    admin: UserRead = Depends(require_permission("characters:update")),
 ):
     attr = db.query(models.CharacterAttributes).filter(
         models.CharacterAttributes.character_id == character_id
@@ -528,7 +542,7 @@ def admin_update_attributes(
 def admin_delete_attributes(
     character_id: int,
     db: Session = Depends(get_db),
-    admin: UserRead = Depends(get_admin_user),
+    admin: UserRead = Depends(require_permission("characters:delete")),
 ):
     attr = db.query(models.CharacterAttributes).filter(
         models.CharacterAttributes.character_id == character_id

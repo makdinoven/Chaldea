@@ -16,7 +16,8 @@ from producer import (
 )
 from typing import List, Dict, Optional
 from fastapi.middleware.cors import CORSMiddleware
-from auth_http import get_admin_user, OAUTH2_SCHEME
+from auth_http import get_admin_user, get_current_user_via_http, require_permission, OAUTH2_SCHEME
+from sqlalchemy import text
 import logging
 
 # Universal subrace skill applied to all subraces (1-16)
@@ -35,8 +36,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-models.Base.metadata.create_all(bind=engine)
-
 router = APIRouter(prefix="/characters")
 # Зависимость для получения сессии базы данных
 def get_db():
@@ -47,12 +46,23 @@ def get_db():
         db.close()
 
 
+def verify_character_ownership(db: Session, character_id: int, user_id: int):
+    """Check that the character belongs to the given user."""
+    result = db.execute(text("SELECT user_id FROM characters WHERE id = :cid"), {"cid": character_id}).fetchone()
+    if not result:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if result[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+
 # Создание заявки на персонажа
 @router.post("/requests/", response_model=schemas.CharacterRequest)
-async def create_character_request(request: schemas.CharacterRequestCreate, db: Session = Depends(get_db)):
+async def create_character_request(request: schemas.CharacterRequestCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user_via_http)):
     """
     Создание заявки на персонажа.
     """
+    if request.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Вы можете создавать заявки только для себя")
     try:
         user_id = request.user_id
         db_request = crud.create_character_request(db, request, user_id)
@@ -63,7 +73,7 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
 
 # Эндпоинт для одобрения заявки
 @router.post("/requests/{request_id}/approve")
-async def approve_character_request(request_id: int, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
+async def approve_character_request(request_id: int, db: Session = Depends(get_db), current_user = Depends(require_permission("characters:approve"))):
     """
     Одобряет заявку на создание персонажа:
     1) Проверяем, что заявка существует и имеет статус 'pending'.
@@ -232,7 +242,7 @@ def admin_list_characters(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
-    current_user=Depends(get_admin_user),
+    current_user=Depends(require_permission("characters:read")),
 ):
     """
     Paginated list of all characters with search and filters. Admin only.
@@ -273,7 +283,7 @@ async def admin_update_character(
     character_id: int,
     data: schemas.AdminCharacterUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_admin_user),
+    current_user=Depends(require_permission("characters:update")),
     token: str = Depends(OAUTH2_SCHEME),
 ):
     """
@@ -358,7 +368,7 @@ async def admin_update_character(
 async def admin_unlink_character(
     character_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_admin_user),
+    current_user=Depends(require_permission("characters:update")),
     token: str = Depends(OAUTH2_SCHEME),
 ):
     """
@@ -423,7 +433,7 @@ async def admin_unlink_character(
 async def delete_character(
     character_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_admin_user),
+    current_user=Depends(require_permission("characters:delete")),
     token: str = Depends(OAUTH2_SCHEME),
 ):
     """
@@ -556,7 +566,7 @@ async def update_user_with_character(user_id: int, character_id: int):
 
 
 @router.post("/requests/{request_id}/reject")
-async def reject_character_request(request_id: int, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
+async def reject_character_request(request_id: int, db: Session = Depends(get_db), current_user = Depends(require_permission("characters:approve"))):
     """
     Отклоняет заявку на создание персонажа и обновляет статус на 'rejected'.
     """
@@ -590,7 +600,7 @@ async def get_races_and_subraces(db: Session = Depends(get_db)):
 
 
 @router.get("/moderation-requests", response_model=Dict)
-async def get_moderation_requests(db: Session = Depends(get_db)):
+async def get_moderation_requests(db: Session = Depends(get_db), current_user = Depends(require_permission("characters:approve"))):
     """
     Эндпоинт для получения всех заявок на модерации
     """
@@ -620,7 +630,7 @@ async def get_starter_kits(db: Session = Depends(get_db)):
 
 
 @router.put("/starter-kits/{class_id}", response_model=schemas.StarterKitResponse)
-async def upsert_starter_kit(class_id: int, data: schemas.StarterKitUpdate, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
+async def upsert_starter_kit(class_id: int, data: schemas.StarterKitUpdate, db: Session = Depends(get_db), current_user = Depends(require_permission("characters:update"))):
     """
     Создаёт или обновляет стартовый набор для указанного класса.
     """
@@ -640,7 +650,7 @@ async def upsert_starter_kit(class_id: int, data: schemas.StarterKitUpdate, db: 
 
 
 @router.post("/titles/", response_model=schemas.Title)
-async def create_title(request: schemas.TitleCreate, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
+async def create_title(request: schemas.TitleCreate, db: Session = Depends(get_db), current_user = Depends(require_permission("characters:create"))):
     """
     Создание нового титула.
     """
@@ -652,7 +662,7 @@ async def create_title(request: schemas.TitleCreate, db: Session = Depends(get_d
         raise HTTPException(status_code=500, detail="Ошибка при создании титула.")
 
 @router.post("/{character_id}/titles/{title_id}")
-async def assign_title(character_id: int, title_id: int, db: Session = Depends(get_db)):
+async def assign_title(character_id: int, title_id: int, db: Session = Depends(get_db), current_user = Depends(require_permission("characters:update"))):
     """
     Присваивает титул персонажу.
     """
@@ -667,10 +677,11 @@ async def assign_title(character_id: int, title_id: int, db: Session = Depends(g
 
 
 @router.post("/{character_id}/current-title/{title_id}")
-async def set_current_title(character_id: int, title_id: int, db: Session = Depends(get_db)):
+async def set_current_title(character_id: int, title_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user_via_http)):
     """
     Устанавливает текущий титул для персонажа.
     """
+    verify_character_ownership(db, character_id, current_user.id)
     try:
         character = crud.set_current_title(db, character_id, title_id)
         if not character:

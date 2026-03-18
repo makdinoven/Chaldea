@@ -5,9 +5,11 @@ from typing import List, Dict
 from fastapi import FastAPI, Depends, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 
 from crud import create_battle, write_turn, get_logs_for_turn
 from schemas import BattleCreated, BattleCreate, ActionResponse, ActionRequest, LogResponse
+from auth_http import get_current_user_via_http, UserRead
 from mongo_client import get_mongo_db
 from database import get_db
 from battle_engine import decrement_cooldowns, set_cooldown
@@ -55,6 +57,22 @@ def _ensure_not_on_cooldown(state: Dict, pid: int, rank_ids: list[int]) -> None:
     for rid in rank_ids:
         if cd.get(str(rid), 0) > 0:
             raise HTTPException(400, f"Rank {rid} is on cooldown")
+
+async def verify_character_ownership(db: AsyncSession, character_id: int, user_id: int):
+    """Check that a character belongs to the given user."""
+    result = await db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if row[0] != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Вы можете управлять только своими персонажами",
+        )
+
 
 async def build_participant_info(char_id: int, participant_id: int) -> dict:
     """
@@ -105,6 +123,7 @@ async def _pay_skill_costs(state: dict, pid: int, ranks: list[dict]) -> dict:
 async def create_battle_endpoint(
     battle_in: BattleCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
 ):
     """
     Создаём бой и инициализируем состояние в Redis.
@@ -113,6 +132,23 @@ async def create_battle_endpoint(
     """
     player_ids = [p.character_id for p in battle_in.players]
     teams = [p.team if p.team is not None else idx % 2 for idx, p in enumerate(battle_in.players)]
+
+    # 0. Ownership: at least one character must belong to the current user
+    user_owns_any = False
+    for cid in player_ids:
+        result = await db.execute(
+            text("SELECT user_id FROM characters WHERE id = :cid"),
+            {"cid": cid},
+        )
+        row = result.fetchone()
+        if row and row[0] == current_user.id:
+            user_owns_any = True
+            break
+    if not user_owns_any:
+        raise HTTPException(
+            status_code=403,
+            detail="Вы должны участвовать в бою своим персонажем",
+        )
 
     # 1. Проверка минимального количества участников
     if len(battle_in.players) < 2:
@@ -177,10 +213,35 @@ async def create_battle_endpoint(
 
 # battle_service/main.py
 @router.get("/{battle_id}/state")
-async def get_state(battle_id: int):
+async def get_state(
+    battle_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
     state = await load_state(battle_id)
     if not state:
         raise HTTPException(404, "State not found")
+
+    # Ownership: verify the user has a character participating in this battle
+    participant_character_ids = [
+        state["participants"][pid]["character_id"]
+        for pid in state["participants"]
+    ]
+    user_is_participant = False
+    for cid in participant_character_ids:
+        result = await db.execute(
+            text("SELECT user_id FROM characters WHERE id = :cid"),
+            {"cid": cid},
+        )
+        row = result.fetchone()
+        if row and row[0] == current_user.id:
+            user_is_participant = True
+            break
+    if not user_is_participant:
+        raise HTTPException(
+            status_code=403,
+            detail="Вы не участвуете в этом бою",
+        )
 
     # snapshot кладём в ответ (берём из Redis, а если нет — из Mongo)
     rds = await get_redis_client()
@@ -223,6 +284,7 @@ async def make_action(
     battle_id: int,
     request: ActionRequest,
     db_session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
 ):
     """
     Обработка полного хода:
@@ -245,6 +307,16 @@ async def make_action(
     logger.debug(f"[ACTION] battle_id={battle_id}, request={request.dict()}")
     if battle_state is None:
         raise HTTPException(404, "Battle not found in Redis")
+
+    # ------------------------------------------------------------------------------
+    # 1.5. Ownership: verify participant's character belongs to the user
+    # ------------------------------------------------------------------------------
+    participant_info_auth = battle_state["participants"].get(str(request.participant_id))
+    if participant_info_auth is None:
+        raise HTTPException(404, "Участник не найден в этом бою")
+    await verify_character_ownership(
+        db_session, participant_info_auth["character_id"], current_user.id
+    )
 
     # ------------------------------------------------------------------------------
     # 2. Проверяем, что сейчас ход указанного участника

@@ -12,7 +12,8 @@ from database import SessionLocal, engine
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from rabbitmq_consumer import start_consumer
-from auth_http import get_admin_user
+from sqlalchemy import text
+from auth_http import get_current_user_via_http, get_admin_user, require_permission
 
 app = FastAPI()
 
@@ -24,10 +25,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Создаем таблицы, если не существуют
-models.Base.metadata.create_all(bind=engine)
-
 
 def _run_consumer_thread():
     loop = asyncio.new_event_loop()
@@ -49,6 +46,15 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def verify_character_ownership(db: Session, character_id: int, user_id: int):
+    """Проверяет, что персонаж существует и принадлежит текущему пользователю."""
+    result = db.execute(text("SELECT user_id FROM characters WHERE id = :cid"), {"cid": character_id}).fetchone()
+    if not result:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if result[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
 
 
 @router.post("/", response_model=schemas.InventoryResponse)
@@ -145,10 +151,11 @@ def add_item_to_inventory(character_id: int, item_data: schemas.InventoryItem, d
 
 
 @router.delete("/{character_id}/items/{item_id}", response_model=List[schemas.CharacterInventory])
-def remove_item_from_inventory(character_id: int, item_id: int, quantity: int = 1, db: Session = Depends(get_db)):
+def remove_item_from_inventory(character_id: int, item_id: int, quantity: int = 1, db: Session = Depends(get_db), current_user = Depends(get_current_user_via_http)):
     """
     Удалить некоторое количество предметов из инвентаря персонажа.
     """
+    verify_character_ownership(db, character_id, current_user.id)
     total_remove = quantity
     slots = db.query(models.CharacterInventory).filter(
         models.CharacterInventory.character_id == character_id,
@@ -209,7 +216,7 @@ async def recover_in_attributes_service(character_id: int, recovery: dict):
 # Экипировка (equip)
 # -----------------------------------------------------------------------------
 @router.post("/{character_id}/equip", response_model=schemas.EquipmentSlot)
-async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Session = Depends(get_db)):
+async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Session = Depends(get_db), current_user = Depends(get_current_user_via_http)):
     """
     Надеть предмет (транзакция):
       1) Проверяем, что предмет есть в инвентаре
@@ -219,6 +226,7 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
       5) Если всё ОК — commit, иначе rollback
       6) По окончании — пересчитываем быстрые слоты (recalc_fast_slots).
     """
+    verify_character_ownership(db, character_id, current_user.id)
     db.begin()  # начинаем транзакцию вручную
 
     try:
@@ -306,7 +314,7 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
 # Снятие (unequip)
 # -----------------------------------------------------------------------------
 @router.post("/{character_id}/unequip", response_model=schemas.EquipmentSlot)
-async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(get_db)):
+async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(get_db), current_user = Depends(get_current_user_via_http)):
     """
     Снять предмет (транзакция):
       1) Возвращаем предмет в инвентарь
@@ -315,6 +323,7 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
       4) rollback при ошибке, commit при успехе
       5) Вызываем recalc_fast_slots (после commit)
     """
+    verify_character_ownership(db, character_id, current_user.id)
     db.begin()
     try:
         slot = db.query(models.EquipmentSlot).filter(
@@ -368,12 +377,13 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
 # Использование предмета (use_item)
 # -----------------------------------------------------------------------------
 @router.post("/{character_id}/use_item")
-async def use_item(character_id: int, req: schemas.InventoryItem, db: Session = Depends(get_db)):
+async def use_item(character_id: int, req: schemas.InventoryItem, db: Session = Depends(get_db), current_user = Depends(get_current_user_via_http)):
     """
     Используем расходник:
       1) Уменьшаем quantity
       2) Если есть health_recovery и т.п., вызываем /recover
     """
+    verify_character_ownership(db, character_id, current_user.id)
     db_item = db.query(models.Items).filter(models.Items.id == req.item_id).first()
     if not db_item:
         raise HTTPException(status_code=404, detail="Предмет не найден")
@@ -440,7 +450,7 @@ def list_items(
     return items
 
 @router.post("/items", response_model=schemas.Item, status_code=201)
-def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
+def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(require_permission("items:create"))):
     """
     Создаёт новый предмет.
 
@@ -471,7 +481,7 @@ def get_item(item_id: int, db: Session = Depends(get_db)):
     return db_item
 
 @router.put("/items/{item_id}", response_model=schemas.Item)
-def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
+def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(require_permission("items:update"))):
     """
     Обновляет все переданные поля предмета (exclude_unset=True).
     Проверка уникальности имени сохраняется.
@@ -498,7 +508,7 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends
     return db_item
 
 @router.delete("/items/{item_id}", status_code=204)
-def delete_item(item_id: int, db: Session = Depends(get_db), current_user = Depends(get_admin_user)):
+def delete_item(item_id: int, db: Session = Depends(get_db), current_user = Depends(require_permission("items:delete"))):
     """
     Удаляет предмет. При необходимости можно добавить проверки на то,
     используется ли предмет в инвентарях/слотах.
@@ -569,7 +579,7 @@ def get_fast_slots(
 def delete_all_inventory(
     character_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_admin_user),
+    current_user=Depends(require_permission("items:delete")),
 ):
     """
     Bulk delete all inventory items and equipment slots for a character.

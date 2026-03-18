@@ -12,3 +12,4 @@ asyncio
 lightgbm
 scikit-learn
 numpy
+requests

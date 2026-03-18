@@ -6,10 +6,11 @@ from typing import Any, Dict, Tuple, Deque
 
 import os
 import aioredis, uvicorn
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from auth_http import require_permission, UserRead
 from clients import get_battle_state, post_battle_action
 from config import settings
 from strategy import Strategy
@@ -85,7 +86,7 @@ async def health() -> Dict[str, Any]:
     }
 
 @app.post("/mode")
-def set_mode(p: ModePayload):
+def set_mode(p: ModePayload, _user: UserRead = Depends(require_permission("battles:manage"))):
     try:
         strategy.set_mode(p.mode)
     except ValueError as e:
@@ -93,7 +94,7 @@ def set_mode(p: ModePayload):
     return {"ok": True, "mode": strategy.mode}
 
 @app.post("/register")
-async def register(p: RegisterPayload):
+async def register(p: RegisterPayload, _user: UserRead = Depends(require_permission("battles:manage"))):
     ALLOWED.add(p.participant_id)
     if p.battle_id:
         PID_BATTLE[p.participant_id] = p.battle_id
@@ -107,7 +108,7 @@ async def register(p: RegisterPayload):
     return {"ok": True, "allowed": list(ALLOWED)}
 
 @app.post("/unregister")
-def unregister(participant_id: int = Body(..., embed=True)):
+def unregister(participant_id: int = Body(..., embed=True), _user: UserRead = Depends(require_permission("battles:manage"))):
     ALLOWED.discard(participant_id)
     return {"ok": True, "allowed": list(ALLOWED)}
 

@@ -11,17 +11,12 @@ import models
 import httpx
 import schemas
 import crud
-from database import engine, get_db
+from database import get_db
 from fastapi.middleware.cors import CORSMiddleware
-from auth_http import get_admin_user
+from auth_http import get_admin_user, get_current_user_via_http, require_permission
+from sqlalchemy import text
 
 app = FastAPI()
-
-@app.on_event("startup")
-async def startup():
-    # создаем таблицы при запуске приложения
-    async with engine.begin() as conn:
-        await conn.run_sync(models.Base.metadata.create_all)
 
 cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
@@ -33,6 +28,19 @@ app.add_middleware(
 )
 
 router = APIRouter(prefix="/locations")
+
+
+async def verify_character_ownership(db: AsyncSession, character_id: int, user_id: int):
+    """Check that the character belongs to the authenticated user."""
+    result = await db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if row[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
 
 
 # --------------------------------------------------------------------
@@ -62,7 +70,7 @@ async def countries_lookup(session: AsyncSession = Depends(get_db)):
 # COUNTRY
 # --------------------------------------------------------------------
 @router.post("/countries/create", response_model=schemas.CountryRead)
-async def create_country_route(body: schemas.CountryCreate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
+async def create_country_route(body: schemas.CountryCreate, session: AsyncSession = Depends(get_db), current_user = Depends(require_permission("locations:create"))):
     new_c = await crud.create_new_country(
         session,
         name=body.name,
@@ -73,7 +81,7 @@ async def create_country_route(body: schemas.CountryCreate, session: AsyncSessio
     return new_c
 
 @router.put("/countries/{country_id}/update", response_model=schemas.CountryRead)
-async def update_country_route(country_id: int, body: schemas.CountryUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
+async def update_country_route(country_id: int, body: schemas.CountryUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(require_permission("locations:update"))):
     db_obj = await crud.update_country(session, country_id, body)
     return db_obj
 
@@ -95,12 +103,12 @@ async def get_country_details_route(country_id: int, session: AsyncSession = Dep
 # REGION
 # --------------------------------------------------------------------
 @router.post("/regions/create", response_model=schemas.RegionCreateResponse)
-async def create_region_route(body: schemas.RegionCreate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
+async def create_region_route(body: schemas.RegionCreate, session: AsyncSession = Depends(get_db), current_user = Depends(require_permission("locations:create"))):
     new_r = await crud.create_new_region(session, body)
     return new_r
 
 @router.put("/regions/{region_id}/update", response_model=schemas.RegionUpdateResponse)
-async def update_region_route(region_id: int, body: schemas.RegionUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
+async def update_region_route(region_id: int, body: schemas.RegionUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(require_permission("locations:update"))):
     return await crud.update_region(session, region_id, body)
 
 @router.get("/regions/{region_id}/details")
@@ -115,7 +123,7 @@ async def get_region_details_route(region_id: int, session: AsyncSession = Depen
 async def delete_region_route(
     region_id: int,
     session: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("locations:delete"))
 ):
     """
     Удаляет регион вместе со всеми его районами и локациями.
@@ -136,7 +144,7 @@ async def delete_region_route(
 async def create_district(
     district: schemas.DistrictCreate,
     session: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("locations:create"))
 ):
     try:
         return await crud.create_district(session, district)
@@ -147,7 +155,7 @@ async def create_district(
         )
 
 @router.put("/districts/{district_id}/update", response_model=schemas.DistrictRead)
-async def update_district_route(district_id: int, body: schemas.DistrictUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
+async def update_district_route(district_id: int, body: schemas.DistrictUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(require_permission("locations:update"))):
     return await crud.update_district(session, district_id, body)
 
 @router.get("/districts/{district_id}/details", response_model=schemas.DistrictRead)
@@ -193,7 +201,7 @@ async def get_district_locations(
 async def delete_district_route(
     district_id: int,
     session: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("locations:delete"))
 ):
     """
     Удаляет район вместе со всеми его локациями.
@@ -211,7 +219,7 @@ async def delete_district_route(
 # LOCATION
 # --------------------------------------------------------------------
 @router.post("/", response_model=schemas.LocationCreateResponse)
-async def create_location(location: schemas.LocationCreate, db: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
+async def create_location(location: schemas.LocationCreate, db: AsyncSession = Depends(get_db), current_user = Depends(require_permission("locations:create"))):
     try:
         db_location = await crud.create_location(db, location)
         # Возвращаем только базовые поля без связанных данных
@@ -230,7 +238,7 @@ async def create_location(location: schemas.LocationCreate, db: AsyncSession = D
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/{location_id}/update", response_model=schemas.LocationRead)
-async def update_location_route(location_id: int, body: schemas.LocationUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
+async def update_location_route(location_id: int, body: schemas.LocationUpdate, session: AsyncSession = Depends(get_db), current_user = Depends(require_permission("locations:update"))):
     try:
         db_location = await crud.update_location(session, location_id, body)
         # Возвращаем только базовые поля без связанных данных
@@ -277,7 +285,7 @@ async def get_location_children(location_id: int, db: AsyncSession = Depends(get
 async def delete_location_route(
     location_id: int,
     session: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("locations:delete"))
 ):
     """
     Удаляет локацию вместе со всеми её дочерними локациями (рекурсивно)
@@ -296,7 +304,7 @@ async def delete_location_route(
 # NEIGHBORS
 # --------------------------------------------------------------------
 @router.post("/{location_id}/neighbors/", response_model=schemas.LocationNeighborResponse)
-async def create_neighbor(location_id: int, neighbor_data: schemas.LocationNeighborCreate, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
+async def create_neighbor(location_id: int, neighbor_data: schemas.LocationNeighborCreate, session: AsyncSession = Depends(get_db), current_user = Depends(require_permission("locations:update"))):
     loc = await crud.get_location_by_id(session, location_id)
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
@@ -332,7 +340,7 @@ async def get_location_neighbors(location_id: int, session: AsyncSession = Depen
     ]
 
 @router.delete("/{location_id}/neighbors/{neighbor_id}", response_model=dict)
-async def delete_neighbor(location_id: int, neighbor_id: int, session: AsyncSession = Depends(get_db), current_user = Depends(get_admin_user)):
+async def delete_neighbor(location_id: int, neighbor_id: int, session: AsyncSession = Depends(get_db), current_user = Depends(require_permission("locations:delete"))):
     """Удаляет связь между локациями"""
     loc = await crud.get_location_by_id(session, location_id)
     if not loc:
@@ -377,7 +385,7 @@ async def update_location_neighbors(
     location_id: int,
     neighbors_data: schemas.LocationNeighborsUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("locations:update"))
 ):
     """Обновляет список соседей локации"""
     # Проверяем существование локации
@@ -400,7 +408,8 @@ async def update_location_neighbors(
 # POSTS
 # --------------------------------------------------------------------
 @router.post("/posts/", response_model=schemas.PostResponse)
-async def create_new_post(post_data: schemas.PostCreate, session: AsyncSession = Depends(get_db)):
+async def create_new_post(post_data: schemas.PostCreate, session: AsyncSession = Depends(get_db), current_user=Depends(get_current_user_via_http)):
+    await verify_character_ownership(session, post_data.character_id, current_user.id)
     return await crud.create_post(session, post_data)
 
 @router.get("/{location_id}/posts/", response_model=List[schemas.PostResponse])
@@ -408,7 +417,7 @@ async def get_posts_in_location(location_id: int, session: AsyncSession = Depend
     return await crud.get_posts_by_location(session, location_id)
 
 @router.get("/admin/data", response_model=schemas.AdminPanelData)
-async def get_admin_panel_data_route(session: AsyncSession = Depends(get_db)):
+async def get_admin_panel_data_route(session: AsyncSession = Depends(get_db), current_user=Depends(require_permission("locations:read"))):
     """
     Возвращает все данные для админ панели одним запросом
     """
@@ -434,7 +443,8 @@ async def get_location_client_details(location_id: int, session: AsyncSession = 
 async def move_and_post(
         destination_location_id: int,
         movement: schemas.MovementPostRequest,
-        session: AsyncSession = Depends(get_db)
+        session: AsyncSession = Depends(get_db),
+        current_user=Depends(get_current_user_via_http),
 ):
     """
     Эндпоинт для перемещения персонажа в новую локацию и одновременного создания поста.
@@ -449,6 +459,9 @@ async def move_and_post(
       6. Обновляем текущую локацию персонажа через Character‑service.
       7. Вызываем Attributes‑service для списания выносливости на стоимость перехода.
     """
+    # 0. Проверяем, что персонаж принадлежит текущему пользователю
+    await verify_character_ownership(session, movement.character_id, current_user.id)
+
     # 1. Получаем профиль персонажа (чтобы узнать current_location_id)
     async with httpx.AsyncClient(timeout=5.0) as client:
         profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/profile"
@@ -546,7 +559,7 @@ async def get_rule(rule_id: int, session: AsyncSession = Depends(get_db)):
 async def create_rule(
     body: schemas.GameRuleCreate,
     session: AsyncSession = Depends(get_db),
-    current_user=Depends(get_admin_user),
+    current_user=Depends(require_permission("rules:create")),
 ):
     """Создаёт новое правило (только админ)."""
     return await crud.create_rule(session, body)
@@ -556,7 +569,7 @@ async def create_rule(
 async def reorder_rules(
     body: schemas.GameRuleReorder,
     session: AsyncSession = Depends(get_db),
-    current_user=Depends(get_admin_user),
+    current_user=Depends(require_permission("rules:update")),
 ):
     """Массовое обновление sort_order (только админ)."""
     await crud.reorder_rules(session, body.order)
@@ -568,7 +581,7 @@ async def update_rule(
     rule_id: int,
     body: schemas.GameRuleUpdate,
     session: AsyncSession = Depends(get_db),
-    current_user=Depends(get_admin_user),
+    current_user=Depends(require_permission("rules:update")),
 ):
     """Обновляет правило (только админ, partial update)."""
     return await crud.update_rule(session, rule_id, body)
@@ -578,7 +591,7 @@ async def update_rule(
 async def delete_rule(
     rule_id: int,
     session: AsyncSession = Depends(get_db),
-    current_user=Depends(get_admin_user),
+    current_user=Depends(require_permission("rules:delete")),
 ):
     """Удаляет правило (только админ)."""
     await crud.delete_rule(session, rule_id)

@@ -15,7 +15,7 @@ from models import Notification
 from database import engine, get_db
 from schemas import Notification as NotificationSchema
 from schemas import GeneralNotificationPayload, NotificationTargetType
-from auth_http import get_current_user_via_http, UserRead
+from auth_http import get_current_user_via_http, require_permission, UserRead
 
 # Импортируем global connections (но не send_to_sse) из sse_manager
 from sse_manager import connections
@@ -97,14 +97,8 @@ def _publish_admin_notification(payload: dict):
 def create_admin_notification(
     data: GeneralNotificationPayload,
     background_tasks: BackgroundTasks,
-    current_user: UserRead = Depends(get_current_user_via_http)
+    current_user: UserRead = Depends(require_permission("notifications:create"))
 ):
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can create notifications"
-        )
-
     payload = {
         "target_type": data.target_type.value,
         "target_value": data.target_value,
@@ -121,7 +115,10 @@ def get_unread_notifications(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
 ):
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Доступ к чужим уведомлениям запрещён")
     query = db.query(Notification).filter(
         Notification.user_id == user_id,
         Notification.status == "unread"
@@ -138,7 +135,10 @@ def get_all_notifications(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
 ):
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Доступ к чужим уведомлениям запрещён")
     query = db.query(Notification).filter(
         Notification.user_id == user_id
     ).order_by(Notification.created_at.asc())
@@ -152,8 +152,11 @@ def get_all_notifications(
 def mark_multiple_notifications_as_read(
     user_id: int,
     notification_ids: List[int],
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
 ):
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Доступ к чужим уведомлениям запрещён")
     notifications = db.query(Notification).filter(
         Notification.user_id == user_id,
         Notification.id.in_(notification_ids),
@@ -172,8 +175,11 @@ def mark_multiple_notifications_as_read(
 @router.put("/{user_id}/mark-all-as-read", response_model=List[NotificationSchema])
 def mark_all_notifications_as_read(
     user_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
 ):
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Доступ к чужим уведомлениям запрещён")
     notifications = db.query(Notification).filter(
         Notification.user_id == user_id,
         Notification.status == "unread"

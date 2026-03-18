@@ -1,13 +1,13 @@
 import os
 from fastapi import FastAPI, APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 import asyncio
 
-from database import get_db, create_tables
+from database import get_db
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import httpx
@@ -16,7 +16,7 @@ import models
 import schemas
 import crud
 from rabbitmq_consumer import start_consumer
-from auth_http import get_admin_user
+from auth_http import get_admin_user, get_current_user_via_http, require_permission
 
 # Пример, если нужно
 CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8005/characters")
@@ -35,9 +35,24 @@ app.add_middleware(
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 
+
+async def verify_character_ownership(db: AsyncSession, character_id: int, user_id: int):
+    """Check that the character exists and belongs to the given user."""
+    result = await db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if row[0] != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Вы можете управлять только своими персонажами",
+        )
+
 @app.on_event("startup")
 async def startup_event():
-    await create_tables()
     asyncio.create_task(start_consumer())
 
 # -----------------------------------------------------------
@@ -93,18 +108,19 @@ async def legacy_create_skills_for_new_character(
 async def admin_create_skill(
     data: schemas.SkillCreate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:create"))
 ):
     return await crud.create_skill(db, data)
 
 @router.get("/admin/skills/", response_model=List[schemas.SkillRead])
-async def admin_list_skills(db: AsyncSession = Depends(get_db)):
+async def admin_list_skills(db: AsyncSession = Depends(get_db), current_user = Depends(require_permission("skills:read"))):
     return await crud.list_skills(db)
 
 @router.get("/admin/skills/{skill_id}", response_model=schemas.SkillRead)
 async def admin_get_skill(
     skill_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("skills:read"))
 ):
     skill = await crud.get_skill(db, skill_id)
     if not skill:
@@ -116,7 +132,7 @@ async def admin_update_skill(
     skill_id: int,
     data: schemas.SkillUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:update"))
 ):
     updated = await crud.update_skill(db, skill_id, data)
     if not updated:
@@ -127,7 +143,7 @@ async def admin_update_skill(
 async def admin_delete_skill(
     skill_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:delete"))
 ):
     success = await crud.delete_skill(db, skill_id)
     if not success:
@@ -141,14 +157,15 @@ async def admin_delete_skill(
 async def admin_create_skill_rank(
     data: schemas.SkillRankCreate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:create"))
 ):
     return await crud.create_skill_rank(db, data)
 
 @router.get("/admin/skill_ranks/{rank_id}", response_model=schemas.SkillRankRead)
 async def admin_get_skill_rank(
     rank_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("skills:read"))
 ):
     rank = await crud.get_skill_rank(db, rank_id)
     if not rank:
@@ -160,7 +177,7 @@ async def admin_update_skill_rank(
     rank_id: int,
     data: schemas.SkillRankUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:update"))
 ):
     updated = await crud.update_skill_rank(db, rank_id, data)
     if not updated:
@@ -171,7 +188,7 @@ async def admin_update_skill_rank(
 async def admin_delete_skill_rank(
     rank_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:delete"))
 ):
     success = await crud.delete_skill_rank(db, rank_id)
     if not success:
@@ -185,14 +202,15 @@ async def admin_delete_skill_rank(
 async def admin_create_damage(
     data: schemas.SkillRankDamageCreate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:create"))
 ):
     return await crud.create_skill_rank_damage(db, data)
 
 @router.get("/admin/damages/{damage_id}", response_model=schemas.SkillRankDamageRead)
 async def admin_get_damage(
     damage_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("skills:read"))
 ):
     dmg = await crud.get_skill_rank_damage(db, damage_id)
     if not dmg:
@@ -204,7 +222,7 @@ async def admin_update_damage(
     damage_id: int,
     data: schemas.SkillRankDamageUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:update"))
 ):
     updated = await crud.update_skill_rank_damage(db, damage_id, data)
     if not updated:
@@ -215,7 +233,7 @@ async def admin_update_damage(
 async def admin_delete_damage(
     damage_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:delete"))
 ):
     success = await crud.delete_skill_rank_damage(db, damage_id)
     if not success:
@@ -229,14 +247,15 @@ async def admin_delete_damage(
 async def admin_create_effect(
     data: schemas.SkillRankEffectCreate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:create"))
 ):
     return await crud.create_skill_rank_effect(db, data)
 
 @router.get("/admin/effects/{effect_id}", response_model=schemas.SkillRankEffectRead)
 async def admin_get_effect(
     effect_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("skills:read"))
 ):
     eff = await crud.get_skill_rank_effect(db, effect_id)
     if not eff:
@@ -248,7 +267,7 @@ async def admin_update_effect(
     effect_id: int,
     data: schemas.SkillRankEffectUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:update"))
 ):
     updated = await crud.update_skill_rank_effect(db, effect_id, data)
     if not updated:
@@ -259,7 +278,7 @@ async def admin_update_effect(
 async def admin_delete_effect(
     effect_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:delete"))
 ):
     success = await crud.delete_skill_rank_effect(db, effect_id)
     if not success:
@@ -273,7 +292,7 @@ async def admin_delete_effect(
 async def admin_give_character_skill(
     data: schemas.CharacterSkillCreate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:create"))
 ):
     return await crud.create_character_skill(db, data)
 
@@ -281,7 +300,7 @@ async def admin_give_character_skill(
 async def admin_delete_all_character_skills(
     character_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:delete"))
 ):
     """Bulk delete all skills for a character (admin only)."""
     count = await crud.delete_all_character_skills(db, character_id)
@@ -292,7 +311,7 @@ async def admin_update_character_skill_rank(
     cs_id: int,
     data: schemas.AdminCharacterSkillUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:update"))
 ):
     """Change the rank of an existing character skill (admin only)."""
     cs = await crud.get_character_skill(db, cs_id)
@@ -310,7 +329,7 @@ async def admin_update_character_skill_rank(
 async def admin_remove_character_skill(
     cs_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:delete"))
 ):
     success = await crud.delete_character_skill(db, cs_id)
     if not success:
@@ -333,12 +352,14 @@ async def list_skills_for_character(
 @router.post("/character_skills/upgrade")
 async def upgrade_skill(
     data: schemas.SkillUpgradeRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
 ):
     """
     Пример логики прокачки ранга (вопрос совместимости).
     """
     character_id = data.character_id
+    await verify_character_ownership(db, character_id, current_user.id)
     next_rank_id = data.next_rank_id
 
     # 1) Запрашиваем character-service
@@ -388,7 +409,7 @@ async def upgrade_skill(
 # 8) Получить полное дерево навыка
 # -----------------------------------------------------------
 @router.get("/admin/skills/{skill_id}/full_tree", response_model=schemas.FullSkillTreeResponse)
-async def get_skill_full_tree(skill_id: int, db: AsyncSession = Depends(get_db)):
+async def get_skill_full_tree(skill_id: int, db: AsyncSession = Depends(get_db), current_user = Depends(require_permission("skills:read"))):
     skill = await crud.get_skill(db, skill_id)
     if not skill:
         raise HTTPException(status_code=404, detail="Skill not found")
@@ -465,7 +486,7 @@ async def update_skill_full_tree(
     skill_id: int,
     data: schemas.FullSkillTreeUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_admin_user)
+    current_user = Depends(require_permission("skills:update"))
 ):
     if skill_id != data.id:
         raise HTTPException(status_code=400, detail="Path skill_id != data.id")
