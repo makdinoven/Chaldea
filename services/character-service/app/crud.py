@@ -39,10 +39,11 @@ def create_character_request(db: Session, request: schemas.CharacterRequestCreat
 
 
 ## Функция для создания предварительного персонажа (с указанием user_id)
-def create_preliminary_character(db: Session, character_request: models.CharacterRequest, currency_balance: int = 0):
+def create_preliminary_character(db: Session, character_request: models.CharacterRequest, currency_balance: int = 0, auto_commit: bool = True):
     """
     Создает предварительную запись персонажа с указанием user_id из заявки.
     currency_balance задаётся из стартового набора класса.
+    При auto_commit=False вызывает flush вместо commit (для использования в транзакции).
     """
     new_character = models.Character(
         id_attributes=None,
@@ -64,20 +65,27 @@ def create_preliminary_character(db: Session, character_request: models.Characte
         currency_balance=currency_balance
     )
     db.add(new_character)
-    db.commit()
+    if auto_commit:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(new_character)
     return new_character
 
 
 # Обновление статуса заявки
-def update_character_request_status(db: Session, request_id: int, status: str):
+def update_character_request_status(db: Session, request_id: int, status: str, auto_commit: bool = True):
     """
     Обновляет статус заявки на персонажа.
+    При auto_commit=False вызывает flush вместо commit (для использования в транзакции).
     """
     db_request = db.query(models.CharacterRequest).filter(models.CharacterRequest.id == request_id).first()
     if db_request:
         db_request.status = status
-        db.commit()
+        if auto_commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(db_request)
         return db_request
     return None
@@ -85,14 +93,18 @@ def update_character_request_status(db: Session, request_id: int, status: str):
 
 # Функция для обновления персонажа после получения зависимостей
 def update_character_with_dependencies(db: Session, character_id: int,
-                                       skills_id: int, attributes_id: int):
+                                       skills_id: int, attributes_id: int, auto_commit: bool = True):
     """
     Обновляет поля персонажа с полученными навыками и атрибутами.
+    При auto_commit=False вызывает flush вместо commit (для использования в транзакции).
     """
     db_character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if db_character:
         db_character.id_attributes = attributes_id
-        db.commit()
+        if auto_commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(db_character)
         return db_character
     return None
@@ -487,10 +499,14 @@ async def send_attributes_request(character_id: int, attributes: dict):
         return None
 
 
-async def assign_character_to_user(user_id: int, character_id: int):
+async def assign_character_to_user(user_id: int, character_id: int, token: str = None):
     """
     Отправляет запрос в микросервис пользователей для присвоения персонажа пользователю.
     """
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
     try:
         async with httpx.AsyncClient() as client:
             # Шаг 1: Создание записи в user_characters
@@ -511,7 +527,8 @@ async def assign_character_to_user(user_id: int, character_id: int):
             logger.info(f"Отправляем запрос на обновление current_character для пользователя {user_id} с персонажем {character_id}")
             update_user_response = await client.put(
                 f"{settings.USER_SERVICE_URL}/users/{user_id}/update_character",
-                json={"current_character": character_id}
+                json={"current_character": character_id},
+                headers=headers
             )
 
             if update_user_response.status_code == 200:

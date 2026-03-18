@@ -22,9 +22,10 @@ interface RequestData {
 
 interface RequestProps {
   data: RequestData;
+  onStatusChange?: (requestId: number) => void;
 }
 
-const Request = ({ data }: RequestProps) => {
+const Request = ({ data, onStatusChange }: RequestProps) => {
   const biographyItems = [
     { title: 'Биография', text: data.biography },
     { title: 'Личность', text: data.background },
@@ -52,6 +53,7 @@ const Request = ({ data }: RequestProps) => {
         .then((res) => {
           if (res.status === 200) {
             toast.success('Заявка одобрена');
+            onStatusChange?.(data.request_id);
           }
         })
         .catch(() => {
@@ -64,6 +66,7 @@ const Request = ({ data }: RequestProps) => {
         .then((res) => {
           if (res.status === 200) {
             toast.success('Заявка отклонена');
+            onStatusChange?.(data.request_id);
           }
         })
         .catch(() => {

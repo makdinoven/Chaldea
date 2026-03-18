@@ -80,6 +80,16 @@ def is_admin(db: Session, user: User) -> bool:
     return (user.role or "").lower() == "admin"
 
 
+def is_admin_or_moderator(db: Session, user: User) -> bool:
+    """Check if user has admin or moderator role."""
+    if user.role_id:
+        role = db.query(Role).filter(Role.id == user.role_id).first()
+        if role and role.name in ("admin", "moderator"):
+            return True
+    # Fallback to legacy string column
+    return (user.role or "").lower() in ("admin", "moderator")
+
+
 def require_admin(db: Session, user: User):
     """Check that user has admin role. Raises 403 if not.
 

@@ -4,7 +4,7 @@ from fastapi import BackgroundTasks, FastAPI, Depends, HTTPException, status, AP
 from fastapi.security import OAuth2PasswordBearer
 import models
 import schemas
-from crud import create_user, get_user_by_email, get_user_by_username, authenticate_user, get_effective_permissions, require_permission, require_admin, is_admin
+from crud import create_user, get_user_by_email, get_user_by_username, authenticate_user, get_effective_permissions, require_permission, require_admin, is_admin, is_admin_or_moderator
 from auth import *
 from auth import SECRET_KEY, ALGORITHM
 from database import SessionLocal, engine, get_db
@@ -141,7 +141,7 @@ async def _fetch_character_short(char_id: int):
 
 # ==================== AUTH & REGISTRATION ====================
 
-@router.post("/register", response_model=UserRead)
+@router.post("/register")
 def register_user(user: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     db_user_email = get_user_by_email(db, email=user.email)
     if db_user_email:
@@ -153,7 +153,11 @@ def register_user(user: UserCreate, background_tasks: BackgroundTasks, db: Sessi
 
     new_user = create_user(db=db, user=user)
     background_tasks.add_task(send_notification_event, new_user.id)
-    return new_user
+
+    token_data = {"sub": new_user.email}
+    access_token = create_access_token(data=token_data, role=new_user.role)
+    refresh_token = create_refresh_token(data=token_data, role=new_user.role)
+    return {"access_token": access_token, "refresh_token": refresh_token}
 
 
 @router.post("/login")
@@ -364,7 +368,8 @@ def update_username(
 @router.put("/{user_id}/update_character")
 async def update_user_character(user_id: int, character_data: dict, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Вы можете менять только своего активного персонажа")
+        if not is_admin_or_moderator(db, current_user):
+            raise HTTPException(status_code=403, detail="Вы можете менять только своего активного персонажа")
     character_id = character_data.get("current_character")
     if character_id is None:
         raise HTTPException(status_code=400, detail="current_character обязателен")

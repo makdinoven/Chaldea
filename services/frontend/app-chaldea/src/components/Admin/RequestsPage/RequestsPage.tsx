@@ -56,6 +56,10 @@ export default function RequestsPage() {
     );
   }
 
+  const handleStatusChange = (requestId: number) => {
+    setData((prev) => prev.filter((item) => item.request_id !== requestId));
+  };
+
   const pendingRequests = data.filter((item) => item.status === 'pending');
 
   return (
@@ -66,7 +70,7 @@ export default function RequestsPage() {
       <div className="flex flex-col gap-20">
         {pendingRequests.length > 0 ? (
           pendingRequests.map((item) => (
-            <Request key={item.request_id} data={item} />
+            <Request key={item.request_id} data={item} onStatusChange={handleStatusChange} />
           ))
         ) : (
           <h2 className="font-semibold text-[26px] text-center text-[color:var(--zoloto)]">

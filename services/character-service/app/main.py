@@ -73,7 +73,7 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
 
 # Эндпоинт для одобрения заявки
 @router.post("/requests/{request_id}/approve")
-async def approve_character_request(request_id: int, db: Session = Depends(get_db), current_user = Depends(require_permission("characters:approve"))):
+async def approve_character_request(request_id: int, db: Session = Depends(get_db), current_user = Depends(require_permission("characters:approve")), token: str = Depends(OAUTH2_SCHEME)):
     """
     Одобряет заявку на создание персонажа:
     1) Проверяем, что заявка существует и имеет статус 'pending'.
@@ -115,8 +115,8 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             currency_amount = 0
             logger.warning(f"Стартовый набор для класса {class_id} не найден, персонаж создаётся без предметов/навыков")
 
-        # 3) Создаем предварительную запись персонажа с currency_balance
-        new_character = crud.create_preliminary_character(db, db_request, currency_balance=currency_amount)
+        # 3) Создаем предварительную запись персонажа с currency_balance (flush, не commit)
+        new_character = crud.create_preliminary_character(db, db_request, currency_balance=currency_amount, auto_commit=False)
         logger.info(f"Создан персонаж с ID {new_character.id}, currency_balance={currency_amount}")
 
         # 4) Генерируем атрибуты по подрасе
@@ -163,27 +163,34 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             logger.info(f"Атрибуты созданы для персонажа {new_character.id}")
         else:
             logger.error("Ошибка при создании атрибутов")
+            db.rollback()
             raise HTTPException(status_code=500, detail="Не удалось создать атрибуты")
 
-        # 8) Обновляем персонажа с зависимостями
+        # 8) Обновляем персонажа с зависимостями (flush, не commit)
         updated_character = crud.update_character_with_dependencies(
             db, new_character.id,
             skills_id=None,
-            attributes_id=attributes_response['id']
+            attributes_id=attributes_response['id'],
+            auto_commit=False
         )
         logger.info(f"Персонаж с ID {new_character.id} обновлен с id_attributes={attributes_response['id']}")
 
-        # 9) Ставим заявке статус "approved"
-        crud.update_character_request_status(db, request_id, "approved")
+        # 9) Ставим заявке статус "approved" (flush, не commit)
+        crud.update_character_request_status(db, request_id, "approved", auto_commit=False)
         logger.info(f"Заявка с ID {request_id} одобрена")
 
         # 10) Привязываем персонажа к пользователю
-        assign_result = await crud.assign_character_to_user(db_request.user_id, updated_character.id)
+        assign_result = await crud.assign_character_to_user(db_request.user_id, updated_character.id, token=token)
         if assign_result:
             logger.info(f"Персонаж с ID {updated_character.id} успешно присвоен пользователю {db_request.user_id}")
         else:
             logger.error("Не удалось присвоить персонажа пользователю")
+            db.rollback()
             raise HTTPException(status_code=500, detail="Не удалось присвоить персонажа пользователю")
+
+        # Единый commit для шагов 3, 8, 9 — после успешного выполнения всех критических шагов
+        db.commit()
+        logger.info("Все изменения в БД зафиксированы единым коммитом")
 
         # 11) Отправляем уведомление через RabbitMQ (non-blocking, async)
         try:
@@ -218,11 +225,14 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
         return {"message": f"Персонаж с ID {new_character.id} успешно создан и присвоен пользователю."}
 
     except HTTPException:
+        db.rollback()
         raise
     except SQLAlchemyError as e:
+        db.rollback()
         logger.error(f"Ошибка при одобрении заявки: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
     except Exception as e:
+        db.rollback()
         logger.error(f"Непредвиденная ошибка при одобрении заявки: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
