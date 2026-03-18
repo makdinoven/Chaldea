@@ -24,9 +24,13 @@ axios.interceptors.request.use((config) => {
 axios.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      toast.error('Сессия истекла или вы не авторизованы. Войдите снова.');
-    } else if (error.response?.status === 403) {
+    const status = error.response?.status;
+    if (status === 401) {
+      const url = error.config?.url || '';
+      if (!url.includes('/users/login') && !url.includes('/users/register')) {
+        toast.error('Сессия истекла или вы не авторизованы. Войдите снова.');
+      }
+    } else if (status === 403) {
       toast.error('Недостаточно прав для выполнения этого действия.');
     }
     return Promise.reject(error);

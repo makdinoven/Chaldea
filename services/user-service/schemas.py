@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, validator
 from datetime import datetime
 
 # Базовая схема пользователя
@@ -8,9 +8,25 @@ class UserBase(BaseModel):
     username: str
     role: Optional[str] = 'user'
 
+    @validator('username')
+    def validate_username(cls, v):
+        if len(v) < 2:
+            raise ValueError('Никнейм должен содержать минимум 2 символа')
+        if len(v) > 30:
+            raise ValueError('Никнейм не должен превышать 30 символов')
+        return v
+
 # Схема для создания пользователя (регистрация)
 class UserCreate(UserBase):
     password: str  # Пароль пользователя
+
+    @validator('password')
+    def validate_password(cls, v):
+        if len(v) < 6:
+            raise ValueError('Пароль должен содержать минимум 6 символов')
+        if len(v) > 128:
+            raise ValueError('Пароль слишком длинный')
+        return v
 
 # Схема для входа пользователя (логин)
 class Login(BaseModel):
@@ -55,6 +71,10 @@ class MeResponse(BaseModel):
     avatar: Optional[str] = None
     balance: Optional[int] = 0
     role: Optional[str] = "user"
+
+    # RBAC fields
+    role_display_name: Optional[str] = None
+    permissions: List[str] = []
 
     # новые поля
     current_character_id: Optional[int] = None
@@ -194,3 +214,100 @@ class UserCharacterItem(BaseModel):
 
 class UserCharactersResponse(BaseModel):
     characters: List[UserCharacterItem]
+
+
+# ==================== RBAC Schemas ====================
+
+class RoleResponse(BaseModel):
+    id: int
+    name: str
+    level: int
+    description: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+class PermissionItem(BaseModel):
+    id: int
+    module: str
+    action: str
+    description: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+class PermissionsGroupedResponse(BaseModel):
+    """Permissions grouped by module."""
+    modules: dict  # {"module_name": [PermissionItem, ...]}
+
+
+class RoleAssignRequest(BaseModel):
+    role_id: int
+    display_name: Optional[str] = None
+
+
+class UserRoleResponse(BaseModel):
+    id: int
+    username: str
+    role: str
+    role_display_name: Optional[str] = None
+    permissions: List[str] = []
+
+
+class PermissionOverridesRequest(BaseModel):
+    """Permission overrides: grants add permissions, revokes remove them."""
+    grants: List[str] = []   # ["module:action", ...]
+    revokes: List[str] = []  # ["module:action", ...]
+
+
+class UserPermissionsResponse(BaseModel):
+    id: int
+    username: str
+    role: str
+    permissions: List[str] = []
+    overrides: dict = {}  # {"grants": [...], "revokes": [...]}
+
+
+class EffectivePermissionsResponse(BaseModel):
+    user_id: int
+    username: str
+    role: str
+    role_display_name: Optional[str] = None
+    role_permissions: List[str] = []
+    overrides: dict = {}
+    effective_permissions: List[str] = []
+
+
+class AdminUserItem(BaseModel):
+    id: int
+    username: str
+    email: str
+    avatar: Optional[str] = None
+    role: Optional[str] = "user"
+    role_id: Optional[int] = None
+    role_display_name: Optional[str] = None
+    registered_at: Optional[datetime] = None
+    last_active_at: Optional[datetime] = None
+    permissions: List[str] = []
+
+    class Config:
+        orm_mode = True
+
+
+class AdminUserListResponse(BaseModel):
+    items: List[AdminUserItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class RolePermissionsRequest(BaseModel):
+    permissions: List[str]
+
+
+class RolePermissionsResponse(BaseModel):
+    role_id: int
+    role_name: str
+    permissions: List[str]
