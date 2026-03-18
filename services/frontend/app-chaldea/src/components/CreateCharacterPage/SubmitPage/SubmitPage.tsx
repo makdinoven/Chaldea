@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useSelector } from 'react-redux';
@@ -47,7 +47,17 @@ export default function SubmitPage({
   const navigateTo = useNavigateTo();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [avatarUrl, setAvatarUrl] = useState<string>(defaultAvatar);
+  const [previewObjectUrl, setPreviewObjectUrl] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Clean up object URL on unmount or when a new preview is created
+  useEffect(() => {
+    return () => {
+      if (previewObjectUrl) {
+        URL.revokeObjectURL(previewObjectUrl);
+      }
+    };
+  }, [previewObjectUrl]);
 
   const handlePhotoInputClick = () => {
     fileInputRef.current?.click();
@@ -83,33 +93,16 @@ export default function SubmitPage({
       });
   };
 
-  const sendPhoto = () => {
-    const file = fileInputRef.current?.files?.[0];
-    const user_id = 1;
-
-    if (!file) {
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('user_id', String(user_id));
-
-    axios
-      .post('/photo/character_avatar_preview', formData)
-      .then((response) => {
-        const { avatar_url } = response.data;
-        setAvatarUrl(avatar_url);
-      })
-      .catch(() => {
-        toast.error('Ошибка загрузки фото');
-      });
-  };
-
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      sendPhoto();
+      // Revoke previous object URL to prevent memory leaks
+      if (previewObjectUrl) {
+        URL.revokeObjectURL(previewObjectUrl);
+      }
+      const objectUrl = URL.createObjectURL(file);
+      setPreviewObjectUrl(objectUrl);
+      setAvatarUrl(objectUrl);
     }
   };
 

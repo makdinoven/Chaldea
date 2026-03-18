@@ -3,13 +3,14 @@ import requests
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 
 
 class UserRead(BaseModel):
     id: int
     username: str
     role: Optional[str] = None
+    permissions: List[str] = []
 
     class Config:
         orm_mode = True
@@ -42,13 +43,25 @@ def get_current_user_via_http(token: str = Depends(OAUTH2_SCHEME)) -> UserRead:
     )
 
 
+def require_permission(permission: str):
+    """FastAPI dependency factory for granular permission checks."""
+    def checker(user: UserRead = Depends(get_current_user_via_http)) -> UserRead:
+        if permission not in user.permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав",
+            )
+        return user
+    return checker
+
+
 def get_admin_user(user: UserRead = Depends(get_current_user_via_http)) -> UserRead:
     """
-    Проверяет, что пользователь имеет роль admin.
+    Проверяет, что пользователь имеет роль admin или moderator.
     """
-    if user.role != "admin":
+    if user.role not in ("admin", "moderator"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Только администраторы могут выполнять это действие",
+            detail="Только администраторы и модераторы могут выполнять это действие",
         )
     return user

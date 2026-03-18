@@ -20,9 +20,11 @@ import AdminCharactersPage from "../Admin/CharactersPage/AdminCharactersPage";
 import AdminCharacterDetailPage from "../Admin/CharactersPage/AdminCharacterDetailPage";
 import RulesPage from "../RulesPage/RulesPage";
 import RulesAdminPage from "../Admin/RulesAdminPage/RulesAdminPage";
+import RbacAdminPage from "../Admin/RbacAdminPage/RbacAdminPage";
 import UserProfilePage from "../UserProfilePage/UserProfilePage";
 import AllUsersPage from "../pages/AllUsersPage/AllUsersPage";
 import OnlineUsersPage from "../pages/OnlineUsersPage/OnlineUsersPage";
+import ProtectedRoute from "../CommonComponents/ProtectedRoute/ProtectedRoute";
 
 const App = () => {
   return (
@@ -43,19 +45,60 @@ const App = () => {
           <Route path="/*" element={<Layout />}>
             <Route path="home" element={<HomePage />} />
             <Route path="createCharacter" element={<CreateCharacterPage />} />
-            <Route path="requestsPage" element={<RequestsPage />} />
+            <Route path="requestsPage" element={
+              <ProtectedRoute requiredPermission="characters:approve">
+                <RequestsPage />
+              </ProtectedRoute>
+            } />
             <Route path="world" element={<WorldPage />} />
             <Route path="location/:locationId" element={<LocationPage />} />
             <Route path="world/country/:countryId/" element={<CountryPage />} />
-            <Route path="admin" element={<AdminPage />} />
-            <Route path="admin/locations" element={<AdminLocationsPage />} />
-            <Route path="home/admin/skills" element={<AdminSkillsPage />} />
-            <Route path="admin/items" element={<ItemsAdminPage />} />
-            <Route path="admin/starter-kits" element={<StarterKitsPage />} />
-            <Route path="admin/characters" element={<AdminCharactersPage />} />
-            <Route path="admin/characters/:characterId" element={<AdminCharacterDetailPage />} />
+            <Route path="admin" element={
+              <ProtectedRoute requiredRole="editor">
+                <AdminPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/locations" element={
+              <ProtectedRoute requiredPermission="locations:read">
+                <AdminLocationsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="home/admin/skills" element={
+              <ProtectedRoute requiredPermission="skills:read">
+                <AdminSkillsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/items" element={
+              <ProtectedRoute requiredPermission="items:read">
+                <ItemsAdminPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/starter-kits" element={
+              <ProtectedRoute requiredPermission="characters:update">
+                <StarterKitsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/characters" element={
+              <ProtectedRoute requiredPermission="characters:read">
+                <AdminCharactersPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/characters/:characterId" element={
+              <ProtectedRoute requiredPermission="characters:read">
+                <AdminCharacterDetailPage />
+              </ProtectedRoute>
+            } />
             <Route path="rules" element={<RulesPage />} />
-            <Route path="admin/rules" element={<RulesAdminPage />} />
+            <Route path="admin/rules" element={
+              <ProtectedRoute requiredPermission="rules:read">
+                <RulesAdminPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/users-roles" element={
+              <ProtectedRoute requiredPermission="users:manage">
+                <RbacAdminPage />
+              </ProtectedRoute>
+            } />
             <Route path="players" element={<AllUsersPage />} />
             <Route path="players/online" element={<OnlineUsersPage />} />
             <Route path="profile" element={<ProfilePage />} />

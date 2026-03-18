@@ -9,13 +9,20 @@ import AvatarDropdown from './AvatarDropdown';
 import NotificationBell from './NotificationBell';
 import AdminMenu from './AdminMenu';
 import { DropdownLink } from './types';
+import { isStaff } from '../../../utils/permissions';
 import logo from '../../../assets/logo.png';
+
+const ROLE_LABELS: Record<string, string> = {
+  admin: 'Администратор',
+  moderator: 'Модератор',
+  editor: 'Редактор',
+};
 
 const Header = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
-  const { username, avatar, character, role } = useAppSelector(
+  const { username, avatar, character, role, roleDisplayName } = useAppSelector(
     (state) => state.user,
   );
 
@@ -102,6 +109,11 @@ const Header = () => {
         </button>
 
         <AdminMenu role={role} />
+        {isStaff(role) && role && (
+          <span className="text-site-blue text-xs font-medium tracking-wide hidden md:inline">
+            {roleDisplayName || ROLE_LABELS[role] || role}
+          </span>
+        )}
       </div>
     </header>
   );

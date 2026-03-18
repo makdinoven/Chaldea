@@ -1,12 +1,13 @@
 import { Link } from 'react-router-dom';
 import { Shield } from 'react-feather';
+import { isStaff } from '../../../utils/permissions';
 
 interface AdminMenuProps {
   role: string | null;
 }
 
 const AdminMenu = ({ role }: AdminMenuProps) => {
-  if (role !== 'admin') return null;
+  if (!isStaff(role)) return null;
 
   return (
     <Link

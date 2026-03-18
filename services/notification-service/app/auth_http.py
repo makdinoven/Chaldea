@@ -4,12 +4,13 @@ import requests
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 
 class UserRead(BaseModel):
     id: int
     username: str
     role: Optional[str] = None
+    permissions: List[str] = []
 
 OAUTH2_SCHEME = OAuth2PasswordBearer(tokenUrl="token")
 
@@ -32,3 +33,15 @@ def get_current_user_via_http(token: str = Depends(OAUTH2_SCHEME)) -> UserRead:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials"
         )
+
+
+def require_permission(permission: str):
+    """FastAPI dependency factory for granular permission checks."""
+    def checker(user: UserRead = Depends(get_current_user_via_http)) -> UserRead:
+        if permission not in user.permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав",
+            )
+        return user
+    return checker
