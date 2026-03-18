@@ -36,7 +36,7 @@ def upgrade() -> None:
             sa.PrimaryKeyConstraint('id'),
         )
 
-    # Regions
+    # Regions (entrance_location_id FK added later to avoid circular dependency)
     if 'Regions' not in existing_tables:
         op.create_table(
             'Regions',
@@ -51,11 +51,10 @@ def upgrade() -> None:
             sa.Column('x', sa.Float(), nullable=True),
             sa.Column('y', sa.Float(), nullable=True),
             sa.ForeignKeyConstraint(['country_id'], ['Countries.id'], ondelete='CASCADE'),
-            sa.ForeignKeyConstraint(['entrance_location_id'], ['Locations.id'], ondelete='SET NULL'),
             sa.PrimaryKeyConstraint('id'),
         )
 
-    # Districts
+    # Districts (entrance_location_id FK added later to avoid circular dependency)
     if 'Districts' not in existing_tables:
         op.create_table(
             'Districts',
@@ -69,7 +68,6 @@ def upgrade() -> None:
             sa.Column('x', sa.Float(), nullable=True),
             sa.Column('y', sa.Float(), nullable=True),
             sa.ForeignKeyConstraint(['region_id'], ['Regions.id'], ondelete='CASCADE'),
-            sa.ForeignKeyConstraint(['entrance_location_id'], ['Locations.id'], ondelete='SET NULL'),
             sa.PrimaryKeyConstraint('id'),
         )
 
@@ -118,8 +116,34 @@ def upgrade() -> None:
         )
         op.create_index(op.f('ix_posts_id'), 'posts', ['id'], unique=False)
 
+    # Deferred FKs (circular dependency: Regions/Districts → Locations)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    # Add Regions.entrance_location_id → Locations.id
+    existing_fks = [fk['name'] for fk in inspector.get_foreign_keys('Regions')]
+    if 'fk_regions_entrance_location' not in existing_fks:
+        op.create_foreign_key(
+            'fk_regions_entrance_location',
+            'Regions', 'Locations',
+            ['entrance_location_id'], ['id'],
+            ondelete='SET NULL',
+        )
+
+    # Add Districts.entrance_location_id → Locations.id
+    existing_fks = [fk['name'] for fk in inspector.get_foreign_keys('Districts')]
+    if 'fk_districts_entrance_location' not in existing_fks:
+        op.create_foreign_key(
+            'fk_districts_entrance_location',
+            'Districts', 'Locations',
+            ['entrance_location_id'], ['id'],
+            ondelete='SET NULL',
+        )
+
 
 def downgrade() -> None:
+    op.drop_constraint('fk_districts_entrance_location', 'Districts', type_='foreignkey')
+    op.drop_constraint('fk_regions_entrance_location', 'Regions', type_='foreignkey')
     op.drop_index(op.f('ix_posts_id'), table_name='posts')
     op.drop_table('posts')
     op.drop_table('LocationNeighbors')
