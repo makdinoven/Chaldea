@@ -20,6 +20,7 @@ class ItemType(str, Enum):
     scroll = "scroll"
     misc = "misc"
     bracelet = "bracelet"
+    shield = "shield"
 
 class ItemRarity(str, Enum):
     common = "common"

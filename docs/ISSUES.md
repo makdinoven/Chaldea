@@ -30,11 +30,9 @@
 **Описание:** `LAST_STATS` dict растёт бесконечно — записи никогда не удаляются после завершения боя. При длительной работе сервис будет потреблять всё больше памяти.
 **Решение:** Очищать записи для (battle_id, pid) при завершении боя, или использовать TTL-cache (например `cachetools.TTLCache`).
 
-### 7. Баг: shield нельзя экипировать через API
-**Сервис:** inventory-service
-**Файл:** `services/inventory-service/app/crud.py:98-107`
-**Описание:** Функция `find_equipment_slot_for_item()` не включает `shield` в словарь `fixed`, хотя слот `shield` существует в `EquipmentSlot` и на фронтенде. При попытке экипировать щит, бэкенд ищет fast_slot (как для consumable), вместо слота `shield`. Функция `is_item_compatible_with_slot()` корректно включает shield, но она не используется в `find_equipment_slot_for_item`.
-**Решение:** Добавить `'shield': 'shield'` в словарь `fixed` в `find_equipment_slot_for_item()`.
+### ~~7. Баг: shield нельзя экипировать через API~~ DONE (FEAT-041)
+~~**Сервис:** inventory-service~~
+~~**Исправлено в FEAT-041:** добавлен `'shield'` во все ENUM-определения (models, schemas, crud) + Alembic-миграция + data backfill для существующих персонажей.~~
 
 ---
 

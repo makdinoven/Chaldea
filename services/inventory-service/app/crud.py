@@ -34,7 +34,7 @@ def create_default_equipment_slots(db: Session, character_id: int):
     """
     slot_types = [
         'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet',
-        'main_weapon', 'additional_weapons',
+        'main_weapon', 'additional_weapons', 'shield',
         'fast_slot_1', 'fast_slot_2', 'fast_slot_3', 'fast_slot_4',
         'fast_slot_5', 'fast_slot_6', 'fast_slot_7', 'fast_slot_8',
         'fast_slot_9', 'fast_slot_10'
@@ -87,6 +87,7 @@ def is_item_compatible_with_slot(item_type: str, slot_type: str) -> bool:
         'bracelet': ['bracelet'],
         'main_weapon': ['main_weapon'],
         'additional_weapons': ['additional_weapons'],
+        'shield': ['shield'],
         'fast_slot_1': ['consumable'],
         'fast_slot_2': ['consumable'],
         'fast_slot_3': ['consumable'],
@@ -99,6 +100,7 @@ def find_equipment_slot_for_item(db: Session, character_id: int, item_obj: model
         'head': 'head', 'body': 'body', 'cloak': 'cloak', 'belt': 'belt',
         'ring': 'ring', 'necklace': 'necklace', 'bracelet': 'bracelet',
         'main_weapon': 'main_weapon', 'additional_weapons': 'additional_weapons',
+        'shield': 'shield',
     }
     if item_obj.item_type in fixed:
         return db.query(models.EquipmentSlot).filter_by(
@@ -140,7 +142,7 @@ def find_equipment_slot_for_item(db: Session, character_id: int, item_obj: model
     if slot:
         slot.is_enabled = True
         db.add(slot)
-        db.commit()
+        db.flush()
         return slot
 
     return None
@@ -161,7 +163,7 @@ def return_item_to_inventory(db: Session, character_id: int, item_obj: models.It
         if inv_slot:
             inv_slot.quantity += 1
             db.add(inv_slot)
-            db.commit()
+            db.flush()
             return
 
     # Если предмет нестекаемый или все стеки заполнены — создаём новый
@@ -171,7 +173,7 @@ def return_item_to_inventory(db: Session, character_id: int, item_obj: models.It
         quantity=1
     )
     db.add(new_inv)
-    db.commit()
+    db.flush()
 
 def build_modifiers_dict(item_obj: models.Items, negative: bool = False) -> dict:
     """

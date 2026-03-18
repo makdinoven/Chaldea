@@ -12,7 +12,7 @@ class Items(Base):
     item_level = Column(Integer, nullable=False,default=0)
     item_type = Column(Enum(
         'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet', 'main_weapon',
-        'consumable','additional_weapons', 'resource', 'scroll', 'misc'
+        'consumable','additional_weapons', 'resource', 'scroll', 'misc', 'shield'
     ), nullable=False)
     item_rarity = Column(Enum(
         'common', 'rare', 'epic', 'legendary', 'mythical', 'divine', 'demonic'
@@ -124,7 +124,8 @@ class EquipmentSlot(Base):
     character_id = Column(Integer, nullable=False)
     slot_type = Column(Enum(
         'head', 'body', 'cloak', 'belt', 'ring',
-        'necklace', 'bracelet', 'main_weapon', 'additional_weapons', 'fast_slot_1', 'fast_slot_2', 'fast_slot_3', 'fast_slot_4',
+        'necklace', 'bracelet', 'main_weapon', 'additional_weapons', 'shield',
+        'fast_slot_1', 'fast_slot_2', 'fast_slot_3', 'fast_slot_4',
     'fast_slot_5', 'fast_slot_6', 'fast_slot_7', 'fast_slot_8',
     'fast_slot_9', 'fast_slot_10'
     ), nullable=False)

@@ -323,7 +323,6 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
       5) Вызываем recalc_fast_slots (после commit)
     """
     verify_character_ownership(db, character_id, current_user.id)
-    db.begin()
     try:
         slot = db.query(models.EquipmentSlot).filter(
             models.EquipmentSlot.character_id == character_id,
