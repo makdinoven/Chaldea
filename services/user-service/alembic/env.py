@@ -25,6 +25,7 @@ if config.config_file_name is not None:
 
 # Target metadata for autogenerate support
 target_metadata = Base.metadata
+VERSION_TABLE = "alembic_version_user"
 
 
 def run_migrations_offline():
@@ -35,6 +36,7 @@ def run_migrations_offline():
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_table=VERSION_TABLE,
     )
 
     with context.begin_transaction():
@@ -53,7 +55,8 @@ def run_migrations_online():
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
-            target_metadata=target_metadata
+            target_metadata=target_metadata,
+            version_table=VERSION_TABLE,
         )
 
         with context.begin_transaction():

@@ -1,6 +1,9 @@
 import os
 import sys
 
+# Add the service root directory to sys.path so that models, database, config
+# can be imported when Alembic is executed from the service root directory.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from logging.config import fileConfig
 
@@ -9,29 +12,32 @@ from sqlalchemy import pool
 
 from alembic import context
 
-# Импортируем Base из модуля models и URL базы данных из модуля database
 from models import Base
 from database import SQLALCHEMY_DATABASE_URL
 
 
-# Настройка файла конфигурации для логирования
+# Alembic Config object
 config = context.config
 
-# Прочитайте файл конфигурации, если он существует
+# Set up loggers from ini file
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Укажите метаданные объектов модели, которые будут использованы для 'autogenerate'
+# Target metadata — photo-service does not own any tables, so autogenerate
+# will not detect changes. Migrations must be written manually if needed.
 target_metadata = Base.metadata
+VERSION_TABLE = "alembic_version_photo"
+
 
 def run_migrations_offline():
-    """Запуск миграций в 'offline' режиме."""
-    url = SQLALCHEMY_DATABASE_URL  # Используем URL базы данных из вашего модуля database.py
+    """Run migrations in 'offline' mode."""
+    url = SQLALCHEMY_DATABASE_URL
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_table=VERSION_TABLE,
     )
 
     with context.begin_transaction():
@@ -39,10 +45,10 @@ def run_migrations_offline():
 
 
 def run_migrations_online():
-    """Запуск миграций в 'online' режиме."""
+    """Run migrations in 'online' mode."""
     connectable = engine_from_config(
         config.get_section(config.config_ini_section),
-        url=SQLALCHEMY_DATABASE_URL,  # Используем URL базы данных из вашего модуля database.py
+        url=SQLALCHEMY_DATABASE_URL,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
@@ -50,7 +56,8 @@ def run_migrations_online():
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
-            target_metadata=target_metadata
+            target_metadata=target_metadata,
+            version_table=VERSION_TABLE,
         )
 
         with context.begin_transaction():

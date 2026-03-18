@@ -19,4 +19,4 @@ COPY ./services/character-service/app /app
 
 EXPOSE 8005
 
-CMD PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8005"]

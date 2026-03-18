@@ -19,11 +19,8 @@ COPY ./services/character-attributes-service/app /app
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем Alembic для управления миграциями и другие необходимые пакеты
-RUN pip install --no-cache-dir alembic pymysql
-
 # Указываем порт, который будет открыт для доступа к микросервису
 EXPOSE 8002
 
 # Команда для запуска FastAPI приложения
-CMD PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8002 --app-dir /app --reload
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8002"]
