@@ -28,11 +28,15 @@ import database  # noqa: E402
 database.engine = MagicMock()
 database.create_tables = AsyncMock()
 
+import main as main_module  # noqa: E402
 from main import app  # noqa: E402
 
 # Clear startup event handlers to prevent RabbitMQ connection attempts
 app.router.on_startup.clear()
-from database import get_db  # noqa: E402
+
+# Use main.get_db (the original function object captured by Depends() in main.py)
+# instead of database.get_db, which may have been replaced by other test modules.
+get_db = main_module.get_db
 
 
 # ---------------------------------------------------------------------------
