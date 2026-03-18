@@ -3,6 +3,7 @@ import {
   fetchUserProfile,
   fetchWallPosts,
   createWallPost,
+  updateWallPost as updateWallPostApi,
   deleteWallPost as deleteWallPostApi,
   fetchFriends,
   fetchIncomingRequests,
@@ -12,6 +13,11 @@ import {
   rejectFriendRequest,
   removeFriend,
   uploadUserAvatar,
+  updateProfileSettings as updateProfileSettingsApi,
+  updateUsername as updateUsernameApi,
+  fetchUserCharacters,
+  uploadProfileBackground as uploadProfileBackgroundApi,
+  deleteProfileBackground as deleteProfileBackgroundApi,
 } from '../../api/userProfile';
 import { getMe } from './userSlice';
 import type { RootState } from '../store';
@@ -62,6 +68,22 @@ export interface UserProfile {
   is_friend: boolean | null;
   friendship_status: string | null;
   friendship_id: number | null;
+  profile_bg_color?: string | null;
+  profile_bg_image?: string | null;
+  nickname_color?: string | null;
+  avatar_frame?: string | null;
+  avatar_effect_color?: string | null;
+  status_text?: string | null;
+  profile_bg_position?: string | null;
+}
+
+export interface UserCharacterItem {
+  id: number;
+  name: string;
+  avatar: string | null;
+  level: number | null;
+  rp_posts_count: number;
+  last_rp_post_date: string | null;
 }
 
 interface UserProfileState {
@@ -72,10 +94,13 @@ interface UserProfileState {
   friends: Friend[];
   incomingRequests: FriendRequest[];
   outgoingRequests: FriendRequest[];
+  characters: UserCharacterItem[];
   loading: boolean;
   postsLoading: boolean;
   friendsLoading: boolean;
   avatarUploading: boolean;
+  charactersLoading: boolean;
+  settingsUpdating: boolean;
   error: string | null;
 }
 
@@ -87,10 +112,13 @@ const initialState: UserProfileState = {
   friends: [],
   incomingRequests: [],
   outgoingRequests: [],
+  characters: [],
   loading: false,
   postsLoading: false,
   friendsLoading: false,
   avatarUploading: false,
+  charactersLoading: false,
+  settingsUpdating: false,
   error: null,
 };
 
@@ -116,6 +144,14 @@ export const createPost = createAsyncThunk(
   'userProfile/createPost',
   async ({ userId, content }: { userId: number; content: string }) => {
     const { data } = await createWallPost(userId, content);
+    return data as WallPost;
+  },
+);
+
+export const editPost = createAsyncThunk(
+  'userProfile/editPost',
+  async ({ postId, content }: { postId: number; content: string }) => {
+    const { data } = await updateWallPostApi(postId, content);
     return data as WallPost;
   },
 );
@@ -196,6 +232,100 @@ export const uploadAvatar = createAsyncThunk(
   },
 );
 
+export const updateProfileSettings = createAsyncThunk(
+  'userProfile/updateProfileSettings',
+  async (
+    {
+      userId,
+      settings,
+    }: {
+      userId: number;
+      settings: {
+        profile_bg_color?: string | null;
+        nickname_color?: string | null;
+        avatar_frame?: string | null;
+        avatar_effect_color?: string | null;
+        status_text?: string | null;
+        profile_bg_position?: string | null;
+      };
+    },
+    { dispatch, rejectWithValue },
+  ) => {
+    try {
+      const { data } = await updateProfileSettingsApi(settings);
+      dispatch(loadUserProfile(userId));
+      return data;
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { detail?: string } } };
+      return rejectWithValue(
+        error.response?.data?.detail ?? 'Не удалось сохранить настройки',
+      );
+    }
+  },
+);
+
+export const updateUsername = createAsyncThunk(
+  'userProfile/updateUsername',
+  async (
+    { userId, username }: { userId: number; username: string },
+    { dispatch, rejectWithValue },
+  ) => {
+    try {
+      const { data } = await updateUsernameApi(username);
+      dispatch(getMe());
+      dispatch(loadUserProfile(userId));
+      return data;
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { detail?: string } } };
+      return rejectWithValue(
+        error.response?.data?.detail ?? 'Не удалось изменить никнейм',
+      );
+    }
+  },
+);
+
+export const loadUserCharacters = createAsyncThunk(
+  'userProfile/loadUserCharacters',
+  async (userId: number) => {
+    const { data } = await fetchUserCharacters(userId);
+    return data.characters as UserCharacterItem[];
+  },
+);
+
+export const uploadProfileBackground = createAsyncThunk(
+  'userProfile/uploadProfileBackground',
+  async (
+    { userId, file }: { userId: number; file: File },
+    { dispatch, rejectWithValue },
+  ) => {
+    try {
+      const { data } = await uploadProfileBackgroundApi(userId, file);
+      dispatch(loadUserProfile(userId));
+      return data.profile_bg_image as string;
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { detail?: string } } };
+      return rejectWithValue(
+        error.response?.data?.detail ?? 'Не удалось загрузить фон профиля',
+      );
+    }
+  },
+);
+
+export const deleteProfileBackground = createAsyncThunk(
+  'userProfile/deleteProfileBackground',
+  async (userId: number, { dispatch, rejectWithValue }) => {
+    try {
+      await deleteProfileBackgroundApi(userId);
+      dispatch(loadUserProfile(userId));
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { detail?: string } } };
+      return rejectWithValue(
+        error.response?.data?.detail ?? 'Не удалось удалить фон профиля',
+      );
+    }
+  },
+);
+
 // ── Slice ──
 
 const userProfileSlice = createSlice({
@@ -247,6 +377,14 @@ const userProfileSlice = createSlice({
         if (state.profile) {
           state.profile.post_stats.total_posts += 1;
           state.profile.post_stats.last_post_date = action.payload.created_at;
+        }
+      })
+
+      // Edit post
+      .addCase(editPost.fulfilled, (state, action) => {
+        const idx = state.posts.findIndex((p) => p.id === action.payload.id);
+        if (idx !== -1) {
+          state.posts[idx] = action.payload;
         }
       })
 
@@ -317,6 +455,68 @@ const userProfileSlice = createSlice({
       })
       .addCase(uploadAvatar.rejected, (state) => {
         state.avatarUploading = false;
+      })
+
+      // Profile settings
+      .addCase(updateProfileSettings.pending, (state) => {
+        state.settingsUpdating = true;
+      })
+      .addCase(updateProfileSettings.fulfilled, (state) => {
+        state.settingsUpdating = false;
+      })
+      .addCase(updateProfileSettings.rejected, (state) => {
+        state.settingsUpdating = false;
+      })
+
+      // Username change
+      .addCase(updateUsername.pending, (state) => {
+        state.settingsUpdating = true;
+      })
+      .addCase(updateUsername.fulfilled, (state) => {
+        state.settingsUpdating = false;
+      })
+      .addCase(updateUsername.rejected, (state) => {
+        state.settingsUpdating = false;
+      })
+
+      // User characters
+      .addCase(loadUserCharacters.pending, (state) => {
+        state.charactersLoading = true;
+      })
+      .addCase(loadUserCharacters.fulfilled, (state, action) => {
+        state.charactersLoading = false;
+        state.characters = action.payload;
+      })
+      .addCase(loadUserCharacters.rejected, (state) => {
+        state.charactersLoading = false;
+      })
+
+      // Profile background upload
+      .addCase(uploadProfileBackground.pending, (state) => {
+        state.settingsUpdating = true;
+      })
+      .addCase(uploadProfileBackground.fulfilled, (state, action) => {
+        state.settingsUpdating = false;
+        if (state.profile) {
+          state.profile.profile_bg_image = action.payload;
+        }
+      })
+      .addCase(uploadProfileBackground.rejected, (state) => {
+        state.settingsUpdating = false;
+      })
+
+      // Profile background delete
+      .addCase(deleteProfileBackground.pending, (state) => {
+        state.settingsUpdating = true;
+      })
+      .addCase(deleteProfileBackground.fulfilled, (state) => {
+        state.settingsUpdating = false;
+        if (state.profile) {
+          state.profile.profile_bg_image = null;
+        }
+      })
+      .addCase(deleteProfileBackground.rejected, (state) => {
+        state.settingsUpdating = false;
       });
   },
 });
@@ -338,3 +538,6 @@ export const selectProfileLoading = (state: RootState) => state.userProfile.load
 export const selectFriendsLoading = (state: RootState) => state.userProfile.friendsLoading;
 export const selectAvatarUploading = (state: RootState) => state.userProfile.avatarUploading;
 export const selectProfileError = (state: RootState) => state.userProfile.error;
+export const selectUserCharacters = (state: RootState) => state.userProfile.characters;
+export const selectCharactersLoading = (state: RootState) => state.userProfile.charactersLoading;
+export const selectSettingsUpdating = (state: RootState) => state.userProfile.settingsUpdating;

@@ -6,7 +6,8 @@ from crud import (
     update_user_avatar, get_user_avatar, update_user_avatar_preview,
     update_character_avatar, get_character_avatar, update_character_avatar_preview, update_location_image,
     update_district_image, update_region_image, update_region_map_image, update_country_map_image,
-    update_skill_rank_image, update_skill_image, update_item_image, update_rule_image
+    update_skill_rank_image, update_skill_image, update_item_image, update_rule_image,
+    update_profile_bg_image, get_profile_bg_image
 )
 from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime
 from fastapi.middleware.cors import CORSMiddleware
@@ -296,4 +297,47 @@ async def change_rule_image(rule_id: int = Form(...), file: UploadFile = File(..
         }
     except Exception as e:
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/photo/change_profile_background")
+async def change_profile_background(user_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_current_user_via_http)):
+    """Загрузить фоновое изображение профиля."""
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Вы можете загружать только свой фон профиля")
+    validate_image_mime(file)
+    try:
+        # Delete old background from S3 if exists
+        old_bg = get_profile_bg_image(user_id)
+        if old_bg:
+            try:
+                delete_s3_file(old_bg)
+            except Exception:
+                pass
+
+        file_stream = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("profile_bg", user_id)
+        bg_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="profile_backgrounds")
+        update_profile_bg_image(user_id, bg_url)
+        return {"message": "Фон профиля успешно загружен", "profile_bg_image": bg_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/photo/delete_profile_background")
+async def delete_profile_background(user_id: int, current_user = Depends(get_current_user_via_http)):
+    """Удалить фоновое изображение профиля."""
+    if user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Вы можете удалить только свой фон профиля")
+    try:
+        bg_url = get_profile_bg_image(user_id)
+        if not bg_url:
+            raise HTTPException(status_code=404, detail="Фон профиля не установлен")
+
+        delete_s3_file(bg_url)
+        update_profile_bg_image(user_id, None)
+        return {"message": "Фон профиля успешно удалён"}
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { User, Trash2 } from 'react-feather';
+import { motion, AnimatePresence } from 'motion/react';
+import { User, Trash2, Edit3 } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
   selectWallPosts,
@@ -9,6 +10,7 @@ import {
   selectHasMorePosts,
   selectPostsPage,
   createPost,
+  editPost,
   deletePost,
   loadWallPosts,
   type WallPost,
@@ -31,6 +33,12 @@ const PostCard = ({
 }) => {
   const dispatch = useAppDispatch();
   const canDelete = currentUserId === post.author_id || isWallOwner;
+  const canEdit = currentUserId === post.author_id;
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState(post.content);
+  const [saving, setSaving] = useState(false);
+  const [editKey, setEditKey] = useState(0);
 
   const handleDelete = async () => {
     try {
@@ -38,6 +46,32 @@ const PostCard = ({
       toast.success('Пост удалён');
     } catch {
       toast.error('Не удалось удалить пост');
+    }
+  };
+
+  const handleEdit = () => {
+    setEditContent(post.content);
+    setEditKey((k) => k + 1);
+    setIsEditing(true);
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+    setEditContent(post.content);
+  };
+
+  const handleSaveEdit = async () => {
+    const stripped = editContent.replace(/<[^>]*>/g, '').trim();
+    if (!stripped) return;
+    setSaving(true);
+    try {
+      await dispatch(editPost({ postId: post.id, content: editContent })).unwrap();
+      setIsEditing(false);
+      toast.success('Пост обновлён');
+    } catch {
+      toast.error('Не удалось сохранить изменения');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -50,38 +84,45 @@ const PostCard = ({
   });
 
   return (
-    <div className="gray-bg p-5 flex gap-4">
-      {/* Author avatar */}
-      <Link
-        to={`/user-profile/${post.author_id}`}
-        className="flex-shrink-0"
-      >
-        <div className="w-10 h-10 rounded-full overflow-hidden bg-white/10 flex items-center justify-center">
-          {post.author_avatar ? (
-            <img
-              src={post.author_avatar}
-              alt={post.author_username}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <User size={18} className="text-white/40" />
-          )}
+    <div className="gray-bg p-5">
+      {/* Author header */}
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <div className="flex items-center gap-3">
+          <Link
+            to={`/user-profile/${post.author_id}`}
+            className="flex-shrink-0"
+          >
+            <div className="w-8 h-8 rounded-full overflow-hidden bg-white/10 flex items-center justify-center">
+              {post.author_avatar ? (
+                <img
+                  src={post.author_avatar}
+                  alt={post.author_username}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <User size={14} className="text-white/40" />
+              )}
+            </div>
+          </Link>
+          <Link
+            to={`/user-profile/${post.author_id}`}
+            className="text-site-blue font-medium hover:underline text-sm"
+          >
+            {post.author_username}
+          </Link>
+          <span className="text-white/30 text-xs">{date}</span>
         </div>
-      </Link>
-
-      {/* Post content */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <div className="flex items-center gap-2">
-            <Link
-              to={`/user-profile/${post.author_id}`}
-              className="text-site-blue font-medium hover:underline"
+        <div className="flex items-center gap-1">
+          {canEdit && !isEditing && (
+            <button
+              onClick={handleEdit}
+              className="text-white/30 hover:text-site-blue transition-colors p-1"
+              title="Редактировать пост"
             >
-              {post.author_username}
-            </Link>
-            <span className="text-white/30 text-xs">{date}</span>
-          </div>
-          {canDelete && (
+              <Edit3 size={14} />
+            </button>
+          )}
+          {canDelete && !isEditing && (
             <button
               onClick={handleDelete}
               className="text-white/30 hover:text-site-red transition-colors p-1"
@@ -91,11 +132,38 @@ const PostCard = ({
             </button>
           )}
         </div>
+      </div>
+
+      {/* Post content or editor */}
+      {isEditing ? (
+        <div className="flex flex-col gap-3">
+          <WysiwygEditor
+            key={editKey}
+            content={editContent}
+            onChange={setEditContent}
+          />
+          <div className="flex justify-end gap-3">
+            <button
+              className="btn-line !py-2 !px-6 !text-sm"
+              onClick={handleCancelEdit}
+            >
+              Отмена
+            </button>
+            <button
+              className="btn-blue !py-2 !px-6 !text-sm"
+              onClick={handleSaveEdit}
+              disabled={saving}
+            >
+              {saving ? 'Сохранение...' : 'Сохранить'}
+            </button>
+          </div>
+        </div>
+      ) : (
         <div
           className="prose-rules text-white/80 text-sm break-words"
           dangerouslySetInnerHTML={{ __html: post.content }}
         />
-      </div>
+      )}
     </div>
   );
 };
@@ -112,6 +180,21 @@ const WallSection = ({ profileUserId, isOwnProfile }: WallSectionProps) => {
   const [editorContent, setEditorContent] = useState('');
   const [posting, setPosting] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const formRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isEditorOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (formRef.current && !formRef.current.contains(e.target as Node)) {
+        if (isContentEmpty(editorContent)) {
+          setIsEditorOpen(false);
+        }
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isEditorOpen, editorContent]);
 
   const isContentEmpty = (html: string) => {
     const stripped = html.replace(/<[^>]*>/g, '').trim();
@@ -125,6 +208,7 @@ const WallSection = ({ profileUserId, isOwnProfile }: WallSectionProps) => {
       await dispatch(createPost({ userId: profileUserId, content: editorContent })).unwrap();
       setEditorContent('');
       setEditorKey((k) => k + 1);
+      setIsEditorOpen(false);
       toast.success('Пост опубликован');
     } catch {
       toast.error('Не удалось опубликовать пост');
@@ -141,21 +225,57 @@ const WallSection = ({ profileUserId, isOwnProfile }: WallSectionProps) => {
     <div className="flex flex-col gap-4">
       {/* New post form with WYSIWYG editor */}
       {isLoggedIn && (
-        <div className="gray-bg p-5 flex flex-col gap-3">
-          <WysiwygEditor
-            key={editorKey}
-            content={editorContent}
-            onChange={setEditorContent}
-          />
-          <div className="flex justify-end">
-            <button
-              className="btn-blue !py-2 !px-6 !text-sm"
-              onClick={handleSubmit}
-              disabled={posting || isContentEmpty(editorContent)}
-            >
-              {posting ? 'Отправка...' : 'Опубликовать'}
-            </button>
-          </div>
+        <div ref={formRef}>
+          <AnimatePresence mode="wait">
+            {!isEditorOpen ? (
+              <motion.div
+                key="toggle-placeholder"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15 }}
+                className="gray-bg px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-white/[0.08] transition-colors rounded-card"
+                onClick={() => setIsEditorOpen(true)}
+              >
+                <Edit3 size={16} className="text-white/30 flex-shrink-0" />
+                <span className="text-white/30 text-sm select-none">Написать на стену...</span>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="editor-form"
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+                className="gray-bg p-5 flex flex-col gap-3"
+              >
+                <WysiwygEditor
+                  key={editorKey}
+                  content={editorContent}
+                  onChange={setEditorContent}
+                />
+                <div className="flex justify-end gap-3">
+                  <button
+                    className="btn-line !py-2 !px-6 !text-sm"
+                    onClick={() => {
+                      setIsEditorOpen(false);
+                      setEditorContent('');
+                      setEditorKey((k) => k + 1);
+                    }}
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    className="btn-blue !py-2 !px-6 !text-sm"
+                    onClick={handleSubmit}
+                    disabled={posting || isContentEmpty(editorContent)}
+                  >
+                    {posting ? 'Отправка...' : 'Опубликовать'}
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       )}
 

@@ -192,7 +192,7 @@ const FriendsSection = ({ profileUserId, isOwnProfile }: FriendsSectionProps) =>
   const outgoingRequests = useAppSelector(selectOutgoingRequests);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="gray-bg p-5 flex flex-col gap-6">
       {/* Incoming requests (own profile only) */}
       {isOwnProfile && incomingRequests.length > 0 && (
         <div>

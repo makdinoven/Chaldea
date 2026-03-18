@@ -16,19 +16,55 @@ from fastapi.middleware.cors import CORSMiddleware
 from producer import send_notification_event
 import httpx
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 import bleach
+import re
+import asyncio
 
 ALLOWED_TAGS = [
     "p", "br", "strong", "em", "u", "s",
     "h1", "h2", "h3",
     "ul", "ol", "li",
     "blockquote",
+    "a", "img", "span", "mark",
+    "figure", "div",
+    "pre", "code",
 ]
 
+ALLOWED_ATTRIBUTES = {
+    "a": ["href", "target", "rel", "class"],
+    "img": ["src", "alt", "class", "width", "height"],
+    "span": ["style", "class"],
+    "mark": ["style", "data-color", "class"],
+    "figure": ["data-type", "data-align", "style", "class"],
+    "div": ["style", "class", "data-node-view-wrapper"],
+    "p": ["style", "class"],
+    "h1": ["style", "class"],
+    "h2": ["style", "class"],
+    "h3": ["style", "class"],
+}
+
+ALLOWED_CSS_PROPERTIES = [
+    "color", "background-color", "text-align", "width",
+    "max-width", "display",
+    "margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
+    "padding", "padding-top", "padding-bottom", "padding-left", "padding-right",
+]
+
+from bleach.css_sanitizer import CSSSanitizer
+
+_css_sanitizer = CSSSanitizer(allowed_css_properties=ALLOWED_CSS_PROPERTIES)
+
 def sanitize_html(html: str) -> str:
-    """Sanitize HTML content, allowing only safe tags from WYSIWYG editor."""
-    return bleach.clean(html, tags=ALLOWED_TAGS, strip=True)
+    """Sanitize HTML content, allowing safe tags and styles from WYSIWYG editor."""
+    return bleach.clean(
+        html,
+        tags=ALLOWED_TAGS,
+        attributes=ALLOWED_ATTRIBUTES,
+        css_sanitizer=_css_sanitizer,
+        strip=True,
+    )
 
 app = FastAPI()
 
@@ -218,6 +254,121 @@ async def upload_avatar(file: UploadFile, current_user: models.User = Depends(ge
     current_user.avatar = relative_path
     db.commit()
     return {"avatar_url": relative_path}
+
+
+# ==================== PROFILE SETTINGS & USERNAME ====================
+
+HEX_COLOR_REGEX = re.compile(r'^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$')
+BG_POSITION_REGEX = re.compile(r'^\d{1,3}%\s\d{1,3}%$')
+ALLOWED_FRAMES = {"gold", "silver", "fire"}
+USERNAME_REGEX = re.compile(r'^[a-zA-Zа-яА-ЯёЁ0-9_-]+$')
+
+
+@router.put("/me/settings", response_model=schemas.ProfileSettingsResponse)
+def update_profile_settings(
+    data: schemas.ProfileSettingsUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Обновить настройки кастомизации профиля."""
+    # Validate hex colors
+    for field_name in ('profile_bg_color', 'nickname_color', 'avatar_effect_color'):
+        value = getattr(data, field_name)
+        if value is not None and not HEX_COLOR_REGEX.match(value):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Некорректный формат цвета для {field_name}. Ожидается HEX (например, #fff или #1a1a2e)"
+            )
+
+    # Validate avatar_frame
+    if data.avatar_frame is not None and data.avatar_frame not in ALLOWED_FRAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Недопустимая рамка. Допустимые значения: {', '.join(ALLOWED_FRAMES)}"
+        )
+
+    # Validate status_text
+    if data.status_text is not None and len(data.status_text) > 100:
+        raise HTTPException(
+            status_code=422,
+            detail="Статус слишком длинный. Максимум 100 символов"
+        )
+
+    # Validate profile_bg_position
+    if data.profile_bg_position is not None:
+        if not BG_POSITION_REGEX.match(data.profile_bg_position):
+            raise HTTPException(
+                status_code=422,
+                detail="Некорректный формат позиции фона. Ожидается формат '50% 50%' (два процента от 0 до 100)"
+            )
+        parts = data.profile_bg_position.replace('%', '').split()
+        if not all(0 <= int(p) <= 100 for p in parts):
+            raise HTTPException(
+                status_code=422,
+                detail="Значения позиции фона должны быть от 0% до 100%"
+            )
+
+    # Update only provided fields
+    user = db.query(models.User).filter(models.User.id == current_user.id).first()
+
+    update_fields = data.dict(exclude_unset=True)
+    for field_name, value in update_fields.items():
+        if field_name == 'status_text' and value is not None:
+            value = bleach.clean(value, tags=[], strip=True)
+        setattr(user, field_name, value)
+
+    db.commit()
+    db.refresh(user)
+
+    return schemas.ProfileSettingsResponse(
+        profile_bg_color=user.profile_bg_color,
+        nickname_color=user.nickname_color,
+        avatar_frame=user.avatar_frame,
+        avatar_effect_color=user.avatar_effect_color,
+        status_text=user.status_text,
+        profile_bg_position=user.profile_bg_position,
+    )
+
+
+@router.put("/me/username", response_model=schemas.UsernameUpdateResponse)
+def update_username(
+    data: schemas.UsernameUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Сменить никнейм пользователя."""
+    username = data.username.strip()
+
+    if not username:
+        raise HTTPException(status_code=400, detail="Никнейм не может быть пустым")
+
+    if len(username) > 32:
+        raise HTTPException(status_code=400, detail="Никнейм слишком длинный. Максимум 32 символа")
+
+    if not USERNAME_REGEX.match(username):
+        raise HTTPException(status_code=400, detail="Никнейм содержит недопустимые символы")
+
+    # Uniqueness check
+    existing = get_user_by_username(db, username=username)
+    if existing and existing.id != current_user.id:
+        raise HTTPException(status_code=400, detail="Этот никнейм уже занят")
+
+    user = db.query(models.User).filter(models.User.id == current_user.id).first()
+    user.username = username
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Этот никнейм уже занят")
+
+    db.refresh(user)
+
+    return schemas.UsernameUpdateResponse(
+        id=user.id,
+        username=user.username,
+        message="Никнейм успешно изменён",
+    )
 
 
 # ==================== CHARACTER RELATIONS ====================
@@ -460,6 +611,41 @@ def get_wall_posts(
     return result
 
 
+@router.put("/wall/posts/{post_id}", response_model=schemas.PostResponse)
+def update_wall_post(
+    post_id: int,
+    post_data: schemas.PostCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Редактировать пост. Может только автор поста."""
+    post = db.query(models.UserPost).filter(models.UserPost.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="Пост не найден")
+
+    if post.author_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Редактировать пост может только автор")
+
+    clean_content = sanitize_html(post_data.content.strip())
+    if not clean_content or not clean_content.replace("<p></p>", "").strip():
+        raise HTTPException(status_code=400, detail="Содержимое поста не может быть пустым")
+
+    post.content = clean_content
+    db.commit()
+    db.refresh(post)
+
+    author = db.query(models.User).filter(models.User.id == post.author_id).first()
+    return schemas.PostResponse(
+        id=post.id,
+        author_id=post.author_id,
+        author_username=author.username if author else "Неизвестный",
+        author_avatar=author.avatar if author else None,
+        wall_owner_id=post.wall_owner_id,
+        content=post.content,
+        created_at=post.created_at,
+    )
+
+
 @router.delete("/wall/posts/{post_id}")
 def delete_wall_post(
     post_id: int,
@@ -689,6 +875,42 @@ def remove_friend(
     return {"detail": "Друг удалён"}
 
 
+# ==================== USER CHARACTERS ====================
+
+@router.get("/{user_id}/characters", response_model=schemas.UserCharactersResponse)
+async def get_user_characters(
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    """Получить список персонажей пользователя."""
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    relations = db.query(models.UserCharacter).filter(
+        models.UserCharacter.user_id == user_id
+    ).all()
+
+    character_ids = [r.character_id for r in relations]
+
+    characters = []
+    if character_ids:
+        tasks = [_fetch_character_short(cid) for cid in character_ids]
+        results = await asyncio.gather(*tasks)
+        for char_data in results:
+            if char_data:
+                characters.append(schemas.UserCharacterItem(
+                    id=char_data["id"],
+                    name=char_data["name"],
+                    avatar=char_data.get("avatar"),
+                    level=char_data.get("level"),
+                    rp_posts_count=0,
+                    last_rp_post_date=None,
+                ))
+
+    return schemas.UserCharactersResponse(characters=characters)
+
+
 # ==================== USER PROFILE ====================
 
 @router.get("/{user_id}/profile", response_model=schemas.UserProfileResponse)
@@ -762,6 +984,13 @@ async def get_user_profile(
         is_friend=is_friend,
         friendship_status=friendship_status,
         friendship_id=friendship_id,
+        profile_bg_color=user.profile_bg_color,
+        profile_bg_image=user.profile_bg_image,
+        nickname_color=user.nickname_color,
+        avatar_frame=user.avatar_frame,
+        avatar_effect_color=user.avatar_effect_color,
+        status_text=user.status_text,
+        profile_bg_position=user.profile_bg_position,
     )
 
 

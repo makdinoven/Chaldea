@@ -556,6 +556,85 @@
   .prose-rules strong { font-weight: 700; }
   .prose-rules em { font-style: italic; }
   .prose-rules u { text-decoration: underline; }
+  .prose-rules s { text-decoration: line-through; opacity: 0.7; }
+  .prose-rules blockquote {
+    border-left: 3px solid rgba(240, 217, 92, 0.5);
+    padding-left: 1rem;
+    margin: 0.75rem 0;
+    color: rgba(255, 255, 255, 0.75);
+    font-style: italic;
+  }
+  /* Resizable image block node */
+  .prose-rules figure[data-type="resizable-image"],
+  .prose-rules .resizable-image-wrapper {
+    margin: 0.75rem 0;
+    line-height: 0;
+    display: block;
+    width: 100%;
+  }
+  .prose-rules figure[data-type="resizable-image"] img,
+  .prose-rules .resizable-image-wrapper img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    display: block;
+  }
+  .prose-rules figure[data-type="resizable-image"] > div,
+  .prose-rules .resizable-image-wrapper > div {
+    max-width: 100%;
+  }
+  /* Alignment: center */
+  .prose-rules figure[data-type="resizable-image"][data-align="center"],
+  .prose-rules figure[data-type="resizable-image"][style*="text-align: center"],
+  .prose-rules .resizable-image-wrapper[data-align="center"] {
+    text-align: center;
+  }
+  .prose-rules figure[data-type="resizable-image"][data-align="center"] > div,
+  .prose-rules figure[data-type="resizable-image"][style*="text-align: center"] > div,
+  .prose-rules .resizable-image-wrapper[data-align="center"] > div {
+    margin-left: auto;
+    margin-right: auto;
+  }
+  /* Alignment: right */
+  .prose-rules figure[data-type="resizable-image"][data-align="right"],
+  .prose-rules figure[data-type="resizable-image"][style*="text-align: right"],
+  .prose-rules .resizable-image-wrapper[data-align="right"] {
+    text-align: right;
+  }
+  .prose-rules figure[data-type="resizable-image"][data-align="right"] > div,
+  .prose-rules figure[data-type="resizable-image"][style*="text-align: right"] > div,
+  .prose-rules .resizable-image-wrapper[data-align="right"] > div {
+    margin-left: auto;
+    margin-right: 0;
+  }
+  /* Legacy inline images (for old saved content) */
+  .prose-rules img.editor-image {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    margin: 0.75rem 0;
+    display: block;
+  }
+  .prose-rules a.editor-link,
+  .prose-rules a {
+    color: #76a6bd;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.2s ease-in-out;
+  }
+  .prose-rules a.editor-link:hover,
+  .prose-rules a:hover {
+    color: #fff9b8;
+  }
+  .prose-rules mark {
+    border-radius: 2px;
+    padding: 0 2px;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+  .prose-rules [style*="text-align: center"] { text-align: center; }
+  .prose-rules [style*="text-align: right"] { text-align: right; }
+  .prose-rules [style*="text-align: left"] { text-align: left; }
 
   /* --- Gold Scrollbar Wide (8px wide, centered 2px track, gold thumb) --- */
   /* Usage: <div className="gold-scrollbar-wide overflow-y-auto">...</div> */

@@ -123,6 +123,13 @@ class UserProfileResponse(BaseModel):
     is_friend: Optional[bool] = None
     friendship_status: Optional[str] = None
     friendship_id: Optional[int] = None
+    profile_bg_color: Optional[str] = None
+    profile_bg_image: Optional[str] = None
+    nickname_color: Optional[str] = None
+    avatar_frame: Optional[str] = None
+    avatar_effect_color: Optional[str] = None
+    status_text: Optional[str] = None
+    profile_bg_position: Optional[str] = None
 
 
 class UserStatsResponse(BaseModel):
@@ -146,3 +153,44 @@ class UserListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ProfileSettingsUpdate(BaseModel):
+    profile_bg_color: Optional[str] = None
+    nickname_color: Optional[str] = None
+    avatar_frame: Optional[str] = None
+    avatar_effect_color: Optional[str] = None
+    status_text: Optional[str] = None
+    profile_bg_position: Optional[str] = None
+
+
+class ProfileSettingsResponse(BaseModel):
+    profile_bg_color: Optional[str] = None
+    nickname_color: Optional[str] = None
+    avatar_frame: Optional[str] = None
+    avatar_effect_color: Optional[str] = None
+    status_text: Optional[str] = None
+    profile_bg_position: Optional[str] = None
+
+
+class UsernameUpdate(BaseModel):
+    username: str
+
+
+class UsernameUpdateResponse(BaseModel):
+    id: int
+    username: str
+    message: str
+
+
+class UserCharacterItem(BaseModel):
+    id: int
+    name: str
+    avatar: Optional[str] = None
+    level: Optional[int] = None
+    rp_posts_count: int = 0
+    last_rp_post_date: Optional[datetime] = None
+
+
+class UserCharactersResponse(BaseModel):
+    characters: List[UserCharacterItem]

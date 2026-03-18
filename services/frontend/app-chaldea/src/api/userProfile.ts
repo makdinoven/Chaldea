@@ -10,6 +10,9 @@ export const fetchWallPosts = (userId: number, page = 1, pageSize = 20) =>
 export const createWallPost = (userId: number, content: string) =>
   axios.post(`${BASE_URL_DEFAULT}/users/${userId}/wall/posts`, { content });
 
+export const updateWallPost = (postId: number, content: string) =>
+  axios.put(`${BASE_URL_DEFAULT}/users/wall/posts/${postId}`, { content });
+
 export const deleteWallPost = (postId: number) =>
   axios.delete(`${BASE_URL_DEFAULT}/users/wall/posts/${postId}`);
 
@@ -46,3 +49,34 @@ export const uploadUserAvatar = (userId: number, file: File) => {
   formData.append('file', file);
   return axios.post(`${BASE_URL_DEFAULT}/photo/change_user_avatar_photo`, formData);
 };
+
+// Profile Settings
+export const updateProfileSettings = (data: {
+  profile_bg_color?: string | null;
+  nickname_color?: string | null;
+  avatar_frame?: string | null;
+  avatar_effect_color?: string | null;
+  status_text?: string | null;
+  profile_bg_position?: string | null;
+}) => axios.put(`${BASE_URL_DEFAULT}/users/me/settings`, data);
+
+// Username Change
+export const updateUsername = (username: string) =>
+  axios.put(`${BASE_URL_DEFAULT}/users/me/username`, { username });
+
+// User Characters
+export const fetchUserCharacters = (userId: number) =>
+  axios.get(`${BASE_URL_DEFAULT}/users/${userId}/characters`);
+
+// Profile Background (via photo-service)
+export const uploadProfileBackground = (userId: number, file: File) => {
+  const formData = new FormData();
+  formData.append('user_id', String(userId));
+  formData.append('file', file);
+  return axios.post(`${BASE_URL_DEFAULT}/photo/change_profile_background`, formData);
+};
+
+export const deleteProfileBackground = (userId: number) =>
+  axios.delete(`${BASE_URL_DEFAULT}/photo/delete_profile_background`, {
+    params: { user_id: userId },
+  });

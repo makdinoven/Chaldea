@@ -231,3 +231,29 @@ def update_rule_image(rule_id: int, image_url: str):
         raise
     finally:
         connection.close()
+
+
+def update_profile_bg_image(user_id: int, image_url):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = "UPDATE users SET profile_bg_image = %s WHERE id = %s"
+            cursor.execute(sql, (image_url, user_id))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def get_profile_bg_image(user_id: int):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = "SELECT profile_bg_image FROM users WHERE id = %s"
+            cursor.execute(sql, (user_id,))
+            result = cursor.fetchone()
+            return result["profile_bg_image"] if result else None
+    finally:
+        connection.close()

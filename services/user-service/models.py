@@ -17,6 +17,13 @@ class User(Base):
     balance = Column(Integer, nullable=True) #Баланс доната
     current_character = Column(Integer, nullable=True, ) #Номер персонажа
     last_active_at = Column(DateTime, nullable=True, default=None)  # Last activity timestamp
+    profile_bg_color = Column(String(7), nullable=True)
+    profile_bg_image = Column(String(512), nullable=True)
+    nickname_color = Column(String(7), nullable=True)
+    avatar_frame = Column(String(50), nullable=True)
+    avatar_effect_color = Column(String(7), nullable=True)
+    status_text = Column(String(100), nullable=True)
+    profile_bg_position = Column(String(20), nullable=True)
 
 class UserCharacter(Base):
     __tablename__ = "users_character"

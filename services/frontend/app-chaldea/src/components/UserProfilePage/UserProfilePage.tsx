@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { User, Calendar, FileText, Clock, UserPlus, UserCheck, UserX } from 'react-feather';
+import { User, Calendar, FileText, Clock, UserPlus, UserCheck, UserX, Settings } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
   loadUserProfile,
@@ -20,17 +20,20 @@ import {
 } from '../../redux/slices/userProfileSlice';
 import WallSection from './WallSection';
 import FriendsSection from './FriendsSection';
+import CharactersSection from './CharactersSection';
+import ProfileSettingsModal, { AVATAR_FRAMES } from './ProfileSettingsModal';
 
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
 
-type Tab = 'wall' | 'friends';
+type Tab = 'wall' | 'characters' | 'friends';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'wall', label: 'Стена' },
+  { key: 'characters', label: 'Персонажи' },
   { key: 'friends', label: 'Друзья' },
 ];
 
-const AVATAR_SIZE = 120;
+const AVATAR_SIZE = 140;
 
 const UserProfilePage = () => {
   const { userId: paramUserId } = useParams<{ userId: string }>();
@@ -44,6 +47,7 @@ const UserProfilePage = () => {
   const isOwnProfile = profileUserId !== null && profileUserId === currentUserId;
 
   const [activeTab, setActiveTab] = useState<Tab>('wall');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -154,10 +158,58 @@ const UserProfilePage = () => {
 
   const friendshipStatus = profile.friendship_status;
 
+  // Compute avatar frame styles
+  const activeFrame = AVATAR_FRAMES.find((f) => f.id === profile?.avatar_frame);
+  const avatarFrameStyle: React.CSSProperties = activeFrame
+    ? { border: activeFrame.borderStyle, boxShadow: activeFrame.shadow }
+    : {};
+  const avatarEffectStyle: React.CSSProperties = profile?.avatar_effect_color
+    ? { boxShadow: `0 0 16px ${profile.avatar_effect_color}` }
+    : {};
+  const combinedAvatarStyle: React.CSSProperties = {
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+    ...avatarFrameStyle,
+    ...(avatarEffectStyle.boxShadow
+      ? {
+          boxShadow: [avatarFrameStyle.boxShadow, avatarEffectStyle.boxShadow]
+            .filter(Boolean)
+            .join(', ') || undefined,
+        }
+      : {}),
+  };
+
+  // Compute header background styles
+  const headerBgStyle: React.CSSProperties = {};
+  if (profile?.profile_bg_image) {
+    headerBgStyle.backgroundImage = `url(${profile.profile_bg_image})`;
+    headerBgStyle.backgroundSize = 'cover';
+    headerBgStyle.backgroundPosition = profile.profile_bg_position || '50% 50%';
+  }
+
+  // Compute content section background style (tabs + tab content)
+  const contentBgStyle: React.CSSProperties = profile?.profile_bg_color
+    ? { backgroundColor: profile.profile_bg_color }
+    : {};
+
   return (
     <div className="w-full max-w-[900px] mx-auto flex flex-col gap-6">
       {/* ── Profile Header ── */}
-      <div className="gray-bg p-6 flex flex-col sm:flex-row items-center sm:items-start gap-6">
+      <div
+        className={`${!profile.profile_bg_image ? 'gray-bg' : 'rounded-card'} p-6 flex flex-col sm:flex-row items-center sm:items-start gap-6 relative`}
+        style={headerBgStyle}
+      >
+        {/* Settings gear (own profile only) */}
+        {isOwnProfile && (
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="absolute top-4 right-4 text-white/40 hover:text-white transition-colors z-10"
+            title="Настройки профиля"
+          >
+            <Settings size={20} />
+          </button>
+        )}
+
         {/* Avatars row */}
         <div className="flex items-end gap-5 flex-shrink-0">
           {/* User avatar */}
@@ -170,10 +222,10 @@ const UserProfilePage = () => {
           />
           <div className="flex flex-col items-center gap-2">
             <div
-              className={`gold-outline relative rounded-full overflow-hidden bg-black/30 flex items-center justify-center ${
+              className={`gold-outline relative rounded-[12px] overflow-hidden bg-black/30 flex items-center justify-center ${
                 isOwnProfile ? 'cursor-pointer group' : ''
               }`}
-              style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
+              style={combinedAvatarStyle}
               onClick={handleAvatarClick}
             >
               {profile.avatar ? (
@@ -207,62 +259,20 @@ const UserProfilePage = () => {
             </span>
           </div>
 
-          {/* Character avatar */}
-          {profile.character && (
-            <Link to="/profile" className="flex flex-col items-center gap-2 group/char">
-              <div
-                className="gold-outline relative rounded-full overflow-hidden bg-black/30"
-                style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
-              >
-                {profile.character.avatar ? (
-                  <img
-                    src={profile.character.avatar}
-                    alt={profile.character.name}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-white/20">
-                    <User size={48} />
-                  </div>
-                )}
-
-                {/* Level badge */}
-                {profile.character.level != null && (
-                  <div
-                    className="absolute bottom-1 left-1/2 -translate-x-1/2 flex items-center justify-center"
-                    style={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: '50%',
-                      background: 'linear-gradient(180deg, #FFF9B8 0%, #BCAB4C 100%)',
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
-                    }}
-                  >
-                    <span className="text-black text-xs font-bold leading-none">
-                      {profile.character.level}
-                    </span>
-                  </div>
-                )}
-
-                {/* Hover overlay */}
-                <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover/char:opacity-100 transition-opacity">
-                  <span className="text-white text-xs font-medium text-center px-2">
-                    Персонаж
-                  </span>
-                </div>
-              </div>
-              <span className="text-white/40 text-[10px] uppercase tracking-wider group-hover/char:text-site-blue transition-colors">
-                {profile.character.name}
-              </span>
-            </Link>
-          )}
         </div>
 
         {/* User info */}
         <div className="flex-1 flex flex-col gap-3 text-center sm:text-left min-w-0">
-          <h1 className="gold-text text-2xl font-semibold uppercase">
+          <h1
+            className="gold-text text-2xl font-semibold uppercase"
+            style={profile.nickname_color ? { color: profile.nickname_color, backgroundImage: 'none', WebkitTextFillColor: profile.nickname_color } : undefined}
+          >
             {profile.username}
           </h1>
+
+          {profile.status_text && (
+            <p className="text-white/50 text-sm italic">{profile.status_text}</p>
+          )}
 
           {registeredDate && (
             <div className="flex items-center gap-2 text-white/50 text-sm justify-center sm:justify-start">
@@ -323,46 +333,64 @@ const UserProfilePage = () => {
         </div>
       </div>
 
-      {/* ── Tabs ── */}
-      <div className="flex gap-0">
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`flex-1 py-3 text-sm font-medium uppercase tracking-wider transition-colors relative ${
-              activeTab === tab.key
-                ? 'text-white'
-                : 'text-white/40 hover:text-white/70'
-            }`}
-          >
-            {tab.label}
-            {activeTab === tab.key && (
-              <div
-                className="absolute bottom-0 left-1/2 -translate-x-1/2 h-[2px] w-3/4"
-                style={{
-                  background: 'linear-gradient(90deg, rgba(255,249,184,0) 0%, #FFF9B8 50%, rgba(188,171,76,0) 100%)',
-                }}
-              />
-            )}
-          </button>
-        ))}
+      {/* ── Tabs + Tab Content ── */}
+      <div
+        className={profile.profile_bg_color ? 'rounded-card' : ''}
+        style={contentBgStyle}
+      >
+        {/* ── Tabs ── */}
+        <div className="flex gap-0">
+          {TABS.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`flex-1 py-3 text-sm font-medium uppercase tracking-wider transition-colors relative ${
+                activeTab === tab.key
+                  ? 'text-white'
+                  : 'text-white/40 hover:text-white/70'
+              }`}
+            >
+              {tab.label}
+              {activeTab === tab.key && (
+                <div
+                  className="absolute bottom-0 left-1/2 -translate-x-1/2 h-[2px] w-3/4"
+                  style={{
+                    background: 'linear-gradient(90deg, rgba(255,249,184,0) 0%, #FFF9B8 50%, rgba(188,171,76,0) 100%)',
+                  }}
+                />
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* ── Tab Content ── */}
+        <div>
+          {activeTab === 'wall' && (
+            <WallSection
+              profileUserId={profileUserId}
+              isOwnProfile={isOwnProfile}
+            />
+          )}
+          {activeTab === 'characters' && (
+            <CharactersSection profileUserId={profileUserId} />
+          )}
+          {activeTab === 'friends' && (
+            <FriendsSection
+              profileUserId={profileUserId}
+              isOwnProfile={isOwnProfile}
+            />
+          )}
+        </div>
       </div>
 
-      {/* ── Tab Content ── */}
-      <div>
-        {activeTab === 'wall' && (
-          <WallSection
-            profileUserId={profileUserId}
-            isOwnProfile={isOwnProfile}
-          />
-        )}
-        {activeTab === 'friends' && (
-          <FriendsSection
-            profileUserId={profileUserId}
-            isOwnProfile={isOwnProfile}
-          />
-        )}
-      </div>
+      {/* ── Profile Settings Modal ── */}
+      {isOwnProfile && profile && (
+        <ProfileSettingsModal
+          isOpen={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          profile={profile}
+        />
+      )}
     </div>
   );
 };
