@@ -3,7 +3,8 @@ Tests for JWT authentication on user avatar endpoints.
 
 Covers:
 - change_user_avatar_photo: 401 without token, 403 wrong user, 200 correct user
-- user_avatar_preview: 401 without token, 403 wrong user, 200 correct user
+
+Note: user_avatar_preview tests were removed in FEAT-033 (preview endpoints deleted).
 """
 
 import io
@@ -108,67 +109,8 @@ class TestChangeUserAvatarAuth:
         assert body["message"] == "Фото успешно загружено"
 
 
-# ===========================================================================
-# POST /photo/user_avatar_preview
-# ===========================================================================
 
-class TestUserAvatarPreviewAuth:
-    """Auth tests for POST /photo/user_avatar_preview."""
-
-    def test_missing_token_returns_401(self, client):
-        """No Authorization header -> 401."""
-        image_bytes = _create_test_image()
-
-        response = client.post(
-            "/photo/user_avatar_preview",
-            data={"user_id": "42"},
-            files=[_multipart_file(image_bytes)],
-        )
-        assert response.status_code == 401
-
-    @patch("auth_http.requests.get")
-    def test_invalid_token_returns_401(self, mock_auth, client):
-        """User-service returns 401 for bad token -> 401."""
-        mock_auth.return_value = _mock_response(401)
-        image_bytes = _create_test_image()
-
-        response = client.post(
-            "/photo/user_avatar_preview",
-            data={"user_id": "42"},
-            files=[_multipart_file(image_bytes)],
-            headers={"Authorization": "Bearer bad-token"},
-        )
-        assert response.status_code == 401
-
-    @patch("auth_http.requests.get")
-    def test_wrong_user_id_returns_403(self, mock_auth, client):
-        """Authenticated as user 99, preview for user 42 -> 403."""
-        mock_auth.return_value = _mock_response(200, USER_99)
-        image_bytes = _create_test_image()
-
-        response = client.post(
-            "/photo/user_avatar_preview",
-            data={"user_id": "42"},
-            files=[_multipart_file(image_bytes)],
-            headers=AUTH_HEADERS,
-        )
-        assert response.status_code == 403
-
-    @patch("main.update_user_avatar_preview")
-    @patch("main.upload_file_to_s3", return_value="https://s3.example.com/bucket/user_preview/photo.webp")
-    @patch("auth_http.requests.get")
-    def test_correct_user_returns_200(self, mock_auth, mock_s3, mock_db, client):
-        """Authenticated as user 42, preview for user 42 -> 200."""
-        mock_auth.return_value = _mock_response(200, USER_42)
-        image_bytes = _create_test_image()
-
-        response = client.post(
-            "/photo/user_avatar_preview",
-            data={"user_id": "42"},
-            files=[_multipart_file(image_bytes)],
-            headers=AUTH_HEADERS,
-        )
-        assert response.status_code == 200
-        body = response.json()
-        assert "avatar_url" in body
-        assert body["message"] == "Фото успешно загружено"
+# NOTE: TestUserAvatarPreviewAuth was removed in FEAT-033.
+# The POST /photo/user_avatar_preview endpoint was deleted as part of
+# legacy preview tables cleanup. See test_preview_removed.py for
+# verification that the endpoint is no longer reachable.

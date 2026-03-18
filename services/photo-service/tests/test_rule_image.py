@@ -98,7 +98,8 @@ class TestRuleImageUploadSuccess:
 
         mock_db.assert_called_once()
         db_args = mock_db.call_args[0]
-        assert db_args[0] == 7  # rule_id
+        # crud functions now receive db session as first arg
+        assert db_args[1] == 7  # rule_id
 
 
 # ===========================================================================

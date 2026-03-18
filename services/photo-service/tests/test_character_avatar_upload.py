@@ -93,8 +93,9 @@ class TestCharacterAvatarUploadSuccess:
         mock_s3.assert_called_once()
         mock_db.assert_called_once()
         db_args = mock_db.call_args[0]
-        assert db_args[0] == 7   # character_id
-        assert db_args[2] == 42  # user_id
+        # crud functions now receive db session as first arg
+        assert db_args[1] == 7   # character_id
+        assert db_args[3] == 42  # user_id
 
 
 # ---------------------------------------------------------------------------

@@ -1,259 +1,115 @@
-import os
-import pymysql
-from pymysql.cursors import DictCursor
+from sqlalchemy.orm import Session
+from models import (
+    User, Character, Country, Region, District,
+    Location, Skill, SkillRank, Item, GameRule,
+)
 
-DB_HOST = os.getenv('DB_HOST')
-DB_USER = os.getenv('DB_USERNAME')
-DB_PASSWORD = os.getenv('DB_PASSWORD')
-DB_DATABASE = os.getenv('DB_DATABASE')
 
-def get_db_connection():
-    return pymysql.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_DATABASE,
-        cursorclass=DictCursor
-    )
-
-def get_character_owner_id(character_id: int):
+def get_character_owner_id(db: Session, character_id: int):
     """Returns user_id of character owner, or None if not found."""
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT user_id FROM characters WHERE id = %s", (character_id,))
-            result = cursor.fetchone()
-            return result['user_id'] if result else None
-    except Exception:
-        return None
-    finally:
-        connection.close()
+    character = db.query(Character).filter(Character.id == character_id).first()
+    return character.user_id if character else None
 
 
-def update_user_avatar(user_id: int, avatar_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            query_users = "UPDATE users SET avatar = %s WHERE id = %s"
-            cursor.execute(query_users, (avatar_url, user_id))
+def update_user_avatar(db: Session, user_id: int, avatar_url: str):
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.avatar = avatar_url
+        db.commit()
 
-            query_preview = "UPDATE users_avatar_preview SET avatar = %s WHERE user_id = %s"
-            cursor.execute(query_preview, (avatar_url, user_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
 
-def get_user_avatar(user_id: int):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            query = "SELECT avatar FROM users WHERE id = %s"
-            cursor.execute(query, (user_id,))
-            result = cursor.fetchone()
-            return result["avatar"] if result else None
-    finally:
-        connection.close()
+def get_user_avatar(db: Session, user_id: int):
+    user = db.query(User).filter(User.id == user_id).first()
+    return user.avatar if user else None
 
-def update_user_avatar_preview(user_id: int, avatar_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            query = "UPDATE users_avatar_preview SET avatar = %s WHERE id = %s"
-            cursor.execute(query, (avatar_url, user_id))
-        connection.commit()
-    finally:
-        connection.close()
 
-def update_character_avatar(character_id: int, avatar_url: str, user_id: int):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            query_char = "UPDATE characters SET avatar = %s WHERE id = %s"
-            cursor.execute(query_char, (avatar_url, character_id))
+def update_character_avatar(db: Session, character_id: int, avatar_url: str, user_id: int):
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if character:
+        character.avatar = avatar_url
+        db.commit()
 
-            query_preview = "UPDATE users_avatar_character_preview SET avatar = %s WHERE user_id = %s"
-            cursor.execute(query_preview, (avatar_url, user_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
 
-def get_character_avatar(character_id: int):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            query = "SELECT avatar FROM characters WHERE id = %s"
-            cursor.execute(query, (character_id,))
-            result = cursor.fetchone()
-            return result["avatar"] if result else None
-    finally:
-        connection.close()
-
-def update_character_avatar_preview(user_id: int, avatar_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            query = "UPDATE users_avatar_character_preview SET avatar = %s WHERE id = %s"
-            cursor.execute(query, (avatar_url, user_id))
-        connection.commit()
-    finally:
-        connection.close()
-
+def get_character_avatar(db: Session, character_id: int):
+    character = db.query(Character).filter(Character.id == character_id).first()
+    return character.avatar if character else None
 
 
 # 1) Обновляем map_image_url в таблице Countries
-def update_country_map_image(country_id: int, map_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = "UPDATE Countries SET map_image_url = %s WHERE id = %s"
-            cursor.execute(sql, (map_url, country_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+def update_country_map_image(db: Session, country_id: int, map_url: str):
+    country = db.query(Country).filter(Country.id == country_id).first()
+    if country:
+        country.map_image_url = map_url
+        db.commit()
 
 
 # 2) Обновляем map_image_url в таблице Regions
-def update_region_map_image(region_id: int, map_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = "UPDATE Regions SET map_image_url = %s WHERE id = %s"
-            cursor.execute(sql, (map_url, region_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+def update_region_map_image(db: Session, region_id: int, map_url: str):
+    region = db.query(Region).filter(Region.id == region_id).first()
+    if region:
+        region.map_image_url = map_url
+        db.commit()
 
 
 # 3) Обновляем image_url в таблице Regions
-def update_region_image(region_id: int, image_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = "UPDATE Regions SET image_url = %s WHERE id = %s"
-            cursor.execute(sql, (image_url, region_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+def update_region_image(db: Session, region_id: int, image_url: str):
+    region = db.query(Region).filter(Region.id == region_id).first()
+    if region:
+        region.image_url = image_url
+        db.commit()
 
 
 # 4) Обновляем image_url в таблице Districts
-def update_district_image(district_id: int, image_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = "UPDATE Districts SET image_url = %s WHERE id = %s"
-            cursor.execute(sql, (image_url, district_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+def update_district_image(db: Session, district_id: int, image_url: str):
+    district = db.query(District).filter(District.id == district_id).first()
+    if district:
+        district.image_url = image_url
+        db.commit()
 
 
 # 5) Обновляем image_url в таблице Locations
-def update_location_image(location_id: int, image_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = "UPDATE Locations SET image_url = %s WHERE id = %s"
-            cursor.execute(sql, (image_url, location_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-def update_skill_image(skill_id: int, image_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = "UPDATE skills SET skill_image = %s WHERE id = %s"
-            cursor.execute(sql, (image_url, skill_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-def update_skill_rank_image(skill_rank_id: int, image_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = "UPDATE skill_ranks SET rank_image = %s WHERE id = %s"
-            cursor.execute(sql, (image_url, skill_rank_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-def update_item_image(item_id: int, image_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = "UPDATE items SET image = %s WHERE id = %s"
-            cursor.execute(sql, (image_url, item_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-def update_rule_image(rule_id: int, image_url: str):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = "UPDATE game_rules SET image_url = %s WHERE id = %s"
-            cursor.execute(sql, (image_url, rule_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+def update_location_image(db: Session, location_id: int, image_url: str):
+    location = db.query(Location).filter(Location.id == location_id).first()
+    if location:
+        location.image_url = image_url
+        db.commit()
 
 
-def update_profile_bg_image(user_id: int, image_url):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = "UPDATE users SET profile_bg_image = %s WHERE id = %s"
-            cursor.execute(sql, (image_url, user_id))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+def update_skill_image(db: Session, skill_id: int, image_url: str):
+    skill = db.query(Skill).filter(Skill.id == skill_id).first()
+    if skill:
+        skill.skill_image = image_url
+        db.commit()
 
 
-def get_profile_bg_image(user_id: int):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = "SELECT profile_bg_image FROM users WHERE id = %s"
-            cursor.execute(sql, (user_id,))
-            result = cursor.fetchone()
-            return result["profile_bg_image"] if result else None
-    finally:
-        connection.close()
+def update_skill_rank_image(db: Session, skill_rank_id: int, image_url: str):
+    rank = db.query(SkillRank).filter(SkillRank.id == skill_rank_id).first()
+    if rank:
+        rank.rank_image = image_url
+        db.commit()
+
+
+def update_item_image(db: Session, item_id: int, image_url: str):
+    item = db.query(Item).filter(Item.id == item_id).first()
+    if item:
+        item.image = image_url
+        db.commit()
+
+
+def update_rule_image(db: Session, rule_id: int, image_url: str):
+    rule = db.query(GameRule).filter(GameRule.id == rule_id).first()
+    if rule:
+        rule.image_url = image_url
+        db.commit()
+
+
+def update_profile_bg_image(db: Session, user_id: int, image_url):
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.profile_bg_image = image_url
+        db.commit()
+
+
+def get_profile_bg_image(db: Session, user_id: int):
+    user = db.query(User).filter(User.id == user_id).first()
+    return user.profile_bg_image if user else None

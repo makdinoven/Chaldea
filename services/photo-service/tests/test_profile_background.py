@@ -68,7 +68,10 @@ class TestUploadProfileBackground:
         assert data["message"] == "Фон профиля успешно загружен"
         assert data["profile_bg_image"] == S3_BG_URL
         mock_s3.assert_called_once()
-        mock_db.assert_called_once_with(42, S3_BG_URL)
+        # crud functions now receive db session as first arg
+        call_args = mock_db.call_args[0]
+        assert call_args[1] == 42  # user_id
+        assert call_args[2] == S3_BG_URL  # image_url
 
     @patch("main.update_profile_bg_image")
     @patch("main.upload_file_to_s3", return_value=S3_BG_URL)
@@ -181,7 +184,10 @@ class TestDeleteProfileBackground:
         data = response.json()
         assert data["message"] == "Фон профиля успешно удалён"
         mock_del_s3.assert_called_once_with(S3_BG_URL)
-        mock_db.assert_called_once_with(42, None)
+        # crud functions now receive db session as first arg
+        call_args = mock_db.call_args[0]
+        assert call_args[1] == 42  # user_id
+        assert call_args[2] is None  # image_url
 
     @patch("main.get_profile_bg_image", return_value=None)
     @patch("auth_http.requests.get")
