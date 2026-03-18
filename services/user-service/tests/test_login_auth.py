@@ -15,6 +15,7 @@ import importlib
 from unittest.mock import patch
 
 import pytest
+from jose import jwt
 
 # conftest.py already adds the service root to sys.path and sets JWT_SECRET_KEY.
 
@@ -299,7 +300,7 @@ class TestRegistrationEndpoint:
 
     @patch("main.send_notification_event")
     def test_register_valid_user_succeeds(self, mock_notify, client, db_session):
-        """POST /users/register with valid data returns 200 and user object."""
+        """POST /users/register with valid data returns 200 with access_token and refresh_token."""
         response = client.post("/users/register", json={
             "email": "newuser@example.com",
             "username": "newuser",
@@ -307,9 +308,11 @@ class TestRegistrationEndpoint:
         })
         assert response.status_code == 200
         data = response.json()
-        assert data["email"] == "newuser@example.com"
-        assert data["username"] == "newuser"
-        assert "id" in data
+        assert "access_token" in data
+        assert "refresh_token" in data
+        # Tokens must be non-empty strings
+        assert isinstance(data["access_token"], str) and len(data["access_token"]) > 0
+        assert isinstance(data["refresh_token"], str) and len(data["refresh_token"]) > 0
 
     @patch("main.send_notification_event")
     def test_register_duplicate_email_returns_400(self, mock_notify, client, db_session):
@@ -386,7 +389,9 @@ class TestRegistrationEndpoint:
             "password": "abcdef",
         })
         assert response.status_code == 200
-        assert response.json()["username"] == "exact6user"
+        data = response.json()
+        assert "access_token" in data
+        assert "refresh_token" in data
 
     def test_register_username_too_short_returns_422(self, client):
         """POST /users/register with username < 2 chars returns 422 with Russian message."""
@@ -431,3 +436,51 @@ class TestRegistrationEndpoint:
         """POST /users/register with empty body returns 422."""
         response = client.post("/users/register", json={})
         assert response.status_code == 422
+
+    @patch("main.send_notification_event")
+    def test_register_returns_valid_jwt_tokens(self, mock_notify, client, db_session):
+        """Returned access_token contains correct 'sub' (email) and 'role' ('user') claims."""
+        response = client.post("/users/register", json={
+            "email": "jwtcheck@example.com",
+            "username": "jwtcheckuser",
+            "password": "ValidPass123",
+        })
+        assert response.status_code == 200
+        data = response.json()
+
+        secret_key = os.environ["JWT_SECRET_KEY"]
+        # Decode access_token and verify claims
+        access_payload = jwt.decode(data["access_token"], secret_key, algorithms=["HS256"])
+        assert access_payload["sub"] == "jwtcheck@example.com"
+        assert access_payload["role"] == "user"
+        assert "exp" in access_payload
+        # current_character should NOT be in the token for a new user
+        assert "current_character" not in access_payload
+
+        # Decode refresh_token and verify claims
+        refresh_payload = jwt.decode(data["refresh_token"], secret_key, algorithms=["HS256"])
+        assert refresh_payload["sub"] == "jwtcheck@example.com"
+        assert refresh_payload["role"] == "user"
+        assert "exp" in refresh_payload
+
+    @patch("main.send_notification_event")
+    def test_register_sql_injection_in_email(self, mock_notify, client, db_session):
+        """SQL injection attempt in email must not crash the service."""
+        response = client.post("/users/register", json={
+            "email": "'; DROP TABLE users; --@evil.com",
+            "username": "sqlinject",
+            "password": "ValidPass123",
+        })
+        # Must not be a 500 — either 422 (validation) or 400 (rejected)
+        assert response.status_code in (200, 400, 422)
+
+    @patch("main.send_notification_event")
+    def test_register_sql_injection_in_username(self, mock_notify, client, db_session):
+        """SQL injection attempt in username must not crash the service."""
+        response = client.post("/users/register", json={
+            "email": "safe@example.com",
+            "username": "'; DROP TABLE users; --",
+            "password": "ValidPass123",
+        })
+        # Must not be a 500
+        assert response.status_code in (200, 400, 422)

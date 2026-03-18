@@ -83,8 +83,8 @@ class TestCreateUserWithoutPreviews:
         })
         assert response.status_code == 200
         data = response.json()
-        assert data["username"] == "regtest"
-        assert "id" in data
+        assert "access_token" in data
+        assert "refresh_token" in data
 
 
 # ---------------------------------------------------------------------------

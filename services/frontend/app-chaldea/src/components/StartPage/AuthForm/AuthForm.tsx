@@ -24,6 +24,11 @@ const extractErrorMessage = (error: unknown): string => {
     return 'Ошибка соединения. Попробуйте позже.';
   }
 
+  // Plain text error response (e.g., "Internal Server Error")
+  if (typeof data === 'string') {
+    return data;
+  }
+
   // FastAPI HTTPException format: {"detail": "message"}
   if (typeof data.detail === 'string') {
     return data.detail;
