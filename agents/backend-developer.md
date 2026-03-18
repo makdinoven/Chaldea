@@ -103,6 +103,16 @@ URL format inside Docker: `http://<service-name>:<port>/<path>`
 
 ---
 
+### RBAC — обязательные проверки при работе с admin-эндпоинтами
+
+- При создании нового admin-эндпоинта: использовать `Depends(get_admin_user)` из `auth_http.py`
+- При создании нового модуля: зарегистрировать разрешения в таблице `permissions` через Alembic-миграцию
+- При изменении модуля: проверить, что существующие разрешения покрывают новые действия
+- Каждое новое разрешение автоматически доступно админу (не нужно добавлять в role_permissions вручную)
+- Для гранулярной проверки прав (в user-service): `require_permission(db, user, "module:action")`
+
+---
+
 ## User-Facing Content — Russian Language Rule
 
 **All user-facing strings MUST be in Russian.** This includes:

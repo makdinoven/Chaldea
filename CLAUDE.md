@@ -32,7 +32,7 @@ Chaldea — браузерная RPG-игра с микросервисной а
 | Сервис | Порт | Путь в репозитории | Особенности |
 |--------|------|--------------------|-------------|
 | user-service | 8000 | `services/user-service/` | JWT-аутентификация, sync SQLAlchemy |
-| photo-service | 8001 | `services/photo-service/` | Raw PyMySQL (не ORM), S3, Pillow |
+| photo-service | 8001 | `services/photo-service/` | SQLAlchemy ORM (mirror models), S3, Pillow |
 | character-attributes-service | 8002 | `services/character-attributes-service/` | Sync SQLAlchemy |
 | skills-service | 8003 | `services/skills-service/` | Async SQLAlchemy (aiomysql) |
 | inventory-service | 8004 | `services/inventory-service/` | Sync SQLAlchemy |
@@ -97,6 +97,7 @@ battle-service ──> character-attributes-service, character-service, skills-s
 autobattle-service ──> battle-service
 user-service ──> character-service, locations-service
 notification-service ──> user-service
+All services (admin endpoints) ──> user-service `/users/me` (RBAC: role + permissions check)
 ```
 
 ### RabbitMQ очереди (активные)
@@ -182,11 +183,25 @@ notification-service ──> user-service
 - Оцени обратную совместимость.
 - Если меняется схема — опиши стратегию миграции и rollback.
 - Для очередей и фоновых задач учитывай идемпотентность.
+- При добавлении нового admin-функционала — зарегистрировать разрешения в таблице `permissions` через Alembic-миграцию.
 
-Сервисы с миграциями (Alembic): character-service, character-attributes-service, skills-service, inventory-service.
-Сервисы без миграций: user-service (Alembic есть, но legacy), locations-service, notification-service, battle-service, photo-service.
+Сервисы с Alembic (auto-migration при старте контейнера):
+- user-service — Alembic DONE (auto-migration, sync, `alembic_version_user`)
+- character-attributes-service — Alembic DONE (auto-migration, sync, `alembic_version_char_attrs`)
+- skills-service — Alembic DONE (auto-migration, async, `alembic_version_skills`)
+- locations-service — Alembic DONE (auto-migration, async, `alembic_version_locations`)
+- character-service — Alembic DONE (auto-migration, sync, `alembic_version_character`)
+- inventory-service — Alembic DONE (auto-migration, sync, `alembic_version_inventory`)
+- photo-service — Alembic DONE (auto-migration, mirror models, no own migrations, `alembic_version_photo`)
+
+Сервисы без Alembic (нужно добавить при первой работе с ними): notification-service, battle-service.
 
 **Правило (см. T2 в `docs/ISSUES.md`):** если задача затрагивает сервис без Alembic — добавить его в рамках текущей работы (init, initial-миграция, `alembic` в requirements.txt). Отдельным коммитом от основной задачи.
+
+**Правила auto-migration:**
+- **При добавлении Alembic в сервис** — настроить автоматический запуск миграций при старте контейнера: в Dockerfile CMD добавить `alembic upgrade head && uvicorn ...` (fail-fast — если миграция падает, сервис не стартует).
+- **Каждый сервис должен использовать уникальное имя `version_table`** в `env.py` (например `alembic_version_user`, `alembic_version_photo`) для избежания коллизий в общей БД.
+- **`create_all()` удалить** при добавлении Alembic — схемой БД управляет только Alembic.
 
 ---
 
@@ -254,7 +269,7 @@ notification-service ──> user-service
 
 1. **Pydantic <2.0** — все backend-сервисы используют Pydantic v1 синтаксис (`class Config: orm_mode = True`, а не `model_config`).
 2. **Смешанный sync/async** — user-service, character-service, inventory-service, character-attributes-service используют sync SQLAlchemy. locations-service, skills-service, battle-service используют async (aiomysql).
-3. **photo-service — особый** — использует raw PyMySQL с DictCursor вместо SQLAlchemy ORM.
+3. **photo-service — особый** — использует SQLAlchemy ORM с mirror-моделями (таблицы принадлежат другим сервисам). Alembic настроен, но initial-миграция пустая (photo-service не владеет таблицами).
 4. **RabbitMQ consumers закомментированы** в character-service, skills-service, inventory-service, character-attributes-service. Вместо них используются прямые HTTP-вызовы.
 5. **Единая БД** — все сервисы подключены к одному MySQL-инстансу. Нет изоляции на уровне БД.
 6. **CORS** — origins захардкожены в каждом сервисе отдельно (не централизованно).
@@ -283,6 +298,22 @@ notification-service ──> user-service
    - **Вместо** `const Bar: React.FC = () => {` **писать** `const Bar = () => {`
    - `React.FC` неявно добавляет `children` в пропсы, усложняет типизацию и считается анти-паттерном в современном React.
    - **Нарушение этого правила = FAIL на ревью.**
+12. **⚠️ MANDATORY: Frontend адаптивность — мобильные устройства** (см. T5 в `docs/ISSUES.md`):
+   - **Новые компоненты** — сразу делать адаптивными (всё должно помещаться и работать на экране 360px+).
+   - **Изменение стилей существующего компонента (включая баг-фиксы!)** — добавить адаптивность для мобильных устройств в том же PR. **Писать стили без адаптивности запрещено.**
+   - **Задача не касается стилей** — не трогать, оставить как есть.
+   - Основные принципы: контент не выходит за viewport, навигация доступна, формы удобны для touch-ввода, изображения масштабируются.
+   - Использовать Tailwind responsive breakpoints: `sm:`, `md:`, `lg:`, `xl:`.
+   - **Нарушение этого правила = FAIL на ревью.**
+13. **⚠️ MANDATORY: RBAC система ролей и разрешений** (FEAT-035):
+   - Система использует иерархические роли: Admin (level=100) > Moderator (50) > Editor (20) > User (0)
+   - Разрешения в формате `модуль:действие` (например `items:create`, `users:manage`)
+   - Admin ВСЕГДА получает ВСЕ разрешения автоматически (включая новые)
+   - **При добавлении нового модуля/эндпоинта:** создать разрешения в таблице `permissions`, добавить в `role_permissions` для соответствующих ролей. Админ получит автоматически.
+   - **При создании admin-эндпоинта:** использовать `Depends(get_admin_user)` из `auth_http.py` (принимает admin + moderator). Для гранулярной проверки — `require_permission("module:action")` в user-service.
+   - **На фронтенде:** использовать `ProtectedRoute` для маршрутов, `hasModuleAccess()`/`hasPermission()` из `utils/permissions.ts` для UI-элементов.
+   - **Тест на полноту:** `test_rbac_permissions.py` проверяет, что админ имеет все разрешения — при добавлении новых разрешений тест обновится автоматически.
+   - Таблицы RBAC: `roles`, `permissions`, `role_permissions`, `user_permissions` (в user-service).
 
 ---
 

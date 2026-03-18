@@ -1,4 +1,3 @@
-# Frontend Developer
 
 ## Role
 
@@ -89,6 +88,15 @@ This includes:
 <button>Save</button>
 <p className="error">Failed to load data</p>
 ```
+
+---
+
+### RBAC — обязательные проверки при работе с фронтендом
+
+- Новые admin-страницы: оборачивать в `<ProtectedRoute requiredRole="editor">` или `requiredPermission="module:action"`
+- Новые admin-секции в AdminPage: добавлять `module` поле для фильтрации по правам
+- Скрытие UI-элементов по правам: использовать `hasPermission()`, `hasModuleAccess()` из `utils/permissions.ts`
+- Никогда не показывать admin-функционал пользователям без прав — проверять через Redux `selectPermissions`
 
 ---
 
