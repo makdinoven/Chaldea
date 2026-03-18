@@ -122,8 +122,8 @@ def upgrade() -> None:
             'starter_kits',
             sa.Column('id', sa.Integer(), primary_key=True, autoincrement=True),
             sa.Column('class_id', sa.Integer(), sa.ForeignKey('classes.id_class'), unique=True, nullable=False),
-            sa.Column('items', sa.JSON(), nullable=False, server_default='[]'),
-            sa.Column('skills', sa.JSON(), nullable=False, server_default='[]'),
+            sa.Column('items', sa.JSON(), nullable=False, server_default=sa.text("('[]')")),
+            sa.Column('skills', sa.JSON(), nullable=False, server_default=sa.text("('[]')")),
             sa.Column('currency_amount', sa.Integer(), nullable=False, server_default='0'),
         )
 
