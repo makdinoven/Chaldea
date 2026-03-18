@@ -9,10 +9,15 @@ Also adds the app directory to sys.path so bare imports work.
 import os
 import sys
 
-# Override DATABASE_URL BEFORE any service module is imported.
-# This prevents database.py from creating an aiomysql engine that hangs
-# trying to resolve the Docker-internal "mysql" hostname.
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite://")
+# Override DB env vars BEFORE any service module is imported.
+# config.py (Pydantic BaseSettings) requires DB_HOST, DB_USERNAME,
+# DB_PASSWORD, DB_DATABASE — they have no defaults (fail-fast design).
+# Individual test files patch database.engine after import, so the actual
+# MySQL URL constructed by settings.DATABASE_URL is never used at runtime.
+os.environ.setdefault("DB_HOST", "localhost")
+os.environ.setdefault("DB_USERNAME", "testuser")
+os.environ.setdefault("DB_PASSWORD", "testpass")
+os.environ.setdefault("DB_DATABASE", "testdb")
 
 # Prevent RabbitMQ consumer from trying to connect during tests.
 os.environ.setdefault("RABBITMQ_URL", "amqp://guest:guest@localhost:5672")

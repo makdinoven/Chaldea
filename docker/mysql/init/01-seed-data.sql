@@ -1,8 +1,6 @@
 -- Seed data for Chaldea game world
 -- Idempotent: uses INSERT IGNORE to skip existing rows
 
-USE mydatabase;
-
 -- Countries
 INSERT IGNORE INTO `Countries` (`id`, `name`, `description`, `leader_id`, `map_image_url`) VALUES
 (2, 'Союзная империя', 'Текстовое описание союзной империи', NULL, NULL),

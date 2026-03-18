@@ -5,10 +5,10 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-DB_HOST = os.getenv("DB_HOST", "mysql")
-DB_NAME = os.getenv("DB_DATABASE", "mydatabase")
-DB_USER = os.getenv("DB_USERNAME", "myuser")
-DB_PASS = os.getenv("DB_PASSWORD", "mypassword")
+DB_HOST = os.environ["DB_HOST"]
+DB_NAME = os.environ["DB_DATABASE"]
+DB_USER = os.environ["DB_USERNAME"]
+DB_PASS = os.environ["DB_PASSWORD"]
 
 DATABASE_URL = (
     f"mysql+aiomysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"

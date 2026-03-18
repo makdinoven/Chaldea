@@ -44,6 +44,14 @@ except ImportError:
 
         _pydantic.BaseSettings = _BaseSettings
 
+# Set DB env vars BEFORE importing config/database — Pydantic BaseSettings
+# requires DB_HOST, DB_USERNAME, DB_PASSWORD, DB_DATABASE (no defaults).
+# The actual MySQL URL is never used because tests override get_db with SQLite.
+os.environ.setdefault("DB_HOST", "localhost")
+os.environ.setdefault("DB_USERNAME", "testuser")
+os.environ.setdefault("DB_PASSWORD", "testpass")
+os.environ.setdefault("DB_DATABASE", "testdb")
+
 # We must set JWT_SECRET_KEY before importing auth.py (it reads os.environ on import).
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-tests")
 

@@ -84,6 +84,7 @@ jobs:
             cd ~/rpgroll
             git pull origin main
             docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+            docker builder prune -f
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
             docker system prune -f
           EOF

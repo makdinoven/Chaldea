@@ -15,6 +15,14 @@ from sqlalchemy.pool import StaticPool
 # Add the app directory to sys.path so bare imports work
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# Set DB env vars BEFORE importing config/database — Pydantic BaseSettings
+# requires DB_HOST, DB_USERNAME, DB_PASSWORD, DB_DATABASE (no defaults).
+# The actual MySQL URL is never used because we patch database.engine below.
+os.environ.setdefault("DB_HOST", "localhost")
+os.environ.setdefault("DB_USERNAME", "testuser")
+os.environ.setdefault("DB_PASSWORD", "testpass")
+os.environ.setdefault("DB_DATABASE", "testdb")
+
 # ── SQLite in-memory engine ──────────────────────────────────────────────
 _test_engine = create_engine(
     "sqlite://",

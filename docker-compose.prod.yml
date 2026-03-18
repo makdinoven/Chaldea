@@ -105,10 +105,10 @@ services:
     ports: !reset []
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      DB_HOST: ${DB_HOST:-mysql}
-      DB_DATABASE: ${DB_DATABASE:-mydatabase}
-      DB_USERNAME: ${DB_USERNAME:-myuser}
-      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
+      DB_HOST: ${DB_HOST}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
       AUTH_SERVICE_URL: http://user-service:8000
 
@@ -117,13 +117,13 @@ services:
     volumes: !reset []
     ports: !reset []
     environment:
-      DB_HOST: ${DB_HOST:-mysql}
-      DB_DATABASE: ${DB_DATABASE:-mydatabase}
-      DB_USERNAME: ${DB_USERNAME:-myuser}
-      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
+      DB_HOST: ${DB_HOST}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       REDIS_URL: redis://redis:6379/0
-      MONGODB_URL: mongodb://mongo:27017/${DB_DATABASE:-mydatabase}
+      MONGODB_URL: mongodb://mongo:27017/${DB_DATABASE}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
 
   autobattle-service:
@@ -134,7 +134,7 @@ services:
       BATTLE_SERVICE_URL: http://battle-service:8010
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       REDIS_URL: redis://redis:6379/0
-      MONGODB_URL: mongodb://mongo:27017/${DB_DATABASE:-mydatabase}
+      MONGODB_URL: mongodb://mongo:27017/${DB_DATABASE}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
 
   # --- Celery: no watchfiles wrapper ---

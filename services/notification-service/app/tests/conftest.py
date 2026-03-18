@@ -13,7 +13,13 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
-# ── Set DATABASE_URL BEFORE any app module import ────────────────────────
+# ── Set DB env vars BEFORE any app module import ─────────────────────────
+# notification-service database.py reads individual DB_* vars via os.environ
+# and falls back to DATABASE_URL. Set both so the SQLite override works.
+os.environ["DB_HOST"] = "localhost"
+os.environ["DB_USERNAME"] = "testuser"
+os.environ["DB_PASSWORD"] = "testpass"
+os.environ["DB_DATABASE"] = "testdb"
 os.environ["DATABASE_URL"] = "sqlite://"
 
 # ── Patch consumers BEFORE importing main.py ────────────────────────────

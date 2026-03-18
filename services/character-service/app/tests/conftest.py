@@ -4,6 +4,14 @@ import os
 # Add the app directory to sys.path so that bare imports (models, crud, etc.) work
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# Set DB env vars BEFORE importing config/database — Pydantic BaseSettings
+# requires DB_HOST, DB_USERNAME, DB_PASSWORD, DB_DATABASE (no defaults).
+# The actual MySQL URL is never used because we patch database.engine below.
+os.environ.setdefault("DB_HOST", "localhost")
+os.environ.setdefault("DB_USERNAME", "testuser")
+os.environ.setdefault("DB_PASSWORD", "testpass")
+os.environ.setdefault("DB_DATABASE", "testdb")
+
 # ---------------------------------------------------------------------------
 # Patch database.engine BEFORE importing main.py
 # main.py calls models.Base.metadata.create_all(bind=engine) at module level,
