@@ -2,12 +2,25 @@
 
 from sqlalchemy import (
     Column, Integer, String, ForeignKey, Text, Boolean, Enum, BigInteger, TIMESTAMP,
-    func, Float
+    func, Float, JSON
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
+
+
+class Area(Base):
+    __tablename__ = 'Areas'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=False)
+    map_image_url = Column(String(255), nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+    countries = relationship("Country", back_populates="area")
+
 
 class Country(Base):
     __tablename__ = 'Countries'
@@ -17,7 +30,11 @@ class Country(Base):
     description = Column(Text, nullable=False)
     leader_id = Column(BigInteger, nullable=True)
     map_image_url = Column(String(255), nullable=True)
+    area_id = Column(BigInteger, ForeignKey('Areas.id', ondelete="SET NULL"), nullable=True)
+    x = Column(Float, nullable=True)
+    y = Column(Float, nullable=True)
 
+    area = relationship("Area", back_populates="countries")
     regions = relationship("Region", back_populates="country")
 
 
@@ -82,6 +99,7 @@ class Location(Base):
     quick_travel_marker = Column(Boolean, nullable=False)
     parent_id = Column(BigInteger, ForeignKey('Locations.id', ondelete="CASCADE"))
     description = Column(Text, nullable=False)
+    marker_type = Column(Enum('safe', 'dangerous', 'dungeon', name='location_marker_type'), nullable=False, default='safe')
 
     # ЯВНО указываем, какие колонке использовать в ForeignKey для district:
     district = relationship(
@@ -111,6 +129,18 @@ class Post(Base):
     location_id = Column(BigInteger, ForeignKey("Locations.id", ondelete="CASCADE"), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+
+class ClickableZone(Base):
+    __tablename__ = 'ClickableZones'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    parent_type = Column(Enum('area', 'country', name='clickable_zone_parent_type'), nullable=False)
+    parent_id = Column(BigInteger, nullable=False)
+    target_type = Column(Enum('country', 'region', name='clickable_zone_target_type'), nullable=False)
+    target_id = Column(BigInteger, nullable=False)
+    zone_data = Column(JSON, nullable=False)
+    label = Column(String(255), nullable=True)
 
 
 class GameRule(Base):

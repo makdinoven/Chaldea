@@ -7,7 +7,6 @@ import CreateCharacterPage from "../CreateCharacterPage/CreateCharacterPage";
 import RequestsPage from "../Admin/RequestsPage/RequestsPage";
 import Layout from "./Layout/Layout";
 import WorldPage from "../WorldPage/WorldPage";
-import CountryPage from "../CountryPage/CountryPage";
 import AdminLocationsPage from "../AdminLocationsPage/AdminLocationsPage";
 import AdminSkillsPage from "../AdminSkillsPage/AdminSkillsPage";
 import LocationPage from "../pages/LocationPage/LocationPage";
@@ -51,8 +50,10 @@ const App = () => {
               </ProtectedRoute>
             } />
             <Route path="world" element={<WorldPage />} />
+            <Route path="world/area/:areaId" element={<WorldPage />} />
+            <Route path="world/country/:countryId" element={<WorldPage />} />
+            <Route path="world/region/:regionId" element={<WorldPage />} />
             <Route path="location/:locationId" element={<LocationPage />} />
-            <Route path="world/country/:countryId/" element={<CountryPage />} />
             <Route path="admin" element={
               <ProtectedRoute requiredRole="editor">
                 <AdminPage />

@@ -13,12 +13,18 @@ class CountryBase(BaseModel):
 class CountryCreate(CountryBase):
     leader_id: Optional[int] = None
     map_image_url: Optional[str] = None
+    area_id: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
 
 class CountryUpdate(BaseModel):
-    name: Optional[str]
-    description: Optional[str]
-    leader_id: Optional[int]
-    map_image_url: Optional[str]
+    name: Optional[str] = None
+    description: Optional[str] = None
+    leader_id: Optional[int] = None
+    map_image_url: Optional[str] = None
+    area_id: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
 
 class CountryRead(BaseModel):
     id: int
@@ -26,6 +32,9 @@ class CountryRead(BaseModel):
     description: str
     leader_id: Optional[int] = None
     map_image_url: Optional[str] = None
+    area_id: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
 
     class Config:
         orm_mode = True
@@ -54,6 +63,7 @@ class LocationCreate(BaseModel):
     image_url: Optional[str] = ""
     recommended_level: Optional[int] = 1
     quick_travel_marker: Optional[bool] = False
+    marker_type: Optional[Literal["safe", "dangerous", "dungeon"]] = "safe"
 
 class LocationCreateResponse(BaseModel):
     id: int
@@ -64,6 +74,7 @@ class LocationCreateResponse(BaseModel):
     image_url: Optional[str] = ""
     recommended_level: Optional[int] = 1
     quick_travel_marker: Optional[bool] = False
+    marker_type: str = "safe"
 
 class LocationUpdate(BaseModel):
     name: Optional[str] = None
@@ -74,6 +85,7 @@ class LocationUpdate(BaseModel):
     quick_travel_marker: Optional[bool] = False
     description: Optional[str] = ""
     parent_id: Optional[int] = None
+    marker_type: Optional[Literal["safe", "dangerous", "dungeon"]] = None
 
 class LocationRead(BaseModel):
     id: int
@@ -84,6 +96,7 @@ class LocationRead(BaseModel):
     quick_travel_marker: bool
     image_url: Optional[str] = None
     parent_id: Optional[int] = None
+    marker_type: str = "safe"
 
     class Config:
         orm_mode = True
@@ -242,6 +255,87 @@ class DistrictLookup(BaseModel):
 
 
 # -------------------------------
+#   AREA SCHEMAS
+# -------------------------------
+class AreaCreate(BaseModel):
+    name: str
+    description: str
+    sort_order: int = 0
+
+class AreaUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    sort_order: Optional[int] = None
+
+class AreaRead(BaseModel):
+    id: int
+    name: str
+    description: str
+    map_image_url: Optional[str] = None
+    sort_order: int = 0
+
+    class Config:
+        orm_mode = True
+
+class AreaWithCountries(AreaRead):
+    countries: List[CountryRead] = []
+
+    class Config:
+        orm_mode = True
+
+class AreaLookup(BaseModel):
+    id: int
+    name: str
+
+
+# -------------------------------
+#   CLICKABLE ZONE SCHEMAS
+# -------------------------------
+class ZonePoint(BaseModel):
+    x: float
+    y: float
+
+class ClickableZoneCreate(BaseModel):
+    parent_type: Literal["area", "country"]
+    parent_id: int
+    target_type: Literal["country", "region"]
+    target_id: int
+    zone_data: List[ZonePoint]
+    label: Optional[str] = None
+
+class ClickableZoneUpdate(BaseModel):
+    parent_type: Optional[Literal["area", "country"]] = None
+    parent_id: Optional[int] = None
+    target_type: Optional[Literal["country", "region"]] = None
+    target_id: Optional[int] = None
+    zone_data: Optional[List[ZonePoint]] = None
+    label: Optional[str] = None
+
+class ClickableZoneRead(BaseModel):
+    id: int
+    parent_type: str
+    parent_id: int
+    target_type: str
+    target_id: int
+    zone_data: list
+    label: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+# -------------------------------
+#   HIERARCHY TREE
+# -------------------------------
+class HierarchyNode(BaseModel):
+    id: int
+    name: str
+    type: str
+    marker_type: Optional[str] = None
+    children: List['HierarchyNode'] = []
+
+
+# -------------------------------
 #   Forward references
 # -------------------------------
 from typing import TYPE_CHECKING
@@ -249,10 +343,12 @@ if TYPE_CHECKING:
     DistrictRead.update_forward_refs()
     RegionRead.update_forward_refs()
     LocationRead.update_forward_refs()
+    HierarchyNode.update_forward_refs()
 else:
     DistrictRead.update_forward_refs()
     RegionRead.update_forward_refs()
     LocationRead.update_forward_refs()
+    HierarchyNode.update_forward_refs()
 
 # Добавляем схему для ответа при создании региона
 class RegionCreateResponse(BaseModel):
@@ -271,6 +367,7 @@ class RegionCreateResponse(BaseModel):
         orm_mode = True
 
 class AdminPanelData(BaseModel):
+    areas: List[AreaRead] = []
     countries: List[CountryRead]
     regions: List[RegionRead]
 

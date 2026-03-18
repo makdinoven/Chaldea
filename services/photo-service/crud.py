@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from models import (
-    User, Character, Country, Region, District,
+    User, Character, Area, Country, Region, District,
     Location, Skill, SkillRank, Item, GameRule,
 )
 
@@ -33,6 +33,13 @@ def update_character_avatar(db: Session, character_id: int, avatar_url: str, use
 def get_character_avatar(db: Session, character_id: int):
     character = db.query(Character).filter(Character.id == character_id).first()
     return character.avatar if character else None
+
+
+def update_area_map_image(db: Session, area_id: int, map_url: str):
+    area = db.query(Area).filter(Area.id == area_id).first()
+    if area:
+        area.map_image_url = map_url
+        db.commit()
 
 
 # 1) Обновляем map_image_url в таблице Countries

@@ -8,6 +8,7 @@ from crud import (
     update_user_avatar, get_user_avatar,
     update_character_avatar, get_character_avatar, update_location_image,
     update_district_image, update_region_image, update_region_map_image, update_country_map_image,
+    update_area_map_image,
     update_skill_rank_image, update_skill_image, update_item_image, update_rule_image,
     update_profile_bg_image, get_profile_bg_image, get_character_owner_id
 )
@@ -71,6 +72,31 @@ async def change_character_avatar_photo(character_id: int = Form(...), user_id: 
         avatar_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="character_avatars")
         update_character_avatar(db, character_id, avatar_url, user_id)
         return {"message": "Фото успешно загружено", "avatar_url": avatar_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/photo/change_area_map")
+async def change_area_map_photo(area_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
+    """
+    Загружает карту области (map_image_url) в таблице Areas.
+    Сохранение файлов происходит в папке /media/maps/.
+    """
+    validate_image_mime(file)
+    try:
+        file_stream = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("area_map", area_id)
+
+        # Сохраняем файл в подкаталог "maps"
+        map_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="maps")
+
+        # Обновляем поле map_image_url в таблице Areas
+        update_area_map_image(db, area_id, map_url)
+
+        return {
+            "message": "Карта области успешно загружена",
+            "map_image_url": map_url
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

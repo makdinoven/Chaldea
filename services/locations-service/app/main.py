@@ -76,7 +76,10 @@ async def create_country_route(body: schemas.CountryCreate, session: AsyncSessio
         name=body.name,
         description=body.description,
         leader_id=body.leader_id,
-        map_image_url=body.map_image_url
+        map_image_url=body.map_image_url,
+        area_id=body.area_id,
+        x=body.x,
+        y=body.y,
     )
     return new_c
 
@@ -232,7 +235,8 @@ async def create_location(location: schemas.LocationCreate, db: AsyncSession = D
             "recommended_level": db_location.recommended_level,
             "quick_travel_marker": db_location.quick_travel_marker,
             "parent_id": db_location.parent_id,
-            "description": db_location.description
+            "description": db_location.description,
+            "marker_type": db_location.marker_type
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -251,7 +255,8 @@ async def update_location_route(location_id: int, body: schemas.LocationUpdate, 
             "recommended_level": db_location.recommended_level,
             "quick_travel_marker": db_location.quick_travel_marker,
             "parent_id": db_location.parent_id,
-            "description": db_location.description or ""
+            "description": db_location.description or "",
+            "marker_type": db_location.marker_type
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -534,6 +539,118 @@ async def move_and_post(
             raise HTTPException(status_code=500, detail="Failed to deduct stamina for movement")
 
     return new_post
+# --------------------------------------------------------------------
+# AREA
+# --------------------------------------------------------------------
+@router.get("/areas/list", response_model=List[schemas.AreaRead])
+async def get_areas_list_route(session: AsyncSession = Depends(get_db)):
+    """Returns all areas sorted by sort_order."""
+    return await crud.get_areas_list(session)
+
+
+@router.get("/areas/{area_id}/details")
+async def get_area_details_route(area_id: int, session: AsyncSession = Depends(get_db)):
+    """Returns area details with its countries."""
+    data = await crud.get_area_details(session, area_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Area not found")
+    return data
+
+
+@router.post("/areas/create", response_model=schemas.AreaRead)
+async def create_area_route(
+    body: schemas.AreaCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:create")),
+):
+    return await crud.create_area(session, body)
+
+
+@router.put("/areas/{area_id}/update", response_model=schemas.AreaRead)
+async def update_area_route(
+    area_id: int,
+    body: schemas.AreaUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:update")),
+):
+    return await crud.update_area(session, area_id, body)
+
+
+@router.delete("/areas/{area_id}/delete", response_model=dict)
+async def delete_area_route(
+    area_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:delete")),
+):
+    try:
+        await crud.delete_area(session, area_id)
+        return {"status": "success", "message": f"Area {area_id} has been deleted."}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --------------------------------------------------------------------
+# CLICKABLE ZONES
+# --------------------------------------------------------------------
+@router.get("/clickable-zones/{parent_type}/{parent_id}", response_model=List[schemas.ClickableZoneRead])
+async def get_clickable_zones_route(
+    parent_type: str,
+    parent_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Returns all clickable zones for a given parent (area or country)."""
+    if parent_type not in ("area", "country"):
+        raise HTTPException(status_code=400, detail="parent_type must be 'area' or 'country'")
+    return await crud.get_clickable_zones_by_parent(session, parent_type, parent_id)
+
+
+@router.post("/clickable-zones/create", response_model=schemas.ClickableZoneRead)
+async def create_clickable_zone_route(
+    body: schemas.ClickableZoneCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:create")),
+):
+    return await crud.create_clickable_zone(session, body)
+
+
+@router.put("/clickable-zones/{zone_id}/update", response_model=schemas.ClickableZoneRead)
+async def update_clickable_zone_route(
+    zone_id: int,
+    body: schemas.ClickableZoneUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:update")),
+):
+    return await crud.update_clickable_zone(session, zone_id, body)
+
+
+@router.delete("/clickable-zones/{zone_id}/delete", response_model=dict)
+async def delete_clickable_zone_route(
+    zone_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:delete")),
+):
+    try:
+        await crud.delete_clickable_zone(session, zone_id)
+        return {"status": "success", "message": f"ClickableZone {zone_id} has been deleted."}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --------------------------------------------------------------------
+# HIERARCHY TREE
+# --------------------------------------------------------------------
+@router.get("/hierarchy/tree", response_model=List[schemas.HierarchyNode])
+async def get_hierarchy_tree_route(session: AsyncSession = Depends(get_db)):
+    """Returns the full hierarchy tree for navigation."""
+    return await crud.get_hierarchy_tree(session)
+
+
 # --------------------------------------------------------------------
 # RULES
 # --------------------------------------------------------------------

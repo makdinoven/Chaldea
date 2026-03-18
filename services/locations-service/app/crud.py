@@ -9,11 +9,13 @@ from sqlalchemy import text, delete
 from config import settings
 import models
 from models import (
-    Country, Region, District, Location, LocationNeighbor, Post, GameRule
+    Country, Region, District, Location, LocationNeighbor, Post, GameRule,
+    Area, ClickableZone
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
-    GameRuleCreate, GameRuleUpdate, GameRuleReorderItem
+    GameRuleCreate, GameRuleUpdate, GameRuleReorderItem,
+    AreaCreate, AreaUpdate, ClickableZoneCreate, ClickableZoneUpdate
 )
 
 # -------------------------------
@@ -82,12 +84,18 @@ async def get_districts_lookup(session: AsyncSession) -> List[dict]:
 #   COUNTRY
 # -------------------------------
 async def create_new_country(session: AsyncSession, name: str, description: str,
-                       leader_id: Optional[int], map_image_url: Optional[str]) -> Country:
+                       leader_id: Optional[int], map_image_url: Optional[str],
+                       area_id: Optional[int] = None,
+                       x: Optional[float] = None,
+                       y: Optional[float] = None) -> Country:
     new_country = Country(
         name=name,
         description=description,
         leader_id=leader_id,
-        map_image_url=map_image_url
+        map_image_url=map_image_url,
+        area_id=area_id,
+        x=x,
+        y=y,
     )
     session.add(new_country)
     await session.commit()
@@ -100,14 +108,8 @@ async def update_country(session: AsyncSession, country_id: int, data) -> Countr
     if not db_country:
         raise HTTPException(status_code=404, detail="Country not found")
 
-    if getattr(data, "name", None) is not None:
-        db_country.name = data.name
-    if getattr(data, "description", None) is not None:
-        db_country.description = data.description
-    if getattr(data, "leader_id", None) is not None:
-        db_country.leader_id = data.leader_id
-    if getattr(data, "map_image_url", None) is not None:
-        db_country.map_image_url = data.map_image_url
+    for field, value in data.dict(exclude_unset=True).items():
+        setattr(db_country, field, value)
 
     await session.commit()
     await session.refresh(db_country)
@@ -558,10 +560,16 @@ async def get_admin_panel_data(session: AsyncSession) -> dict:
     """
     Получает все данные для админ панели одним запросом
     """
+    # Получаем все области
+    areas_result = await session.execute(
+        select(Area).order_by(Area.sort_order.asc(), Area.id.asc())
+    )
+    areas = areas_result.scalars().all()
+
     # Получаем все страны
     countries_result = await session.execute(select(Country))
     countries = countries_result.scalars().all()
-    
+
     # Получаем все регионы с их районами
     regions_result = await session.execute(
         select(Region).options(
@@ -580,7 +588,7 @@ async def get_admin_panel_data(session: AsyncSession) -> dict:
                 select(Location).where(Location.district_id == district.id)
             )
             locations = locations_result.scalars().all()
-            
+
             districts_data.append({
                 "id": district.id,
                 "name": district.name,
@@ -595,11 +603,13 @@ async def get_admin_panel_data(session: AsyncSession) -> dict:
                         "id": loc.id,
                         "name": loc.name,
                         "type": loc.type,
-                        "description": loc.description
+                        "description": loc.description,
+                        "marker_type": loc.marker_type,
+                        "image_url": loc.image_url
                     } for loc in locations
                 ]
             })
-        
+
         regions_data.append({
             "id": region.id,
             "name": region.name,
@@ -615,13 +625,25 @@ async def get_admin_panel_data(session: AsyncSession) -> dict:
         })
 
     return {
+        "areas": [
+            {
+                "id": area.id,
+                "name": area.name,
+                "description": area.description,
+                "map_image_url": area.map_image_url,
+                "sort_order": area.sort_order,
+            } for area in areas
+        ],
         "countries": [
             {
                 "id": country.id,
                 "name": country.name,
                 "description": country.description,
                 "leader_id": country.leader_id,
-                "map_image_url": country.map_image_url
+                "map_image_url": country.map_image_url,
+                "area_id": country.area_id,
+                "x": country.x,
+                "y": country.y,
             } for country in countries
         ],
         "regions": regions_data
@@ -636,7 +658,10 @@ async def get_countries_list(session: AsyncSession) -> List[dict]:
             "id": country.id,
             "name": country.name,
             "description": country.description,
-            "map_image_url": country.map_image_url
+            "map_image_url": country.map_image_url,
+            "area_id": country.area_id,
+            "x": country.x,
+            "y": country.y,
         } for country in countries
     ]
 
@@ -959,6 +984,244 @@ async def get_players_in_location(location_id: int) -> List[dict]:
         except Exception as e:
             logger.error(f"Ошибка при получении персонажей для локации {location_id}: {e}")
             return []
+
+
+# -------------------------------
+#   AREA
+# -------------------------------
+async def create_area(session: AsyncSession, data: AreaCreate) -> Area:
+    new_area = Area(
+        name=data.name,
+        description=data.description,
+        sort_order=data.sort_order,
+    )
+    session.add(new_area)
+    await session.commit()
+    await session.refresh(new_area)
+    return new_area
+
+
+async def update_area(session: AsyncSession, area_id: int, data: AreaUpdate) -> Area:
+    result = await session.execute(select(Area).where(Area.id == area_id))
+    db_area = result.scalars().first()
+    if not db_area:
+        raise HTTPException(status_code=404, detail="Area not found")
+
+    for field, value in data.dict(exclude_unset=True).items():
+        setattr(db_area, field, value)
+
+    await session.commit()
+    await session.refresh(db_area)
+    return db_area
+
+
+async def get_area_details(session: AsyncSession, area_id: int) -> Optional[dict]:
+    """Returns area details with its countries."""
+    result = await session.execute(
+        select(Area)
+        .options(selectinload(Area.countries))
+        .where(Area.id == area_id)
+    )
+    area = result.scalars().first()
+    if not area:
+        return None
+
+    return {
+        "id": area.id,
+        "name": area.name,
+        "description": area.description,
+        "map_image_url": area.map_image_url,
+        "sort_order": area.sort_order,
+        "countries": [
+            {
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "leader_id": c.leader_id,
+                "map_image_url": c.map_image_url,
+                "area_id": c.area_id,
+                "x": c.x,
+                "y": c.y,
+            }
+            for c in area.countries
+        ],
+    }
+
+
+async def get_areas_list(session: AsyncSession) -> List[Area]:
+    result = await session.execute(
+        select(Area).order_by(Area.sort_order.asc(), Area.id.asc())
+    )
+    return result.scalars().all()
+
+
+async def delete_area(session: AsyncSession, area_id: int) -> None:
+    result = await session.execute(select(Area).where(Area.id == area_id))
+    db_area = result.scalars().first()
+    if not db_area:
+        raise HTTPException(status_code=404, detail="Area not found")
+
+    await session.execute(delete(Area).where(Area.id == area_id))
+    await session.commit()
+
+
+# -------------------------------
+#   CLICKABLE ZONES
+# -------------------------------
+async def create_clickable_zone(session: AsyncSession, data: ClickableZoneCreate) -> ClickableZone:
+    zone_data_dicts = [point.dict() for point in data.zone_data]
+    new_zone = ClickableZone(
+        parent_type=data.parent_type,
+        parent_id=data.parent_id,
+        target_type=data.target_type,
+        target_id=data.target_id,
+        zone_data=zone_data_dicts,
+        label=data.label,
+    )
+    session.add(new_zone)
+    await session.commit()
+    await session.refresh(new_zone)
+    return new_zone
+
+
+async def update_clickable_zone(session: AsyncSession, zone_id: int, data: ClickableZoneUpdate) -> ClickableZone:
+    result = await session.execute(select(ClickableZone).where(ClickableZone.id == zone_id))
+    db_zone = result.scalars().first()
+    if not db_zone:
+        raise HTTPException(status_code=404, detail="ClickableZone not found")
+
+    update_data = data.dict(exclude_unset=True)
+    if "zone_data" in update_data and update_data["zone_data"] is not None:
+        update_data["zone_data"] = [point.dict() for point in data.zone_data]
+
+    for field, value in update_data.items():
+        setattr(db_zone, field, value)
+
+    await session.commit()
+    await session.refresh(db_zone)
+    return db_zone
+
+
+async def delete_clickable_zone(session: AsyncSession, zone_id: int) -> None:
+    result = await session.execute(select(ClickableZone).where(ClickableZone.id == zone_id))
+    db_zone = result.scalars().first()
+    if not db_zone:
+        raise HTTPException(status_code=404, detail="ClickableZone not found")
+
+    await session.execute(delete(ClickableZone).where(ClickableZone.id == zone_id))
+    await session.commit()
+
+
+async def get_clickable_zones_by_parent(session: AsyncSession, parent_type: str, parent_id: int) -> List[ClickableZone]:
+    result = await session.execute(
+        select(ClickableZone).where(
+            ClickableZone.parent_type == parent_type,
+            ClickableZone.parent_id == parent_id,
+        )
+    )
+    return result.scalars().all()
+
+
+# -------------------------------
+#   HIERARCHY TREE
+# -------------------------------
+async def get_hierarchy_tree(session: AsyncSession) -> List[dict]:
+    """
+    Returns the full hierarchy tree: Area -> Country -> Region -> District -> Location.
+    Countries without an area_id are included at the root level as type='country' nodes.
+    Uses eager loading to avoid N+1 queries.
+    """
+    # Load all data in bulk to avoid N+1
+    areas_result = await session.execute(
+        select(Area).order_by(Area.sort_order.asc(), Area.id.asc())
+    )
+    areas = areas_result.scalars().all()
+
+    countries_result = await session.execute(select(Country))
+    countries = countries_result.scalars().all()
+
+    regions_result = await session.execute(select(Region))
+    regions = regions_result.scalars().all()
+
+    districts_result = await session.execute(select(District))
+    districts = districts_result.scalars().all()
+
+    locations_result = await session.execute(select(Location))
+    locations = locations_result.scalars().all()
+
+    # Build location tree (handle parent_id hierarchy)
+    locations_by_id = {}
+    for loc in locations:
+        locations_by_id[loc.id] = {
+            "id": loc.id,
+            "name": loc.name,
+            "type": "location",
+            "marker_type": loc.marker_type if loc.marker_type else "safe",
+            "children": [],
+        }
+
+    # Assign child locations to parents
+    root_locations_by_district = {}  # district_id -> list of root locations
+    for loc in locations:
+        if loc.parent_id and loc.parent_id in locations_by_id:
+            locations_by_id[loc.parent_id]["children"].append(locations_by_id[loc.id])
+        else:
+            root_locations_by_district.setdefault(loc.district_id, []).append(
+                locations_by_id[loc.id]
+            )
+
+    # Build district nodes
+    districts_by_region = {}
+    for district in districts:
+        district_node = {
+            "id": district.id,
+            "name": district.name,
+            "type": "district",
+            "children": root_locations_by_district.get(district.id, []),
+        }
+        districts_by_region.setdefault(district.region_id, []).append(district_node)
+
+    # Build region nodes
+    regions_by_country = {}
+    for region in regions:
+        region_node = {
+            "id": region.id,
+            "name": region.name,
+            "type": "region",
+            "children": districts_by_region.get(region.id, []),
+        }
+        regions_by_country.setdefault(region.country_id, []).append(region_node)
+
+    # Build country nodes
+    countries_by_area = {}
+    orphan_countries = []  # countries without area_id
+    for country in countries:
+        country_node = {
+            "id": country.id,
+            "name": country.name,
+            "type": "country",
+            "children": regions_by_country.get(country.id, []),
+        }
+        if country.area_id:
+            countries_by_area.setdefault(country.area_id, []).append(country_node)
+        else:
+            orphan_countries.append(country_node)
+
+    # Build area nodes
+    tree = []
+    for area in areas:
+        area_node = {
+            "id": area.id,
+            "name": area.name,
+            "type": "area",
+            "children": countries_by_area.get(area.id, []),
+        }
+        tree.append(area_node)
+
+    # Add orphan countries at root level
+    tree.extend(orphan_countries)
+
+    return tree
 
 
 # -------------------------------

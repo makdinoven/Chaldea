@@ -26,6 +26,13 @@ class Character(Base):
     avatar = Column(String(500), nullable=True)
 
 
+class Area(Base):
+    __tablename__ = "Areas"
+
+    id = Column(Integer, primary_key=True)
+    map_image_url = Column(Text, nullable=True)
+
+
 class Country(Base):
     __tablename__ = "Countries"
 
