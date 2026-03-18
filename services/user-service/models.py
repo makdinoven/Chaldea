@@ -16,6 +16,7 @@ class User(Base):
     avatar = Column(String(255), nullable=True)  # URL аватарки пользователя
     balance = Column(Integer, nullable=True) #Баланс доната
     current_character = Column(Integer, nullable=True, ) #Номер персонажа
+    last_active_at = Column(DateTime, nullable=True, default=None)  # Last activity timestamp
 
 class UserCharacter(Base):
     __tablename__ = "users_character"

@@ -21,6 +21,8 @@ import AdminCharacterDetailPage from "../Admin/CharactersPage/AdminCharacterDeta
 import RulesPage from "../RulesPage/RulesPage";
 import RulesAdminPage from "../Admin/RulesAdminPage/RulesAdminPage";
 import UserProfilePage from "../UserProfilePage/UserProfilePage";
+import AllUsersPage from "../pages/AllUsersPage/AllUsersPage";
+import OnlineUsersPage from "../pages/OnlineUsersPage/OnlineUsersPage";
 
 const App = () => {
   return (
@@ -54,6 +56,8 @@ const App = () => {
             <Route path="admin/characters/:characterId" element={<AdminCharacterDetailPage />} />
             <Route path="rules" element={<RulesPage />} />
             <Route path="admin/rules" element={<RulesAdminPage />} />
+            <Route path="players" element={<AllUsersPage />} />
+            <Route path="players/online" element={<OnlineUsersPage />} />
             <Route path="profile" element={<ProfilePage />} />
             <Route path="user-profile" element={<UserProfilePage />} />
             <Route path="user-profile/:userId" element={<UserProfilePage />} />

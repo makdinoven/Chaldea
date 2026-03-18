@@ -26,4 +26,4 @@ COPY ./services/user-service /app
 EXPOSE 8000
 
 # Команда для запуска миграций и FastAPI приложения
-CMD ["sh", "-c", "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app"]
+CMD ["sh", "-c", "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app"]

@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from producer import send_notification_event
 import httpx
 from sqlalchemy import func
+from datetime import datetime, timedelta
 import bleach
 
 ALLOWED_TAGS = [
@@ -174,7 +175,20 @@ def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
 # ==================== CURRENT USER ====================
 
 @router.get("/me", response_model=schemas.MeResponse)
-async def read_users_me(current_user: models.User = Depends(get_current_user)):
+async def read_users_me(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Update last_active_at for online tracking.
+    # current_user may be bound to a different session (from get_current_user),
+    # so we update via a direct query on the handler's db session.
+    # Wrapped in try/except so the endpoint still works if the migration
+    # adding last_active_at has not been applied yet.
+    try:
+        db.query(models.User).filter(models.User.id == current_user.id).update(
+            {models.User.last_active_at: datetime.utcnow()}
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+
     me_data = {
         "id": current_user.id,
         "email": current_user.email,
@@ -290,22 +304,77 @@ def clear_current_character(
 app.mount("/assets", StaticFiles(directory="src/assets"), name="assets")
 
 
-# ==================== USER LISTS ====================
+# ==================== USER LISTS & STATS ====================
 
-@router.get("/all")
+ONLINE_THRESHOLD_MINUTES = 5
+
+
+@router.get("/stats", response_model=schemas.UserStatsResponse)
+def get_user_stats(db: Session = Depends(get_db)):
+    """Public endpoint: total registered users and currently online users."""
+    total_users = db.query(func.count(models.User.id)).scalar()
+    try:
+        threshold = datetime.utcnow() - timedelta(minutes=ONLINE_THRESHOLD_MINUTES)
+        online_users = db.query(func.count(models.User.id)).filter(
+            models.User.last_active_at >= threshold
+        ).scalar()
+    except Exception:
+        db.rollback()
+        online_users = 0
+    return schemas.UserStatsResponse(total_users=total_users, online_users=online_users)
+
+
+@router.get("/online", response_model=schemas.UserListResponse)
+def get_online_users(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Public endpoint: paginated list of online users (active in last 5 min)."""
+    try:
+        threshold = datetime.utcnow() - timedelta(minutes=ONLINE_THRESHOLD_MINUTES)
+        base_query = db.query(models.User).filter(models.User.last_active_at >= threshold)
+        total = base_query.count()
+        users = (
+            base_query
+            .order_by(models.User.last_active_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+    except Exception:
+        db.rollback()
+        total = 0
+        users = []
+    return schemas.UserListResponse(
+        items=[schemas.UserPublicItem.from_orm(u) for u in users],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/all", response_model=schemas.UserListResponse)
 def get_all_users(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
+    """Public endpoint: paginated list of all registered users."""
     total = db.query(models.User).count()
     users = (
         db.query(models.User)
+        .order_by(models.User.registered_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
     )
-    return {"items": users, "total": total, "page": page, "page_size": page_size}
+    return schemas.UserListResponse(
+        items=[schemas.UserPublicItem.from_orm(u) for u in users],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/admins", response_model=List[UserRead])

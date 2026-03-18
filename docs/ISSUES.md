@@ -42,6 +42,12 @@
 **Описание:** `LAST_STATS` dict растёт бесконечно — записи никогда не удаляются после завершения боя. При длительной работе сервис будет потреблять всё больше памяти.
 **Решение:** Очищать записи для (battle_id, pid) при завершении боя, или использовать TTL-cache (например `cachetools.TTLCache`).
 
+### A-029-1. GET /users/all exposes hashed_password and email to unauthenticated users
+**Сервис:** user-service
+**Файл:** `services/user-service/main.py` (endpoint `GET /users/all`, line ~296)
+**Описание:** `GET /users/all` returns raw ORM objects without a `response_model`, meaning all User fields including `hashed_password` and `email` are sent in the API response. The endpoint requires no authentication, so anyone can retrieve all user emails and password hashes.
+**Решение:** Add `response_model` with a safe schema (exclude `hashed_password`, `email`) or add explicit field selection in the query.
+
 ### 7. Баг: shield нельзя экипировать через API
 **Сервис:** inventory-service
 **Файл:** `services/inventory-service/app/crud.py:98-107`
@@ -239,7 +245,7 @@
 | Приоритет | Количество |
 |-----------|-----------|
 | CRITICAL | 1 |
-| HIGH | 10 |
+| HIGH | 11 |
 | MEDIUM | 6 |
 | LOW | 4 |
-| **Итого** | **21** |
+| **Итого** | **22** |

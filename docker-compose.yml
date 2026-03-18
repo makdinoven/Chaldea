@@ -212,7 +212,7 @@ services:
     build:
       context: .
       dockerfile: ./docker/user-service/Dockerfile
-    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app --reload"
+    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app --reload"
     volumes:
       - ./services/user-service:/app
     environment:

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, EmailStr
 from datetime import datetime
 
@@ -123,3 +123,26 @@ class UserProfileResponse(BaseModel):
     is_friend: Optional[bool] = None
     friendship_status: Optional[str] = None
     friendship_id: Optional[int] = None
+
+
+class UserStatsResponse(BaseModel):
+    total_users: int
+    online_users: int
+
+
+class UserPublicItem(BaseModel):
+    id: int
+    username: str
+    avatar: Optional[str] = None
+    registered_at: Optional[datetime] = None
+    last_active_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+
+class UserListResponse(BaseModel):
+    items: List[UserPublicItem]
+    total: int
+    page: int
+    page_size: int
