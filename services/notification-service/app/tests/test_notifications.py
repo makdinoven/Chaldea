@@ -7,9 +7,10 @@ Covers:
 - PUT  /notifications/{user_id}/mark-as-read
 - PUT  /notifications/{user_id}/mark-all-as-read
 - POST /notifications/create  (admin only)
-- GET  /notifications/stream   (SSE, initial connection)
-- send_to_sse helper
 - Security: SQL injection, unauthorized access
+
+Note: SSE stream and sse_manager tests were removed in FEAT-050 (WebSocket migration).
+See test_websocket.py for WebSocket endpoint and ws_manager tests.
 """
 
 import pytest
@@ -208,80 +209,6 @@ class TestCreateNotification:
             json={"target_type": "invalid_type", "message": "test"},
         )
         assert resp.status_code == 422
-
-
-# ── GET /notifications/stream (SSE) ─────────────────────────────────────
-
-class TestSSEStream:
-
-    @pytest.mark.skip(reason="SSE infinite generator hangs TestClient; needs async test with timeout")
-    def test_sse_stream_returns_200_with_auth(self, client):
-        """SSE endpoint returns 200 and text/event-stream content type."""
-        with client.stream("GET", "/notifications/stream") as resp:
-            assert resp.status_code == 200
-            assert "text/event-stream" in resp.headers.get("content-type", "")
-
-    def test_sse_stream_returns_401_without_auth(self, db_session):
-        """Without auth override, the endpoint should reject the request."""
-        from main import app
-        from database import get_db
-
-        # Only override DB, NOT auth — so real auth dependency runs and fails
-        def override_get_db():
-            yield db_session
-
-        app.dependency_overrides[get_db] = override_get_db
-        # Clear auth override if any
-        from auth_http import get_current_user_via_http
-        app.dependency_overrides.pop(get_current_user_via_http, None)
-
-        from fastapi.testclient import TestClient
-        unauthenticated = TestClient(app)
-        resp = unauthenticated.get("/notifications/stream")
-        # FastAPI returns 401 when OAuth2PasswordBearer token is missing
-        assert resp.status_code in (401, 403)
-        app.dependency_overrides.clear()
-
-
-# ── send_to_sse helper ───────────────────────────────────────────────────
-
-class TestSSEManager:
-
-    def test_send_to_sse_delivers_to_connected_user(self):
-        """send_to_sse puts JSON data into the user's asyncio.Queue."""
-        import asyncio
-        import json
-        from sse_manager import connections, send_to_sse
-
-        loop = asyncio.new_event_loop()
-        queue = asyncio.Queue()
-        connections[42] = queue
-
-        try:
-            # send_to_sse uses run_coroutine_threadsafe which needs a running loop
-            asyncio.set_event_loop(loop)
-
-            # Run in loop context so run_coroutine_threadsafe works
-            async def _test():
-                send_to_sse(42, {"msg": "hello"})
-                # Give the coroutine a chance to execute
-                await asyncio.sleep(0.05)
-                assert not queue.empty()
-                item = await queue.get()
-                assert json.loads(item) == {"msg": "hello"}
-
-            loop.run_until_complete(_test())
-        finally:
-            connections.pop(42, None)
-            loop.close()
-
-    def test_send_to_sse_no_op_for_disconnected_user(self):
-        """send_to_sse does nothing if user has no active connection."""
-        from sse_manager import connections, send_to_sse
-
-        connections.pop(999, None)
-        # Should not raise
-        send_to_sse(999, {"msg": "ignored"})
 
 
 # ── Security tests ───────────────────────────────────────────────────────

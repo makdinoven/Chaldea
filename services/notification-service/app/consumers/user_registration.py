@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import Notification
 from schemas import NotificationCreate
-from sse_manager import send_to_sse
+from ws_manager import send_to_user
 
 QUEUE_NAME = "user_registration"
 
@@ -34,15 +34,15 @@ def consume():
         db.commit()
         db.refresh(db_notification)
 
-        # Отправляем в SSE (если пользователь подключён)
-        sse_data = {
+        # Отправляем через WebSocket (если пользователь подключён)
+        notification_data = {
             "id": db_notification.id,
             "user_id": db_notification.user_id,
             "message": db_notification.message,
             "status": db_notification.status,
             "created_at": str(db_notification.created_at)
         }
-        send_to_sse(user_id, sse_data)
+        send_to_user(user_id, {"type": "notification", "data": notification_data})
 
         print(f"[user_registration_consumer] Notification created for user {user_id}")
         ch.basic_ack(delivery_tag=method.delivery_tag)

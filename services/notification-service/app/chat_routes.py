@@ -1,9 +1,8 @@
 """
-Chat REST endpoints and SSE stream for notification-service.
+Chat REST endpoints for notification-service.
 All endpoints are under the /notifications/chat prefix (Nginx routes /notifications/*).
 """
 
-import asyncio
 import json
 import logging
 import os
@@ -12,7 +11,6 @@ from typing import Optional
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from auth_http import get_current_user_via_http, require_permission, UserRead, OAUTH2_SCHEME, AUTH_SERVICE_URL
@@ -27,7 +25,7 @@ from chat_schemas import (
     PaginatedChatMessages,
 )
 import chat_crud
-from sse_manager import add_chat_connection, remove_chat_connection, broadcast_to_channel, broadcast_to_all
+from ws_manager import broadcast_to_channel, broadcast_to_all
 
 logger = logging.getLogger(__name__)
 
@@ -259,35 +257,3 @@ def check_ban(
     )
 
 
-# ---------------------------------------------------------------------------
-# GET /chat/stream — SSE stream for real-time chat
-# ---------------------------------------------------------------------------
-
-@chat_router.get("/stream")
-async def chat_sse_stream(
-    current_user: UserRead = Depends(get_current_user_via_http),
-):
-    """
-    SSE endpoint for real-time chat messages.
-    Client connects once; receives events for ALL channels.
-    Frontend filters by the currently active tab.
-    """
-    user_id = current_user.id
-    queue = add_chat_connection(user_id)
-
-    async def event_generator():
-        try:
-            while True:
-                try:
-                    # Wait for a message with a timeout for keepalive
-                    data_str = await asyncio.wait_for(queue.get(), timeout=30.0)
-                    yield f"data: {data_str}\n\n"
-                except asyncio.TimeoutError:
-                    # Send keepalive ping
-                    yield f"data: {json.dumps({'type': 'ping'})}\n\n"
-        except asyncio.CancelledError:
-            pass
-        finally:
-            remove_chat_connection(user_id)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")

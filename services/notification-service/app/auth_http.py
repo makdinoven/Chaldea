@@ -1,6 +1,7 @@
 # auth_http.py (файл в сервисе уведомлений)
 import os
 import requests
+import httpx
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
@@ -33,6 +34,22 @@ def get_current_user_via_http(token: str = Depends(OAUTH2_SCHEME)) -> UserRead:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials"
         )
+
+
+async def authenticate_websocket(token: str):
+    """Validate JWT by calling user-service. Returns user dict or None."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{AUTH_SERVICE_URL}/users/me",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5.0
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return None
+    except Exception:
+        return None
 
 
 def require_permission(permission: str):

@@ -18,6 +18,7 @@ import type { ChatMessage as ChatMessageType, ChatChannel } from '../../types/ch
 import ChatHeader from './ChatHeader';
 import ChatInput from './ChatInput';
 import ChatMessages from './ChatMessages';
+import ConfirmationModal from '../ui/ConfirmationModal';
 import toast from 'react-hot-toast';
 
 interface ChatPanelProps {
@@ -35,6 +36,7 @@ const ChatPanel = ({ isAuthenticated, isBanned }: ChatPanelProps) => {
   const permissions = useAppSelector(selectPermissions);
 
   const [quoteText, setQuoteText] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
 
   // Fetch messages on mount and channel switch
   useEffect(() => {
@@ -89,9 +91,9 @@ const ChatPanel = ({ isAuthenticated, isBanned }: ChatPanelProps) => {
 
   const handleDelete = useCallback(
     (messageId: number) => {
-      dispatch(deleteMessage(messageId));
+      setDeleteConfirmId(messageId);
     },
-    [dispatch],
+    [],
   );
 
   const activeMessages = messages[activeChannel] ?? [];
@@ -123,6 +125,18 @@ const ChatPanel = ({ isAuthenticated, isBanned }: ChatPanelProps) => {
         onReply={handleReply}
         onQuote={handleQuote}
         onDelete={handleDelete}
+      />
+      <ConfirmationModal
+        isOpen={deleteConfirmId !== null}
+        title="Удалить сообщение?"
+        message="Это действие нельзя отменить. Сообщение будет удалено для всех пользователей."
+        onConfirm={() => {
+          if (deleteConfirmId) {
+            dispatch(deleteMessage(deleteConfirmId));
+          }
+          setDeleteConfirmId(null);
+        }}
+        onCancel={() => setDeleteConfirmId(null)}
       />
     </div>
   );

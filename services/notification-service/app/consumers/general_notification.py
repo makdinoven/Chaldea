@@ -12,8 +12,7 @@ from database import get_db
 from models import Notification
 from schemas import NotificationCreate, GeneralNotificationPayload, NotificationTargetType
 
-# Импортируем send_to_sse
-from sse_manager import send_to_sse
+from ws_manager import send_to_user
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -79,15 +78,15 @@ def create_and_send(db: Session, user_id: int, message: str):
     db.commit()
     db.refresh(db_obj)
 
-    # Сразу отправляем SSE, если подключён
-    sse_data = {
+    # Отправляем через WebSocket, если пользователь подключён
+    notification_data = {
         "id": db_obj.id,
         "user_id": db_obj.user_id,
         "message": db_obj.message,
         "status": db_obj.status,
         "created_at": str(db_obj.created_at)
     }
-    send_to_sse(user_id, sse_data)
+    send_to_user(user_id, {"type": "notification", "data": notification_data})
 
     logger.info(f"[general_notifications_consumer] Created notification {db_obj.id} for user {user_id}")
 

@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+websockets
 sqlalchemy
 alembic
 pydantic<2.0.0
@@ -7,4 +8,5 @@ pika
 pymysql
 requests
 pytest
+pytest-asyncio
 httpx

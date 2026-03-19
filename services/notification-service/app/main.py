@@ -4,9 +4,8 @@ import asyncio
 import json
 import logging
 import os
-from fastapi import BackgroundTasks, FastAPI, APIRouter, Depends, HTTPException, Query, status
+from fastapi import BackgroundTasks, FastAPI, APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from typing import List
 from sqlalchemy.orm import Session
 
@@ -14,10 +13,9 @@ from models import Notification
 from database import get_db
 from schemas import Notification as NotificationSchema
 from schemas import GeneralNotificationPayload, NotificationTargetType
-from auth_http import get_current_user_via_http, require_permission, UserRead
+from auth_http import get_current_user_via_http, require_permission, authenticate_websocket, UserRead
 
-# Импортируем global connections (но не send_to_sse) из sse_manager
-from sse_manager import connections
+import ws_manager
 
 # Подключаем консьюмеры (без импорта из main!)
 from consumers.user_registration import start_user_registration_consumer
@@ -49,25 +47,34 @@ async def startup_event():
 
 router = APIRouter(prefix="/notifications")
 
-# SSE-эндпоинт
-@router.get("/stream", response_class=StreamingResponse)
-async def sse_notifications_stream(
-    current_user: UserRead = Depends(get_current_user_via_http)
-):
-    """
-    Открываем постоянное соединение SSE для текущего пользователя.
-    """
-    user_id = current_user.id
-    if user_id not in connections:
-        connections[user_id] = asyncio.Queue()
-    queue = connections[user_id]
 
-    async def event_generator():
+# WebSocket endpoint (replaces SSE /stream and /chat/stream)
+@app.websocket("/notifications/ws")
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
+    user = await authenticate_websocket(token)
+    if not user:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    user_id = user["id"]
+    await websocket.accept()
+    await ws_manager.connect(user_id, websocket)
+
+    try:
         while True:
-            data_str = await queue.get()
-            yield f"data: {data_str}\n\n"
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                # Client messages are ignored (read-only push channel)
+            except asyncio.TimeoutError:
+                # Send application-level ping on timeout
+                await websocket.send_json({"type": "ping", "data": {}})
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await ws_manager.disconnect(user_id)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 def _publish_admin_notification(payload: dict):
     """Internal function that performs the blocking RabbitMQ publish for admin notifications."""
