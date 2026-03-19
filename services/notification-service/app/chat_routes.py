@@ -133,6 +133,16 @@ def send_message(
         "data": json.loads(response.json()),
     })
 
+    # 9. Increment activity points (fire-and-forget, don't block on failure)
+    try:
+        requests.post(
+            f"{AUTH_SERVICE_URL}/users/{current_user.id}/activity/increment",
+            json={"points": 1},
+            timeout=3,
+        )
+    except Exception:
+        pass  # Non-critical, don't fail the message send
+
     return response
 
 

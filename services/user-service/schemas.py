@@ -154,6 +154,7 @@ class UserProfileResponse(BaseModel):
     post_color: Optional[str] = None
     profile_style_settings: Optional[dict] = None
     last_active_at: Optional[datetime] = None
+    activity_points: int = 0
 
 
 class UserStatsResponse(BaseModel):

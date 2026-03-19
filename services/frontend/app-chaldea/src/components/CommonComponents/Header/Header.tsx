@@ -10,7 +10,7 @@ import NotificationBell from './NotificationBell';
 import AdminMenu from './AdminMenu';
 import { DropdownLink } from './types';
 import { isStaff } from '../../../utils/permissions';
-import logo from '../../../assets/logo.png';
+import logo from '../../../assets/logo_fog.png';
 
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Администратор',
@@ -68,13 +68,11 @@ const Header = () => {
       {/* Left section: Logo + Nav */}
       <div className="flex items-center gap-10">
         <Link to="/home" className="flex-shrink-0">
-          <div className="w-20 h-20 rounded-card-lg overflow-hidden">
-            <img
-              src={logo}
-              alt="Логотип"
-              className="w-full h-full object-cover"
-            />
-          </div>
+          <img
+            src={logo}
+            alt="Fall of Gods"
+            className="h-16 w-auto object-contain"
+          />
         </Link>
         <NavLinks />
       </div>

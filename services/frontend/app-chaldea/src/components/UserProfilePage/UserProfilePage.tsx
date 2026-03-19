@@ -366,7 +366,7 @@ const UserProfilePage = () => {
             style={hasBgImage ? { ...textShadowStyle, backgroundColor: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(4px)' } : textShadowStyle}
           >
             <Activity size={14} />
-            <span>Активность: 0</span>
+            <span>Активность: {profile.activity_points ?? 0}</span>
           </div>
 
           {/* Friend action button */}

@@ -2,6 +2,7 @@ from typing import List, Optional
 
 from fastapi import BackgroundTasks, FastAPI, Depends, HTTPException, status, APIRouter, Query
 from fastapi.security import OAuth2PasswordBearer
+from pydantic import BaseModel
 import models
 import schemas
 from crud import create_user, get_user_by_email, get_user_by_username, authenticate_user, get_effective_permissions, require_permission, require_admin, is_admin, is_admin_or_moderator
@@ -1567,7 +1568,34 @@ async def get_user_profile(
         post_color=user.post_color,
         profile_style_settings=style_settings,
         last_active_at=user.last_active_at,
+        activity_points=user.activity_points or 0,
     )
+
+
+# ==================== ACTIVITY POINTS ====================
+
+class ActivityIncrementRequest(BaseModel):
+    points: int = 1
+
+class ActivityIncrementResponse(BaseModel):
+    activity_points: int
+
+@router.post("/{user_id}/activity/increment", response_model=ActivityIncrementResponse)
+def increment_activity_points(
+    user_id: int,
+    body: ActivityIncrementRequest,
+    db: Session = Depends(get_db),
+):
+    """Increment activity points for a user. Internal service-to-service call, no auth required."""
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    new_value = (user.activity_points or 0) + body.points
+    user.activity_points = new_value
+    db.commit()
+
+    return ActivityIncrementResponse(activity_points=new_value)
 
 
 # ==================== GET USER BY ID (catch-all, must be last) ====================

@@ -69,6 +69,7 @@ class User(Base):
     profile_bg_position = Column(String(20), nullable=True)
     post_color = Column(String(7), nullable=True)
     profile_style_settings = Column(Text, nullable=True)
+    activity_points = Column(Integer, nullable=False, default=0, server_default="0")
 
 class UserCharacter(Base):
     __tablename__ = "users_character"

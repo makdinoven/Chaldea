@@ -105,6 +105,7 @@ export interface UserProfile {
   post_color?: string | null;
   profile_style_settings?: ProfileStyleSettings | null;
   last_active_at?: string | null;
+  activity_points?: number;
 }
 
 export interface UserCharacterItem {
