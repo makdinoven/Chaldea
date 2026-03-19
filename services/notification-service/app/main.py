@@ -10,9 +10,8 @@ from fastapi.responses import StreamingResponse
 from typing import List
 from sqlalchemy.orm import Session
 
-import models
 from models import Notification
-from database import engine, get_db
+from database import get_db
 from schemas import Notification as NotificationSchema
 from schemas import GeneralNotificationPayload, NotificationTargetType
 from auth_http import get_current_user_via_http, require_permission, UserRead
@@ -41,7 +40,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    models.Base.metadata.create_all(bind=engine)
+    # Schema is now managed by Alembic (runs before uvicorn in Dockerfile CMD).
     # Запускаем консьюмеры
     start_user_registration_consumer()
     start_general_notifications_consumer()

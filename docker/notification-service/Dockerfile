@@ -23,4 +23,4 @@ RUN pip install --no-cache-dir --upgrade pip && \
 EXPOSE 8007
 
 # Команда для запуска FastAPI приложения
-CMD PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8007 --reload
+CMD ["sh", "-c", "cd /app && PYTHONPATH=/app alembic upgrade head && PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8007 --reload"]
