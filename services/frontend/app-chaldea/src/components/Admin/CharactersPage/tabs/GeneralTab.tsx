@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { useAppDispatch } from '../../../../redux/store';
+import { useAppDispatch, useAppSelector } from '../../../../redux/store';
 import {
   updateAdminCharacter,
   unlinkAdminCharacter,
   deleteAdminCharacter,
   setSelectedCharacter,
 } from '../../../../redux/slices/adminCharactersSlice';
-import { RACE_NAMES, CLASS_NAMES } from '../../../ProfilePage/constants';
+import { CLASS_NAMES } from '../../../ProfilePage/constants';
+import { selectRaceNamesMap } from '../../../../redux/slices/profileSlice';
 import type { AdminCharacterListItem } from '../types';
 
 interface GeneralTabProps {
@@ -18,6 +19,7 @@ interface GeneralTabProps {
 const GeneralTab = ({ character }: GeneralTabProps) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const raceNamesMap = useAppSelector(selectRaceNamesMap);
 
   const [level, setLevel] = useState(character.level);
   const [statPoints, setStatPoints] = useState(character.stat_points);
@@ -86,7 +88,7 @@ const GeneralTab = ({ character }: GeneralTabProps) => {
           <div>
             <span className="text-white/60 text-xs uppercase tracking-[0.06em]">Раса</span>
             <p className="text-white text-base">
-              {RACE_NAMES[character.id_race] ?? `#${character.id_race}`}
+              {raceNamesMap[character.id_race] ?? `#${character.id_race}`}
             </p>
           </div>
           <div>

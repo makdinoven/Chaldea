@@ -20,6 +20,7 @@ import AdminCharacterDetailPage from "../Admin/CharactersPage/AdminCharacterDeta
 import RulesPage from "../RulesPage/RulesPage";
 import RulesAdminPage from "../Admin/RulesAdminPage/RulesAdminPage";
 import RbacAdminPage from "../Admin/RbacAdminPage/RbacAdminPage";
+import AdminRacesPage from "../Admin/AdminRaces/AdminRacesPage";
 import UserProfilePage from "../UserProfilePage/UserProfilePage";
 import AllUsersPage from "../pages/AllUsersPage/AllUsersPage";
 import OnlineUsersPage from "../pages/OnlineUsersPage/OnlineUsersPage";
@@ -98,6 +99,11 @@ const App = () => {
             <Route path="admin/users-roles" element={
               <ProtectedRoute requiredPermission="users:manage">
                 <RbacAdminPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/races" element={
+              <ProtectedRoute requiredPermission="races:create">
+                <AdminRacesPage />
               </ProtectedRoute>
             } />
             <Route path="players" element={<AllUsersPage />} />

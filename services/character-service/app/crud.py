@@ -5,7 +5,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
 from models import CharacterRequest, Race, Subrace, Class, Character, LevelThreshold
-from presets import SUBRACE_ATTRIBUTES
 import logging
 
 logger = logging.getLogger("character-service.crud")
@@ -176,7 +175,8 @@ def get_all_races_and_subraces(db: Session):
         races_data[race.id_race] = {
             "id_race": race.id_race,
             "name": race.name,
-            "description": race.description,  # Добавляем описание расы
+            "description": race.description,
+            "image": race.image,
             "subraces": []
         }
 
@@ -184,7 +184,9 @@ def get_all_races_and_subraces(db: Session):
         races_data[subrace.id_race]["subraces"].append({
             "id_subrace": subrace.id_subrace,
             "name": subrace.name,
-            "description": subrace.description  # Добавляем описание подрасы
+            "description": subrace.description,
+            "stat_preset": subrace.stat_preset,
+            "image": subrace.image,
         })
 
     return races_data
@@ -394,26 +396,33 @@ def get_titles_for_character(db: Session, character_id: int):
     )
     return titles
 
-def generate_attributes_for_subrace(subrace_id: int) -> dict:
+def generate_attributes_for_subrace(db: Session, subrace_id: int) -> dict:
     """
     Генерирует атрибуты для персонажа на основе его подрасы.
+    Читает stat_preset из таблицы subraces в БД.
 
+    :param db: SQLAlchemy Session
     :param subrace_id: ID подрасы
     :return: Словарь с атрибутами
     """
-    # Извлекаем атрибуты из шаблона или возвращаем дефолтные значения
-    return SUBRACE_ATTRIBUTES.get(subrace_id, {
+    subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == subrace_id).first()
+    if subrace and subrace.stat_preset:
+        return dict(subrace.stat_preset)
+
+    # Дефолтные значения, если пресет не найден
+    logger.warning(f"Пресет статов для подрасы {subrace_id} не найден, используются значения по умолчанию")
+    return {
         "strength": 10,
         "agility": 10,
         "intelligence": 10,
-        "endurance": 100,
-        "health": 100,
-        "energy": 50,
-        "mana": 75,
-        "stamina": 100,
+        "endurance": 10,
+        "health": 10,
+        "energy": 10,
+        "mana": 10,
+        "stamina": 10,
         "charisma": 10,
-        "luck": 10
-    })
+        "luck": 10,
+    }
 
 
 async def send_inventory_request(character_id: int, items: list):

@@ -10,6 +10,7 @@ import {
 import ProfileTabs from './ProfileTabs';
 import PlaceholderTab from './PlaceholderTab';
 import InventoryTab from './InventoryTab/InventoryTab';
+import StatsTab from './StatsTab/StatsTab';
 
 const ProfilePage = () => {
   const dispatch = useAppDispatch();
@@ -55,7 +56,7 @@ const ProfilePage = () => {
       case 'inventory':
         return <InventoryTab characterId={characterId} />;
       case 'stats':
-        return <PlaceholderTab tabName="Статы" />;
+        return <StatsTab characterId={characterId} />;
       case 'skills':
         return <PlaceholderTab tabName="Навыки" />;
       case 'logs':

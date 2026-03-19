@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from models import (
     User, Character, Area, Country, Region, District,
-    Location, Skill, SkillRank, Item, GameRule,
+    Location, Skill, SkillRank, Item, GameRule, Race, Subrace,
 )
 
 
@@ -120,3 +120,17 @@ def update_profile_bg_image(db: Session, user_id: int, image_url):
 def get_profile_bg_image(db: Session, user_id: int):
     user = db.query(User).filter(User.id == user_id).first()
     return user.profile_bg_image if user else None
+
+
+def update_race_image(db: Session, race_id: int, image_url: str):
+    race = db.query(Race).filter(Race.id_race == race_id).first()
+    if race:
+        race.image = image_url
+        db.commit()
+
+
+def update_subrace_image(db: Session, subrace_id: int, image_url: str):
+    subrace = db.query(Subrace).filter(Subrace.id_subrace == subrace_id).first()
+    if subrace:
+        subrace.image = image_url
+        db.commit()

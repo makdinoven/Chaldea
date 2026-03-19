@@ -1,6 +1,6 @@
 from inspect import classify_class_attrs
 from typing import Optional, Dict, List
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from datetime import datetime
 
 # Базовая схема для заявки на создание персонажа
@@ -218,3 +218,109 @@ class AdminCharacterUpdate(BaseModel):
     level: Optional[int] = None
     stat_points: Optional[int] = None
     currency_balance: Optional[int] = None
+
+
+# ========== Stat Preset Schema ==========
+
+STAT_PRESET_KEYS = [
+    "strength", "agility", "intelligence", "endurance",
+    "health", "energy", "mana", "stamina",
+    "charisma", "luck",
+]
+
+
+class StatPreset(BaseModel):
+    strength: int = 0
+    agility: int = 0
+    intelligence: int = 0
+    endurance: int = 0
+    health: int = 0
+    energy: int = 0
+    mana: int = 0
+    stamina: int = 0
+    charisma: int = 0
+    luck: int = 0
+
+    @validator(*STAT_PRESET_KEYS)
+    def values_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("Значение стата не может быть отрицательным")
+        return v
+
+    @validator("luck", always=True)
+    def preset_sum_must_be_100(cls, v, values):
+        total = v
+        for key in STAT_PRESET_KEYS[:-1]:  # all except luck (already counted as v)
+            total += values.get(key, 0)
+        if total != 100:
+            raise ValueError(f"Сумма пресета должна быть равна 100, получено {total}")
+        return v
+
+
+# ========== Race Schemas ==========
+
+class RaceCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+class RaceUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+class RaceResponse(BaseModel):
+    id_race: int
+    name: str
+    description: Optional[str] = None
+    image: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+# ========== Subrace Schemas ==========
+
+class SubraceCreate(BaseModel):
+    id_race: int
+    name: str
+    description: Optional[str] = None
+    stat_preset: StatPreset
+
+class SubraceUpdate(BaseModel):
+    id_race: Optional[int] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    stat_preset: Optional[StatPreset] = None
+
+class SubraceResponse(BaseModel):
+    id_subrace: int
+    id_race: int
+    name: str
+    description: Optional[str] = None
+    stat_preset: Optional[Dict] = None
+    image: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+# ========== Race with Subraces (for public endpoint) ==========
+
+class SubraceWithPreset(BaseModel):
+    id_subrace: int
+    name: str
+    description: Optional[str] = None
+    stat_preset: Optional[Dict] = None
+    image: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+class RaceWithSubraces(BaseModel):
+    id_race: int
+    name: str
+    description: Optional[str] = None
+    image: Optional[str] = None
+    subraces: List[SubraceWithPreset] = []
+
+    class Config:
+        orm_mode = True

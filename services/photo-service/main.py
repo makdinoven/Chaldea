@@ -10,7 +10,8 @@ from crud import (
     update_district_image, update_region_image, update_region_map_image, update_country_map_image,
     update_area_map_image,
     update_skill_rank_image, update_skill_image, update_item_image, update_rule_image,
-    update_profile_bg_image, get_profile_bg_image, get_character_owner_id
+    update_profile_bg_image, get_profile_bg_image, get_character_owner_id,
+    update_race_image, update_subrace_image,
 )
 from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime
 from fastapi.middleware.cors import CORSMiddleware
@@ -293,6 +294,50 @@ async def change_rule_image(rule_id: int = Form(...), file: UploadFile = File(..
 
         return {
             "message": "Изображение правила успешно загружено",
+            "image_url": image_url
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/photo/change_race_image")
+async def change_race_image(race_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
+    """
+    Загружает или заменяет изображение расы.
+    """
+    validate_image_mime(file)
+    try:
+        file_stream = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("race_image", race_id)
+        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="race_images")
+
+        update_race_image(db, race_id, image_url)
+
+        return {
+            "message": "Изображение расы успешно загружено",
+            "image_url": image_url
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/photo/change_subrace_image")
+async def change_subrace_image(subrace_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
+    """
+    Загружает или заменяет изображение подрасы.
+    """
+    validate_image_mime(file)
+    try:
+        file_stream = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("subrace_image", subrace_id)
+        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="race_images")
+
+        update_subrace_image(db, subrace_id, image_url)
+
+        return {
+            "message": "Изображение подрасы успешно загружено",
             "image_url": image_url
         }
     except Exception as e:

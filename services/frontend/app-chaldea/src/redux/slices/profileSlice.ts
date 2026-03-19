@@ -111,6 +111,32 @@ export interface CharacterAttributes {
   max_energy: number;
   current_stamina: number;
   max_stamina: number;
+  res_effects: number;
+  res_physical: number;
+  res_catting: number;
+  res_crushing: number;
+  res_piercing: number;
+  res_magic: number;
+  res_fire: number;
+  res_ice: number;
+  res_watering: number;
+  res_electricity: number;
+  res_sainting: number;
+  res_wind: number;
+  res_damning: number;
+}
+
+export interface UpgradeStatsPayload {
+  strength?: number;
+  agility?: number;
+  intelligence?: number;
+  endurance?: number;
+  health?: number;
+  mana?: number;
+  energy?: number;
+  stamina?: number;
+  charisma?: number;
+  luck?: number;
 }
 
 export interface CharacterRaceInfo {
@@ -129,6 +155,10 @@ export interface ContextMenuState {
   slotType?: string;
 }
 
+export interface RaceNamesMap {
+  [raceId: number]: string;
+}
+
 export interface ProfileState {
   character: CharacterProfile | null;
   raceInfo: CharacterRaceInfo | null;
@@ -141,6 +171,7 @@ export interface ProfileState {
   loading: boolean;
   error: string | null;
   avatarUploading: boolean;
+  raceNamesMap: RaceNamesMap;
 }
 
 // --- Initial State ---
@@ -162,6 +193,7 @@ const initialState: ProfileState = {
   loading: false,
   error: null,
   avatarUploading: false,
+  raceNamesMap: {},
 };
 
 // --- Async Thunks ---
@@ -194,6 +226,31 @@ export const fetchRaceInfo = createAsyncThunk<
       return response.data;
     } catch {
       return thunkAPI.rejectWithValue('Не удалось загрузить информацию о расе');
+    }
+  },
+);
+
+interface RaceApiItem {
+  id_race: number;
+  name: string;
+}
+
+export const fetchRaceNames = createAsyncThunk<
+  RaceNamesMap,
+  void,
+  { rejectValue: string }
+>(
+  'profile/fetchRaceNames',
+  async (_, thunkAPI) => {
+    try {
+      const response = await axios.get<RaceApiItem[]>('/characters/races');
+      const map: RaceNamesMap = {};
+      for (const race of response.data) {
+        map[race.id_race] = race.name;
+      }
+      return map;
+    } catch {
+      return thunkAPI.rejectWithValue('Не удалось загрузить названия рас');
     }
   },
 );
@@ -382,6 +439,7 @@ export const loadProfileData = createAsyncThunk<
         thunkAPI.dispatch(fetchInventory(characterId)),
         thunkAPI.dispatch(fetchEquipment(characterId)),
         thunkAPI.dispatch(fetchFastSlots(characterId)),
+        thunkAPI.dispatch(fetchRaceNames()),
       ]);
     } catch {
       return thunkAPI.rejectWithValue('Не удалось загрузить данные профиля');
@@ -415,6 +473,28 @@ export const uploadCharacterAvatar = createAsyncThunk<
         return thunkAPI.rejectWithValue(error.response.data.detail);
       }
       return thunkAPI.rejectWithValue('Не удалось загрузить аватарку');
+    }
+  },
+);
+
+export const upgradeStats = createAsyncThunk<
+  void,
+  { characterId: number; stats: UpgradeStatsPayload },
+  { rejectValue: string; dispatch: AppDispatch }
+>(
+  'profile/upgradeStats',
+  async ({ characterId, stats }, thunkAPI) => {
+    try {
+      await axios.post(`/attributes/${characterId}/upgrade`, stats);
+      await Promise.all([
+        thunkAPI.dispatch(fetchProfile(characterId)),
+        thunkAPI.dispatch(fetchAttributes(characterId)),
+      ]);
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        return thunkAPI.rejectWithValue(error.response.data.detail);
+      }
+      return thunkAPI.rejectWithValue('Не удалось распределить очки характеристик');
     }
   },
 );
@@ -519,6 +599,14 @@ const profileSlice = createSlice({
       .addCase(dropItem.rejected, (state, action) => {
         state.error = action.payload ?? 'Не удалось удалить предмет';
       })
+      // upgradeStats
+      .addCase(upgradeStats.rejected, (state, action) => {
+        state.error = action.payload ?? 'Не удалось распределить очки характеристик';
+      })
+      // fetchRaceNames
+      .addCase(fetchRaceNames.fulfilled, (state, action) => {
+        state.raceNamesMap = action.payload;
+      })
       // uploadCharacterAvatar
       .addCase(uploadCharacterAvatar.pending, (state) => {
         state.avatarUploading = true;
@@ -550,6 +638,7 @@ export const selectContextMenu = (state: RootState) => state.profile.contextMenu
 export const selectProfileLoading = (state: RootState) => state.profile.loading;
 export const selectProfileError = (state: RootState) => state.profile.error;
 export const selectAvatarUploading = (state: RootState) => state.profile.avatarUploading;
+export const selectRaceNamesMap = (state: RootState) => state.profile.raceNamesMap;
 
 export const selectFilteredInventory = createSelector(
   [selectInventory, selectSelectedCategory],

@@ -15,6 +15,7 @@ import profileReducer from './slices/profileSlice';
 import adminCharactersReducer from './slices/adminCharactersSlice';
 import userProfileReducer from './slices/userProfileSlice';
 import worldMapReducer from './slices/worldMapSlice';
+import racesReducer from './slices/racesSlice';
 
 export const store = configureStore({
   reducer: {
@@ -33,6 +34,7 @@ export const store = configureStore({
     adminCharacters: adminCharactersReducer,
     userProfile: userProfileReducer,
     worldMap: worldMapReducer,
+    races: racesReducer,
   },
 });
 

@@ -14,13 +14,13 @@ class CharacterAttributes(Base):
     current_health = Column(Integer, default=100)
     current_mana = Column(Integer, default=75)
     current_energy = Column(Integer, default=50)
-    current_stamina = Column(Integer, default=50)
+    current_stamina = Column(Integer, default=100)
 
     # Максимальные значения
     max_health = Column(Integer, default=100)
     max_mana = Column(Integer, default=75)
     max_energy = Column(Integer, default=50)
-    max_stamina = Column(Integer, default=50)
+    max_stamina = Column(Integer, default=100)
 
     #Прокачиваемые статы
 

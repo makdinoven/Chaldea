@@ -5,9 +5,10 @@ import {
   selectProfile,
   selectRaceInfo,
   selectAvatarUploading,
+  selectRaceNamesMap,
   uploadCharacterAvatar,
 } from '../../../redux/slices/profileSlice';
-import { RACE_NAMES, CLASS_NAMES } from '../constants';
+import { CLASS_NAMES } from '../constants';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
 
 const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
@@ -17,6 +18,7 @@ export default function CharacterCard() {
   const profile = useAppSelector(selectProfile);
   const raceInfo = useAppSelector(selectRaceInfo);
   const avatarUploading = useAppSelector(selectAvatarUploading);
+  const raceNamesMap = useAppSelector(selectRaceNamesMap);
   const userId = useAppSelector((state) => state.user.id) as number | null;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -58,7 +60,7 @@ export default function CharacterCard() {
     );
   }
 
-  const raceName = raceInfo ? (RACE_NAMES[raceInfo.id_race] ?? 'Неизвестная раса') : '—';
+  const raceName = raceInfo ? (raceNamesMap[raceInfo.id_race] ?? 'Неизвестная раса') : '—';
   const className = raceInfo ? (CLASS_NAMES[raceInfo.id_class] ?? 'Неизвестный класс') : '—';
 
   return (

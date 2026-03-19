@@ -151,61 +151,103 @@ async def upgrade_attributes(
         logger.exception(f"Ошибка при списании stat_points: {e}")
         raise HTTPException(status_code=500, detail="Failed to communicate with character-service")
 
-    # Применяем прокачку (транзакция)
+    # Применяем прокачку
     try:
-        with db.begin():
-            attr = db.query(models.CharacterAttributes).filter(
-                models.CharacterAttributes.character_id == character_id
-            ).with_for_update().first()
-            if not attr:
-                raise HTTPException(status_code=404, detail="Attributes not found")
+        attr = db.query(models.CharacterAttributes).filter(
+            models.CharacterAttributes.character_id == character_id
+        ).with_for_update().first()
+        if not attr:
+            raise HTTPException(status_code=404, detail="Attributes not found")
 
-            # Код из вашего примера
-            attr.res_physical += upgrade_request.strength * 0.1
-            attr.dodge += upgrade_request.agility * 0.1
-            attr.res_magic += upgrade_request.intelligence * 0.1
-            attr.res_effects += upgrade_request.endurance * 0.1
+        b = 0.1  # bonus per stat point
 
-            attr.health += upgrade_request.health
-            attr.max_health += upgrade_request.health * 10
-            attr.current_health += upgrade_request.health * 10
+        # Strength: +0.1 to res_physical
+        attr.strength += upgrade_request.strength
+        attr.res_physical += upgrade_request.strength * b
 
-            attr.energy += upgrade_request.energy
-            attr.max_energy += upgrade_request.energy * 5
-            attr.current_energy += upgrade_request.energy * 5
+        # Agility: +0.1 to dodge
+        attr.agility += upgrade_request.agility
+        attr.dodge += upgrade_request.agility * b
 
-            attr.mana += upgrade_request.mana
-            attr.max_mana += upgrade_request.mana * 10
-            attr.current_mana += upgrade_request.mana * 10
+        # Intelligence: +0.1 to res_magic
+        attr.intelligence += upgrade_request.intelligence
+        attr.res_magic += upgrade_request.intelligence * b
 
-            attr.stamina += upgrade_request.stamina
-            attr.max_stamina += upgrade_request.stamina * 5
-            attr.current_stamina += upgrade_request.stamina * 5
+        # Endurance: +0.1 to ALL 13 resistance fields
+        attr.endurance += upgrade_request.endurance
+        if upgrade_request.endurance:
+            endurance_bonus = upgrade_request.endurance * b
+            attr.res_physical += endurance_bonus
+            attr.res_catting += endurance_bonus
+            attr.res_crushing += endurance_bonus
+            attr.res_piercing += endurance_bonus
+            attr.res_magic += endurance_bonus
+            attr.res_fire += endurance_bonus
+            attr.res_ice += endurance_bonus
+            attr.res_watering += endurance_bonus
+            attr.res_electricity += endurance_bonus
+            attr.res_sainting += endurance_bonus
+            attr.res_wind += endurance_bonus
+            attr.res_damning += endurance_bonus
+            # res_effects: endurance adds resistance to effects
+            attr.res_effects += endurance_bonus
 
-            attr.charisma += upgrade_request.charisma
-            attr.critical_hit_chance += upgrade_request.luck * 0.1
-            attr.dodge += upgrade_request.luck * 0.1
+        # Health: +10 max_health per point
+        attr.health += upgrade_request.health
+        attr.max_health += upgrade_request.health * 10
+        attr.current_health += upgrade_request.health * 10
 
-            # Округляем
-            attr.current_health = int(attr.current_health)
-            attr.max_health = int(attr.max_health)
-            attr.current_mana = int(attr.current_mana)
-            attr.max_mana = int(attr.max_mana)
-            attr.current_energy = int(attr.current_energy)
-            attr.max_energy = int(attr.max_energy)
-            attr.current_stamina = int(attr.current_stamina)
-            attr.max_stamina = int(attr.max_stamina)
-            attr.health = int(attr.health)
-            attr.mana = int(attr.mana)
-            attr.energy = int(attr.energy)
-            attr.stamina = int(attr.stamina)
+        # Energy: +5 max_energy per point
+        attr.energy += upgrade_request.energy
+        attr.max_energy += upgrade_request.energy * 5
+        attr.current_energy += upgrade_request.energy * 5
 
+        # Mana: +10 max_mana per point
+        attr.mana += upgrade_request.mana
+        attr.max_mana += upgrade_request.mana * 10
+        attr.current_mana += upgrade_request.mana * 10
+
+        # Stamina: +5 max_stamina per point
+        attr.stamina += upgrade_request.stamina
+        attr.max_stamina += upgrade_request.stamina * 5
+        attr.current_stamina += upgrade_request.stamina * 5
+
+        # Charisma: increment counter only
+        attr.charisma += upgrade_request.charisma
+
+        # Luck: +0.1 to dodge, critical_hit_chance, AND res_effects
+        attr.luck += upgrade_request.luck
+        if upgrade_request.luck:
+            luck_bonus = upgrade_request.luck * b
+            attr.dodge += luck_bonus
+            attr.critical_hit_chance += luck_bonus
+            attr.res_effects += luck_bonus
+
+        # Округляем
+        attr.current_health = int(attr.current_health)
+        attr.max_health = int(attr.max_health)
+        attr.current_mana = int(attr.current_mana)
+        attr.max_mana = int(attr.max_mana)
+        attr.current_energy = int(attr.current_energy)
+        attr.max_energy = int(attr.max_energy)
+        attr.current_stamina = int(attr.current_stamina)
+        attr.max_stamina = int(attr.max_stamina)
+        attr.health = int(attr.health)
+        attr.mana = int(attr.mana)
+        attr.energy = int(attr.energy)
+        attr.stamina = int(attr.stamina)
+
+        db.commit()
         db.refresh(attr)
     except SQLAlchemyError as e:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to upgrade attributes")
 
     updated_attributes = {
+        "strength": attr.strength,
+        "agility": attr.agility,
+        "intelligence": attr.intelligence,
+        "endurance": attr.endurance,
         "health": attr.health,
         "max_health": attr.max_health,
         "current_health": attr.current_health,
@@ -217,12 +259,23 @@ async def upgrade_attributes(
         "stamina": attr.stamina,
         "max_stamina": attr.max_stamina,
         "current_stamina": attr.current_stamina,
-        "res_physical": attr.res_physical,
-        "dodge": attr.dodge,
-        "res_magic": attr.res_magic,
-        "res_effects": attr.res_effects,
         "charisma": attr.charisma,
-        "critical_hit_chance": attr.critical_hit_chance
+        "luck": attr.luck,
+        "dodge": attr.dodge,
+        "critical_hit_chance": attr.critical_hit_chance,
+        "res_physical": attr.res_physical,
+        "res_catting": attr.res_catting,
+        "res_crushing": attr.res_crushing,
+        "res_piercing": attr.res_piercing,
+        "res_magic": attr.res_magic,
+        "res_fire": attr.res_fire,
+        "res_ice": attr.res_ice,
+        "res_watering": attr.res_watering,
+        "res_electricity": attr.res_electricity,
+        "res_sainting": attr.res_sainting,
+        "res_wind": attr.res_wind,
+        "res_damning": attr.res_damning,
+        "res_effects": attr.res_effects,
     }
 
     return schemas.AttributesResponse(
@@ -235,10 +288,7 @@ async def upgrade_attributes(
 # -----------------------------
 # 5. apply_modifiers (общий)
 # -----------------------------
-HEALTH_MULTIPLIER = 10
-MANA_MULTIPLIER = 10
-ENERGY_MULTIPLIER = 5
-STAMINA_MULTIPLIER = 5
+from constants import HEALTH_MULTIPLIER, MANA_MULTIPLIER, ENERGY_MULTIPLIER, STAMINA_MULTIPLIER
 
 @router.post("/{character_id}/apply_modifiers")
 def apply_modifiers(character_id: int, modifiers: dict, db: Session = Depends(get_db)):
@@ -536,7 +586,26 @@ def admin_update_attributes(
 
 
 # -----------------------------
-# 8. Admin: удаление атрибутов
+# 8. Admin: пересчёт производных статов
+# -----------------------------
+@router.post("/{character_id}/recalculate")
+def recalculate_attributes_endpoint(
+    character_id: int,
+    db: Session = Depends(get_db),
+    admin: UserRead = Depends(require_permission("characters:update")),
+):
+    """
+    Пересчитывает все производные статы из базовых значений (10 прокачиваемых статов).
+    Не учитывает модификаторы экипировки — предназначен для админского использования.
+    """
+    result = crud.recalculate_attributes(db, character_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Атрибуты персонажа не найдены")
+    return {"detail": "Attributes recalculated", "character_id": character_id}
+
+
+# -----------------------------
+# 9. Admin: удаление атрибутов
 # -----------------------------
 @router.delete("/{character_id}")
 def admin_delete_attributes(

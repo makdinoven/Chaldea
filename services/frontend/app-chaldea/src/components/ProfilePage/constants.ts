@@ -90,18 +90,6 @@ export const EQUIPMENT_TYPES = new Set([
 // Minimum cells to display in the item grid
 export const MIN_GRID_CELLS = 40;
 
-// --- Race name mapping ---
-
-export const RACE_NAMES: Record<number, string> = {
-  1: 'Человек',
-  2: 'Эльф',
-  3: 'Гном',
-  4: 'Орк',
-  5: 'Нежить',
-  6: 'Зверолюд',
-  7: 'Полукровка',
-};
-
 // --- Class name mapping ---
 
 export const CLASS_NAMES: Record<number, string> = {
@@ -116,22 +104,52 @@ export const STAT_LABELS: Record<string, string> = {
   strength: 'Сила',
   agility: 'Ловкость',
   intelligence: 'Интеллект',
-  endurance: 'Выносливость',
+  endurance: 'Живучесть',
   health: 'Здоровье',
   mana: 'Мана',
   energy: 'Энергия',
-  stamina: 'Стамина',
+  stamina: 'Выносливость',
   charisma: 'Харизма',
   luck: 'Удача',
   damage: 'Урон',
   dodge: 'Уклонение',
-  critical_hit_chance: 'Крит. шанс',
-  critical_damage: 'Крит. урон',
+  critical_hit_chance: 'Шанс крит. удара',
+  critical_damage: 'Урон крит. удара',
+  res_effects: 'Сопротивление эффектам',
+  res_physical: 'Сопротивление физ. урону',
+  res_catting: 'Сопротивление реж. урону',
+  res_crushing: 'Сопротивление дроб. урону',
+  res_piercing: 'Сопротивление кол. урону',
+  res_magic: 'Сопротивление маг. урону',
+  res_fire: 'Сопротивление огню',
+  res_ice: 'Сопротивление льду',
+  res_watering: 'Сопротивление воде',
+  res_electricity: 'Сопротивление электричеству',
+  res_wind: 'Сопротивление ветру',
+  res_sainting: 'Сопротивление свету',
+  res_damning: 'Сопротивление тьме',
 };
 
 // --- Stats that display as percentages ---
 
-export const PERCENTAGE_STATS = new Set(['dodge', 'critical_hit_chance']);
+export const PERCENTAGE_STATS = new Set([
+  'dodge',
+  'critical_hit_chance',
+  'critical_damage',
+  'res_effects',
+  'res_physical',
+  'res_catting',
+  'res_crushing',
+  'res_piercing',
+  'res_magic',
+  'res_fire',
+  'res_ice',
+  'res_watering',
+  'res_electricity',
+  'res_wind',
+  'res_sainting',
+  'res_damning',
+]);
 
 // --- Resource bar config ---
 
@@ -157,6 +175,54 @@ export const PRIMARY_STATS = [
   'luck',
   'damage',
   'dodge',
+  'critical_hit_chance',
+  'critical_damage',
+] as const;
+
+// --- 6 main stats for the tiered color bar display ---
+
+export const MAIN_STATS = [
+  'strength',
+  'agility',
+  'intelligence',
+  'endurance',
+  'charisma',
+  'luck',
+] as const;
+
+// --- 10 upgradeable stats for stat distribution ---
+
+export const UPGRADEABLE_STATS = [
+  'strength',
+  'agility',
+  'intelligence',
+  'endurance',
+  'health',
+  'energy',
+  'mana',
+  'stamina',
+  'charisma',
+  'luck',
+] as const;
+
+// --- Derived combat stats for grid display ---
+
+export const DERIVED_STATS = [
+  'damage',
+  'dodge',
+  'res_effects',
+  'res_physical',
+  'res_catting',
+  'res_crushing',
+  'res_piercing',
+  'res_magic',
+  'res_fire',
+  'res_ice',
+  'res_watering',
+  'res_electricity',
+  'res_wind',
+  'res_sainting',
+  'res_damning',
   'critical_hit_chance',
   'critical_damage',
 ] as const;

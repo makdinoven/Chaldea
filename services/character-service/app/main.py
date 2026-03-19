@@ -7,7 +7,6 @@ import asyncio
 import models, schemas, crud
 from database import SessionLocal, engine
 from config import settings
-from presets import SUBRACE_ATTRIBUTES
 from producer import (
     send_character_approved_notification,
     publish_character_inventory,
@@ -119,8 +118,8 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
         new_character = crud.create_preliminary_character(db, db_request, currency_balance=currency_amount, auto_commit=False)
         logger.info(f"Создан персонаж с ID {new_character.id}, currency_balance={currency_amount}")
 
-        # 4) Генерируем атрибуты по подрасе
-        attributes = crud.generate_attributes_for_subrace(db_request.id_subrace)
+        # 4) Генерируем атрибуты по подрасе (из БД)
+        attributes = crud.generate_attributes_for_subrace(db, db_request.id_subrace)
         logger.info(f"Сгенерированы атрибуты для подрасы {db_request.id_subrace}")
 
         # 5) Отправка запроса на создание инвентаря (graceful — не блокирует одобрение)
@@ -317,8 +316,23 @@ async def admin_update_character(
     if "currency_balance" in update_data and update_data["currency_balance"] < 0:
         raise HTTPException(status_code=400, detail="Баланс валюты должен быть >= 0")
 
+    old_level = character.level
+    old_stat_points = character.stat_points
+
     for field, value in update_data.items():
         setattr(character, field, value)
+
+    # Auto-grant stat_points when admin increases level without explicitly changing stat_points.
+    # The frontend always sends stat_points in the payload, so we compare against the old DB value
+    # instead of checking key presence: if the sent stat_points equals the old value, the admin
+    # didn't intentionally change it, and we should auto-grant level_diff * 10.
+    if "level" in update_data:
+        level_diff = update_data["level"] - old_level
+        stat_points_changed_by_admin = (
+            "stat_points" in update_data and update_data["stat_points"] != old_stat_points
+        )
+        if level_diff > 0 and not stat_points_changed_by_admin:
+            character.stat_points = old_stat_points + level_diff * 10
 
     try:
         db.commit()
@@ -596,11 +610,11 @@ async def reject_character_request(request_id: int, db: Session = Depends(get_db
 async def get_races_and_subraces(db: Session = Depends(get_db)):
     try:
         races_data = crud.get_all_races_and_subraces(db)
-        # Добавляем атрибуты к каждой подрасе на основе её id
+        # stat_preset и image уже включены из БД через crud.get_all_races_and_subraces
+        # Добавляем обратную совместимость: "attributes" = stat_preset
         for race_id, race_info in races_data.items():
             for subrace in race_info["subraces"]:
-                subrace_attributes = SUBRACE_ATTRIBUTES.get(subrace["id_subrace"], {})
-                subrace["attributes"] = subrace_attributes
+                subrace["attributes"] = subrace.get("stat_preset") or {}
         # Преобразуем словарь в список
         return list(races_data.values())
     except SQLAlchemyError as e:
@@ -1010,5 +1024,243 @@ def get_short_info(character_id: int, db: Session = Depends(get_db)):
 def list_characters(db: Session = Depends(get_db)):
     characters = db.query(models.Character).all()
     return characters
+
+
+# ============================================================
+# Public races endpoint
+# ============================================================
+
+@router.get("/races", response_model=List[schemas.RaceWithSubraces])
+def get_all_races(db: Session = Depends(get_db)):
+    """
+    Возвращает все расы с подрасами и пресетами статов.
+    Публичный эндпоинт для страницы создания персонажа.
+    """
+    try:
+        races = db.query(models.Race).all()
+        result = []
+        for race in races:
+            subraces_data = []
+            for sr in race.subraces:
+                subraces_data.append(schemas.SubraceWithPreset(
+                    id_subrace=sr.id_subrace,
+                    name=sr.name,
+                    description=sr.description,
+                    stat_preset=sr.stat_preset,
+                    image=sr.image,
+                ))
+            result.append(schemas.RaceWithSubraces(
+                id_race=race.id_race,
+                name=race.name,
+                description=race.description,
+                image=race.image,
+                subraces=subraces_data,
+            ))
+        return result
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении рас: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при получении рас.")
+
+
+# ============================================================
+# Admin Race/Subrace CRUD endpoints
+# ============================================================
+
+@router.post("/admin/races", response_model=schemas.RaceResponse, status_code=201)
+def admin_create_race(
+    data: schemas.RaceCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("races:create")),
+):
+    """Создание новой расы."""
+    # Check for duplicate name
+    existing = db.query(models.Race).filter(models.Race.name == data.name).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Раса с таким именем уже существует")
+
+    race = models.Race(name=data.name, description=data.description)
+    db.add(race)
+    try:
+        db.commit()
+        db.refresh(race)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при создании расы: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при создании расы")
+    return race
+
+
+@router.put("/admin/races/{race_id}", response_model=schemas.RaceResponse)
+def admin_update_race(
+    race_id: int,
+    data: schemas.RaceUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("races:update")),
+):
+    """Обновление расы."""
+    race = db.query(models.Race).filter(models.Race.id_race == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Раса не найдена")
+
+    update_data = data.dict(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="Нет данных для обновления")
+
+    # Check for duplicate name if name is being changed
+    if "name" in update_data and update_data["name"] != race.name:
+        existing = db.query(models.Race).filter(models.Race.name == update_data["name"]).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Раса с таким именем уже существует")
+
+    for field, value in update_data.items():
+        setattr(race, field, value)
+
+    try:
+        db.commit()
+        db.refresh(race)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении расы: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении расы")
+    return race
+
+
+@router.delete("/admin/races/{race_id}")
+def admin_delete_race(
+    race_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("races:delete")),
+):
+    """Удаление расы. Запрещено при наличии связанных подрас или персонажей."""
+    race = db.query(models.Race).filter(models.Race.id_race == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Раса не найдена")
+
+    # Check for subraces
+    subrace_count = db.query(models.Subrace).filter(models.Subrace.id_race == race_id).count()
+    if subrace_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Невозможно удалить расу: существуют связанные подрасы или персонажи",
+        )
+
+    # Check for characters
+    character_count = db.query(models.Character).filter(models.Character.id_race == race_id).count()
+    if character_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Невозможно удалить расу: существуют связанные подрасы или персонажи",
+        )
+
+    try:
+        db.delete(race)
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при удалении расы: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при удалении расы")
+
+    return {"detail": "Race deleted"}
+
+
+@router.post("/admin/subraces", response_model=schemas.SubraceResponse, status_code=201)
+def admin_create_subrace(
+    data: schemas.SubraceCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("races:create")),
+):
+    """Создание новой подрасы с пресетом статов."""
+    # Verify race exists
+    race = db.query(models.Race).filter(models.Race.id_race == data.id_race).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Раса не найдена")
+
+    subrace = models.Subrace(
+        id_race=data.id_race,
+        name=data.name,
+        description=data.description,
+        stat_preset=data.stat_preset.dict(),
+    )
+    db.add(subrace)
+    try:
+        db.commit()
+        db.refresh(subrace)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при создании подрасы: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при создании подрасы")
+    return subrace
+
+
+@router.put("/admin/subraces/{subrace_id}", response_model=schemas.SubraceResponse)
+def admin_update_subrace(
+    subrace_id: int,
+    data: schemas.SubraceUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("races:update")),
+):
+    """Обновление подрасы."""
+    subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == subrace_id).first()
+    if not subrace:
+        raise HTTPException(status_code=404, detail="Подраса не найдена")
+
+    update_data = data.dict(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="Нет данных для обновления")
+
+    # If race is being changed, verify the new race exists
+    if "id_race" in update_data:
+        race = db.query(models.Race).filter(models.Race.id_race == update_data["id_race"]).first()
+        if not race:
+            raise HTTPException(status_code=404, detail="Раса не найдена")
+
+    # Convert stat_preset from Pydantic model to dict if present
+    if "stat_preset" in update_data and update_data["stat_preset"] is not None:
+        update_data["stat_preset"] = data.stat_preset.dict()
+
+    for field, value in update_data.items():
+        setattr(subrace, field, value)
+
+    try:
+        db.commit()
+        db.refresh(subrace)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении подрасы: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении подрасы")
+    return subrace
+
+
+@router.delete("/admin/subraces/{subrace_id}")
+def admin_delete_subrace(
+    subrace_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("races:delete")),
+):
+    """Удаление подрасы. Запрещено при наличии связанных персонажей."""
+    subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == subrace_id).first()
+    if not subrace:
+        raise HTTPException(status_code=404, detail="Подраса не найдена")
+
+    # Check for characters referencing this subrace
+    character_count = db.query(models.Character).filter(
+        models.Character.id_subrace == subrace_id
+    ).count()
+    if character_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Невозможно удалить подрасу: существуют связанные персонажи",
+        )
+
+    try:
+        db.delete(subrace)
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при удалении подрасы: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при удалении подрасы")
+
+    return {"detail": "Subrace deleted"}
+
 
 app.include_router(router)

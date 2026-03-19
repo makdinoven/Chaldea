@@ -83,6 +83,20 @@ class Item(Base):
     image = Column(String(500), nullable=True)
 
 
+class Race(Base):
+    __tablename__ = "races"
+
+    id_race = Column(Integer, primary_key=True)
+    image = Column(String(255), nullable=True)
+
+
+class Subrace(Base):
+    __tablename__ = "subraces"
+
+    id_subrace = Column(Integer, primary_key=True)
+    image = Column(String(255), nullable=True)
+
+
 class GameRule(Base):
     __tablename__ = "game_rules"
 

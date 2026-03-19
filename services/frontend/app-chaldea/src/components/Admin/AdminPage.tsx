@@ -19,6 +19,7 @@ const sections: AdminSection[] = [
   { label: 'Персонажи', path: '/admin/characters', description: 'Управление персонажами всех игроков', module: 'characters' },
   { label: 'Правила', path: '/admin/rules', description: 'Управление блоками правил игры', module: 'rules' },
   { label: 'Пользователи и роли', path: '/admin/users-roles', description: 'Управление ролями, правами доступа и разрешениями', module: 'users' },
+  { label: 'Расы', path: '/admin/races', description: 'Управление расами, подрасами и пресетами статов', module: 'races' },
 ];
 
 const AdminPage = () => {

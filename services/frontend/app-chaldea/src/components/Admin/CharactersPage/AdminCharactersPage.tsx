@@ -18,7 +18,11 @@ import {
   selectAdminCharactersListLoading,
   selectAdminCharactersListError,
 } from '../../../redux/slices/adminCharactersSlice';
-import { RACE_NAMES, CLASS_NAMES } from '../../ProfilePage/constants';
+import { CLASS_NAMES } from '../../ProfilePage/constants';
+import {
+  selectRaceNamesMap,
+  fetchRaceNames,
+} from '../../../redux/slices/profileSlice';
 
 const DEBOUNCE_MS = 300;
 
@@ -34,9 +38,17 @@ const AdminCharactersPage = () => {
   const filters = useAppSelector(selectAdminCharactersFilters);
   const loading = useAppSelector(selectAdminCharactersListLoading);
   const error = useAppSelector(selectAdminCharactersListError);
+  const raceNamesMap = useAppSelector(selectRaceNamesMap);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isInitialMount = useRef(true);
+
+  // Fetch race names if not loaded
+  useEffect(() => {
+    if (Object.keys(raceNamesMap).length === 0) {
+      dispatch(fetchRaceNames());
+    }
+  }, [dispatch, raceNamesMap]);
 
   // Fetch characters on mount and when page/filters change (not search — that's debounced)
   useEffect(() => {
@@ -80,7 +92,7 @@ const AdminCharactersPage = () => {
     navigate(`/admin/characters/${id}`);
   };
 
-  const raceOptions = Object.entries(RACE_NAMES).map(([id, name]) => ({
+  const raceOptions = Object.entries(raceNamesMap).map(([id, name]) => ({
     value: Number(id),
     label: name,
   }));
@@ -263,7 +275,7 @@ const AdminCharactersPage = () => {
                     <td className="text-white text-sm py-3 px-2 font-medium">{char.name}</td>
                     <td className="text-white text-sm py-3 px-2">{char.level}</td>
                     <td className="text-white/80 text-sm py-3 px-2">
-                      {RACE_NAMES[char.id_race] ?? `#${char.id_race}`}
+                      {raceNamesMap[char.id_race] ?? `#${char.id_race}`}
                     </td>
                     <td className="text-white/80 text-sm py-3 px-2">
                       {CLASS_NAMES[char.id_class] ?? `#${char.id_class}`}

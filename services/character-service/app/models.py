@@ -61,6 +61,7 @@ class Race(Base):
     id_race = Column(Integer, primary_key=True, index=True)
     name = Column(String(50), nullable=False, unique=True)
     description = Column(Text, nullable=True)
+    image = Column(String(255), nullable=True)
 
     # Связь с подрасами
     subraces = relationship("Subrace", back_populates="race")
@@ -73,6 +74,8 @@ class Subrace(Base):
     id_race = Column(Integer, ForeignKey("races.id_race"), nullable=False)
     name = Column(String(50), nullable=False)
     description = Column(Text, nullable=True)
+    stat_preset = Column(JSON, nullable=True)
+    image = Column(String(255), nullable=True)
 
     # Связь с расами
     race = relationship("Race", back_populates="subraces")
