@@ -1,8 +1,10 @@
 import { CharacterAttributes } from '../../../redux/slices/profileSlice';
-import { DERIVED_STATS, STAT_LABELS, PERCENTAGE_STATS } from '../constants';
+import { DERIVED_STATS, STAT_LABELS, PERCENTAGE_STATS, CLASS_MAIN_ATTRIBUTE } from '../constants';
 
 interface DerivedStatsSectionProps {
   attributes: CharacterAttributes;
+  classId: number | null;
+  mainWeaponDamageModifier: number;
 }
 
 const STAT_ICONS: Record<string, string> = {
@@ -25,7 +27,16 @@ const STAT_ICONS: Record<string, string> = {
   critical_damage: '\uD83D\uDCA5',
 };
 
-const DerivedStatsSection = ({ attributes }: DerivedStatsSectionProps) => {
+const DerivedStatsSection = ({ attributes, classId, mainWeaponDamageModifier }: DerivedStatsSectionProps) => {
+  // Calculate damage based on class main attribute + weapon damage modifier
+  const getDisplayDamage = (): number => {
+    if (classId == null) return attributes.damage ?? 0;
+    const mainAttrKey = CLASS_MAIN_ATTRIBUTE[classId];
+    if (!mainAttrKey) return attributes.damage ?? 0;
+    const mainAttrValue = (attributes[mainAttrKey as keyof CharacterAttributes] as number) ?? 0;
+    return mainAttrValue + mainWeaponDamageModifier;
+  };
+
   return (
     <div>
       <h3 className="gold-text text-xl font-medium uppercase mb-4">
@@ -33,7 +44,8 @@ const DerivedStatsSection = ({ attributes }: DerivedStatsSectionProps) => {
       </h3>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
         {DERIVED_STATS.map((stat) => {
-          const value = attributes[stat as keyof CharacterAttributes] ?? 0;
+          const rawValue = attributes[stat as keyof CharacterAttributes] ?? 0;
+          const value = stat === 'damage' ? getDisplayDamage() : rawValue;
           const isPercent = PERCENTAGE_STATS.has(stat);
           const displayValue = isPercent
             ? `${typeof value === 'number' ? value.toFixed(1) : value}%`

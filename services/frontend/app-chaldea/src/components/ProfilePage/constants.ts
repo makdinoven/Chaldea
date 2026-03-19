@@ -98,6 +98,15 @@ export const CLASS_NAMES: Record<number, string> = {
   3: 'Маг',
 };
 
+// --- Class to main attribute mapping for damage calculation ---
+
+/** Maps class ID to the attribute key used as the base for damage calculation */
+export const CLASS_MAIN_ATTRIBUTE: Record<number, string> = {
+  1: 'strength',     // Воин
+  2: 'agility',      // Плут
+  3: 'intelligence', // Маг
+};
+
 // --- Stat labels for StatsPanel ---
 
 export const STAT_LABELS: Record<string, string> = {

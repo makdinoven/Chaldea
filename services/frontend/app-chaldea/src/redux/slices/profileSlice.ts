@@ -328,11 +328,12 @@ export const equipItem = createAsyncThunk<
   async ({ characterId, itemId }, thunkAPI) => {
     try {
       await axios.post(`/inventory/${characterId}/equip`, { item_id: itemId });
-      // Re-fetch inventory and equipment after successful equip
+      // Re-fetch inventory, equipment, and attributes after successful equip
       await Promise.all([
         thunkAPI.dispatch(fetchInventory(characterId)),
         thunkAPI.dispatch(fetchEquipment(characterId)),
         thunkAPI.dispatch(fetchFastSlots(characterId)),
+        thunkAPI.dispatch(fetchAttributes(characterId)),
       ]);
     } catch (error: unknown) {
       if (axios.isAxiosError(error) && error.response?.data?.detail) {
@@ -354,11 +355,12 @@ export const unequipItem = createAsyncThunk<
       await axios.post(`/inventory/${characterId}/unequip`, null, {
         params: { slot_type: slotType },
       });
-      // Re-fetch inventory and equipment after successful unequip
+      // Re-fetch inventory, equipment, and attributes after successful unequip
       await Promise.all([
         thunkAPI.dispatch(fetchInventory(characterId)),
         thunkAPI.dispatch(fetchEquipment(characterId)),
         thunkAPI.dispatch(fetchFastSlots(characterId)),
+        thunkAPI.dispatch(fetchAttributes(characterId)),
       ]);
     } catch (error: unknown) {
       if (axios.isAxiosError(error) && error.response?.data?.detail) {

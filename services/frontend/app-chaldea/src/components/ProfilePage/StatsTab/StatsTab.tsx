@@ -3,6 +3,8 @@ import { useAppSelector } from '../../../redux/store';
 import {
   selectAttributes,
   selectProfile,
+  selectRaceInfo,
+  selectEquipment,
 } from '../../../redux/slices/profileSlice';
 import PrimaryStatsSection from './PrimaryStatsSection';
 import ResourceStatsSection from './ResourceStatsSection';
@@ -16,6 +18,12 @@ interface StatsTabProps {
 const StatsTab = ({ characterId }: StatsTabProps) => {
   const attributes = useAppSelector(selectAttributes);
   const profile = useAppSelector(selectProfile);
+  const raceInfo = useAppSelector(selectRaceInfo);
+  const equipment = useAppSelector(selectEquipment);
+
+  const classId = raceInfo?.id_class ?? null;
+  const mainWeaponSlot = equipment.find((slot) => slot.slot_type === 'main_weapon');
+  const mainWeaponDamageModifier = mainWeaponSlot?.item?.damage_modifier ?? 0;
 
   if (!attributes) {
     return (
@@ -53,7 +61,11 @@ const StatsTab = ({ characterId }: StatsTabProps) => {
       </section>
 
       <section className="gray-bg p-5 sm:p-6">
-        <DerivedStatsSection attributes={attributes} />
+        <DerivedStatsSection
+          attributes={attributes}
+          classId={classId}
+          mainWeaponDamageModifier={mainWeaponDamageModifier}
+        />
       </section>
     </motion.div>
   );
