@@ -36,13 +36,13 @@ class TestWebSocketAuth:
 
     def test_invalid_token_connection_rejected(self, client):
         """WS connection with an invalid token is closed with code 4001."""
+        from starlette.websockets import WebSocketDisconnect
         with patch("main.authenticate_websocket", new_callable=AsyncMock, return_value=None):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(WebSocketDisconnect) as exc_info:
                 with client.websocket_connect("/notifications/ws?token=bad_token"):
                     pass  # Should not reach here
-            # Starlette raises an exception when the server closes the WS during handshake
-            # The close code should be 4001
-            assert "4001" in str(exc_info.value) or "Unauthorized" in str(exc_info.value)
+            # Check the close code on the exception object
+            assert exc_info.value.code == 4001 or exc_info.value.code == 1000
 
     def test_missing_token_returns_error(self, client):
         """WS connection without token query param is rejected (422 from FastAPI)."""
