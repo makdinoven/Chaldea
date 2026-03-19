@@ -14,14 +14,11 @@ import {
 } from '../../redux/slices/userProfileSlice';
 import ColorPicker from '../common/ColorPicker';
 import AvatarFramePreview from './AvatarFramePreview';
-import type { AvatarFrame } from './AvatarFramePreview';
+import { AVATAR_FRAMES } from '../../utils/avatarFrames';
+import type { AvatarFrame } from '../../utils/avatarFrames';
 import BackgroundPositionPicker from './BackgroundPositionPicker';
 
-export const AVATAR_FRAMES = [
-  { id: 'gold', label: 'Золотая', borderStyle: '3px solid #f0d95c', shadow: '0 0 12px rgba(240, 217, 92, 0.4)' },
-  { id: 'silver', label: 'Серебряная', borderStyle: '3px solid #c0c0c0', shadow: '0 0 12px rgba(192, 192, 192, 0.4)' },
-  { id: 'fire', label: 'Огненная', borderStyle: '3px solid #ff6347', shadow: '0 0 15px rgba(255, 99, 71, 0.5)' },
-] as const;
+export { AVATAR_FRAMES };
 
 const NO_FRAME: AvatarFrame = { id: 'none', label: 'Нет рамки', borderStyle: 'none', shadow: 'none' };
 

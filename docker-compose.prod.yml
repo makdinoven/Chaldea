@@ -65,42 +65,42 @@ services:
 
   # --- Backend services: no --reload, no volume mounts, no exposed ports ---
   user-service:
-    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   photo-service:
-    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8001 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8001 --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   character-attributes-service:
-    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8002 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8002 --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   skills-service:
-    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8003 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8003 --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   inventory-service:
-    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8004 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8004 --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   character-service:
-    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   locations-service:
-    command: sh -c "cd /app && (PYTHONPATH=/app alembic upgrade head || echo 'Alembic migration failed, continuing...') && uvicorn main:app --host 0.0.0.0 --port 8006 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8006 --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   notification-service:
-    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8007 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8007"
     volumes: !reset []
     ports: !reset []
     environment:

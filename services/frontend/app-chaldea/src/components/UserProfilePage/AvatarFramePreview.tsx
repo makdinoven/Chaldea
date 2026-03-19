@@ -1,11 +1,7 @@
 import { User } from 'react-feather';
+import type { AvatarFrame } from '../../utils/avatarFrames';
 
-export interface AvatarFrame {
-  id: string;
-  label: string;
-  borderStyle: string;
-  shadow: string;
-}
+export type { AvatarFrame };
 
 interface AvatarFramePreviewProps {
   avatarUrl: string | null;

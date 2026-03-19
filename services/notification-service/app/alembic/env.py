@@ -13,6 +13,7 @@ from sqlalchemy import pool
 from alembic import context
 
 from models import Base
+import chat_models  # noqa: F401 — register chat models for autogenerate
 from database import SQLALCHEMY_DATABASE_URL
 
 

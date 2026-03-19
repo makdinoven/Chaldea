@@ -23,6 +23,8 @@ from sse_manager import connections
 from consumers.user_registration import start_user_registration_consumer
 from consumers.general_notification import start_general_notifications_consumer
 
+from chat_routes import chat_router
+
 import pika
 
 logger = logging.getLogger("notification-service")
@@ -194,3 +196,4 @@ def mark_all_notifications_as_read(
     return notifications
 
 app.include_router(router)
+app.include_router(chat_router)

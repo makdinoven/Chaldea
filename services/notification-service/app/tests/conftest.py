@@ -41,8 +41,10 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 # SQLite does not support MySQL ENUM columns. We monkey-patch the model's
 # status column to use plain String before creating tables.
 from models import Notification as NotificationModel  # noqa: E402
+from chat_models import ChatMessage as ChatMessageModel  # noqa: E402
 
 NotificationModel.__table__.c.status.type = String(10)
+ChatMessageModel.__table__.c.channel.type = String(20)
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
@@ -75,6 +77,15 @@ def admin_user():
     """An admin user."""
     return _make_user(user_id=99, username="admin", role="admin", permissions=[
         "notifications:create", "notifications:read", "notifications:update", "notifications:delete",
+        "chat:delete", "chat:ban",
+    ])
+
+
+@pytest.fixture()
+def moderator_user():
+    """A moderator user with chat moderation permissions."""
+    return _make_user(user_id=50, username="moderator", role="moderator", permissions=[
+        "chat:delete", "chat:ban",
     ])
 
 
@@ -114,6 +125,26 @@ def admin_client(db_session, admin_user):
 
     def override_auth():
         return admin_user
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user_via_http] = override_auth
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def moderator_client(db_session, moderator_user):
+    """
+    FastAPI TestClient authenticated as moderator (has chat:delete, chat:ban).
+    """
+    from auth_http import get_current_user_via_http
+    from main import app
+
+    def override_get_db():
+        yield db_session
+
+    def override_auth():
+        return moderator_user
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user_via_http] = override_auth

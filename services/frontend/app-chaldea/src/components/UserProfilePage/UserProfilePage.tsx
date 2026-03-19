@@ -21,7 +21,8 @@ import {
 import WallSection from './WallSection';
 import FriendsSection from './FriendsSection';
 import CharactersSection from './CharactersSection';
-import ProfileSettingsModal, { AVATAR_FRAMES, buildColorEffectStyle, buildNicknameTextShadow } from './ProfileSettingsModal';
+import ProfileSettingsModal, { buildColorEffectStyle, buildNicknameTextShadow } from './ProfileSettingsModal';
+import { AVATAR_FRAMES } from '../../utils/avatarFrames';
 
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
 

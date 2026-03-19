@@ -25,6 +25,7 @@ import UserProfilePage from "../UserProfilePage/UserProfilePage";
 import AllUsersPage from "../pages/AllUsersPage/AllUsersPage";
 import OnlineUsersPage from "../pages/OnlineUsersPage/OnlineUsersPage";
 import ProtectedRoute from "../CommonComponents/ProtectedRoute/ProtectedRoute";
+import ChatHistoryPage from "../Chat/ChatHistoryPage";
 
 const App = () => {
   return (
@@ -106,6 +107,7 @@ const App = () => {
                 <AdminRacesPage />
               </ProtectedRoute>
             } />
+            <Route path="chat/history" element={<ChatHistoryPage />} />
             <Route path="players" element={<AllUsersPage />} />
             <Route path="players/online" element={<OnlineUsersPage />} />
             <Route path="profile" element={<ProfilePage />} />
