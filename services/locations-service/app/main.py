@@ -716,6 +716,147 @@ async def delete_rule(
 
 
 # --------------------------------------------------------------------
+# GAME TIME
+# --------------------------------------------------------------------
+from datetime import datetime
+
+
+@router.get("/game-time", response_model=schemas.GameTimePublicResponse)
+async def get_game_time_public(session: AsyncSession = Depends(get_db)):
+    """Публичный эндпоинт: возвращает epoch + offset_days + server_time для расчёта на фронтенде."""
+    config = await crud.get_game_time_config(session)
+    now = datetime.utcnow()
+    if config:
+        return {
+            "epoch": config.epoch,
+            "offset_days": config.offset_days,
+            "server_time": now,
+        }
+    # Fallback to defaults if no row exists
+    return {
+        "epoch": datetime(2026, 3, 19, 0, 0, 0),
+        "offset_days": 0,
+        "server_time": now,
+    }
+
+
+@router.get("/game-time/admin", response_model=schemas.GameTimeAdminResponse)
+async def get_game_time_admin(
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("gametime:read")),
+):
+    """Админский эндпоинт: возвращает полную конфигурацию + вычисленное игровое время."""
+    config = await crud.get_game_time_config(session)
+    if not config:
+        raise HTTPException(status_code=404, detail="Конфигурация игрового времени не найдена")
+    now = datetime.utcnow()
+    computed = crud.compute_game_time(config.epoch, config.offset_days, now)
+    return {
+        "id": config.id,
+        "epoch": config.epoch,
+        "offset_days": config.offset_days,
+        "updated_at": config.updated_at,
+        "computed": computed,
+        "server_time": now,
+    }
+
+
+@router.put("/game-time/admin", response_model=schemas.GameTimeAdminResponse)
+async def update_game_time_admin(
+    body: schemas.GameTimeAdminUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("gametime:update")),
+):
+    """
+    Обновляет конфигурацию игрового времени.
+    Два режима:
+      - Direct: задать epoch и/или offset_days напрямую.
+      - Set-date: задать target_year/target_segment/target_week — бэкенд вычислит offset_days.
+    """
+    now = datetime.utcnow()
+
+    # Determine if set-date mode is used
+    if body.target_year is not None:
+        # Validate target_year
+        if body.target_year < 1:
+            raise HTTPException(status_code=400, detail="Год должен быть >= 1")
+
+        # Validate target_segment
+        if body.target_segment and body.target_segment not in crud.VALID_SEGMENT_NAMES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Недопустимое имя сегмента: {body.target_segment}. "
+                       f"Допустимые: {', '.join(crud.VALID_SEGMENT_NAMES)}",
+            )
+
+        target_segment = body.target_segment or "spring"
+
+        # Find segment info
+        segment_info = None
+        for s in crud.YEAR_SEGMENTS:
+            if s["name"] == target_segment:
+                segment_info = s
+                break
+
+        # Validate week for seasons
+        if segment_info and segment_info["type"] == "season":
+            target_week = body.target_week or 1
+            if target_week < 1 or target_week > 13:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Неделя должна быть от 1 до 13 для сезонов",
+                )
+        else:
+            target_week = None
+
+        # Compute target_day_in_year
+        cumulative = 0
+        for segment in crud.YEAR_SEGMENTS:
+            if segment["name"] == target_segment:
+                if segment["type"] == "season" and target_week:
+                    target_day_in_year = cumulative + (target_week - 1) * crud.DAYS_PER_WEEK
+                else:
+                    target_day_in_year = cumulative
+                break
+            cumulative += segment["real_days"]
+
+        target_total_days = (body.target_year - 1) * crud.DAYS_PER_YEAR + target_day_in_year
+
+        # Determine the epoch to use
+        epoch_to_use = body.epoch
+        if epoch_to_use is None:
+            config = await crud.get_game_time_config(session)
+            epoch_to_use = config.epoch if config else datetime(2026, 3, 19, 0, 0, 0)
+
+        import math
+        elapsed_without_offset = math.floor((now - epoch_to_use).total_seconds() / 86400)
+        computed_offset = target_total_days - elapsed_without_offset
+
+        update_data = {"offset_days": computed_offset}
+        if body.epoch is not None:
+            update_data["epoch"] = body.epoch
+    else:
+        # Direct mode
+        update_data = {}
+        if body.epoch is not None:
+            update_data["epoch"] = body.epoch
+        if body.offset_days is not None:
+            update_data["offset_days"] = body.offset_days
+
+    config = await crud.update_game_time_config(session, update_data)
+    now = datetime.utcnow()
+    computed = crud.compute_game_time(config.epoch, config.offset_days, now)
+    return {
+        "id": config.id,
+        "epoch": config.epoch,
+        "offset_days": config.offset_days,
+        "updated_at": config.updated_at,
+        "computed": computed,
+        "server_time": now,
+    }
+
+
+# --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------
 app.include_router(router)

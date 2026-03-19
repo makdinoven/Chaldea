@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useAppSelector } from '../../../redux/store';
 import { selectHierarchyTree, selectWorldMapLoading } from '../../../redux/slices/worldMapSlice';
 import TreeNode from './TreeNode';
+import GameTimeWidget from '../GameTimeWidget';
 
 interface HierarchyTreeProps {
   currentLocationId: number | null;
@@ -55,6 +56,7 @@ const HierarchyTree = ({ currentLocationId }: HierarchyTreeProps) => {
       {/* Desktop sidebar */}
       <aside className="hidden md:block w-[280px] shrink-0">
         <div className="gray-bg p-4 sticky top-4">
+          <GameTimeWidget />
           <h3 className="gold-text text-lg font-medium uppercase mb-3 tracking-wider">
             Навигация
           </h3>
@@ -86,6 +88,7 @@ const HierarchyTree = ({ currentLocationId }: HierarchyTreeProps) => {
                          bg-site-dark overflow-y-auto"
             >
               <div className="p-4">
+                <GameTimeWidget />
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="gold-text text-lg font-medium uppercase tracking-wider">
                     Навигация

@@ -460,3 +460,40 @@ class GameRuleReorderItem(BaseModel):
 class GameRuleReorder(BaseModel):
     order: List[GameRuleReorderItem]
 
+
+# -------------------------------
+#   GAME TIME SCHEMAS
+# -------------------------------
+class GameTimePublicResponse(BaseModel):
+    epoch: datetime
+    offset_days: int
+    server_time: datetime
+
+
+class ComputedGameTime(BaseModel):
+    year: int
+    segment_name: str
+    segment_type: str
+    week: Optional[int] = None
+    is_transition: bool
+
+
+class GameTimeAdminResponse(BaseModel):
+    id: int
+    epoch: datetime
+    offset_days: int
+    updated_at: datetime
+    computed: ComputedGameTime
+    server_time: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class GameTimeAdminUpdate(BaseModel):
+    epoch: Optional[datetime] = None
+    offset_days: Optional[int] = None
+    target_year: Optional[int] = None
+    target_segment: Optional[str] = None
+    target_week: Optional[int] = None
+

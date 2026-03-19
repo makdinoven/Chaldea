@@ -10,7 +10,7 @@ from config import settings
 import models
 from models import (
     Country, Region, District, Location, LocationNeighbor, Post, GameRule,
-    Area, ClickableZone
+    Area, ClickableZone, GameTimeConfig
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -1298,3 +1298,97 @@ async def reorder_rules(session: AsyncSession, order_items: List[GameRuleReorder
         if db_rule:
             db_rule.sort_order = item.sort_order
     await session.commit()
+
+
+# -------------------------------
+#   GAME TIME
+# -------------------------------
+import math
+from datetime import datetime
+
+YEAR_SEGMENTS = [
+    {"name": "spring",    "type": "season",     "real_days": 39},
+    {"name": "beltane",   "type": "transition",  "real_days": 10},
+    {"name": "summer",    "type": "season",     "real_days": 39},
+    {"name": "lughnasad", "type": "transition",  "real_days": 10},
+    {"name": "autumn",    "type": "season",     "real_days": 39},
+    {"name": "samhain",   "type": "transition",  "real_days": 10},
+    {"name": "winter",    "type": "season",     "real_days": 39},
+    {"name": "imbolc",    "type": "transition",  "real_days": 10},
+]
+DAYS_PER_YEAR = 196
+DAYS_PER_WEEK = 3
+
+VALID_SEGMENT_NAMES = [s["name"] for s in YEAR_SEGMENTS]
+
+
+def compute_game_time(epoch: datetime, offset_days: int, now: datetime) -> dict:
+    """
+    Pure function: computes the current in-game time based on epoch, offset, and real time.
+    Returns dict with year, segment_name, segment_type, week, is_transition.
+    """
+    elapsed_seconds = (now - epoch).total_seconds()
+    elapsed_real_days = math.floor(elapsed_seconds / 86400) + offset_days
+
+    if elapsed_real_days < 0:
+        elapsed_real_days = 0
+
+    year = elapsed_real_days // DAYS_PER_YEAR + 1
+    day_in_year = elapsed_real_days % DAYS_PER_YEAR
+
+    current_segment = YEAR_SEGMENTS[0]
+    day_in_segment = day_in_year
+    cumulative = 0
+    for segment in YEAR_SEGMENTS:
+        if day_in_year < cumulative + segment["real_days"]:
+            current_segment = segment
+            day_in_segment = day_in_year - cumulative
+            break
+        cumulative += segment["real_days"]
+
+    if current_segment["type"] == "season":
+        week = day_in_segment // DAYS_PER_WEEK + 1
+        is_transition = False
+    else:
+        week = None
+        is_transition = True
+
+    return {
+        "year": year,
+        "segment_name": current_segment["name"],
+        "segment_type": current_segment["type"],
+        "week": week,
+        "is_transition": is_transition,
+    }
+
+
+async def get_game_time_config(session: AsyncSession) -> Optional[GameTimeConfig]:
+    """Returns the singleton game time config row, or None if not found."""
+    result = await session.execute(select(GameTimeConfig))
+    return result.scalars().first()
+
+
+async def update_game_time_config(
+    session: AsyncSession, data: dict
+) -> GameTimeConfig:
+    """
+    Updates the singleton game time config row.
+    Creates a default row if none exists.
+    data keys: epoch (datetime), offset_days (int)
+    """
+    result = await session.execute(select(GameTimeConfig))
+    config = result.scalars().first()
+
+    if not config:
+        config = GameTimeConfig()
+        session.add(config)
+        await session.flush()
+
+    if "epoch" in data and data["epoch"] is not None:
+        config.epoch = data["epoch"]
+    if "offset_days" in data and data["offset_days"] is not None:
+        config.offset_days = data["offset_days"]
+
+    await session.commit()
+    await session.refresh(config)
+    return config

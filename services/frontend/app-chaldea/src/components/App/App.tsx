@@ -26,6 +26,7 @@ import AllUsersPage from "../pages/AllUsersPage/AllUsersPage";
 import OnlineUsersPage from "../pages/OnlineUsersPage/OnlineUsersPage";
 import ProtectedRoute from "../CommonComponents/ProtectedRoute/ProtectedRoute";
 import ChatHistoryPage from "../Chat/ChatHistoryPage";
+import GameTimeAdminPage from "../Admin/GameTimeAdminPage";
 
 const App = () => {
   return (
@@ -105,6 +106,11 @@ const App = () => {
             <Route path="admin/races" element={
               <ProtectedRoute requiredPermission="races:create">
                 <AdminRacesPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/game-time" element={
+              <ProtectedRoute requiredPermission="gametime:read">
+                <GameTimeAdminPage />
               </ProtectedRoute>
             } />
             <Route path="chat/history" element={<ChatHistoryPage />} />
