@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { ChatMessage as ChatMessageType } from '../../types/chat';
 import { AVATAR_FRAMES } from '../../utils/avatarFrames';
 import { hasPermission } from '../../utils/permissions';
@@ -43,34 +44,36 @@ const ChatMessage = ({
       onMouseEnter={() => setShowActions(true)}
       onMouseLeave={() => setShowActions(false)}
     >
-      {/* Avatar — large, square with frame */}
-      <div
-        className="w-[88px] h-[88px] flex-shrink-0 rounded-[10px] overflow-hidden bg-white/10"
-        style={{
-          border: frame?.borderStyle ?? '2px solid rgba(255,255,255,0.15)',
-          boxShadow: frame?.shadow ?? 'none',
-        }}
-      >
-        {message.avatar ? (
-          <img
-            src={message.avatar}
-            alt={message.username}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-white/40 text-2xl font-medium">
-            {message.username.charAt(0).toUpperCase()}
-          </div>
-        )}
-      </div>
+      {/* Avatar — square with frame, clickable to profile */}
+      <Link to={`/user-profile/${message.user_id}`} className="cursor-pointer flex-shrink-0">
+        <div
+          className="w-[66px] h-[66px] rounded-[10px] overflow-hidden bg-white/10"
+          style={{
+            border: frame?.borderStyle ?? '2px solid rgba(255,255,255,0.15)',
+            boxShadow: frame?.shadow ?? 'none',
+          }}
+        >
+          {message.avatar ? (
+            <img
+              src={message.avatar}
+              alt={message.username}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-white/40 text-2xl font-medium">
+              {message.username.charAt(0).toUpperCase()}
+            </div>
+          )}
+        </div>
+      </Link>
 
       {/* Message bubble */}
       <div className="flex-1 min-w-0">
         {/* Username + time */}
         <div className="flex items-baseline gap-2 mb-1">
-          <span className="gold-text text-sm font-medium truncate">
+          <Link to={`/user-profile/${message.user_id}`} className="gold-text text-sm font-medium truncate hover:underline cursor-pointer">
             {message.username}
-          </span>
+          </Link>
           <span className="text-white/30 text-xs flex-shrink-0">
             {formatTime(message.created_at)}
           </span>
