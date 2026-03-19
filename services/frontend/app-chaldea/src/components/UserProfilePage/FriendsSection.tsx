@@ -1,18 +1,22 @@
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { User, UserPlus, UserX, X } from 'react-feather';
+import { User, UserPlus, UserX, X, MessageSquare } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
   selectFriends,
   selectFriendsLoading,
   selectIncomingRequests,
   selectOutgoingRequests,
+  selectUserProfile,
   acceptRequest,
   rejectRequest,
   removeFriendThunk,
   type Friend,
   type FriendRequest,
 } from '../../redux/slices/userProfileSlice';
+import { formatLastActive, isOnline } from '../../utils/formatLastActive';
+import { buildColorEffectStyle } from './ProfileSettingsModal';
 
 interface FriendsSectionProps {
   profileUserId: number;
@@ -39,9 +43,16 @@ const FriendCard = ({
     }
   };
 
+  const online = isOnline(friend.last_active_at ?? null);
+  const statusText = formatLastActive(friend.last_active_at ?? null);
+
+  const handleMessage = () => {
+    toast('Скоро будет доступно', { icon: '✉️' });
+  };
+
   return (
     <div className="gray-bg p-4 flex items-center gap-3 group">
-      <Link to={`/user-profile/${friend.id}`} className="flex-shrink-0">
+      <Link to={`/user-profile/${friend.id}`} className="flex-shrink-0 relative">
         <div className="w-12 h-12 rounded-full overflow-hidden bg-white/10 flex items-center justify-center">
           {friend.avatar ? (
             <img
@@ -53,22 +64,46 @@ const FriendCard = ({
             <User size={20} className="text-white/40" />
           )}
         </div>
+        {/* Online/offline indicator dot */}
+        <span
+          className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ring-2 ring-white/20 ${
+            online ? 'bg-green-500' : 'bg-gray-500'
+          }`}
+        />
       </Link>
-      <Link
-        to={`/user-profile/${friend.id}`}
-        className="flex-1 text-white font-medium hover:text-site-blue transition-colors truncate"
-      >
-        {friend.username}
-      </Link>
-      {isOwnProfile && (
-        <button
-          onClick={handleRemove}
-          className="text-white/20 hover:text-site-red transition-colors opacity-0 group-hover:opacity-100 p-1"
-          title="Удалить из друзей"
+      <div className="flex-1 min-w-0">
+        <Link
+          to={`/user-profile/${friend.id}`}
+          className="text-white font-medium hover:text-site-blue transition-colors truncate block"
         >
-          <UserX size={16} />
+          {friend.username}
+        </Link>
+        <span
+          className={`text-xs ${
+            online ? 'text-green-400' : 'text-white/40'
+          }`}
+        >
+          {statusText}
+        </span>
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={handleMessage}
+          className="text-white/30 hover:text-site-blue transition-colors p-1"
+          title="Написать сообщение"
+        >
+          <MessageSquare size={16} />
         </button>
-      )}
+        {isOwnProfile && (
+          <button
+            onClick={handleRemove}
+            className="text-white/20 hover:text-site-red transition-colors opacity-0 group-hover:opacity-100 p-1"
+            title="Удалить из друзей"
+          >
+            <UserX size={16} />
+          </button>
+        )}
+      </div>
     </div>
   );
 };
@@ -190,9 +225,17 @@ const FriendsSection = ({ profileUserId, isOwnProfile }: FriendsSectionProps) =>
   const friendsLoading = useAppSelector(selectFriendsLoading);
   const incomingRequests = useAppSelector(selectIncomingRequests);
   const outgoingRequests = useAppSelector(selectOutgoingRequests);
+  const profile = useAppSelector(selectUserProfile);
+
+  const postColor = profile?.post_color ?? '';
+  const containerStyle = useMemo(() => {
+    if (!postColor) return undefined;
+    const style = buildColorEffectStyle(postColor, 'post_color', profile?.profile_style_settings);
+    return { backgroundColor: style.backgroundColor } as React.CSSProperties;
+  }, [postColor, profile?.profile_style_settings]);
 
   return (
-    <div className="gray-bg p-5 flex flex-col gap-6">
+    <div className={postColor ? 'rounded-card p-5 flex flex-col gap-6' : 'gray-bg p-5 flex flex-col gap-6'} style={containerStyle}>
       {/* Incoming requests (own profile only) */}
       {isOwnProfile && incomingRequests.length > 0 && (
         <div>

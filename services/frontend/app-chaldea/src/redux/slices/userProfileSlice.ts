@@ -24,6 +24,32 @@ import type { RootState } from '../store';
 
 // ── Types ──
 
+export interface ProfileStyleSettings {
+  post_color_opacity?: number;
+  post_color_blur?: number;
+  post_color_glow?: number;
+  post_color_saturation?: number;
+  bg_color_opacity?: number;
+  bg_color_blur?: number;
+  bg_color_glow?: number;
+  bg_color_saturation?: number;
+  avatar_effect_opacity?: number;
+  avatar_effect_blur?: number;
+  avatar_effect_glow?: number;
+  avatar_effect_saturation?: number;
+  nickname_color_2?: string;
+  nickname_gradient_angle?: number;
+  nickname_brightness?: number;
+  nickname_contrast?: number;
+  nickname_shimmer?: boolean;
+  nickname_glow?: number;
+  nickname_pulse?: boolean;
+  nickname_text_shadow?: number;
+  nickname_font?: string;
+  text_shadow_enabled?: boolean;
+  text_backdrop_enabled?: boolean;
+}
+
 export interface WallPost {
   id: number;
   author_id: number;
@@ -38,6 +64,7 @@ export interface Friend {
   id: number;
   username: string;
   avatar: string | null;
+  last_active_at?: string | null;
 }
 
 export interface FriendRequest {
@@ -75,6 +102,9 @@ export interface UserProfile {
   avatar_effect_color?: string | null;
   status_text?: string | null;
   profile_bg_position?: string | null;
+  post_color?: string | null;
+  profile_style_settings?: ProfileStyleSettings | null;
+  last_active_at?: string | null;
 }
 
 export interface UserCharacterItem {
@@ -84,6 +114,12 @@ export interface UserCharacterItem {
   level: number | null;
   rp_posts_count: number;
   last_rp_post_date: string | null;
+  id_race?: number | null;
+  id_class?: number | null;
+  id_subrace?: number | null;
+  race_name?: string | null;
+  class_name?: string | null;
+  subrace_name?: string | null;
 }
 
 interface UserProfileState {
@@ -247,6 +283,8 @@ export const updateProfileSettings = createAsyncThunk(
         avatar_effect_color?: string | null;
         status_text?: string | null;
         profile_bg_position?: string | null;
+        post_color?: string | null;
+        profile_style_settings?: ProfileStyleSettings | null;
       };
     },
     { dispatch, rejectWithValue },

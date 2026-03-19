@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
@@ -9,12 +9,15 @@ import {
   selectPostsLoading,
   selectHasMorePosts,
   selectPostsPage,
+  selectUserProfile,
   createPost,
   editPost,
   deletePost,
   loadWallPosts,
   type WallPost,
+  type ProfileStyleSettings,
 } from '../../redux/slices/userProfileSlice';
+import { buildColorEffectStyle } from './ProfileSettingsModal';
 import WysiwygEditor from '../CommonComponents/WysiwygEditor/WysiwygEditor';
 
 interface WallSectionProps {
@@ -26,10 +29,12 @@ const PostCard = ({
   post,
   currentUserId,
   isWallOwner,
+  postColorStyle,
 }: {
   post: WallPost;
   currentUserId: number | null;
   isWallOwner: boolean;
+  postColorStyle: React.CSSProperties | null;
 }) => {
   const dispatch = useAppDispatch();
   const canDelete = currentUserId === post.author_id || isWallOwner;
@@ -84,7 +89,10 @@ const PostCard = ({
   });
 
   return (
-    <div className="gray-bg p-5">
+    <div
+      className={postColorStyle ? 'rounded-card p-5' : 'gray-bg p-5'}
+      style={postColorStyle ?? undefined}
+    >
       {/* Author header */}
       <div className="flex items-center justify-between gap-2 mb-3">
         <div className="flex items-center gap-3">
@@ -176,12 +184,24 @@ const WallSection = ({ profileUserId, isOwnProfile }: WallSectionProps) => {
   const page = useAppSelector(selectPostsPage);
   const currentUserId = useAppSelector((state) => state.user.id) as number | null;
   const isLoggedIn = currentUserId !== null;
+  const profile = useAppSelector(selectUserProfile);
 
   const [editorContent, setEditorContent] = useState('');
   const [posting, setPosting] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const formRef = useRef<HTMLDivElement>(null);
+
+  /** Compute post color style from the profile owner's settings */
+  const postColorStyle = useMemo<React.CSSProperties | null>(() => {
+    const color = profile?.post_color;
+    if (!color) return null;
+    const ss: ProfileStyleSettings = profile?.profile_style_settings ?? {};
+    const style = buildColorEffectStyle(color, 'post_color', ss);
+    // Ensure the post has rounded corners matching gray-bg
+    style.borderRadius = '15px';
+    return style;
+  }, [profile?.post_color, profile?.profile_style_settings]);
 
   useEffect(() => {
     if (!isEditorOpen) return;
@@ -234,7 +254,12 @@ const WallSection = ({ profileUserId, isOwnProfile }: WallSectionProps) => {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.15 }}
-                className="gray-bg px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-white/[0.08] transition-colors rounded-card"
+                className={
+                  postColorStyle
+                    ? 'px-4 py-3 flex items-center gap-3 cursor-pointer hover:brightness-110 transition-all rounded-card'
+                    : 'gray-bg px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-white/[0.08] transition-colors rounded-card'
+                }
+                style={postColorStyle ?? undefined}
                 onClick={() => setIsEditorOpen(true)}
               >
                 <Edit3 size={16} className="text-white/30 flex-shrink-0" />
@@ -247,7 +272,8 @@ const WallSection = ({ profileUserId, isOwnProfile }: WallSectionProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2, ease: 'easeOut' }}
-                className="gray-bg p-5 flex flex-col gap-3"
+                className={postColorStyle ? 'p-5 flex flex-col gap-3 rounded-card' : 'gray-bg p-5 flex flex-col gap-3'}
+                style={postColorStyle ?? undefined}
               >
                 <WysiwygEditor
                   key={editorKey}
@@ -292,6 +318,7 @@ const WallSection = ({ profileUserId, isOwnProfile }: WallSectionProps) => {
           post={post}
           currentUserId={currentUserId}
           isWallOwner={isOwnProfile}
+          postColorStyle={postColorStyle}
         />
       ))}
 

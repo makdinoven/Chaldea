@@ -34,9 +34,9 @@ async def change_user_avatar_photo(user_id: int = Form(...), file: UploadFile = 
         raise HTTPException(status_code=403, detail="Вы можете загружать только свой аватар")
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("profile_photo", user_id)
-        avatar_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="user_avatars")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("profile_photo", user_id, extension=result.extension)
+        avatar_url = upload_file_to_s3(result.data, unique_filename, subdirectory="user_avatars", content_type=result.content_type)
         update_user_avatar(db, user_id, avatar_url)
         return {"message": "Фото успешно загружено", "avatar_url": avatar_url}
     except Exception as e:
@@ -68,9 +68,9 @@ async def change_character_avatar_photo(character_id: int = Form(...), user_id: 
         raise HTTPException(status_code=403, detail="Вы можете загружать аватар только своего персонажа")
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("profile_photo", character_id)
-        avatar_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="character_avatars")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("profile_photo", character_id, extension=result.extension)
+        avatar_url = upload_file_to_s3(result.data, unique_filename, subdirectory="character_avatars", content_type=result.content_type)
         update_character_avatar(db, character_id, avatar_url, user_id)
         return {"message": "Фото успешно загружено", "avatar_url": avatar_url}
     except Exception as e:
@@ -85,11 +85,11 @@ async def change_area_map_photo(area_id: int = Form(...), file: UploadFile = Fil
     """
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("area_map", area_id)
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("area_map", area_id, extension=result.extension)
 
         # Сохраняем файл в подкаталог "maps"
-        map_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="maps")
+        map_url = upload_file_to_s3(result.data, unique_filename, subdirectory="maps", content_type=result.content_type)
 
         # Обновляем поле map_image_url в таблице Areas
         update_area_map_image(db, area_id, map_url)
@@ -110,12 +110,11 @@ async def change_country_map_photo(country_id: int = Form(...), file: UploadFile
     """
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("country_map", country_id)
-        # Пример: "country_map_17_a4c3b8c73f...webp"
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("country_map", country_id, extension=result.extension)
 
         # Сохраняем файл в подкаталог "maps"
-        map_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="maps")
+        map_url = upload_file_to_s3(result.data, unique_filename, subdirectory="maps", content_type=result.content_type)
 
         # Обновляем поле map_image_url в таблице Countries
         update_country_map_image(db, country_id, map_url)
@@ -137,9 +136,9 @@ async def change_region_map_photo(region_id: int = Form(...), file: UploadFile =
     """
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("region_map", region_id)
-        map_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="maps")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("region_map", region_id, extension=result.extension)
+        map_url = upload_file_to_s3(result.data, unique_filename, subdirectory="maps", content_type=result.content_type)
 
         update_region_map_image(db, region_id, map_url)
 
@@ -160,9 +159,9 @@ async def change_region_image(region_id: int = Form(...), file: UploadFile = Fil
     """
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("region_image", region_id)
-        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="locations")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("region_image", region_id, extension=result.extension)
+        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="locations", content_type=result.content_type)
 
         update_region_image(db, region_id, image_url)
 
@@ -183,9 +182,9 @@ async def change_district_image(district_id: int = Form(...), file: UploadFile =
     """
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("district_image", district_id)
-        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="locations")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("district_image", district_id, extension=result.extension)
+        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="locations", content_type=result.content_type)
 
         update_district_image(db, district_id, image_url)
 
@@ -202,9 +201,9 @@ async def change_district_image(district_id: int = Form(...), file: UploadFile =
 async def change_location_image(location_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("location_image", location_id)
-        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="locations")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("location_image", location_id, extension=result.extension)
+        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="locations", content_type=result.content_type)
 
         update_location_image(db, location_id, image_url)
 
@@ -222,9 +221,9 @@ async def change_skill_image(skill_id: int = Form(...), file: UploadFile = File(
     """
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("skill_image", skill_id)
-        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="skills")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("skill_image", skill_id, extension=result.extension)
+        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="skills", content_type=result.content_type)
 
         update_skill_image(db, skill_id, image_url)
 
@@ -244,9 +243,9 @@ async def change_skill_rank_image(skill_rank_id: int = Form(...), file: UploadFi
     """
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("skill_rank_image", skill_rank_id)
-        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="skill_ranks")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("skill_rank_image", skill_rank_id, extension=result.extension)
+        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="skill_ranks", content_type=result.content_type)
 
         update_skill_rank_image(db, skill_rank_id, image_url)
 
@@ -265,9 +264,9 @@ async def change_item_image(item_id: int = Form(...), file: UploadFile = File(..
     """
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("item_image", item_id)
-        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="items")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("item_image", item_id, extension=result.extension)
+        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="items", content_type=result.content_type)
 
         update_item_image(db, item_id, image_url)
 
@@ -286,9 +285,9 @@ async def change_rule_image(rule_id: int = Form(...), file: UploadFile = File(..
     """
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("rule_image", rule_id)
-        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="rules")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("rule_image", rule_id, extension=result.extension)
+        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="rules", content_type=result.content_type)
 
         update_rule_image(db, rule_id, image_url)
 
@@ -308,9 +307,9 @@ async def change_race_image(race_id: int = Form(...), file: UploadFile = File(..
     """
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("race_image", race_id)
-        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="race_images")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("race_image", race_id, extension=result.extension)
+        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="race_images", content_type=result.content_type)
 
         update_race_image(db, race_id, image_url)
 
@@ -330,9 +329,9 @@ async def change_subrace_image(subrace_id: int = Form(...), file: UploadFile = F
     """
     validate_image_mime(file)
     try:
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("subrace_image", subrace_id)
-        image_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="race_images")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("subrace_image", subrace_id, extension=result.extension)
+        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="race_images", content_type=result.content_type)
 
         update_subrace_image(db, subrace_id, image_url)
 
@@ -360,9 +359,9 @@ async def change_profile_background(user_id: int = Form(...), file: UploadFile =
             except Exception:
                 pass
 
-        file_stream = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("profile_bg", user_id)
-        bg_url = upload_file_to_s3(file_stream, unique_filename, subdirectory="profile_backgrounds")
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("profile_bg", user_id, extension=result.extension)
+        bg_url = upload_file_to_s3(result.data, unique_filename, subdirectory="profile_backgrounds", content_type=result.content_type)
         update_profile_bg_image(db, user_id, bg_url)
         return {"message": "Фон профиля успешно загружен", "profile_bg_image": bg_url}
     except Exception as e:

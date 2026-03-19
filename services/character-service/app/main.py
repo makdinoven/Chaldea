@@ -1012,12 +1012,24 @@ def get_short_info(character_id: int, db: Session = Depends(get_db)):
     ch = db.query(models.Character).filter(models.Character.id == character_id).first()
     if not ch:
         raise HTTPException(status_code=404, detail="Character not found")
+
+    # Fetch race, subrace, class names via joins
+    race = db.query(models.Race).filter(models.Race.id_race == ch.id_race).first()
+    subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == ch.id_subrace).first()
+    char_class = db.query(models.Class).filter(models.Class.id_class == ch.id_class).first()
+
     return {
         "id": ch.id,
         "name": ch.name,
         "avatar": ch.avatar,
         "level": ch.level,
-        "current_location_id": ch.current_location_id
+        "current_location_id": ch.current_location_id,
+        "id_race": ch.id_race,
+        "id_class": ch.id_class,
+        "id_subrace": ch.id_subrace,
+        "race_name": race.name if race else None,
+        "class_name": char_class.name if char_class else None,
+        "subrace_name": subrace.name if subrace else None,
     }
 
 @router.get("/list", response_model=List[schemas.CharacterShort])

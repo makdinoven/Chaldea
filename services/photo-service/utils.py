@@ -1,6 +1,7 @@
 import os
 import uuid
-from PIL import Image
+from collections import namedtuple
+from PIL import Image, ImageSequence
 import io
 import boto3
 from dotenv import load_dotenv
@@ -17,6 +18,8 @@ logging.getLogger("boto3").setLevel(logging.WARNING)
 load_dotenv()
 
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+ImageResult = namedtuple("ImageResult", ["data", "extension", "content_type"])
 
 
 def validate_image_mime(file: UploadFile):
@@ -47,8 +50,14 @@ s3_client = boto3.client(
 )
 
 
-def convert_to_webp(input_file, quality=80) -> bytes:
-    MAX_FILE_SIZE = 15 * 1024 * 1024  # 10MB
+def convert_to_webp(input_file, quality=80) -> ImageResult:
+    """Convert an image to WebP, preserving animated GIFs as-is.
+
+    Returns an ImageResult namedtuple with (data, extension, content_type).
+    For animated GIFs: keeps GIF format to preserve animation.
+    For all other images: converts to WebP as before.
+    """
+    MAX_FILE_SIZE = 15 * 1024 * 1024  # 15MB
 
     try:
         # Чтение и проверка размера файла
@@ -65,10 +74,45 @@ def convert_to_webp(input_file, quality=80) -> bytes:
             except Exception as verify_error:
                 raise ValueError("Invalid image content") from verify_error
 
-            # Переоткрытие и конвертация
+            # Переоткрытие и обработка
             buffer.seek(0)
             with Image.open(buffer) as image:
-                image = image.copy()  # Создаем копию для безопасности
+                is_animated_gif = (
+                    image.format == "GIF"
+                    and getattr(image, "is_animated", False)
+                )
+
+                if is_animated_gif:
+                    # Сохраняем анимированный GIF без конвертации
+                    frames = []
+                    durations = []
+                    for frame in ImageSequence.Iterator(image):
+                        frames.append(frame.copy())
+                        durations.append(frame.info.get("duration", 100))
+
+                    output_stream = io.BytesIO()
+                    frames[0].save(
+                        output_stream,
+                        format="GIF",
+                        save_all=True,
+                        append_images=frames[1:],
+                        duration=durations,
+                        loop=image.info.get("loop", 0),
+                        disposal=image.info.get("disposal", 2),
+                    )
+                    gif_data = output_stream.getvalue()
+
+                    if len(gif_data) < 100:
+                        raise ValueError("Invalid GIF processing result")
+
+                    return ImageResult(
+                        data=gif_data,
+                        extension=".gif",
+                        content_type="image/gif",
+                    )
+
+                # Статические изображения — конвертация в WebP
+                image = image.copy()
 
                 if image.mode not in ("RGB", "RGBA"):
                     image = image.convert("RGBA" if image.mode == "P" else "RGB")
@@ -88,7 +132,11 @@ def convert_to_webp(input_file, quality=80) -> bytes:
                 if len(webp_data) < 100:  # Минимальный размер для WebP
                     raise ValueError("Invalid WEBP conversion result")
 
-                return webp_data
+                return ImageResult(
+                    data=webp_data,
+                    extension=".webp",
+                    content_type="image/webp",
+                )
 
     except Exception as e:
         logging.error(f"Image processing error: {str(e)}", exc_info=True)
@@ -98,7 +146,7 @@ def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".web
     return f"{prefix}_{entity_id}_{uuid.uuid4().hex}{extension}"
 
 
-def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "") -> str:
+def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "", content_type: str = "image/webp") -> str:
     try:
         if not isinstance(file_stream, bytes):
             raise TypeError("Expected bytes content")
@@ -114,7 +162,7 @@ def upload_file_to_s3(file_stream: bytes, filename: str, subdirectory: str = "")
             Key=s3_key,
             Body=file_stream,
             ACL='public-read',
-            ContentType='image/webp',
+            ContentType=content_type,
             ContentLength=len(file_stream),
             ContentMD5=content_md5,
             Metadata={

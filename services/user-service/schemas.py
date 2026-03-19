@@ -122,6 +122,7 @@ class FriendResponse(BaseModel):
     id: int
     username: str
     avatar: Optional[str] = None
+    last_active_at: Optional[datetime] = None
 
     class Config:
         orm_mode = True
@@ -150,6 +151,9 @@ class UserProfileResponse(BaseModel):
     avatar_effect_color: Optional[str] = None
     status_text: Optional[str] = None
     profile_bg_position: Optional[str] = None
+    post_color: Optional[str] = None
+    profile_style_settings: Optional[dict] = None
+    last_active_at: Optional[datetime] = None
 
 
 class UserStatsResponse(BaseModel):
@@ -182,6 +186,8 @@ class ProfileSettingsUpdate(BaseModel):
     avatar_effect_color: Optional[str] = None
     status_text: Optional[str] = None
     profile_bg_position: Optional[str] = None
+    post_color: Optional[str] = None
+    profile_style_settings: Optional[dict] = None
 
 
 class ProfileSettingsResponse(BaseModel):
@@ -191,6 +197,8 @@ class ProfileSettingsResponse(BaseModel):
     avatar_effect_color: Optional[str] = None
     status_text: Optional[str] = None
     profile_bg_position: Optional[str] = None
+    post_color: Optional[str] = None
+    profile_style_settings: Optional[dict] = None
 
 
 class UsernameUpdate(BaseModel):
@@ -210,6 +218,12 @@ class UserCharacterItem(BaseModel):
     level: Optional[int] = None
     rp_posts_count: int = 0
     last_rp_post_date: Optional[datetime] = None
+    id_race: Optional[int] = None
+    id_class: Optional[int] = None
+    id_subrace: Optional[int] = None
+    race_name: Optional[str] = None
+    class_name: Optional[str] = None
+    subrace_name: Optional[str] = None
 
 
 class UserCharactersResponse(BaseModel):

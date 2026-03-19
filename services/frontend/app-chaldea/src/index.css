@@ -287,6 +287,7 @@
     font-size: 16px;
     color: #c6c4c4;
     width: 100%;
+    min-height: 40px;
     outline: none;
     transition: border-color 0.2s ease-in-out;
   }
@@ -543,6 +544,27 @@
   }
   .hover-divider:hover::after {
     opacity: 1;
+  }
+
+  /* --- Nickname Shimmer Animation --- */
+  /* Usage: <span className="nickname-shimmer">...</span> */
+  @keyframes shimmer {
+    0% { background-position: -200% center; }
+    100% { background-position: 200% center; }
+  }
+  .nickname-shimmer {
+    background-size: 200% auto;
+    animation: shimmer 3s linear infinite;
+  }
+
+  /* --- Nickname Pulse Animation --- */
+  /* Usage: <span className="nickname-pulse">...</span> */
+  @keyframes nickname-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  .nickname-pulse {
+    animation: nickname-pulse 2s ease-in-out infinite;
   }
 
   /* --- Slot Pulse Animation (compatible drop targets during drag) --- */

@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 import bleach
 import re
 import asyncio
+import json
 
 ALLOWED_TAGS = [
     "p", "br", "strong", "em", "u", "s",
@@ -135,7 +136,13 @@ async def _fetch_character_short(char_id: int):
             "name": ch_json["name"],
             "avatar": ch_json["avatar"],
             "level": ch_json.get("level"),
-            "current_location": loc_json
+            "current_location": loc_json,
+            "id_race": ch_json.get("id_race"),
+            "id_class": ch_json.get("id_class"),
+            "id_subrace": ch_json.get("id_subrace"),
+            "race_name": ch_json.get("race_name"),
+            "class_name": ch_json.get("class_name"),
+            "subrace_name": ch_json.get("subrace_name"),
         }
 
 
@@ -255,6 +262,121 @@ BG_POSITION_REGEX = re.compile(r'^\d{1,3}%\s\d{1,3}%$')
 ALLOWED_FRAMES = {"gold", "silver", "fire"}
 USERNAME_REGEX = re.compile(r'^[a-zA-Zа-яА-ЯёЁ0-9_-]+$')
 
+# Maximum size (in chars) for serialized profile_style_settings JSON
+PROFILE_STYLE_SETTINGS_MAX_SIZE = 2048
+
+# Allowed keys and their validation rules for profile_style_settings
+_STYLE_FLOAT_FIELDS = {
+    "post_color_opacity": (0.0, 1.0),
+    "post_color_blur": (0.0, 20.0),
+    "post_color_glow": (0.0, 20.0),
+    "post_color_saturation": (0.0, 2.0),
+    "bg_color_opacity": (0.0, 1.0),
+    "bg_color_blur": (0.0, 20.0),
+    "bg_color_glow": (0.0, 20.0),
+    "bg_color_saturation": (0.0, 2.0),
+    "avatar_effect_opacity": (0.0, 1.0),
+    "avatar_effect_blur": (0.0, 20.0),
+    "avatar_effect_glow": (0.0, 20.0),
+    "avatar_effect_saturation": (0.0, 2.0),
+    "nickname_brightness": (0.5, 2.0),
+    "nickname_contrast": (0.5, 2.0),
+    "nickname_glow": (0.0, 20.0),
+    "nickname_text_shadow": (0.0, 10.0),
+}
+_STYLE_INT_FIELDS = {
+    "nickname_gradient_angle": (0, 360),
+}
+_STYLE_BOOL_FIELDS = {"nickname_shimmer", "text_shadow_enabled", "text_backdrop_enabled", "nickname_pulse"}
+_STYLE_HEX_FIELDS = {"nickname_color_2"}
+_STYLE_FONT_ALLOWED = {
+    "",
+    "Georgia, serif",
+    "Impact, sans-serif",
+    '"Courier New", monospace',
+    '"Trebuchet MS", sans-serif',
+    "Palatino, serif",
+    "Copperplate, fantasy",
+}
+_STYLE_FONT_FIELDS = {"nickname_font"}
+
+
+def _validate_profile_style_settings(raw: dict) -> dict:
+    """Validate and sanitize profile_style_settings dict.
+
+    - Unknown keys are silently dropped.
+    - Float/int values are clamped to their allowed ranges.
+    - Hex strings are validated with the same regex as other color fields.
+    - Boolean fields must be bool.
+    - The resulting JSON string must not exceed PROFILE_STYLE_SETTINGS_MAX_SIZE chars.
+    """
+    cleaned: dict = {}
+
+    for key, (lo, hi) in _STYLE_FLOAT_FIELDS.items():
+        if key in raw:
+            val = raw[key]
+            if not isinstance(val, (int, float)):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Поле '{key}' должно быть числом",
+                )
+            cleaned[key] = max(lo, min(hi, float(val)))
+
+    for key, (lo, hi) in _STYLE_INT_FIELDS.items():
+        if key in raw:
+            val = raw[key]
+            if not isinstance(val, (int, float)):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Поле '{key}' должно быть числом",
+                )
+            cleaned[key] = max(lo, min(hi, int(val)))
+
+    for key in _STYLE_BOOL_FIELDS:
+        if key in raw:
+            val = raw[key]
+            if not isinstance(val, bool):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Поле '{key}' должно быть булевым значением (true/false)",
+                )
+            cleaned[key] = val
+
+    for key in _STYLE_HEX_FIELDS:
+        if key in raw:
+            val = raw[key]
+            if not isinstance(val, str) or not HEX_COLOR_REGEX.match(val):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Некорректный формат цвета для '{key}'. Ожидается HEX (например, #fff или #1a1a2e)",
+                )
+            cleaned[key] = val
+
+    for key in _STYLE_FONT_FIELDS:
+        if key in raw:
+            val = raw[key]
+            if not isinstance(val, str):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Поле '{key}' должно быть строкой",
+                )
+            if val not in _STYLE_FONT_ALLOWED:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Недопустимое значение для '{key}'. Допустимые шрифты: {', '.join(sorted(f for f in _STYLE_FONT_ALLOWED if f))}",
+                )
+            cleaned[key] = val
+
+    # Check serialized size
+    serialized = json.dumps(cleaned, ensure_ascii=False)
+    if len(serialized) > PROFILE_STYLE_SETTINGS_MAX_SIZE:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Настройки стилей слишком большие. Максимум {PROFILE_STYLE_SETTINGS_MAX_SIZE} символов",
+        )
+
+    return cleaned
+
 
 @router.put("/me/settings", response_model=schemas.ProfileSettingsResponse)
 def update_profile_settings(
@@ -264,7 +386,7 @@ def update_profile_settings(
 ):
     """Обновить настройки кастомизации профиля."""
     # Validate hex colors
-    for field_name in ('profile_bg_color', 'nickname_color', 'avatar_effect_color'):
+    for field_name in ('profile_bg_color', 'nickname_color', 'avatar_effect_color', 'post_color'):
         value = getattr(data, field_name)
         if value is not None and not HEX_COLOR_REGEX.match(value):
             raise HTTPException(
@@ -300,6 +422,10 @@ def update_profile_settings(
                 detail="Значения позиции фона должны быть от 0% до 100%"
             )
 
+    # Validate and sanitize profile_style_settings if provided
+    if data.profile_style_settings is not None:
+        data.profile_style_settings = _validate_profile_style_settings(data.profile_style_settings)
+
     # Update only provided fields
     user = db.query(models.User).filter(models.User.id == current_user.id).first()
 
@@ -307,10 +433,21 @@ def update_profile_settings(
     for field_name, value in update_fields.items():
         if field_name == 'status_text' and value is not None:
             value = bleach.clean(value, tags=[], strip=True)
+        # Serialize profile_style_settings dict to JSON string for TEXT column
+        if field_name == 'profile_style_settings' and value is not None:
+            value = json.dumps(value, ensure_ascii=False)
         setattr(user, field_name, value)
 
     db.commit()
     db.refresh(user)
+
+    # Parse profile_style_settings JSON string back to dict for response
+    style_settings = None
+    if user.profile_style_settings:
+        try:
+            style_settings = json.loads(user.profile_style_settings)
+        except (json.JSONDecodeError, TypeError):
+            style_settings = None
 
     return schemas.ProfileSettingsResponse(
         profile_bg_color=user.profile_bg_color,
@@ -319,6 +456,8 @@ def update_profile_settings(
         avatar_effect_color=user.avatar_effect_color,
         status_text=user.status_text,
         profile_bg_position=user.profile_bg_position,
+        post_color=user.post_color,
+        profile_style_settings=style_settings,
     )
 
 
@@ -1259,7 +1398,12 @@ def get_user_friends(
 
     all_friends = {u.id: u for u in friends_as_sender + friends_as_receiver}
     return [
-        schemas.FriendResponse(id=u.id, username=u.username, avatar=u.avatar)
+        schemas.FriendResponse(
+            id=u.id,
+            username=u.username,
+            avatar=u.avatar,
+            last_active_at=u.last_active_at,
+        )
         for u in all_friends.values()
     ]
 
@@ -1321,6 +1465,12 @@ async def get_user_characters(
                     level=char_data.get("level"),
                     rp_posts_count=0,
                     last_rp_post_date=None,
+                    id_race=char_data.get("id_race"),
+                    id_class=char_data.get("id_class"),
+                    id_subrace=char_data.get("id_subrace"),
+                    race_name=char_data.get("race_name"),
+                    class_name=char_data.get("class_name"),
+                    subrace_name=char_data.get("subrace_name"),
                 ))
 
     return schemas.UserCharactersResponse(characters=characters)
@@ -1389,6 +1539,14 @@ async def get_user_profile(
             is_friend = False
             friendship_status = "none"
 
+    # Parse profile_style_settings JSON string back to dict
+    style_settings = None
+    if user.profile_style_settings:
+        try:
+            style_settings = json.loads(user.profile_style_settings)
+        except (json.JSONDecodeError, TypeError):
+            style_settings = None
+
     return schemas.UserProfileResponse(
         id=user.id,
         username=user.username,
@@ -1406,6 +1564,9 @@ async def get_user_profile(
         avatar_effect_color=user.avatar_effect_color,
         status_text=user.status_text,
         profile_bg_position=user.profile_bg_position,
+        post_color=user.post_color,
+        profile_style_settings=style_settings,
+        last_active_at=user.last_active_at,
     )
 
 

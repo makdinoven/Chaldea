@@ -51,14 +51,39 @@ export const uploadUserAvatar = (userId: number, file: File) => {
 };
 
 // Profile Settings
-export const updateProfileSettings = (data: {
+export interface ProfileSettingsPayload {
   profile_bg_color?: string | null;
   nickname_color?: string | null;
   avatar_frame?: string | null;
   avatar_effect_color?: string | null;
   status_text?: string | null;
   profile_bg_position?: string | null;
-}) => axios.put(`${BASE_URL_DEFAULT}/users/me/settings`, data);
+  post_color?: string | null;
+  profile_style_settings?: {
+    post_color_opacity?: number;
+    post_color_blur?: number;
+    post_color_glow?: number;
+    post_color_saturation?: number;
+    bg_color_opacity?: number;
+    bg_color_blur?: number;
+    bg_color_glow?: number;
+    bg_color_saturation?: number;
+    avatar_effect_opacity?: number;
+    avatar_effect_blur?: number;
+    avatar_effect_glow?: number;
+    avatar_effect_saturation?: number;
+    nickname_color_2?: string;
+    nickname_gradient_angle?: number;
+    nickname_brightness?: number;
+    nickname_contrast?: number;
+    nickname_shimmer?: boolean;
+    text_shadow_enabled?: boolean;
+    text_backdrop_enabled?: boolean;
+  } | null;
+}
+
+export const updateProfileSettings = (data: ProfileSettingsPayload) =>
+  axios.put(`${BASE_URL_DEFAULT}/users/me/settings`, data);
 
 // Username Change
 export const updateUsername = (username: string) =>
