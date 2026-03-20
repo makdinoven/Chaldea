@@ -50,6 +50,13 @@ def update_country_map_image(db: Session, country_id: int, map_url: str):
         db.commit()
 
 
+def update_country_emblem(db: Session, country_id: int, emblem_url: str):
+    country = db.query(Country).filter(Country.id == country_id).first()
+    if country:
+        country.emblem_url = emblem_url
+        db.commit()
+
+
 # 2) Обновляем map_image_url в таблице Regions
 def update_region_map_image(db: Session, region_id: int, map_url: str):
     region = db.query(Region).filter(Region.id == region_id).first()
@@ -74,11 +81,27 @@ def update_district_image(db: Session, district_id: int, image_url: str):
         db.commit()
 
 
+# 4b) Обновляем map_icon_url в таблице Districts
+def update_district_icon(db: Session, district_id: int, icon_url: str):
+    district = db.query(District).filter(District.id == district_id).first()
+    if district:
+        district.map_icon_url = icon_url
+        db.commit()
+
+
 # 5) Обновляем image_url в таблице Locations
 def update_location_image(db: Session, location_id: int, image_url: str):
     location = db.query(Location).filter(Location.id == location_id).first()
     if location:
         location.image_url = image_url
+        db.commit()
+
+
+# 6) Обновляем map_icon_url в таблице Locations
+def update_location_icon(db: Session, location_id: int, icon_url: str):
+    location = db.query(Location).filter(Location.id == location_id).first()
+    if location:
+        location.map_icon_url = icon_url
         db.commit()
 
 

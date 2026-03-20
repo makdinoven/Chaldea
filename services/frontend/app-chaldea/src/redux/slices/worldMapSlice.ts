@@ -30,22 +30,39 @@ export interface CountryDetailsData {
   }[];
 }
 
+export interface RegionMapItem {
+  id: number;
+  name: string;
+  type: 'location' | 'district';
+  map_icon_url: string | null;
+  map_x: number | null;
+  map_y: number | null;
+  marker_type: string | null;
+  image_url: string | null;
+}
+
 export interface RegionDetailsData {
   id: number;
   name: string;
   map_image_url: string | null;
   recommended_level: number | null;
+  neighbor_edges: { from_id: number; to_id: number }[];
+  map_items: RegionMapItem[];
   districts: {
     id: number;
     name: string;
     image_url: string | null;
+    map_icon_url: string | null;
+    x: number | null;
+    y: number | null;
     locations: {
       id: number;
       name: string;
       marker_type: string;
-      x: number | null;
-      y: number | null;
       image_url: string | null;
+      map_icon_url: string | null;
+      map_x: number | null;
+      map_y: number | null;
     }[];
   }[];
 }
@@ -60,6 +77,8 @@ export interface WorldMapState {
   countryDetails: CountryDetailsData | null;
   regionDetails: RegionDetailsData | null;
   loading: boolean;
+  detailsLoading: boolean;
+  zonesLoading: boolean;
   error: string | null;
 }
 
@@ -75,6 +94,8 @@ const initialState: WorldMapState = {
   countryDetails: null,
   regionDetails: null,
   loading: false,
+  detailsLoading: false,
+  zonesLoading: false,
   error: null,
 };
 
@@ -109,28 +130,29 @@ const worldMapSlice = createSlice({
       })
       // fetchAreaDetails
       .addCase(fetchAreaDetails.pending, (state) => {
-        state.loading = true;
+        state.detailsLoading = true;
+        state.areaDetails = null;
         state.error = null;
       })
       .addCase(fetchAreaDetails.fulfilled, (state, action: PayloadAction<AreaWithCountries>) => {
         state.areaDetails = action.payload;
-        state.loading = false;
+        state.detailsLoading = false;
       })
       .addCase(fetchAreaDetails.rejected, (state, action) => {
-        state.loading = false;
+        state.detailsLoading = false;
         state.error = action.payload ?? 'Не удалось загрузить данные области';
       })
       // fetchClickableZones
       .addCase(fetchClickableZones.pending, (state) => {
-        state.loading = true;
+        state.zonesLoading = true;
         state.error = null;
       })
       .addCase(fetchClickableZones.fulfilled, (state, action: PayloadAction<ClickableZone[]>) => {
         state.clickableZones = action.payload;
-        state.loading = false;
+        state.zonesLoading = false;
       })
       .addCase(fetchClickableZones.rejected, (state, action) => {
-        state.loading = false;
+        state.zonesLoading = false;
         state.error = action.payload ?? 'Не удалось загрузить зоны карты';
       })
       // fetchHierarchyTree
@@ -148,28 +170,30 @@ const worldMapSlice = createSlice({
       })
       // fetchCountryDetails
       .addCase(fetchCountryDetails.pending, (state) => {
-        state.loading = true;
+        state.detailsLoading = true;
+        state.countryDetails = null;
         state.error = null;
       })
       .addCase(fetchCountryDetails.fulfilled, (state, action) => {
         state.countryDetails = action.payload;
-        state.loading = false;
+        state.detailsLoading = false;
       })
       .addCase(fetchCountryDetails.rejected, (state, action) => {
-        state.loading = false;
+        state.detailsLoading = false;
         state.error = action.payload ?? 'Не удалось загрузить данные страны';
       })
       // fetchRegionDetails
       .addCase(fetchRegionDetails.pending, (state) => {
-        state.loading = true;
+        state.detailsLoading = true;
+        state.regionDetails = null;
         state.error = null;
       })
       .addCase(fetchRegionDetails.fulfilled, (state, action) => {
         state.regionDetails = action.payload;
-        state.loading = false;
+        state.detailsLoading = false;
       })
       .addCase(fetchRegionDetails.rejected, (state, action) => {
-        state.loading = false;
+        state.detailsLoading = false;
         state.error = action.payload ?? 'Не удалось загрузить данные региона';
       });
   },
@@ -188,6 +212,8 @@ export const selectAreaDetails = (state: RootState) => state.worldMap.areaDetail
 export const selectCountryDetails = (state: RootState) => state.worldMap.countryDetails;
 export const selectRegionDetails = (state: RootState) => state.worldMap.regionDetails;
 export const selectWorldMapLoading = (state: RootState) => state.worldMap.loading;
+export const selectDetailsLoading = (state: RootState) => state.worldMap.detailsLoading;
+export const selectZonesLoading = (state: RootState) => state.worldMap.zonesLoading;
 export const selectWorldMapError = (state: RootState) => state.worldMap.error;
 
 export default worldMapSlice.reducer;

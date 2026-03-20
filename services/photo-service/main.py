@@ -7,11 +7,12 @@ from database import get_db
 from crud import (
     update_user_avatar, get_user_avatar,
     update_character_avatar, get_character_avatar, update_location_image,
-    update_district_image, update_region_image, update_region_map_image, update_country_map_image,
-    update_area_map_image,
+    update_district_image, update_district_icon, update_region_image, update_region_map_image,
+    update_country_map_image,
+    update_area_map_image, update_country_emblem,
     update_skill_rank_image, update_skill_image, update_item_image, update_rule_image,
     update_profile_bg_image, get_profile_bg_image, get_character_owner_id,
-    update_race_image, update_subrace_image,
+    update_race_image, update_subrace_image, update_location_icon,
 )
 from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime
 from fastapi.middleware.cors import CORSMiddleware
@@ -127,6 +128,29 @@ async def change_country_map_photo(country_id: int = Form(...), file: UploadFile
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/photo/change_country_emblem")
+async def change_country_emblem(country_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
+    """
+    Загружает эмблему страны (emblem_url) в таблице Countries.
+    Сохранение файлов происходит в папке /media/emblems/.
+    """
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("country_emblem", country_id, extension=result.extension)
+
+        file_url = upload_file_to_s3(result.data, unique_filename, subdirectory="emblems", content_type=result.content_type)
+
+        update_country_emblem(db, country_id, file_url)
+
+        return {
+            "message": "Эмблема страны успешно загружена",
+            "emblem_url": file_url
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # 2) Добавить фотографию карты региона
 @app.post("/photo/change_region_map")
 async def change_region_map_photo(region_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
@@ -196,6 +220,29 @@ async def change_district_image(district_id: int = Form(...), file: UploadFile =
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# 4b) Загрузить иконку района для карты региона (map_icon_url)
+@app.post("/photo/change_district_icon")
+async def change_district_icon(district_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
+    """
+    Загружает иконку района для отображения на карте региона (map_icon_url).
+    Сохранение файлов происходит в папке /media/district_icons/.
+    """
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("district_icon", district_id, extension=result.extension)
+        file_url = upload_file_to_s3(result.data, unique_filename, subdirectory="district_icons", content_type=result.content_type)
+
+        update_district_icon(db, district_id, file_url)
+
+        return {
+            "message": "Иконка района успешно загружена",
+            "map_icon_url": file_url
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # 5) Добавить изображение для локации (Location, image_url)
 @app.post("/photo/change_location_image")
 async def change_location_image(location_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
@@ -213,6 +260,30 @@ async def change_location_image(location_id: int = Form(...), file: UploadFile =
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# 6) Загрузить иконку локации для карты региона (map_icon_url)
+@app.post("/photo/change_location_icon")
+async def change_location_icon(location_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
+    """
+    Загружает иконку локации для отображения на карте региона (map_icon_url).
+    Сохранение файлов происходит в папке /media/location_icons/.
+    """
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("location_icon", location_id, extension=result.extension)
+        file_url = upload_file_to_s3(result.data, unique_filename, subdirectory="location_icons", content_type=result.content_type)
+
+        update_location_icon(db, location_id, file_url)
+
+        return {
+            "message": "Иконка локации успешно загружена",
+            "map_icon_url": file_url
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/photo/change_skill_image")
 async def change_skill_image(skill_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):

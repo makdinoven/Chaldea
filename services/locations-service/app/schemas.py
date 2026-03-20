@@ -13,6 +13,7 @@ class CountryBase(BaseModel):
 class CountryCreate(CountryBase):
     leader_id: Optional[int] = None
     map_image_url: Optional[str] = None
+    emblem_url: Optional[str] = None
     area_id: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
@@ -22,6 +23,7 @@ class CountryUpdate(BaseModel):
     description: Optional[str] = None
     leader_id: Optional[int] = None
     map_image_url: Optional[str] = None
+    emblem_url: Optional[str] = None
     area_id: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
@@ -32,6 +34,7 @@ class CountryRead(BaseModel):
     description: str
     leader_id: Optional[int] = None
     map_image_url: Optional[str] = None
+    emblem_url: Optional[str] = None
     area_id: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
@@ -48,7 +51,8 @@ class CountryLookup(BaseModel):
 # -------------------------------
 class LocationBase(BaseModel):
     name: str
-    district_id: int
+    district_id: Optional[int] = None
+    region_id: Optional[int] = None
     type: Literal["location", "subdistrict"]
     image_url: str
     recommended_level: int
@@ -57,28 +61,37 @@ class LocationBase(BaseModel):
 
 class LocationCreate(BaseModel):
     name: str
-    district_id: int
+    district_id: Optional[int] = None
+    region_id: Optional[int] = None
     parent_id: Optional[int] = None
     description: Optional[str] = ""
     image_url: Optional[str] = ""
     recommended_level: Optional[int] = 1
     quick_travel_marker: Optional[bool] = False
     marker_type: Optional[Literal["safe", "dangerous", "dungeon"]] = "safe"
+    map_icon_url: Optional[str] = None
+    map_x: Optional[float] = None
+    map_y: Optional[float] = None
 
 class LocationCreateResponse(BaseModel):
     id: int
     name: str
-    district_id: int
+    district_id: Optional[int] = None
+    region_id: Optional[int] = None
     parent_id: Optional[int] = None
     description: Optional[str] = ""
     image_url: Optional[str] = ""
     recommended_level: Optional[int] = 1
     quick_travel_marker: Optional[bool] = False
     marker_type: str = "safe"
+    map_icon_url: Optional[str] = None
+    map_x: Optional[float] = None
+    map_y: Optional[float] = None
 
 class LocationUpdate(BaseModel):
     name: Optional[str] = None
     district_id: Optional[int] = None
+    region_id: Optional[int] = None
     type: Optional[Literal["location", "subdistrict"]] = None
     image_url: Optional[str] = ""
     recommended_level: Optional[int] = 1
@@ -86,6 +99,9 @@ class LocationUpdate(BaseModel):
     description: Optional[str] = ""
     parent_id: Optional[int] = None
     marker_type: Optional[Literal["safe", "dangerous", "dungeon"]] = None
+    map_icon_url: Optional[str] = None
+    map_x: Optional[float] = None
+    map_y: Optional[float] = None
 
 class LocationRead(BaseModel):
     id: int
@@ -97,6 +113,9 @@ class LocationRead(BaseModel):
     image_url: Optional[str] = None
     parent_id: Optional[int] = None
     marker_type: str = "safe"
+    map_icon_url: Optional[str] = None
+    map_x: Optional[float] = None
+    map_y: Optional[float] = None
 
     class Config:
         orm_mode = True
@@ -111,6 +130,7 @@ class DistrictBase(BaseModel):
     x: Optional[float] = None
     y: Optional[float] = None
     image_url: Optional[str] = None
+    map_icon_url: Optional[str] = None
 
 class DistrictCreate(DistrictBase):
     entrance_location_id: Optional[int] = None
@@ -123,6 +143,7 @@ class DistrictUpdate(BaseModel):
     entrance_location_id: Optional[int]
     x: Optional[float]
     y: Optional[float]
+    map_icon_url: Optional[str]
 
 class DistrictRead(BaseModel):
     id: int
@@ -134,6 +155,7 @@ class DistrictRead(BaseModel):
     x: Optional[float] = None
     y: Optional[float] = None
     image_url: Optional[str] = None
+    map_icon_url: Optional[str] = None
     locations: List[LocationRead] = []
 
     class Config:
@@ -298,18 +320,20 @@ class ZonePoint(BaseModel):
 class ClickableZoneCreate(BaseModel):
     parent_type: Literal["area", "country"]
     parent_id: int
-    target_type: Literal["country", "region"]
+    target_type: Literal["country", "region", "area"]
     target_id: int
     zone_data: List[ZonePoint]
     label: Optional[str] = None
+    stroke_color: Optional[str] = None
 
 class ClickableZoneUpdate(BaseModel):
     parent_type: Optional[Literal["area", "country"]] = None
     parent_id: Optional[int] = None
-    target_type: Optional[Literal["country", "region"]] = None
+    target_type: Optional[Literal["country", "region", "area"]] = None
     target_id: Optional[int] = None
     zone_data: Optional[List[ZonePoint]] = None
     label: Optional[str] = None
+    stroke_color: Optional[str] = None
 
 class ClickableZoneRead(BaseModel):
     id: int
@@ -319,6 +343,7 @@ class ClickableZoneRead(BaseModel):
     target_id: int
     zone_data: list
     label: Optional[str] = None
+    stroke_color: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -415,7 +440,8 @@ class LocationClientDetails(BaseModel):
     image_url: Optional[str]
     recommended_level: int
     quick_travel_marker: bool
-    district_id: int
+    district_id: Optional[int] = None
+    region_id: Optional[int] = None
     neighbors: List[NeighborClient] = []
     players: List[PlayerInLocation] = []
     posts: List[ClientPost] = []

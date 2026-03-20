@@ -40,7 +40,7 @@ REGULAR_USER_RESPONSE = {"id": 2, "username": "user", "role": "user", "permissio
 
 
 def _make_country(country_id=1, name="Test Country", description="Desc",
-                  leader_id=None, map_image_url=None,
+                  leader_id=None, map_image_url=None, emblem_url=None,
                   area_id=None, x=None, y=None):
     """Create a mock Country ORM object."""
     country = MagicMock()
@@ -49,6 +49,7 @@ def _make_country(country_id=1, name="Test Country", description="Desc",
     country.description = description
     country.leader_id = leader_id
     country.map_image_url = map_image_url
+    country.emblem_url = emblem_url
     country.area_id = area_id
     country.x = x
     country.y = y

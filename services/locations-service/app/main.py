@@ -80,6 +80,7 @@ async def create_country_route(body: schemas.CountryCreate, session: AsyncSessio
         area_id=body.area_id,
         x=body.x,
         y=body.y,
+        emblem_url=body.emblem_url,
     )
     return new_c
 
@@ -230,13 +231,17 @@ async def create_location(location: schemas.LocationCreate, db: AsyncSession = D
             "id": db_location.id,
             "name": db_location.name,
             "district_id": db_location.district_id,
+            "region_id": db_location.region_id,
             "type": db_location.type,
             "image_url": db_location.image_url,
             "recommended_level": db_location.recommended_level,
             "quick_travel_marker": db_location.quick_travel_marker,
             "parent_id": db_location.parent_id,
             "description": db_location.description,
-            "marker_type": db_location.marker_type
+            "marker_type": db_location.marker_type,
+            "map_icon_url": db_location.map_icon_url,
+            "map_x": db_location.map_x,
+            "map_y": db_location.map_y,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -256,7 +261,10 @@ async def update_location_route(location_id: int, body: schemas.LocationUpdate, 
             "quick_travel_marker": db_location.quick_travel_marker,
             "parent_id": db_location.parent_id,
             "description": db_location.description or "",
-            "marker_type": db_location.marker_type
+            "marker_type": db_location.marker_type,
+            "map_icon_url": db_location.map_icon_url,
+            "map_x": db_location.map_x,
+            "map_y": db_location.map_y,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

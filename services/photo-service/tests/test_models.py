@@ -77,7 +77,7 @@ class TestColumnPresence:
 
     def test_country_columns(self):
         cols = _column_names(Country)
-        assert {"id", "map_image_url"} == cols
+        assert {"id", "map_image_url", "emblem_url"} == cols
 
     def test_region_columns(self):
         cols = _column_names(Region)
@@ -89,7 +89,7 @@ class TestColumnPresence:
 
     def test_location_columns(self):
         cols = _column_names(Location)
-        assert {"id", "image_url"} == cols
+        assert {"id", "image_url", "map_icon_url"} == cols
 
     def test_skill_columns(self):
         cols = _column_names(Skill)

@@ -39,7 +39,7 @@ const navItems: NavItem[] = [
         title: 'ИГРОВОЙ МИР',
         links: [
           { label: 'Персонажи', path: '/characters' },
-          { label: 'Карта мира', path: '/world-map' },
+          { label: 'Карта мира', path: '/world' },
           { label: 'Вестник', path: '/herald' },
         ],
       },

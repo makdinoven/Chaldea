@@ -212,3 +212,27 @@ export const removeNeighbor = createAsyncThunk(
   }
 );
 
+export const uploadLocationIcon = createAsyncThunk(
+  'locationEdit/uploadLocationIcon',
+  async ({ locationId, file }, { rejectWithValue }) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('location_id', locationId);
+
+      const response = await axios.post(
+        '/photo/change_location_icon',
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      );
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data || error.message);
+    }
+  }
+);
+

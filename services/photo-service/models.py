@@ -38,6 +38,7 @@ class Country(Base):
 
     id = Column(Integer, primary_key=True)
     map_image_url = Column(Text, nullable=True)
+    emblem_url = Column(Text, nullable=True)
 
 
 class Region(Base):
@@ -53,6 +54,7 @@ class District(Base):
 
     id = Column(Integer, primary_key=True)
     image_url = Column(Text, nullable=True)
+    map_icon_url = Column(Text, nullable=True)
 
 
 class Location(Base):
@@ -60,6 +62,7 @@ class Location(Base):
 
     id = Column(Integer, primary_key=True)
     image_url = Column(Text, nullable=True)
+    map_icon_url = Column(Text, nullable=True)
 
 
 class Skill(Base):

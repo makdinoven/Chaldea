@@ -23,6 +23,8 @@ interface AdminClickableZoneEditorProps {
   /** Available target entities (countries for area parent, regions for country parent) */
   targetOptions: TargetOption[];
   targetType: 'country' | 'region';
+  /** Available areas as targets (for per-zone target type switching) */
+  areaOptions?: TargetOption[];
   onClose?: () => void;
 }
 
@@ -37,7 +39,11 @@ interface EditingZone {
   zoneId: number;
   label: string;
   targetId: string;
+  strokeColor: string;
+  targetType: 'country' | 'region' | 'area';
 }
+
+type DrawingMode = 'rectangle' | 'polygon';
 
 // --- Component ---
 
@@ -47,6 +53,7 @@ const AdminClickableZoneEditor = ({
   mapImageUrl,
   targetOptions,
   targetType,
+  areaOptions,
   onClose,
 }: AdminClickableZoneEditorProps) => {
   const dispatch = useAppDispatch();
@@ -55,13 +62,25 @@ const AdminClickableZoneEditor = ({
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Drawing mode
+  const [drawingMode, setDrawingMode] = useState<DrawingMode>('polygon');
+
+  // Rectangle drawing state
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Polygon drawing state
+  const [polygonPoints, setPolygonPoints] = useState<ZonePoint[]>([]);
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+  const [polygonFinalized, setPolygonFinalized] = useState(false);
+
   const [selectedZoneId, setSelectedZoneId] = useState<number | null>(null);
 
   // New zone form
   const [newZoneLabel, setNewZoneLabel] = useState('');
   const [newZoneTargetId, setNewZoneTargetId] = useState('');
+  const [newZoneColor, setNewZoneColor] = useState('#f0d95c');
+  const [newZoneTargetType, setNewZoneTargetType] = useState<'country' | 'region' | 'area'>(targetType);
 
   // Edit zone form
   const [editingZone, setEditingZone] = useState<EditingZone | null>(null);
@@ -87,9 +106,42 @@ const AdminClickableZoneEditor = ({
     []
   );
 
+  // --- Polygon helpers ---
+
+  const distanceBetween = (a: { x: number; y: number }, b: { x: number; y: number }): number => {
+    return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+  };
+
+  const CLOSE_THRESHOLD = 3; // percent distance to snap to first point
+
+  const finalizePolygon = useCallback(() => {
+    if (polygonPoints.length < 3) {
+      toast.error('Минимум 3 точки для полигона');
+      return;
+    }
+    setPolygonFinalized(true);
+    setCursorPos(null);
+  }, [polygonPoints.length]);
+
+  const clearPolygonDrawing = () => {
+    setPolygonPoints([]);
+    setCursorPos(null);
+    setPolygonFinalized(false);
+    setNewZoneLabel('');
+    setNewZoneTargetId('');
+    setNewZoneColor('#f0d95c');
+    setNewZoneTargetType(targetType);
+  };
+
+  const handleUndoLastPoint = () => {
+    setPolygonPoints((prev) => prev.slice(0, -1));
+  };
+
   // --- Drawing handlers ---
 
   const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (drawingMode === 'polygon') return; // polygon uses click, not drag
+
     if (selectedZoneId) {
       setSelectedZoneId(null);
       return;
@@ -106,14 +158,23 @@ const AdminClickableZoneEditor = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (!isDragging || !dragState) return;
     const coords = getPercentCoords(e.clientX, e.clientY);
-    setDragState((prev) =>
-      prev ? { ...prev, currentX: coords.x, currentY: coords.y } : null
-    );
+
+    // Polygon: update cursor position for follow-line
+    if (drawingMode === 'polygon' && polygonPoints.length > 0 && !polygonFinalized) {
+      setCursorPos(coords);
+    }
+
+    // Rectangle: update drag
+    if (drawingMode === 'rectangle' && isDragging && dragState) {
+      setDragState((prev) =>
+        prev ? { ...prev, currentX: coords.x, currentY: coords.y } : null
+      );
+    }
   };
 
   const handleMouseUp = () => {
+    if (drawingMode === 'polygon') return;
     if (!isDragging || !dragState) return;
     setIsDragging(false);
 
@@ -129,42 +190,94 @@ const AdminClickableZoneEditor = ({
     // Keep dragState for the form - user needs to fill label and target
   };
 
-  const handleSaveNewZone = async () => {
-    if (!dragState) return;
+  const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (drawingMode !== 'polygon') return;
+    if (polygonFinalized) return;
 
+    // Deselect zone if one is selected
+    if (selectedZoneId) {
+      setSelectedZoneId(null);
+      return;
+    }
+
+    const coords = getPercentCoords(e.clientX, e.clientY);
+
+    // Check if clicking near first point to close
+    if (polygonPoints.length >= 3) {
+      const first = polygonPoints[0];
+      if (distanceBetween(coords, first) < CLOSE_THRESHOLD) {
+        finalizePolygon();
+        return;
+      }
+    }
+
+    setPolygonPoints((prev) => [...prev, coords]);
+  };
+
+  const handleSvgDoubleClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    // Disabled: double-click was causing accidental polygon finalization.
+    // Use "click near first point" or "Завершить" button instead.
+    e.preventDefault();
+  };
+
+  const handleSaveNewZone = async () => {
     if (!newZoneTargetId) {
       toast.error('Выберите целевой объект для зоны');
       return;
     }
 
-    const x1 = Math.min(dragState.startX, dragState.currentX);
-    const y1 = Math.min(dragState.startY, dragState.currentY);
-    const x2 = Math.max(dragState.startX, dragState.currentX);
-    const y2 = Math.max(dragState.startY, dragState.currentY);
+    let zoneData: ZonePoint[];
 
-    const zoneData: ZonePoint[] = [
-      { x: x1, y: y1 },
-      { x: x2, y: y1 },
-      { x: x2, y: y2 },
-      { x: x1, y: y2 },
-    ];
+    if (drawingMode === 'polygon') {
+      if (polygonPoints.length < 3) {
+        toast.error('Минимум 3 точки для зоны');
+        return;
+      }
+      zoneData = polygonPoints;
+    } else {
+      if (!dragState) return;
+
+      const x1 = Math.min(dragState.startX, dragState.currentX);
+      const y1 = Math.min(dragState.startY, dragState.currentY);
+      const x2 = Math.max(dragState.startX, dragState.currentX);
+      const y2 = Math.max(dragState.startY, dragState.currentY);
+
+      zoneData = [
+        { x: x1, y: y1 },
+        { x: x2, y: y1 },
+        { x: x2, y: y2 },
+        { x: x1, y: y2 },
+      ];
+    }
 
     try {
       await dispatch(
         createClickableZone({
           parent_type: parentType,
           parent_id: parentId,
-          target_type: targetType,
+          target_type: newZoneTargetType,
           target_id: Number(newZoneTargetId),
           zone_data: zoneData,
           label: newZoneLabel || undefined,
+          stroke_color: newZoneColor,
         })
       ).unwrap();
 
-      toast.success('Зона создана');
+      toast.success('Зона создана. Можно нарисовать ещё одну.');
+
+      // Keep target type, target id, and color for quick multi-polygon creation
+      const savedTargetType = newZoneTargetType;
+      const savedTargetId = newZoneTargetId;
+      const savedColor = newZoneColor;
+
       setDragState(null);
-      setNewZoneLabel('');
-      setNewZoneTargetId('');
+      clearPolygonDrawing();
+
+      // Restore target selection so user can immediately draw another polygon for the same target
+      setNewZoneTargetType(savedTargetType);
+      setNewZoneTargetId(savedTargetId);
+      setNewZoneColor(savedColor);
+
       dispatch(fetchClickableZones({ parentType, parentId }));
     } catch {
       toast.error('Ошибка создания зоны');
@@ -173,8 +286,7 @@ const AdminClickableZoneEditor = ({
 
   const handleCancelNewZone = () => {
     setDragState(null);
-    setNewZoneLabel('');
-    setNewZoneTargetId('');
+    clearPolygonDrawing();
   };
 
   // --- Edit/Delete zone ---
@@ -184,6 +296,8 @@ const AdminClickableZoneEditor = ({
       zoneId: zone.id,
       label: zone.label || '',
       targetId: String(zone.target_id),
+      strokeColor: zone.stroke_color || '#f0d95c',
+      targetType: zone.target_type,
     });
     setSelectedZoneId(zone.id);
   };
@@ -196,8 +310,9 @@ const AdminClickableZoneEditor = ({
         updateClickableZone({
           id: editingZone.zoneId,
           label: editingZone.label || undefined,
-          target_type: targetType,
+          target_type: editingZone.targetType,
           target_id: Number(editingZone.targetId),
+          stroke_color: editingZone.strokeColor,
         })
       ).unwrap();
 
@@ -231,6 +346,17 @@ const AdminClickableZoneEditor = ({
     }
   };
 
+  // --- Mode switching ---
+
+  const switchMode = (mode: DrawingMode) => {
+    if (mode === drawingMode) return;
+    // Clear any in-progress drawing
+    setDragState(null);
+    setIsDragging(false);
+    clearPolygonDrawing();
+    setDrawingMode(mode);
+  };
+
   // --- Render helpers ---
 
   const getZoneSvgPath = (zoneData: ZonePoint[]): string => {
@@ -244,10 +370,29 @@ const AdminClickableZoneEditor = ({
     return d;
   };
 
+  const getOptionsForTargetType = (tt: 'country' | 'region' | 'area'): TargetOption[] => {
+    if (tt === 'area') return areaOptions || [];
+    // 'country' or 'region' use the default targetOptions passed from parent
+    return targetOptions;
+  };
+
+  const getTargetTypeLabel = (tt: 'country' | 'region' | 'area'): string => {
+    if (tt === 'area') return 'Область';
+    if (tt === 'country') return 'Страна';
+    return 'Регион';
+  };
+
   const getTargetName = (targetId: number): string => {
-    const found = targetOptions.find((t) => t.id === targetId);
+    // Search across all option sets
+    const allOptions = [...targetOptions, ...(areaOptions || [])];
+    const found = allOptions.find((t) => t.id === targetId);
     return found ? found.name : `#${targetId}`;
   };
+
+  // Check if new zone form should show
+  const showNewZoneForm =
+    (drawingMode === 'rectangle' && dragState && !isDragging) ||
+    (drawingMode === 'polygon' && polygonFinalized);
 
   // --- Render ---
 
@@ -275,6 +420,30 @@ const AdminClickableZoneEditor = ({
           Редактор кликабельных зон
         </h3>
 
+        {/* Drawing mode toggle */}
+        <div className="flex gap-2 mb-3">
+          <button
+            className={`px-3 py-1.5 rounded text-sm font-medium border-none cursor-pointer transition-colors ${
+              drawingMode === 'polygon'
+                ? 'bg-site-blue text-white'
+                : 'bg-white/10 text-[#8ab3d5] hover:bg-white/20'
+            }`}
+            onClick={() => switchMode('polygon')}
+          >
+            Полигон
+          </button>
+          <button
+            className={`px-3 py-1.5 rounded text-sm font-medium border-none cursor-pointer transition-colors ${
+              drawingMode === 'rectangle'
+                ? 'bg-site-blue text-white'
+                : 'bg-white/10 text-[#8ab3d5] hover:bg-white/20'
+            }`}
+            onClick={() => switchMode('rectangle')}
+          >
+            Прямоугольник
+          </button>
+        </div>
+
         <div
           ref={containerRef}
           className="relative border border-white/20 rounded-lg overflow-hidden cursor-crosshair"
@@ -294,8 +463,11 @@ const AdminClickableZoneEditor = ({
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
+            onClick={handleSvgClick}
+            onDoubleClick={handleSvgDoubleClick}
             onMouseLeave={() => {
-              if (isDragging) handleMouseUp();
+              if (drawingMode === 'rectangle' && isDragging) handleMouseUp();
+              if (drawingMode === 'polygon') setCursorPos(null);
             }}
           >
             {/* Existing zones */}
@@ -304,7 +476,7 @@ const AdminClickableZoneEditor = ({
                 <path
                   d={getZoneSvgPath(zone.zone_data)}
                   fill={selectedZoneId === zone.id ? 'rgba(118,166,189,0.4)' : 'rgba(240,217,92,0.2)'}
-                  stroke={selectedZoneId === zone.id ? '#76a6bd' : '#f0d95c'}
+                  stroke={selectedZoneId === zone.id ? '#76a6bd' : (zone.stroke_color || '#f0d95c')}
                   strokeWidth="0.3"
                   className="cursor-pointer transition-colors"
                   onClick={(e) => {
@@ -331,8 +503,8 @@ const AdminClickableZoneEditor = ({
               </g>
             ))}
 
-            {/* Drawing preview */}
-            {dragState && (
+            {/* Rectangle drawing preview */}
+            {drawingMode === 'rectangle' && dragState && (
               <rect
                 x={Math.min(dragState.startX, dragState.currentX)}
                 y={Math.min(dragState.startY, dragState.currentY)}
@@ -344,31 +516,145 @@ const AdminClickableZoneEditor = ({
                 strokeDasharray="1"
               />
             )}
+
+            {/* Polygon drawing preview */}
+            {drawingMode === 'polygon' && polygonPoints.length > 0 && (
+              <g>
+                {/* Filled polygon preview (when finalized or has 3+ points) */}
+                {polygonPoints.length >= 3 && (
+                  <polygon
+                    points={polygonPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                    fill="rgba(118,166,189,0.3)"
+                    stroke="#76a6bd"
+                    strokeWidth="0.3"
+                    strokeDasharray={polygonFinalized ? '0' : '1'}
+                  />
+                )}
+
+                {/* Lines between points (when < 3 points, draw as lines) */}
+                {polygonPoints.length < 3 && polygonPoints.length >= 2 && (
+                  <polyline
+                    points={polygonPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                    fill="none"
+                    stroke="#76a6bd"
+                    strokeWidth="0.3"
+                    strokeDasharray="1"
+                  />
+                )}
+
+                {/* Follow-line from last point to cursor */}
+                {!polygonFinalized && cursorPos && polygonPoints.length > 0 && (
+                  <line
+                    x1={polygonPoints[polygonPoints.length - 1].x}
+                    y1={polygonPoints[polygonPoints.length - 1].y}
+                    x2={cursorPos.x}
+                    y2={cursorPos.y}
+                    stroke="#76a6bd"
+                    strokeWidth="0.2"
+                    strokeDasharray="0.5"
+                    opacity={0.7}
+                  />
+                )}
+
+                {/* Vertex circles */}
+                {polygonPoints.map((pt, i) => (
+                  <circle
+                    key={i}
+                    cx={pt.x}
+                    cy={pt.y}
+                    r={i === 0 && polygonPoints.length >= 3 && !polygonFinalized ? 1.2 : 0.7}
+                    fill={i === 0 ? '#f0d95c' : '#76a6bd'}
+                    stroke="white"
+                    strokeWidth="0.15"
+                    className="pointer-events-none"
+                  />
+                ))}
+              </g>
+            )}
           </svg>
         </div>
 
-        <p className="text-xs text-[#8ab3d5] mt-2">
-          Нажмите и перетащите на карте, чтобы нарисовать прямоугольную зону.
-        </p>
+        {/* Hint text */}
+        <div className="flex items-center justify-between mt-2">
+          <p className="text-xs text-[#8ab3d5]">
+            {drawingMode === 'rectangle'
+              ? 'Нажмите и перетащите на карте, чтобы нарисовать прямоугольную зону.'
+              : 'Кликните для добавления точек. Клик на первую точку или кнопка «Завершить» для завершения.'}
+          </p>
+
+          {/* Polygon point count and controls during drawing */}
+          {drawingMode === 'polygon' && polygonPoints.length > 0 && !polygonFinalized && (
+            <div className="flex items-center gap-3 ml-3 flex-shrink-0">
+              <span className="text-xs text-[#8ab3d5]">Точек: {polygonPoints.length}</span>
+              <button
+                className="text-xs text-[#8ab3d5] hover:text-white transition-colors cursor-pointer bg-transparent border-none underline"
+                onClick={handleUndoLastPoint}
+              >
+                Убрать последнюю точку
+              </button>
+              {polygonPoints.length >= 3 && (
+                <button
+                  className="text-xs text-[#99ffaa] hover:text-white transition-colors cursor-pointer bg-transparent border-none underline"
+                  onClick={finalizePolygon}
+                >
+                  Завершить полигон
+                </button>
+              )}
+              <button
+                className="text-xs text-[#ff9999] hover:text-white transition-colors cursor-pointer bg-transparent border-none underline"
+                onClick={clearPolygonDrawing}
+              >
+                Отменить рисование
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* New zone form (after drawing) */}
-        {dragState && !isDragging && (
+        {showNewZoneForm && (
           <div className="mt-4 p-4 bg-[rgba(22,37,49,0.85)] rounded-lg border border-white/10">
             <h4 className="text-[#a8c6df] mb-3 font-medium">Новая зона</h4>
             <div className="flex flex-col gap-3">
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="flex-1">
+                  <label className="block mb-1 text-[#8ab3d5] text-sm">Название (необязательно):</label>
+                  <input
+                    type="text"
+                    value={newZoneLabel}
+                    onChange={(e) => setNewZoneLabel(e.target.value)}
+                    placeholder="Название зоны"
+                    className="w-full p-2 bg-black/30 border border-white/10 rounded text-[#d4e6f3] text-sm transition-colors focus:border-site-blue/50 focus:outline-none"
+                  />
+                </div>
+                <div className="w-full sm:w-auto">
+                  <label className="block mb-1 text-[#8ab3d5] text-sm">Цвет обводки:</label>
+                  <input
+                    type="color"
+                    value={newZoneColor}
+                    onChange={(e) => setNewZoneColor(e.target.value)}
+                    className="w-full sm:w-10 h-[38px] p-0.5 bg-black/30 border border-white/10 rounded cursor-pointer"
+                  />
+                </div>
+              </div>
               <div>
-                <label className="block mb-1 text-[#8ab3d5] text-sm">Название (необязательно):</label>
-                <input
-                  type="text"
-                  value={newZoneLabel}
-                  onChange={(e) => setNewZoneLabel(e.target.value)}
-                  placeholder="Название зоны"
+                <label className="block mb-1 text-[#8ab3d5] text-sm">Тип цели:</label>
+                <select
+                  value={newZoneTargetType}
+                  onChange={(e) => {
+                    const tt = e.target.value as 'country' | 'region' | 'area';
+                    setNewZoneTargetType(tt);
+                    setNewZoneTargetId('');
+                  }}
                   className="w-full p-2 bg-black/30 border border-white/10 rounded text-[#d4e6f3] text-sm transition-colors focus:border-site-blue/50 focus:outline-none"
-                />
+                >
+                  <option value="area">Область</option>
+                  <option value="country">Страна</option>
+                  <option value="region">Регион</option>
+                </select>
               </div>
               <div>
                 <label className="block mb-1 text-[#8ab3d5] text-sm">
-                  Цель ({targetType === 'country' ? 'Страна' : 'Регион'}):
+                  Цель ({getTargetTypeLabel(newZoneTargetType)}):
                 </label>
                 <select
                   value={newZoneTargetId}
@@ -376,7 +662,7 @@ const AdminClickableZoneEditor = ({
                   className="w-full p-2 bg-black/30 border border-white/10 rounded text-[#d4e6f3] text-sm transition-colors focus:border-site-blue/50 focus:outline-none"
                 >
                   <option value="">Выберите...</option>
-                  {targetOptions.map((opt) => (
+                  {getOptionsForTargetType(newZoneTargetType).map((opt) => (
                     <option key={opt.id} value={opt.id}>
                       {opt.name}
                     </option>
@@ -442,22 +728,56 @@ const AdminClickableZoneEditor = ({
                 </span>
                 <span className="text-[#8ab3d5] text-xs">ID: {zone.id}</span>
               </div>
-              <div className="text-[#8ab3d5] text-xs mb-2">
-                Цель: {getTargetName(zone.target_id)} (#{zone.target_id})
+              <div className="text-[#8ab3d5] text-xs mb-2 flex items-center gap-2">
+                <span>Цель: {getTargetName(zone.target_id)} (#{zone.target_id})</span>
+                <span
+                  className="inline-block w-3 h-3 rounded-sm border border-white/20 flex-shrink-0"
+                  style={{ backgroundColor: zone.stroke_color || '#f0d95c' }}
+                  title="Цвет обводки"
+                />
               </div>
 
               {/* Editing form for this zone */}
               {editingZone && editingZone.zoneId === zone.id ? (
                 <div className="mt-2 flex flex-col gap-2">
-                  <input
-                    type="text"
-                    value={editingZone.label}
-                    onChange={(e) =>
-                      setEditingZone((prev) => (prev ? { ...prev, label: e.target.value } : null))
-                    }
-                    placeholder="Название"
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={editingZone.label}
+                      onChange={(e) =>
+                        setEditingZone((prev) => (prev ? { ...prev, label: e.target.value } : null))
+                      }
+                      placeholder="Название"
+                      className="flex-1 p-1.5 bg-black/30 border border-white/10 rounded text-[#d4e6f3] text-xs transition-colors focus:border-site-blue/50 focus:outline-none"
+                    />
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[#8ab3d5] text-xs whitespace-nowrap">Цвет:</span>
+                      <input
+                        type="color"
+                        value={editingZone.strokeColor}
+                        onChange={(e) =>
+                          setEditingZone((prev) =>
+                            prev ? { ...prev, strokeColor: e.target.value } : null
+                          )
+                        }
+                        className="w-8 h-7 p-0.5 bg-black/30 border border-white/10 rounded cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                  <select
+                    value={editingZone.targetType}
+                    onChange={(e) => {
+                      const tt = e.target.value as 'country' | 'region' | 'area';
+                      setEditingZone((prev) =>
+                        prev ? { ...prev, targetType: tt, targetId: '' } : null
+                      );
+                    }}
                     className="w-full p-1.5 bg-black/30 border border-white/10 rounded text-[#d4e6f3] text-xs transition-colors focus:border-site-blue/50 focus:outline-none"
-                  />
+                  >
+                    <option value="area">Область</option>
+                    <option value="country">Страна</option>
+                    <option value="region">Регион</option>
+                  </select>
                   <select
                     value={editingZone.targetId}
                     onChange={(e) =>
@@ -468,7 +788,7 @@ const AdminClickableZoneEditor = ({
                     className="w-full p-1.5 bg-black/30 border border-white/10 rounded text-[#d4e6f3] text-xs transition-colors focus:border-site-blue/50 focus:outline-none"
                   >
                     <option value="">Выберите...</option>
-                    {targetOptions.map((opt) => (
+                    {getOptionsForTargetType(editingZone.targetType).map((opt) => (
                       <option key={opt.id} value={opt.id}>
                         {opt.name}
                       </option>

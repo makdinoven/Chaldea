@@ -9,6 +9,7 @@ export interface Country {
   name: string;
   description: string;
   map_image_url: string | null;
+  emblem_url: string | null;
   area_id: number | null;
   x: number | null;
   y: number | null;
@@ -27,6 +28,9 @@ export interface District {
   description: string;
   region_id: number;
   image_url: string | null;
+  map_icon_url: string | null;
+  x: number | null;
+  y: number | null;
   locations: LocationItem[];
 }
 
@@ -36,6 +40,9 @@ export interface LocationItem {
   type: string;
   image_url: string | null;
   marker_type: string;
+  map_icon_url: string | null;
+  map_x: number | null;
+  map_y: number | null;
   children?: LocationItem[];
 }
 
@@ -44,8 +51,20 @@ export interface CountryDetails {
   name: string;
   description: string;
   map_image_url: string | null;
+  emblem_url: string | null;
   area_id: number | null;
   regions: Region[];
+}
+
+export interface RegionMapItem {
+  id: number;
+  name: string;
+  type: 'location' | 'district';
+  map_icon_url: string | null;
+  map_x: number | null;
+  map_y: number | null;
+  marker_type: string | null;
+  image_url: string | null;
 }
 
 export interface RegionDetails {
@@ -53,6 +72,9 @@ export interface RegionDetails {
   name: string;
   description: string;
   country_id: number;
+  map_image_url: string | null;
+  neighbor_edges: Array<{ from_id: number; to_id: number }>;
+  map_items: RegionMapItem[];
   districts: District[];
 }
 
@@ -72,20 +94,22 @@ export interface AreaUpdateData {
 export interface ClickableZoneCreateData {
   parent_type: 'area' | 'country';
   parent_id: number;
-  target_type: 'country' | 'region';
+  target_type: 'country' | 'region' | 'area';
   target_id: number;
   zone_data: ZonePoint[];
   label?: string;
+  stroke_color?: string;
 }
 
 export interface ClickableZoneUpdateData {
   id: number;
   parent_type?: 'area' | 'country';
   parent_id?: number;
-  target_type?: 'country' | 'region';
+  target_type?: 'country' | 'region' | 'area';
   target_id?: number;
   zone_data?: ZonePoint[];
   label?: string;
+  stroke_color?: string;
 }
 
 // Re-export for convenience

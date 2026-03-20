@@ -9,6 +9,7 @@ interface CountryFormData {
   name: string;
   description: string;
   map_image_url: string;
+  emblem_url: string;
   leader_id: number | null;
   area_id: number | string;
 }
@@ -18,6 +19,7 @@ interface InitialData {
   name?: string;
   description?: string;
   map_image_url?: string;
+  emblem_url?: string | null;
   leader_id?: number | null;
   area_id?: number | null;
 }
@@ -37,11 +39,14 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
     name: initialData?.name || '',
     description: initialData?.description || '',
     map_image_url: initialData?.map_image_url || '',
+    emblem_url: initialData?.emblem_url || '',
     leader_id: initialData?.leader_id || null,
     area_id: initialData?.area_id || '',
   });
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [emblemFile, setEmblemFile] = useState<File | null>(null);
+  const [emblemPreview, setEmblemPreview] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
 
@@ -64,6 +69,13 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
         ...prev,
         map_image_url: previewUrl,
       }));
+    }
+  };
+
+  const handleEmblemFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setEmblemFile(e.target.files[0]);
+      setEmblemPreview(URL.createObjectURL(e.target.files[0]));
     }
   };
 
@@ -92,29 +104,57 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
     }
   };
 
+  const uploadEmblem = async (countryId: number): Promise<string | null> => {
+    if (!emblemFile) return null;
+
+    setIsUploading(true);
+
+    try {
+      const fd = new FormData();
+      fd.append('country_id', String(countryId));
+      fd.append('file', emblemFile);
+
+      const response = await axios.post('/photo/change_country_emblem', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      return response.data.emblem_url;
+    } catch {
+      toast.error('Не удалось загрузить эмблему страны');
+      return null;
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isUploading) return;
 
-    if (!initialData) {
-      const savedCountry = await onSuccess(formData);
-      if (savedCountry && typeof savedCountry === 'object' && 'id' in (savedCountry as Record<string, unknown>) && selectedFile) {
-        const imageUrl = await uploadImage((savedCountry as { id: number }).id);
-        if (imageUrl) {
-          onSuccess({ ...savedCountry, map_image_url: imageUrl });
-        }
-      }
-    } else {
-      if (selectedFile && initialData.id) {
+    if (initialData?.id) {
+      // Edit existing country
+      const resultData: Record<string, unknown> = { ...formData, id: initialData.id };
+
+      if (selectedFile) {
         const imageUrl = await uploadImage(initialData.id);
         if (imageUrl) {
-          onSuccess({ ...formData, map_image_url: imageUrl });
-        } else {
-          onSuccess(formData);
+          resultData.map_image_url = imageUrl;
         }
-      } else {
-        onSuccess(formData);
       }
+
+      if (emblemFile) {
+        const emblemUrl = await uploadEmblem(initialData.id);
+        if (emblemUrl) {
+          resultData.emblem_url = emblemUrl;
+        }
+      }
+
+      onSuccess(resultData);
+    } else {
+      // Create new country — pass form data, let parent handle API call.
+      // NOTE: Emblem upload requires a country_id, so for newly created countries
+      // the emblem must be uploaded after creation (edit the country to add emblem).
+      onSuccess(formData);
     }
   };
 
@@ -201,6 +241,55 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
                 className="max-w-full h-auto rounded border border-white/10"
               />
             </div>
+          )}
+        </div>
+
+        <div className="mb-6">
+          <label className="block mb-2 text-[#8ab3d5] font-medium">ЭМБЛЕМА СТРАНЫ:</label>
+          <div className="mb-4">
+            <input
+              type="file"
+              id="emblem_image"
+              accept="image/*"
+              onChange={handleEmblemFileChange}
+              className="hidden"
+            />
+            <label
+              htmlFor="emblem_image"
+              className="inline-block px-6 py-3 bg-white/10 text-white rounded cursor-pointer transition-colors hover:bg-white/20"
+            >
+              {emblemFile ? emblemFile.name : 'Выберите файл'}
+            </label>
+          </div>
+
+          <div className="flex items-center gap-4 flex-wrap">
+            {emblemPreview && (
+              <div className="flex flex-col items-center gap-1">
+                <span className="text-xs text-gray-400">Новая</span>
+                <img
+                  src={emblemPreview}
+                  alt="Предпросмотр эмблемы"
+                  className="w-12 h-12 rounded-full object-cover border border-white/10"
+                />
+              </div>
+            )}
+
+            {!emblemPreview && initialData?.emblem_url && (
+              <div className="flex flex-col items-center gap-1">
+                <span className="text-xs text-gray-400">Текущая</span>
+                <img
+                  src={initialData.emblem_url}
+                  alt="Текущая эмблема"
+                  className="w-12 h-12 rounded-full object-cover border border-white/10"
+                />
+              </div>
+            )}
+          </div>
+
+          {!initialData?.id && (
+            <p className="text-xs text-gray-400 mt-2">
+              Эмблему можно загрузить после создания страны
+            </p>
           )}
         </div>
 

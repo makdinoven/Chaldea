@@ -4,6 +4,7 @@ import {
     updateLocation,
     fetchLocationDetails,
     uploadLocationImage,
+    uploadLocationIcon,
     updateLocationNeighbors,
     fetchLocationsList,
     fetchDistrictLocations,
@@ -19,6 +20,8 @@ const initialState = {
     error: null,
     imageUploading: false,
     imageError: null,
+    iconUploading: false,
+    iconError: null,
     districtLocations: [],
     allLocations: []
 };
@@ -99,6 +102,22 @@ const locationEditSlice = createSlice({
             .addCase(uploadLocationImage.rejected, (state, action) => {
                 state.imageUploading = false;
                 state.imageError = action.payload;
+            })
+
+            // Обработка uploadLocationIcon
+            .addCase(uploadLocationIcon.pending, (state) => {
+                state.iconUploading = true;
+                state.iconError = null;
+            })
+            .addCase(uploadLocationIcon.fulfilled, (state, action) => {
+                state.iconUploading = false;
+                if (state.currentLocation) {
+                    state.currentLocation.map_icon_url = action.payload.map_icon_url;
+                }
+            })
+            .addCase(uploadLocationIcon.rejected, (state, action) => {
+                state.iconUploading = false;
+                state.iconError = action.payload;
             })
 
             // Обработка updateLocationNeighbors

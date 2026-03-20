@@ -87,12 +87,14 @@ async def create_new_country(session: AsyncSession, name: str, description: str,
                        leader_id: Optional[int], map_image_url: Optional[str],
                        area_id: Optional[int] = None,
                        x: Optional[float] = None,
-                       y: Optional[float] = None) -> Country:
+                       y: Optional[float] = None,
+                       emblem_url: Optional[str] = None) -> Country:
     new_country = Country(
         name=name,
         description=description,
         leader_id=leader_id,
         map_image_url=map_image_url,
+        emblem_url=emblem_url,
         area_id=area_id,
         x=x,
         y=y,
@@ -133,6 +135,7 @@ async def get_country_details(session: AsyncSession, country_id: int) -> Optiona
         "description": country.description,
         "leader_id": country.leader_id,
         "map_image_url": country.map_image_url,
+        "emblem_url": country.emblem_url,
         "regions": [
             {
                 "id": reg.id,
@@ -209,10 +212,17 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
     if not region:
         return None
 
-    # Получаем все локации для региона одним запросом
+    # Получаем все локации для региона одним запросом (district-based + standalone)
+    district_ids = [d.id for d in region.districts]
+    from sqlalchemy import or_
+    location_filter = []
+    if district_ids:
+        location_filter.append(Location.district_id.in_(district_ids))
+    location_filter.append(
+        (Location.region_id == region_id) & (Location.district_id.is_(None))
+    )
     locations_result = await session.execute(
-        select(Location)
-        .where(Location.district_id.in_([d.id for d in region.districts]))
+        select(Location).where(or_(*location_filter))
     )
     all_locations = locations_result.scalars().all()
 
@@ -226,6 +236,10 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         "quick_travel_marker": loc.quick_travel_marker,
         "description": loc.description,
         "parent_id": loc.parent_id,
+        "marker_type": loc.marker_type,
+        "map_icon_url": loc.map_icon_url,
+        "map_x": loc.map_x,
+        "map_y": loc.map_y,
         "children": []
     } for loc in all_locations}
 
@@ -265,8 +279,54 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
             "x": district.x,
             "y": district.y,
             "image_url": district.image_url,
+            "map_icon_url": district.map_icon_url,
             "locations": district_root_locations
         })
+
+    # Build unified map_items list combining locations and districts
+    map_items = []
+    for loc in all_locations:
+        if loc.map_x is not None and loc.map_y is not None:
+            map_items.append({
+                "id": loc.id,
+                "name": loc.name,
+                "type": "location",
+                "map_icon_url": loc.map_icon_url,
+                "map_x": loc.map_x,
+                "map_y": loc.map_y,
+                "marker_type": loc.marker_type,
+                "image_url": loc.image_url,
+            })
+    for district in region.districts:
+        if district.x is not None and district.y is not None:
+            map_items.append({
+                "id": district.id,
+                "name": district.name,
+                "type": "district",
+                "map_icon_url": district.map_icon_url,
+                "map_x": district.x,
+                "map_y": district.y,
+                "marker_type": None,
+                "image_url": district.image_url,
+            })
+
+    # Получаем neighbor_edges для всех локаций региона
+    all_location_ids = [loc.id for loc in all_locations]
+    neighbor_edges = []
+    if all_location_ids:
+        neighbors_result = await session.execute(
+            select(LocationNeighbor).where(
+                LocationNeighbor.location_id.in_(all_location_ids),
+                LocationNeighbor.neighbor_id.in_(all_location_ids)
+            )
+        )
+        all_neighbors = neighbors_result.scalars().all()
+        seen_edges = set()
+        for n in all_neighbors:
+            edge = (min(n.location_id, n.neighbor_id), max(n.location_id, n.neighbor_id))
+            if edge not in seen_edges:
+                seen_edges.add(edge)
+                neighbor_edges.append({"from_id": edge[0], "to_id": edge[1]})
 
     return {
         "id": region.id,
@@ -280,7 +340,9 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         "leader_id": region.leader_id,
         "x": region.x,
         "y": region.y,
-        "districts": districts_data
+        "districts": districts_data,
+        "map_items": map_items,
+        "neighbor_edges": neighbor_edges,
     }
 
 
@@ -297,7 +359,8 @@ async def create_district(session: AsyncSession, district: DistrictCreate) -> Di
         recommended_level=district.recommended_level,
         x=district.x,
         y=district.y,
-        image_url=district.image_url or ""  # Используем пустую строку вместо None
+        image_url=district.image_url or "",  # Используем пустую строку вместо None
+        map_icon_url=district.map_icon_url,
     )
     
     session.add(db_district)
@@ -341,6 +404,8 @@ async def update_district(session: AsyncSession, district_id: int, data) -> Dist
         db_district.x = data.x
     if getattr(data, "y", None) is not None:
         db_district.y = data.y
+    if getattr(data, "map_icon_url", None) is not None:
+        db_district.map_icon_url = data.map_icon_url
 
     await session.commit()
     await session.refresh(db_district)
@@ -353,11 +418,18 @@ async def create_location(session: AsyncSession, location_data: LocationCreate) 
     try:
         print("=== Начало создания локации ===")
         print(f"Входные данные: {location_data}")
-        
+
+        # Validate: must have either district_id or region_id
+        if not location_data.district_id and not location_data.region_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Необходимо указать district_id или region_id"
+            )
+
         # Создаем словарь с данными локации
         location_dict = location_data.dict()
         print(f"Преобразованные данные: {location_dict}")
-        
+
         # Устанавливаем значения по умолчанию
         location_dict['type'] = 'location'
         location_dict['image_url'] = location_dict.get('image_url', '')
@@ -523,6 +595,7 @@ async def get_location_details(session: AsyncSession, location_id: int) -> Optio
         "recommended_level": loc.recommended_level,
         "quick_travel_marker": loc.quick_travel_marker,
         "district_id": loc.district_id,
+        "region_id": loc.region_id,
         "neighbors": [
             {"neighbor_id": n.neighbor_id, "energy_cost": n.energy_cost}
             for n in neighbors
@@ -598,6 +671,7 @@ async def get_admin_panel_data(session: AsyncSession) -> dict:
                 "x": district.x,
                 "y": district.y,
                 "image_url": district.image_url,
+                "map_icon_url": district.map_icon_url,
                 "locations": [
                     {
                         "id": loc.id,
@@ -605,7 +679,10 @@ async def get_admin_panel_data(session: AsyncSession) -> dict:
                         "type": loc.type,
                         "description": loc.description,
                         "marker_type": loc.marker_type,
-                        "image_url": loc.image_url
+                        "image_url": loc.image_url,
+                        "map_icon_url": loc.map_icon_url,
+                        "map_x": loc.map_x,
+                        "map_y": loc.map_y,
                     } for loc in locations
                 ]
             })
@@ -641,6 +718,7 @@ async def get_admin_panel_data(session: AsyncSession) -> dict:
                 "description": country.description,
                 "leader_id": country.leader_id,
                 "map_image_url": country.map_image_url,
+                "emblem_url": country.emblem_url,
                 "area_id": country.area_id,
                 "x": country.x,
                 "y": country.y,
@@ -659,6 +737,7 @@ async def get_countries_list(session: AsyncSession) -> List[dict]:
             "name": country.name,
             "description": country.description,
             "map_image_url": country.map_image_url,
+            "emblem_url": country.emblem_url,
             "area_id": country.area_id,
             "x": country.x,
             "y": country.y,
@@ -921,6 +1000,7 @@ async def get_client_location_details(session: AsyncSession, location_id: int) -
         "recommended_level": loc.recommended_level,
         "quick_travel_marker": loc.quick_travel_marker,
         "district_id": loc.district_id,
+        "region_id": loc.region_id,
         "neighbors": detailed_neighbors,
         "players": players,
         "posts": detailed_posts
@@ -1039,6 +1119,7 @@ async def get_area_details(session: AsyncSession, area_id: int) -> Optional[dict
                 "description": c.description,
                 "leader_id": c.leader_id,
                 "map_image_url": c.map_image_url,
+                "emblem_url": c.emblem_url,
                 "area_id": c.area_id,
                 "x": c.x,
                 "y": c.y,
@@ -1077,6 +1158,7 @@ async def create_clickable_zone(session: AsyncSession, data: ClickableZoneCreate
         target_id=data.target_id,
         zone_data=zone_data_dicts,
         label=data.label,
+        stroke_color=data.stroke_color,
     )
     session.add(new_zone)
     await session.commit()
@@ -1162,11 +1244,16 @@ async def get_hierarchy_tree(session: AsyncSession) -> List[dict]:
 
     # Assign child locations to parents
     root_locations_by_district = {}  # district_id -> list of root locations
+    root_locations_by_region = {}    # region_id -> list of standalone root locations
     for loc in locations:
         if loc.parent_id and loc.parent_id in locations_by_id:
             locations_by_id[loc.parent_id]["children"].append(locations_by_id[loc.id])
-        else:
+        elif loc.district_id:
             root_locations_by_district.setdefault(loc.district_id, []).append(
+                locations_by_id[loc.id]
+            )
+        elif loc.region_id:
+            root_locations_by_region.setdefault(loc.region_id, []).append(
                 locations_by_id[loc.id]
             )
 
@@ -1181,14 +1268,15 @@ async def get_hierarchy_tree(session: AsyncSession) -> List[dict]:
         }
         districts_by_region.setdefault(district.region_id, []).append(district_node)
 
-    # Build region nodes
+    # Build region nodes (districts + standalone locations)
     regions_by_country = {}
     for region in regions:
+        region_children = districts_by_region.get(region.id, []) + root_locations_by_region.get(region.id, [])
         region_node = {
             "id": region.id,
             "name": region.name,
             "type": "region",
-            "children": districts_by_region.get(region.id, []),
+            "children": region_children,
         }
         regions_by_country.setdefault(region.country_id, []).append(region_node)
 

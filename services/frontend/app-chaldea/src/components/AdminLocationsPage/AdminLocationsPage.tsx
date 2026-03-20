@@ -11,7 +11,7 @@ import {
   deleteArea,
   uploadAreaMap,
 } from '../../redux/actions/adminLocationsActions';
-import { deleteCountry } from '../../redux/actions/countryEditActions';
+import { deleteCountry, createCountry, updateCountry } from '../../redux/actions/countryEditActions';
 import { deleteRegion } from '../../redux/actions/regionEditActions';
 import { deleteDistrict } from '../../redux/actions/districtEditActions';
 import { deleteLocation } from '../../redux/actions/locationEditActions';
@@ -21,6 +21,8 @@ import EditCountryForm from './EditForms/EditCountryForm/EditCountryForm';
 import EditRegionForm from './EditForms/EditRegionForm/EditRegionForm';
 import EditDistrictForm from './EditForms/EditDistrictForm/EditDistrictForm';
 import EditLocationForm from './EditForms/EditLocationForm/EditLocationForm';
+import AdminClickableZoneEditor from './AdminClickableZoneEditor/AdminClickableZoneEditor';
+import RegionMapEditor from './RegionMapEditor/RegionMapEditor';
 
 import type { Area } from '../../redux/actions/adminLocationsActions';
 
@@ -39,6 +41,9 @@ interface District {
   id: number;
   name: string;
   image_url?: string | null;
+  map_icon_url?: string | null;
+  x?: number | null;
+  y?: number | null;
   locations?: LocationNode[];
 }
 
@@ -90,6 +95,9 @@ const AdminLocationsPage = () => {
   const [areaForm, setAreaForm] = useState<AreaFormData>({ name: '', description: '', sort_order: 0 });
   const [areaMapFile, setAreaMapFile] = useState<File | null>(null);
   const [isCreatingArea, setIsCreatingArea] = useState(false);
+  const [editingZonesForAreaId, setEditingZonesForAreaId] = useState<number | null>(null);
+  const [editingZonesForCountryId, setEditingZonesForCountryId] = useState<number | null>(null);
+  const [editingMapForRegionId, setEditingMapForRegionId] = useState<number | null>(null);
 
   useEffect(() => {
     dispatch(fetchCountriesList());
@@ -194,8 +202,9 @@ const AdminLocationsPage = () => {
   };
 
   const toggleCountry = (countryId: number) => {
-    setOpenedCountries((prev) => ({ ...prev, [countryId]: !prev[countryId] }));
-    if (!countryDetails[countryId]) {
+    const isOpening = !openedCountries[countryId];
+    setOpenedCountries((prev) => ({ ...prev, [countryId]: isOpening }));
+    if (isOpening) {
       dispatch(fetchCountryDetails(countryId));
     }
   };
@@ -469,6 +478,22 @@ const AdminLocationsPage = () => {
               >
                 <span className="text-lg font-bold text-gold">{area.name}</span>
                 <div className="flex items-center gap-4">
+                  {area.map_image_url && (
+                    <button
+                      className="px-2 py-1 bg-green-600/20 text-green-400 border-none rounded cursor-pointer text-xs transition-colors hover:bg-green-600/30"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (editingZonesForAreaId === area.id) {
+                          setEditingZonesForAreaId(null);
+                        } else {
+                          setEditingZonesForAreaId(area.id);
+                          setOpenedAreas(prev => ({ ...prev, [area.id]: true }));
+                        }
+                      }}
+                    >
+                      Редактировать зоны
+                    </button>
+                  )}
                   <button
                     className="px-2 py-1 bg-site-blue/20 text-site-blue border-none rounded cursor-pointer text-xs transition-colors hover:bg-site-blue/30"
                     onClick={(e) => handleStartEditArea(e, area)}
@@ -503,6 +528,19 @@ const AdminLocationsPage = () => {
                     </div>
                   )}
                   {renderCountries(areaCountries)}
+                  {editingZonesForAreaId === area.id && area.map_image_url && (
+                    <div className="mt-4">
+                      <AdminClickableZoneEditor
+                        parentType="area"
+                        parentId={area.id}
+                        mapImageUrl={area.map_image_url}
+                        targetOptions={areaCountries.map((c) => ({ id: c.id, name: c.name }))}
+                        targetType="country"
+                        areaOptions={areas.map((a) => ({ id: a.id, name: a.name }))}
+                        onClose={() => setEditingZonesForAreaId(null)}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -536,7 +574,27 @@ const AdminLocationsPage = () => {
             <EditCountryForm
               initialData={editingCountry}
               onCancel={() => setEditingCountry(null)}
-              onSuccess={() => {
+              onSuccess={async (data?: unknown) => {
+                const countryData = data as Record<string, unknown> | undefined;
+                if (countryData && !countryData.id) {
+                  // New country — dispatch createCountry
+                  try {
+                    await dispatch(createCountry(countryData) as any).unwrap();
+                    toast.success('Страна создана');
+                  } catch {
+                    toast.error('Ошибка создания страны');
+                    return;
+                  }
+                } else if (countryData?.id) {
+                  // Existing country — dispatch updateCountry
+                  try {
+                    await dispatch(updateCountry(countryData) as any).unwrap();
+                    toast.success('Страна обновлена');
+                  } catch {
+                    toast.error('Ошибка обновления страны');
+                    return;
+                  }
+                }
                 setEditingCountry(null);
                 dispatch(fetchCountriesList());
               }}
@@ -612,6 +670,22 @@ const AdminLocationsPage = () => {
         >
           <span className="text-lg font-bold text-[#a8c6df]">{country.name}</span>
           <div className="flex items-center gap-4">
+            {countryDetails[country.id]?.map_image_url && (
+              <button
+                className="px-2 py-1 bg-green-600/20 text-green-400 border-none rounded cursor-pointer text-xs transition-colors hover:bg-green-600/30"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (editingZonesForCountryId === country.id) {
+                    setEditingZonesForCountryId(null);
+                  } else {
+                    setEditingZonesForCountryId(country.id);
+                    setOpenedCountries(prev => ({ ...prev, [country.id]: true }));
+                  }
+                }}
+              >
+                Редактировать зоны
+              </button>
+            )}
             <button
               className="px-2 py-1 bg-site-blue/20 text-site-blue border-none rounded cursor-pointer text-xs transition-colors hover:bg-site-blue/30"
               onClick={(e) => handleEditCountry(e, country)}
@@ -671,6 +745,32 @@ const AdminLocationsPage = () => {
                     >
                       Добавить зону
                     </button>
+                    {regionDetails[region.id]?.map_image_url && (
+                      <button
+                        className={`px-2 py-1 border-none rounded cursor-pointer text-xs transition-colors whitespace-nowrap ${
+                          editingMapForRegionId === region.id
+                            ? 'bg-green-600/30 text-green-300'
+                            : 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
+                        }`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (editingMapForRegionId === region.id) {
+                            setEditingMapForRegionId(null);
+                          } else {
+                            setEditingMapForRegionId(region.id);
+                            // Ensure region is expanded and details are loaded
+                            if (!openedRegions[region.id]) {
+                              setOpenedRegions((prev) => ({ ...prev, [region.id]: true }));
+                            }
+                            if (!regionDetails[region.id]) {
+                              dispatch(fetchRegionDetails(region.id));
+                            }
+                          }
+                        }}
+                      >
+                        Карта региона
+                      </button>
+                    )}
                     <span
                       className={`text-site-blue transition-transform duration-300 inline-block ml-2 ${
                         openedRegions[region.id] ? 'rotate-180' : ''
@@ -740,10 +840,43 @@ const AdminLocationsPage = () => {
                         )}
                       </div>
                     ))}
+
+                    {/* Region Map Editor */}
+                    {editingMapForRegionId === region.id && regionDetails[region.id]?.map_image_url && (
+                      <RegionMapEditor
+                        regionId={region.id}
+                        mapImageUrl={regionDetails[region.id].map_image_url!}
+                        mapItems={regionDetails[region.id].map_items ?? []}
+                        districts={
+                          regionDetails[region.id].districts?.map((d: District) => ({
+                            id: d.id,
+                            name: d.name,
+                            map_icon_url: d.map_icon_url ?? null,
+                            x: d.x ?? null,
+                            y: d.y ?? null,
+                          })) ?? []
+                        }
+                        neighborEdges={regionDetails[region.id].neighbor_edges ?? []}
+                        onClose={() => setEditingMapForRegionId(null)}
+                      />
+                    )}
                   </div>
                 )}
               </div>
             ))}
+            {editingZonesForCountryId === country.id && countryDetails[country.id]?.map_image_url && (
+              <div className="mt-4">
+                <AdminClickableZoneEditor
+                  parentType="country"
+                  parentId={country.id}
+                  mapImageUrl={countryDetails[country.id].map_image_url!}
+                  targetOptions={countryDetails[country.id].regions?.map((r: Region) => ({ id: r.id, name: r.name })) || []}
+                  targetType="region"
+                  areaOptions={areas.map((a) => ({ id: a.id, name: a.name }))}
+                  onClose={() => setEditingZonesForCountryId(null)}
+                />
+              </div>
+            )}
           </div>
         )}
       </div>

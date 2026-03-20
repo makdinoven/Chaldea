@@ -6,6 +6,7 @@ import {
   createLocation,
   updateLocation,
   uploadLocationImage,
+  uploadLocationIcon,
   updateLocationNeighbors,
   fetchLocationDetails,
   fetchLocationsList,
@@ -42,6 +43,7 @@ interface InitialData {
   quick_travel_marker?: boolean;
   marker_type?: 'safe' | 'dangerous' | 'dungeon';
   image_url?: string;
+  map_icon_url?: string;
   id?: number;
 }
 
@@ -85,6 +87,8 @@ const EditLocationForm = ({
   const [isUploading, setIsUploading] = useState(false);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string>(initialData?.image_url || '');
+  const [iconFile, setIconFile] = useState<File | null>(null);
+  const [iconPreview, setIconPreview] = useState<string | null>(initialData?.map_icon_url || null);
   const [neighbors, setNeighbors] = useState<Neighbor[]>([]);
 
   useEffect(() => {
@@ -112,6 +116,9 @@ const EditLocationForm = ({
         quick_travel_marker: (currentLocation.quick_travel_marker as boolean) ?? false,
         marker_type: (currentLocation.marker_type as 'safe' | 'dangerous' | 'dungeon') || 'safe',
       });
+      if (currentLocation.map_icon_url && !iconFile) {
+        setIconPreview(currentLocation.map_icon_url as string);
+      }
       if (Array.isArray(currentLocation.neighbors)) {
         setNeighbors(
           (currentLocation.neighbors as { neighbor_id: number; energy_cost: number }[]).map((n) => ({
@@ -158,6 +165,18 @@ const EditLocationForm = ({
       reader.onloadend = () => {
         setSelectedImage(file);
         setImagePreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleIconFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setIconFile(file);
+        setIconPreview(reader.result as string);
       };
       reader.readAsDataURL(file);
     }
@@ -217,6 +236,19 @@ const EditLocationForm = ({
           ).unwrap();
         } catch {
           toast.error('Ошибка при загрузке изображения');
+        }
+      }
+
+      if (iconFile) {
+        try {
+          await dispatch(
+            uploadLocationIcon({
+              locationId: (result as { id: number }).id,
+              file: iconFile,
+            } as never) as unknown as ReturnType<typeof uploadLocationIcon>
+          ).unwrap();
+        } catch {
+          toast.error('Ошибка при загрузке иконки для карты');
         }
       }
 
@@ -346,6 +378,25 @@ const EditLocationForm = ({
                   src={imagePreview || formData.image_url}
                   alt="Preview"
                   className="max-w-full max-h-[200px] rounded border border-white/10"
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="mb-4">
+            <label className="block mb-2 text-[#8ab3d5] font-medium">ИКОНКА НА КАРТЕ (PNG):</label>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleIconFileChange}
+              className="text-[#d4e6f3] text-sm"
+            />
+            {(iconPreview || (currentLocation as Record<string, unknown> | null)?.map_icon_url) && (
+              <div className="mt-2">
+                <img
+                  src={iconPreview || String((currentLocation as Record<string, unknown>)?.map_icon_url || '')}
+                  alt="Иконка на карте"
+                  className="max-h-[80px] w-auto object-contain"
                 />
               </div>
             )}

@@ -41,7 +41,7 @@ REGULAR_USER_RESPONSE = {"id": 2, "username": "user", "role": "user", "permissio
 
 def _make_zone(zone_id=1, parent_type="area", parent_id=1,
                target_type="country", target_id=10,
-               zone_data=None, label=None):
+               zone_data=None, label=None, stroke_color=None):
     """Create a mock ClickableZone ORM object."""
     zone = MagicMock()
     zone.id = zone_id
@@ -51,6 +51,7 @@ def _make_zone(zone_id=1, parent_type="area", parent_id=1,
     zone.target_id = target_id
     zone.zone_data = zone_data or [{"x": 0.1, "y": 0.2}, {"x": 0.3, "y": 0.4}]
     zone.label = label
+    zone.stroke_color = stroke_color
     return zone
 
 
@@ -249,7 +250,7 @@ class TestCreateClickableZone:
 
     @patch("auth_http.requests.get")
     def test_create_zone_invalid_target_type_returns_422(self, mock_auth, client):
-        """target_type must be 'country' or 'region' (Literal validation)."""
+        """target_type must be 'country', 'region', or 'area' (Literal validation)."""
         mock_auth.return_value = _mock_response(200, ADMIN_USER_RESPONSE)
         payload = {
             **VALID_ZONE_PAYLOAD,
@@ -348,11 +349,11 @@ class TestUpdateClickableZone:
 
     @patch("auth_http.requests.get")
     def test_update_zone_invalid_target_type_returns_422(self, mock_auth, client):
-        """target_type must be 'country' or 'region'."""
+        """target_type must be 'country', 'region', or 'area'."""
         mock_auth.return_value = _mock_response(200, ADMIN_USER_RESPONSE)
         response = client.put(
             "/locations/clickable-zones/1/update",
-            json={"target_type": "area"},
+            json={"target_type": "planet"},
             headers=ADMIN_HEADERS,
         )
         assert response.status_code == 422

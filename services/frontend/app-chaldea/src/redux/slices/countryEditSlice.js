@@ -1,7 +1,5 @@
 import { createSlice } from '@reduxjs/toolkit';
 import { createCountry, updateCountry, uploadCountryMap, deleteCountry } from '../actions/countryEditActions';
-// Временно закомментируем импорт
-// import { createCountry, updateCountry, uploadCountryMap } from '../actions/countryEditActions';
 
 const countryEditSlice = createSlice({
     name: 'countryEdit',
@@ -19,8 +17,6 @@ const countryEditSlice = createSlice({
     },
     extraReducers: (builder) => {
         builder
-            // Временно закомментируем обработчики
-            /*
             .addCase(createCountry.pending, (state) => {
                 state.loading = true;
                 state.error = null;
@@ -34,7 +30,7 @@ const countryEditSlice = createSlice({
                 state.loading = false;
                 state.error = action.payload;
             })
-            
+
             .addCase(updateCountry.pending, (state) => {
                 state.loading = true;
                 state.error = null;
@@ -48,7 +44,7 @@ const countryEditSlice = createSlice({
                 state.loading = false;
                 state.error = action.payload;
             })
-            
+
             .addCase(uploadCountryMap.pending, (state) => {
                 state.loading = true;
                 state.error = null;
@@ -60,8 +56,7 @@ const countryEditSlice = createSlice({
                 state.loading = false;
                 state.error = action.payload;
             })
-            */
-            // Добавляем обработчики для удаления
+
             .addCase(deleteCountry.pending, (state) => {
                 state.loading = true;
                 state.error = null;

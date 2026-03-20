@@ -7,9 +7,10 @@ interface InteractiveMapProps {
   clickableZones: ClickableZone[];
   onZoneClick: (zone: ClickableZone) => void;
   title?: string;
+  countries?: Array<{ id: number; emblem_url: string | null }>;
 }
 
-const InteractiveMap = ({ mapImageUrl, clickableZones, onZoneClick, title }: InteractiveMapProps) => {
+const InteractiveMap = ({ mapImageUrl, clickableZones, onZoneClick, title, countries }: InteractiveMapProps) => {
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -36,6 +37,7 @@ const InteractiveMap = ({ mapImageUrl, clickableZones, onZoneClick, title }: Int
               <ClickableZoneOverlay
                 zones={clickableZones}
                 onZoneClick={onZoneClick}
+                countries={countries}
               />
             )}
           </>

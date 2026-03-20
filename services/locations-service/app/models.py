@@ -30,6 +30,7 @@ class Country(Base):
     description = Column(Text, nullable=False)
     leader_id = Column(BigInteger, nullable=True)
     map_image_url = Column(String(255), nullable=True)
+    emblem_url = Column(String(255), nullable=True)
     area_id = Column(BigInteger, ForeignKey('Areas.id', ondelete="SET NULL"), nullable=True)
     x = Column(Float, nullable=True)
     y = Column(Float, nullable=True)
@@ -55,6 +56,11 @@ class Region(Base):
 
     country = relationship("Country", back_populates="regions")
     districts = relationship("District", back_populates="region")
+    standalone_locations = relationship(
+        "Location",
+        back_populates="region",
+        foreign_keys="[Location.region_id]"
+    )
 
 
 class District(Base):
@@ -70,6 +76,7 @@ class District(Base):
 
     x = Column(Float, nullable=True)
     y = Column(Float, nullable=True)
+    map_icon_url = Column(String(255), nullable=True)
 
     region = relationship("Region", back_populates="districts")
 
@@ -92,7 +99,8 @@ class Location(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
-    district_id = Column(BigInteger, ForeignKey('Districts.id', ondelete="CASCADE"), nullable=False)
+    district_id = Column(BigInteger, ForeignKey('Districts.id', ondelete="CASCADE"), nullable=True)
+    region_id = Column(BigInteger, ForeignKey('Regions.id', ondelete='CASCADE'), nullable=True)
     type = Column(Enum('location', 'subdistrict', name='location_type'), nullable=False)
     image_url = Column(String(255), nullable=True)
     recommended_level = Column(Integer, nullable=False)
@@ -100,12 +108,21 @@ class Location(Base):
     parent_id = Column(BigInteger, ForeignKey('Locations.id', ondelete="CASCADE"))
     description = Column(Text, nullable=False)
     marker_type = Column(Enum('safe', 'dangerous', 'dungeon', name='location_marker_type'), nullable=False, default='safe')
+    map_icon_url = Column(String(255), nullable=True)
+    map_x = Column(Float, nullable=True)
+    map_y = Column(Float, nullable=True)
 
     # ЯВНО указываем, какие колонке использовать в ForeignKey для district:
     district = relationship(
         "District",
         back_populates="locations",
         foreign_keys=[district_id]
+    )
+
+    region = relationship(
+        "Region",
+        back_populates="standalone_locations",
+        foreign_keys=[region_id]
     )
 
     # для иерархии self -> children
@@ -137,10 +154,11 @@ class ClickableZone(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     parent_type = Column(Enum('area', 'country', name='clickable_zone_parent_type'), nullable=False)
     parent_id = Column(BigInteger, nullable=False)
-    target_type = Column(Enum('country', 'region', name='clickable_zone_target_type'), nullable=False)
+    target_type = Column(Enum('country', 'region', 'area', name='clickable_zone_target_type'), nullable=False)
     target_id = Column(BigInteger, nullable=False)
     zone_data = Column(JSON, nullable=False)
     label = Column(String(255), nullable=True)
+    stroke_color = Column(String(20), nullable=True)
 
 
 class GameRule(Base):

@@ -12,10 +12,11 @@ export interface ClickableZone {
   id: number;
   parent_type: 'area' | 'country';
   parent_id: number;
-  target_type: 'country' | 'region';
+  target_type: 'country' | 'region' | 'area';
   target_id: number;
   zone_data: ZonePoint[];
   label: string | null;
+  stroke_color: string | null;
 }
 
 export interface Area {
@@ -32,6 +33,7 @@ export interface AreaCountry {
   x: number | null;
   y: number | null;
   map_image_url: string | null;
+  emblem_url: string | null;
 }
 
 export interface AreaWithCountries extends Area {
@@ -128,8 +130,24 @@ export const fetchCountryDetails = createAsyncThunk<
   },
 );
 
+export const updateDistrictPosition = createAsyncThunk<
+  { id: number; x: number | null; y: number | null },
+  { districtId: number; x: number | null; y: number | null },
+  { rejectValue: string }
+>(
+  'worldMap/updateDistrictPosition',
+  async ({ districtId, x, y }, thunkAPI) => {
+    try {
+      const response = await axios.put(`/locations/districts/${districtId}/update`, { x, y });
+      return response.data;
+    } catch {
+      return thunkAPI.rejectWithValue('Не удалось обновить позицию зоны');
+    }
+  },
+);
+
 export const fetchRegionDetails = createAsyncThunk<
-  { id: number; name: string; map_image_url: string | null; recommended_level: number | null; districts: { id: number; name: string; image_url: string | null; locations: { id: number; name: string; marker_type: string; x: number | null; y: number | null; image_url: string | null }[] }[] },
+  { id: number; name: string; map_image_url: string | null; recommended_level: number | null; neighbor_edges: { from_id: number; to_id: number }[]; map_items: { id: number; name: string; type: 'location' | 'district'; map_icon_url: string | null; map_x: number | null; map_y: number | null; marker_type: string | null; image_url: string | null }[]; districts: { id: number; name: string; image_url: string | null; map_icon_url: string | null; x: number | null; y: number | null; locations: { id: number; name: string; marker_type: string; image_url: string | null; map_icon_url: string | null; map_x: number | null; map_y: number | null }[] }[] },
   number,
   { rejectValue: string }
 >(
@@ -140,6 +158,44 @@ export const fetchRegionDetails = createAsyncThunk<
       return response.data;
     } catch {
       return thunkAPI.rejectWithValue('Не удалось загрузить данные региона');
+    }
+  },
+);
+
+export const uploadLocationIcon = createAsyncThunk<
+  { message: string; map_icon_url: string },
+  { locationId: number; file: File },
+  { rejectValue: string }
+>(
+  'worldMap/uploadLocationIcon',
+  async ({ locationId, file }, thunkAPI) => {
+    try {
+      const formData = new FormData();
+      formData.append('location_id', String(locationId));
+      formData.append('file', file);
+
+      const response = await axios.post('/photo/change_location_icon', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return response.data;
+    } catch {
+      return thunkAPI.rejectWithValue('Не удалось загрузить иконку локации');
+    }
+  },
+);
+
+export const updateLocationPosition = createAsyncThunk<
+  { id: number; map_x: number | null; map_y: number | null },
+  { locationId: number; map_x: number | null; map_y: number | null },
+  { rejectValue: string }
+>(
+  'worldMap/updateLocationPosition',
+  async ({ locationId, map_x, map_y }, thunkAPI) => {
+    try {
+      const response = await axios.put(`/locations/${locationId}/update`, { map_x, map_y });
+      return response.data;
+    } catch {
+      return thunkAPI.rejectWithValue('Не удалось обновить позицию локации');
     }
   },
 );
