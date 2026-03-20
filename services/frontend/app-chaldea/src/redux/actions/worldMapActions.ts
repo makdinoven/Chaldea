@@ -147,7 +147,7 @@ export const updateDistrictPosition = createAsyncThunk<
 );
 
 export const fetchRegionDetails = createAsyncThunk<
-  { id: number; name: string; map_image_url: string | null; recommended_level: number | null; neighbor_edges: { from_id: number; to_id: number }[]; map_items: { id: number; name: string; type: 'location' | 'district'; map_icon_url: string | null; map_x: number | null; map_y: number | null; marker_type: string | null; image_url: string | null }[]; districts: { id: number; name: string; image_url: string | null; map_icon_url: string | null; parent_district_id: number | null; x: number | null; y: number | null; sort_order: number; locations: { id: number; name: string; marker_type: string; image_url: string | null; map_icon_url: string | null; map_x: number | null; map_y: number | null; sort_order: number }[] }[] },
+  { id: number; name: string; map_image_url: string | null; recommended_level: number | null; neighbor_edges: { from_id: number; to_id: number }[]; map_items: { id: number; name: string; type: 'location' | 'district'; map_icon_url: string | null; map_x: number | null; map_y: number | null; marker_type: string | null; image_url: string | null; map_image_url?: string | null }[]; districts: { id: number; name: string; image_url: string | null; map_icon_url: string | null; map_image_url?: string | null; parent_district_id: number | null; x: number | null; y: number | null; sort_order: number; locations: { id: number; name: string; marker_type: string; image_url: string | null; map_icon_url: string | null; map_x: number | null; map_y: number | null; sort_order: number }[] }[] },
   number,
   { rejectValue: string }
 >(

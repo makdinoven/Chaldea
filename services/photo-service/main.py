@@ -7,7 +7,8 @@ from database import get_db
 from crud import (
     update_user_avatar, get_user_avatar,
     update_character_avatar, get_character_avatar, update_location_image,
-    update_district_image, update_district_icon, update_region_image, update_region_map_image,
+    update_district_image, update_district_icon, update_district_map_image,
+    update_region_image, update_region_map_image,
     update_country_map_image,
     update_area_map_image, update_country_emblem,
     update_skill_rank_image, update_skill_image, update_item_image, update_rule_image,
@@ -238,6 +239,29 @@ async def change_district_icon(district_id: int = Form(...), file: UploadFile = 
         return {
             "message": "Иконка района успешно загружена",
             "map_icon_url": file_url
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 4d) Загрузить карту района/города (map_image_url)
+@app.post("/photo/change_district_map")
+async def change_district_map_photo(district_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
+    """
+    Загружает карту района/города (map_image_url) в таблице Districts.
+    Сохранение файлов происходит в папке /media/maps/.
+    """
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("district_map", district_id, extension=result.extension)
+        map_url = upload_file_to_s3(result.data, unique_filename, subdirectory="maps", content_type=result.content_type)
+
+        update_district_map_image(db, district_id, map_url)
+
+        return {
+            "message": "Карта района успешно загружена",
+            "map_image_url": map_url
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

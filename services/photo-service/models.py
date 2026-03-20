@@ -55,6 +55,7 @@ class District(Base):
     id = Column(Integer, primary_key=True)
     image_url = Column(Text, nullable=True)
     map_icon_url = Column(Text, nullable=True)
+    map_image_url = Column(Text, nullable=True)
 
 
 class Location(Base):

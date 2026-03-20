@@ -59,6 +59,9 @@ const WorldPage = () => {
   // District modal state
   const [selectedDistrictId, setSelectedDistrictId] = useState<number | null>(null);
 
+  // City map view state: when a district has map_image_url, show its map instead of modal
+  const [cityMapDistrictId, setCityMapDistrictId] = useState<number | null>(null);
+
   // Determine view level from route params
   const viewLevel: ViewLevel = useMemo(() => {
     if (params.regionId) return 'region';
@@ -86,6 +89,12 @@ const WorldPage = () => {
   useEffect(() => {
     dispatch(fetchHierarchyTree());
   }, [dispatch]);
+
+  // Reset city map view when changing route
+  useEffect(() => {
+    setCityMapDistrictId(null);
+    setSelectedDistrictId(null);
+  }, [viewLevel, entityId]);
 
   // Fetch data based on view level
   useEffect(() => {
@@ -145,8 +154,32 @@ const WorldPage = () => {
 
   // Handle district click from region map
   const handleDistrictClick = (districtId: number) => {
+    // Check if the district has a city map
+    const district = regionDetails?.districts.find((d) => d.id === districtId);
+    const mapItem = regionDetails?.map_items?.find((i) => i.type === 'district' && i.id === districtId);
+    const hasMapImage = district?.map_image_url || mapItem?.map_image_url;
+    if (hasMapImage) {
+      setCityMapDistrictId(districtId);
+    } else {
+      setSelectedDistrictId(districtId);
+    }
+  };
+
+  // Handle back from city map to region map
+  const handleCityMapBack = () => {
+    setCityMapDistrictId(null);
+  };
+
+  // Handle district click inside city map (sub-districts open modal)
+  const handleCityMapDistrictClick = (districtId: number) => {
     setSelectedDistrictId(districtId);
   };
+
+  // City map district data (declared before breadcrumbs so it can be used there)
+  const cityMapDistrict = useMemo(() => {
+    if (cityMapDistrictId == null || !regionDetails) return null;
+    return regionDetails.districts.find((d) => d.id === cityMapDistrictId) ?? null;
+  }, [cityMapDistrictId, regionDetails]);
 
   // Build breadcrumb
   const breadcrumbs = useMemo(() => {
@@ -193,10 +226,15 @@ const WorldPage = () => {
         }
       }
       items.push({ label: regionDetails.name, path: `/world/region/${regionDetails.id}` });
+
+      // Add city map breadcrumb if viewing a district map
+      if (cityMapDistrict) {
+        items.push({ label: cityMapDistrict.name, path: '#' });
+      }
     }
 
     return items;
-  }, [viewLevel, areaDetails, countryDetails, regionDetails, hierarchyTree]);
+  }, [viewLevel, areaDetails, countryDetails, regionDetails, hierarchyTree, cityMapDistrict]);
 
   // Determine map image and title for current view
   const mapImageUrl = useMemo(() => {
@@ -233,9 +271,25 @@ const WorldPage = () => {
   const regionMapItems: MapItem[] = useMemo(() => {
     if (!regionDetails) return [];
 
-    // Use backend map_items if available
+    // Use backend map_items if available, but filter out items that belong to districts with city maps
     if (regionDetails.map_items && regionDetails.map_items.length > 0) {
-      return regionDetails.map_items;
+      // Find district IDs that have their own city map
+      const cityMapDistrictIds = new Set(
+        regionDetails.districts
+          .filter((d) => d.map_image_url)
+          .map((d) => d.id),
+      );
+      return regionDetails.map_items.filter((item) => {
+        // Locations belonging to a city-map district should not appear on the region map
+        if (item.type === 'location' && item.district_id && cityMapDistrictIds.has(item.district_id)) {
+          return false;
+        }
+        // Sub-districts of a city-map district should not appear on the region map
+        if (item.type === 'district' && item.parent_district_id && cityMapDistrictIds.has(item.parent_district_id)) {
+          return false;
+        }
+        return true;
+      });
     }
 
     // Fallback: build client-side from districts + locations
@@ -275,6 +329,67 @@ const WorldPage = () => {
 
     return items;
   }, [regionDetails]);
+
+  // City map image URL
+  const cityMapImageUrl = useMemo(() => {
+    if (!cityMapDistrict) return null;
+    return cityMapDistrict.map_image_url ?? null;
+  }, [cityMapDistrict]);
+
+  // City map items: locations belonging to this district + sub-districts
+  const cityMapItems: MapItem[] = useMemo(() => {
+    if (cityMapDistrictId == null || !regionDetails) return [];
+    const items: MapItem[] = [];
+
+    // Add locations belonging to this district (from map_items)
+    if (regionDetails.map_items) {
+      for (const item of regionDetails.map_items) {
+        if (item.type === 'location' && item.district_id === cityMapDistrictId) {
+          items.push(item);
+        }
+        // Sub-districts of this district
+        if (item.type === 'district' && item.parent_district_id === cityMapDistrictId) {
+          items.push(item);
+        }
+      }
+    }
+
+    // Fallback: also check districts array for locations
+    if (items.length === 0) {
+      const district = regionDetails.districts.find((d) => d.id === cityMapDistrictId);
+      if (district) {
+        for (const loc of district.locations) {
+          items.push({
+            id: loc.id,
+            name: loc.name,
+            type: 'location',
+            map_icon_url: loc.map_icon_url,
+            map_x: loc.map_x,
+            map_y: loc.map_y,
+            marker_type: loc.marker_type,
+            image_url: loc.image_url,
+          });
+        }
+        // Sub-districts
+        for (const subD of regionDetails.districts) {
+          if (subD.parent_district_id === cityMapDistrictId) {
+            items.push({
+              id: subD.id,
+              name: subD.name,
+              type: 'district',
+              map_icon_url: subD.map_icon_url,
+              map_x: subD.x,
+              map_y: subD.y,
+              marker_type: subD.marker_type ?? null,
+              image_url: subD.image_url,
+            });
+          }
+        }
+      }
+    }
+
+    return items;
+  }, [cityMapDistrictId, regionDetails]);
 
   // Flatten all locations from all districts for the list view
   const allRegionLocations = useMemo(() => {
@@ -355,9 +470,12 @@ const WorldPage = () => {
                       <p className="text-white text-sm font-medium truncate">
                         {location.name}
                       </p>
-                      <p className="text-white/40 text-xs">
-                        {MARKER_LABELS[location.marker_type] ?? 'Локация'}
-                      </p>
+                      <div className="flex items-center gap-1">
+                        <p className="text-white/40 text-xs">
+                          {MARKER_LABELS[location.marker_type] ?? 'Локация'}
+                        </p>
+                        {renderBadgeTag(location.marker_type, location.recommended_level)}
+                      </div>
                     </div>
 
                     {location.id === currentLocationId && (
@@ -415,7 +533,32 @@ const WorldPage = () => {
             </div>
           </div>
         ) : viewLevel === 'region' ? (
-          regionDetails?.map_image_url ? (
+          cityMapDistrictId && cityMapImageUrl && cityMapDistrict ? (
+            /* City map view for district */
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-3 mb-3">
+                <button
+                  onClick={handleCityMapBack}
+                  className="text-white/50 hover:text-white text-sm bg-transparent border-none cursor-pointer transition-colors shrink-0 flex items-center gap-1"
+                >
+                  <span>&#9664;</span>
+                  <span className="text-xs">Назад к региону</span>
+                </button>
+              </div>
+              <h2 className="gold-text text-2xl font-medium uppercase mb-2 text-center">
+                {cityMapDistrict.name}
+              </h2>
+              <RegionInteractiveMap
+                mapImageUrl={cityMapImageUrl}
+                mapItems={cityMapItems}
+                neighborEdges={[]}
+                currentLocationId={currentLocationId}
+                onLocationClick={handleLocationClick}
+                onDistrictClick={handleCityMapDistrictClick}
+                isCityMap
+              />
+            </div>
+          ) : regionDetails?.map_image_url ? (
             <div className="flex-1 min-w-0">
               <h2 className="gold-text text-2xl font-medium uppercase mb-2 text-center">
                 {regionDetails.name}
@@ -523,9 +666,12 @@ const WorldPage = () => {
                         </div>
                         <div className="min-w-0">
                           <p className="text-amber-200 text-sm font-medium truncate">{item.name}</p>
-                          <p className="text-white/40 text-xs">
-                            {item.locations.length} {item.locations.length === 1 ? 'локация' : 'локаций'}
-                          </p>
+                          <div className="flex items-center gap-1">
+                            <p className="text-white/40 text-xs">
+                              {item.locations.length} {item.locations.length === 1 ? 'локация' : 'локаций'}
+                            </p>
+                            {renderBadgeTag(item.marker_type, item.recommended_level)}
+                          </div>
                         </div>
                         <span className="ml-auto text-white/30 text-sm shrink-0">&#9654;</span>
                       </button>
@@ -555,9 +701,12 @@ const WorldPage = () => {
                         </div>
                         <div className="min-w-0">
                           <p className="text-white text-sm font-medium truncate">{item.name}</p>
-                          <p className="text-white/40 text-xs">
-                            {MARKER_LABELS[item.marker_type] ?? 'Локация'}
-                          </p>
+                          <div className="flex items-center gap-1">
+                            <p className="text-white/40 text-xs">
+                              {MARKER_LABELS[item.marker_type] ?? 'Локация'}
+                            </p>
+                            {renderBadgeTag(item.marker_type, item.recommended_level)}
+                          </div>
                         </div>
                         {item.id === currentLocationId && (
                           <span className="ml-auto text-gold text-xs font-medium shrink-0">
@@ -589,12 +738,36 @@ const MARKER_ICONS: Record<string, string> = {
   safe: '\u{1F3E0}',
   dangerous: '\u{2694}\uFE0F',
   dungeon: '\u{1F3F0}',
+  farm: '\u{1F479}',
 };
 
 const MARKER_LABELS: Record<string, string> = {
   safe: 'Безопасная',
   dangerous: 'Опасная',
   dungeon: 'Подземелье',
+  farm: 'Фарм',
+};
+
+const MARKER_BADGE_COLORS: Record<string, string> = {
+  safe: 'text-green-400',
+  dangerous: 'text-red-400',
+  dungeon: 'text-purple-400',
+  farm: 'text-orange-400',
+};
+
+const renderBadgeTag = (markerType?: string | null, recommendedLevel?: number | null) => {
+  const icon = MARKER_ICONS[markerType ?? ''] ?? '';
+  const label = MARKER_LABELS[markerType ?? ''] ?? '';
+  const color = MARKER_BADGE_COLORS[markerType ?? ''] ?? 'text-white/50';
+  const showLevel = (markerType === 'dangerous' || markerType === 'farm') && recommendedLevel;
+  const levelStr = showLevel ? `\u0423\u0440.${recommendedLevel}` : '';
+  const parts = [icon, label, levelStr ? `\u{00B7} ${levelStr}` : ''].filter(Boolean).join(' ');
+  if (!parts) return null;
+  return (
+    <span className={`text-[10px] bg-black/20 px-1.5 py-0.5 rounded whitespace-nowrap ${color}`}>
+      {parts}
+    </span>
+  );
 };
 
 export default WorldPage;

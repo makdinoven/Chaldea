@@ -29,7 +29,10 @@ export interface District {
   region_id: number;
   image_url: string | null;
   map_icon_url: string | null;
+  map_image_url: string | null;
   parent_district_id: number | null;
+  marker_type: string | null;
+  recommended_level: number | null;
   x: number | null;
   y: number | null;
   sort_order: number;
@@ -68,9 +71,11 @@ export interface RegionMapItem {
   map_y: number | null;
   marker_type: string | null;
   image_url: string | null;
+  map_image_url?: string | null;
   district_id?: number | null;
   parent_district_id?: number | null;
   sort_order?: number;
+  recommended_level?: number | null;
 }
 
 export interface RegionDetails {
@@ -305,6 +310,28 @@ export const updateClickableZone = createAsyncThunk<
       return response.data;
     } catch {
       return rejectWithValue('Ошибка обновления кликабельной зоны');
+    }
+  }
+);
+
+export const uploadDistrictMap = createAsyncThunk<
+  { message: string; map_image_url: string },
+  { districtId: number; file: File },
+  { rejectValue: string }
+>(
+  'adminLocations/uploadDistrictMap',
+  async ({ districtId, file }, { rejectWithValue }) => {
+    try {
+      const formData = new FormData();
+      formData.append('district_id', String(districtId));
+      formData.append('file', file);
+
+      const response = await axios.post('/photo/change_district_map', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return response.data;
+    } catch {
+      return rejectWithValue('Ошибка загрузки карты района');
     }
   }
 );

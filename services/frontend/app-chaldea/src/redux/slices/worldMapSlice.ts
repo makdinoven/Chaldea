@@ -39,9 +39,11 @@ export interface RegionMapItem {
   map_y: number | null;
   marker_type: string | null;
   image_url: string | null;
+  map_image_url?: string | null;
   district_id?: number | null;
   parent_district_id?: number | null;
   sort_order?: number;
+  recommended_level?: number | null;
 }
 
 export interface RegionDetailsData {
@@ -56,7 +58,10 @@ export interface RegionDetailsData {
     name: string;
     image_url: string | null;
     map_icon_url: string | null;
+    map_image_url?: string | null;
     parent_district_id: number | null;
+    marker_type?: string | null;
+    recommended_level?: number | null;
     x: number | null;
     y: number | null;
     sort_order: number;
@@ -64,6 +69,7 @@ export interface RegionDetailsData {
       id: number;
       name: string;
       marker_type: string;
+      recommended_level?: number | null;
       image_url: string | null;
       map_icon_url: string | null;
       map_x: number | null;

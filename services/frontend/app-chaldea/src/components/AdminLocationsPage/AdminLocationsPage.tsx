@@ -41,8 +41,11 @@ interface District {
   id: number;
   name: string;
   parent_district_id?: number | null;
+  marker_type?: string | null;
+  recommended_level?: number | null;
   image_url?: string | null;
   map_icon_url?: string | null;
+  map_image_url?: string | null;
   x?: number | null;
   y?: number | null;
   locations?: LocationNode[];
@@ -759,13 +762,11 @@ const AdminLocationsPage = () => {
                             setEditingMapForRegionId(null);
                           } else {
                             setEditingMapForRegionId(region.id);
-                            // Ensure region is expanded and details are loaded
+                            // Ensure region is expanded and details are loaded (always re-fetch for fresh data)
                             if (!openedRegions[region.id]) {
                               setOpenedRegions((prev) => ({ ...prev, [region.id]: true }));
                             }
-                            if (!regionDetails[region.id]) {
-                              dispatch(fetchRegionDetails(region.id));
-                            }
+                            dispatch(fetchRegionDetails(region.id));
                           }
                         }}
                       >
@@ -853,7 +854,10 @@ const AdminLocationsPage = () => {
                             id: d.id,
                             name: d.name,
                             parent_district_id: d.parent_district_id ?? null,
+                            marker_type: d.marker_type ?? null,
+                            recommended_level: d.recommended_level ?? null,
                             map_icon_url: d.map_icon_url ?? null,
+                            map_image_url: d.map_image_url ?? null,
                             x: d.x ?? null,
                             y: d.y ?? null,
                           })) ?? []

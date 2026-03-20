@@ -281,10 +281,13 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
             "description": district.description,
             "parent_district_id": district.parent_district_id,
             "entrance_location": entrance_location,
+            "recommended_level": district.recommended_level,
+            "marker_type": district.marker_type,
             "x": district.x,
             "y": district.y,
             "image_url": district.image_url,
             "map_icon_url": district.map_icon_url,
+            "map_image_url": district.map_image_url,
             "sort_order": district.sort_order,
             "locations": district_root_locations
         })
@@ -304,6 +307,7 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
             "image_url": loc.image_url,
             "district_id": loc.district_id,
             "sort_order": loc.sort_order,
+            "recommended_level": loc.recommended_level,
         })
     for district in sorted(region.districts, key=lambda d: d.sort_order):
         map_items.append({
@@ -313,10 +317,12 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
             "map_icon_url": district.map_icon_url,
             "map_x": district.x,
             "map_y": district.y,
-            "marker_type": None,
+            "marker_type": district.marker_type,
             "image_url": district.image_url,
+            "map_image_url": district.map_image_url,
             "parent_district_id": district.parent_district_id,
             "sort_order": district.sort_order,
+            "recommended_level": district.recommended_level,
         })
 
     # Получаем neighbor_edges для всех локаций региона
@@ -366,6 +372,7 @@ async def create_district(session: AsyncSession, district: DistrictCreate) -> Di
         region_id=district.region_id,
         entrance_location_id=district.entrance_location_id,
         recommended_level=district.recommended_level,
+        marker_type=district.marker_type or "safe",
         x=district.x,
         y=district.y,
         image_url=district.image_url or "",  # Используем пустую строку вместо None
@@ -399,25 +406,13 @@ async def update_district(session: AsyncSession, district_id: int, data) -> Dist
     if not db_district:
         raise HTTPException(status_code=404, detail="District not found")
     
-    # Обновление полей
-    if getattr(data, "name", None) is not None:
-        db_district.name = data.name
-    if getattr(data, "description", None) is not None:
-        db_district.description = data.description
-    if getattr(data, "image_url", None) is not None:
-        db_district.image_url = data.image_url
-    if getattr(data, "recommended_level", None) is not None:
-        db_district.recommended_level = data.recommended_level
-    if getattr(data, "entrance_location_id", None) is not None:
-        db_district.entrance_location_id = data.entrance_location_id
-    if getattr(data, "x", None) is not None:
-        db_district.x = data.x
-    if getattr(data, "y", None) is not None:
-        db_district.y = data.y
-    if getattr(data, "map_icon_url", None) is not None:
-        db_district.map_icon_url = data.map_icon_url
-    if getattr(data, "parent_district_id", None) is not None:
-        db_district.parent_district_id = data.parent_district_id
+    # Обновление полей — используем exclude_unset чтобы отличить "не передано" от "передано как null"
+    update_fields = data.dict(exclude_unset=True) if hasattr(data, 'dict') else {}
+    for field in ('name', 'description', 'image_url', 'recommended_level',
+                  'entrance_location_id', 'x', 'y', 'map_icon_url',
+                  'parent_district_id', 'marker_type', 'map_image_url'):
+        if field in update_fields:
+            setattr(db_district, field, update_fields[field])
 
     await session.commit()
     await session.refresh(db_district)

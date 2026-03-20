@@ -68,7 +68,7 @@ class LocationCreate(BaseModel):
     image_url: Optional[str] = ""
     recommended_level: Optional[int] = 1
     quick_travel_marker: Optional[bool] = False
-    marker_type: Optional[Literal["safe", "dangerous", "dungeon"]] = "safe"
+    marker_type: Optional[Literal["safe", "dangerous", "dungeon", "farm"]] = "safe"
     map_icon_url: Optional[str] = None
     map_x: Optional[float] = None
     map_y: Optional[float] = None
@@ -99,7 +99,7 @@ class LocationUpdate(BaseModel):
     quick_travel_marker: Optional[bool] = False
     description: Optional[str] = ""
     parent_id: Optional[int] = None
-    marker_type: Optional[Literal["safe", "dangerous", "dungeon"]] = None
+    marker_type: Optional[Literal["safe", "dangerous", "dungeon", "farm"]] = None
     map_icon_url: Optional[str] = None
     map_x: Optional[float] = None
     map_y: Optional[float] = None
@@ -129,10 +129,12 @@ class DistrictBase(BaseModel):
     description: str
     region_id: int
     recommended_level: Optional[int] = 1
+    marker_type: Optional[Literal["safe", "dangerous", "dungeon", "farm"]] = "safe"
     x: Optional[float] = None
     y: Optional[float] = None
     image_url: Optional[str] = None
     map_icon_url: Optional[str] = None
+    map_image_url: Optional[str] = None
 
 class DistrictCreate(DistrictBase):
     entrance_location_id: Optional[int] = None
@@ -144,10 +146,12 @@ class DistrictUpdate(BaseModel):
     description: Optional[str]
     image_url: Optional[str]
     recommended_level: Optional[int]
+    marker_type: Optional[Literal["safe", "dangerous", "dungeon", "farm"]] = None
     entrance_location_id: Optional[int]
     x: Optional[float]
     y: Optional[float]
     map_icon_url: Optional[str]
+    map_image_url: Optional[str] = None
     parent_district_id: Optional[int] = None
 
 class DistrictRead(BaseModel):
@@ -158,10 +162,12 @@ class DistrictRead(BaseModel):
     parent_district_id: Optional[int] = None
     entrance_location_id: Optional[int] = None
     recommended_level: Optional[int] = 1
+    marker_type: Optional[str] = "safe"
     x: Optional[float] = None
     y: Optional[float] = None
     image_url: Optional[str] = None
     map_icon_url: Optional[str] = None
+    map_image_url: Optional[str] = None
     sort_order: int = 0
     locations: List[LocationRead] = []
 

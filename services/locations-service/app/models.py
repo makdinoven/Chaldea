@@ -74,10 +74,12 @@ class District(Base):
     image_url = Column(String(255), nullable=True)
     entrance_location_id = Column(BigInteger, ForeignKey('Locations.id', ondelete="SET NULL"))
     recommended_level = Column(Integer, nullable=True, default=1)
+    marker_type = Column(Enum('safe', 'dangerous', 'dungeon', 'farm', name='district_marker_type'), nullable=True, default='safe')
 
     x = Column(Float, nullable=True)
     y = Column(Float, nullable=True)
     map_icon_url = Column(String(255), nullable=True)
+    map_image_url = Column(String(255), nullable=True)
     sort_order = Column(Integer, nullable=False, default=0)
 
     region = relationship("Region", back_populates="districts")
@@ -111,7 +113,7 @@ class Location(Base):
     quick_travel_marker = Column(Boolean, nullable=False)
     parent_id = Column(BigInteger, ForeignKey('Locations.id', ondelete="CASCADE"))
     description = Column(Text, nullable=False)
-    marker_type = Column(Enum('safe', 'dangerous', 'dungeon', name='location_marker_type'), nullable=False, default='safe')
+    marker_type = Column(Enum('safe', 'dangerous', 'dungeon', 'farm', name='location_marker_type'), nullable=False, default='safe')
     map_icon_url = Column(String(255), nullable=True)
     map_x = Column(Float, nullable=True)
     map_y = Column(Float, nullable=True)
