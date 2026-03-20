@@ -59,7 +59,9 @@ def _make_country(country_id=1, name="Test Country", description="Desc",
 def _make_location(location_id=1, name="Test Location", district_id=1,
                    type_="location", image_url="", recommended_level=1,
                    quick_travel_marker=False, parent_id=None,
-                   description="Loc desc", marker_type="safe"):
+                   description="Loc desc", marker_type="safe",
+                   map_icon_url=None, map_x=None, map_y=None,
+                   region_id=None):
     """Create a mock Location ORM object."""
     loc = MagicMock()
     loc.id = location_id
@@ -72,6 +74,10 @@ def _make_location(location_id=1, name="Test Location", district_id=1,
     loc.parent_id = parent_id
     loc.description = description
     loc.marker_type = marker_type
+    loc.map_icon_url = map_icon_url
+    loc.map_x = map_x
+    loc.map_y = map_y
+    loc.region_id = region_id
     return loc
 
 
