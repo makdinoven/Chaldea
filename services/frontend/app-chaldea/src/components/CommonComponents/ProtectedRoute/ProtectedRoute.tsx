@@ -1,6 +1,6 @@
 import { Navigate } from 'react-router-dom';
 import { useAppSelector } from '../../../redux/store';
-import { selectRole, selectPermissions } from '../../../redux/slices/userSlice';
+import { selectRole, selectPermissions, selectAuthInitialized } from '../../../redux/slices/userSlice';
 import { hasPermission, hasAnyPermission } from '../../../utils/permissions';
 
 const ROLE_LEVELS: Record<string, number> = {
@@ -27,6 +27,16 @@ const ProtectedRoute = ({
 }: ProtectedRouteProps) => {
   const role = useAppSelector(selectRole);
   const permissions = useAppSelector(selectPermissions);
+  const authInitialized = useAppSelector(selectAuthInitialized);
+
+  // Auth not yet initialized — show loading spinner
+  if (!authInitialized) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="w-10 h-10 border-4 border-gold-dark border-t-gold rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   // Not logged in — redirect to login page
   if (!role) {

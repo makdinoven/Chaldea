@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { MessageSquare, User } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
@@ -19,7 +19,13 @@ const Header = () => {
     (state) => state.user,
   );
 
+  const isInitialMount = useRef(true);
+
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
     dispatch(getMe());
   }, [location.pathname, dispatch]);
 

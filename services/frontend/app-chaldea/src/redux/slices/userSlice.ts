@@ -37,6 +37,7 @@ interface UserState {
   avatar: string | null;
   status: 'idle' | 'loading' | 'succeeded' | 'failed';
   error: string | null;
+  authInitialized: boolean;
 }
 
 const initialState: UserState = {
@@ -50,6 +51,7 @@ const initialState: UserState = {
   avatar: null,
   status: "idle",
   error: null,
+  authInitialized: false,
 };
 
 export const getMe = createAsyncThunk<GetMeResponse, void, { rejectValue: string }>(
@@ -94,6 +96,9 @@ const userSlice = createSlice({
       state.character = null;
       state.avatar = null;
     },
+    setAuthInitialized(state) {
+      state.authInitialized = true;
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -104,6 +109,7 @@ const userSlice = createSlice({
       .addCase(getMe.fulfilled, (state, action: PayloadAction<GetMeResponse>) => {
         const { id, email, username, role, role_display_name, permissions, avatar, character } = action.payload;
         state.status = "succeeded";
+        state.authInitialized = true;
         state.id = id;
         state.email = email;
         state.username = username;
@@ -115,6 +121,7 @@ const userSlice = createSlice({
       })
       .addCase(getMe.rejected, (state, action) => {
         state.status = "failed";
+        state.authInitialized = true;
         state.error = action.payload ?? null;
         state.id = null;
         state.email = null;
@@ -127,7 +134,7 @@ const userSlice = createSlice({
   },
 });
 
-export const { logout } = userSlice.actions;
+export const { logout, setAuthInitialized } = userSlice.actions;
 export default userSlice.reducer;
 
 // --- Selectors ---
@@ -135,3 +142,4 @@ export default userSlice.reducer;
 export const selectPermissions = (state: RootState) => state.user.permissions;
 export const selectRole = (state: RootState) => state.user.role;
 export const selectRoleDisplayName = (state: RootState) => state.user.roleDisplayName;
+export const selectAuthInitialized = (state: RootState) => state.user.authInitialized;

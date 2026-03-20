@@ -1,5 +1,8 @@
+import { useEffect } from "react";
 import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
+import { useAppDispatch } from "../../redux/store";
+import { getMe, setAuthInitialized } from "../../redux/slices/userSlice";
 
 import StartPage from "../StartPage/StartPage";
 import HomePage from "../HomePage/HomePage";
@@ -29,6 +32,17 @@ import ChatHistoryPage from "../Chat/ChatHistoryPage";
 import GameTimeAdminPage from "../Admin/GameTimeAdminPage";
 
 const App = () => {
+  const dispatch = useAppDispatch();
+
+  useEffect(() => {
+    const token = localStorage.getItem('accessToken');
+    if (token) {
+      dispatch(getMe());
+    } else {
+      dispatch(setAuthInitialized());
+    }
+  }, [dispatch]);
+
   return (
     <>
       <Toaster
