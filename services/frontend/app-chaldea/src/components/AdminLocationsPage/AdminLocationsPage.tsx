@@ -335,8 +335,14 @@ const AdminLocationsPage = () => {
 
   const renderLocationsRecursively = (location: LocationNode) => (
     <div key={location.id}>
-      <div className="grid grid-cols-[60px_120px_minmax(200px,1fr)_100px_auto] gap-2.5 items-center px-3 py-2 bg-white/[0.04] rounded my-1 text-sm text-[#d4e6f3] hover:bg-white/10 transition-colors">
-        <div>{location.id}</div>
+      <div className={`grid grid-cols-[4px_60px_120px_minmax(200px,1fr)_100px_auto] gap-2.5 items-center px-3 py-2 rounded my-1 text-sm transition-colors ${
+        location.marker_type === 'dangerous' ? 'bg-red-600/[0.06] text-[#d4e6f3] hover:bg-red-600/[0.12] border-l-2 border-red-400/40'
+        : location.marker_type === 'dungeon' ? 'bg-purple-600/[0.06] text-[#d4e6f3] hover:bg-purple-600/[0.12] border-l-2 border-purple-400/40'
+        : location.marker_type === 'farm' ? 'bg-orange-600/[0.06] text-[#d4e6f3] hover:bg-orange-600/[0.12] border-l-2 border-orange-400/40'
+        : 'bg-green-600/[0.06] text-[#d4e6f3] hover:bg-green-600/[0.12] border-l-2 border-green-400/30'
+      }`}>
+        <div />
+        <div className="text-white/50">{location.id}</div>
         {location.image_url && (
           <div>
             <img src={location.image_url} alt="" className="w-[120px] h-[80px] object-cover rounded" />
@@ -344,7 +350,17 @@ const AdminLocationsPage = () => {
         )}
         {!location.image_url && <div />}
         <div>{location.name}</div>
-        <div>{location.type}</div>
+        <div className={`text-xs ${
+          location.marker_type === 'dangerous' ? 'text-red-400/70'
+          : location.marker_type === 'dungeon' ? 'text-purple-400/70'
+          : location.marker_type === 'farm' ? 'text-orange-400/70'
+          : 'text-green-400/70'
+        }`}>{
+          location.marker_type === 'dangerous' ? 'Опасная'
+          : location.marker_type === 'dungeon' ? 'Подземелье'
+          : location.marker_type === 'farm' ? 'Фарм'
+          : 'Безопасная'
+        }</div>
         <div className="flex gap-2 items-center justify-end">
           <button
             className="px-2 py-1 bg-site-blue/20 text-site-blue border-none rounded cursor-pointer text-xs transition-colors hover:bg-site-blue/30"
@@ -785,63 +801,107 @@ const AdminLocationsPage = () => {
 
                 {openedRegions[region.id] && regionDetails[region.id] && (
                   <div className="ml-5 border-l border-white/10 pl-5">
-                    {regionDetails[region.id].districts?.map((district: District) => (
-                      <div key={district.id}>
-                        <div
-                          className="grid grid-cols-[60px_120px_minmax(200px,1fr)_100px_auto] gap-2.5 items-center px-3 py-2 bg-white/[0.08] rounded my-1 text-sm text-[#d4e6f3] cursor-pointer hover:bg-white/10 transition-colors"
-                          onClick={(e) => toggleDistrict(e, district.id)}
-                        >
-                          <div>{district.id}</div>
-                          {district.image_url ? (
-                            <div>
-                              <img
-                                src={district.image_url}
-                                alt=""
-                                className="w-[120px] h-[80px] object-cover rounded"
-                              />
-                            </div>
-                          ) : (
-                            <div />
-                          )}
-                          <div>{district.name}</div>
-                          <div>Зона</div>
-                          <div className="flex gap-2 items-center justify-end">
-                            <button
-                              className="px-2 py-1 bg-site-blue/20 text-site-blue border-none rounded cursor-pointer text-xs transition-colors hover:bg-site-blue/30"
-                              onClick={(e) => handleEditDistrict(e, district)}
-                            >
-                              Изменить
-                            </button>
-                            <button
-                              className="px-2 py-1 bg-site-red/20 text-[#ff9999] border-none rounded cursor-pointer text-xs transition-colors hover:bg-site-red/30"
-                              onClick={(e) => handleDeleteDistrict(e, district.id)}
-                            >
-                              Удалить
-                            </button>
-                            <button
-                              className="px-2 py-1 bg-site-blue/20 text-white border-none rounded cursor-pointer text-xs transition-colors hover:bg-site-blue/30 whitespace-nowrap"
-                              onClick={(e) => handleAddLocation(e, district.id)}
-                              type="button"
-                            >
-                              Добавить локацию
-                            </button>
-                            <span
-                              className={`text-site-blue transition-transform duration-300 inline-block ml-2 ${
-                                openedDistricts[district.id] ? 'rotate-180' : ''
-                              }`}
-                            >
-                              ▼
-                            </span>
-                          </div>
-                        </div>
+                    {(() => {
+                      const rd = regionDetails[region.id];
+                      const allDistricts: District[] = rd.districts ?? [];
+                      // Top-level districts (no parent)
+                      const topDistricts = allDistricts.filter((d) => !d.parent_district_id);
+                      // Sub-districts grouped by parent
+                      const subByParent: Record<number, District[]> = {};
+                      for (const d of allDistricts) {
+                        if (d.parent_district_id) {
+                          if (!subByParent[d.parent_district_id]) subByParent[d.parent_district_id] = [];
+                          subByParent[d.parent_district_id].push(d);
+                        }
+                      }
+                      // Standalone locations (from map_items with no district_id)
+                      const standaloneLocations = (rd.map_items ?? []).filter(
+                        (item: { type: string; district_id?: number | null }) => item.type === 'location' && !item.district_id,
+                      );
 
-                        {openedDistricts[district.id] && (
-                          <div className="ml-5 border-l border-white/10 pl-5">
-                            {district.locations?.map((loc) => renderLocationsRecursively(loc))}
+                      const renderDistrictRow = (district: District, indent: number) => (
+                        <div key={district.id}>
+                          <div
+                            className={`grid grid-cols-[4px_60px_120px_minmax(200px,1fr)_100px_auto] gap-2.5 items-center px-3 py-2 rounded my-1 text-sm cursor-pointer transition-colors ${
+                              indent > 0
+                                ? 'bg-amber-600/[0.08] text-amber-200/80 hover:bg-amber-600/[0.14] border-l-2 border-amber-500/30'
+                                : 'bg-amber-600/[0.12] text-[#e8d5a0] hover:bg-amber-600/[0.18] border-l-2 border-amber-400/50'
+                            }`}
+                            style={indent > 0 ? { marginLeft: indent * 20 } : undefined}
+                            onClick={(e) => toggleDistrict(e, district.id)}
+                          >
+                            <div />
+                            <div className="text-white/50">{district.id}</div>
+                            {district.image_url ? (
+                              <div>
+                                <img src={district.image_url} alt="" className="w-[120px] h-[80px] object-cover rounded" />
+                              </div>
+                            ) : (
+                              <div />
+                            )}
+                            <div className="font-medium">{district.name}</div>
+                            <div className={`text-xs ${indent > 0 ? 'text-amber-400/60' : 'text-amber-300/70'}`}>{indent > 0 ? 'Подзона' : 'Зона'}</div>
+                            <div className="flex gap-2 items-center justify-end">
+                              <button
+                                className="px-2 py-1 bg-site-blue/20 text-site-blue border-none rounded cursor-pointer text-xs transition-colors hover:bg-site-blue/30"
+                                onClick={(e) => handleEditDistrict(e, district)}
+                              >
+                                Изменить
+                              </button>
+                              <button
+                                className="px-2 py-1 bg-site-red/20 text-[#ff9999] border-none rounded cursor-pointer text-xs transition-colors hover:bg-site-red/30"
+                                onClick={(e) => handleDeleteDistrict(e, district.id)}
+                              >
+                                Удалить
+                              </button>
+                              <button
+                                className="px-2 py-1 bg-site-blue/20 text-white border-none rounded cursor-pointer text-xs transition-colors hover:bg-site-blue/30 whitespace-nowrap"
+                                onClick={(e) => handleAddLocation(e, district.id)}
+                                type="button"
+                              >
+                                Добавить локацию
+                              </button>
+                              <span
+                                className={`text-site-blue transition-transform duration-300 inline-block ml-2 ${
+                                  openedDistricts[district.id] ? 'rotate-180' : ''
+                                }`}
+                              >
+                                ▼
+                              </span>
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    ))}
+
+                          {openedDistricts[district.id] && (
+                            <div className="ml-5 border-l border-white/10 pl-5">
+                              {/* Sub-districts nested inside */}
+                              {(subByParent[district.id] ?? []).map((sub) => renderDistrictRow(sub, indent + 1))}
+                              {/* Locations of this district */}
+                              {district.locations?.map((loc) => renderLocationsRecursively(loc))}
+                            </div>
+                          )}
+                        </div>
+                      );
+
+                      return (
+                        <>
+                          {topDistricts.map((d) => renderDistrictRow(d, 0))}
+                          {/* Standalone locations (not in any zone) */}
+                          {standaloneLocations.length > 0 && (
+                            <>
+                              {standaloneLocations.map((loc: LocationNode & { id: number; name: string; type: string; image_url?: string | null; marker_type?: string }) => (
+                                renderLocationsRecursively({
+                                  id: loc.id,
+                                  name: loc.name,
+                                  type: loc.type ?? 'location',
+                                  image_url: loc.image_url,
+                                  marker_type: loc.marker_type,
+                                })
+                              ))}
+                            </>
+                          )}
+                        </>
+                      );
+                    })()}
 
                     {/* Region Map Editor */}
                     {editingMapForRegionId === region.id && regionDetails[region.id]?.map_image_url && (

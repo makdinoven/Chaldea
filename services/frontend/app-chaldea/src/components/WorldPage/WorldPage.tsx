@@ -273,19 +273,26 @@ const WorldPage = () => {
 
     // Use backend map_items if available, but filter out items that belong to districts with city maps
     if (regionDetails.map_items && regionDetails.map_items.length > 0) {
-      // Find district IDs that have their own city map
-      const cityMapDistrictIds = new Set(
-        regionDetails.districts
-          .filter((d) => d.map_image_url)
-          .map((d) => d.id),
+      // Collect ALL district IDs that belong inside a city map (recursively)
+      const cityMapRootIds = new Set(
+        regionDetails.districts.filter((d) => d.map_image_url).map((d) => d.id),
       );
+      const cityMapAllIds = new Set(cityMapRootIds);
+      const collectDescendants = (parentId: number) => {
+        for (const d of regionDetails.districts) {
+          if (d.parent_district_id === parentId && !cityMapAllIds.has(d.id)) {
+            cityMapAllIds.add(d.id);
+            collectDescendants(d.id);
+          }
+        }
+      };
+      for (const rootId of cityMapRootIds) collectDescendants(rootId);
+
       return regionDetails.map_items.filter((item) => {
-        // Locations belonging to a city-map district should not appear on the region map
-        if (item.type === 'location' && item.district_id && cityMapDistrictIds.has(item.district_id)) {
+        if (item.type === 'location' && item.district_id && cityMapAllIds.has(item.district_id)) {
           return false;
         }
-        // Sub-districts of a city-map district should not appear on the region map
-        if (item.type === 'district' && item.parent_district_id && cityMapDistrictIds.has(item.parent_district_id)) {
+        if (item.type === 'district' && item.parent_district_id && cityMapAllIds.has(item.parent_district_id)) {
           return false;
         }
         return true;
@@ -293,9 +300,29 @@ const WorldPage = () => {
     }
 
     // Fallback: build client-side from districts + locations
+    // Also collect city-map district IDs to filter them out
+    const cityMapRootIdsFb = new Set(
+      regionDetails.districts.filter((d) => d.map_image_url).map((d) => d.id),
+    );
+    const cityMapAllIdsFb = new Set(cityMapRootIdsFb);
+    const collectDescFb = (parentId: number) => {
+      for (const d of regionDetails.districts) {
+        if (d.parent_district_id === parentId && !cityMapAllIdsFb.has(d.id)) {
+          cityMapAllIdsFb.add(d.id);
+          collectDescFb(d.id);
+        }
+      }
+    };
+    for (const rootId of cityMapRootIdsFb) collectDescFb(rootId);
+
     const items: MapItem[] = [];
 
     for (const district of regionDetails.districts) {
+      // Skip sub-districts that belong inside a city map
+      if (district.parent_district_id && cityMapAllIdsFb.has(district.parent_district_id)) {
+        continue;
+      }
+
       // Add district as map item if it has coordinates
       if (district.x != null && district.y != null) {
         items.push({
@@ -308,6 +335,11 @@ const WorldPage = () => {
           marker_type: null,
           image_url: district.image_url ?? null,
         });
+      }
+
+      // Skip locations if this district is a city-map district
+      if (cityMapAllIdsFb.has(district.id)) {
+        continue;
       }
 
       // Add locations

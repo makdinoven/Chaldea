@@ -957,11 +957,10 @@ async def update_items_sort_order(session: AsyncSession, items: list):
     logger.info(f"sort_order: updated {updated}/{len(items)} items")
 
 
-async def delete_region(session: AsyncSession, region_id: int):
+async def delete_region(session: AsyncSession, region_id: int, commit: bool = True):
     """
     Удаляет регион вместе со всеми его районами и локациями.
     """
-    # Проверяем существование региона
     region_result = await session.execute(
         select(Region).where(Region.id == region_id)
     )
@@ -969,20 +968,50 @@ async def delete_region(session: AsyncSession, region_id: int):
     if not region:
         raise HTTPException(status_code=404, detail="Region not found")
 
-    # Получаем все районы этого региона
     districts_result = await session.execute(
         select(District).where(District.region_id == region_id)
     )
     districts = districts_result.scalars().all()
 
-    # Для каждого района — удаляем
     for d in districts:
         await delete_district(session, d.id, commit=False)
 
-    # Удаляем сам регион
+    # Удаляем standalone-локации региона
+    await session.execute(
+        delete(Location).where(Location.region_id == region_id, Location.district_id.is_(None))
+    )
+
     await session.execute(
         delete(Region).where(Region.id == region_id)
     )
+
+    if commit:
+        await session.commit()
+
+
+async def delete_country(session: AsyncSession, country_id: int):
+    """Удаляет страну вместе со всеми регионами, районами и локациями."""
+    country_result = await session.execute(
+        select(Country).where(Country.id == country_id)
+    )
+    country = country_result.scalars().first()
+    if not country:
+        raise HTTPException(status_code=404, detail="Country not found")
+
+    # Удаляем все регионы страны
+    regions_result = await session.execute(
+        select(Region).where(Region.country_id == country_id)
+    )
+    regions = regions_result.scalars().all()
+    for r in regions:
+        await delete_region(session, r.id, commit=False)
+
+    # Удаляем страну
+    await session.execute(
+        delete(Country).where(Country.id == country_id)
+    )
+    await session.commit()
+
 
 logger = logging.getLogger("location-service.crud")
 async def get_client_location_details(session: AsyncSession, location_id: int) -> Optional[dict]:

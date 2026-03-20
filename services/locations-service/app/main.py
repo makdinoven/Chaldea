@@ -89,6 +89,11 @@ async def update_country_route(country_id: int, body: schemas.CountryUpdate, ses
     db_obj = await crud.update_country(session, country_id, body)
     return db_obj
 
+@router.delete("/countries/{country_id}/delete", response_model=dict)
+async def delete_country_route(country_id: int, session: AsyncSession = Depends(get_db), current_user=Depends(require_permission("locations:delete"))):
+    await crud.delete_country(session, country_id)
+    return {"message": "Country deleted"}
+
 @router.get("/countries/list")
 async def get_countries_list_route(session: AsyncSession = Depends(get_db)):
     """Возвращает список стран"""

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAppDispatch } from '../../../redux/store';
@@ -222,6 +222,47 @@ const RegionMapEditor = ({
     }
   };
 
+  // --- Delete item ---
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+
+  const handleDeleteItem = async (item: MapItemData) => {
+    const label = item.type === 'district' ? 'зону' : 'локацию';
+    if (!window.confirm(`Удалить ${label} "${item.name}"? Это действие необратимо.`)) return;
+
+    const key = itemKey(item);
+    setDeletingKey(key);
+    try {
+      if (item.type === 'district') {
+        await axios.delete(`/locations/districts/${item.id}/delete`);
+      } else {
+        await axios.delete(`/locations/${item.id}/delete`);
+      }
+      // Remove from local state
+      setCreatedItems((prev) => prev.filter((i) => itemKey(i) !== key));
+      // Remove from local positions
+      setLocalPositions((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      toast.success(`${item.type === 'district' ? 'Зона' : 'Локация'} удалена`);
+    } catch {
+      toast.error('Не удалось удалить');
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
+  const renderDeleteButton = (item: MapItemData) => (
+    <button
+      type="button"
+      className="text-[10px] text-white/20 hover:text-site-red bg-transparent border-none cursor-pointer flex-shrink-0 p-0 leading-none"
+      onClick={(e) => { e.stopPropagation(); handleDeleteItem(item); }}
+      disabled={deletingKey === itemKey(item)}
+      title="Удалить"
+    >&#128465;</button>
+  );
+
   // Get sort_order for an item, considering local overrides
   const getSortOrder = useCallback((type: string, id: number): number => {
     const key = `${type}-${id}`;
@@ -289,9 +330,44 @@ const RegionMapEditor = ({
     return { map_x: item.map_x, map_y: item.map_y };
   };
 
+  // Collect district IDs that have city maps (and all their descendants)
+  const cityMapDistrictIds = useMemo(() => {
+    const rootIds = new Set(
+      districts.filter((d) => d.map_image_url).map((d) => d.id),
+    );
+    // Also check createdItems and mapItems for districts with map_image_url
+    for (const item of [...mapItems, ...createdItems]) {
+      if (item.type === 'district' && (item as MapItemData & { map_image_url?: string | null }).map_image_url) {
+        rootIds.add(item.id);
+      }
+    }
+    const allIds = new Set(rootIds);
+    const collect = (parentId: number) => {
+      for (const d of [...districts, ...dedupedItems.filter((i) => i.type === 'district')]) {
+        const pid = 'parent_district_id' in d ? (d as { parent_district_id?: number | null }).parent_district_id : null;
+        if (pid === parentId && !allIds.has(d.id)) {
+          allIds.add(d.id);
+          collect(d.id);
+        }
+      }
+    };
+    for (const rootId of rootIds) collect(rootId);
+    return allIds;
+  }, [districts, mapItems, createdItems, dedupedItems]);
+
+  // Items belonging to city-map districts (shown only in city map editor, not on region map)
+  const isCityMapItem = (item: MapItemData): boolean => {
+    if (item.type === 'location' && item.district_id && cityMapDistrictIds.has(item.district_id)) return true;
+    if (item.type === 'district' && item.parent_district_id && cityMapDistrictIds.has(item.parent_district_id)) return true;
+    return false;
+  };
+
   const placedItems = dedupedItems.filter((item) => {
     const pos = getPosition(item);
-    return pos.map_x != null && pos.map_y != null;
+    if (pos.map_x == null || pos.map_y == null) return false;
+    // Exclude items that belong to a city map
+    if (isCityMapItem(item)) return false;
+    return true;
   });
 
   // Unplaced items: exclude locations that belong to a zone, all districts (shown in "Зоны" section)
@@ -813,12 +889,21 @@ const RegionMapEditor = ({
   };
 
   const renderEditButton = (item: MapItemData) => (
-    <button
-      type="button"
-      className="text-[10px] text-white/30 hover:text-site-blue bg-transparent border-none cursor-pointer flex-shrink-0 p-0 leading-none"
-      onClick={(e) => { e.stopPropagation(); startEdit(item); }}
-      title="Редактировать"
-    >&#9998;</button>
+    <span className="inline-flex items-center gap-0.5 flex-shrink-0">
+      <button
+        type="button"
+        className="text-[10px] text-white/30 hover:text-site-blue bg-transparent border-none cursor-pointer p-0 leading-none"
+        onClick={(e) => { e.stopPropagation(); startEdit(item); }}
+        title="Редактировать"
+      >&#9998;</button>
+      <button
+        type="button"
+        className="text-[10px] text-white/20 hover:text-site-red bg-transparent border-none cursor-pointer p-0 leading-none"
+        onClick={(e) => { e.stopPropagation(); handleDeleteItem(item); }}
+        disabled={deletingKey === itemKey(item)}
+        title="Удалить"
+      >&#128465;</button>
+    </span>
   );
 
   const renderInlineEditForm = () => {
@@ -1178,7 +1263,7 @@ const RegionMapEditor = ({
                             key={key}
                             draggable
                             onDragStart={(e) => handleDragStart(e, key)}
-                            className="flex items-center gap-2 px-2 py-1.5 mb-1 bg-white/[0.04] rounded cursor-grab hover:bg-white/10 transition-colors text-xs text-[#d4e6f3] select-none"
+                            className="flex items-center gap-2 px-2 py-1.5 mb-1 bg-white/[0.04] rounded cursor-grab hover:bg-white/10 transition-colors text-xs text-[#d4e6f3] select-none min-w-0"
                           >
                             {renderCityMapIcon(item, 'sm')}
                             <span className="truncate">{item.name}</span>
@@ -1201,7 +1286,11 @@ const RegionMapEditor = ({
                         const subIsPlaced = subPos.map_x != null && subPos.map_y != null;
                         return (
                           <div key={`city-subzone-${subZone.id}`} className="mb-1">
-                            <div className="flex items-center gap-0.5">
+                            <div
+                              className={`flex items-center gap-0.5 min-w-0 ${!subIsPlaced ? 'cursor-grab' : ''}`}
+                              draggable={!subIsPlaced}
+                              onDragStart={!subIsPlaced ? (e) => handleDragStart(e, itemKey(subZone)) : undefined}
+                            >
                               <button
                                 type="button"
                                 className="w-full flex items-center gap-2 px-2 py-1.5 bg-amber-600/10 rounded text-xs text-amber-300/90 hover:bg-amber-600/20 transition-colors border-none cursor-pointer text-left"
@@ -1231,7 +1320,11 @@ const RegionMapEditor = ({
                                       const nChildCount = (cityLocationsBySubZone[nestedZone.id]?.length ?? 0) + (nestedSubZonesByParent[nestedZone.id]?.length ?? 0);
                                       return (
                                         <div key={`nested-zone-${nestedZone.id}`} className="mb-0.5">
-                                          <div className="flex items-center gap-0.5">
+                                          <div
+                                            className={`flex items-center gap-0.5 min-w-0 ${!nPlaced ? 'cursor-grab' : ''}`}
+                                            draggable={!nPlaced}
+                                            onDragStart={!nPlaced ? (e) => handleDragStart(e, itemKey(nestedZone)) : undefined}
+                                          >
                                             <div className="flex flex-col flex-shrink-0">
                                               <button type="button" disabled={idx === 0} className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0" onClick={() => handleReorder(sortedItems, idx, idx - 1)} title="Вверх">&#9650;</button>
                                               <button type="button" disabled={idx === sortedItems.length - 1} className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0" onClick={() => handleReorder(sortedItems, idx, idx + 1)} title="Вниз">&#9660;</button>
@@ -1260,12 +1353,12 @@ const RegionMapEditor = ({
                                                   const lp = getPosition(nLoc);
                                                   const lPlaced = lp.map_x != null && lp.map_y != null;
                                                   return (
-                                                    <div key={itemKey(nLoc)} className={`flex items-center gap-0.5 mb-0.5 rounded text-[11px] text-[#d4e6f3] ${lPlaced ? 'bg-green-600/10' : 'bg-white/[0.03]'}`}>
+                                                    <div key={itemKey(nLoc)} draggable={!lPlaced} onDragStart={!lPlaced ? (e) => handleDragStart(e, itemKey(nLoc)) : undefined} className={`flex items-center gap-0.5 mb-0.5 rounded text-[11px] text-[#d4e6f3] min-w-0 ${lPlaced ? 'bg-green-600/10' : 'bg-white/[0.03] cursor-grab'}`}>
                                                       <div className="flex flex-col flex-shrink-0">
                                                         <button type="button" disabled={nIdx === 0} className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0" onClick={() => handleReorder(nestedSorted, nIdx, nIdx - 1)} title="Вверх">&#9650;</button>
                                                         <button type="button" disabled={nIdx === nestedSorted.length - 1} className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0" onClick={() => handleReorder(nestedSorted, nIdx, nIdx + 1)} title="Вниз">&#9660;</button>
                                                       </div>
-                                                      <div className="flex items-center gap-2 px-2 py-1 flex-1 min-w-0">
+                                                      <div className="flex items-center gap-2 px-2 py-1 flex-1 min-w-0 overflow-hidden">
                                                         {lPlaced && <span className="text-green-400 text-[10px] flex-shrink-0">&#10003;</span>}
                                                         {renderCityMapIcon(nLoc, 'sm')}
                                                         <span className="truncate">{nLoc.name}</span>
@@ -1287,12 +1380,12 @@ const RegionMapEditor = ({
                                     const locPos = getPosition(loc);
                                     const locPlaced = locPos.map_x != null && locPos.map_y != null;
                                     return (
-                                      <div key={itemKey(loc)} className={`flex items-center gap-0.5 mb-0.5 rounded text-[11px] text-[#d4e6f3] ${locPlaced ? 'bg-green-600/10' : 'bg-white/[0.03]'}`}>
+                                      <div key={itemKey(loc)} draggable={!locPlaced} onDragStart={!locPlaced ? (e) => handleDragStart(e, itemKey(loc)) : undefined} className={`flex items-center gap-0.5 mb-0.5 rounded text-[11px] text-[#d4e6f3] min-w-0 ${locPlaced ? 'bg-green-600/10' : 'bg-white/[0.03] cursor-grab'}`}>
                                         <div className="flex flex-col flex-shrink-0">
                                           <button type="button" disabled={idx === 0} className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0" onClick={() => handleReorder(sortedItems, idx, idx - 1)} title="Вверх">&#9650;</button>
                                           <button type="button" disabled={idx === sortedItems.length - 1} className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0" onClick={() => handleReorder(sortedItems, idx, idx + 1)} title="Вниз">&#9660;</button>
                                         </div>
-                                        <div className="flex items-center gap-2 px-2 py-1 flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 px-2 py-1 flex-1 min-w-0 overflow-hidden">
                                           {locPlaced && <span className="text-green-400 text-[10px] flex-shrink-0">&#10003;</span>}
                                           {renderCityMapIcon(loc, 'sm')}
                                           <span className="truncate">{loc.name}</span>
@@ -1320,7 +1413,7 @@ const RegionMapEditor = ({
                         return (
                           <div
                             key={key}
-                            className="flex items-center gap-2 px-2 py-1.5 mb-1 bg-green-600/10 rounded text-xs text-[#d4e6f3]"
+                            className="flex items-center gap-2 px-2 py-1.5 mb-1 bg-green-600/10 rounded text-xs text-[#d4e6f3] min-w-0"
                           >
                             <span className="text-green-400 text-[10px] flex-shrink-0">&#10003;</span>
                             {renderCityMapIcon(item, 'sm')}
@@ -1672,7 +1765,7 @@ const RegionMapEditor = ({
                     key={key}
                     draggable
                     onDragStart={(e) => handleDragStart(e, key)}
-                    className="flex items-center gap-2 px-2 py-1.5 mb-1 bg-white/[0.04] rounded cursor-grab hover:bg-white/10 transition-colors text-xs text-[#d4e6f3] select-none"
+                    className="flex items-center gap-2 px-2 py-1.5 mb-1 bg-white/[0.04] rounded cursor-grab hover:bg-white/10 transition-colors text-xs text-[#d4e6f3] select-none min-w-0"
                   >
                     {renderItemIcon(item, 'sm')}
                     <span className="truncate">{item.name}</span>
@@ -1827,7 +1920,7 @@ const RegionMapEditor = ({
                                           return (
                                             <div
                                               key={itemKey(loc)}
-                                              className={`flex items-center gap-0.5 mb-0.5 rounded text-[11px] text-[#d4e6f3] ${
+                                              className={`flex items-center gap-0.5 mb-0.5 rounded text-[11px] text-[#d4e6f3] min-w-0 ${
                                                 isPlaced ? 'bg-green-600/10' : 'bg-white/[0.03]'
                                               }`}
                                             >
@@ -1847,7 +1940,7 @@ const RegionMapEditor = ({
                                                   title="Вниз"
                                                 >&#9660;</button>
                                               </div>
-                                              <div className="flex items-center gap-2 px-2 py-1 flex-1 min-w-0">
+                                              <div className="flex items-center gap-2 px-2 py-1 flex-1 min-w-0 overflow-hidden">
                                                 {isPlaced && <span className="text-green-400 text-[10px] flex-shrink-0">&#10003;</span>}
                                                 {renderItemIcon(loc, 'sm')}
                                                 <span className="truncate">{loc.name}</span>
@@ -1870,7 +1963,7 @@ const RegionMapEditor = ({
                             return (
                               <div
                                 key={itemKey(loc)}
-                                className={`flex items-center gap-0.5 mb-0.5 rounded text-[11px] text-[#d4e6f3] ${
+                                className={`flex items-center gap-0.5 mb-0.5 rounded text-[11px] text-[#d4e6f3] min-w-0 ${
                                   isPlaced ? 'bg-green-600/10' : 'bg-white/[0.03]'
                                 }`}
                               >
@@ -1890,7 +1983,7 @@ const RegionMapEditor = ({
                                     title="Вниз"
                                   >&#9660;</button>
                                 </div>
-                                <div className="flex items-center gap-2 px-2 py-1 flex-1 min-w-0">
+                                <div className="flex items-center gap-2 px-2 py-1 flex-1 min-w-0 overflow-hidden">
                                   {isPlaced && <span className="text-green-400 text-[10px] flex-shrink-0">&#10003;</span>}
                                   {renderItemIcon(loc, 'sm')}
                                   <span className="truncate">{loc.name}</span>
@@ -1919,7 +2012,7 @@ const RegionMapEditor = ({
                 return (
                   <div
                     key={key}
-                    className="flex items-center gap-2 px-2 py-1.5 mb-1 bg-green-600/10 rounded text-xs text-[#d4e6f3]"
+                    className="flex items-center gap-2 px-2 py-1.5 mb-1 bg-green-600/10 rounded text-xs text-[#d4e6f3] min-w-0"
                   >
                     <span className="text-green-400 text-[10px] flex-shrink-0">&check;</span>
                     {renderItemIcon(item, 'sm')}
