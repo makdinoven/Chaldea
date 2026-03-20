@@ -1792,9 +1792,16 @@ const RegionMapEditor = ({
                 const childSubDistricts = subDistrictsByParent[zone.id] ?? [];
                 const childCount = childLocations.length + childSubDistricts.length;
                 const zoneMapUrl = getDistrictMapUrl(zone.id);
+                const zoneItem = dedupedItems.find((i) => i.type === 'district' && i.id === zone.id);
+                const zonePos = zoneItem ? getPosition(zoneItem) : { map_x: null, map_y: null };
+                const zoneIsPlaced = zonePos.map_x != null && zonePos.map_y != null;
                 return (
                   <div key={`zone-group-${zone.id}`} className="mb-1">
-                    <div className="flex items-center gap-1">
+                    <div
+                      className={`flex items-center gap-1 ${!zoneIsPlaced ? 'cursor-grab' : ''}`}
+                      draggable={!zoneIsPlaced}
+                      onDragStart={!zoneIsPlaced && zoneItem ? (e) => handleDragStart(e, itemKey(zoneItem)) : undefined}
+                    >
                       <button
                         type="button"
                         className="flex-1 flex items-center gap-2 px-2 py-1.5 bg-amber-600/10 rounded text-xs text-amber-300/90 hover:bg-amber-600/20 transition-colors border-none cursor-pointer text-left min-w-0"
@@ -1803,6 +1810,7 @@ const RegionMapEditor = ({
                         <span className="text-[10px] flex-shrink-0 transition-transform" style={{ transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
                           &#9654;
                         </span>
+                        {zoneIsPlaced && <span className="text-green-400 text-[10px] flex-shrink-0">&#10003;</span>}
                         <span className="truncate">{zone.name}</span>
                         {zoneMapUrl && (
                           <span className="text-[9px] text-amber-400/70 flex-shrink-0" title="Есть карта города">&#128506;</span>
