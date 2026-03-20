@@ -288,6 +288,14 @@ const WorldPage = () => {
     return regionDetails.districts.find((d) => d.id === selectedDistrictId) ?? null;
   }, [selectedDistrictId, regionDetails]);
 
+  // Sub-districts of the selected district, sorted by sort_order
+  const selectedDistrictChildren = useMemo(() => {
+    if (selectedDistrictId == null || !regionDetails) return [];
+    return [...regionDetails.districts]
+      .filter((d) => d.parent_district_id === selectedDistrictId)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  }, [selectedDistrictId, regionDetails]);
+
   // For region view, render location list instead of polygon map
   const renderRegionContent = () => {
     if (!regionDetails) return null;
@@ -457,70 +465,111 @@ const WorldPage = () => {
           <div className="modal-content max-w-lg w-full mx-4">
             {/* Modal header */}
             <div className="flex items-center justify-between mb-4">
-              <h3 className="gold-text text-xl font-medium uppercase">
-                {selectedDistrict.name}
-              </h3>
+              <div className="flex items-center gap-2 min-w-0">
+                {selectedDistrict.parent_district_id != null && (
+                  <button
+                    onClick={() => setSelectedDistrictId(selectedDistrict.parent_district_id!)}
+                    className="text-white/50 hover:text-white text-sm bg-transparent border-none cursor-pointer transition-colors shrink-0"
+                    title="Назад"
+                  >
+                    &#9664;
+                  </button>
+                )}
+                <h3 className="gold-text text-xl font-medium uppercase truncate">
+                  {selectedDistrict.name}
+                </h3>
+              </div>
               <button
                 onClick={() => setSelectedDistrictId(null)}
-                className="text-white/50 hover:text-white text-xl bg-transparent border-none cursor-pointer transition-colors"
+                className="text-white/50 hover:text-white text-xl bg-transparent border-none cursor-pointer transition-colors shrink-0"
               >
                 &times;
               </button>
             </div>
 
-            {/* Locations list */}
-            {selectedDistrict.locations.length > 0 ? (
-              <div className="space-y-2 mb-4">
-                <p className="text-white/50 text-xs uppercase tracking-wide mb-2">
-                  Локации
-                </p>
-                {selectedDistrict.locations.map((location) => (
-                  <button
-                    key={location.id}
-                    onClick={() => {
-                      setSelectedDistrictId(null);
-                      handleLocationClick(location.id);
-                    }}
-                    className={`
-                      w-full flex items-center gap-3 p-3 rounded-card
-                      transition-all duration-200 ease-site cursor-pointer text-left
-                      ${location.id === currentLocationId
-                        ? 'bg-white/[0.12] gold-outline'
-                        : 'bg-white/[0.05] hover:bg-white/[0.1]'}
-                    `}
-                  >
-                    <div className="w-9 h-9 rounded-full overflow-hidden shrink-0 bg-site-dark">
-                      {location.image_url ? (
-                        <img
-                          src={location.image_url}
-                          alt={location.name}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-white/20 text-xs">
-                          {MARKER_ICONS[location.marker_type] ?? '\u{1F4CD}'}
+            {/* Unified list: sub-zones + locations mixed, sorted by sort_order */}
+            {(() => {
+              const sortedLocations = [...selectedDistrict.locations].map((loc) => ({
+                ...loc,
+                _kind: 'location' as const,
+              }));
+              const sortedSubZones = selectedDistrictChildren.map((z) => ({
+                ...z,
+                _kind: 'zone' as const,
+              }));
+              const allItems = [...sortedLocations, ...sortedSubZones].sort(
+                (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0),
+              );
+
+              if (allItems.length === 0) {
+                return <p className="text-white/40 text-sm mb-4">В этой зоне пока нет элементов</p>;
+              }
+
+              return (
+                <div className="space-y-2 mb-4">
+                  {allItems.map((item) =>
+                    item._kind === 'zone' ? (
+                      <button
+                        key={`zone-${item.id}`}
+                        onClick={() => setSelectedDistrictId(item.id)}
+                        className="w-full flex items-center gap-3 p-3 rounded-card transition-all duration-200 ease-site cursor-pointer text-left bg-amber-600/10 hover:bg-amber-600/20"
+                      >
+                        <div className="w-9 h-9 rounded overflow-hidden shrink-0 border border-amber-400/40 bg-amber-600/30 flex items-center justify-center">
+                          {item.map_icon_url ? (
+                            <img src={item.map_icon_url} alt={item.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="text-amber-300/70 text-xs">&#9670;</span>
+                          )}
                         </div>
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-white text-sm font-medium truncate">
-                        {location.name}
-                      </p>
-                      <p className="text-white/40 text-xs">
-                        {MARKER_LABELS[location.marker_type] ?? 'Локация'}
-                      </p>
-                    </div>
-                    {location.id === currentLocationId && (
-                      <span className="ml-auto text-gold text-xs font-medium shrink-0">
-                        Вы здесь
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="text-white/40 text-sm mb-4">В этой зоне пока нет локаций</p>
-            )}
+                        <div className="min-w-0">
+                          <p className="text-amber-200 text-sm font-medium truncate">{item.name}</p>
+                          <p className="text-white/40 text-xs">
+                            {item.locations.length} {item.locations.length === 1 ? 'локация' : 'локаций'}
+                          </p>
+                        </div>
+                        <span className="ml-auto text-white/30 text-sm shrink-0">&#9654;</span>
+                      </button>
+                    ) : (
+                      <button
+                        key={`loc-${item.id}`}
+                        onClick={() => {
+                          setSelectedDistrictId(null);
+                          handleLocationClick(item.id);
+                        }}
+                        className={`
+                          w-full flex items-center gap-3 p-3 rounded-card
+                          transition-all duration-200 ease-site cursor-pointer text-left
+                          ${item.id === currentLocationId
+                            ? 'bg-white/[0.12] gold-outline'
+                            : 'bg-white/[0.05] hover:bg-white/[0.1]'}
+                        `}
+                      >
+                        <div className="w-9 h-9 rounded-full overflow-hidden shrink-0 bg-site-dark">
+                          {item.image_url ? (
+                            <img src={item.image_url} alt={item.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-white/20 text-xs">
+                              {MARKER_ICONS[item.marker_type] ?? '\u{1F4CD}'}
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-white text-sm font-medium truncate">{item.name}</p>
+                          <p className="text-white/40 text-xs">
+                            {MARKER_LABELS[item.marker_type] ?? 'Локация'}
+                          </p>
+                        </div>
+                        {item.id === currentLocationId && (
+                          <span className="ml-auto text-gold text-xs font-medium shrink-0">
+                            Вы здесь
+                          </span>
+                        )}
+                      </button>
+                    ),
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Sub-districts (nested zones) */}
             {regionDetails && (() => {

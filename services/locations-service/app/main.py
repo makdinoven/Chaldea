@@ -123,6 +123,18 @@ async def get_region_details_route(region_id: int, session: AsyncSession = Depen
         raise HTTPException(status_code=404, detail="Region not found")
     return data
 
+@router.put("/regions/{region_id}/sort-order")
+async def update_region_sort_order(
+    region_id: int,
+    body: schemas.SortOrderUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:update")),
+):
+    """Batch-update sort_order for districts and locations within a region."""
+    await crud.update_items_sort_order(session, body.items)
+    return {"status": "success"}
+
+
 @router.delete("/regions/{region_id}/delete", response_model=dict)
 async def delete_region_route(
     region_id: int,

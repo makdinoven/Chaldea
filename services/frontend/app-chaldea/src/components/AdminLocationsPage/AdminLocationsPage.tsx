@@ -40,6 +40,7 @@ interface LocationNode {
 interface District {
   id: number;
   name: string;
+  parent_district_id?: number | null;
   image_url?: string | null;
   map_icon_url?: string | null;
   x?: number | null;
@@ -851,6 +852,7 @@ const AdminLocationsPage = () => {
                           regionDetails[region.id].districts?.map((d: District) => ({
                             id: d.id,
                             name: d.name,
+                            parent_district_id: d.parent_district_id ?? null,
                             map_icon_url: d.map_icon_url ?? null,
                             x: d.x ?? null,
                             y: d.y ?? null,

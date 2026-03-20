@@ -16,14 +16,19 @@ interface MapItemData {
   map_x: number | null;
   map_y: number | null;
   marker_type?: string | null;
+  district_id?: number | null;
+  parent_district_id?: number | null;
+  sort_order?: number;
 }
 
 interface DistrictOption {
   id: number;
   name: string;
+  parent_district_id?: number | null;
   map_icon_url?: string | null;
   x?: number | null;
   y?: number | null;
+  sort_order?: number;
 }
 
 interface RegionMapEditorProps {
@@ -64,6 +69,7 @@ interface CreateLocationFormState {
 interface CreateZoneFormState {
   name: string;
   description: string;
+  parent_district_id: string;
 }
 
 const INITIAL_LOCATION_FORM: CreateLocationFormState = {
@@ -76,6 +82,7 @@ const INITIAL_LOCATION_FORM: CreateLocationFormState = {
 const INITIAL_ZONE_FORM: CreateZoneFormState = {
   name: '',
   description: '',
+  parent_district_id: '__none__',
 };
 
 const RegionMapEditor = ({
@@ -107,6 +114,51 @@ const RegionMapEditor = ({
   const [locationIconPreview, setLocationIconPreview] = useState<string | null>(null);
   const [zoneIconFile, setZoneIconFile] = useState<File | null>(null);
   const [zoneIconPreview, setZoneIconPreview] = useState<string | null>(null);
+  const [expandedZones, setExpandedZones] = useState<Set<number>>(new Set());
+  const [localSortOverrides, setLocalSortOverrides] = useState<Record<string, number>>({});
+
+  // Get sort_order for an item, considering local overrides
+  const getSortOrder = useCallback((type: string, id: number): number => {
+    const key = `${type}-${id}`;
+    if (key in localSortOverrides) return localSortOverrides[key];
+    // Find from mapItems or districts props
+    if (type === 'district') {
+      const d = districts.find((dd) => dd.id === id);
+      return d?.sort_order ?? 0;
+    }
+    const item = mapItems.find((i) => i.type === type && i.id === id);
+    return (item as MapItemData)?.sort_order ?? 0;
+  }, [localSortOverrides, districts, mapItems]);
+
+  // Save sort order to API
+  const saveSortOrder = useCallback(async (items: Array<{ id: number; type: string; sort_order: number }>) => {
+    try {
+      await axios.put(`/locations/regions/${regionId}/sort-order`, { items });
+    } catch {
+      toast.error('Не удалось сохранить порядок');
+    }
+  }, [regionId]);
+
+  // Reorder: move item at `fromIdx` to `toIdx` within a sorted children array, then reassign sequential sort_order
+  const handleReorder = useCallback((
+    sortedChildren: Array<{ id: number; type: string; name: string }>,
+    fromIdx: number,
+    toIdx: number,
+  ) => {
+    const reordered = [...sortedChildren];
+    const [moved] = reordered.splice(fromIdx, 1);
+    reordered.splice(toIdx, 0, moved);
+
+    const overrides: Record<string, number> = {};
+    const apiItems: Array<{ id: number; type: string; sort_order: number }> = [];
+    reordered.forEach((item, idx) => {
+      overrides[`${item.type}-${item.id}`] = idx;
+      apiItems.push({ id: item.id, type: item.type, sort_order: idx });
+    });
+
+    setLocalSortOverrides((prev) => ({ ...prev, ...overrides }));
+    saveSortOrder(apiItems);
+  }, [saveSortOrder]);
 
   // Build unified items: map_items from backend + locally created
   const allItems: MapItemData[] = [
@@ -140,10 +192,73 @@ const RegionMapEditor = ({
     return pos.map_x != null && pos.map_y != null;
   });
 
+  // Unplaced items: exclude locations that belong to a zone and sub-districts (they'll be shown nested under their parent zone)
   const unplacedItems = dedupedItems.filter((item) => {
     const pos = getPosition(item);
-    return pos.map_x == null || pos.map_y == null;
+    if (pos.map_x != null && pos.map_y != null) return false;
+    if (item.type === 'location' && item.district_id) return false;
+    if (item.type === 'district' && item.parent_district_id) return false;
+    return true;
   });
+
+  // All districts (from both props and created items) for zone grouping
+  const allDistricts = [
+    ...districts.map((d) => ({ id: d.id, name: d.name, parent_district_id: d.parent_district_id ?? null })),
+    ...createdItems.filter((i) => i.type === 'district').map((d) => ({ id: d.id, name: d.name, parent_district_id: d.parent_district_id ?? null })),
+  ].filter((d, i, arr) => arr.findIndex((x) => x.id === d.id) === i);
+
+  // Sub-districts grouped by parent_district_id
+  const subDistrictsByParent = allDistricts
+    .filter((d) => d.parent_district_id != null)
+    .reduce<Record<number, typeof allDistricts>>((acc, d) => {
+      const parentId = d.parent_district_id!;
+      if (!acc[parentId]) acc[parentId] = [];
+      acc[parentId].push(d);
+      return acc;
+    }, {});
+
+  // Locations grouped by district_id
+  const locationsByZone = dedupedItems
+    .filter((item) => item.type === 'location' && item.district_id)
+    .reduce<Record<number, MapItemData[]>>((acc, item) => {
+      const zoneId = item.district_id!;
+      if (!acc[zoneId]) acc[zoneId] = [];
+      acc[zoneId].push(item);
+      return acc;
+    }, {});
+
+  // Top-level districts that have child locations or sub-districts (exclude sub-districts from top-level list)
+  const topLevelDistricts = allDistricts
+    .filter(
+      (d) => d.parent_district_id == null && ((locationsByZone[d.id]?.length ?? 0) > 0 || (subDistrictsByParent[d.id]?.length ?? 0) > 0),
+    )
+    .sort((a, b) => getSortOrder('district', a.id) - getSortOrder('district', b.id));
+
+  // Build sorted children (sub-districts + locations mixed) for a given zone
+  const getZoneChildren = useCallback((zoneId: number): Array<{ id: number; type: string; name: string }> => {
+    const childSubDistricts = (subDistrictsByParent[zoneId] ?? []).map((d) => ({
+      id: d.id,
+      type: 'district' as const,
+      name: d.name,
+    }));
+    const childLocations = (locationsByZone[zoneId] ?? []).map((l) => ({
+      id: l.id,
+      type: 'location' as const,
+      name: l.name,
+    }));
+    return [...childSubDistricts, ...childLocations].sort(
+      (a, b) => getSortOrder(a.type, a.id) - getSortOrder(b.type, b.id),
+    );
+  }, [subDistrictsByParent, locationsByZone, getSortOrder]);
+
+  const toggleZone = (zoneId: number) => {
+    setExpandedZones((prev) => {
+      const next = new Set(prev);
+      if (next.has(zoneId)) next.delete(zoneId);
+      else next.add(zoneId);
+      return next;
+    });
+  };
 
   // --- Create handlers ---
 
@@ -155,7 +270,7 @@ const RegionMapEditor = ({
   };
 
   const handleZoneFormChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>,
   ) => {
     const { name, value } = e.target;
     setZoneForm((prev) => ({ ...prev, [name]: value }));
@@ -231,13 +346,17 @@ const RegionMapEditor = ({
         map_x: null,
         map_y: null,
         marker_type: response.data.marker_type ?? 'safe',
+        district_id: hasDistrict ? parseInt(locationForm.district_id, 10) : null,
       };
       setCreatedItems((prev) => [...prev, newItem]);
+      if (hasDistrict) {
+        setExpandedZones((prev) => new Set(prev).add(parseInt(locationForm.district_id, 10)));
+      }
       setLocationForm(INITIAL_LOCATION_FORM);
       setLocationIconFile(null);
       setLocationIconPreview(null);
       setShowCreateForm(false);
-      toast.success('Локация создана — перетащите её на карту');
+      toast.success(hasDistrict ? 'Локация создана и привязана к зоне' : 'Локация создана — перетащите её на карту');
     } catch {
       toast.error('Не удалось создать локацию');
     } finally {
@@ -257,13 +376,18 @@ const RegionMapEditor = ({
       return;
     }
 
+    const hasParentZone = zoneForm.parent_district_id && zoneForm.parent_district_id !== '__none__';
+
     setCreating(true);
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         name: zoneForm.name.trim(),
         description: zoneForm.description.trim(),
         region_id: regionId,
       };
+      if (hasParentZone) {
+        payload.parent_district_id = parseInt(zoneForm.parent_district_id, 10);
+      }
       const response = await axios.post('/locations/districts', payload);
       let iconUrl: string | null = response.data.map_icon_url ?? null;
 
@@ -290,13 +414,17 @@ const RegionMapEditor = ({
         map_x: null,
         map_y: null,
         marker_type: null,
+        parent_district_id: hasParentZone ? parseInt(zoneForm.parent_district_id, 10) : null,
       };
       setCreatedItems((prev) => [...prev, newItem]);
+      if (hasParentZone) {
+        setExpandedZones((prev) => new Set(prev).add(parseInt(zoneForm.parent_district_id, 10)));
+      }
       setZoneForm(INITIAL_ZONE_FORM);
       setZoneIconFile(null);
       setZoneIconPreview(null);
       setShowCreateForm(false);
-      toast.success('Зона создана — перетащите её на карту');
+      toast.success(hasParentZone ? 'Подзона создана — перетащите её на карту' : 'Зона создана — перетащите её на карту');
     } catch {
       toast.error('Не удалось создать зону');
     } finally {
@@ -479,7 +607,7 @@ const RegionMapEditor = ({
   // --- Item rendering helper ---
 
   const renderItemIcon = (item: MapItemData, size: 'sm' | 'lg') => {
-    const sizeClasses = size === 'sm' ? 'w-6 h-6' : 'w-14 h-14 sm:w-16 sm:h-16 md:w-20 md:h-20';
+    const sizeClasses = size === 'sm' ? 'w-6 h-6' : 'w-10 h-10';
 
     if (item.map_icon_url) {
       return (
@@ -495,14 +623,14 @@ const RegionMapEditor = ({
     if (item.type === 'district') {
       return (
         <span
-          className={`${size === 'sm' ? 'w-4 h-4' : 'w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12'} rounded flex-shrink-0 border border-amber-400/60 bg-amber-600/40`}
+          className={`${size === 'sm' ? 'w-4 h-4' : 'w-10 h-10'} rounded flex-shrink-0 border border-amber-400/60 bg-amber-600/40`}
         />
       );
     }
 
     return (
       <span
-        className={`${size === 'sm' ? 'w-4 h-4' : 'w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12'} rounded-full flex-shrink-0`}
+        className={`${size === 'sm' ? 'w-4 h-4' : 'w-10 h-10'} rounded-full flex-shrink-0`}
         style={{ backgroundColor: getMarkerColor(item.marker_type) }}
       />
     );
@@ -587,6 +715,22 @@ const RegionMapEditor = ({
                     required
                     className="w-full px-2 py-1.5 bg-black/30 border border-white/10 rounded text-xs text-[#d4e6f3] placeholder-white/30 focus:border-site-blue/50 focus:outline-none"
                   />
+                  <select
+                    name="parent_district_id"
+                    value={zoneForm.parent_district_id}
+                    onChange={handleZoneFormChange}
+                    className="w-full px-2 py-1.5 bg-black/30 border border-white/10 rounded text-xs text-[#d4e6f3] focus:border-site-blue/50 focus:outline-none"
+                  >
+                    <option value="__none__">Без родительской зоны (в регион)</option>
+                    {[...districts, ...createdItems.filter((i) => i.type === 'district')].reduce<DistrictOption[]>((acc, d) => {
+                      if (!acc.some((x) => x.id === d.id)) acc.push({ id: d.id, name: d.name });
+                      return acc;
+                    }, []).map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
                   <textarea
                     name="description"
                     value={zoneForm.description}
@@ -687,7 +831,7 @@ const RegionMapEditor = ({
             </div>
           )}
 
-          {/* Unplaced items */}
+          {/* Unplaced items (only free locations + unplaced zones, NOT zone-linked locations) */}
           {unplacedItems.length > 0 && (
             <div className="mb-3">
               <p className="text-[10px] text-white/40 uppercase mb-1">
@@ -707,6 +851,171 @@ const RegionMapEditor = ({
                     {item.type === 'district' && (
                       <span className="ml-auto text-[9px] text-amber-400/60 flex-shrink-0">зона</span>
                     )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Zones with their child locations and sub-zones */}
+          {topLevelDistricts.length > 0 && (
+            <div className="mb-3">
+              <p className="text-[10px] text-white/40 uppercase mb-1">
+                Зоны
+              </p>
+              {topLevelDistricts.map((zone) => {
+                const isExpanded = expandedZones.has(zone.id);
+                const childLocations = locationsByZone[zone.id] ?? [];
+                const childSubDistricts = subDistrictsByParent[zone.id] ?? [];
+                const childCount = childLocations.length + childSubDistricts.length;
+                return (
+                  <div key={`zone-group-${zone.id}`} className="mb-1">
+                    <button
+                      type="button"
+                      className="w-full flex items-center gap-2 px-2 py-1.5 bg-amber-600/10 rounded text-xs text-amber-300/90 hover:bg-amber-600/20 transition-colors border-none cursor-pointer text-left"
+                      onClick={() => toggleZone(zone.id)}
+                    >
+                      <span className="text-[10px] flex-shrink-0 transition-transform" style={{ transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+                        &#9654;
+                      </span>
+                      <span className="truncate">{zone.name}</span>
+                      <span className="ml-auto text-[9px] text-amber-400/40 flex-shrink-0">{childCount}</span>
+                    </button>
+                    {isExpanded && (() => {
+                      const sortedChildren = getZoneChildren(zone.id);
+                      return (
+                        <div className="ml-4 mt-0.5">
+                          {sortedChildren.map((child, idx) => {
+                            if (child.type === 'district') {
+                              const subZone = child;
+                              const subZoneItem = dedupedItems.find((i) => i.type === 'district' && i.id === subZone.id);
+                              const subPos = subZoneItem ? getPosition(subZoneItem) : { map_x: null, map_y: null };
+                              const subIsPlaced = subPos.map_x != null && subPos.map_y != null;
+                              const subChildLocations = locationsByZone[subZone.id] ?? [];
+                              const subIsExpanded = expandedZones.has(subZone.id);
+                              return (
+                                <div key={`sub-zone-${subZone.id}`} className="mb-0.5">
+                                  <div className="flex items-center gap-0.5">
+                                    <div className="flex flex-col flex-shrink-0">
+                                      <button
+                                        type="button"
+                                        disabled={idx === 0}
+                                        className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0"
+                                        onClick={() => handleReorder(sortedChildren, idx, idx - 1)}
+                                        title="Вверх"
+                                      >&#9650;</button>
+                                      <button
+                                        type="button"
+                                        disabled={idx === sortedChildren.length - 1}
+                                        className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0"
+                                        onClick={() => handleReorder(sortedChildren, idx, idx + 1)}
+                                        title="Вниз"
+                                      >&#9660;</button>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      className={`flex-1 flex items-center gap-2 px-2 py-1 rounded text-[11px] hover:bg-amber-600/15 transition-colors border-none cursor-pointer text-left ${
+                                        subIsPlaced ? 'bg-green-600/10 text-amber-300/80' : 'bg-amber-600/5 text-amber-300/70'
+                                      }`}
+                                      onClick={() => toggleZone(subZone.id)}
+                                    >
+                                      {subChildLocations.length > 0 && (
+                                        <span className="text-[9px] flex-shrink-0 transition-transform" style={{ transform: subIsExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+                                          &#9654;
+                                        </span>
+                                      )}
+                                      {subIsPlaced && <span className="text-green-400 text-[10px] flex-shrink-0">&#10003;</span>}
+                                      <span className="truncate">{subZone.name}</span>
+                                      <span className="ml-auto text-[9px] text-amber-400/40 flex-shrink-0">
+                                        {subChildLocations.length > 0 ? subChildLocations.length : ''}
+                                      </span>
+                                    </button>
+                                  </div>
+                                  {subIsExpanded && subChildLocations.length > 0 && (() => {
+                                    const subSorted = getZoneChildren(subZone.id);
+                                    return (
+                                      <div className="ml-4 mt-0.5">
+                                        {subSorted.map((subChild, subIdx) => {
+                                          const loc = dedupedItems.find((i) => i.type === subChild.type && i.id === subChild.id);
+                                          if (!loc) return null;
+                                          const pos = getPosition(loc);
+                                          const isPlaced = pos.map_x != null && pos.map_y != null;
+                                          return (
+                                            <div
+                                              key={itemKey(loc)}
+                                              className={`flex items-center gap-0.5 mb-0.5 rounded text-[11px] text-[#d4e6f3] ${
+                                                isPlaced ? 'bg-green-600/10' : 'bg-white/[0.03]'
+                                              }`}
+                                            >
+                                              <div className="flex flex-col flex-shrink-0">
+                                                <button
+                                                  type="button"
+                                                  disabled={subIdx === 0}
+                                                  className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0"
+                                                  onClick={() => handleReorder(subSorted, subIdx, subIdx - 1)}
+                                                  title="Вверх"
+                                                >&#9650;</button>
+                                                <button
+                                                  type="button"
+                                                  disabled={subIdx === subSorted.length - 1}
+                                                  className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0"
+                                                  onClick={() => handleReorder(subSorted, subIdx, subIdx + 1)}
+                                                  title="Вниз"
+                                                >&#9660;</button>
+                                              </div>
+                                              <div className="flex items-center gap-2 px-2 py-1 flex-1 min-w-0">
+                                                {isPlaced && <span className="text-green-400 text-[10px] flex-shrink-0">&#10003;</span>}
+                                                {renderItemIcon(loc, 'sm')}
+                                                <span className="truncate">{loc.name}</span>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              );
+                            }
+                            // Location child
+                            const loc = dedupedItems.find((i) => i.type === 'location' && i.id === child.id);
+                            if (!loc) return null;
+                            const pos = getPosition(loc);
+                            const isPlaced = pos.map_x != null && pos.map_y != null;
+                            return (
+                              <div
+                                key={itemKey(loc)}
+                                className={`flex items-center gap-0.5 mb-0.5 rounded text-[11px] text-[#d4e6f3] ${
+                                  isPlaced ? 'bg-green-600/10' : 'bg-white/[0.03]'
+                                }`}
+                              >
+                                <div className="flex flex-col flex-shrink-0">
+                                  <button
+                                    type="button"
+                                    disabled={idx === 0}
+                                    className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0"
+                                    onClick={() => handleReorder(sortedChildren, idx, idx - 1)}
+                                    title="Вверх"
+                                  >&#9650;</button>
+                                  <button
+                                    type="button"
+                                    disabled={idx === sortedChildren.length - 1}
+                                    className="text-[10px] text-white/40 hover:text-white/70 bg-transparent border-none cursor-pointer disabled:opacity-20 disabled:cursor-default leading-none p-0"
+                                    onClick={() => handleReorder(sortedChildren, idx, idx + 1)}
+                                    title="Вниз"
+                                  >&#9660;</button>
+                                </div>
+                                <div className="flex items-center gap-2 px-2 py-1 flex-1 min-w-0">
+                                  {isPlaced && <span className="text-green-400 text-[10px] flex-shrink-0">&#10003;</span>}
+                                  {renderItemIcon(loc, 'sm')}
+                                  <span className="truncate">{loc.name}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })}

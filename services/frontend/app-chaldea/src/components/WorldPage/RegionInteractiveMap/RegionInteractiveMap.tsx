@@ -191,7 +191,7 @@ const RegionInteractiveMap = ({
                         src={item.map_icon_url}
                         alt={item.name}
                         className={`
-                          max-w-[80px] sm:max-w-[100px] md:max-w-[120px] h-auto
+                          w-[50px] h-[50px] object-contain
                           ${isCurrent ? 'ring-2 ring-gold rounded-sm' : ''}
                         `}
                         draggable={false}
@@ -200,7 +200,7 @@ const RegionInteractiveMap = ({
                       /* Fallback marker circle */
                       <div
                         className={`
-                          w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-full
+                          w-[50px] h-[50px] rounded-full
                           flex items-center justify-center
                           border-2 text-sm sm:text-base
                           ${isCurrent ? 'border-gold shadow-[0_0_10px_rgba(240,217,92,0.6)]' : 'border-white/50'}
@@ -220,13 +220,13 @@ const RegionInteractiveMap = ({
                   {/* Item name label */}
                   <span
                     className={`
-                      gold-text text-xs sm:text-sm font-medium text-center
+                      text-white text-xs sm:text-sm font-semibold text-center
                       whitespace-nowrap max-w-[100px] sm:max-w-[140px] truncate
                       transition-all duration-200 ease-site
                       ${isHovered ? 'brightness-125 scale-105' : ''}
                     `}
                     style={{
-                      textShadow: '0 1px 3px rgba(0,0,0,0.8), 0 0 6px rgba(0,0,0,0.6)',
+                      textShadow: '0 0 8px rgba(240,217,92,0.7), 0 1px 3px rgba(0,0,0,0.9)',
                     }}
                   >
                     {item.name}

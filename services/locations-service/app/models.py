@@ -69,6 +69,7 @@ class District(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
     region_id = Column(BigInteger, ForeignKey('Regions.id', ondelete="CASCADE"), nullable=False)
+    parent_district_id = Column(BigInteger, ForeignKey('Districts.id', ondelete="CASCADE"), nullable=True)
     description = Column(Text, nullable=False)
     image_url = Column(String(255), nullable=True)
     entrance_location_id = Column(BigInteger, ForeignKey('Locations.id', ondelete="SET NULL"))
@@ -77,8 +78,11 @@ class District(Base):
     x = Column(Float, nullable=True)
     y = Column(Float, nullable=True)
     map_icon_url = Column(String(255), nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
 
     region = relationship("Region", back_populates="districts")
+    parent_district = relationship("District", remote_side=[id], back_populates="sub_districts")
+    sub_districts = relationship("District", back_populates="parent_district")
 
     # ВАЖНО: указываем, что в таблице Locations есть district_id,
     # который связан именно с этим relationship.
@@ -111,6 +115,7 @@ class Location(Base):
     map_icon_url = Column(String(255), nullable=True)
     map_x = Column(Float, nullable=True)
     map_y = Column(Float, nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
 
     # ЯВНО указываем, какие колонке использовать в ForeignKey для district:
     district = relationship(

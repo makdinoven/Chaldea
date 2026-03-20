@@ -240,6 +240,7 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         "map_icon_url": loc.map_icon_url,
         "map_x": loc.map_x,
         "map_y": loc.map_y,
+        "sort_order": loc.sort_order,
         "children": []
     } for loc in all_locations}
 
@@ -262,11 +263,14 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
 
     # Формируем данные по районам
     districts_data = []
-    for district in region.districts:
-        district_root_locations = [
-            loc for loc in root_locations
-            if loc["id"] in [l.id for l in all_locations if l.district_id == district.id]
-        ]
+    for district in sorted(region.districts, key=lambda d: d.sort_order):
+        district_root_locations = sorted(
+            [
+                loc for loc in root_locations
+                if loc["id"] in [l.id for l in all_locations if l.district_id == district.id]
+            ],
+            key=lambda loc: loc["sort_order"],
+        )
         entrance_location = None
         if district.entrance_location_id:
             entrance_location = locations_by_id.get(district.entrance_location_id)
@@ -275,40 +279,45 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
             "id": district.id,
             "name": district.name,
             "description": district.description,
+            "parent_district_id": district.parent_district_id,
             "entrance_location": entrance_location,
             "x": district.x,
             "y": district.y,
             "image_url": district.image_url,
             "map_icon_url": district.map_icon_url,
+            "sort_order": district.sort_order,
             "locations": district_root_locations
         })
 
-    # Build unified map_items list combining locations and districts
+    # Build unified map_items list combining ALL locations and districts
+    # (including those without coordinates — the frontend handles placed/unplaced separation)
     map_items = []
     for loc in all_locations:
-        if loc.map_x is not None and loc.map_y is not None:
-            map_items.append({
-                "id": loc.id,
-                "name": loc.name,
-                "type": "location",
-                "map_icon_url": loc.map_icon_url,
-                "map_x": loc.map_x,
-                "map_y": loc.map_y,
-                "marker_type": loc.marker_type,
-                "image_url": loc.image_url,
-            })
-    for district in region.districts:
-        if district.x is not None and district.y is not None:
-            map_items.append({
-                "id": district.id,
-                "name": district.name,
-                "type": "district",
-                "map_icon_url": district.map_icon_url,
-                "map_x": district.x,
-                "map_y": district.y,
-                "marker_type": None,
-                "image_url": district.image_url,
-            })
+        map_items.append({
+            "id": loc.id,
+            "name": loc.name,
+            "type": "location",
+            "map_icon_url": loc.map_icon_url,
+            "map_x": loc.map_x,
+            "map_y": loc.map_y,
+            "marker_type": loc.marker_type,
+            "image_url": loc.image_url,
+            "district_id": loc.district_id,
+            "sort_order": loc.sort_order,
+        })
+    for district in sorted(region.districts, key=lambda d: d.sort_order):
+        map_items.append({
+            "id": district.id,
+            "name": district.name,
+            "type": "district",
+            "map_icon_url": district.map_icon_url,
+            "map_x": district.x,
+            "map_y": district.y,
+            "marker_type": None,
+            "image_url": district.image_url,
+            "parent_district_id": district.parent_district_id,
+            "sort_order": district.sort_order,
+        })
 
     # Получаем neighbor_edges для всех локаций региона
     all_location_ids = [loc.id for loc in all_locations]
@@ -361,6 +370,7 @@ async def create_district(session: AsyncSession, district: DistrictCreate) -> Di
         y=district.y,
         image_url=district.image_url or "",  # Используем пустую строку вместо None
         map_icon_url=district.map_icon_url,
+        parent_district_id=district.parent_district_id,
     )
     
     session.add(db_district)
@@ -406,6 +416,8 @@ async def update_district(session: AsyncSession, district_id: int, data) -> Dist
         db_district.y = data.y
     if getattr(data, "map_icon_url", None) is not None:
         db_district.map_icon_url = data.map_icon_url
+    if getattr(data, "parent_district_id", None) is not None:
+        db_district.parent_district_id = data.parent_district_id
 
     await session.commit()
     await session.refresh(db_district)
@@ -919,6 +931,36 @@ async def delete_district(
 
     if commit:
         await session.commit()
+
+async def update_items_sort_order(session: AsyncSession, items: list):
+    """Batch-update sort_order for districts and locations."""
+    import logging
+    logger = logging.getLogger(__name__)
+    updated = 0
+    for item in items:
+        if item.type == "district":
+            result = await session.execute(
+                select(District).where(District.id == item.id)
+            )
+            obj = result.scalars().first()
+            if obj:
+                obj.sort_order = item.sort_order
+                updated += 1
+            else:
+                logger.warning(f"District {item.id} not found for sort_order update")
+        elif item.type == "location":
+            result = await session.execute(
+                select(Location).where(Location.id == item.id)
+            )
+            obj = result.scalars().first()
+            if obj:
+                obj.sort_order = item.sort_order
+                updated += 1
+            else:
+                logger.warning(f"Location {item.id} not found for sort_order update")
+    await session.commit()
+    logger.info(f"sort_order: updated {updated}/{len(items)} items")
+
 
 async def delete_region(session: AsyncSession, region_id: int):
     """

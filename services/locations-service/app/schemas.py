@@ -72,6 +72,7 @@ class LocationCreate(BaseModel):
     map_icon_url: Optional[str] = None
     map_x: Optional[float] = None
     map_y: Optional[float] = None
+    sort_order: int = 0
 
 class LocationCreateResponse(BaseModel):
     id: int
@@ -116,6 +117,7 @@ class LocationRead(BaseModel):
     map_icon_url: Optional[str] = None
     map_x: Optional[float] = None
     map_y: Optional[float] = None
+    sort_order: int = 0
 
     class Config:
         orm_mode = True
@@ -134,6 +136,8 @@ class DistrictBase(BaseModel):
 
 class DistrictCreate(DistrictBase):
     entrance_location_id: Optional[int] = None
+    parent_district_id: Optional[int] = None
+    sort_order: int = 0
 
 class DistrictUpdate(BaseModel):
     name: Optional[str]
@@ -144,18 +148,21 @@ class DistrictUpdate(BaseModel):
     x: Optional[float]
     y: Optional[float]
     map_icon_url: Optional[str]
+    parent_district_id: Optional[int] = None
 
 class DistrictRead(BaseModel):
     id: int
     name: str
     description: str
     region_id: int
+    parent_district_id: Optional[int] = None
     entrance_location_id: Optional[int] = None
     recommended_level: Optional[int] = 1
     x: Optional[float] = None
     y: Optional[float] = None
     image_url: Optional[str] = None
     map_icon_url: Optional[str] = None
+    sort_order: int = 0
     locations: List[LocationRead] = []
 
     class Config:
@@ -522,4 +529,16 @@ class GameTimeAdminUpdate(BaseModel):
     target_year: Optional[int] = None
     target_segment: Optional[str] = None
     target_week: Optional[int] = None
+
+
+# -------------------------------
+#   SORT ORDER SCHEMAS
+# -------------------------------
+class SortOrderItem(BaseModel):
+    id: int
+    type: Literal["district", "location"]
+    sort_order: int
+
+class SortOrderUpdate(BaseModel):
+    items: List[SortOrderItem]
 
