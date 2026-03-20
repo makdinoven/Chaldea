@@ -85,7 +85,7 @@ class TestColumnPresence:
 
     def test_district_columns(self):
         cols = _column_names(District)
-        assert {"id", "image_url", "map_icon_url"} == cols
+        assert {"id", "image_url", "map_icon_url", "map_image_url"} == cols
 
     def test_location_columns(self):
         cols = _column_names(Location)
