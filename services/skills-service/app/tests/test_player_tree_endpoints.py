@@ -53,24 +53,18 @@ import database  # noqa: E402
 
 _original_get_db = database.get_db
 
-database.engine = _async_test_engine
-database.async_session = _AsyncTestSessionLocal
-
+# NOTE: engine/session patching moved into setup_db fixture to avoid
+# cross-file collisions when pytest imports multiple test modules.
 
 async def _override_get_db():
     async with _AsyncTestSessionLocal() as session:
         yield session
 
 
-database.get_db = _override_get_db
-
-
 async def _test_create_tables():
     async with _async_test_engine.begin() as conn:
         await conn.run_sync(database.Base.metadata.create_all)
 
-
-database.create_tables = _test_create_tables
 
 import models  # noqa: E402
 
@@ -131,6 +125,11 @@ def _mock_httpx_response(status_code=200, json_data=None):
 @pytest_asyncio.fixture()
 async def setup_db():
     """Create and drop tables for each test."""
+    # Patch database engine/session at fixture time (not module level)
+    database.engine = _async_test_engine
+    database.async_session = _AsyncTestSessionLocal
+    database.get_db = _override_get_db
+    database.create_tables = _test_create_tables
     async with _async_test_engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
     yield

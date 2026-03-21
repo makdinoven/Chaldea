@@ -44,16 +44,13 @@ _AsyncTestSessionLocal = async_sessionmaker(
 # ---------------------------------------------------------------------------
 import database  # noqa: E402
 
-database.engine = _async_test_engine
-database.async_session = _AsyncTestSessionLocal
-
+# NOTE: engine/session patching moved into setup_db fixture to avoid
+# cross-file collisions when pytest imports multiple test modules.
 
 async def _test_create_tables():
     async with _async_test_engine.begin() as conn:
         await conn.run_sync(database.Base.metadata.create_all)
 
-
-database.create_tables = _test_create_tables
 
 import models  # noqa: E402
 import schemas  # noqa: E402
@@ -66,6 +63,10 @@ import crud  # noqa: E402
 
 @pytest_asyncio.fixture()
 async def setup_db():
+    # Patch database engine/session at fixture time (not module level)
+    database.engine = _async_test_engine
+    database.async_session = _AsyncTestSessionLocal
+    database.create_tables = _test_create_tables
     async with _async_test_engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
     yield
