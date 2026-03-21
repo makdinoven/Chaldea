@@ -35,6 +35,7 @@ interface ClassColors {
   blocked: { border: string; fill: string; rune: string };
 }
 
+/* DB class IDs: 1=Warrior, 2=Rogue, 3=Mage */
 const classColors: Record<number, ClassColors> = {
   // Warrior — red/amber
   1: {
@@ -43,17 +44,17 @@ const classColors: Record<number, ClassColors> = {
     locked:    { border: 'rgba(255,255,255,0.12)', fill: 'rgba(255,255,255,0.03)', rune: 'rgba(255,255,255,0.15)' },
     blocked:   { border: 'rgba(239,68,68,0.2)', fill: 'rgba(239,68,68,0.04)', rune: 'rgba(239,68,68,0.15)' },
   },
-  // Mage — blue/cyan
+  // Rogue — green/emerald
   2: {
-    chosen:    { border: '#38bdf8', fill: 'rgba(56,189,248,0.15)', glow: '0 0 16px rgba(56,189,248,0.6), inset 0 0 12px rgba(56,189,248,0.15)', rune: '#7dd3fc', badge: 'rgba(56,189,248,0.25)' },
-    available: { border: '#38bdf880', fill: 'rgba(56,189,248,0.06)', glow: '0 0 10px rgba(56,189,248,0.3)', rune: '#38bdf899' },
+    chosen:    { border: '#34d399', fill: 'rgba(52,211,153,0.15)', glow: '0 0 16px rgba(52,211,153,0.6), inset 0 0 12px rgba(52,211,153,0.15)', rune: '#6ee7b7', badge: 'rgba(52,211,153,0.25)' },
+    available: { border: '#34d39980', fill: 'rgba(52,211,153,0.06)', glow: '0 0 10px rgba(52,211,153,0.3)', rune: '#34d39999' },
     locked:    { border: 'rgba(255,255,255,0.12)', fill: 'rgba(255,255,255,0.03)', rune: 'rgba(255,255,255,0.15)' },
     blocked:   { border: 'rgba(239,68,68,0.2)', fill: 'rgba(239,68,68,0.04)', rune: 'rgba(239,68,68,0.15)' },
   },
-  // Rogue — green/emerald
+  // Mage — blue/cyan
   3: {
-    chosen:    { border: '#34d399', fill: 'rgba(52,211,153,0.15)', glow: '0 0 16px rgba(52,211,153,0.6), inset 0 0 12px rgba(52,211,153,0.15)', rune: '#6ee7b7', badge: 'rgba(52,211,153,0.25)' },
-    available: { border: '#34d39980', fill: 'rgba(52,211,153,0.06)', glow: '0 0 10px rgba(52,211,153,0.3)', rune: '#34d39999' },
+    chosen:    { border: '#38bdf8', fill: 'rgba(56,189,248,0.15)', glow: '0 0 16px rgba(56,189,248,0.6), inset 0 0 12px rgba(56,189,248,0.15)', rune: '#7dd3fc', badge: 'rgba(56,189,248,0.25)' },
+    available: { border: '#38bdf880', fill: 'rgba(56,189,248,0.06)', glow: '0 0 10px rgba(56,189,248,0.3)', rune: '#38bdf899' },
     locked:    { border: 'rgba(255,255,255,0.12)', fill: 'rgba(255,255,255,0.03)', rune: 'rgba(255,255,255,0.15)' },
     blocked:   { border: 'rgba(239,68,68,0.2)', fill: 'rgba(239,68,68,0.04)', rune: 'rgba(239,68,68,0.15)' },
   },

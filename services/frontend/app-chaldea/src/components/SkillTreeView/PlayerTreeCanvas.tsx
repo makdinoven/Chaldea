@@ -21,26 +21,26 @@ import warriorArt from '../../assets/skillTreeWarrior.png';
 import mageArt from '../../assets/skillTreeMage.png';
 import rogueArt from '../../assets/skillTreeRogue.png';
 
-/* Map class_id -> art image */
+/* Map class_id -> art image (DB: 1=Warrior, 2=Rogue, 3=Mage) */
 const classArtMap: Record<number, string> = {
   1: warriorArt,
-  2: mageArt,
-  3: rogueArt,
+  2: rogueArt,
+  3: mageArt,
 };
 
-/* Map class_id -> gradient colors [start, end] */
+/* Map class_id -> gradient colors (DB: 1=Warrior, 2=Rogue, 3=Mage) */
 const classGradientColors: Record<number, { bright: [string, string]; dim: [string, string] }> = {
   1: {
     bright: ['#fbbf24', '#ef4444'],  // Warrior — gold → red
     dim: ['rgba(251,191,36,0.3)', 'rgba(239,68,68,0.2)'],
   },
   2: {
-    bright: ['#a78bfa', '#38bdf8'],  // Mage — purple → blue
-    dim: ['rgba(167,139,250,0.3)', 'rgba(56,189,248,0.2)'],
-  },
-  3: {
     bright: ['#fbbf24', '#34d399'],  // Rogue — gold → green
     dim: ['rgba(251,191,36,0.3)', 'rgba(52,211,153,0.2)'],
+  },
+  3: {
+    bright: ['#a78bfa', '#38bdf8'],  // Mage — purple → blue
+    dim: ['rgba(167,139,250,0.3)', 'rgba(56,189,248,0.2)'],
   },
 };
 

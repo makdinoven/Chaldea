@@ -154,8 +154,8 @@ export const NODE_TYPE_OPTIONS = [
 
 export const CLASS_OPTIONS = [
   { value: 1, label: 'Воин' },
-  { value: 2, label: 'Маг' },
-  { value: 3, label: 'Плут' },
+  { value: 2, label: 'Плут' },
+  { value: 3, label: 'Маг' },
 ] as const;
 
 export const TREE_TYPE_OPTIONS = [
