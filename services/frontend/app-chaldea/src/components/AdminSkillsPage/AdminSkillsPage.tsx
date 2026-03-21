@@ -67,8 +67,19 @@ const AdminSkillsPage = () => {
   );
 
   const handleAddSkill = async () => {
+    const baseName = 'Новый навык';
+    const existingNames = new Set(skillsList.map((s) => s.name));
+    let newName = baseName;
+    if (existingNames.has(newName)) {
+      let counter = 2;
+      while (existingNames.has(`${baseName} (${counter})`)) {
+        counter++;
+      }
+      newName = `${baseName} (${counter})`;
+    }
+
     const newSkillPayload = {
-      name: 'Новый навык',
+      name: newName,
       skill_type: 'attack',
       description: '',
     };
@@ -77,9 +88,10 @@ const AdminSkillsPage = () => {
       const res = await axios.post('/skills/admin/skills/', newSkillPayload);
       dispatch(fetchSkills() as unknown as any);
       handleSelectSkill(res.data.id);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Ошибка при создании навыка:', err);
-      toast.error('Не удалось создать навык');
+      const message = err?.response?.data?.detail || 'Не удалось создать навык';
+      toast.error(message);
     }
   };
 

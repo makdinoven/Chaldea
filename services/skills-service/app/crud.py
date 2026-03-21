@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException
 from sqlalchemy.orm import selectinload
 
@@ -11,7 +12,11 @@ import models, schemas
 async def create_skill(db: AsyncSession, data: schemas.SkillCreate) -> models.Skill:
     new_skill = models.Skill(**data.dict())
     db.add(new_skill)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Навык с таким именем уже существует")
     await db.refresh(new_skill)
     return new_skill
 
