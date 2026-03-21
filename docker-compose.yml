@@ -387,6 +387,7 @@ services:
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      INVENTORY_SERVICE_URL: http://inventory-service:8004
     depends_on:
       mysql:
         condition: service_healthy

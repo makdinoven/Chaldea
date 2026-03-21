@@ -30,6 +30,19 @@ export interface Post {
   liked_by: number[];
 }
 
+export interface LocationLootItem {
+  id: number;
+  location_id: number;
+  item_id: number;
+  quantity: number;
+  dropped_by_character_id: number | null;
+  dropped_at: string;
+  item_name: string | null;
+  item_image: string | null;
+  item_rarity: string | null;
+  item_type: string | null;
+}
+
 export interface LocationData {
   id: number;
   name: string;
@@ -41,6 +54,7 @@ export interface LocationData {
   neighbors: NeighborLocation[];
   players: Player[];
   posts: Post[];
+  loot: LocationLootItem[];
 }
 
 export type MarkerType = 'safe' | 'dangerous' | 'dungeon' | 'farm';

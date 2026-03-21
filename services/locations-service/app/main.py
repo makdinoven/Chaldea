@@ -1,6 +1,7 @@
 import os
+import logging
 from typing import List
-from fastapi import FastAPI, Depends, HTTPException, APIRouter
+from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 import asyncio
 from sqlalchemy import select, delete
@@ -15,6 +16,8 @@ from database import get_db
 from fastapi.middleware.cors import CORSMiddleware
 from auth_http import get_admin_user, get_current_user_via_http, require_permission
 from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -905,6 +908,157 @@ async def update_game_time_admin(
         "updated_at": config.updated_at,
         "computed": computed,
         "server_time": now,
+    }
+
+
+# --------------------------------------------------------------------
+# LOOT — Drop & Pickup
+# --------------------------------------------------------------------
+@router.post("/{location_id}/loot/drop", response_model=schemas.LocationLootItem)
+async def drop_loot(
+    location_id: int,
+    body: schemas.LocationLootDrop,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """
+    Выбросить предмет из инвентаря персонажа на землю в указанной локации.
+    """
+    # 1. Проверяем принадлежность персонажа
+    await verify_character_ownership(session, body.character_id, current_user.id)
+
+    # 2. Проверяем, что персонаж находится в данной локации
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/profile"
+        profile_resp = await client.get(profile_url)
+        if profile_resp.status_code != 200:
+            raise HTTPException(status_code=404, detail="Профиль персонажа не найден")
+        profile_data = profile_resp.json()
+
+    current_location = profile_data.get("current_location_id")
+    if current_location is None or int(current_location) != location_id:
+        raise HTTPException(status_code=400, detail="Персонаж не находится в этой локации")
+
+    # 3. Удаляем предмет из инвентаря через inventory-service
+    auth_header = request.headers.get("authorization", "")
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        remove_url = (
+            f"{settings.INVENTORY_SERVICE_URL}/inventory/{body.character_id}"
+            f"/items/{body.item_id}?quantity={body.quantity}"
+        )
+        remove_resp = await client.delete(
+            remove_url,
+            headers={"Authorization": auth_header},
+        )
+        if remove_resp.status_code != 200:
+            detail = "Не удалось удалить предмет из инвентаря"
+            try:
+                detail = remove_resp.json().get("detail", detail)
+            except Exception:
+                pass
+            raise HTTPException(status_code=remove_resp.status_code, detail=detail)
+
+    # 4. Создаём запись лута в локации
+    loot = await crud.create_location_loot(
+        session, location_id, body.item_id, body.quantity, body.character_id
+    )
+
+    # 5. Получаем данные предмета для ответа
+    loot_list = await crud.get_location_loot(session, location_id)
+    for item in loot_list:
+        if item["id"] == loot.id:
+            return item
+
+    # Fallback — вернуть без обогащения
+    return {
+        "id": loot.id,
+        "location_id": loot.location_id,
+        "item_id": loot.item_id,
+        "quantity": loot.quantity,
+        "dropped_by_character_id": loot.dropped_by_character_id,
+        "dropped_at": loot.dropped_at,
+    }
+
+
+@router.post("/{location_id}/loot/{loot_id}/pickup", response_model=schemas.LocationLootItem)
+async def pickup_loot(
+    location_id: int,
+    loot_id: int,
+    body: schemas.LocationLootPickup,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """
+    Подобрать лут из локации и добавить в инвентарь персонажа.
+    """
+    # 1. Проверяем принадлежность персонажа
+    await verify_character_ownership(session, body.character_id, current_user.id)
+
+    # 2. Проверяем, что персонаж находится в данной локации
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/profile"
+        profile_resp = await client.get(profile_url)
+        if profile_resp.status_code != 200:
+            raise HTTPException(status_code=404, detail="Профиль персонажа не найден")
+        profile_data = profile_resp.json()
+
+    current_location = profile_data.get("current_location_id")
+    if current_location is None or int(current_location) != location_id:
+        raise HTTPException(status_code=400, detail="Персонаж не находится в этой локации")
+
+    # 3. Забираем лут (SELECT FOR UPDATE + delete)
+    loot_data = await crud.pickup_location_loot(session, loot_id)
+    if not loot_data:
+        raise HTTPException(status_code=404, detail="Лут не найден или уже подобран")
+
+    # Проверяем, что лут принадлежит этой локации
+    if loot_data["location_id"] != location_id:
+        # Компенсация: вернуть лут обратно
+        await crud.create_location_loot(
+            session,
+            loot_data["location_id"],
+            loot_data["item_id"],
+            loot_data["quantity"],
+            loot_data["dropped_by_character_id"],
+        )
+        raise HTTPException(status_code=400, detail="Лут не принадлежит этой локации")
+
+    # 4. Добавляем предмет в инвентарь через inventory-service
+    auth_header = request.headers.get("authorization", "")
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        add_url = f"{settings.INVENTORY_SERVICE_URL}/inventory/{body.character_id}/items"
+        add_resp = await client.post(
+            add_url,
+            json={"item_id": loot_data["item_id"], "quantity": loot_data["quantity"]},
+            headers={"Authorization": auth_header},
+        )
+        if add_resp.status_code != 200:
+            # Компенсация: вернуть лут обратно
+            logger.error(
+                f"Не удалось добавить предмет в инвентарь, возвращаем лут: {add_resp.text}"
+            )
+            await crud.create_location_loot(
+                session,
+                loot_data["location_id"],
+                loot_data["item_id"],
+                loot_data["quantity"],
+                loot_data["dropped_by_character_id"],
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Не удалось добавить предмет в инвентарь",
+            )
+
+    # 5. Возвращаем данные подобранного лута
+    return {
+        "id": loot_data["id"],
+        "location_id": loot_data["location_id"],
+        "item_id": loot_data["item_id"],
+        "quantity": loot_data["quantity"],
+        "dropped_by_character_id": loot_data["dropped_by_character_id"],
+        "dropped_at": loot_data["dropped_at"],
     }
 
 

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
+import axios from 'axios';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import {
   selectContextMenu,
@@ -9,8 +10,10 @@ import {
   unequipItem,
   useItem,
   dropItem,
+  fetchInventory,
   InventoryItem,
 } from '../../../redux/slices/profileSlice';
+import { BASE_URL } from '../../../api/api';
 import { EQUIPMENT_TYPES } from '../constants';
 import ConfirmationModal from '../../ui/ConfirmationModal';
 
@@ -26,6 +29,7 @@ interface MenuAction {
 const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
   const dispatch = useAppDispatch();
   const contextMenu = useAppSelector(selectContextMenu);
+  const currentLocation = useAppSelector(state => state.user.character?.current_location);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Confirmation modal state for drop actions
@@ -170,6 +174,41 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
                   ),
                 'Предметы удалены',
               );
+            },
+          });
+        },
+      });
+    }
+
+    // Бросить на локацию — only when character has a current location
+    if (currentLocation) {
+      actions.push({
+        label: 'Бросить на локацию',
+        handler: () => {
+          dispatch(closeContextMenu());
+          setConfirmModal({
+            isOpen: true,
+            message: `Бросить "${item.name}" (x1) на локацию "${currentLocation.name}"?`,
+            onConfirm: async () => {
+              setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+              try {
+                await axios.post(
+                  `${BASE_URL}/locations/${currentLocation.id}/loot/drop`,
+                  {
+                    character_id: characterId,
+                    item_id: item.id,
+                    quantity: 1,
+                  }
+                );
+                toast.success('Предмет брошен на локацию');
+                dispatch(fetchInventory(characterId));
+              } catch (err) {
+                const message =
+                  axios.isAxiosError(err) && err.response?.data?.detail
+                    ? err.response.data.detail
+                    : 'Не удалось бросить предмет на локацию';
+                toast.error(message);
+              }
             },
           });
         },

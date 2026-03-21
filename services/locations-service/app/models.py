@@ -193,6 +193,17 @@ class GameRule(Base):
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class LocationLoot(Base):
+    __tablename__ = 'location_loot'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    location_id = Column(BigInteger, ForeignKey('Locations.id', ondelete='CASCADE'), nullable=False, index=True)
+    item_id = Column(Integer, nullable=False)
+    quantity = Column(Integer, nullable=False, default=1)
+    dropped_by_character_id = Column(Integer, nullable=True)
+    dropped_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+
 class GameTimeConfig(Base):
     __tablename__ = 'game_time_config'
 

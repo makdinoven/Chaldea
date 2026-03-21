@@ -11,6 +11,7 @@ import PlayersSection from './PlayersSection';
 import PostCard from './PostCard';
 import PostCreateForm from './PostCreateForm';
 import NeighborsSection from './NeighborsSection';
+import LootSection from './LootSection';
 import PlaceholderSection from './PlaceholderSection';
 
 const LocationPage = () => {
@@ -166,6 +167,29 @@ const LocationPage = () => {
     [locationId, character?.id, fetchLocationData]
   );
 
+  // --- Loot pickup ---
+
+  const handlePickupLoot = useCallback(
+    async (lootId: number) => {
+      if (!character?.id || !locationId) return;
+      try {
+        await axios.post(
+          `${BASE_URL}/locations/${locationId}/loot/${lootId}/pickup`,
+          { character_id: character.id }
+        );
+        toast.success('Предмет подобран');
+        await fetchLocationData();
+      } catch (err) {
+        const message =
+          axios.isAxiosError(err) && err.response?.data?.detail
+            ? err.response.data.detail
+            : 'Не удалось подобрать предмет';
+        toast.error(message);
+      }
+    },
+    [character?.id, locationId, fetchLocationData]
+  );
+
   // --- Loading state ---
   if (loading) {
     return (
@@ -214,6 +238,16 @@ const LocationPage = () => {
       <section className="bg-black/30 rounded-card p-4 sm:p-6">
         <PlayersSection players={location.players} />
       </section>
+
+      <div className="gradient-divider-h relative pb-2" />
+
+      {/* Loot */}
+      <LootSection
+        loot={location.loot ?? []}
+        currentCharacterId={isCharacterHere ? (character?.id ?? null) : null}
+        locationId={location.id}
+        onPickup={handlePickupLoot}
+      />
 
       <div className="gradient-divider-h relative pb-2" />
 

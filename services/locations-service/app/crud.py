@@ -11,7 +11,7 @@ from config import settings
 import models
 from models import (
     Country, Region, District, Location, LocationNeighbor, Post, PostLike, GameRule,
-    Area, ClickableZone, GameTimeConfig
+    Area, ClickableZone, GameTimeConfig, LocationLoot
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -1120,6 +1120,9 @@ async def get_client_location_details(session: AsyncSession, location_id: int) -
         post_dict["likes_count"] = likes_map.get(pid, {}).get("likes_count", 0)
         post_dict["liked_by"] = likes_map.get(pid, {}).get("liked_by", [])
 
+    # 6. Получаем лут в локации
+    loot_items = await get_location_loot(session, location_id)
+
     return {
         "id": loc.id,
         "name": loc.name,
@@ -1133,7 +1136,8 @@ async def get_client_location_details(session: AsyncSession, location_id: int) -
         "region_id": loc.region_id,
         "neighbors": detailed_neighbors,
         "players": players,
-        "posts": detailed_posts
+        "posts": detailed_posts,
+        "loot": loot_items,
     }
 
 async def get_post_details(post: Post) -> dict:
@@ -1612,3 +1616,84 @@ async def update_game_time_config(
     await session.commit()
     await session.refresh(config)
     return config
+
+
+# -------------------------------
+#   LOCATION LOOT
+# -------------------------------
+async def get_location_loot(session: AsyncSession, location_id: int) -> List[dict]:
+    """
+    Получает список лута в локации, обогащая данными из таблицы items (shared DB).
+    """
+    query = text("""
+        SELECT ll.id, ll.location_id, ll.item_id, ll.quantity,
+               ll.dropped_by_character_id, ll.dropped_at,
+               i.name AS item_name, i.image AS item_image,
+               i.item_rarity, i.item_type
+        FROM location_loot ll
+        LEFT JOIN items i ON ll.item_id = i.id
+        WHERE ll.location_id = :location_id
+        ORDER BY ll.dropped_at DESC
+    """)
+    result = await session.execute(query, {"location_id": location_id})
+    rows = result.fetchall()
+    return [
+        {
+            "id": row[0],
+            "location_id": row[1],
+            "item_id": row[2],
+            "quantity": row[3],
+            "dropped_by_character_id": row[4],
+            "dropped_at": row[5],
+            "item_name": row[6],
+            "item_image": row[7],
+            "item_rarity": row[8],
+            "item_type": row[9],
+        }
+        for row in rows
+    ]
+
+
+async def create_location_loot(
+    session: AsyncSession,
+    location_id: int,
+    item_id: int,
+    quantity: int,
+    character_id: Optional[int] = None,
+) -> LocationLoot:
+    """Создаёт запись лута в локации."""
+    loot = LocationLoot(
+        location_id=location_id,
+        item_id=item_id,
+        quantity=quantity,
+        dropped_by_character_id=character_id,
+    )
+    session.add(loot)
+    await session.commit()
+    await session.refresh(loot)
+    return loot
+
+
+async def pickup_location_loot(session: AsyncSession, loot_id: int) -> Optional[dict]:
+    """
+    Забирает лут: SELECT FOR UPDATE + удаление.
+    Возвращает данные лута или None, если не найден.
+    """
+    stmt = select(LocationLoot).where(LocationLoot.id == loot_id).with_for_update()
+    result = await session.execute(stmt)
+    loot = result.scalars().first()
+    if not loot:
+        return None
+
+    loot_data = {
+        "id": loot.id,
+        "location_id": loot.location_id,
+        "item_id": loot.item_id,
+        "quantity": loot.quantity,
+        "dropped_by_character_id": loot.dropped_by_character_id,
+        "dropped_at": loot.dropped_at,
+    }
+
+    await session.delete(loot)
+    await session.commit()
+    return loot_data

@@ -451,6 +451,29 @@ class ClientPost(BaseModel):
     likes_count: int = 0
     liked_by: List[int] = []
 
+class LocationLootDrop(BaseModel):
+    character_id: int
+    item_id: int
+    quantity: int = 1
+
+class LocationLootPickup(BaseModel):
+    character_id: int
+
+class LocationLootItem(BaseModel):
+    id: int
+    location_id: int
+    item_id: int
+    quantity: int
+    dropped_by_character_id: Optional[int] = None
+    dropped_at: Optional[datetime] = None
+    item_name: Optional[str] = None
+    item_image: Optional[str] = None
+    item_rarity: Optional[str] = None
+    item_type: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
 class LocationClientDetails(BaseModel):
     id: int
     name: str
@@ -465,6 +488,7 @@ class LocationClientDetails(BaseModel):
     neighbors: List[NeighborClient] = []
     players: List[PlayerInLocation] = []
     posts: List[ClientPost] = []
+    loot: List[LocationLootItem] = []
 
     class Config:
         orm_mode = True
