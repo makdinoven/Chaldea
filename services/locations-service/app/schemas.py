@@ -435,6 +435,16 @@ class PlayerInLocation(BaseModel):
     character_title: Optional[str] = ""
     user_id: Optional[int] = None
 
+
+class NpcInLocation(BaseModel):
+    id: int
+    name: str
+    avatar: Optional[str] = None
+    level: int = 1
+    class_name: Optional[str] = None
+    race_name: Optional[str] = None
+    npc_role: Optional[str] = None
+
 class NeighborClient(BaseModel):
     neighbor_id: int
     name: str
@@ -447,6 +457,7 @@ class ClientPost(BaseModel):
     character_id: int
     character_photo: str
     character_title: str
+    character_level: Optional[int] = None
     character_name: Optional[str]
     user_id: int
     user_nickname: str
@@ -493,6 +504,7 @@ class LocationClientDetails(BaseModel):
     is_favorited: bool = False
     neighbors: List[NeighborClient] = []
     players: List[PlayerInLocation] = []
+    npcs: List[NpcInLocation] = []
     posts: List[ClientPost] = []
     loot: List[LocationLootItem] = []
 

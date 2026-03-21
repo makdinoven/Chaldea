@@ -23,6 +23,7 @@ const sections: AdminSection[] = [
   { label: 'Расы', path: '/admin/races', description: 'Управление расами, подрасами и пресетами статов', module: 'races' },
   { label: 'Игровое время', path: '/admin/game-time', description: 'Настройка внутриигрового календаря', module: 'gametime' },
   { label: 'Модерация постов', path: '/admin/moderation', description: 'Жалобы и запросы на удаление постов локаций', module: 'moderation' },
+  { label: 'НПС', path: '/admin/npcs', description: 'Управление НПС: создание, редактирование, размещение на локациях', module: 'npcs' },
 ];
 
 const AdminPage = () => {

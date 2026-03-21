@@ -45,6 +45,16 @@ export interface LocationLootItem {
   item_type: string | null;
 }
 
+export interface NpcInLocation {
+  id: number;
+  name: string;
+  avatar: string | null;
+  level: number;
+  class_name: string | null;
+  race_name: string | null;
+  npc_role: string | null;
+}
+
 export interface LocationData {
   id: number;
   name: string;
@@ -58,6 +68,7 @@ export interface LocationData {
   players: Player[];
   posts: Post[];
   loot: LocationLootItem[];
+  npcs: NpcInLocation[];
 }
 
 export type MarkerType = 'safe' | 'dangerous' | 'dungeon' | 'farm';

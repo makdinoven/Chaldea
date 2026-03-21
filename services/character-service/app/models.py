@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON
+from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON, Boolean
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -36,7 +36,7 @@ class Character(Base):
     id_class = Column(Integer, nullable=False)
     id_attributes = Column(Integer, nullable=True)  # Поле для атрибутов
     currency_balance = Column(Integer, default=0)
-    request_id = Column(Integer, ForeignKey("character_requests.id"), nullable=False)  # Ссылка на заявку
+    request_id = Column(Integer, ForeignKey("character_requests.id"), nullable=True)  # Ссылка на заявку (nullable for NPCs)
     user_id = Column(Integer, nullable=True)  # Добавляем поле user_id
     appearance = Column(Text, nullable=False)
     sex = Column(Enum('male', 'female', 'genderless'), default='genderless')
@@ -50,6 +50,8 @@ class Character(Base):
     level = Column(Integer, nullable=False, default=1)
     stat_points = Column(Integer, nullable=False, default=0)
     current_location_id = Column(BigInteger, nullable=True)
+    is_npc = Column(Boolean, nullable=False, default=False, index=True)
+    npc_role = Column(String(50), nullable=True)
 
     titles = relationship("CharacterTitle", back_populates="character")
     current_title = relationship("Title")

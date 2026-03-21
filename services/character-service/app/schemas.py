@@ -153,6 +153,7 @@ class CharacterProfileResponse(BaseModel):
         character_photo: str
         character_title: str
         character_name: str
+        character_level: Optional[int] = None
         user_id: Optional[int] = None
         user_nickname: Optional[str] = None
 
@@ -329,3 +330,78 @@ class RaceWithSubraces(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+# ========== NPC Schemas ==========
+
+class NpcCreate(BaseModel):
+    name: str
+    id_class: int
+    id_race: int
+    id_subrace: int
+    npc_role: Optional[str] = None
+    biography: Optional[str] = None
+    personality: Optional[str] = None
+    appearance: str = ""
+    background: Optional[str] = None
+    sex: Optional[str] = "genderless"
+    age: Optional[int] = None
+    weight: Optional[str] = None
+    height: Optional[str] = None
+    avatar: str = ""
+    level: int = 1
+    stat_points: int = 0
+    currency_balance: int = 0
+    current_location_id: Optional[int] = None
+
+
+class NpcUpdate(BaseModel):
+    name: Optional[str] = None
+    id_class: Optional[int] = None
+    id_race: Optional[int] = None
+    id_subrace: Optional[int] = None
+    npc_role: Optional[str] = None
+    biography: Optional[str] = None
+    personality: Optional[str] = None
+    appearance: Optional[str] = None
+    background: Optional[str] = None
+    sex: Optional[str] = None
+    age: Optional[int] = None
+    weight: Optional[str] = None
+    height: Optional[str] = None
+    avatar: Optional[str] = None
+    level: Optional[int] = None
+    stat_points: Optional[int] = None
+    currency_balance: Optional[int] = None
+    current_location_id: Optional[int] = None
+
+
+class NpcListItem(BaseModel):
+    id: int
+    name: str
+    level: int
+    id_race: int
+    id_class: int
+    npc_role: Optional[str] = None
+    avatar: Optional[str] = None
+    current_location_id: Optional[int] = None
+
+    class Config:
+        orm_mode = True
+
+
+class NpcListResponse(BaseModel):
+    items: List[NpcListItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class NpcInLocation(BaseModel):
+    id: int
+    name: str
+    avatar: Optional[str] = None
+    level: int = 1
+    class_name: Optional[str] = None
+    race_name: Optional[str] = None
+    npc_role: Optional[str] = None

@@ -917,7 +917,10 @@ def get_characters_by_location(location_id: int, db: Session = Depends(get_db)):
       - character_title: имя текущего титула (если установлен; иначе пустая строка),
       - character_photo: фотография персонажа (например, avatar).
     """
-    characters = db.query(models.Character).filter(models.Character.current_location_id == location_id).all()
+    characters = db.query(models.Character).filter(
+        models.Character.current_location_id == location_id,
+        models.Character.is_npc == False,
+    ).all()
     result = []
     for ch in characters:
         race = db.query(models.Race).filter(models.Race.id_race == ch.id_race).first()
@@ -1009,6 +1012,7 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
     return {
         "character_photo": character.avatar,
         "character_title": character.current_title.name if character.current_title else "",
+        "character_level": character.level,
         "user_id": user_id,
         "user_nickname": user_nickname,
         "character_name": character.name,
@@ -1280,6 +1284,283 @@ def admin_delete_subrace(
         raise HTTPException(status_code=500, detail="Ошибка при удалении подрасы")
 
     return {"detail": "Subrace deleted"}
+
+
+# ============================================================
+# NPC Admin endpoints
+# ============================================================
+
+@router.get("/admin/npcs", response_model=schemas.NpcListResponse)
+def admin_list_npcs(
+    q: str = Query("", description="Search by NPC name"),
+    npc_role: Optional[str] = Query(None, description="Filter by NPC role"),
+    location_id: Optional[int] = Query(None, description="Filter by location"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("npcs:read")),
+):
+    """Paginated list of all NPCs with search and filters. Admin only."""
+    try:
+        query = db.query(models.Character).filter(models.Character.is_npc == True)
+
+        if q:
+            query = query.filter(models.Character.name.ilike(f"%{q}%"))
+        if npc_role is not None:
+            query = query.filter(models.Character.npc_role == npc_role)
+        if location_id is not None:
+            query = query.filter(models.Character.current_location_id == location_id)
+
+        total = query.count()
+        offset = (page - 1) * page_size
+        items = query.order_by(models.Character.id).offset(offset).limit(page_size).all()
+
+        return schemas.NpcListResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
+    except SQLAlchemyError as e:
+        logger.error(f"Error fetching NPC list: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.post("/admin/npcs")
+async def admin_create_npc(
+    data: schemas.NpcCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("npcs:create")),
+):
+    """Create a new NPC character (is_npc=True, user_id=None, request_id=None)."""
+    try:
+        new_npc = models.Character(
+            name=data.name,
+            id_class=data.id_class,
+            id_race=data.id_race,
+            id_subrace=data.id_subrace,
+            npc_role=data.npc_role,
+            biography=data.biography,
+            personality=data.personality,
+            appearance=data.appearance,
+            background=data.background,
+            sex=data.sex,
+            age=data.age,
+            weight=data.weight,
+            height=data.height,
+            avatar=data.avatar,
+            level=data.level,
+            stat_points=data.stat_points,
+            currency_balance=data.currency_balance,
+            current_location_id=data.current_location_id,
+            is_npc=True,
+            user_id=None,
+            request_id=None,
+        )
+        db.add(new_npc)
+        db.flush()
+        db.refresh(new_npc)
+
+        # Create attributes via character-attributes-service
+        attributes = crud.generate_attributes_for_subrace(db, data.id_subrace)
+        attributes_response = await crud.send_attributes_request(new_npc.id, attributes)
+        if attributes_response:
+            new_npc.id_attributes = attributes_response.get("id")
+            logger.info(f"Attributes created for NPC {new_npc.id}")
+        else:
+            logger.warning(f"Failed to create attributes for NPC {new_npc.id}, continuing without attributes")
+
+        db.commit()
+        db.refresh(new_npc)
+
+        return {
+            "id": new_npc.id,
+            "name": new_npc.name,
+            "level": new_npc.level,
+            "npc_role": new_npc.npc_role,
+            "current_location_id": new_npc.current_location_id,
+            "detail": "NPC создан",
+        }
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Error creating NPC: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при создании NPC")
+
+
+@router.get("/admin/npcs/{npc_id}")
+def admin_get_npc(
+    npc_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("npcs:read")),
+):
+    """Get NPC detail by ID. Verifies the character is actually an NPC."""
+    npc = db.query(models.Character).filter(
+        models.Character.id == npc_id,
+        models.Character.is_npc == True,
+    ).first()
+    if not npc:
+        raise HTTPException(status_code=404, detail="NPC не найден")
+
+    race = db.query(models.Race).filter(models.Race.id_race == npc.id_race).first()
+    cls = db.query(models.Class).filter(models.Class.id_class == npc.id_class).first()
+    subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == npc.id_subrace).first()
+
+    return {
+        "id": npc.id,
+        "name": npc.name,
+        "level": npc.level,
+        "stat_points": npc.stat_points,
+        "currency_balance": npc.currency_balance,
+        "id_race": npc.id_race,
+        "race_name": race.name if race else None,
+        "id_class": npc.id_class,
+        "class_name": cls.name if cls else None,
+        "id_subrace": npc.id_subrace,
+        "subrace_name": subrace.name if subrace else None,
+        "npc_role": npc.npc_role,
+        "biography": npc.biography,
+        "personality": npc.personality,
+        "appearance": npc.appearance,
+        "background": npc.background,
+        "sex": npc.sex,
+        "age": npc.age,
+        "weight": npc.weight,
+        "height": npc.height,
+        "avatar": npc.avatar,
+        "current_location_id": npc.current_location_id,
+    }
+
+
+@router.put("/admin/npcs/{npc_id}")
+def admin_update_npc(
+    npc_id: int,
+    data: schemas.NpcUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("npcs:update")),
+):
+    """Update NPC fields."""
+    npc = db.query(models.Character).filter(
+        models.Character.id == npc_id,
+        models.Character.is_npc == True,
+    ).first()
+    if not npc:
+        raise HTTPException(status_code=404, detail="NPC не найден")
+
+    update_data = data.dict(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="Нет данных для обновления")
+
+    for field, value in update_data.items():
+        setattr(npc, field, value)
+
+    try:
+        db.commit()
+        db.refresh(npc)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Error updating NPC {npc_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении NPC")
+
+    return {"detail": "NPC обновлен", "id": npc.id}
+
+
+@router.delete("/admin/npcs/{npc_id}")
+async def admin_delete_npc(
+    npc_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("npcs:delete")),
+    token: str = Depends(OAUTH2_SCHEME),
+):
+    """Delete NPC with cascade cleanup (attributes, inventory, skills)."""
+    npc = db.query(models.Character).filter(
+        models.Character.id == npc_id,
+        models.Character.is_npc == True,
+    ).first()
+    if not npc:
+        raise HTTPException(status_code=404, detail="NPC не найден")
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Cascade cleanup: inventory
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{settings.INVENTORY_SERVICE_URL}{npc_id}/all",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Inventory cleared for NPC {npc_id}")
+            else:
+                logger.warning(f"Failed to clear inventory for NPC {npc_id}: {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Error clearing inventory for NPC {npc_id}: {e}")
+
+    # Cascade cleanup: skills
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{settings.SKILLS_SERVICE_URL}admin/character_skills/by_character/{npc_id}",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Skills cleared for NPC {npc_id}")
+            else:
+                logger.warning(f"Failed to clear skills for NPC {npc_id}: {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Error clearing skills for NPC {npc_id}: {e}")
+
+    # Cascade cleanup: attributes
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{settings.ATTRIBUTES_SERVICE_URL}{npc_id}",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Attributes cleared for NPC {npc_id}")
+            else:
+                logger.warning(f"Failed to clear attributes for NPC {npc_id}: {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Error clearing attributes for NPC {npc_id}: {e}")
+
+    # Delete the NPC row
+    try:
+        db.delete(npc)
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Error deleting NPC {npc_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при удалении NPC")
+
+    return {"detail": f"NPC с ID {npc_id} удален"}
+
+
+# ============================================================
+# NPC Public endpoint
+# ============================================================
+
+@router.get("/npcs/by_location", response_model=List[schemas.NpcInLocation])
+def get_npcs_by_location(location_id: int, db: Session = Depends(get_db)):
+    """Returns list of NPCs at a given location (public endpoint)."""
+    npcs = db.query(models.Character).filter(
+        models.Character.current_location_id == location_id,
+        models.Character.is_npc == True,
+    ).all()
+
+    result = []
+    for npc in npcs:
+        race = db.query(models.Race).filter(models.Race.id_race == npc.id_race).first()
+        cls = db.query(models.Class).filter(models.Class.id_class == npc.id_class).first()
+        result.append({
+            "id": npc.id,
+            "name": npc.name,
+            "avatar": npc.avatar,
+            "level": npc.level,
+            "class_name": cls.name if cls else None,
+            "race_name": race.name if race else None,
+            "npc_role": npc.npc_role,
+        })
+    return result
 
 
 app.include_router(router)

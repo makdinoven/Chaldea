@@ -32,6 +32,7 @@ import ChatHistoryPage from "../Chat/ChatHistoryPage";
 import GameTimeAdminPage from "../Admin/GameTimeAdminPage";
 import AdminClassTreePage from "../AdminClassTreeEditor/AdminClassTreePage";
 import AdminModerationPage from "../AdminModerationPage/AdminModerationPage";
+import AdminNpcsPage from "../AdminNpcsPage/AdminNpcsPage";
 import SkillTreePage from "../SkillTreeView/SkillTreePage";
 
 const App = () => {
@@ -139,6 +140,11 @@ const App = () => {
             <Route path="admin/moderation" element={
               <ProtectedRoute requiredPermission="moderation:read">
                 <AdminModerationPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/npcs" element={
+              <ProtectedRoute requiredPermission="npcs:read">
+                <AdminNpcsPage />
               </ProtectedRoute>
             } />
             <Route path="chat/history" element={<ChatHistoryPage />} />

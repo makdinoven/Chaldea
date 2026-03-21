@@ -330,7 +330,7 @@ const LocationPage = () => {
       <div className="gradient-divider-h relative pb-2" />
 
       {/* Players + NPCs */}
-      <PlayersSection players={location.players} />
+      <PlayersSection players={location.players} npcs={location.npcs ?? []} />
 
       {/* Loot — only shown when items exist */}
       {(location.loot ?? []).length > 0 && (

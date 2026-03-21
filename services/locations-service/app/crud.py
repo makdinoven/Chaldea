@@ -1106,6 +1106,9 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
     # 3. Получаем список персонажей для локации через новый эндпоинт Character‑service
     players = await get_players_in_location(location_id)
 
+    # 3b. Получаем список NPC для локации
+    npcs = await get_npcs_in_location(location_id)
+
     # 4. Получаем посты для локации
     posts_db = await get_posts_by_location(session, location_id)
     detailed_posts = []
@@ -1143,6 +1146,7 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         "is_favorited": favorited,
         "neighbors": detailed_neighbors,
         "players": players,
+        "npcs": npcs,
         "posts": detailed_posts,
         "loot": loot_items,
     }
@@ -1179,6 +1183,7 @@ async def get_post_details(post: Post) -> dict:
         "character_id": post.character_id,
         "character_photo": profile_data.get("character_photo", ""),
         "character_title": profile_data.get("character_title", ""),
+        "character_level": profile_data.get("character_level"),
         "user_id": profile_data.get("user_id"),
         "user_nickname": profile_data.get("user_nickname", ""),
         "character_name": profile_data.get("character_name", ""),
@@ -1206,6 +1211,22 @@ async def get_players_in_location(location_id: int) -> List[dict]:
             return players_data
         except Exception as e:
             logger.error(f"Ошибка при получении персонажей для локации {location_id}: {e}")
+            return []
+
+
+async def get_npcs_in_location(location_id: int) -> List[dict]:
+    """
+    Получает список NPC, находящихся в заданной локации, через Character-service.
+    GET {settings.CHARACTER_SERVICE_URL}/characters/npcs/by_location?location_id={location_id}
+    """
+    url = f"{settings.CHARACTER_SERVICE_URL}/characters/npcs/by_location?location_id={location_id}"
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Ошибка при получении NPC для локации {location_id}: {e}")
             return []
 
 
