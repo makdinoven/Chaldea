@@ -7,125 +7,90 @@ interface PlayerNodeData extends TreeNodeInTreeResponse {
   classId: number;
 }
 
-/* ---------- Class color themes ---------- */
-// Warrior = red, Rogue = green, Mage = blue
-interface ClassTheme {
-  chosenRing: string;
-  chosenFill: string;
-  chosenGlow: string;
-  chosenDot: string;
-  chosenText: string;
-  chosenBadge: string;
-  availableRing: string;
-  availableFill: string;
-  availableGlow: string;
-  availableDot: string;
-  availableText: string;
+/* ========== Rune symbols by level_ring ========== */
+const runesByRing: Record<number, string[]> = {
+  1:  ['ᚨ', 'ᚠ', 'ᚢ'],
+  5:  ['ᚦ', 'ᚱ', 'ᚲ', 'ᚷ', 'ᚹ'],
+  10: ['ᚺ', 'ᚾ', 'ᛁ', 'ᛃ', 'ᛇ'],
+  15: ['ᛈ', 'ᛉ', 'ᛊ', 'ᛏ', 'ᛒ'],
+  20: ['ᛖ', 'ᛗ', 'ᛚ', 'ᛜ', 'ᛞ'],
+  25: ['ᛟ', 'ᛝ', 'ᛠ', 'ᛡ', 'ᛢ', 'ᛣ'],
+  30: ['ᛤ', 'ᛥ', 'ᛦ', 'ᛧ', 'ᛨ', 'ᛩ', 'ᛪ'],
+  35: ['᛫', 'ᚨ', 'ᚠ'],
+  40: ['ᚢ', 'ᚦ', 'ᚱ'],
+  45: ['ᚲ', 'ᚷ', 'ᚹ'],
+  50: ['ᚺ', 'ᚾ', 'ᛁ'],
+};
+
+const getRune = (levelRing: number, sortOrder: number): string => {
+  const runes = runesByRing[levelRing] ?? runesByRing[1];
+  return runes[sortOrder % runes.length];
+};
+
+/* ========== Class color schemes ========== */
+interface ClassColors {
+  chosen: { border: string; fill: string; glow: string; rune: string; badge: string };
+  available: { border: string; fill: string; glow: string; rune: string };
+  locked: { border: string; fill: string; rune: string };
+  blocked: { border: string; fill: string; rune: string };
 }
 
-const classThemes: Record<number, ClassTheme> = {
-  // Warrior — red
+const classColors: Record<number, ClassColors> = {
+  // Warrior — red/amber
   1: {
-    chosenRing: 'ring-red-400',
-    chosenFill: 'bg-red-400/30',
-    chosenGlow: 'shadow-[0_0_12px_rgba(248,113,113,0.7)]',
-    chosenDot: 'bg-red-400',
-    chosenText: 'text-red-300',
-    chosenBadge: 'bg-red-400/25 text-red-300',
-    availableRing: 'ring-red-300/60 animate-pulse',
-    availableFill: 'bg-red-400/10',
-    availableGlow: 'shadow-[0_0_10px_rgba(248,113,113,0.35)]',
-    availableDot: 'bg-red-300/70',
-    availableText: 'text-red-300/80',
+    chosen:    { border: '#f87171', fill: 'rgba(248,113,113,0.15)', glow: '0 0 16px rgba(248,113,113,0.6), inset 0 0 12px rgba(248,113,113,0.15)', rune: '#fca5a5', badge: 'rgba(248,113,113,0.25)' },
+    available: { border: '#f8717180', fill: 'rgba(248,113,113,0.06)', glow: '0 0 10px rgba(248,113,113,0.3)', rune: '#f8717199' },
+    locked:    { border: 'rgba(255,255,255,0.12)', fill: 'rgba(255,255,255,0.03)', rune: 'rgba(255,255,255,0.15)' },
+    blocked:   { border: 'rgba(239,68,68,0.2)', fill: 'rgba(239,68,68,0.04)', rune: 'rgba(239,68,68,0.15)' },
   },
-  // Mage — blue
+  // Mage — blue/cyan
   2: {
-    chosenRing: 'ring-sky-400',
-    chosenFill: 'bg-sky-400/30',
-    chosenGlow: 'shadow-[0_0_12px_rgba(56,189,248,0.7)]',
-    chosenDot: 'bg-sky-400',
-    chosenText: 'text-sky-300',
-    chosenBadge: 'bg-sky-400/25 text-sky-300',
-    availableRing: 'ring-sky-300/60 animate-pulse',
-    availableFill: 'bg-sky-400/10',
-    availableGlow: 'shadow-[0_0_10px_rgba(56,189,248,0.35)]',
-    availableDot: 'bg-sky-300/70',
-    availableText: 'text-sky-300/80',
+    chosen:    { border: '#38bdf8', fill: 'rgba(56,189,248,0.15)', glow: '0 0 16px rgba(56,189,248,0.6), inset 0 0 12px rgba(56,189,248,0.15)', rune: '#7dd3fc', badge: 'rgba(56,189,248,0.25)' },
+    available: { border: '#38bdf880', fill: 'rgba(56,189,248,0.06)', glow: '0 0 10px rgba(56,189,248,0.3)', rune: '#38bdf899' },
+    locked:    { border: 'rgba(255,255,255,0.12)', fill: 'rgba(255,255,255,0.03)', rune: 'rgba(255,255,255,0.15)' },
+    blocked:   { border: 'rgba(239,68,68,0.2)', fill: 'rgba(239,68,68,0.04)', rune: 'rgba(239,68,68,0.15)' },
   },
-  // Rogue — green
+  // Rogue — green/emerald
   3: {
-    chosenRing: 'ring-emerald-400',
-    chosenFill: 'bg-emerald-400/30',
-    chosenGlow: 'shadow-[0_0_12px_rgba(52,211,153,0.7)]',
-    chosenDot: 'bg-emerald-400',
-    chosenText: 'text-emerald-300',
-    chosenBadge: 'bg-emerald-400/25 text-emerald-300',
-    availableRing: 'ring-emerald-300/60 animate-pulse',
-    availableFill: 'bg-emerald-400/10',
-    availableGlow: 'shadow-[0_0_10px_rgba(52,211,153,0.35)]',
-    availableDot: 'bg-emerald-300/70',
-    availableText: 'text-emerald-300/80',
+    chosen:    { border: '#34d399', fill: 'rgba(52,211,153,0.15)', glow: '0 0 16px rgba(52,211,153,0.6), inset 0 0 12px rgba(52,211,153,0.15)', rune: '#6ee7b7', badge: 'rgba(52,211,153,0.25)' },
+    available: { border: '#34d39980', fill: 'rgba(52,211,153,0.06)', glow: '0 0 10px rgba(52,211,153,0.3)', rune: '#34d39999' },
+    locked:    { border: 'rgba(255,255,255,0.12)', fill: 'rgba(255,255,255,0.03)', rune: 'rgba(255,255,255,0.15)' },
+    blocked:   { border: 'rgba(239,68,68,0.2)', fill: 'rgba(239,68,68,0.04)', rune: 'rgba(239,68,68,0.15)' },
   },
 };
 
-const defaultTheme = classThemes[1];
+const defaultColors = classColors[1];
 
-/* ---------- size by node_type ---------- */
-const sizeMap: Record<string, { outer: string }> = {
-  root: { outer: 'w-[70px] h-[70px]' },
-  subclass_choice: { outer: 'w-[60px] h-[60px]' },
-  regular: { outer: 'w-[36px] h-[36px]' },
-};
+/* ========== Hexagon SVG clip path (used inline) ========== */
+const HEX_POINTS = '50,0 93.3,25 93.3,75 50,100 6.7,75 6.7,25';
 
+/* ========== Component ========== */
 const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   const d = data as PlayerNodeData;
   const skillsCount = d.skills?.length ?? 0;
   const state = d.visualState ?? 'locked';
   const nodeType = d.node_type ?? 'regular';
-  const size = sizeMap[nodeType] ?? sizeMap.regular;
   const isLarge = nodeType === 'root' || nodeType === 'subclass_choice';
   const isClickable = state === 'available' || state === 'chosen';
-  const theme = classThemes[d.classId] ?? defaultTheme;
+  const colors = classColors[d.classId] ?? defaultColors;
+  const stateColors = colors[state];
 
-  // Build style based on state + class theme
-  let ring = '';
-  let fill = '';
-  let glow = '';
-  let opacity = 'opacity-100';
+  const size = isLarge ? 70 : 40;
+  const rune = getRune(d.level_ring, d.sort_order ?? 0);
+  const runeSize = isLarge ? 'text-[22px]' : 'text-[16px]';
 
-  if (state === 'chosen') {
-    ring = `ring-2 ${theme.chosenRing}`;
-    fill = theme.chosenFill;
-    glow = theme.chosenGlow;
-  } else if (state === 'available') {
-    ring = `ring-2 ${theme.availableRing}`;
-    fill = theme.availableFill;
-    glow = theme.availableGlow;
-  } else if (state === 'locked') {
-    ring = 'ring-1 ring-white/15';
-    fill = 'bg-white/5';
-    opacity = 'opacity-40';
-  } else {
-    ring = 'ring-1 ring-site-red/25';
-    fill = 'bg-site-red/5';
-    opacity = 'opacity-30';
-  }
-
-  const label = isLarge
-    ? (d.name ?? '').slice(0, 3).toUpperCase()
-    : undefined;
+  const opacity = state === 'locked' ? 0.4 : state === 'blocked' ? 0.3 : 1;
+  const animClass = state === 'available' ? 'animate-pulse' : '';
 
   return (
     <div
       className={`
         relative flex items-center justify-center
-        rounded-full
-        ${size.outer}
-        ${ring} ${fill} ${glow} ${opacity}
-        transition-all duration-200 ease-site
-        ${isClickable ? 'cursor-pointer hover:brightness-125' : 'cursor-default'}
-        ${selected ? 'ring-site-blue ring-offset-1 ring-offset-transparent' : ''}
+        transition-all duration-300 ease-site
+        ${isClickable ? 'cursor-pointer' : 'cursor-default'}
+        ${animClass}
       `}
+      style={{ width: size, height: size, opacity }}
       title={
         state === 'locked'
           ? `Требуется уровень ${d.level_ring}`
@@ -134,48 +99,74 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
             : d.name
       }
     >
+      {/* Handle top */}
       <Handle
         type="target"
         position={Position.Top}
         className="!w-[3px] !h-[3px] !bg-transparent !border-0 !-top-px"
       />
 
-      {/* Inner dot for regular nodes */}
-      {!isLarge && (
-        <span
-          className={`block rounded-full ${
-            state === 'chosen' ? `w-[14px] h-[14px] ${theme.chosenDot}` :
-            state === 'available' ? `w-[10px] h-[10px] ${theme.availableDot}` :
-            state === 'locked' ? 'w-[8px] h-[8px] bg-white/20' :
-            'w-[8px] h-[8px] bg-site-red/20'
-          }`}
+      {/* Hexagon shape via SVG */}
+      <svg
+        viewBox="0 0 100 100"
+        className="absolute inset-0 w-full h-full"
+        style={{ filter: state === 'chosen' || state === 'available' ? `drop-shadow(${stateColors.glow.split(',')[0]})` : undefined }}
+      >
+        {/* Glow background for chosen */}
+        {state === 'chosen' && (
+          <polygon
+            points={HEX_POINTS}
+            fill={stateColors.fill}
+            stroke="none"
+          />
+        )}
+
+        {/* Main hexagon border */}
+        <polygon
+          points={HEX_POINTS}
+          fill={stateColors.fill}
+          stroke={stateColors.border}
+          strokeWidth={state === 'chosen' ? 3 : state === 'available' ? 2.5 : 1.5}
         />
-      )}
 
-      {/* Label for large nodes */}
-      {isLarge && label && (
-        <span
-          className={`text-[11px] font-medium tracking-wider select-none ${
-            state === 'chosen' ? theme.chosenText :
-            state === 'available' ? theme.availableText :
-            state === 'locked' ? 'text-white/40' :
-            'text-site-red/40'
-          }`}
-        >
-          {label}
-        </span>
-      )}
+        {/* Inner hexagon line (decorative) */}
+        {isLarge && (
+          <polygon
+            points="50,12 83,30 83,70 50,88 17,70 17,30"
+            fill="none"
+            stroke={stateColors.border}
+            strokeWidth={0.8}
+            opacity={0.3}
+          />
+        )}
+      </svg>
 
-      {/* Level ring badge (large nodes only) */}
+      {/* Rune symbol */}
+      <span
+        className={`
+          relative z-10 select-none font-bold leading-none
+          ${runeSize}
+          ${isClickable ? 'hover:brightness-150' : ''}
+        `}
+        style={{
+          color: stateColors.rune,
+          textShadow: state === 'chosen'
+            ? `0 0 8px ${stateColors.rune}, 0 0 16px ${stateColors.rune}40`
+            : undefined,
+        }}
+      >
+        {rune}
+      </span>
+
+      {/* Level badge (large nodes only) */}
       {isLarge && (
         <span
-          className={`
-            absolute -top-1.5 -right-1.5
-            bg-[#1a1a2e] text-[9px] font-medium rounded-full
-            w-[18px] h-[18px] flex items-center justify-center
-            border border-white/15
-            ${state === 'chosen' ? theme.chosenText : 'text-white/60'}
-          `}
+          className="absolute -top-1.5 -right-1.5 z-10 text-[8px] font-medium rounded-full w-[16px] h-[16px] flex items-center justify-center border"
+          style={{
+            background: '#0e0e1a',
+            borderColor: stateColors.border,
+            color: state === 'chosen' ? stateColors.rune : 'rgba(255,255,255,0.5)',
+          }}
         >
           {d.level_ring}
         </span>
@@ -184,24 +175,47 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
       {/* Skills count badge */}
       {skillsCount > 0 && (
         <span
-          className={`
-            absolute -bottom-1 left-1/2 -translate-x-1/2
-            text-[8px] font-medium rounded-full
-            px-1 min-w-[14px] text-center leading-[14px]
-            ${state === 'chosen' ? theme.chosenBadge : 'bg-site-blue/25 text-site-blue'}
-          `}
+          className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 z-10 text-[7px] font-bold rounded-full px-1 min-w-[14px] text-center leading-[13px]"
+          style={{
+            background: state === 'chosen' ? (colors.chosen.badge) : 'rgba(100,130,255,0.2)',
+            color: state === 'chosen' ? stateColors.rune : 'rgba(100,130,255,0.8)',
+          }}
         >
           {skillsCount}
         </span>
       )}
 
-      {/* Blocked X (large only) */}
-      {state === 'blocked' && isLarge && (
-        <span className="absolute top-0.5 left-0.5 text-site-red/50 text-[9px] font-bold">
-          &#10005;
+      {/* Blocked X overlay */}
+      {state === 'blocked' && (
+        <span className="absolute inset-0 flex items-center justify-center z-10 text-red-500/40 text-lg font-bold">
+          ✕
         </span>
       )}
 
+      {/* Subclass name label below */}
+      {nodeType === 'subclass_choice' && d.name && (
+        <span
+          className="absolute -bottom-5 left-1/2 -translate-x-1/2 z-10 whitespace-nowrap select-none text-[9px] font-bold uppercase tracking-[0.15em]"
+          style={{
+            color: state === 'chosen' ? stateColors.rune : 'rgba(255,255,255,0.35)',
+            textShadow: state === 'chosen'
+              ? `0 0 6px ${stateColors.rune}60`
+              : undefined,
+            fontFamily: 'serif',
+          }}
+        >
+          {d.name}
+        </span>
+      )}
+
+      {/* Selected ring */}
+      {selected && (
+        <div
+          className="absolute inset-[-4px] rounded-full border-2 border-site-blue/60 pointer-events-none"
+        />
+      )}
+
+      {/* Handle bottom */}
       <Handle
         type="source"
         position={Position.Bottom}

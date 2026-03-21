@@ -18,12 +18,14 @@ import type {
 } from './types';
 
 import warriorArt from '../../assets/skillTreeWarrior.png';
+import mageArt from '../../assets/skillTreeMage.png';
+import rogueArt from '../../assets/skillTreeRogue.png';
 
-/* Map class_id -> art image (expand as new assets appear) */
+/* Map class_id -> art image */
 const classArtMap: Record<number, string> = {
   1: warriorArt,
-  2: warriorArt, // placeholder
-  3: warriorArt, // placeholder
+  2: mageArt,
+  3: rogueArt,
 };
 
 /* Map class_id -> gradient colors [start, end] */
@@ -141,11 +143,11 @@ const PlayerTreeCanvas = ({
         tree.nodes
       );
 
-      // Admin nodes are 100px. Player nodes vary (36/60/70px).
+      // Admin nodes are 100px. Player hex nodes vary (40/70px).
       // Adjust position so centers align.
       const adminSize = 100;
       const nodeType = apiNode.node_type ?? 'regular';
-      const playerSize = nodeType === 'root' ? 70 : nodeType === 'subclass_choice' ? 60 : 36;
+      const playerSize = (nodeType === 'root' || nodeType === 'subclass_choice') ? 70 : 40;
       const offset = (adminSize - playerSize) / 2;
 
       return {
