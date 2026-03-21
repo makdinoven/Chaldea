@@ -4,8 +4,7 @@ interface Tab {
 }
 
 const TABS: Tab[] = [
-  { key: 'inventory', label: 'Инвентарь' },
-  { key: 'stats', label: 'Статы' },
+  { key: 'character', label: 'Персонаж' },
   { key: 'skills', label: 'Навыки' },
   { key: 'logs', label: 'Логи персонажа' },
   { key: 'titles', label: 'Титулы' },

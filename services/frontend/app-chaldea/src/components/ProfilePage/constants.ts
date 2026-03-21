@@ -88,7 +88,7 @@ export const EQUIPMENT_TYPES = new Set([
 ]);
 
 // Minimum cells to display in the item grid
-export const MIN_GRID_CELLS = 40;
+export const MIN_GRID_CELLS = 80;
 
 // --- Class name mapping ---
 

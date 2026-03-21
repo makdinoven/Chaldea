@@ -9,8 +9,7 @@ import {
 } from '../../redux/slices/profileSlice';
 import ProfileTabs from './ProfileTabs';
 import PlaceholderTab from './PlaceholderTab';
-import InventoryTab from './InventoryTab/InventoryTab';
-import StatsTab from './StatsTab/StatsTab';
+import CharacterTab from './CharacterTab/CharacterTab';
 import SkillsTab from './SkillsTab/SkillsTab';
 
 const ProfilePage = () => {
@@ -18,7 +17,7 @@ const ProfilePage = () => {
   const character = useAppSelector((state) => state.user.character);
   const loading = useAppSelector(selectProfileLoading);
   const error = useAppSelector(selectProfileError);
-  const [activeTab, setActiveTab] = useState('inventory');
+  const [activeTab, setActiveTab] = useState('character');
 
   const characterId = character?.id ?? null;
 
@@ -54,10 +53,8 @@ const ProfilePage = () => {
 
   const renderTabContent = () => {
     switch (activeTab) {
-      case 'inventory':
-        return <InventoryTab characterId={characterId} />;
-      case 'stats':
-        return <StatsTab characterId={characterId} />;
+      case 'character':
+        return <CharacterTab characterId={characterId} />;
       case 'skills':
         return <SkillsTab characterId={characterId} />;
       case 'logs':

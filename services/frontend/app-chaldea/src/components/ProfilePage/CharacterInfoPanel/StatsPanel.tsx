@@ -8,7 +8,7 @@ export default function StatsPanel() {
 
   if (!attributes && !profile) {
     return (
-      <div className="flex flex-col gap-[10px] w-[210px]">
+      <div className="flex flex-col gap-[10px] w-full">
         {[...Array(4)].map((_, i) => (
           <div key={i}>
             <div className="flex justify-between items-center mb-[10px]">
@@ -36,7 +36,7 @@ export default function StatsPanel() {
   };
 
   return (
-    <div className="flex flex-col gap-5 w-[210px]">
+    <div className="flex flex-col gap-5 w-full">
       {/* Resource Bars — Figma: 210px wide, gold labels, 9px bars */}
       {RESOURCE_BARS.map(({ key, label, colorClass }) => {
         const currentKey = `current_${key}` as keyof typeof resourceData;

@@ -37,7 +37,7 @@ const ItemGrid = () => {
   return (
     <motion.div
       ref={setNodeRef}
-      className={`gold-scrollbar-wide overflow-y-auto max-h-[516px] pr-1 rounded-lg transition-colors duration-200 ${
+      className={`gold-scrollbar-wide overflow-y-auto max-h-[516px] lg:max-h-full lg:h-full pr-1 rounded-lg transition-colors duration-200 ${
         showDropHighlight ? 'slot-pulse-compatible' : ''
       }`}
       initial="hidden"
