@@ -56,6 +56,10 @@ const WorldPage = () => {
   const userCharacter = useAppSelector((state) => state.user.character);
   const currentLocationId = userCharacter?.current_location?.id ?? null;
 
+  // Map transition animation state
+  const [mapTransition, setMapTransition] = useState<'idle' | 'zoom-out' | 'fade-in'>('idle');
+  const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
+
   // District modal state
   const [selectedDistrictId, setSelectedDistrictId] = useState<number | null>(null);
 
@@ -136,30 +140,56 @@ const WorldPage = () => {
     }
   }, [viewLevel, areas, navigate, params.areaId]);
 
+  // Animated navigation: zoom-out → navigate → fade-in
+  const animatedNavigate = (path: string) => {
+    setMapTransition('zoom-out');
+    setPendingNavigation(path);
+    setTimeout(() => {
+      navigate(path);
+      setMapTransition('fade-in');
+      setTimeout(() => setMapTransition('idle'), 400);
+    }, 350);
+  };
+
+  // Trigger fade-in when view changes (e.g. via breadcrumbs or back button)
+  useEffect(() => {
+    if (!pendingNavigation) {
+      setMapTransition('fade-in');
+      const t = setTimeout(() => setMapTransition('idle'), 400);
+      return () => clearTimeout(t);
+    }
+    setPendingNavigation(null);
+  }, [viewLevel, entityId]);
+
   // Handle zone click - navigate to target
   const handleZoneClick = (zone: ClickableZone) => {
     if (zone.target_type === 'country') {
-      navigate(`/world/country/${zone.target_id}`);
+      animatedNavigate(`/world/country/${zone.target_id}`);
     } else if (zone.target_type === 'region') {
-      navigate(`/world/region/${zone.target_id}`);
+      animatedNavigate(`/world/region/${zone.target_id}`);
     } else if (zone.target_type === 'area') {
-      navigate(`/world/area/${zone.target_id}`);
+      animatedNavigate(`/world/area/${zone.target_id}`);
     }
   };
 
   // Handle location click from region view
   const handleLocationClick = (locationId: number) => {
-    navigate(`/location/${locationId}`);
+    animatedNavigate(`/location/${locationId}`);
   };
 
   // Handle district click from region map
   const handleDistrictClick = (districtId: number) => {
-    // Check if the district has a city map
     const district = regionDetails?.districts.find((d) => d.id === districtId);
     const mapItem = regionDetails?.map_items?.find((i) => i.type === 'district' && i.id === districtId);
     const hasMapImage = district?.map_image_url || mapItem?.map_image_url;
     if (hasMapImage) {
-      setCityMapDistrictId(districtId);
+      // Animate transition to city map
+      setMapTransition('zoom-out');
+      setTimeout(() => {
+        setCityMapDistrictId(districtId);
+        setMapTransition('fade-in');
+        setTimeout(() => setMapTransition('idle'), 400);
+      }, 350);
     } else {
       setSelectedDistrictId(districtId);
     }
@@ -556,7 +586,21 @@ const WorldPage = () => {
       <div className="flex gap-5 items-start">
         <HierarchyTree currentLocationId={currentLocationId} />
 
-        {/* Map area */}
+        {/* Map area with transition animation */}
+        <div
+          className="flex-1 min-w-0 transition-all ease-site"
+          style={{
+            transitionDuration: mapTransition === 'idle' ? '0ms' : '350ms',
+            opacity: mapTransition === 'zoom-out' ? 0 : 1,
+            transform:
+              mapTransition === 'zoom-out'
+                ? 'scale(1.15)'
+                : mapTransition === 'fade-in'
+                  ? 'scale(1)'
+                  : 'scale(1)',
+            filter: mapTransition === 'zoom-out' ? 'blur(4px)' : 'blur(0px)',
+          }}
+        >
         {(detailsLoading || loading) && !areaDetails && !countryDetails && !regionDetails ? (
           <div className="flex-1 flex items-center justify-center min-h-[400px]">
             <div className="flex flex-col items-center gap-3">
@@ -627,6 +671,7 @@ const WorldPage = () => {
             }
           />
         )}
+        </div>
       </div>
 
       {/* District contents modal */}
