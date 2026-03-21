@@ -285,6 +285,19 @@ class DialogueNode(Base):
                            cascade="all, delete-orphan")
 
 
+class NpcShopItem(Base):
+    __tablename__ = 'npc_shop_items'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    npc_id = Column(Integer, nullable=False, index=True)
+    item_id = Column(Integer, nullable=False)
+    buy_price = Column(Integer, nullable=False)
+    sell_price = Column(Integer, nullable=False, default=0)
+    stock = Column(Integer, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text("1"))
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+
 class DialogueOption(Base):
     __tablename__ = 'dialogue_options'
 

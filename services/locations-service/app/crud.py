@@ -12,7 +12,8 @@ import models
 from models import (
     Country, Region, District, Location, LocationNeighbor, Post, PostLike, GameRule,
     Area, ClickableZone, GameTimeConfig, LocationLoot, LocationFavorite,
-    PostDeletionRequest, PostReport, DialogueTree, DialogueNode, DialogueOption
+    PostDeletionRequest, PostReport, DialogueTree, DialogueNode, DialogueOption,
+    NpcShopItem
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -2166,3 +2167,242 @@ def _build_node_response(node: DialogueNode) -> dict:
         "options": options,
         "is_end": is_end,
     }
+
+
+# -------------------------------
+#   NPC SHOP
+# -------------------------------
+async def create_npc_shop_item(session: AsyncSession, npc_id: int, data: dict) -> NpcShopItem:
+    """Add an item to NPC's shop inventory."""
+    shop_item = NpcShopItem(
+        npc_id=npc_id,
+        item_id=data["item_id"],
+        buy_price=data["buy_price"],
+        sell_price=data.get("sell_price", 0),
+        stock=data.get("stock"),
+    )
+    session.add(shop_item)
+    await session.commit()
+    await session.refresh(shop_item)
+    return shop_item
+
+
+async def get_npc_shop_items_admin(session: AsyncSession, npc_id: int) -> List[dict]:
+    """Get all shop items for an NPC (admin view, includes inactive)."""
+    query = text("""
+        SELECT si.id, si.npc_id, si.item_id, si.buy_price, si.sell_price,
+               si.stock, si.is_active, si.created_at,
+               i.name AS item_name, i.image AS item_image,
+               i.item_rarity, i.item_type
+        FROM npc_shop_items si
+        LEFT JOIN items i ON si.item_id = i.id
+        WHERE si.npc_id = :npc_id
+        ORDER BY si.id ASC
+    """)
+    result = await session.execute(query, {"npc_id": npc_id})
+    rows = result.fetchall()
+    return [
+        {
+            "id": row[0],
+            "npc_id": row[1],
+            "item_id": row[2],
+            "buy_price": row[3],
+            "sell_price": row[4],
+            "stock": row[5],
+            "is_active": bool(row[6]),
+            "created_at": row[7],
+            "item_name": row[8],
+            "item_image": row[9],
+            "item_rarity": row[10],
+            "item_type": row[11],
+        }
+        for row in rows
+    ]
+
+
+async def update_npc_shop_item(session: AsyncSession, shop_item_id: int, data: dict) -> Optional[NpcShopItem]:
+    """Update an NPC shop item's price, stock, or active status."""
+    result = await session.execute(
+        select(NpcShopItem).where(NpcShopItem.id == shop_item_id)
+    )
+    shop_item = result.scalars().first()
+    if not shop_item:
+        return None
+
+    if "buy_price" in data and data["buy_price"] is not None:
+        shop_item.buy_price = data["buy_price"]
+    if "sell_price" in data and data["sell_price"] is not None:
+        shop_item.sell_price = data["sell_price"]
+    if "stock" in data:
+        shop_item.stock = data["stock"]
+    if "is_active" in data and data["is_active"] is not None:
+        shop_item.is_active = data["is_active"]
+
+    await session.commit()
+    await session.refresh(shop_item)
+    return shop_item
+
+
+async def delete_npc_shop_item(session: AsyncSession, shop_item_id: int) -> bool:
+    """Remove an item from NPC's shop."""
+    result = await session.execute(
+        select(NpcShopItem).where(NpcShopItem.id == shop_item_id)
+    )
+    shop_item = result.scalars().first()
+    if not shop_item:
+        return False
+    await session.delete(shop_item)
+    await session.commit()
+    return True
+
+
+async def get_npc_shop_items_player(session: AsyncSession, npc_id: int) -> List[dict]:
+    """Get active shop items for an NPC (player view)."""
+    query = text("""
+        SELECT si.id, si.npc_id, si.item_id, si.buy_price, si.sell_price,
+               si.stock, si.is_active, si.created_at,
+               i.name AS item_name, i.image AS item_image,
+               i.item_rarity, i.item_type
+        FROM npc_shop_items si
+        LEFT JOIN items i ON si.item_id = i.id
+        WHERE si.npc_id = :npc_id AND si.is_active = 1
+        ORDER BY si.id ASC
+    """)
+    result = await session.execute(query, {"npc_id": npc_id})
+    rows = result.fetchall()
+    return [
+        {
+            "id": row[0],
+            "npc_id": row[1],
+            "item_id": row[2],
+            "buy_price": row[3],
+            "sell_price": row[4],
+            "stock": row[5],
+            "is_active": bool(row[6]),
+            "created_at": row[7],
+            "item_name": row[8],
+            "item_image": row[9],
+            "item_rarity": row[10],
+            "item_type": row[11],
+        }
+        for row in rows
+    ]
+
+
+async def get_shop_item_by_id(session: AsyncSession, shop_item_id: int) -> Optional[NpcShopItem]:
+    """Get a single shop item by its ID."""
+    result = await session.execute(
+        select(NpcShopItem).where(NpcShopItem.id == shop_item_id)
+    )
+    return result.scalars().first()
+
+
+async def deduct_currency(session: AsyncSession, character_id: int, amount: int) -> Optional[int]:
+    """
+    Atomically deduct currency from character. Returns new balance or None if insufficient.
+    Uses direct SQL UPDATE with WHERE check for atomicity in the shared DB.
+    """
+    result = await session.execute(
+        text("""
+            UPDATE characters
+            SET currency_balance = currency_balance - :amount
+            WHERE id = :cid AND currency_balance >= :amount
+        """),
+        {"cid": character_id, "amount": amount},
+    )
+    if result.rowcount == 0:
+        return None
+    await session.commit()
+
+    # Fetch new balance
+    bal_result = await session.execute(
+        text("SELECT currency_balance FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    row = bal_result.fetchone()
+    return row[0] if row else None
+
+
+async def add_currency(session: AsyncSession, character_id: int, amount: int) -> Optional[int]:
+    """Add currency to character. Returns new balance."""
+    await session.execute(
+        text("""
+            UPDATE characters
+            SET currency_balance = currency_balance + :amount
+            WHERE id = :cid
+        """),
+        {"cid": character_id, "amount": amount},
+    )
+    await session.commit()
+
+    bal_result = await session.execute(
+        text("SELECT currency_balance FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    row = bal_result.fetchone()
+    return row[0] if row else None
+
+
+async def get_character_location(session: AsyncSession, character_id: int) -> Optional[int]:
+    """Get the current location ID of a character from shared DB."""
+    result = await session.execute(
+        text("SELECT current_location_id FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    row = result.fetchone()
+    if not row:
+        return None
+    return row[0]
+
+
+async def get_npc_location(session: AsyncSession, npc_id: int) -> Optional[int]:
+    """Get the current location of an NPC from shared DB."""
+    result = await session.execute(
+        text("SELECT current_location_id FROM characters WHERE id = :cid AND is_npc = 1"),
+        {"cid": npc_id},
+    )
+    row = result.fetchone()
+    if not row:
+        return None
+    return row[0]
+
+
+async def decrement_stock(session: AsyncSession, shop_item_id: int, quantity: int) -> bool:
+    """Decrement stock for a shop item. Returns False if insufficient stock."""
+    result = await session.execute(
+        text("""
+            UPDATE npc_shop_items
+            SET stock = stock - :qty
+            WHERE id = :sid AND stock >= :qty
+        """),
+        {"sid": shop_item_id, "qty": quantity},
+    )
+    if result.rowcount == 0:
+        return False
+    await session.commit()
+    return True
+
+
+async def get_item_name(session: AsyncSession, item_id: int) -> Optional[str]:
+    """Get item name from shared items table."""
+    result = await session.execute(
+        text("SELECT name FROM items WHERE id = :iid"),
+        {"iid": item_id},
+    )
+    row = result.fetchone()
+    return row[0] if row else None
+
+
+async def find_sell_price_for_item(session: AsyncSession, npc_id: int, item_id: int) -> Optional[int]:
+    """Find the sell price for an item in NPC's shop. Returns None if NPC won't buy it."""
+    result = await session.execute(
+        text("""
+            SELECT sell_price FROM npc_shop_items
+            WHERE npc_id = :npc_id AND item_id = :item_id
+              AND is_active = 1 AND sell_price > 0
+            LIMIT 1
+        """),
+        {"npc_id": npc_id, "item_id": item_id},
+    )
+    row = result.fetchone()
+    return row[0] if row else None

@@ -1436,6 +1436,257 @@ async def choose_dialogue_option(
 
 
 # --------------------------------------------------------------------
+# NPC SHOP — Admin endpoints
+# --------------------------------------------------------------------
+@router.post("/admin/npc-shop/{npc_id}/items", response_model=schemas.NpcShopItemRead)
+async def add_npc_shop_item(
+    npc_id: int,
+    body: schemas.NpcShopItemCreate,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """Add an item to NPC's shop inventory."""
+    shop_item = await crud.create_npc_shop_item(session, npc_id, body.dict())
+    item_name = await crud.get_item_name(session, shop_item.item_id)
+    return {
+        "id": shop_item.id,
+        "npc_id": shop_item.npc_id,
+        "item_id": shop_item.item_id,
+        "buy_price": shop_item.buy_price,
+        "sell_price": shop_item.sell_price,
+        "stock": shop_item.stock,
+        "is_active": shop_item.is_active,
+        "created_at": shop_item.created_at,
+        "item_name": item_name,
+    }
+
+
+@router.get("/admin/npc-shop/{npc_id}/items", response_model=List[schemas.NpcShopItemRead])
+async def list_npc_shop_items(
+    npc_id: int,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """List all shop items for an NPC (admin view, includes inactive)."""
+    return await crud.get_npc_shop_items_admin(session, npc_id)
+
+
+@router.put("/admin/npc-shop/items/{shop_item_id}", response_model=schemas.NpcShopItemRead)
+async def update_npc_shop_item(
+    shop_item_id: int,
+    body: schemas.NpcShopItemUpdate,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """Update price, stock, or active status of a shop item."""
+    updated = await crud.update_npc_shop_item(session, shop_item_id, body.dict(exclude_unset=True))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Товар в магазине не найден")
+    item_name = await crud.get_item_name(session, updated.item_id)
+    return {
+        "id": updated.id,
+        "npc_id": updated.npc_id,
+        "item_id": updated.item_id,
+        "buy_price": updated.buy_price,
+        "sell_price": updated.sell_price,
+        "stock": updated.stock,
+        "is_active": updated.is_active,
+        "created_at": updated.created_at,
+        "item_name": item_name,
+    }
+
+
+@router.delete("/admin/npc-shop/items/{shop_item_id}")
+async def delete_npc_shop_item(
+    shop_item_id: int,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """Remove an item from NPC's shop."""
+    deleted = await crud.delete_npc_shop_item(session, shop_item_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Товар в магазине не найден")
+    return {"detail": "Товар удалён из магазина"}
+
+
+# --------------------------------------------------------------------
+# NPC SHOP — Player-facing endpoints
+# --------------------------------------------------------------------
+@router.get("/npcs/{npc_id}/shop", response_model=List[schemas.NpcShopItemRead])
+async def get_npc_shop(
+    npc_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Get NPC's shop items (active only, with item details)."""
+    return await crud.get_npc_shop_items_player(session, npc_id)
+
+
+@router.post("/npcs/{npc_id}/shop/buy", response_model=schemas.ShopTransactionResponse)
+async def buy_from_npc(
+    npc_id: int,
+    body: schemas.ShopBuyRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """
+    Buy an item from NPC's shop.
+    Flow:
+    1. Verify character ownership
+    2. Verify character is at NPC's location
+    3. Check stock (if limited)
+    4. Calculate total price
+    5. Atomically deduct currency
+    6. Add item to inventory via inventory-service
+    7. Decrement stock if limited
+    """
+    # 1. Verify ownership
+    await verify_character_ownership(session, body.character_id, current_user.id)
+
+    # 2. Verify character is at NPC's location
+    char_location = await crud.get_character_location(session, body.character_id)
+    npc_location = await crud.get_npc_location(session, npc_id)
+    if npc_location is None:
+        raise HTTPException(status_code=404, detail="NPC не найден")
+    if char_location is None or char_location != npc_location:
+        raise HTTPException(status_code=400, detail="Персонаж не находится в локации этого NPC")
+
+    # 3. Get shop item and validate
+    shop_item = await crud.get_shop_item_by_id(session, body.shop_item_id)
+    if not shop_item or shop_item.npc_id != npc_id or not shop_item.is_active:
+        raise HTTPException(status_code=404, detail="Товар не найден в магазине этого NPC")
+
+    if body.quantity < 1:
+        raise HTTPException(status_code=400, detail="Количество должно быть >= 1")
+
+    # Check stock
+    if shop_item.stock is not None and shop_item.stock < body.quantity:
+        raise HTTPException(status_code=400, detail="Недостаточно товара на складе")
+
+    # 4. Calculate total price
+    total_price = shop_item.buy_price * body.quantity
+
+    # 5. Atomically deduct currency
+    new_balance = await crud.deduct_currency(session, body.character_id, total_price)
+    if new_balance is None:
+        raise HTTPException(status_code=400, detail="Недостаточно валюты")
+
+    # 6. Add item to inventory via inventory-service
+    auth_header = request.headers.get("authorization", "")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            add_url = f"{settings.INVENTORY_SERVICE_URL}/inventory/{body.character_id}/items"
+            add_resp = await client.post(
+                add_url,
+                json={"item_id": shop_item.item_id, "quantity": body.quantity},
+                headers={"Authorization": auth_header},
+            )
+            if add_resp.status_code != 200:
+                # Compensate: refund currency
+                await crud.add_currency(session, body.character_id, total_price)
+                detail = "Не удалось добавить предмет в инвентарь"
+                try:
+                    detail = add_resp.json().get("detail", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=detail)
+    except httpx.HTTPError:
+        # Compensate: refund currency
+        await crud.add_currency(session, body.character_id, total_price)
+        raise HTTPException(status_code=503, detail="Сервис инвентаря недоступен")
+
+    # 7. Decrement stock if limited
+    if shop_item.stock is not None:
+        await crud.decrement_stock(session, shop_item.id, body.quantity)
+
+    item_name = await crud.get_item_name(session, shop_item.item_id)
+
+    return {
+        "success": True,
+        "message": "Покупка совершена",
+        "new_balance": new_balance,
+        "item_name": item_name,
+        "quantity": body.quantity,
+        "total_price": total_price,
+    }
+
+
+@router.post("/npcs/{npc_id}/shop/sell", response_model=schemas.ShopTransactionResponse)
+async def sell_to_npc(
+    npc_id: int,
+    body: schemas.ShopSellRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """
+    Sell an item to NPC.
+    Flow:
+    1. Verify character ownership
+    2. Verify character is at NPC's location
+    3. Find sell_price for this item (must be > 0)
+    4. Remove item from inventory via inventory-service
+    5. Add currency to character
+    """
+    # 1. Verify ownership
+    await verify_character_ownership(session, body.character_id, current_user.id)
+
+    # 2. Verify character is at NPC's location
+    char_location = await crud.get_character_location(session, body.character_id)
+    npc_location = await crud.get_npc_location(session, npc_id)
+    if npc_location is None:
+        raise HTTPException(status_code=404, detail="NPC не найден")
+    if char_location is None or char_location != npc_location:
+        raise HTTPException(status_code=400, detail="Персонаж не находится в локации этого NPC")
+
+    if body.quantity < 1:
+        raise HTTPException(status_code=400, detail="Количество должно быть >= 1")
+
+    # 3. Find sell_price
+    sell_price = await crud.find_sell_price_for_item(session, npc_id, body.item_id)
+    if sell_price is None:
+        raise HTTPException(status_code=400, detail="Этот NPC не покупает данный предмет")
+
+    total_price = sell_price * body.quantity
+
+    # 4. Remove item from inventory via inventory-service
+    auth_header = request.headers.get("authorization", "")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            remove_url = (
+                f"{settings.INVENTORY_SERVICE_URL}/inventory/{body.character_id}"
+                f"/items/{body.item_id}?quantity={body.quantity}"
+            )
+            remove_resp = await client.delete(
+                remove_url,
+                headers={"Authorization": auth_header},
+            )
+            if remove_resp.status_code != 200:
+                detail = "Не удалось удалить предмет из инвентаря"
+                try:
+                    detail = remove_resp.json().get("detail", detail)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=remove_resp.status_code, detail=detail)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Сервис инвентаря недоступен")
+
+    # 5. Add currency to character
+    new_balance = await crud.add_currency(session, body.character_id, total_price)
+
+    item_name = await crud.get_item_name(session, body.item_id)
+
+    return {
+        "success": True,
+        "message": "Продажа совершена",
+        "new_balance": new_balance,
+        "item_name": item_name,
+        "quantity": body.quantity,
+        "total_price": total_price,
+    }
+
+
+# --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------
 app.include_router(router)

@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { BASE_URL } from '../../../api/api';
 import { NPC_ROLE_LABELS } from '../../../constants/npc';
 import NpcDialogueModal from './NpcDialogueModal';
+import NpcShopModal from './NpcShopModal';
 
 interface NpcDetail {
   id: number;
@@ -29,6 +30,8 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
   const [loading, setLoading] = useState(true);
   const [hasDialogue, setHasDialogue] = useState(false);
   const [dialogueOpen, setDialogueOpen] = useState(false);
+  const [hasShop, setHasShop] = useState(false);
+  const [shopOpen, setShopOpen] = useState(false);
 
   useEffect(() => {
     const fetchNpc = async () => {
@@ -58,11 +61,35 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
     checkDialogue();
   }, [npcId]);
 
+  // Check if NPC has a shop
+  useEffect(() => {
+    const checkShop = async () => {
+      try {
+        const res = await axios.get(`${BASE_URL}/locations/npcs/${npcId}/shop`);
+        setHasShop(Array.isArray(res.data) && res.data.length > 0);
+      } catch {
+        setHasShop(false);
+      }
+    };
+    checkShop();
+  }, [npcId]);
+
   const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget) onClose();
   };
 
   const roleLabel = npc?.npc_role ? (NPC_ROLE_LABELS[npc.npc_role] || npc.npc_role) : null;
+
+  if (shopOpen && npc) {
+    return (
+      <NpcShopModal
+        npcId={npc.id}
+        npcName={npc.name}
+        npcAvatar={npc.avatar}
+        onClose={() => setShopOpen(false)}
+      />
+    );
+  }
 
   if (dialogueOpen && npc) {
     return (
@@ -187,6 +214,26 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                 </svg>
                 Поговорить
+              </button>
+            )}
+
+            {/* Trade button */}
+            {hasShop && (
+              <button
+                onClick={() => setShopOpen(true)}
+                className="
+                  mt-2 w-full px-6 py-3 rounded-card
+                  border border-gold/50 bg-gold/10
+                  text-gold text-sm sm:text-base font-medium uppercase tracking-wide
+                  hover:bg-gold/20 hover:border-gold/80
+                  transition-all duration-200
+                  flex items-center justify-center gap-2
+                "
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z" />
+                </svg>
+                Торговля
               </button>
             )}
           </div>

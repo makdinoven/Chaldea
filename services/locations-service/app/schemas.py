@@ -748,3 +748,54 @@ class DialogueNodeResponse(BaseModel):
 class DialogueChooseRequest(BaseModel):
     option_id: int
 
+
+# -------------------------------
+#   NPC SHOP SCHEMAS
+# -------------------------------
+class NpcShopItemCreate(BaseModel):
+    item_id: int
+    buy_price: int
+    sell_price: int = 0
+    stock: Optional[int] = None
+
+class NpcShopItemUpdate(BaseModel):
+    buy_price: Optional[int] = None
+    sell_price: Optional[int] = None
+    stock: Optional[int] = None
+    is_active: Optional[bool] = None
+
+class NpcShopItemRead(BaseModel):
+    id: int
+    npc_id: int
+    item_id: int
+    buy_price: int
+    sell_price: int
+    stock: Optional[int] = None
+    is_active: bool
+    item_name: Optional[str] = None
+    item_image: Optional[str] = None
+    item_rarity: Optional[str] = None
+    item_type: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+class ShopBuyRequest(BaseModel):
+    character_id: int
+    shop_item_id: int
+    quantity: int = 1
+
+class ShopSellRequest(BaseModel):
+    character_id: int
+    item_id: int
+    quantity: int = 1
+
+class ShopTransactionResponse(BaseModel):
+    success: bool
+    message: str
+    new_balance: Optional[int] = None
+    item_name: Optional[str] = None
+    quantity: int = 0
+    total_price: int = 0
+

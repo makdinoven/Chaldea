@@ -5,6 +5,7 @@ import { BASE_URL } from '../../api/api';
 import useDebounce from '../../hooks/useDebounce';
 import { NPC_ROLES, NPC_ROLE_LABELS, NPC_SEXES, NPC_CLASSES, NPC_RACES } from '../../constants/npc';
 import DialogueEditor from './DialogueEditor';
+import NpcShopEditor from './NpcShopEditor';
 
 /* ── Types ── */
 
@@ -74,6 +75,7 @@ const AdminNpcsPage = () => {
   const [saving, setSaving] = useState(false);
   const [locations, setLocations] = useState<LocationOption[]>([]);
   const [dialogueNpc, setDialogueNpc] = useState<{ id: number; name: string } | null>(null);
+  const [shopNpc, setShopNpc] = useState<{ id: number; name: string } | null>(null);
 
   const fetchNpcs = useCallback(async () => {
     setLoading(true);
@@ -206,6 +208,18 @@ const AdminNpcsPage = () => {
   const filteredNpcs = npcs;
 
   /* ── Render ── */
+
+  if (shopNpc) {
+    return (
+      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+        <NpcShopEditor
+          npcId={shopNpc.id}
+          npcName={shopNpc.name}
+          onClose={() => setShopNpc(null)}
+        />
+      </div>
+    );
+  }
 
   if (dialogueNpc) {
     return (
@@ -443,6 +457,14 @@ const AdminNpcsPage = () => {
                           >
                             Диалоги
                           </button>
+                          {npc.npc_role === 'merchant' && (
+                            <button
+                              onClick={() => setShopNpc({ id: npc.id, name: npc.name })}
+                              className="text-sm text-site-blue hover:text-white transition-colors duration-200"
+                            >
+                              Магазин
+                            </button>
+                          )}
                           <button
                             onClick={() => handleDelete(npc.id)}
                             className="text-sm text-site-red hover:text-white transition-colors duration-200"
@@ -495,6 +517,14 @@ const AdminNpcsPage = () => {
                     >
                       Диалоги
                     </button>
+                    {npc.npc_role === 'merchant' && (
+                      <button
+                        onClick={() => setShopNpc({ id: npc.id, name: npc.name })}
+                        className="text-sm text-site-blue hover:text-white transition-colors"
+                      >
+                        Магазин
+                      </button>
+                    )}
                     <button
                       onClick={() => handleDelete(npc.id)}
                       className="text-sm text-site-red hover:text-white transition-colors"
