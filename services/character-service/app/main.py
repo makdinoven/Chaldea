@@ -920,10 +920,16 @@ def get_characters_by_location(location_id: int, db: Session = Depends(get_db)):
     characters = db.query(models.Character).filter(models.Character.current_location_id == location_id).all()
     result = []
     for ch in characters:
+        race = db.query(models.Race).filter(models.Race.id_race == ch.id_race).first()
+        cls = db.query(models.Class).filter(models.Class.id_class == ch.id_class).first()
         result.append({
-            "character_name": ch.name,
+            "id": ch.id,
+            "name": ch.name,
+            "avatar": ch.avatar,
+            "level": ch.level,
+            "class_name": cls.name if cls else None,
+            "race_name": race.name if race else None,
             "character_title": ch.current_title.name if ch.current_title else "",
-            "character_photo": ch.avatar,
             "user_id": ch.user_id,
         })
     return result

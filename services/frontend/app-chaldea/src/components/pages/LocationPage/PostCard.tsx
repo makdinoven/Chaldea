@@ -131,7 +131,7 @@ const PostCard = ({
   };
 
   return (
-    <div className="bg-black/30 rounded-card p-3 sm:p-4 flex flex-col gap-3">
+    <div className="bg-black/50 rounded-card p-3 sm:p-4 flex flex-col gap-3">
       {/* Top row: avatar + info + timestamp */}
       <div className="flex items-start gap-3">
         {/* Avatar */}

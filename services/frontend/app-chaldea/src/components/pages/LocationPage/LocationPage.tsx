@@ -308,7 +308,7 @@ const LocationPage = () => {
   const isCharacterHere = character?.current_location?.id === location.id;
 
   return (
-    <div className="flex flex-col gap-6 sm:gap-8 pb-10">
+    <div className="flex flex-col gap-6 sm:gap-8 pb-10 bg-black/40 rounded-card p-4 sm:p-6 backdrop-blur-sm">
       {/* Back button */}
       <button
         onClick={() => navigate(-1)}
@@ -330,7 +330,7 @@ const LocationPage = () => {
       <div className="gradient-divider-h relative pb-2" />
 
       {/* Players */}
-      <section className="bg-black/30 rounded-card p-4 sm:p-6">
+      <section className="bg-black/50 rounded-card p-4 sm:p-6">
         <PlayersSection players={location.players} />
       </section>
 
@@ -347,7 +347,7 @@ const LocationPage = () => {
       <div className="gradient-divider-h relative pb-2" />
 
       {/* Posts */}
-      <section className="bg-black/30 rounded-card p-4 sm:p-6 flex flex-col gap-4">
+      <section className="bg-black/50 rounded-card p-4 sm:p-6 flex flex-col gap-4">
         <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
           Посты
         </h2>
@@ -385,7 +385,7 @@ const LocationPage = () => {
       <div className="gradient-divider-h relative pb-2" />
 
       {/* Neighbors */}
-      <section className="bg-black/30 rounded-card p-4 sm:p-6">
+      <section className="bg-black/50 rounded-card p-4 sm:p-6">
         <NeighborsSection neighbors={location.neighbors} />
       </section>
 

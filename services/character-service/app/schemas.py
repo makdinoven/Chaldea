@@ -140,9 +140,13 @@ class CharacterBaseInfoResponse(BaseModel):
         orm_mode = True
 
 class PlayerInLocation(BaseModel):
-    character_name: str
-    character_title: str
-    character_photo: str
+    id: int
+    name: str
+    avatar: Optional[str] = None
+    level: int = 1
+    class_name: Optional[str] = None
+    race_name: Optional[str] = None
+    character_title: Optional[str] = ""
     user_id: Optional[int] = None
 
 class CharacterProfileResponse(BaseModel):
