@@ -31,6 +31,7 @@ import ProtectedRoute from "../CommonComponents/ProtectedRoute/ProtectedRoute";
 import ChatHistoryPage from "../Chat/ChatHistoryPage";
 import GameTimeAdminPage from "../Admin/GameTimeAdminPage";
 import AdminClassTreePage from "../AdminClassTreeEditor/AdminClassTreePage";
+import SkillTreePage from "../SkillTreeView/SkillTreePage";
 
 const App = () => {
   const dispatch = useAppDispatch();
@@ -72,6 +73,7 @@ const App = () => {
             <Route path="world/country/:countryId" element={<WorldPage />} />
             <Route path="world/region/:regionId" element={<WorldPage />} />
             <Route path="location/:locationId" element={<LocationPage />} />
+            <Route path="skill-tree" element={<SkillTreePage />} />
             <Route path="admin" element={
               <ProtectedRoute requiredRole="editor">
                 <AdminPage />
@@ -87,7 +89,7 @@ const App = () => {
                 <AdminSkillsPage />
               </ProtectedRoute>
             } />
-            <Route path="home/admin/class-trees" element={
+            <Route path="admin/class-trees" element={
               <ProtectedRoute requiredPermission="skill_trees:read">
                 <AdminClassTreePage />
               </ProtectedRoute>

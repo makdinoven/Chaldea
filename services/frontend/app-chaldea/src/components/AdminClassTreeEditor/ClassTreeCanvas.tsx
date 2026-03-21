@@ -40,7 +40,7 @@ const ClassTreeCanvas = ({
   );
 
   return (
-    <div className="w-full h-full">
+    <div className="w-full h-full relative" style={{ minHeight: 400 }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -50,6 +50,8 @@ const ClassTreeCanvas = ({
         onNodeClick={handleNodeClick}
         nodeTypes={nodeTypes}
         fitView
+        selectNodesOnDrag={false}
+        elevateNodesOnSelect={true}
         defaultEdgeOptions={{
           style: { stroke: '#f0d95c', strokeWidth: 2 },
           type: 'default',

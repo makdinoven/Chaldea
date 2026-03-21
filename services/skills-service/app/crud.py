@@ -542,8 +542,11 @@ async def save_full_class_tree(
         desired_skills = {(s.skill_id, s.sort_order) for s in node_data.skills}
         desired_skill_ids = {s.skill_id for s in node_data.skills}
 
-        # Remove skills no longer in the list
-        existing_node_skills = list(node_obj.node_skills) if node_obj.node_skills else []
+        # For new nodes, node_skills is empty (no lazy load needed)
+        if real_node_id in new_node_objects:
+            existing_node_skills = []
+        else:
+            existing_node_skills = list(node_obj.node_skills) if node_obj.node_skills else []
         for ns in existing_node_skills:
             if ns.skill_id not in desired_skill_ids:
                 await db.delete(ns)

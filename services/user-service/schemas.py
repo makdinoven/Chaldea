@@ -59,6 +59,12 @@ class CharacterShort(BaseModel):
     avatar: str
     level: Optional[int] = None
     current_location: Optional[LocationShort] = None
+    id_class: Optional[int] = None
+    id_race: Optional[int] = None
+    id_subrace: Optional[int] = None
+    race_name: Optional[str] = None
+    class_name: Optional[str] = None
+    subrace_name: Optional[str] = None
 
 class ClearCurrentCharacterRequest(BaseModel):
     character_id: int

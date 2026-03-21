@@ -33,7 +33,7 @@ const TreeToolbar = ({
   if (!hasTree) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 p-3 bg-black/30 backdrop-blur-sm border-b border-white/10">
+    <div className="flex flex-wrap items-center gap-2 p-3 bg-black/30 backdrop-blur-sm border-b border-white/10 relative z-10">
       {/* Save */}
       <button
         onClick={onSave}

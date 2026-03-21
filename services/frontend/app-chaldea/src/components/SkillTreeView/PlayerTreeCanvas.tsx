@@ -8,7 +8,6 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import PlayerNodeComponent from './PlayerNodeComponent';
-import { autoLayoutRings } from '../AdminClassTreeEditor/utils/ringLayout';
 import { computeNodeState } from './utils/computeNodeState';
 import type {
   FullClassTreeResponse,
@@ -61,9 +60,6 @@ const PlayerTreeCanvas = ({
       };
     });
 
-    // Auto-layout by rings
-    const layoutNodes = autoLayoutRings(rfNodes);
-
     // Build edges with color based on state
     const rfEdges: Edge[] = tree.connections.map((conn) => {
       const sourceChosen = chosenNodeIds.has(Number(conn.from_node_id));
@@ -76,14 +72,14 @@ const PlayerTreeCanvas = ({
         target: String(conn.to_node_id),
         type: 'default',
         style: {
-          stroke: isGold ? '#f0d95c' : 'rgba(255,255,255,0.15)',
-          strokeWidth: isGold ? 2.5 : 1.5,
+          stroke: isGold ? '#f0d95c' : 'rgba(255,255,255,0.35)',
+          strokeWidth: isGold ? 3 : 2,
         },
         animated: isGold,
       };
     });
 
-    return { nodes: layoutNodes, edges: rfEdges };
+    return { nodes: rfNodes, edges: rfEdges };
   }, [tree, chosenNodeIds, characterLevel]);
 
   const handleNodeClick: NodeMouseHandler = useCallback(

@@ -12,27 +12,27 @@ const stateStyles: Record<
 > = {
   chosen: {
     border: 'border-green-400',
-    bg: 'bg-green-400/15',
-    extra: 'shadow-[0_0_14px_rgba(74,222,128,0.5)]',
+    bg: 'bg-green-900/60',
+    extra: 'shadow-[0_0_18px_rgba(74,222,128,0.6)]',
     opacity: 'opacity-100',
   },
   available: {
     border: 'border-gold',
-    bg: 'bg-gold/10',
-    extra: 'shadow-[0_0_12px_rgba(240,217,92,0.4)] animate-pulse',
+    bg: 'bg-yellow-900/50',
+    extra: 'shadow-[0_0_16px_rgba(240,217,92,0.5)] animate-pulse',
     opacity: 'opacity-100',
   },
   locked: {
-    border: 'border-white/20',
-    bg: 'bg-white/5',
+    border: 'border-white/30',
+    bg: 'bg-black/50',
     extra: '',
-    opacity: 'opacity-40',
+    opacity: 'opacity-70',
   },
   blocked: {
-    border: 'border-site-red/40',
-    bg: 'bg-site-red/5',
+    border: 'border-site-red/50',
+    bg: 'bg-red-900/30',
     extra: '',
-    opacity: 'opacity-45',
+    opacity: 'opacity-60',
   },
 };
 
@@ -62,11 +62,11 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
             : undefined
       }
     >
-      {/* Hidden handles for edges */}
+      {/* Handles for edges */}
       <Handle
         type="target"
         position={Position.Top}
-        className="!w-0 !h-0 !bg-transparent !border-0 !min-w-0 !min-h-0"
+        className="!w-2 !h-2 !bg-white/20 !border-0 !-top-1"
       />
 
       {/* Level ring badge */}
@@ -103,7 +103,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
       <Handle
         type="source"
         position={Position.Bottom}
-        className="!w-0 !h-0 !bg-transparent !border-0 !min-w-0 !min-h-0"
+        className="!w-2 !h-2 !bg-white/20 !border-0 !-bottom-1"
       />
     </div>
   );
