@@ -47,6 +47,8 @@ interface CharacterSkill {
   skill_name: string | null;
   skill_type: string | null;
   skill_image: string | null;
+  skill_description: string | null;
+  skill_min_level: number | null;
 }
 
 interface SkillsTabProps {
@@ -177,7 +179,7 @@ const SkillsTab = ({ characterId }: SkillsTabProps) => {
         </Link>
       </div>
 
-      {/* Skills grid */}
+      {/* Skills grouped by level */}
       {skills.length === 0 ? (
         <div className="gray-bg p-8 text-center">
           <p className="text-white/40 text-lg mb-3">Нет изученных навыков</p>
@@ -186,54 +188,94 @@ const SkillsTab = ({ characterId }: SkillsTabProps) => {
           </Link>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {skills.map((cs) => {
-            const rank = cs.skill_rank;
-            const skillImage = cs.skill_image || rank.rank_image;
-            const skillName = cs.skill_name || rank.rank_name;
-            const skillType = cs.skill_type;
-            const typeBadge = SKILL_TYPE_BADGE[skillType ?? ''] ?? '';
-            const typeLabel = SKILL_TYPE_LABELS[skillType ?? ''] ?? '';
+        <div className="space-y-6">
+          {(() => {
+            // Group skills by level tier (1, 5, 10, 15, ... 50)
+            const TIERS = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
+            const getTier = (lvl: number): number => {
+              for (let i = TIERS.length - 1; i >= 0; i--) {
+                if (lvl >= TIERS[i]) return TIERS[i];
+              }
+              return 1;
+            };
 
-            return (
-              <button
-                key={cs.id}
-                onClick={() => setSelectedSkill(cs)}
-                className={`
-                  p-4 rounded-card border flex items-center gap-3 text-left
-                  transition-all duration-200 ease-site cursor-pointer
-                  ${cardStyle.bg} ${cardStyle.border} ${cardStyle.glow}
-                `}
-              >
-                {skillImage ? (
-                  <img
-                    src={skillImage}
-                    alt={skillName ?? ''}
-                    className="w-14 h-14 rounded-lg object-cover flex-shrink-0 border border-white/10"
-                  />
-                ) : (
-                  <div className="w-14 h-14 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0">
-                    <span className="text-white/20 text-xl">⚔</span>
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="text-white font-medium text-sm truncate">
-                    {skillName}
-                  </p>
-                  <div className="flex items-center gap-2 mt-1">
-                    {typeLabel && (
-                      <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${typeBadge}`}>
-                        {typeLabel}
-                      </span>
-                    )}
-                    <span className="text-white/40 text-xs">
-                      Ранг {rank.rank_number}
+            const grouped = new Map<number, CharacterSkill[]>();
+            for (const cs of skills) {
+              const lvl = cs.skill_min_level ?? cs.skill_rank.level_requirement ?? 1;
+              const tier = getTier(lvl);
+              if (!grouped.has(tier)) grouped.set(tier, []);
+              grouped.get(tier)!.push(cs);
+            }
+
+            const sortedTiers = [...grouped.keys()].sort((a, b) => a - b);
+
+            return sortedTiers.map((tier) => {
+              const tierSkills = grouped.get(tier)!;
+              return (
+                <div key={tier}>
+                  {/* Tier header */}
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="h-px flex-1 bg-white/10" />
+                    <span className="text-white/40 text-xs font-medium uppercase tracking-wider">
+                      Уровень {tier}
                     </span>
+                    <div className="h-px flex-1 bg-white/10" />
+                  </div>
+
+                  {/* Skills in this tier */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {tierSkills.map((cs) => {
+                      const rank = cs.skill_rank;
+                      const skillImage = cs.skill_image || rank.rank_image;
+                      const skillName = cs.skill_name || rank.rank_name;
+                      const skillType = cs.skill_type;
+                      const typeBadge = SKILL_TYPE_BADGE[skillType ?? ''] ?? '';
+                      const typeLabel = SKILL_TYPE_LABELS[skillType ?? ''] ?? '';
+
+                      return (
+                        <button
+                          key={cs.id}
+                          onClick={() => setSelectedSkill(cs)}
+                          className={`
+                            p-4 rounded-card border flex items-center gap-3 text-left
+                            transition-all duration-200 ease-site cursor-pointer
+                            ${cardStyle.bg} ${cardStyle.border} ${cardStyle.glow}
+                          `}
+                        >
+                          {skillImage ? (
+                            <img
+                              src={skillImage}
+                              alt={skillName ?? ''}
+                              className="w-14 h-14 rounded-lg object-cover flex-shrink-0 border border-white/10"
+                            />
+                          ) : (
+                            <div className="w-14 h-14 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0">
+                              <span className="text-white/20 text-xl">⚔</span>
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-white font-medium text-sm truncate">
+                              {skillName}
+                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                              {typeLabel && (
+                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${typeBadge}`}>
+                                  {typeLabel}
+                                </span>
+                              )}
+                              <span className="text-white/40 text-xs">
+                                Ранг {rank.rank_number}
+                              </span>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-              </button>
-            );
-          })}
+              );
+            });
+          })()}
         </div>
       )}
 
@@ -301,9 +343,16 @@ const SkillsTab = ({ characterId }: SkillsTabProps) => {
                       </button>
                     </div>
 
-                    {/* Description */}
-                    {rank.rank_description && (
-                      <p className="text-white/70 text-sm mb-4 leading-relaxed">
+                    {/* Skill description */}
+                    {cs.skill_description && (
+                      <p className="text-white/70 text-sm mb-3 leading-relaxed">
+                        {cs.skill_description}
+                      </p>
+                    )}
+
+                    {/* Rank description */}
+                    {rank.rank_description && rank.rank_description !== cs.skill_description && (
+                      <p className="text-white/50 text-xs mb-3 leading-relaxed italic">
                         {rank.rank_description}
                       </p>
                     )}

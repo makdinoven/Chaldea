@@ -183,6 +183,8 @@ class CharacterSkillRead(CharacterSkillBase):
     skill_name: Optional[str] = None
     skill_type: Optional[str] = None
     skill_image: Optional[str] = None
+    skill_description: Optional[str] = None
+    skill_min_level: Optional[int] = None
 
     class Config:
         orm_mode = True

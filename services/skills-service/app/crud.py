@@ -220,10 +220,14 @@ async def list_character_skills_for_character(db: AsyncSession, character_id: in
             cs.skill_name = skill.name
             cs.skill_type = skill.skill_type
             cs.skill_image = skill.skill_image
+            cs.skill_description = skill.description
+            cs.skill_min_level = skill.min_level
         else:
             cs.skill_name = None
             cs.skill_type = None
             cs.skill_image = None
+            cs.skill_description = None
+            cs.skill_min_level = None
 
     return char_skills
 
