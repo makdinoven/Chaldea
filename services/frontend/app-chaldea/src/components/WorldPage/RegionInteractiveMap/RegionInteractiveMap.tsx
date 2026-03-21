@@ -195,7 +195,6 @@ const RegionInteractiveMap = ({
                   onMouseEnter={() => setHoveredId(key)}
                   onMouseLeave={() => setHoveredId(null)}
                   className="flex flex-col items-center gap-1 cursor-pointer group bg-transparent border-none p-0"
-                  title={item.name}
                 >
                   {/* Icon container */}
                   <div
@@ -230,16 +229,29 @@ const RegionInteractiveMap = ({
                       /* City map: round icons with image */
                       (() => {
                         const imgUrl = item.map_icon_url || item.image_url;
+                        const borderStyle = isCurrent
+                          ? 'border-[6px] border-red-500 shadow-[0_0_14px_rgba(239,68,68,0.7),0_0_5px_rgba(239,68,68,0.4)]'
+                          : isHovered
+                            ? 'border-[6px] border-gold shadow-[0_0_12px_rgba(240,217,92,0.5)]'
+                            : 'border-[6px] border-gold';
                         if (imgUrl) {
                           return (
-                            <div className={`w-[50px] h-[50px] rounded-full overflow-hidden border-2 ${isCurrent ? 'border-gold shadow-[0_0_10px_rgba(240,217,92,0.6)]' : 'border-white/40'}`}>
-                              <img src={imgUrl} alt={item.name} className="w-full h-full object-cover" draggable={false} />
+                            <div className={`rounded-full p-[4px] transition-all duration-300 ease-site ${
+                              isCurrent
+                                ? 'bg-red-500 shadow-[0_0_14px_rgba(239,68,68,0.7),0_0_5px_rgba(239,68,68,0.4)]'
+                                : isHovered
+                                  ? 'bg-gold shadow-[0_0_12px_rgba(240,217,92,0.5)]'
+                                  : 'bg-gold'
+                            }`}>
+                              <div className="w-[48px] h-[48px] rounded-full overflow-hidden">
+                                <img src={imgUrl} alt={item.name} className="w-full h-full object-cover" draggable={false} />
+                              </div>
                             </div>
                           );
                         }
                         return (
                           <div
-                            className={`w-[50px] h-[50px] rounded-full flex items-center justify-center border-2 text-sm ${isCurrent ? 'border-gold shadow-[0_0_10px_rgba(240,217,92,0.6)]' : 'border-white/40'}`}
+                            className={`w-[54px] h-[54px] rounded-full flex items-center justify-center text-sm transition-all duration-300 ease-site ${borderStyle}`}
                             style={{ backgroundColor: item.type === 'district' ? 'rgba(180,130,50,0.5)' : (MARKER_COLORS[item.marker_type ?? ''] ?? '#76a6bd') + '99' }}
                           >
                             <span className="leading-none">{item.type === 'district' ? '\u{2666}' : (MARKER_ICONS[item.marker_type ?? ''] ?? '\u{1F4CD}')}</span>
