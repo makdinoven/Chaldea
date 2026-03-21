@@ -11,7 +11,8 @@ from config import settings
 import models
 from models import (
     Country, Region, District, Location, LocationNeighbor, Post, PostLike, GameRule,
-    Area, ClickableZone, GameTimeConfig, LocationLoot, LocationFavorite
+    Area, ClickableZone, GameTimeConfig, LocationLoot, LocationFavorite,
+    PostDeletionRequest, PostReport
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -1753,3 +1754,186 @@ async def is_favorited(session: AsyncSession, user_id: int, location_id: int) ->
         )
     )
     return result.scalars().first() is not None
+
+
+# -------------------------------
+#   POST MODERATION
+# -------------------------------
+async def create_deletion_request(
+    session: AsyncSession, post_id: int, user_id: int, reason: Optional[str] = None
+) -> PostDeletionRequest:
+    """Create a deletion request for a post. User must own the post. No duplicate pending requests."""
+    # Verify post exists
+    result = await session.execute(select(Post).where(Post.id == post_id))
+    post = result.scalars().first()
+    if not post:
+        raise HTTPException(status_code=404, detail="Пост не найден")
+
+    # Verify user owns the post (check via character ownership — post has character_id,
+    # we need to check that the character belongs to the user)
+    char_result = await session.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": post.character_id},
+    )
+    char_row = char_result.fetchone()
+    if not char_row or char_row[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете запрашивать удаление только своих постов")
+
+    # Check no duplicate pending request
+    existing = await session.execute(
+        select(PostDeletionRequest).where(
+            PostDeletionRequest.post_id == post_id,
+            PostDeletionRequest.user_id == user_id,
+            PostDeletionRequest.status == "pending",
+        )
+    )
+    if existing.scalars().first():
+        raise HTTPException(status_code=409, detail="Запрос на удаление этого поста уже существует")
+
+    req = PostDeletionRequest(
+        post_id=post_id,
+        user_id=user_id,
+        reason=reason,
+        status="pending",
+    )
+    session.add(req)
+    await session.commit()
+    await session.refresh(req)
+    return req
+
+
+async def create_report(
+    session: AsyncSession, post_id: int, user_id: int, reason: Optional[str] = None
+) -> PostReport:
+    """Create a report for a post. One report per user per post (unique constraint)."""
+    # Verify post exists
+    result = await session.execute(select(Post).where(Post.id == post_id))
+    if not result.scalars().first():
+        raise HTTPException(status_code=404, detail="Пост не найден")
+
+    report = PostReport(
+        post_id=post_id,
+        user_id=user_id,
+        reason=reason,
+        status="pending",
+    )
+    session.add(report)
+    try:
+        await session.commit()
+        await session.refresh(report)
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Вы уже отправляли жалобу на этот пост")
+    return report
+
+
+async def get_pending_deletion_requests(session: AsyncSession) -> List[dict]:
+    """List all pending deletion requests with post content."""
+    result = await session.execute(
+        select(PostDeletionRequest, Post)
+        .outerjoin(Post, PostDeletionRequest.post_id == Post.id)
+        .where(PostDeletionRequest.status == "pending")
+        .order_by(PostDeletionRequest.created_at.desc())
+    )
+    rows = result.all()
+    items = []
+    for req, post in rows:
+        items.append({
+            "id": req.id,
+            "post_id": req.post_id,
+            "user_id": req.user_id,
+            "reason": req.reason,
+            "status": req.status,
+            "created_at": req.created_at,
+            "reviewed_at": req.reviewed_at,
+            "post_content": post.content if post else None,
+            "post_character_id": post.character_id if post else None,
+            "post_location_id": post.location_id if post else None,
+        })
+    return items
+
+
+async def get_pending_reports(session: AsyncSession) -> List[dict]:
+    """List all pending reports with post content."""
+    result = await session.execute(
+        select(PostReport, Post)
+        .outerjoin(Post, PostReport.post_id == Post.id)
+        .where(PostReport.status == "pending")
+        .order_by(PostReport.created_at.desc())
+    )
+    rows = result.all()
+    items = []
+    for report, post in rows:
+        items.append({
+            "id": report.id,
+            "post_id": report.post_id,
+            "user_id": report.user_id,
+            "reason": report.reason,
+            "status": report.status,
+            "created_at": report.created_at,
+            "reviewed_at": report.reviewed_at,
+            "post_content": post.content if post else None,
+            "post_character_id": post.character_id if post else None,
+            "post_location_id": post.location_id if post else None,
+        })
+    return items
+
+
+async def review_deletion_request(
+    session: AsyncSession, request_id: int, action: str, admin_user_id: int
+) -> PostDeletionRequest:
+    """Review a deletion request. If approved, delete the post."""
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="Действие должно быть 'approve' или 'reject'")
+
+    result = await session.execute(
+        select(PostDeletionRequest).where(PostDeletionRequest.id == request_id)
+    )
+    req = result.scalars().first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Запрос на удаление не найден")
+    if req.status != "pending":
+        raise HTTPException(status_code=400, detail="Запрос уже рассмотрен")
+
+    if action == "approve":
+        # Delete the post
+        await session.execute(delete(Post).where(Post.id == req.post_id))
+        req.status = "approved"
+    else:
+        req.status = "rejected"
+
+    req.reviewed_by_user_id = admin_user_id
+    req.reviewed_at = sa_func.now()
+    await session.commit()
+    await session.refresh(req)
+    return req
+
+
+async def review_report(
+    session: AsyncSession, report_id: int, action: str, admin_user_id: int
+) -> PostReport:
+    """Review a report. If resolved, optionally delete the post."""
+    if action not in ("resolve", "dismiss"):
+        raise HTTPException(status_code=400, detail="Действие должно быть 'resolve' или 'dismiss'")
+
+    result = await session.execute(
+        select(PostReport).where(PostReport.id == report_id)
+    )
+    report = result.scalars().first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Жалоба не найдена")
+    if report.status != "pending":
+        raise HTTPException(status_code=400, detail="Жалоба уже рассмотрена")
+
+    if action == "resolve":
+        # Delete the post when report is resolved
+        await session.execute(delete(Post).where(Post.id == report.post_id))
+        report.status = "resolved"
+    else:
+        report.status = "dismissed"
+
+    report.reviewed_by_user_id = admin_user_id
+    report.reviewed_at = sa_func.now()
+    await session.commit()
+    await session.refresh(report)
+    return report

@@ -1174,6 +1174,110 @@ async def pickup_loot(
 
 
 # --------------------------------------------------------------------
+# POST MODERATION — Player endpoints
+# --------------------------------------------------------------------
+@router.post("/posts/{post_id}/request-deletion", response_model=schemas.PostDeletionRequestRead)
+async def request_post_deletion(
+    post_id: int,
+    body: schemas.PostDeletionRequestCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Игрок запрашивает удаление своего поста. Запрос отправляется модераторам."""
+    req = await crud.create_deletion_request(session, post_id, current_user.id, body.reason)
+    return {
+        "id": req.id,
+        "post_id": req.post_id,
+        "user_id": req.user_id,
+        "reason": req.reason,
+        "status": req.status,
+        "created_at": req.created_at,
+        "reviewed_at": req.reviewed_at,
+    }
+
+
+@router.post("/posts/{post_id}/report", response_model=schemas.PostReportRead)
+async def report_post(
+    post_id: int,
+    body: schemas.PostReportCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Игрок отправляет жалобу на пост. Одна жалоба от одного игрока на один пост."""
+    report = await crud.create_report(session, post_id, current_user.id, body.reason)
+    return {
+        "id": report.id,
+        "post_id": report.post_id,
+        "user_id": report.user_id,
+        "reason": report.reason,
+        "status": report.status,
+        "created_at": report.created_at,
+        "reviewed_at": report.reviewed_at,
+    }
+
+
+# --------------------------------------------------------------------
+# POST MODERATION — Admin endpoints
+# --------------------------------------------------------------------
+@router.get("/admin/moderation/deletion-requests", response_model=List[schemas.PostDeletionRequestRead])
+async def get_deletion_requests(
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_admin_user),
+):
+    """Список всех ожидающих запросов на удаление постов."""
+    return await crud.get_pending_deletion_requests(session)
+
+
+@router.get("/admin/moderation/reports", response_model=List[schemas.PostReportRead])
+async def get_reports(
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_admin_user),
+):
+    """Список всех ожидающих жалоб на посты."""
+    return await crud.get_pending_reports(session)
+
+
+@router.put("/admin/moderation/deletion-requests/{request_id}/review", response_model=schemas.PostDeletionRequestRead)
+async def review_deletion_request(
+    request_id: int,
+    body: schemas.PostModerationReview,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_admin_user),
+):
+    """Модератор рассматривает запрос на удаление поста (approve/reject)."""
+    req = await crud.review_deletion_request(session, request_id, body.action, current_user.id)
+    return {
+        "id": req.id,
+        "post_id": req.post_id,
+        "user_id": req.user_id,
+        "reason": req.reason,
+        "status": req.status,
+        "created_at": req.created_at,
+        "reviewed_at": req.reviewed_at,
+    }
+
+
+@router.put("/admin/moderation/reports/{report_id}/review", response_model=schemas.PostReportRead)
+async def review_report(
+    report_id: int,
+    body: schemas.PostModerationReview,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_admin_user),
+):
+    """Модератор рассматривает жалобу на пост (resolve/dismiss)."""
+    report = await crud.review_report(session, report_id, body.action, current_user.id)
+    return {
+        "id": report.id,
+        "post_id": report.post_id,
+        "user_id": report.user_id,
+        "reason": report.reason,
+        "status": report.status,
+        "created_at": report.created_at,
+        "reviewed_at": report.reviewed_at,
+    }
+
+
+# --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------
 app.include_router(router)

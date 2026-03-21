@@ -592,3 +592,46 @@ class TagPlayerRequest(BaseModel):
     target_user_id: int
     sender_character_id: int
 
+
+# -------------------------------
+#   POST MODERATION SCHEMAS
+# -------------------------------
+class PostDeletionRequestCreate(BaseModel):
+    reason: Optional[str] = None
+
+class PostReportCreate(BaseModel):
+    reason: Optional[str] = None
+
+class PostDeletionRequestRead(BaseModel):
+    id: int
+    post_id: int
+    user_id: int
+    reason: Optional[str] = None
+    status: str
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+    post_content: Optional[str] = None
+    post_character_id: Optional[int] = None
+    post_location_id: Optional[int] = None
+
+    class Config:
+        orm_mode = True
+
+class PostReportRead(BaseModel):
+    id: int
+    post_id: int
+    user_id: int
+    reason: Optional[str] = None
+    status: str
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+    post_content: Optional[str] = None
+    post_character_id: Optional[int] = None
+    post_location_id: Optional[int] = None
+
+    class Config:
+        orm_mode = True
+
+class PostModerationReview(BaseModel):
+    action: str
+

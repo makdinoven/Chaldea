@@ -217,6 +217,36 @@ class LocationFavorite(Base):
     )
 
 
+class PostDeletionRequest(Base):
+    __tablename__ = "post_deletion_requests"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False)
+    reason = Column(String(500), nullable=True)
+    status = Column(String(20), default="pending", nullable=False)
+    reviewed_by_user_id = Column(Integer, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    reviewed_at = Column(TIMESTAMP, nullable=True)
+
+
+class PostReport(Base):
+    __tablename__ = "post_reports"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=False)
+    reason = Column(String(500), nullable=True)
+    status = Column(String(20), default="pending", nullable=False)
+    reviewed_by_user_id = Column(Integer, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    reviewed_at = Column(TIMESTAMP, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('post_id', 'user_id', name='uq_post_report_user'),
+    )
+
+
 class GameTimeConfig(Base):
     __tablename__ = 'game_time_config'
 

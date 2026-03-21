@@ -22,6 +22,7 @@ const sections: AdminSection[] = [
   { label: 'Пользователи и роли', path: '/admin/users-roles', description: 'Управление ролями, правами доступа и разрешениями', module: 'users' },
   { label: 'Расы', path: '/admin/races', description: 'Управление расами, подрасами и пресетами статов', module: 'races' },
   { label: 'Игровое время', path: '/admin/game-time', description: 'Настройка внутриигрового календаря', module: 'gametime' },
+  { label: 'Модерация постов', path: '/admin/moderation', description: 'Жалобы и запросы на удаление постов локаций', module: 'moderation' },
 ];
 
 const AdminPage = () => {

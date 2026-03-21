@@ -201,6 +201,44 @@ const LocationPage = () => {
     [character?.id, locationId]
   );
 
+  // --- Report handler ---
+
+  const handleReport = useCallback(
+    async (postId: number, reason: string) => {
+      try {
+        await axios.post(`${BASE_URL}/locations/posts/${postId}/report`, { reason });
+        toast.success('Жалоба отправлена');
+      } catch (err) {
+        if (axios.isAxiosError(err) && err.response?.status === 409) {
+          toast.error('Вы уже отправляли жалобу на этот пост');
+        } else {
+          toast.error('Не удалось отправить жалобу');
+        }
+        throw err;
+      }
+    },
+    []
+  );
+
+  // --- Request deletion handler ---
+
+  const handleRequestDeletion = useCallback(
+    async (postId: number, reason: string) => {
+      try {
+        await axios.post(`${BASE_URL}/locations/posts/${postId}/request-deletion`, { reason });
+        toast.success('Запрос на удаление отправлен');
+      } catch (err) {
+        const message =
+          axios.isAxiosError(err) && err.response?.data?.detail
+            ? err.response.data.detail
+            : 'Не удалось отправить запрос на удаление';
+        toast.error(message);
+        throw err;
+      }
+    },
+    []
+  );
+
   // --- Post submit ---
 
   const handleSubmitPost = useCallback(
@@ -336,6 +374,8 @@ const LocationPage = () => {
                 onLike={handleLike}
                 onUnlike={handleUnlike}
                 onTagPlayer={handleTagPlayer}
+                onReport={handleReport}
+                onRequestDeletion={handleRequestDeletion}
               />
             ))}
           </div>

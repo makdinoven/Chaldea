@@ -9,6 +9,8 @@ interface PostCardProps {
   onLike: (postId: number) => void;
   onUnlike: (postId: number) => void;
   onTagPlayer: (targetUserId: number) => void;
+  onReport: (postId: number, reason: string) => void;
+  onRequestDeletion: (postId: number, reason: string) => void;
 }
 
 const formatRelativeTime = (dateStr: string): string => {
@@ -43,11 +45,20 @@ const PostCard = ({
   onLike,
   onUnlike,
   onTagPlayer,
+  onReport,
+  onRequestDeletion,
 }: PostCardProps) => {
   const isLiked = currentCharacterId !== null && post.liked_by.includes(currentCharacterId);
   const [animating, setAnimating] = useState(false);
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [modalType, setModalType] = useState<'report' | 'deletion' | null>(null);
+  const [modalReason, setModalReason] = useState('');
+  const [modalSubmitting, setModalSubmitting] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const isAuthor = currentCharacterId !== null && post.character_id === currentCharacterId;
 
   // Filter out the current user from players list (prevent self-tagging)
   const taggablePlayers = players.filter((p) => p.user_id !== currentUserId);
@@ -63,6 +74,45 @@ const PostCard = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [tagDropdownOpen]);
+
+  // Close menu on outside click
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpen]);
+
+  const openModal = (type: 'report' | 'deletion') => {
+    setModalType(type);
+    setModalReason('');
+    setMenuOpen(false);
+  };
+
+  const closeModal = () => {
+    setModalType(null);
+    setModalReason('');
+    setModalSubmitting(false);
+  };
+
+  const handleModalSubmit = async () => {
+    if (!modalType) return;
+    setModalSubmitting(true);
+    try {
+      if (modalType === 'report') {
+        await onReport(post.post_id, modalReason);
+      } else {
+        await onRequestDeletion(post.post_id, modalReason);
+      }
+      closeModal();
+    } catch {
+      setModalSubmitting(false);
+    }
+  };
 
   const handleLikeClick = () => {
     setAnimating(true);
@@ -126,7 +176,7 @@ const PostCard = ({
         {post.content}
       </p>
 
-      {/* Actions row: like + tag */}
+      {/* Actions row: like + tag + menu */}
       <div className="flex items-center gap-3">
         {/* Like button */}
         <button
@@ -219,7 +269,98 @@ const PostCard = ({
             )}
           </div>
         )}
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Post actions menu (report / request deletion) */}
+        {currentCharacterId !== null && (
+          <div className="relative" ref={menuRef}>
+            <button
+              onClick={() => setMenuOpen((prev) => !prev)}
+              className="text-white/30 hover:text-white/60 transition-colors p-1"
+              aria-label="Действия с постом"
+              title="Действия с постом"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+              </svg>
+            </button>
+
+            {menuOpen && (
+              <div className="absolute bottom-full right-0 mb-2 w-48 bg-black/90 border border-white/10 rounded-card shadow-card z-20">
+                <div className="py-1">
+                  <button
+                    onClick={() => openModal('report')}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-white/70 hover:bg-white/10 hover:text-white transition-colors text-left text-xs"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-site-red/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 21v-4m0 0V5a2 2 0 012-2h6.5l1 1H21l-3 6 3 6h-8.5l-1-1H5a2 2 0 00-2 2z" />
+                    </svg>
+                    Пожаловаться
+                  </button>
+                  {isAuthor && (
+                    <button
+                      onClick={() => openModal('deletion')}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-white/70 hover:bg-white/10 hover:text-white transition-colors text-left text-xs"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-site-red/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                      Запросить удаление
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Report / Deletion request modal */}
+      {modalType && (
+        <div className="modal-overlay" onClick={closeModal}>
+          <div
+            className="modal-content max-w-md w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="gold-text text-base font-medium mb-3">
+              {modalType === 'report' ? 'Пожаловаться на пост' : 'Запрос на удаление поста'}
+            </h3>
+
+            <p className="text-white/50 text-xs mb-3 line-clamp-2">
+              {post.content}
+            </p>
+
+            <textarea
+              value={modalReason}
+              onChange={(e) => setModalReason(e.target.value)}
+              placeholder="Причина (необязательно)"
+              className="w-full bg-black/40 border border-white/10 rounded-card text-white text-sm p-3 resize-none h-20 focus:outline-none focus:border-site-blue/50 placeholder:text-white/30"
+            />
+
+            <div className="flex justify-end gap-3 mt-4">
+              <button
+                onClick={closeModal}
+                className="btn-line text-xs px-4 py-1.5"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={handleModalSubmit}
+                disabled={modalSubmitting}
+                className="btn-blue text-xs px-4 py-1.5 disabled:opacity-50"
+              >
+                {modalSubmitting
+                  ? 'Отправка...'
+                  : modalType === 'report'
+                    ? 'Отправить жалобу'
+                    : 'Отправить запрос'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
