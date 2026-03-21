@@ -9,17 +9,15 @@ interface LootSectionProps {
 }
 
 const LootSection = ({ loot, currentCharacterId, onPickup }: LootSectionProps) => {
+  if (loot.length === 0) return null;
+
   return (
     <section className="gold-outline relative rounded-card bg-black/50 p-4 sm:p-6 flex flex-col gap-4">
       <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
         Лут на локации
       </h2>
 
-      {loot.length === 0 ? (
-        <p className="text-white/50 text-sm text-center py-4">
-          На земле ничего не лежит
-        </p>
-      ) : (
+      {(
         <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
           {loot.map((lootItem) => {
             const rarityClass =

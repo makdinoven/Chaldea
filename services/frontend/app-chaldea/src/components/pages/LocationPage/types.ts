@@ -22,6 +22,7 @@ export interface Post {
   character_photo: string | null;
   character_title: string | null;
   character_name: string;
+  character_level: number | null;
   user_id: number;
   user_nickname: string;
   content: string;

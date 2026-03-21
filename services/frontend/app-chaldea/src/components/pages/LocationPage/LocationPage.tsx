@@ -329,20 +329,21 @@ const LocationPage = () => {
 
       <div className="gradient-divider-h relative pb-2" />
 
-      {/* Players */}
-      <section className="bg-black/50 rounded-card p-4 sm:p-6">
-        <PlayersSection players={location.players} />
-      </section>
+      {/* Players + NPCs */}
+      <PlayersSection players={location.players} />
 
-      <div className="gradient-divider-h relative pb-2" />
-
-      {/* Loot */}
-      <LootSection
-        loot={location.loot ?? []}
-        currentCharacterId={isCharacterHere ? (character?.id ?? null) : null}
-        locationId={location.id}
-        onPickup={handlePickupLoot}
-      />
+      {/* Loot — only shown when items exist */}
+      {(location.loot ?? []).length > 0 && (
+        <>
+          <div className="gradient-divider-h relative pb-2" />
+          <LootSection
+            loot={location.loot}
+            currentCharacterId={isCharacterHere ? (character?.id ?? null) : null}
+            locationId={location.id}
+            onPickup={handlePickupLoot}
+          />
+        </>
+      )}
 
       <div className="gradient-divider-h relative pb-2" />
 
@@ -393,9 +394,6 @@ const LocationPage = () => {
 
       {/* Placeholder sections */}
       <div className="flex flex-col gap-4 sm:flex-row sm:gap-4">
-        <div className="flex-1">
-          <PlaceholderSection title="НПС" message="Скоро здесь появятся неигровые персонажи" />
-        </div>
         <div className="flex-1">
           <PlaceholderSection title="Враги" message="Скоро здесь появятся враги для сражений" />
         </div>

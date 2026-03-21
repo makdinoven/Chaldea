@@ -131,11 +131,20 @@ const PostCard = ({
   };
 
   return (
-    <div className="bg-black/50 rounded-card p-3 sm:p-4 flex flex-col gap-3">
-      {/* Top row: avatar + info + timestamp */}
-      <div className="flex items-start gap-3">
+    <div className="bg-black/50 rounded-card p-3 sm:p-4 flex gap-3 sm:gap-4">
+      {/* Left: avatar panel */}
+      <div className="flex flex-col items-center gap-1.5 shrink-0 w-[72px] sm:w-[90px]">
+        {/* Title above avatar */}
+        {post.character_title ? (
+          <span className="text-site-blue text-[10px] sm:text-xs italic text-center leading-tight line-clamp-2 w-full">
+            {post.character_title}
+          </span>
+        ) : (
+          <span className="text-[10px] sm:text-xs text-transparent select-none">&nbsp;</span>
+        )}
+
         {/* Avatar */}
-        <div className="gold-outline relative w-10 h-10 rounded-full overflow-hidden bg-black/40 shrink-0">
+        <div className="gold-outline relative w-14 h-14 sm:w-[72px] sm:h-[72px] rounded-full overflow-hidden bg-black/40">
           {post.character_photo ? (
             <img
               src={post.character_photo}
@@ -144,39 +153,39 @@ const PostCard = ({
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-white/20">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7 sm:w-9 sm:h-9" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
               </svg>
             </div>
           )}
         </div>
 
-        {/* Name + title */}
-        <div className="flex flex-col flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-white text-sm font-medium truncate">
-              {post.character_name}
-            </span>
-          </div>
-          {post.character_title && (
-            <span className="text-site-blue text-xs italic truncate">
-              {post.character_title}
-            </span>
-          )}
-        </div>
+        {/* Name */}
+        <span className="text-white text-[10px] sm:text-xs font-medium text-center truncate w-full">
+          {post.character_name}
+        </span>
 
-        {/* Timestamp */}
-        <span className="text-white/40 text-xs shrink-0">
-          {formatRelativeTime(post.created_at)}
+        {/* Level */}
+        <span className="gold-text text-[10px] sm:text-xs font-medium">
+          LVL {post.character_level ?? '?'}
         </span>
       </div>
 
-      {/* Content */}
-      <p className="text-white/90 text-sm leading-relaxed whitespace-pre-wrap break-words">
-        {post.content}
-      </p>
+      {/* Right: content + actions */}
+      <div className="flex flex-col gap-3 flex-1 min-w-0">
+        {/* Timestamp */}
+        <div className="flex justify-end">
+          <span className="text-white/40 text-xs shrink-0">
+            {formatRelativeTime(post.created_at)}
+          </span>
+        </div>
 
-      {/* Actions row: like + tag + menu */}
+        {/* Content */}
+        <div className="text-white/90 text-sm leading-relaxed whitespace-pre-wrap break-words prose-rules"
+          dangerouslySetInnerHTML={{ __html: post.content }}
+        />
+
+        {/* Actions row: like + tag + menu */}
       <div className="flex items-center gap-3">
         {/* Like button */}
         <button
@@ -315,6 +324,7 @@ const PostCard = ({
             )}
           </div>
         )}
+      </div>
       </div>
 
       {/* Report / Deletion request modal */}
