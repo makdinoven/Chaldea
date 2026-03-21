@@ -5,6 +5,7 @@ import axios from 'axios';
 import { BASE_URL } from '../../../api/api';
 import { useBodyBackground } from '../../../hooks/useBodyBackground';
 import { useAppSelector } from '../../../redux/store';
+import { isStaff } from '../../../utils/permissions';
 import { LocationData } from './types';
 import LocationHeader from './LocationHeader';
 import PlayersSection from './PlayersSection';
@@ -23,6 +24,8 @@ const LocationPage = () => {
 
   const character = useAppSelector((state) => state.user.character);
   const userId = useAppSelector((state) => state.user.id);
+  const userRole = useAppSelector((state) => state.user.role);
+  const userIsStaff = isStaff(userRole);
 
   useBodyBackground(location?.image_url);
 
@@ -258,6 +261,30 @@ const LocationPage = () => {
     [locationId, character?.id, fetchLocationData]
   );
 
+  // --- NPC post submit (admin only) ---
+
+  const handleSubmitNpcPost = useCallback(
+    async (npcId: number, content: string) => {
+      if (!locationId) return;
+      try {
+        await axios.post(`${BASE_URL}/locations/posts/as-npc`, {
+          npc_id: npcId,
+          location_id: Number(locationId),
+          content,
+        });
+        toast.success('Пост от НПС отправлен');
+        await fetchLocationData();
+      } catch (err) {
+        const message =
+          axios.isAxiosError(err) && err.response?.data?.detail
+            ? err.response.data.detail
+            : 'Не удалось отправить пост от НПС';
+        toast.error(message);
+      }
+    },
+    [locationId, fetchLocationData]
+  );
+
   // --- Loot pickup ---
 
   const handlePickupLoot = useCallback(
@@ -353,11 +380,14 @@ const LocationPage = () => {
           Посты
         </h2>
 
-        {/* Create form — shown if character exists */}
-        {character && (
+        {/* Create form — shown if character exists or user is staff */}
+        {(character || userIsStaff) && (
           <PostCreateForm
             onSubmit={handleSubmitPost}
-            disabled={!isCharacterHere && !character}
+            onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
+            disabled={!isCharacterHere && !character && !userIsStaff}
+            isStaff={userIsStaff}
+            npcs={location.npcs ?? []}
           />
         )}
 

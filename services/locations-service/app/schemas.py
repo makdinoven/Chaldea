@@ -515,6 +515,11 @@ class MovementPostRequest(BaseModel):
     character_id: int
     content: str
 
+class NpcPostCreate(BaseModel):
+    npc_id: int
+    location_id: int
+    content: str
+
 
 # -------------------------------
 #   GAME RULE SCHEMAS

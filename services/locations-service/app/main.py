@@ -705,6 +705,43 @@ async def move_and_post(
                 background_tasks.add_task(publish_notification_sync, uid, msg)
 
     return new_post
+
+
+@router.post("/posts/as-npc", response_model=schemas.PostResponse)
+async def create_post_as_npc(
+        body: schemas.NpcPostCreate,
+        session: AsyncSession = Depends(get_db),
+        admin_user=Depends(get_admin_user),
+        token: str = Depends(OAUTH2_SCHEME),
+):
+    """
+    Admin-only: создать пост от имени NPC на указанной локации.
+    Не требует проверки перемещения/выносливости.
+    """
+    # 1. Проверяем, что NPC существует через character-service
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        npc_url = f"{settings.CHARACTER_SERVICE_URL}/characters/admin/npcs/{body.npc_id}"
+        resp = await client.get(npc_url, headers={"Authorization": f"Bearer {token}"})
+        if resp.status_code != 200:
+            raise HTTPException(status_code=404, detail="NPC не найден")
+
+    # 2. Проверяем, что локация существует
+    loc_result = await session.execute(
+        select(models.Location).where(models.Location.id == body.location_id)
+    )
+    if not loc_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Локация не найдена")
+
+    # 3. Создаём пост от имени NPC
+    post_in = schemas.PostCreate(
+        character_id=body.npc_id,
+        location_id=body.location_id,
+        content=body.content,
+    )
+    new_post = await crud.create_post(session, post_in)
+    return new_post
+
+
 # --------------------------------------------------------------------
 # AREA
 # --------------------------------------------------------------------

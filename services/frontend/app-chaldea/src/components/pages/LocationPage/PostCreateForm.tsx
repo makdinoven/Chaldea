@@ -2,10 +2,14 @@ import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Edit3 } from 'react-feather';
 import WysiwygEditor from '../../CommonComponents/WysiwygEditor/WysiwygEditor';
+import { NpcInLocation } from './types';
 
 interface PostCreateFormProps {
   onSubmit: (content: string) => Promise<void>;
+  onSubmitAsNpc?: (npcId: number, content: string) => Promise<void>;
   disabled?: boolean;
+  isStaff?: boolean;
+  npcs?: NpcInLocation[];
 }
 
 const isContentEmpty = (html: string) => {
@@ -13,11 +17,13 @@ const isContentEmpty = (html: string) => {
   return stripped.length === 0;
 };
 
-const PostCreateForm = ({ onSubmit, disabled }: PostCreateFormProps) => {
+const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] }: PostCreateFormProps) => {
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
+  const [npcMode, setNpcMode] = useState(false);
+  const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
   const formRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -26,6 +32,8 @@ const PostCreateForm = ({ onSubmit, disabled }: PostCreateFormProps) => {
       if (formRef.current && !formRef.current.contains(e.target as Node)) {
         if (isContentEmpty(content)) {
           setIsEditorOpen(false);
+          setNpcMode(false);
+          setSelectedNpcId(null);
         }
       }
     };
@@ -35,6 +43,22 @@ const PostCreateForm = ({ onSubmit, disabled }: PostCreateFormProps) => {
 
   const handleSubmit = async () => {
     if (isContentEmpty(content) || submitting) return;
+
+    if (npcMode) {
+      if (!selectedNpcId || !onSubmitAsNpc) return;
+      setSubmitting(true);
+      try {
+        await onSubmitAsNpc(selectedNpcId, content);
+        setContent('');
+        setEditorKey((k) => k + 1);
+        setIsEditorOpen(false);
+        setNpcMode(false);
+        setSelectedNpcId(null);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -46,6 +70,16 @@ const PostCreateForm = ({ onSubmit, disabled }: PostCreateFormProps) => {
       setSubmitting(false);
     }
   };
+
+  const resetForm = () => {
+    setIsEditorOpen(false);
+    setContent('');
+    setEditorKey((k) => k + 1);
+    setNpcMode(false);
+    setSelectedNpcId(null);
+  };
+
+  const selectedNpc = npcs.find((n) => n.id === selectedNpcId);
 
   return (
     <div ref={formRef}>
@@ -72,6 +106,53 @@ const PostCreateForm = ({ onSubmit, disabled }: PostCreateFormProps) => {
             transition={{ duration: 0.2, ease: 'easeOut' }}
             className="bg-black/40 p-5 flex flex-col gap-3 rounded-card"
           >
+            {/* NPC mode toggle for staff */}
+            {isStaff && npcs.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <label className="flex items-center gap-2 cursor-pointer text-sm text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={npcMode}
+                    onChange={(e) => {
+                      setNpcMode(e.target.checked);
+                      if (!e.target.checked) setSelectedNpcId(null);
+                    }}
+                    className="accent-gold w-4 h-4"
+                  />
+                  Написать от НПС
+                </label>
+
+                {npcMode && (
+                  <select
+                    value={selectedNpcId ?? ''}
+                    onChange={(e) => setSelectedNpcId(e.target.value ? Number(e.target.value) : null)}
+                    className="bg-black/60 border border-white/20 text-white text-sm rounded px-3 py-2
+                               focus:border-gold focus:outline-none transition-colors"
+                  >
+                    <option value="">Выберите НПС...</option>
+                    {npcs.map((npc) => (
+                      <option key={npc.id} value={npc.id}>
+                        {npc.name} {npc.npc_role ? `(${npc.npc_role})` : ''} — ур. {npc.level}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {npcMode && selectedNpc && (
+                  <div className="flex items-center gap-2 text-xs text-white/50">
+                    {selectedNpc.avatar && (
+                      <img
+                        src={selectedNpc.avatar}
+                        alt={selectedNpc.name}
+                        className="w-6 h-6 rounded-full object-cover"
+                      />
+                    )}
+                    <span>Пост будет от: <span className="text-gold">{selectedNpc.name}</span></span>
+                  </div>
+                )}
+              </div>
+            )}
+
             <WysiwygEditor
               key={editorKey}
               content={content}
@@ -80,20 +161,16 @@ const PostCreateForm = ({ onSubmit, disabled }: PostCreateFormProps) => {
             <div className="flex justify-end gap-3">
               <button
                 className="btn-line !py-2 !px-6 !text-sm"
-                onClick={() => {
-                  setIsEditorOpen(false);
-                  setContent('');
-                  setEditorKey((k) => k + 1);
-                }}
+                onClick={resetForm}
               >
                 Отмена
               </button>
               <button
                 className="btn-blue !py-2 !px-6 !text-sm"
                 onClick={handleSubmit}
-                disabled={submitting || isContentEmpty(content)}
+                disabled={submitting || isContentEmpty(content) || (npcMode && !selectedNpcId)}
               >
-                {submitting ? 'Отправка...' : 'Опубликовать'}
+                {submitting ? 'Отправка...' : npcMode ? 'Опубликовать от НПС' : 'Опубликовать'}
               </button>
             </div>
           </motion.div>
