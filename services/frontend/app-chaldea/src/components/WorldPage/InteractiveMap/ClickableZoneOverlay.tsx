@@ -51,6 +51,15 @@ const ClickableZoneOverlay = ({ zones, onZoneClick, countries }: ClickableZoneOv
         viewBox="0 0 100 100"
         preserveAspectRatio="none"
       >
+        <defs>
+          <filter id="zone-glow">
+            <feGaussianBlur stdDeviation="0.4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
         {zones.map((zone) => {
           const pointsStr = zone.zone_data
             .map((p) => `${p.x},${p.y}`)
@@ -61,10 +70,14 @@ const ClickableZoneOverlay = ({ zones, onZoneClick, countries }: ClickableZoneOv
             <polygon
               key={zone.id}
               points={pointsStr}
-              className="cursor-pointer transition-all duration-200 ease-site"
-              fill={highlighted ? 'rgba(118, 166, 189, 0.25)' : 'rgba(255, 255, 255, 0.05)'}
-              stroke={highlighted ? '#76a6bd' : (zone.stroke_color ?? 'rgba(255, 249, 184, 0.3)')}
-              strokeWidth="0.3"
+              className="cursor-pointer"
+              style={{
+                transition: 'fill 0.3s ease, stroke 0.3s ease, stroke-width 0.3s ease',
+              }}
+              fill={highlighted ? 'rgba(240, 217, 92, 0.2)' : 'rgba(255, 255, 255, 0.05)'}
+              stroke={highlighted ? '#f0d95c' : (zone.stroke_color ?? 'rgba(255, 249, 184, 0.3)')}
+              strokeWidth={highlighted ? '0.5' : '0.3'}
+              filter={highlighted ? 'url(#zone-glow)' : undefined}
               onMouseEnter={() => setHoveredTargetKey(getTargetKey(zone))}
               onMouseLeave={() => setHoveredTargetKey(null)}
               onClick={() => onZoneClick(zone)}

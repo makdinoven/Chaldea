@@ -201,11 +201,20 @@ const RegionInteractiveMap = ({
                   <div
                     className={`
                       relative flex items-center justify-center
-                      transition-transform duration-200 ease-site
-                      ${isHovered ? 'scale-110' : ''}
+                      transition-all duration-300 ease-site
+                      ${isHovered ? 'scale-[1.15] drop-shadow-[0_0_12px_rgba(240,217,92,0.6)]' : ''}
                       ${isCurrent ? 'drop-shadow-[0_0_8px_rgba(240,217,92,0.7)]' : ''}
                     `}
                   >
+                    {/* Hover glow ring */}
+                    {isHovered && !isCurrent && (
+                      <div
+                        className="absolute -inset-2 rounded-full pointer-events-none"
+                        style={{
+                          background: 'radial-gradient(circle, rgba(240,217,92,0.2) 0%, transparent 70%)',
+                        }}
+                      />
+                    )}
                     {/* Gold glow ring for current location */}
                     {isCurrent && (
                       <div
@@ -286,13 +295,15 @@ const RegionInteractiveMap = ({
                   {/* Item name label */}
                   <span
                     className={`
-                      text-white text-xs sm:text-sm font-semibold text-center
+                      text-xs sm:text-sm font-semibold text-center
                       whitespace-nowrap max-w-[100px] sm:max-w-[140px] truncate
-                      transition-all duration-200 ease-site
-                      ${isHovered ? 'brightness-125 scale-105' : ''}
+                      transition-all duration-300 ease-site
+                      ${isHovered ? 'text-gold scale-110' : 'text-white'}
                     `}
                     style={{
-                      textShadow: '0 0 8px rgba(240,217,92,0.7), 0 1px 3px rgba(0,0,0,0.9)',
+                      textShadow: isHovered
+                        ? '0 0 12px rgba(240,217,92,0.9), 0 0 4px rgba(240,217,92,0.5), 0 1px 3px rgba(0,0,0,0.9)'
+                        : '0 0 8px rgba(240,217,92,0.7), 0 1px 3px rgba(0,0,0,0.9)',
                     }}
                   >
                     {item.name}
