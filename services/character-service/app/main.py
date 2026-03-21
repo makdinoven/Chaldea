@@ -923,7 +923,8 @@ def get_characters_by_location(location_id: int, db: Session = Depends(get_db)):
         result.append({
             "character_name": ch.name,
             "character_title": ch.current_title.name if ch.current_title else "",
-            "character_photo": ch.avatar
+            "character_photo": ch.avatar,
+            "user_id": ch.user_id,
         })
     return result
 

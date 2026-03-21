@@ -1,7 +1,8 @@
 import os
 import logging
-from typing import List
-from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request
+from typing import List, Optional
+from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request, BackgroundTasks
+from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 import asyncio
 from sqlalchemy import select, delete
@@ -14,10 +15,13 @@ import schemas
 import crud
 from database import get_db
 from fastapi.middleware.cors import CORSMiddleware
-from auth_http import get_admin_user, get_current_user_via_http, require_permission
+from auth_http import get_admin_user, get_current_user_via_http, require_permission, UserRead, OAUTH2_SCHEME
+from rabbitmq_publisher import publish_notification_sync
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+
+OAUTH2_SCHEME_OPTIONAL = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
 app = FastAPI()
 
@@ -44,6 +48,22 @@ async def verify_character_ownership(db: AsyncSession, character_id: int, user_i
         raise HTTPException(status_code=404, detail="Персонаж не найден")
     if row[0] != user_id:
         raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+
+def get_optional_user(token: Optional[str] = Depends(OAUTH2_SCHEME_OPTIONAL)) -> Optional[UserRead]:
+    """Try to authenticate user, return None if no token or invalid token."""
+    if not token:
+        return None
+    import requests as sync_requests
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{os.environ.get('AUTH_SERVICE_URL', 'http://user-service:8000')}/users/me"
+    try:
+        resp = sync_requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            return UserRead(**resp.json())
+    except Exception:
+        pass
+    return None
 
 
 # --------------------------------------------------------------------
@@ -485,24 +505,101 @@ async def get_admin_panel_data_route(session: AsyncSession = Depends(get_db), cu
 
 
 @router.get("/{location_id}/client/details", response_model=schemas.LocationClientDetails)
-async def get_location_client_details(location_id: int, session: AsyncSession = Depends(get_db)):
+async def get_location_client_details(
+    location_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user: Optional[UserRead] = Depends(get_optional_user),
+):
     """
     Возвращает детальную информацию о локации для клиента.
     Помимо базовых данных локации, включает:
       - Список соседей
       - Список персонажей (игроков) в локации
       - Посты пользователей, обогащенные информацией о профиле автора, полученной из Character‑service
+      - is_favorited (если пользователь авторизован)
     """
-    data = await crud.get_client_location_details(session, location_id)
+    user_id = current_user.id if current_user else None
+    data = await crud.get_client_location_details(session, location_id, user_id=user_id)
     if not data:
         raise HTTPException(status_code=404, detail="Location not found")
     return data
+
+
+# --------------------------------------------------------------------
+# FAVORITES
+# --------------------------------------------------------------------
+@router.post("/{location_id}/favorite")
+async def add_favorite(
+    location_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Добавить локацию в избранное."""
+    await crud.add_favorite(session, current_user.id, location_id)
+    return {"detail": "Локация добавлена в избранное"}
+
+
+@router.delete("/{location_id}/favorite")
+async def remove_favorite(
+    location_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Удалить локацию из избранного."""
+    await crud.remove_favorite(session, current_user.id, location_id)
+    return {"detail": "Локация удалена из избранного"}
+
+
+# --------------------------------------------------------------------
+# PLAYER TAGGING
+# --------------------------------------------------------------------
+@router.post("/{location_id}/tag-player")
+async def tag_player(
+    location_id: int,
+    body: schemas.TagPlayerRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """
+    Отправить уведомление другому игроку с приглашением на локацию.
+    Отправитель должен владеть персонажем sender_character_id.
+    """
+    # Prevent self-tagging
+    if current_user.id == body.target_user_id:
+        raise HTTPException(status_code=400, detail="Нельзя отметить самого себя")
+
+    # Verify character ownership
+    await verify_character_ownership(session, body.sender_character_id, current_user.id)
+
+    # Get sender character name from character-service
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{body.sender_character_id}/profile"
+        resp = await client.get(profile_url)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=404, detail="Профиль персонажа не найден")
+        profile_data = resp.json()
+    character_name = profile_data.get("character_name", "Неизвестный")
+
+    # Get location name
+    result = await session.execute(
+        select(models.Location).where(models.Location.id == location_id)
+    )
+    loc = result.scalars().first()
+    if not loc:
+        raise HTTPException(status_code=404, detail="Локация не найдена")
+
+    message = f"{character_name} зовёт вас на локацию «{loc.name}»"
+    background_tasks.add_task(publish_notification_sync, body.target_user_id, message)
+
+    return {"detail": "Уведомление отправлено"}
 
 
 @router.post("/{destination_location_id}/move_and_post", response_model=schemas.PostResponse)
 async def move_and_post(
         destination_location_id: int,
         movement: schemas.MovementPostRequest,
+        background_tasks: BackgroundTasks,
         session: AsyncSession = Depends(get_db),
         current_user=Depends(get_current_user_via_http),
 ):
@@ -592,6 +689,20 @@ async def move_and_post(
         consume_resp = await client.post(consume_url, json={"amount": movement_cost})
         if consume_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Failed to deduct stamina for movement")
+
+    # 7. Уведомляем пользователей, добавивших локацию в избранное
+    dest_result = await session.execute(
+        select(models.Location).where(models.Location.id == destination_location_id)
+    )
+    dest_loc = dest_result.scalars().first()
+    if dest_loc:
+        location_name = dest_loc.name
+        fav_user_ids = await crud.get_favorite_user_ids(session, destination_location_id)
+        author_user_id = current_user.id
+        for uid in fav_user_ids:
+            if uid != author_user_id:
+                msg = f"Новый пост на локации «{location_name}»"
+                background_tasks.add_task(publish_notification_sync, uid, msg)
 
     return new_post
 # --------------------------------------------------------------------

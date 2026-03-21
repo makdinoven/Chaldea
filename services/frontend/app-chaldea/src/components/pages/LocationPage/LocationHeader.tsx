@@ -2,6 +2,8 @@ import { LocationData, MarkerType } from './types';
 
 interface LocationHeaderProps {
   location: LocationData;
+  isFavorited: boolean;
+  onToggleFavorite: () => void;
 }
 
 const MARKER_LABELS: Record<MarkerType, string> = {
@@ -18,7 +20,7 @@ const MARKER_COLORS: Record<MarkerType, string> = {
   farm: 'bg-orange-500/80 text-orange-100',
 };
 
-const LocationHeader = ({ location }: LocationHeaderProps) => {
+const LocationHeader = ({ location, isFavorited, onToggleFavorite }: LocationHeaderProps) => {
   const markerType = (location.marker_type || 'safe') as MarkerType;
   const markerLabel = MARKER_LABELS[markerType] ?? markerType;
   const markerColor = MARKER_COLORS[markerType] ?? 'bg-white/20 text-white';
@@ -45,10 +47,35 @@ const LocationHeader = ({ location }: LocationHeaderProps) => {
         )}
       </div>
 
-      {/* Name */}
-      <h1 className="gold-text text-xl sm:text-2xl font-medium uppercase text-center">
-        {location.name}
-      </h1>
+      {/* Name + Favorite */}
+      <div className="flex items-center gap-2">
+        <h1 className="gold-text text-xl sm:text-2xl font-medium uppercase text-center">
+          {location.name}
+        </h1>
+        <button
+          onClick={onToggleFavorite}
+          className="shrink-0 p-1 transition-colors hover:scale-110 active:scale-95 transition-transform"
+          aria-label={isFavorited ? 'Убрать из избранного' : 'Добавить в избранное'}
+          title={isFavorited ? 'Убрать из избранного' : 'Добавить в избранное'}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className={`w-5 h-5 sm:w-6 sm:h-6 ${
+              isFavorited ? 'text-gold' : 'text-white/40 hover:text-gold/70'
+            }`}
+            viewBox="0 0 24 24"
+            fill={isFavorited ? 'currentColor' : 'none'}
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"
+            />
+          </svg>
+        </button>
+      </div>
 
       {/* Badges */}
       <div className="flex flex-wrap items-center justify-center gap-2">

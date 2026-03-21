@@ -8,6 +8,7 @@ aiomysql>=0.3.0
 pymysql==1.1.1
 httpx
 requests
+pika
 pytest
 pytest-asyncio
 alembic

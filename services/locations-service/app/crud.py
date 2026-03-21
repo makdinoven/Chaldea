@@ -11,7 +11,7 @@ from config import settings
 import models
 from models import (
     Country, Region, District, Location, LocationNeighbor, Post, PostLike, GameRule,
-    Area, ClickableZone, GameTimeConfig, LocationLoot
+    Area, ClickableZone, GameTimeConfig, LocationLoot, LocationFavorite
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -1070,7 +1070,7 @@ async def delete_country(session: AsyncSession, country_id: int):
 
 
 logger = logging.getLogger("location-service.crud")
-async def get_client_location_details(session: AsyncSession, location_id: int) -> Optional[dict]:
+async def get_client_location_details(session: AsyncSession, location_id: int, user_id: Optional[int] = None) -> Optional[dict]:
     """
     Собирает детальную информацию о локации для клиентской части:
       - Извлекает базовые данные локации (без children)
@@ -1123,6 +1123,11 @@ async def get_client_location_details(session: AsyncSession, location_id: int) -
     # 6. Получаем лут в локации
     loot_items = await get_location_loot(session, location_id)
 
+    # 7. Проверяем, добавлена ли локация в избранное
+    favorited = False
+    if user_id is not None:
+        favorited = await is_favorited(session, user_id, location_id)
+
     return {
         "id": loc.id,
         "name": loc.name,
@@ -1134,6 +1139,7 @@ async def get_client_location_details(session: AsyncSession, location_id: int) -
         "quick_travel_marker": loc.quick_travel_marker,
         "district_id": loc.district_id,
         "region_id": loc.region_id,
+        "is_favorited": favorited,
         "neighbors": detailed_neighbors,
         "players": players,
         "posts": detailed_posts,
@@ -1697,3 +1703,53 @@ async def pickup_location_loot(session: AsyncSession, loot_id: int) -> Optional[
     await session.delete(loot)
     await session.commit()
     return loot_data
+
+
+# -------------------------------
+#   LOCATION FAVORITES
+# -------------------------------
+async def add_favorite(session: AsyncSession, user_id: int, location_id: int) -> LocationFavorite:
+    """Add a location to user's favorites. Raises 409 if already favorited."""
+    fav = LocationFavorite(user_id=user_id, location_id=location_id)
+    session.add(fav)
+    try:
+        await session.commit()
+        await session.refresh(fav)
+        return fav
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Локация уже в избранном")
+
+
+async def remove_favorite(session: AsyncSession, user_id: int, location_id: int) -> None:
+    """Remove a location from user's favorites. Raises 404 if not found."""
+    result = await session.execute(
+        select(LocationFavorite).where(
+            LocationFavorite.user_id == user_id,
+            LocationFavorite.location_id == location_id,
+        )
+    )
+    fav = result.scalars().first()
+    if not fav:
+        raise HTTPException(status_code=404, detail="Локация не найдена в избранном")
+    await session.delete(fav)
+    await session.commit()
+
+
+async def get_favorite_user_ids(session: AsyncSession, location_id: int) -> List[int]:
+    """Returns list of user_ids who favorited the given location."""
+    result = await session.execute(
+        select(LocationFavorite.user_id).where(LocationFavorite.location_id == location_id)
+    )
+    return [row[0] for row in result.fetchall()]
+
+
+async def is_favorited(session: AsyncSession, user_id: int, location_id: int) -> bool:
+    """Check if a user has favorited a location."""
+    result = await session.execute(
+        select(LocationFavorite.id).where(
+            LocationFavorite.user_id == user_id,
+            LocationFavorite.location_id == location_id,
+        )
+    )
+    return result.scalars().first() is not None

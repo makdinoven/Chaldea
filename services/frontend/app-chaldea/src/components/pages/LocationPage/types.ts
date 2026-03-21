@@ -1,5 +1,6 @@
 export interface Player {
   id: number;
+  user_id: number;
   name: string;
   avatar: string | null;
   level: number;
@@ -51,6 +52,7 @@ export interface LocationData {
   recommended_level: number;
   image_url: string | null;
   marker_type: string;
+  is_favorited?: boolean;
   neighbors: NeighborLocation[];
   players: Player[];
   posts: Post[];

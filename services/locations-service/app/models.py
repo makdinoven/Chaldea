@@ -204,6 +204,19 @@ class LocationLoot(Base):
     dropped_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
 
 
+class LocationFavorite(Base):
+    __tablename__ = "location_favorites"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    location_id = Column(BigInteger, ForeignKey("Locations.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'location_id', name='uq_user_location_favorite'),
+    )
+
+
 class GameTimeConfig(Base):
     __tablename__ = 'game_time_config'
 

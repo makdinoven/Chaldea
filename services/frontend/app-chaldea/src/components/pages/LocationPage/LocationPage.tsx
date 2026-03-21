@@ -22,6 +22,7 @@ const LocationPage = () => {
   const [error, setError] = useState<string | null>(null);
 
   const character = useAppSelector((state) => state.user.character);
+  const userId = useAppSelector((state) => state.user.id);
 
   useBodyBackground(location?.image_url);
 
@@ -49,6 +50,35 @@ const LocationPage = () => {
   useEffect(() => {
     fetchLocationData();
   }, [fetchLocationData]);
+
+  // --- Favorite handler (optimistic) ---
+
+  const handleToggleFavorite = useCallback(async () => {
+    if (!locationId) return;
+
+    const wasFavorited = location?.is_favorited ?? false;
+
+    // Optimistic update
+    setLocation((prev) => {
+      if (!prev) return prev;
+      return { ...prev, is_favorited: !wasFavorited };
+    });
+
+    try {
+      if (wasFavorited) {
+        await axios.delete(`${BASE_URL}/locations/${locationId}/favorite`);
+      } else {
+        await axios.post(`${BASE_URL}/locations/${locationId}/favorite`);
+      }
+    } catch {
+      // Revert on error
+      setLocation((prev) => {
+        if (!prev) return prev;
+        return { ...prev, is_favorited: wasFavorited };
+      });
+      toast.error('Не удалось обновить избранное');
+    }
+  }, [locationId, location?.is_favorited]);
 
   // --- Like handlers (optimistic) ---
 
@@ -148,6 +178,29 @@ const LocationPage = () => {
     [character?.id]
   );
 
+  // --- Tag player handler ---
+
+  const handleTagPlayer = useCallback(
+    async (targetUserId: number) => {
+      if (!character?.id || !locationId) return;
+
+      try {
+        await axios.post(`${BASE_URL}/locations/${locationId}/tag-player`, {
+          target_user_id: targetUserId,
+          sender_character_id: character.id,
+        });
+        toast.success('Уведомление отправлено');
+      } catch (err) {
+        const message =
+          axios.isAxiosError(err) && err.response?.data?.detail
+            ? err.response.data.detail
+            : 'Не удалось отправить уведомление';
+        toast.error(message);
+      }
+    },
+    [character?.id, locationId]
+  );
+
   // --- Post submit ---
 
   const handleSubmitPost = useCallback(
@@ -230,7 +283,11 @@ const LocationPage = () => {
       </button>
 
       {/* Header */}
-      <LocationHeader location={location} />
+      <LocationHeader
+        location={location}
+        isFavorited={location.is_favorited ?? false}
+        onToggleFavorite={handleToggleFavorite}
+      />
 
       <div className="gradient-divider-h relative pb-2" />
 
@@ -274,8 +331,11 @@ const LocationPage = () => {
                 key={post.post_id}
                 post={post}
                 currentCharacterId={character?.id ?? null}
+                currentUserId={userId}
+                players={location.players}
                 onLike={handleLike}
                 onUnlike={handleUnlike}
+                onTagPlayer={handleTagPlayer}
               />
             ))}
           </div>

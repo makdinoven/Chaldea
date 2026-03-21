@@ -429,6 +429,7 @@ class PlayerInLocation(BaseModel):
     character_name: str
     character_title: str
     character_photo: str
+    user_id: Optional[int] = None
 
 class NeighborClient(BaseModel):
     neighbor_id: int
@@ -485,6 +486,7 @@ class LocationClientDetails(BaseModel):
     quick_travel_marker: bool
     district_id: Optional[int] = None
     region_id: Optional[int] = None
+    is_favorited: bool = False
     neighbors: List[NeighborClient] = []
     players: List[PlayerInLocation] = []
     posts: List[ClientPost] = []
@@ -578,4 +580,15 @@ class SortOrderItem(BaseModel):
 
 class SortOrderUpdate(BaseModel):
     items: List[SortOrderItem]
+
+
+# -------------------------------
+#   FAVORITE / TAG SCHEMAS
+# -------------------------------
+class LocationFavoriteCreate(BaseModel):
+    pass
+
+class TagPlayerRequest(BaseModel):
+    target_user_id: int
+    sender_character_id: int
 
