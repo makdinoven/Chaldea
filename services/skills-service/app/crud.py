@@ -769,49 +769,40 @@ async def get_sibling_nodes(
 ) -> list[int]:
     """
     Find branch conflict candidates: nodes at the same level_ring that share a parent.
+    Connections can go either direction, so parent = connected node with lower level_ring.
     Returns list of sibling node IDs (excluding node_id itself).
     """
-    # Get the node's level_ring
-    stmt = select(models.TreeNode).where(models.TreeNode.id == node_id)
-    result = await db.execute(stmt)
-    node = result.scalar_one_or_none()
-    if not node:
+    # Get parent node IDs (connected nodes with lower level_ring)
+    parent_ids = await get_parent_nodes(db, node_id)
+    if not parent_ids:
         return []
 
-    level_ring = node.level_ring
-
-    # Find all parent connections where to_node_id = node_id
-    stmt = (
-        select(models.TreeNodeConnection.from_node_id)
-        .where(models.TreeNodeConnection.to_node_id == node_id)
-    )
+    # Get the node's level_ring
+    stmt = select(models.TreeNode.level_ring).where(models.TreeNode.id == node_id)
     result = await db.execute(stmt)
-    parent_ids = [row[0] for row in result.fetchall()]
-
-    if not parent_ids:
+    level_ring = result.scalar_one_or_none()
+    if level_ring is None:
         return []
 
     sibling_ids = set()
     for parent_id in parent_ids:
-        # Find other to_node_ids from this parent
-        stmt = (
-            select(models.TreeNodeConnection.to_node_id)
-            .where(
-                models.TreeNodeConnection.from_node_id == parent_id,
-                models.TreeNodeConnection.to_node_id != node_id,
-            )
+        # Find all nodes connected to this parent (both directions)
+        stmt1 = select(models.TreeNodeConnection.to_node_id).where(
+            models.TreeNodeConnection.from_node_id == parent_id
         )
-        result = await db.execute(stmt)
-        candidate_ids = [row[0] for row in result.fetchall()]
+        stmt2 = select(models.TreeNodeConnection.from_node_id).where(
+            models.TreeNodeConnection.to_node_id == parent_id
+        )
+        r1 = await db.execute(stmt1)
+        r2 = await db.execute(stmt2)
+        connected = [row[0] for row in r1.fetchall()] + [row[0] for row in r2.fetchall()]
 
-        # Filter to same level_ring
+        # Filter: same level_ring, not self, not the parent
+        candidate_ids = [cid for cid in connected if cid != node_id and cid != parent_id]
         if candidate_ids:
-            stmt = (
-                select(models.TreeNode.id)
-                .where(
-                    models.TreeNode.id.in_(candidate_ids),
-                    models.TreeNode.level_ring == level_ring,
-                )
+            stmt = select(models.TreeNode.id).where(
+                models.TreeNode.id.in_(candidate_ids),
+                models.TreeNode.level_ring == level_ring,
             )
             result = await db.execute(stmt)
             for row in result.fetchall():
@@ -821,10 +812,32 @@ async def get_sibling_nodes(
 
 
 async def get_parent_nodes(db: AsyncSession, node_id: int) -> list[int]:
-    """Get from_node_ids (parents) for a given node from tree_node_connections."""
-    stmt = (
-        select(models.TreeNodeConnection.from_node_id)
-        .where(models.TreeNodeConnection.to_node_id == node_id)
+    """Get parent node IDs — nodes connected to this node with a LOWER level_ring."""
+    # Get the node's level_ring
+    stmt = select(models.TreeNode).where(models.TreeNode.id == node_id)
+    result = await db.execute(stmt)
+    node = result.scalar_one_or_none()
+    if not node:
+        return []
+
+    # Find all connected nodes (both directions)
+    stmt1 = select(models.TreeNodeConnection.from_node_id).where(
+        models.TreeNodeConnection.to_node_id == node_id
+    )
+    stmt2 = select(models.TreeNodeConnection.to_node_id).where(
+        models.TreeNodeConnection.from_node_id == node_id
+    )
+    r1 = await db.execute(stmt1)
+    r2 = await db.execute(stmt2)
+    connected_ids = [row[0] for row in r1.fetchall()] + [row[0] for row in r2.fetchall()]
+
+    if not connected_ids:
+        return []
+
+    # Filter to nodes with lower level_ring (= parents)
+    stmt = select(models.TreeNode.id).where(
+        models.TreeNode.id.in_(connected_ids),
+        models.TreeNode.level_ring < node.level_ring,
     )
     result = await db.execute(stmt)
     return [row[0] for row in result.fetchall()]

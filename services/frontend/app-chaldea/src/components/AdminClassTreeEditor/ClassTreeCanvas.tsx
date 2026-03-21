@@ -9,9 +9,11 @@ import ReactFlow, {
   type OnEdgesChange,
   type OnConnect,
   type NodeMouseHandler,
+  type EdgeMouseHandler,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import TreeNodeComponent from './TreeNodeComponent';
+import AlignmentGuides from './AlignmentGuides';
 
 interface ClassTreeCanvasProps {
   nodes: Node[];
@@ -20,7 +22,10 @@ interface ClassTreeCanvasProps {
   onEdgesChange: OnEdgesChange;
   onConnect: OnConnect;
   onNodeClick: (nodeId: string) => void;
+  onEdgeDelete: (edgeId: string) => void;
 }
+
+const SNAP_GRID: [number, number] = [10, 10];
 
 const ClassTreeCanvas = ({
   nodes,
@@ -29,6 +34,7 @@ const ClassTreeCanvas = ({
   onEdgesChange,
   onConnect,
   onNodeClick,
+  onEdgeDelete,
 }: ClassTreeCanvasProps) => {
   const nodeTypes = useMemo(() => ({ treeNode: TreeNodeComponent }), []);
 
@@ -37,6 +43,15 @@ const ClassTreeCanvas = ({
       onNodeClick(node.id);
     },
     [onNodeClick]
+  );
+
+  const handleEdgeClick: EdgeMouseHandler = useCallback(
+    (_event, edge) => {
+      if (window.confirm('Удалить связь между узлами?')) {
+        onEdgeDelete(edge.id);
+      }
+    },
+    [onEdgeDelete]
   );
 
   return (
@@ -48,10 +63,13 @@ const ClassTreeCanvas = ({
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onNodeClick={handleNodeClick}
+        onEdgeClick={handleEdgeClick}
         nodeTypes={nodeTypes}
         fitView
         selectNodesOnDrag={false}
         elevateNodesOnSelect={true}
+        snapToGrid={true}
+        snapGrid={SNAP_GRID}
         defaultEdgeOptions={{
           style: { stroke: '#f0d95c', strokeWidth: 2 },
           type: 'default',
@@ -65,6 +83,7 @@ const ClassTreeCanvas = ({
           maskColor="rgba(26,26,46,0.8)"
           className="!bg-site-bg !border-white/10 !rounded-card"
         />
+        <AlignmentGuides />
       </ReactFlow>
     </div>
   );

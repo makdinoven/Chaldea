@@ -1101,6 +1101,65 @@ async def reset_tree(
     }
 
 
+@router.post("/admin/class_trees/reset_full")
+async def admin_reset_tree_full(
+    data: schemas.ResetTreeRequest,
+    db: AsyncSession = Depends(get_db),
+    admin_user=Depends(require_permission("skill_trees:update")),
+):
+    """Admin: fully reset ALL tree progress for a character (including subclass). Deletes all skills."""
+    character_id = data.character_id
+
+    # Find all trees for this character's progress
+    stmt = (
+        select(models.CharacterTreeProgress.tree_id)
+        .where(models.CharacterTreeProgress.character_id == character_id)
+        .distinct()
+    )
+    result = await db.execute(stmt)
+    tree_ids = [row[0] for row in result.fetchall()]
+
+    if not tree_ids:
+        return {"detail": "Нечего сбрасывать", "nodes_reset": 0, "skills_removed": 0}
+
+    total_nodes = 0
+    total_skills = 0
+
+    for tree_id in tree_ids:
+        # Get ALL progress nodes (including subclass_choice)
+        stmt = (
+            select(models.CharacterTreeProgress)
+            .where(
+                models.CharacterTreeProgress.character_id == character_id,
+                models.CharacterTreeProgress.tree_id == tree_id,
+            )
+        )
+        result = await db.execute(stmt)
+        progress_rows = result.scalars().all()
+
+        node_ids = [p.node_id for p in progress_rows]
+
+        # Delete skills from those nodes
+        if node_ids:
+            skill_ids = await crud.get_skills_for_nodes(db, node_ids)
+            if skill_ids:
+                total_skills += await crud.delete_character_skills_by_skill_ids(
+                    db, character_id, skill_ids
+                )
+
+        # Delete ALL progress rows
+        for row in progress_rows:
+            await db.delete(row)
+        total_nodes += len(progress_rows)
+
+    await db.commit()
+    return {
+        "detail": "Весь прогресс сброшен (включая подкласс)",
+        "nodes_reset": total_nodes,
+        "skills_removed": total_skills,
+    }
+
+
 @router.get("/skills/{skill_id}/full_tree", response_model=schemas.FullSkillTreeResponse)
 async def get_skill_full_tree_public(
     skill_id: int,

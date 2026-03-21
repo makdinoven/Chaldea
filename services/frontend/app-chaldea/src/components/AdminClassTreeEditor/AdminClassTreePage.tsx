@@ -10,7 +10,7 @@ import {
 } from '../../redux/actions/classTreeAdminActions';
 import { clearSelectedTree } from '../../redux/slices/classTreeAdminSlice';
 import { useClassTreeEditor } from './hooks/useClassTreeEditor';
-import { autoLayoutRings } from './utils/ringLayout';
+import { autoLayoutRings, autoAlignRows } from './utils/ringLayout';
 import ClassTreeCanvas from './ClassTreeCanvas';
 import TreeNodeInspector from './TreeNodeInspector';
 import TreeToolbar from './TreeToolbar';
@@ -115,6 +115,12 @@ const AdminClassTreePage = () => {
   const handleAutoLayout = () => {
     const laid = autoLayoutRings(editor.nodes);
     editor.setNodes(laid);
+    editor.setIsDirty(true);
+  };
+
+  const handleAlignRows = () => {
+    const aligned = autoAlignRows(editor.nodes, editor.edges);
+    editor.setNodes(aligned);
     editor.setIsDirty(true);
   };
 
@@ -299,6 +305,7 @@ const AdminClassTreePage = () => {
               onSave={handleSave}
               onAddNode={(ring) => editor.addNode(ring)}
               onAutoLayout={handleAutoLayout}
+              onAlignRows={handleAlignRows}
               isSaving={updateStatus === 'loading'}
               isDirty={editor.isDirty}
               hasTree={!!selectedFullTree}
@@ -327,6 +334,7 @@ const AdminClassTreePage = () => {
                   onEdgesChange={editor.onEdgesChange}
                   onConnect={editor.onConnect}
                   onNodeClick={(id) => editor.setSelectedNodeId(id)}
+                  onEdgeDelete={(id) => editor.removeEdge(id)}
                 />
               ) : (
                 <div className="flex items-center justify-center h-full">

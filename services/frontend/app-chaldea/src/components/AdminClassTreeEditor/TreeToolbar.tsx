@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Save, PlusCircle, Layout, Settings, ChevronDown } from 'react-feather';
+import { Save, PlusCircle, Layout, AlignCenter, Settings, ChevronDown } from 'react-feather';
 import { LEVEL_RING_OPTIONS } from './types';
 
 interface TreeToolbarProps {
@@ -10,6 +10,7 @@ interface TreeToolbarProps {
   onSave: () => void;
   onAddNode: (levelRing: number) => void;
   onAutoLayout: () => void;
+  onAlignRows: () => void;
   isSaving: boolean;
   isDirty: boolean;
   hasTree: boolean;
@@ -23,6 +24,7 @@ const TreeToolbar = ({
   onSave,
   onAddNode,
   onAutoLayout,
+  onAlignRows,
   isSaving,
   isDirty,
   hasTree,
@@ -75,13 +77,22 @@ const TreeToolbar = ({
         )}
       </div>
 
-      {/* Auto-layout */}
+      {/* Auto-layout (rings) */}
       <button
         onClick={onAutoLayout}
         className="btn-line flex items-center gap-1.5 text-sm !py-1.5 !px-3"
       >
         <Layout size={14} />
-        Авто-раскладка
+        По кругу
+      </button>
+
+      {/* Auto-align rows */}
+      <button
+        onClick={onAlignRows}
+        className="btn-line flex items-center gap-1.5 text-sm !py-1.5 !px-3"
+      >
+        <AlignCenter size={14} />
+        По рядам
       </button>
 
       {/* Settings toggle */}

@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAppDispatch, useAppSelector } from '../../../../redux/store';
+import axios from 'axios';
+import toast from 'react-hot-toast';
 import {
   updateAdminCharacter,
   unlinkAdminCharacter,
@@ -29,6 +31,8 @@ const GeneralTab = ({ character }: GeneralTabProps) => {
   // Modal state
   const [showUnlinkModal, setShowUnlinkModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showResetTreeModal, setShowResetTreeModal] = useState(false);
+  const [resettingTree, setResettingTree] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
@@ -67,6 +71,24 @@ const GeneralTab = ({ character }: GeneralTabProps) => {
     setShowDeleteModal(false);
     await dispatch(deleteAdminCharacter(character.id)).unwrap();
     navigate('/admin/characters');
+  };
+
+  const handleResetTree = async () => {
+    setResettingTree(true);
+    try {
+      const res = await axios.post('/skills/admin/class_trees/reset_full', {
+        character_id: character.id,
+      });
+      const data = res.data;
+      toast.success(
+        `Прогресс сброшен: ${data.nodes_reset} узлов, ${data.skills_removed} навыков удалено`
+      );
+      setShowResetTreeModal(false);
+    } catch {
+      toast.error('Ошибка при сбросе прогресса');
+    } finally {
+      setResettingTree(false);
+    }
   };
 
   return (
@@ -184,6 +206,9 @@ const GeneralTab = ({ character }: GeneralTabProps) => {
               Отвязать от аккаунта
             </button>
           )}
+          <button className="btn-line" onClick={() => setShowResetTreeModal(true)}>
+            Сбросить дерево навыков
+          </button>
           <button
             className="text-site-red text-sm uppercase tracking-[0.06em] font-medium hover:opacity-80 transition-opacity duration-200"
             onClick={() => setShowDeleteModal(true)}
@@ -215,6 +240,44 @@ const GeneralTab = ({ character }: GeneralTabProps) => {
                   Отвязать
                 </button>
                 <button className="btn-line" onClick={() => setShowUnlinkModal(false)}>
+                  Отмена
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Reset tree confirmation modal */}
+      <AnimatePresence>
+        {showResetTreeModal && (
+          <div className="modal-overlay" onClick={() => setShowResetTreeModal(false)}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className="modal-content gold-outline gold-outline-thick"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 className="gold-text text-2xl uppercase mb-4">Сброс дерева навыков</h2>
+              <p className="text-white mb-2">
+                Сбросить весь прогресс дерева навыков персонажа{' '}
+                <span className="text-gold font-medium">{character.name}</span>?
+              </p>
+              <p className="text-site-red text-sm mb-6">
+                Будут удалены все выбранные узлы (включая подкласс), все купленные навыки из дерева.
+                Опыт не возвращается.
+              </p>
+              <div className="flex gap-4">
+                <button
+                  className="btn-blue"
+                  onClick={handleResetTree}
+                  disabled={resettingTree}
+                >
+                  {resettingTree ? 'Сброс...' : 'Подтвердить сброс'}
+                </button>
+                <button className="btn-line" onClick={() => setShowResetTreeModal(false)}>
                   Отмена
                 </button>
               </div>

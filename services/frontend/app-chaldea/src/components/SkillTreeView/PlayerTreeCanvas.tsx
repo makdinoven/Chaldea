@@ -1,9 +1,11 @@
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, memo, useState } from 'react';
 import ReactFlow, {
-  Background,
   Controls,
+  BaseEdge,
+  getSmoothStepPath,
   type Node,
   type Edge,
+  type EdgeProps,
   type NodeMouseHandler,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
@@ -14,6 +16,94 @@ import type {
   CharacterTreeProgressResponse,
   NodeVisualState,
 } from './types';
+
+import warriorArt from '../../assets/skillTreeWarrior.png';
+
+/* Map class_id -> art image (expand as new assets appear) */
+const classArtMap: Record<number, string> = {
+  1: warriorArt,
+  2: warriorArt, // placeholder
+  3: warriorArt, // placeholder
+};
+
+/* Map class_id -> gradient colors [start, end] */
+const classGradientColors: Record<number, { bright: [string, string]; dim: [string, string] }> = {
+  1: {
+    bright: ['#fbbf24', '#ef4444'],  // Warrior — gold → red
+    dim: ['rgba(251,191,36,0.3)', 'rgba(239,68,68,0.2)'],
+  },
+  2: {
+    bright: ['#a78bfa', '#38bdf8'],  // Mage — purple → blue
+    dim: ['rgba(167,139,250,0.3)', 'rgba(56,189,248,0.2)'],
+  },
+  3: {
+    bright: ['#fbbf24', '#34d399'],  // Rogue — gold → green
+    dim: ['rgba(251,191,36,0.3)', 'rgba(52,211,153,0.2)'],
+  },
+};
+
+const defaultGradient = classGradientColors[1];
+
+/* Custom gradient edge component */
+const GradientEdge = memo(({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  data,
+}: EdgeProps) => {
+  const [edgePath] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+    borderRadius: 16,
+  });
+
+  const gradientId = `gradient-${id}`;
+  const colors = (data?.colors ?? defaultGradient.dim) as [string, string];
+  const strokeWidth = (data?.strokeWidth ?? 1) as number;
+  const glowing = (data?.glowing ?? false) as boolean;
+
+  return (
+    <>
+      <defs>
+        <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor={colors[0]} />
+          <stop offset="100%" stopColor={colors[1]} />
+        </linearGradient>
+      </defs>
+      {/* Glow layer */}
+      {glowing && (
+        <BaseEdge
+          id={`${id}-glow`}
+          path={edgePath}
+          style={{
+            stroke: `url(#${gradientId})`,
+            strokeWidth: strokeWidth + 4,
+            opacity: 0.3,
+            filter: 'blur(3px)',
+          }}
+        />
+      )}
+      {/* Main line */}
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        style={{
+          stroke: `url(#${gradientId})`,
+          strokeWidth,
+        }}
+      />
+    </>
+  );
+});
+
 
 interface PlayerTreeCanvasProps {
   tree: FullClassTreeResponse;
@@ -26,7 +116,13 @@ const PlayerTreeCanvas = ({
   progress,
   onNodeClick,
 }: PlayerTreeCanvasProps) => {
-  const nodeTypes = useMemo(() => ({ playerNode: PlayerNodeComponent }), []);
+  const nodeTypes = useMemo(() => ({
+    playerNode: PlayerNodeComponent,
+  }), []);
+
+  const edgeTypes = useMemo(() => ({
+    gradient: GradientEdge,
+  }), []);
 
   const chosenNodeIds = useMemo(() => {
     if (!progress) return new Set<number>();
@@ -36,7 +132,6 @@ const PlayerTreeCanvas = ({
   const characterLevel = progress?.character_level ?? 0;
 
   const { nodes, edges } = useMemo(() => {
-    // Build nodes with visual state
     const rfNodes: Node[] = tree.nodes.map((apiNode) => {
       const visualState: NodeVisualState = computeNodeState(
         apiNode,
@@ -46,13 +141,21 @@ const PlayerTreeCanvas = ({
         tree.nodes
       );
 
+      // Admin nodes are 100px. Player nodes vary (36/60/70px).
+      // Adjust position so centers align.
+      const adminSize = 100;
+      const nodeType = apiNode.node_type ?? 'regular';
+      const playerSize = nodeType === 'root' ? 70 : nodeType === 'subclass_choice' ? 60 : 36;
+      const offset = (adminSize - playerSize) / 2;
+
       return {
         id: String(apiNode.id),
         type: 'playerNode',
-        position: { x: apiNode.position_x, y: apiNode.position_y },
+        position: { x: apiNode.position_x + offset, y: apiNode.position_y + offset },
         data: {
           ...apiNode,
           visualState,
+          classId: tree.class_id,
         },
         draggable: false,
         selectable: true,
@@ -60,22 +163,33 @@ const PlayerTreeCanvas = ({
       };
     });
 
-    // Build edges with color based on state
+    /* ---------- Edges with gradient styling ---------- */
+    const gradient = classGradientColors[tree.class_id] ?? defaultGradient;
     const rfEdges: Edge[] = tree.connections.map((conn) => {
       const sourceChosen = chosenNodeIds.has(Number(conn.from_node_id));
       const targetChosen = chosenNodeIds.has(Number(conn.to_node_id));
-      const isGold = sourceChosen && targetChosen;
+      const bothChosen = sourceChosen && targetChosen;
+      const oneChosen = sourceChosen || targetChosen;
+
+      let colors: [string, string] = ['rgba(255,255,255,0.06)', 'rgba(255,255,255,0.03)'];
+      let strokeWidth = 1;
+      let glowing = false;
+
+      if (bothChosen) {
+        colors = gradient.bright;
+        strokeWidth = 2.5;
+        glowing = true;
+      } else if (oneChosen) {
+        colors = gradient.dim;
+        strokeWidth = 1.5;
+      }
 
       return {
         id: String(conn.id ?? `edge-${conn.from_node_id}-${conn.to_node_id}`),
         source: String(conn.from_node_id),
         target: String(conn.to_node_id),
-        type: 'default',
-        style: {
-          stroke: isGold ? '#f0d95c' : 'rgba(255,255,255,0.35)',
-          strokeWidth: isGold ? 3 : 2,
-        },
-        animated: isGold,
+        type: 'gradient',
+        data: { colors, strokeWidth, glowing },
       };
     });
 
@@ -89,28 +203,94 @@ const PlayerTreeCanvas = ({
     [onNodeClick]
   );
 
+  const classArt = classArtMap[tree.class_id] ?? warriorArt;
+
+  // Lock minZoom to fitView level + compute translate bounds from node positions
+  const [initialZoom, setInitialZoom] = useState<number | null>(null);
+
+  const translateExtent = useMemo((): [[number, number], [number, number]] => {
+    if (nodes.length === 0) return [[-Infinity, -Infinity], [Infinity, Infinity]];
+    const xs = nodes.map((n) => n.position.x);
+    const ys = nodes.map((n) => n.position.y);
+    const pad = 150; // extra padding around edges
+    return [
+      [Math.min(...xs) - pad, Math.min(...ys) - pad],
+      [Math.max(...xs) + pad, Math.max(...ys) + pad],
+    ];
+  }, [nodes]);
+
   return (
-    <div className="w-full h-full min-h-[400px]">
+    <div className="relative w-full h-full min-h-[400px] overflow-hidden">
+      {/* ---- Class art as fixed background ---- */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          backgroundImage: `url(${classArt})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          opacity: 0.25,
+        }}
+      />
+
+      {/* ---- Dark radial vignette over the art ---- */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            'radial-gradient(circle at 50% 50%, rgba(10,10,18,0.15) 0%, rgba(10,10,18,0.6) 55%, rgba(10,10,18,0.9) 80%)',
+        }}
+      />
+
+      {/* ---- Subtle grid overlay ---- */}
+      <div
+        className="absolute inset-0 pointer-events-none opacity-[0.04]"
+        style={{
+          backgroundImage:
+            'linear-gradient(rgba(255,255,255,0.15) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.15) 1px, transparent 1px)',
+          backgroundSize: '40px 40px',
+        }}
+      />
+
+      {/* ---- ReactFlow canvas ---- */}
       <ReactFlow
         nodes={nodes}
         edges={edges}
         onNodeClick={handleNodeClick}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={true}
+        panOnDrag={true}
+        panOnScroll={false}
+        zoomOnScroll={true}
+        zoomOnPinch={true}
+        zoomOnDoubleClick={true}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
-        defaultEdgeOptions={{
-          type: 'default',
+        fitViewOptions={{ padding: 0.1 }}
+        minZoom={initialZoom ?? 0.1}
+        maxZoom={2.5}
+        translateExtent={translateExtent}
+        onInit={(instance) => {
+          // After fitView, lock minZoom to current zoom (= fully zoomed out state)
+          setTimeout(() => {
+            const { zoom } = instance.getViewport();
+            setInitialZoom(zoom);
+          }, 150);
         }}
-        className="bg-transparent"
+        defaultEdgeOptions={{ type: 'default' }}
+        className="!bg-transparent"
+        style={{ position: 'relative', zIndex: 2 }}
         proOptions={{ hideAttribution: true }}
       >
-        <Background color="#ffffff10" gap={20} size={1} />
         <Controls
           showInteractive={false}
-          className="!bg-site-bg !border-white/10 !rounded-card [&_button]:!bg-site-bg [&_button]:!border-white/10 [&_button]:!fill-white [&_button:hover]:!bg-white/10"
+          className="
+            !bg-[#1a1a2e]/80 !border-white/5 !rounded-lg !shadow-none
+            [&_button]:!bg-transparent [&_button]:!border-white/5
+            [&_button]:!fill-white/50 [&_button:hover]:!fill-white
+            [&_button:hover]:!bg-white/5
+          "
         />
       </ReactFlow>
     </div>

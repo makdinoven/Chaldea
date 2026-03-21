@@ -108,6 +108,14 @@ export const useClassTreeEditor = (fullTree: FullClassTreeResponse | null) => {
     [generateTempId, fullTree, setNodes]
   );
 
+  const removeEdge = useCallback(
+    (edgeId: string) => {
+      setEdges((eds) => eds.filter((e) => e.id !== edgeId));
+      setIsDirty(true);
+    },
+    [setEdges]
+  );
+
   const removeNode = useCallback(
     (nodeId: string) => {
       setNodes((nds) => nds.filter((n) => n.id !== nodeId));
@@ -240,6 +248,7 @@ export const useClassTreeEditor = (fullTree: FullClassTreeResponse | null) => {
     onConnect: handleConnect,
     addNode,
     removeNode,
+    removeEdge,
     updateNodeData,
     addSkillToNode,
     removeSkillFromNode,

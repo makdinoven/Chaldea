@@ -19,6 +19,7 @@ interface NodeDetailPanelProps {
   characterId: number;
   onClose: () => void;
   onRefresh: () => void;
+  onNavigateToSubclass?: (nodeId: number) => void;
 }
 
 const nodeTypeLabels: Record<string, string> = {
@@ -34,6 +35,7 @@ const NodeDetailPanel = ({
   characterId,
   onClose,
   onRefresh,
+  onNavigateToSubclass,
 }: NodeDetailPanelProps) => {
   const dispatch = useAppDispatch();
   const [choosing, setChoosing] = useState(false);
@@ -167,6 +169,17 @@ const NodeDetailPanel = ({
         </button>
       )}
 
+      {/* Navigate to subclass tree (chosen subclass_choice node) */}
+      {visualState === 'chosen' && node.node_type === 'subclass_choice' && onNavigateToSubclass && (
+        <button
+          onClick={() => onNavigateToSubclass(node.id)}
+          className="btn-blue w-full text-base flex items-center justify-center gap-2"
+        >
+          Перейти к дереву подкласса
+          <span className="text-lg">→</span>
+        </button>
+      )}
+
       {/* Skills list (only for chosen nodes) */}
       {visualState === 'chosen' && node.skills.length > 0 && (
         <div className="flex flex-col gap-2 flex-1 overflow-hidden">
@@ -203,8 +216,11 @@ const NodeDetailPanel = ({
           </p>
         )}
 
-      {/* Reset button at bottom */}
-      {chosenNodeIds.size > 0 && (
+      {/* Reset button at bottom — hidden if subclass is chosen (irreversible) */}
+      {chosenNodeIds.size > 0 &&
+        !tree.nodes.some(
+          (n) => n.node_type === 'subclass_choice' && chosenNodeIds.has(n.id)
+        ) && (
         <div className="mt-auto pt-3 border-t border-white/10">
           <button
             onClick={() => setResetConfirmOpen(true)}

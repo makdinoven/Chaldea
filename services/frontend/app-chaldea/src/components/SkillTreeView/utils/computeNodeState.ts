@@ -28,30 +28,46 @@ export const computeNodeState = (
   // Root nodes are always available if level matches
   if (node.node_type === 'root') return 'available';
 
-  // Prerequisite check: at least one parent must be chosen
-  const parentNodeIds = connections
-    .filter((c) => Number(c.to_node_id) === node.id)
-    .map((c) => Number(c.from_node_id));
+  // Find connected nodes and determine which are parents (lower level_ring)
+  // Connections can go either direction, so check both sides
+  const connectedNodeIds = new Set<number>();
+  for (const c of connections) {
+    const fromId = Number(c.from_node_id);
+    const toId = Number(c.to_node_id);
+    if (fromId === node.id) connectedNodeIds.add(toId);
+    if (toId === node.id) connectedNodeIds.add(fromId);
+  }
 
+  // Parents = connected nodes with LOWER level_ring
+  const parentNodeIds = [...connectedNodeIds].filter((nid) => {
+    const n = allNodes.find((an) => an.id === nid);
+    return n && n.level_ring < node.level_ring;
+  });
+
+  // Prerequisite check: at least one parent must be chosen
   const hasChosenParent = parentNodeIds.some((pid) => chosenNodeIds.has(pid));
   if (!hasChosenParent) return 'locked';
 
-  // Branch conflict: check if any sibling from same parent at same level_ring is chosen
+  // Siblings = other nodes at same level_ring that share a parent
+  const siblingNodeIds = new Set<number>();
   for (const parentId of parentNodeIds) {
-    const siblingNodeIds = connections
-      .filter(
-        (c) => Number(c.from_node_id) === parentId && Number(c.to_node_id) !== node.id
-      )
-      .map((c) => Number(c.to_node_id));
-
-    // Filter to same level_ring siblings only
-    const sameLevelSiblings = siblingNodeIds.filter((sid) => {
-      const siblingNode = allNodes.find((n) => n.id === sid);
-      return siblingNode && siblingNode.level_ring === node.level_ring;
-    });
-
-    if (sameLevelSiblings.some((sid) => chosenNodeIds.has(sid))) return 'blocked';
+    for (const c of connections) {
+      const fromId = Number(c.from_node_id);
+      const toId = Number(c.to_node_id);
+      // Find nodes connected to this parent
+      if (fromId === parentId && toId !== node.id) {
+        const candidate = allNodes.find((n) => n.id === toId);
+        if (candidate && candidate.level_ring === node.level_ring) siblingNodeIds.add(toId);
+      }
+      if (toId === parentId && fromId !== node.id) {
+        const candidate = allNodes.find((n) => n.id === fromId);
+        if (candidate && candidate.level_ring === node.level_ring) siblingNodeIds.add(fromId);
+      }
+    }
   }
+
+  // Branch conflict: sibling already chosen
+  if ([...siblingNodeIds].some((sid) => chosenNodeIds.has(sid))) return 'blocked';
 
   return 'available';
 };
