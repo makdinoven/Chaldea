@@ -369,13 +369,17 @@ async def upgrade_skill(
     if not rank:
         raise HTTPException(status_code=404, detail="SkillRank not found")
 
-    # Класс, раса, подраса, уровень и т.д. (аналогично)
-    # ...
-    # 3) Узнаём active_experience
-    # ...
-    # 4) Проверяем cost => списываем
+    # 3) Check and deduct experience for upgrade
     cost = rank.upgrade_cost
-    # ...
+    if cost > 0:
+        active_exp = await get_active_experience(character_id)
+        if active_exp < cost:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Недостаточно опыта для улучшения. Требуется: {cost}, доступно: {active_exp}",
+            )
+        await deduct_active_experience(character_id, cost)
+
     # 5) Обновляем/создаём CharacterSkill
     skill_id = rank.skill_id
     conflicts = await crud.build_conflicts_for_skill(db, skill_id)
@@ -767,6 +771,427 @@ async def admin_delete_tree_node(
     if not success:
         raise HTTPException(status_code=404, detail="Tree node not found")
     return {"detail": "Tree node deleted"}
+
+
+# ====================================================================
+# Helper functions for cross-service HTTP calls (FEAT-057)
+# ====================================================================
+
+async def deduct_active_experience(character_id: int, amount: int) -> int:
+    """Deduct active_experience via character-attributes-service. Returns new balance."""
+    async with httpx.AsyncClient() as client:
+        url = f"{ATTRIBUTES_SERVICE_URL}/{character_id}/active_experience"
+        resp = await client.put(url, json={"amount": -amount})
+        if resp.status_code == 400:
+            raise HTTPException(400, detail="Недостаточно опыта")
+        if resp.status_code != 200:
+            raise HTTPException(500, detail="Ошибка при списании опыта")
+        return resp.json().get("active_experience", 0)
+
+
+async def get_character_info(character_id: int) -> dict:
+    """Get character class/level via character-service."""
+    async with httpx.AsyncClient() as client:
+        url = f"{CHARACTER_SERVICE_URL}/{character_id}/race_info"
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            raise HTTPException(404, detail="Персонаж не найден")
+        return resp.json()
+
+
+async def get_active_experience(character_id: int) -> int:
+    """Get current active_experience from character-attributes-service."""
+    async with httpx.AsyncClient() as client:
+        url = f"{ATTRIBUTES_SERVICE_URL}/{character_id}"
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            raise HTTPException(500, detail="Не удалось получить атрибуты")
+        return resp.json().get("active_experience", 0)
+
+
+# ====================================================================
+# 11) Player: Class Skill Tree endpoints (FEAT-057)
+# ====================================================================
+
+@router.get("/class_trees/by_class/{class_id}", response_model=schemas.FullClassTreeResponse)
+async def get_class_tree_by_class(
+    class_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public endpoint: get the full class tree for a given class_id."""
+    tree = await crud.get_class_tree_by_class_id(db, class_id, tree_type="class")
+    if not tree:
+        raise HTTPException(status_code=404, detail="Дерево навыков для этого класса не найдено")
+    result = await crud.get_full_class_tree(db, tree.id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Дерево навыков не найдено")
+    return result
+
+
+@router.get(
+    "/class_trees/{tree_id}/progress/{character_id}",
+    response_model=schemas.CharacterTreeProgressResponse,
+)
+async def get_tree_progress(
+    tree_id: int,
+    character_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Get character's progress on a specific tree (chosen nodes + purchased skills)."""
+    await verify_character_ownership(db, character_id, current_user.id)
+
+    # Chosen nodes
+    progress_rows = await crud.get_character_tree_progress(db, character_id, tree_id)
+    chosen_nodes = [
+        schemas.ChosenNodeProgress(
+            node_id=p.node_id,
+            chosen_at=str(p.chosen_at) if p.chosen_at else None,
+        )
+        for p in progress_rows
+    ]
+
+    # Purchased skills: find character_skills that belong to this tree's nodes
+    # Get all node_ids for this tree
+    tree_data = await crud.get_class_tree(db, tree_id)
+    if not tree_data:
+        raise HTTPException(status_code=404, detail="Дерево навыков не найдено")
+
+    node_ids = [n.id for n in tree_data.nodes]
+    tree_skill_ids = await crud.get_skills_for_nodes(db, node_ids)
+
+    purchased_skills = []
+    if tree_skill_ids:
+        all_cs = await crud.list_character_skills_for_character(db, character_id)
+        for cs in all_cs:
+            if cs.skill_rank.skill_id in tree_skill_ids:
+                purchased_skills.append(
+                    schemas.PurchasedSkillProgress(
+                        skill_id=cs.skill_rank.skill_id,
+                        skill_rank_id=cs.skill_rank_id,
+                        character_skill_id=cs.id,
+                    )
+                )
+
+    # Get active_experience and character_level via HTTP
+    active_exp = await get_active_experience(character_id)
+    char_info = await get_character_info(character_id)
+    char_level = char_info.get("level", 0)
+
+    return schemas.CharacterTreeProgressResponse(
+        character_id=character_id,
+        tree_id=tree_id,
+        chosen_nodes=chosen_nodes,
+        purchased_skills=purchased_skills,
+        active_experience=active_exp,
+        character_level=char_level,
+    )
+
+
+@router.post("/class_trees/{tree_id}/choose_node")
+async def choose_node(
+    tree_id: int,
+    data: schemas.ChooseNodeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Choose a node in the tree (free, validates prerequisites and branch conflicts)."""
+    character_id = data.character_id
+    node_id = data.node_id
+    await verify_character_ownership(db, character_id, current_user.id)
+
+    # 1. Verify node belongs to tree
+    stmt = select(models.TreeNode).where(
+        models.TreeNode.id == node_id,
+        models.TreeNode.tree_id == tree_id,
+    )
+    result = await db.execute(stmt)
+    node = result.scalar_one_or_none()
+    if not node:
+        raise HTTPException(status_code=404, detail="Узел не найден в этом дереве")
+
+    # 2. Get character info and verify level
+    char_info = await get_character_info(character_id)
+    char_level = char_info.get("level", 0)
+    if char_level < node.level_ring:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недостаточный уровень персонажа. Требуется: {node.level_ring}, текущий: {char_level}",
+        )
+
+    # 3. Check tree's class_id matches character's class
+    tree = await crud.get_class_tree(db, tree_id)
+    if not tree:
+        raise HTTPException(status_code=404, detail="Дерево навыков не найдено")
+    char_class_id = char_info.get("id_class")
+    if tree.class_id != char_class_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Дерево навыков не соответствует классу персонажа",
+        )
+
+    # 4. Check node is not already chosen
+    existing_progress = await crud.get_character_tree_progress(db, character_id, tree_id)
+    chosen_node_ids = {p.node_id for p in existing_progress}
+    if node_id in chosen_node_ids:
+        raise HTTPException(status_code=400, detail="Узел уже выбран")
+
+    # 5. Prerequisite check
+    if node.node_type != "root":
+        parent_ids = await crud.get_parent_nodes(db, node_id)
+        if not parent_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="У узла нет родительских связей и он не является корневым",
+            )
+        has_chosen_parent = any(pid in chosen_node_ids for pid in parent_ids)
+        if not has_chosen_parent:
+            raise HTTPException(
+                status_code=400,
+                detail="Необходимо сначала выбрать предыдущий узел в цепочке",
+            )
+
+    # 6. Branch conflict check
+    sibling_ids = await crud.get_sibling_nodes(db, tree_id, node_id)
+    for sib_id in sibling_ids:
+        if sib_id in chosen_node_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Альтернативная ветка уже выбрана",
+            )
+
+    # 7. Insert progress
+    await crud.add_character_tree_progress(db, character_id, tree_id, node_id)
+    return {"detail": "Узел выбран", "node_id": node_id}
+
+
+@router.post("/class_trees/purchase_skill")
+async def purchase_skill(
+    data: schemas.PurchaseSkillRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Buy a skill from a chosen node (costs active_experience)."""
+    character_id = data.character_id
+    node_id = data.node_id
+    skill_id = data.skill_id
+    await verify_character_ownership(db, character_id, current_user.id)
+
+    # 1. Verify node is chosen by character
+    # First get the node to find its tree_id
+    stmt = select(models.TreeNode).where(models.TreeNode.id == node_id)
+    result = await db.execute(stmt)
+    node = result.scalar_one_or_none()
+    if not node:
+        raise HTTPException(status_code=404, detail="Узел не найден")
+
+    progress_rows = await crud.get_character_tree_progress(db, character_id, node.tree_id)
+    chosen_node_ids = {p.node_id for p in progress_rows}
+    if node_id not in chosen_node_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Необходимо сначала выбрать этот узел",
+        )
+
+    # 2. Verify skill belongs to node
+    stmt = select(models.TreeNodeSkill).where(
+        models.TreeNodeSkill.node_id == node_id,
+        models.TreeNodeSkill.skill_id == skill_id,
+    )
+    result = await db.execute(stmt)
+    node_skill = result.scalar_one_or_none()
+    if not node_skill:
+        raise HTTPException(
+            status_code=400,
+            detail="Навык не привязан к этому узлу",
+        )
+
+    # 3. Check character doesn't already have this skill
+    existing_cs = await crud.get_character_skill_by_skill_id(db, character_id, skill_id)
+    if existing_cs:
+        raise HTTPException(status_code=400, detail="Навык уже изучен")
+
+    # 4. Get skill's purchase_cost
+    skill = await crud.get_skill(db, skill_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail="Навык не найден")
+
+    purchase_cost = skill.purchase_cost or 0
+
+    # 5. Check and deduct experience
+    if purchase_cost > 0:
+        active_exp = await get_active_experience(character_id)
+        if active_exp < purchase_cost:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Недостаточно опыта. Требуется: {purchase_cost}, доступно: {active_exp}",
+            )
+        await deduct_active_experience(character_id, purchase_cost)
+
+    # 6. Find rank 1 of the skill
+    ranks = await crud.list_skill_ranks_by_skill(db, skill_id)
+    rank1 = None
+    for r in ranks:
+        if r.rank_number == 1:
+            rank1 = r
+            break
+    if not rank1:
+        raise HTTPException(
+            status_code=500,
+            detail="У навыка нет базового ранга (rank 1)",
+        )
+
+    # 7. Create CharacterSkill
+    cs_data = schemas.CharacterSkillCreate(
+        character_id=character_id,
+        skill_rank_id=rank1.id,
+    )
+    new_cs = await crud.create_character_skill(db, cs_data)
+    return {"detail": "Навык изучен", "character_skill_id": new_cs.id}
+
+
+@router.post("/class_trees/{tree_id}/reset")
+async def reset_tree(
+    tree_id: int,
+    data: schemas.ResetTreeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Reset tree progress (except subclass choice). Skills from reset nodes are deleted."""
+    character_id = data.character_id
+    await verify_character_ownership(db, character_id, current_user.id)
+
+    # 1. Get non-subclass progress rows (node_ids to reset)
+    stmt = (
+        select(models.CharacterTreeProgress)
+        .join(models.TreeNode, models.TreeNode.id == models.CharacterTreeProgress.node_id)
+        .where(
+            models.CharacterTreeProgress.character_id == character_id,
+            models.CharacterTreeProgress.tree_id == tree_id,
+            models.TreeNode.node_type != "subclass_choice",
+        )
+    )
+    result = await db.execute(stmt)
+    progress_rows = result.scalars().all()
+
+    if not progress_rows:
+        return {"detail": "Нечего сбрасывать", "nodes_reset": 0, "skills_removed": 0}
+
+    node_ids_to_reset = [p.node_id for p in progress_rows]
+
+    # 2. Get skill_ids for those nodes
+    skill_ids = await crud.get_skills_for_nodes(db, node_ids_to_reset)
+
+    # 3. Delete character_skills for those skill_ids
+    skills_removed = 0
+    if skill_ids:
+        skills_removed = await crud.delete_character_skills_by_skill_ids(
+            db, character_id, skill_ids
+        )
+
+    # 4. Delete progress rows
+    nodes_reset = await crud.delete_character_tree_progress_for_reset(
+        db, character_id, tree_id
+    )
+
+    return {
+        "detail": "Прогресс сброшен",
+        "nodes_reset": nodes_reset,
+        "skills_removed": skills_removed,
+    }
+
+
+@router.get("/skills/{skill_id}/full_tree", response_model=schemas.FullSkillTreeResponse)
+async def get_skill_full_tree_public(
+    skill_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public endpoint: get the full skill tree (ranks, damage, effects) for player upgrade modal."""
+    skill = await crud.get_skill(db, skill_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail="Навык не найден")
+
+    await db.refresh(skill, ["ranks"])
+
+    ranks_in_tree = []
+    for rank in skill.ranks:
+        await db.refresh(rank, ["damage_entries", "effects"])
+        damage_list = []
+        for dmg in rank.damage_entries:
+            damage_list.append({
+                "id": dmg.id,
+                "damage_type": dmg.damage_type,
+                "amount": dmg.amount,
+                "description": dmg.description,
+                "chance": dmg.chance,
+                "target_side": dmg.target_side,
+                "weapon_slot": dmg.weapon_slot
+            })
+        effect_list = []
+        for eff in rank.effects:
+            effect_list.append({
+                "id": eff.id,
+                "target_side": eff.target_side,
+                "effect_name": eff.effect_name,
+                "description": eff.description,
+                "chance": eff.chance,
+                "duration": eff.duration,
+                "magnitude": eff.magnitude,
+                "attribute_key": eff.attribute_key
+            })
+        ranks_in_tree.append({
+            "id": rank.id,
+            "rank_name": rank.rank_name,
+            "rank_image": rank.rank_image,
+            "rank_number": rank.rank_number,
+            "left_child_id": rank.left_child_id,
+            "right_child_id": rank.right_child_id,
+            "cost_energy": rank.cost_energy,
+            "cost_mana": rank.cost_mana,
+            "cooldown": rank.cooldown,
+            "level_requirement": rank.level_requirement,
+            "upgrade_cost": rank.upgrade_cost,
+            "class_limitations": rank.class_limitations,
+            "race_limitations": rank.race_limitations,
+            "subrace_limitations": rank.subrace_limitations,
+            "rank_description": rank.rank_description,
+            "damage_entries": damage_list,
+            "effects": effect_list
+        })
+
+    return {
+        "id": skill.id,
+        "name": skill.name,
+        "skill_type": skill.skill_type,
+        "description": skill.description,
+        "class_limitations": skill.class_limitations,
+        "race_limitations": skill.race_limitations,
+        "subrace_limitations": skill.subrace_limitations,
+        "min_level": skill.min_level,
+        "purchase_cost": skill.purchase_cost,
+        "skill_image": skill.skill_image,
+        "ranks": ranks_in_tree
+    }
+
+
+@router.get(
+    "/class_trees/subclass_trees/{class_tree_id}",
+    response_model=List[schemas.ClassSkillTreeRead],
+)
+async def get_subclass_trees(
+    class_tree_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public endpoint: get available subclass trees for a class tree."""
+    stmt = (
+        select(models.ClassSkillTree)
+        .where(
+            models.ClassSkillTree.parent_tree_id == class_tree_id,
+            models.ClassSkillTree.tree_type == "subclass",
+        )
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
 app.include_router(router, prefix="")

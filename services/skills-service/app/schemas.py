@@ -456,3 +456,42 @@ class FullClassTreeUpdateRequest(BaseModel):
     tree_image: Optional[str] = None
     nodes: List[TreeNodeInTree] = []
     connections: List[TreeNodeConnectionInTree] = []
+
+
+# ====================================================================
+# Player Tree Progress schemas (FEAT-057)
+# ====================================================================
+
+class ChosenNodeProgress(BaseModel):
+    node_id: int
+    chosen_at: Optional[str] = None
+
+
+class PurchasedSkillProgress(BaseModel):
+    skill_id: int
+    skill_rank_id: int
+    character_skill_id: int
+
+
+class CharacterTreeProgressResponse(BaseModel):
+    character_id: int
+    tree_id: int
+    chosen_nodes: List[ChosenNodeProgress]
+    purchased_skills: List[PurchasedSkillProgress]
+    active_experience: int
+    character_level: int
+
+
+class ChooseNodeRequest(BaseModel):
+    character_id: int
+    node_id: int
+
+
+class PurchaseSkillRequest(BaseModel):
+    character_id: int
+    node_id: int
+    skill_id: int
+
+
+class ResetTreeRequest(BaseModel):
+    character_id: int

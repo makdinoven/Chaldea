@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from fastapi import HTTPException
 from sqlalchemy.orm import selectinload
 
@@ -701,4 +701,182 @@ async def build_conflicts_for_skill(db: AsyncSession, skill_id: int) -> set[tupl
                 conflicts.add((c1, c2))
                 conflicts.add((c2, c1))
     return conflicts
+
+
+# ====================================================================
+# CRUD: Player Tree Progress (FEAT-057)
+# ====================================================================
+
+async def get_character_tree_progress(
+    db: AsyncSession, character_id: int, tree_id: int
+) -> list[models.CharacterTreeProgress]:
+    """Get all chosen nodes for a character in a given tree."""
+    stmt = (
+        select(models.CharacterTreeProgress)
+        .where(
+            models.CharacterTreeProgress.character_id == character_id,
+            models.CharacterTreeProgress.tree_id == tree_id,
+        )
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def add_character_tree_progress(
+    db: AsyncSession, character_id: int, tree_id: int, node_id: int
+) -> models.CharacterTreeProgress:
+    """Insert a new chosen node for the character."""
+    progress = models.CharacterTreeProgress(
+        character_id=character_id,
+        tree_id=tree_id,
+        node_id=node_id,
+    )
+    db.add(progress)
+    await db.commit()
+    await db.refresh(progress)
+    return progress
+
+
+async def delete_character_tree_progress_for_reset(
+    db: AsyncSession, character_id: int, tree_id: int
+) -> int:
+    """Delete progress rows where node_type != 'subclass_choice'. Returns count of deleted rows."""
+    # Get all progress rows for this character+tree
+    stmt = (
+        select(models.CharacterTreeProgress)
+        .join(models.TreeNode, models.TreeNode.id == models.CharacterTreeProgress.node_id)
+        .where(
+            models.CharacterTreeProgress.character_id == character_id,
+            models.CharacterTreeProgress.tree_id == tree_id,
+            models.TreeNode.node_type != "subclass_choice",
+        )
+    )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    count = len(rows)
+    for row in rows:
+        await db.delete(row)
+    if count > 0:
+        await db.commit()
+    return count
+
+
+async def get_sibling_nodes(
+    db: AsyncSession, tree_id: int, node_id: int
+) -> list[int]:
+    """
+    Find branch conflict candidates: nodes at the same level_ring that share a parent.
+    Returns list of sibling node IDs (excluding node_id itself).
+    """
+    # Get the node's level_ring
+    stmt = select(models.TreeNode).where(models.TreeNode.id == node_id)
+    result = await db.execute(stmt)
+    node = result.scalar_one_or_none()
+    if not node:
+        return []
+
+    level_ring = node.level_ring
+
+    # Find all parent connections where to_node_id = node_id
+    stmt = (
+        select(models.TreeNodeConnection.from_node_id)
+        .where(models.TreeNodeConnection.to_node_id == node_id)
+    )
+    result = await db.execute(stmt)
+    parent_ids = [row[0] for row in result.fetchall()]
+
+    if not parent_ids:
+        return []
+
+    sibling_ids = set()
+    for parent_id in parent_ids:
+        # Find other to_node_ids from this parent
+        stmt = (
+            select(models.TreeNodeConnection.to_node_id)
+            .where(
+                models.TreeNodeConnection.from_node_id == parent_id,
+                models.TreeNodeConnection.to_node_id != node_id,
+            )
+        )
+        result = await db.execute(stmt)
+        candidate_ids = [row[0] for row in result.fetchall()]
+
+        # Filter to same level_ring
+        if candidate_ids:
+            stmt = (
+                select(models.TreeNode.id)
+                .where(
+                    models.TreeNode.id.in_(candidate_ids),
+                    models.TreeNode.level_ring == level_ring,
+                )
+            )
+            result = await db.execute(stmt)
+            for row in result.fetchall():
+                sibling_ids.add(row[0])
+
+    return list(sibling_ids)
+
+
+async def get_parent_nodes(db: AsyncSession, node_id: int) -> list[int]:
+    """Get from_node_ids (parents) for a given node from tree_node_connections."""
+    stmt = (
+        select(models.TreeNodeConnection.from_node_id)
+        .where(models.TreeNodeConnection.to_node_id == node_id)
+    )
+    result = await db.execute(stmt)
+    return [row[0] for row in result.fetchall()]
+
+
+async def get_skills_for_nodes(db: AsyncSession, node_ids: list[int]) -> list[int]:
+    """Get skill_ids from tree_node_skills for the given node_ids."""
+    if not node_ids:
+        return []
+    stmt = (
+        select(models.TreeNodeSkill.skill_id)
+        .where(models.TreeNodeSkill.node_id.in_(node_ids))
+    )
+    result = await db.execute(stmt)
+    return [row[0] for row in result.fetchall()]
+
+
+async def delete_character_skills_by_skill_ids(
+    db: AsyncSession, character_id: int, skill_ids: list[int]
+) -> int:
+    """
+    Delete character_skills rows where character_id matches AND
+    skill_rank.skill_id is in skill_ids. Returns count of deleted rows.
+    """
+    if not skill_ids:
+        return 0
+    stmt = (
+        select(models.CharacterSkill)
+        .join(models.SkillRank, models.SkillRank.id == models.CharacterSkill.skill_rank_id)
+        .where(
+            models.CharacterSkill.character_id == character_id,
+            models.SkillRank.skill_id.in_(skill_ids),
+        )
+    )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    count = len(rows)
+    for row in rows:
+        await db.delete(row)
+    if count > 0:
+        await db.commit()
+    return count
+
+
+async def get_class_tree_by_class_id(
+    db: AsyncSession, class_id: int, tree_type: str = "class"
+) -> models.ClassSkillTree | None:
+    """Find a class_skill_tree by class_id and tree_type."""
+    stmt = (
+        select(models.ClassSkillTree)
+        .where(
+            models.ClassSkillTree.class_id == class_id,
+            models.ClassSkillTree.tree_type == tree_type,
+        )
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
