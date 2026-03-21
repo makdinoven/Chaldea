@@ -67,10 +67,154 @@ export const STAT_MODIFIERS = [
   { label: "Energy(±)", key: "energy" },
 ];
 
+export const SKILL_TYPE_OPTIONS = [
+  { label: "Атака", value: "attack" },
+  { label: "Поддержка", value: "support" },
+  { label: "Защита", value: "defense" },
+  { label: "Случайно", value: "random" },
+];
+
+export const PRIMARY_ATTR_OPTIONS = [
+  { label: "Сила", value: "strength" },
+  { label: "Ловкость", value: "agility" },
+  { label: "Интеллект", value: "intelligence" },
+  { label: "Выносливость", value: "endurance" },
+];
+
+export const POISON_SUBTYPE_OPTIONS = [
+  { label: "Периодический урон", value: "periodic_damage" },
+  { label: "Снижение характеристик", value: "stat_reduction" },
+  { label: "Снижение защит", value: "defense_reduction" },
+  { label: "Паралич", value: "paralysis" },
+];
+
 export const COMPLEX_EFFECTS = [
-  { label: "Кровотечение", value: "Bleeding" },
-  { label: "Отравление", value: "Poison" },
-  { label: "Паралич", value: "Paralysis" },
+  {
+    value: "Bleeding",
+    label: "Кровотечение",
+    description: "Периодический урон HP каждый ход",
+    hasAttributeKey: false,
+    attributeKeyOptions: null,
+    fixedDuration: null,
+    allowedSides: null, // both
+  },
+  {
+    value: "ArmorBreak",
+    label: "Раскол брони",
+    description: "Снижает все физические сопротивления",
+    hasAttributeKey: false,
+    attributeKeyOptions: null,
+    fixedDuration: null,
+    allowedSides: null,
+  },
+  {
+    value: "Stun",
+    label: "Оглушение",
+    description: "Блокирует все действия на 1 ход",
+    hasAttributeKey: false,
+    attributeKeyOptions: null,
+    fixedDuration: 1,
+    allowedSides: null,
+  },
+  {
+    value: "Knockdown",
+    label: "Сбитие с ног",
+    description: "Блокирует один тип навыков на 1 ход",
+    hasAttributeKey: true,
+    attributeKeyOptions: SKILL_TYPE_OPTIONS,
+    fixedDuration: 1,
+    allowedSides: null,
+  },
+  {
+    value: "Daze",
+    label: "Ошеломление",
+    description: "Снижает исходящий урон",
+    hasAttributeKey: false,
+    attributeKeyOptions: null,
+    fixedDuration: null,
+    allowedSides: null,
+  },
+  {
+    value: "MagicImpact",
+    label: "Магическое воздействие",
+    description: "Модифицирует первичный атрибут (+ = бафф, - = дебафф)",
+    hasAttributeKey: true,
+    attributeKeyOptions: PRIMARY_ATTR_OPTIONS,
+    fixedDuration: null,
+    allowedSides: null,
+  },
+  {
+    value: "Burn",
+    label: "Возгорание",
+    description: "Периодический урон HP + снижение уклонения",
+    hasAttributeKey: false,
+    attributeKeyOptions: null,
+    fixedDuration: null,
+    allowedSides: null,
+  },
+  {
+    value: "Freeze",
+    label: "Обледенение",
+    description: "Снижает ВСЕ сопротивления урону",
+    hasAttributeKey: false,
+    attributeKeyOptions: null,
+    fixedDuration: null,
+    allowedSides: null,
+  },
+  {
+    value: "Wet",
+    label: "Мокрый",
+    description: "Снижает весь исходящий магический урон",
+    hasAttributeKey: false,
+    attributeKeyOptions: null,
+    fixedDuration: null,
+    allowedSides: null,
+  },
+  {
+    value: "Electrify",
+    label: "Электролизация",
+    description: "Увеличивает весь входящий урон",
+    hasAttributeKey: false,
+    attributeKeyOptions: null,
+    fixedDuration: null,
+    allowedSides: null,
+  },
+  {
+    value: "Windburn",
+    label: "Обветрение",
+    description: "Блокирует один тип навыков на 1 ход",
+    hasAttributeKey: true,
+    attributeKeyOptions: SKILL_TYPE_OPTIONS,
+    fixedDuration: 1,
+    allowedSides: null,
+  },
+  {
+    value: "Holy",
+    label: "Святость",
+    description: "Повышает все 4 первичных атрибута (только на себя)",
+    hasAttributeKey: false,
+    attributeKeyOptions: null,
+    fixedDuration: null,
+    allowedSides: ["self"],
+  },
+  {
+    value: "Curse",
+    label: "Проклятие",
+    description: "Снижает все 4 первичных атрибута (только на врага)",
+    hasAttributeKey: false,
+    attributeKeyOptions: null,
+    fixedDuration: null,
+    allowedSides: ["enemy"],
+  },
+  {
+    value: "Poison",
+    label: "Отравление",
+    description: "Подтип определяет поведение: урон, снижение стат, защит или паралич",
+    hasAttributeKey: true,
+    attributeKeyOptions: POISON_SUBTYPE_OPTIONS,
+    fixedDuration: null,
+    allowedSides: null,
+  },
 ];
 
 /**

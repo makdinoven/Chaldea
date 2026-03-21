@@ -413,6 +413,7 @@ export default function NodeRankDetails({
             title="Сложн. эффекты (Self)"
             complexArray={data.selfComplexEffects || []}
             onChange={(arr) => handleChange('selfComplexEffects', arr)}
+            side="self"
           />
         </>
       )}
@@ -443,6 +444,7 @@ export default function NodeRankDetails({
             title="Сложн. эффекты (Enemy)"
             complexArray={data.enemyComplexEffects || []}
             onChange={(arr) => handleChange('enemyComplexEffects', arr)}
+            side="enemy"
           />
         </>
       )}

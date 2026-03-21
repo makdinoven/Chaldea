@@ -251,6 +251,7 @@ const RankNode = ({
                 title="Сложные эффекты (Self)"
                 complexArray={rank.selfComplexEffects}
                 onChange={(arr) => handleFieldChange('selfComplexEffects', arr)}
+                side="self"
               />
             </>
           )}
@@ -281,6 +282,7 @@ const RankNode = ({
                 title="Сложные эффекты (Enemy)"
                 complexArray={rank.enemyComplexEffects}
                 onChange={(arr) => handleFieldChange('enemyComplexEffects', arr)}
+                side="enemy"
               />
             </>
           )}
