@@ -195,8 +195,8 @@ const EditLocationForm = ({
     e.preventDefault();
     if (isUploading) return;
 
-    if (!formData.name || !formData.district_id) {
-      toast.error('Заполните обязательные поля: название и зона');
+    if (!formData.name) {
+      toast.error('Заполните обязательное поле: название');
       return;
     }
 
@@ -209,7 +209,7 @@ const EditLocationForm = ({
         recommended_level: formData.recommended_level ? Number(formData.recommended_level) : 1,
         type: 'location',
         quick_travel_marker: Boolean(formData.quick_travel_marker),
-        district_id: Number(formData.district_id),
+        district_id: formData.district_id ? Number(formData.district_id) : null,
         marker_type: formData.marker_type || 'safe',
       };
 
