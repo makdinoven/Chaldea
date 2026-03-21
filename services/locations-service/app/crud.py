@@ -12,7 +12,7 @@ import models
 from models import (
     Country, Region, District, Location, LocationNeighbor, Post, PostLike, GameRule,
     Area, ClickableZone, GameTimeConfig, LocationLoot, LocationFavorite,
-    PostDeletionRequest, PostReport
+    PostDeletionRequest, PostReport, DialogueTree, DialogueNode, DialogueOption
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -1958,3 +1958,211 @@ async def review_report(
     await session.commit()
     await session.refresh(report)
     return report
+
+
+# -------------------------------
+#   DIALOGUE TREE CRUD
+# -------------------------------
+async def create_dialogue_tree(session: AsyncSession, data: dict) -> DialogueTree:
+    """Create a dialogue tree with nodes and options, resolving index-based links."""
+    tree = DialogueTree(
+        npc_id=data["npc_id"],
+        title=data["title"],
+        is_active=data.get("is_active", True),
+    )
+    session.add(tree)
+    await session.flush()  # get tree.id
+
+    nodes_data = data.get("nodes", [])
+    db_nodes = []
+    for node_data in nodes_data:
+        node = DialogueNode(
+            tree_id=tree.id,
+            npc_text=node_data["npc_text"],
+            is_root=node_data.get("is_root", False),
+            sort_order=node_data.get("sort_order", 0),
+            action_type=node_data.get("action_type"),
+            action_data=node_data.get("action_data"),
+        )
+        session.add(node)
+        db_nodes.append(node)
+
+    await session.flush()  # get all node ids
+
+    # Now create options with resolved next_node_id
+    for i, node_data in enumerate(nodes_data):
+        for opt_data in node_data.get("options", []):
+            next_node_id = None
+            next_node_index = opt_data.get("next_node_index")
+            if next_node_index is not None and 0 <= next_node_index < len(db_nodes):
+                next_node_id = db_nodes[next_node_index].id
+
+            option = DialogueOption(
+                node_id=db_nodes[i].id,
+                text=opt_data["text"],
+                next_node_id=next_node_id,
+                sort_order=opt_data.get("sort_order", 0),
+                condition=opt_data.get("condition"),
+            )
+            session.add(option)
+
+    await session.commit()
+
+    # Reload with relationships
+    return await get_dialogue_tree(session, tree.id)
+
+
+async def get_dialogue_tree(session: AsyncSession, tree_id: int) -> Optional[DialogueTree]:
+    """Get a single dialogue tree with all nodes and options."""
+    result = await session.execute(
+        select(DialogueTree)
+        .options(
+            selectinload(DialogueTree.nodes).selectinload(DialogueNode.options)
+        )
+        .where(DialogueTree.id == tree_id)
+    )
+    return result.scalars().first()
+
+
+async def list_dialogue_trees(session: AsyncSession, npc_id: Optional[int] = None) -> List[DialogueTree]:
+    """List dialogue trees, optionally filtered by npc_id."""
+    stmt = select(DialogueTree)
+    if npc_id is not None:
+        stmt = stmt.where(DialogueTree.npc_id == npc_id)
+    stmt = stmt.order_by(DialogueTree.id.desc())
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+async def update_dialogue_tree(session: AsyncSession, tree_id: int, data: dict) -> Optional[DialogueTree]:
+    """Update a dialogue tree. If nodes are provided, replace all nodes and options."""
+    result = await session.execute(
+        select(DialogueTree).where(DialogueTree.id == tree_id)
+    )
+    tree = result.scalars().first()
+    if not tree:
+        return None
+
+    if data.get("title") is not None:
+        tree.title = data["title"]
+    if data.get("is_active") is not None:
+        tree.is_active = data["is_active"]
+
+    if data.get("nodes") is not None:
+        # Delete existing nodes (cascade deletes options too)
+        await session.execute(
+            delete(DialogueNode).where(DialogueNode.tree_id == tree_id)
+        )
+        await session.flush()
+
+        nodes_data = data["nodes"]
+        db_nodes = []
+        for node_data in nodes_data:
+            node = DialogueNode(
+                tree_id=tree.id,
+                npc_text=node_data["npc_text"],
+                is_root=node_data.get("is_root", False),
+                sort_order=node_data.get("sort_order", 0),
+                action_type=node_data.get("action_type"),
+                action_data=node_data.get("action_data"),
+            )
+            session.add(node)
+            db_nodes.append(node)
+
+        await session.flush()
+
+        for i, node_data in enumerate(nodes_data):
+            for opt_data in node_data.get("options", []):
+                next_node_id = None
+                next_node_index = opt_data.get("next_node_index")
+                if next_node_index is not None and 0 <= next_node_index < len(db_nodes):
+                    next_node_id = db_nodes[next_node_index].id
+
+                option = DialogueOption(
+                    node_id=db_nodes[i].id,
+                    text=opt_data["text"],
+                    next_node_id=next_node_id,
+                    sort_order=opt_data.get("sort_order", 0),
+                    condition=opt_data.get("condition"),
+                )
+                session.add(option)
+
+    await session.commit()
+    return await get_dialogue_tree(session, tree_id)
+
+
+async def delete_dialogue_tree(session: AsyncSession, tree_id: int) -> bool:
+    """Delete a dialogue tree by id. Returns True if deleted."""
+    result = await session.execute(
+        select(DialogueTree).where(DialogueTree.id == tree_id)
+    )
+    tree = result.scalars().first()
+    if not tree:
+        return False
+    await session.delete(tree)
+    await session.commit()
+    return True
+
+
+async def get_active_dialogue_for_npc(session: AsyncSession, npc_id: int) -> Optional[dict]:
+    """Get the active dialogue tree root node for a given NPC (player-facing)."""
+    result = await session.execute(
+        select(DialogueTree)
+        .options(
+            selectinload(DialogueTree.nodes).selectinload(DialogueNode.options)
+        )
+        .where(DialogueTree.npc_id == npc_id, DialogueTree.is_active == True)
+        .limit(1)
+    )
+    tree = result.scalars().first()
+    if not tree:
+        return None
+
+    # Find root node
+    root = None
+    for node in tree.nodes:
+        if node.is_root:
+            root = node
+            break
+
+    if not root:
+        # Fallback: use the first node by sort_order
+        sorted_nodes = sorted(tree.nodes, key=lambda n: n.sort_order)
+        root = sorted_nodes[0] if sorted_nodes else None
+
+    if not root:
+        return None
+
+    return _build_node_response(root)
+
+
+async def get_dialogue_node(session: AsyncSession, node_id: int) -> Optional[DialogueNode]:
+    """Get a single dialogue node with its options."""
+    result = await session.execute(
+        select(DialogueNode)
+        .options(selectinload(DialogueNode.options))
+        .where(DialogueNode.id == node_id)
+    )
+    return result.scalars().first()
+
+
+def _build_node_response(node: DialogueNode) -> dict:
+    """Build player-facing node response dict."""
+    sorted_options = sorted(node.options, key=lambda o: o.sort_order)
+    options = [
+        {
+            "id": opt.id,
+            "text": opt.text,
+            "next_node_id": opt.next_node_id,
+        }
+        for opt in sorted_options
+    ]
+    is_end = len(options) == 0 or all(o["next_node_id"] is None for o in options)
+    return {
+        "id": node.id,
+        "npc_text": node.npc_text,
+        "action_type": node.action_type,
+        "action_data": node.action_data,
+        "options": options,
+        "is_end": is_end,
+    }

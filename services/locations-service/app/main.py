@@ -1315,6 +1315,127 @@ async def review_report(
 
 
 # --------------------------------------------------------------------
+# DIALOGUE TREES (Admin)
+# --------------------------------------------------------------------
+@router.post("/admin/dialogues", response_model=schemas.DialogueTreeRead)
+async def create_dialogue_tree(
+    body: schemas.DialogueTreeCreate,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """Create a dialogue tree with nodes and options."""
+    tree = await crud.create_dialogue_tree(session, body.dict())
+    return tree
+
+
+@router.get("/admin/dialogues", response_model=List[schemas.DialogueTreeListItem])
+async def list_dialogue_trees(
+    npc_id: Optional[int] = None,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """List dialogue trees, optionally filtered by NPC id."""
+    trees = await crud.list_dialogue_trees(session, npc_id=npc_id)
+    return trees
+
+
+@router.get("/admin/dialogues/{tree_id}", response_model=schemas.DialogueTreeRead)
+async def get_dialogue_tree(
+    tree_id: int,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """Get a full dialogue tree with all nodes and options."""
+    tree = await crud.get_dialogue_tree(session, tree_id)
+    if not tree:
+        raise HTTPException(status_code=404, detail="Дерево диалога не найдено")
+    return tree
+
+
+@router.put("/admin/dialogues/{tree_id}", response_model=schemas.DialogueTreeRead)
+async def update_dialogue_tree(
+    tree_id: int,
+    body: schemas.DialogueTreeUpdate,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """Update a dialogue tree (replace all nodes/options if provided)."""
+    tree = await crud.update_dialogue_tree(session, tree_id, body.dict(exclude_unset=True))
+    if not tree:
+        raise HTTPException(status_code=404, detail="Дерево диалога не найдено")
+    return tree
+
+
+@router.delete("/admin/dialogues/{tree_id}")
+async def delete_dialogue_tree(
+    tree_id: int,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """Delete a dialogue tree and all its nodes/options."""
+    deleted = await crud.delete_dialogue_tree(session, tree_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Дерево диалога не найдено")
+    return {"detail": "Дерево диалога удалено"}
+
+
+# --------------------------------------------------------------------
+# DIALOGUE TREES (Player-facing)
+# --------------------------------------------------------------------
+@router.get("/npcs/{npc_id}/dialogue", response_model=schemas.DialogueNodeResponse)
+async def get_npc_dialogue(
+    npc_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Get the active dialogue root node for an NPC."""
+    node_data = await crud.get_active_dialogue_for_npc(session, npc_id)
+    if not node_data:
+        raise HTTPException(status_code=404, detail="У этого NPC нет активного диалога")
+    return node_data
+
+
+@router.post("/npcs/{npc_id}/dialogue/{node_id}/choose", response_model=schemas.DialogueNodeResponse)
+async def choose_dialogue_option(
+    npc_id: int,
+    node_id: int,
+    body: schemas.DialogueChooseRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    """Player selects a dialogue option. Returns the next node or conversation end."""
+    # Verify the option belongs to this node
+    node = await crud.get_dialogue_node(session, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Узел диалога не найден")
+
+    # Find the selected option
+    selected = None
+    for opt in node.options:
+        if opt.id == body.option_id:
+            selected = opt
+            break
+
+    if not selected:
+        raise HTTPException(status_code=400, detail="Вариант ответа не найден в этом узле")
+
+    # If next_node_id is None, conversation ends
+    if selected.next_node_id is None:
+        return {
+            "id": node_id,
+            "npc_text": "Диалог завершён.",
+            "action_type": None,
+            "action_data": None,
+            "options": [],
+            "is_end": True,
+        }
+
+    next_node = await crud.get_dialogue_node(session, selected.next_node_id)
+    if not next_node:
+        raise HTTPException(status_code=404, detail="Следующий узел диалога не найден")
+
+    return crud._build_node_response(next_node)
+
+
+# --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------
 app.include_router(router)

@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
 import useDebounce from '../../hooks/useDebounce';
 import { NPC_ROLES, NPC_ROLE_LABELS, NPC_SEXES, NPC_CLASSES, NPC_RACES } from '../../constants/npc';
+import DialogueEditor from './DialogueEditor';
 
 /* ── Types ── */
 
@@ -72,6 +73,7 @@ const AdminNpcsPage = () => {
   const [form, setForm] = useState<NpcFormData>(INITIAL_FORM);
   const [saving, setSaving] = useState(false);
   const [locations, setLocations] = useState<LocationOption[]>([]);
+  const [dialogueNpc, setDialogueNpc] = useState<{ id: number; name: string } | null>(null);
 
   const fetchNpcs = useCallback(async () => {
     setLoading(true);
@@ -204,6 +206,18 @@ const AdminNpcsPage = () => {
   const filteredNpcs = npcs;
 
   /* ── Render ── */
+
+  if (dialogueNpc) {
+    return (
+      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+        <DialogueEditor
+          npcId={dialogueNpc.id}
+          npcName={dialogueNpc.name}
+          onClose={() => setDialogueNpc(null)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
@@ -424,6 +438,12 @@ const AdminNpcsPage = () => {
                             Редактировать
                           </button>
                           <button
+                            onClick={() => setDialogueNpc({ id: npc.id, name: npc.name })}
+                            className="text-sm text-gold hover:text-gold-light transition-colors duration-200"
+                          >
+                            Диалоги
+                          </button>
+                          <button
                             onClick={() => handleDelete(npc.id)}
                             className="text-sm text-site-red hover:text-white transition-colors duration-200"
                           >
@@ -462,12 +482,18 @@ const AdminNpcsPage = () => {
                   <div className="text-white/50 text-xs">
                     Локация: {npc.location_name || '—'}
                   </div>
-                  <div className="flex gap-3">
+                  <div className="flex gap-3 flex-wrap">
                     <button
                       onClick={() => openEditForm(npc.id)}
                       className="text-sm text-white hover:text-site-blue transition-colors"
                     >
                       Редактировать
+                    </button>
+                    <button
+                      onClick={() => setDialogueNpc({ id: npc.id, name: npc.name })}
+                      className="text-sm text-gold hover:text-gold-light transition-colors"
+                    >
+                      Диалоги
                     </button>
                     <button
                       onClick={() => handleDelete(npc.id)}

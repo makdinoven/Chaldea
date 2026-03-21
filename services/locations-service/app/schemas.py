@@ -656,3 +656,95 @@ class PostReportRead(BaseModel):
 class PostModerationReview(BaseModel):
     action: str
 
+
+# -------------------------------
+#   DIALOGUE TREE SCHEMAS (Admin)
+# -------------------------------
+class DialogueOptionCreate(BaseModel):
+    text: str
+    next_node_index: Optional[int] = None
+    sort_order: int = 0
+    condition: Optional[dict] = None
+
+class DialogueNodeCreate(BaseModel):
+    npc_text: str
+    is_root: bool = False
+    sort_order: int = 0
+    action_type: Optional[str] = None
+    action_data: Optional[dict] = None
+    options: List[DialogueOptionCreate] = []
+
+class DialogueTreeCreate(BaseModel):
+    npc_id: int
+    title: str
+    is_active: bool = True
+    nodes: List[DialogueNodeCreate] = []
+
+class DialogueTreeUpdate(BaseModel):
+    title: Optional[str] = None
+    is_active: Optional[bool] = None
+    nodes: Optional[List[DialogueNodeCreate]] = None
+
+class DialogueOptionRead(BaseModel):
+    id: int
+    text: str
+    next_node_id: Optional[int] = None
+    sort_order: int = 0
+    condition: Optional[dict] = None
+
+    class Config:
+        orm_mode = True
+
+class DialogueNodeRead(BaseModel):
+    id: int
+    npc_text: str
+    is_root: bool = False
+    sort_order: int = 0
+    action_type: Optional[str] = None
+    action_data: Optional[dict] = None
+    options: List[DialogueOptionRead] = []
+
+    class Config:
+        orm_mode = True
+
+class DialogueTreeRead(BaseModel):
+    id: int
+    npc_id: int
+    title: str
+    is_active: bool
+    created_at: datetime
+    nodes: List[DialogueNodeRead] = []
+
+    class Config:
+        orm_mode = True
+
+class DialogueTreeListItem(BaseModel):
+    id: int
+    npc_id: int
+    title: str
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+# -------------------------------
+#   DIALOGUE TREE SCHEMAS (Player)
+# -------------------------------
+class DialogueOptionResponse(BaseModel):
+    id: int
+    text: str
+    next_node_id: Optional[int] = None
+
+class DialogueNodeResponse(BaseModel):
+    id: int
+    npc_text: str
+    action_type: Optional[str] = None
+    action_data: Optional[dict] = None
+    options: List[DialogueOptionResponse] = []
+    is_end: bool = False
+
+class DialogueChooseRequest(BaseModel):
+    option_id: int
+

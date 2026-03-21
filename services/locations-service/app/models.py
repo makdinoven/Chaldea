@@ -254,3 +254,46 @@ class GameTimeConfig(Base):
     epoch = Column(TIMESTAMP, nullable=False, server_default=text("'2026-03-19 00:00:00'"))
     offset_days = Column(Integer, nullable=False, server_default=text("0"))
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class DialogueTree(Base):
+    __tablename__ = 'dialogue_trees'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    npc_id = Column(Integer, nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text("1"))
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    nodes = relationship("DialogueNode", back_populates="tree", cascade="all, delete-orphan")
+
+
+class DialogueNode(Base):
+    __tablename__ = 'dialogue_nodes'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    tree_id = Column(BigInteger, ForeignKey('dialogue_trees.id', ondelete='CASCADE'), nullable=False, index=True)
+    npc_text = Column(Text, nullable=False)
+    is_root = Column(Boolean, nullable=False, default=False, server_default=text("0"))
+    sort_order = Column(Integer, nullable=False, default=0)
+    action_type = Column(String(50), nullable=True)
+    action_data = Column(JSON, nullable=True)
+
+    tree = relationship("DialogueTree", back_populates="nodes")
+    options = relationship("DialogueOption", back_populates="node",
+                           foreign_keys="[DialogueOption.node_id]",
+                           cascade="all, delete-orphan")
+
+
+class DialogueOption(Base):
+    __tablename__ = 'dialogue_options'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    node_id = Column(BigInteger, ForeignKey('dialogue_nodes.id', ondelete='CASCADE'), nullable=False, index=True)
+    text = Column(String(500), nullable=False)
+    next_node_id = Column(BigInteger, ForeignKey('dialogue_nodes.id', ondelete='SET NULL'), nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    condition = Column(JSON, nullable=True)
+
+    node = relationship("DialogueNode", back_populates="options", foreign_keys=[node_id])
+    next_node = relationship("DialogueNode", foreign_keys=[next_node_id])
