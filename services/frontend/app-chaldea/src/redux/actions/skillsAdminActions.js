@@ -9,7 +9,7 @@ export const fetchSkills = createAsyncThunk(
   'skills/fetchSkills',
   async (_, { rejectWithValue }) => {
     try {
-      const res = await axios.get(`${BASE_URL}/admin/skills`)
+      const res = await axios.get(`${BASE_URL}/admin/skills/`)
       return res.data
     } catch (err) {
       return rejectWithValue(err.response?.data || err.message)

@@ -65,42 +65,42 @@ services:
 
   # --- Backend services: no --reload, no volume mounts, no exposed ports ---
   user-service:
-    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   photo-service:
-    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8001 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8001 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   character-attributes-service:
-    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8002 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8002 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   skills-service:
-    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8003 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8003 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   inventory-service:
-    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8004 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8004 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   character-service:
-    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8005 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8005 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   locations-service:
-    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8006 --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8006 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
 
   notification-service:
-    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8007"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8007 --proxy-headers --forwarded-allow-ips='*'"
     volumes: !reset []
     ports: !reset []
     environment:
@@ -113,7 +113,7 @@ services:
       AUTH_SERVICE_URL: http://user-service:8000
 
   battle-service:
-    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8010 --app-dir /app"
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8010 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
     environment:
@@ -127,7 +127,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
 
   autobattle-service:
-    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8011 --app-dir /app"
+    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8011 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
     environment:
