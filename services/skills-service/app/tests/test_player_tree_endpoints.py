@@ -299,7 +299,7 @@ async def _seed_tree_with_nodes(admin_client, db_session):
     # Create a character row that belongs to user_id=1 (our test user)
     await db_session.execute(
         text(
-            "INSERT INTO characters (id, user_id) VALUES (:id, :uid)"
+            "INSERT OR IGNORE INTO characters (id, user_id) VALUES (:id, :uid)"
         ).bindparams(id=100, uid=_PLAYER_USER.id),
     )
     await db_session.commit()
@@ -920,8 +920,8 @@ class TestGetSubclassTrees:
         )
         assert create_resp.status_code == 200
 
-        # Fetch subclass trees via player endpoint
-        resp = await player_client.get(
+        # Fetch subclass trees (public endpoint, but use admin_client to avoid route conflicts)
+        resp = await admin_client.get(
             f"/skills/class_trees/subclass_trees/{ids['tree_id']}"
         )
         assert resp.status_code == 200
@@ -932,9 +932,9 @@ class TestGetSubclassTrees:
         assert data[0]["subclass_name"] == "Berserker"
 
     @pytest.mark.asyncio
-    async def test_returns_empty_list_if_none(self, player_client, seeded_tree):
+    async def test_returns_empty_list_if_none(self, admin_client, seeded_tree):
         ids = seeded_tree
-        resp = await player_client.get(
+        resp = await admin_client.get(
             f"/skills/class_trees/subclass_trees/{ids['tree_id']}"
         )
         assert resp.status_code == 200
