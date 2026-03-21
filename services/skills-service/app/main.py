@@ -9,7 +9,7 @@ import asyncio
 
 from database import get_db
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+from typing import List, Optional
 import httpx
 
 import models
@@ -652,6 +652,121 @@ async def assign_multiple_skills(
 
     return {"assigned": assigned}
 
+
+# ====================================================================
+# 10) Admin: Class Skill Tree endpoints (FEAT-056)
+# ====================================================================
+
+@router.post("/admin/class_trees/", response_model=schemas.ClassSkillTreeRead)
+async def admin_create_class_tree(
+    data: schemas.ClassSkillTreeCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("skill_trees:create")),
+):
+    return await crud.create_class_tree(db, data)
+
+
+@router.get("/admin/class_trees/", response_model=List[schemas.ClassSkillTreeRead])
+async def admin_list_class_trees(
+    class_id: Optional[int] = None,
+    tree_type: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("skill_trees:read")),
+):
+    return await crud.list_class_trees(db, class_id=class_id, tree_type=tree_type)
+
+
+@router.get("/admin/class_trees/{tree_id}", response_model=schemas.ClassSkillTreeRead)
+async def admin_get_class_tree(
+    tree_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("skill_trees:read")),
+):
+    tree = await crud.get_class_tree(db, tree_id)
+    if not tree:
+        raise HTTPException(status_code=404, detail="Class tree not found")
+    return tree
+
+
+@router.get("/admin/class_trees/{tree_id}/full", response_model=schemas.FullClassTreeResponse)
+async def admin_get_full_class_tree(
+    tree_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("skill_trees:read")),
+):
+    result = await crud.get_full_class_tree(db, tree_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Class tree not found")
+    return result
+
+
+@router.put("/admin/class_trees/{tree_id}/full")
+async def admin_save_full_class_tree(
+    tree_id: int,
+    data: schemas.FullClassTreeUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("skill_trees:update")),
+):
+    if tree_id != data.id:
+        raise HTTPException(status_code=400, detail="Path tree_id != data.id")
+    return await crud.save_full_class_tree(db, tree_id, data)
+
+
+@router.delete("/admin/class_trees/{tree_id}")
+async def admin_delete_class_tree(
+    tree_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("skill_trees:delete")),
+):
+    success = await crud.delete_class_tree(db, tree_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Class tree not found")
+    return {"detail": "Class tree deleted"}
+
+
+# --- Individual Node Operations ---
+
+@router.post("/admin/class_trees/{tree_id}/nodes/", response_model=schemas.TreeNodeRead)
+async def admin_create_tree_node(
+    tree_id: int,
+    data: schemas.TreeNodeCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("skill_trees:create")),
+):
+    # Verify tree exists
+    tree = await crud.get_class_tree(db, tree_id)
+    if not tree:
+        raise HTTPException(status_code=404, detail="Class tree not found")
+    if data.tree_id != tree_id:
+        raise HTTPException(status_code=400, detail="Path tree_id != data.tree_id")
+    return await crud.create_tree_node(db, data)
+
+
+@router.put("/admin/class_trees/{tree_id}/nodes/{node_id}", response_model=schemas.TreeNodeRead)
+async def admin_update_tree_node(
+    tree_id: int,
+    node_id: int,
+    data: schemas.TreeNodeBase,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("skill_trees:update")),
+):
+    updated = await crud.update_tree_node(db, node_id, data)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Tree node not found")
+    return updated
+
+
+@router.delete("/admin/class_trees/{tree_id}/nodes/{node_id}")
+async def admin_delete_tree_node(
+    tree_id: int,
+    node_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("skill_trees:delete")),
+):
+    success = await crud.delete_tree_node(db, node_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Tree node not found")
+    return {"detail": "Tree node deleted"}
 
 
 app.include_router(router, prefix="")

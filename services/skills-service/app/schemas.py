@@ -309,3 +309,150 @@ class MultipleSkillsAssignRequest(BaseModel):
 # ----------------------------------------------------
 class AdminCharacterSkillUpdate(BaseModel):
     skill_rank_id: int
+
+
+# ====================================================================
+# Class Skill Tree schemas (FEAT-056)
+# ====================================================================
+
+# --- Class Skill Tree ---
+
+class ClassSkillTreeBase(BaseModel):
+    class_id: int
+    name: str
+    description: Optional[str] = None
+    tree_type: str = "class"
+    parent_tree_id: Optional[int] = None
+    subclass_name: Optional[str] = None
+    tree_image: Optional[str] = None
+
+
+class ClassSkillTreeCreate(ClassSkillTreeBase):
+    pass
+
+
+class ClassSkillTreeUpdate(ClassSkillTreeBase):
+    pass
+
+
+class ClassSkillTreeRead(ClassSkillTreeBase):
+    id: int
+
+    class Config:
+        orm_mode = True
+
+
+# --- Tree Node ---
+
+class TreeNodeBase(BaseModel):
+    level_ring: int
+    position_x: float = 0.0
+    position_y: float = 0.0
+    name: str
+    description: Optional[str] = None
+    node_type: str = "regular"
+    icon_image: Optional[str] = None
+    sort_order: int = 0
+
+
+class TreeNodeCreate(TreeNodeBase):
+    tree_id: int
+
+
+class TreeNodeRead(TreeNodeBase):
+    id: int
+    tree_id: int
+
+    class Config:
+        orm_mode = True
+
+
+# --- Tree Node Skill (inside a node) ---
+
+class TreeNodeSkillEntry(BaseModel):
+    skill_id: int
+    sort_order: int = 0
+
+
+class TreeNodeSkillRead(BaseModel):
+    id: int
+    skill_id: int
+    sort_order: int = 0
+    # Denormalized fields from skills table
+    skill_name: Optional[str] = None
+    skill_type: Optional[str] = None
+    skill_image: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+# --- Connection ---
+
+class TreeNodeConnectionInTree(BaseModel):
+    id: Optional[Union[int, str]] = None
+    from_node_id: Union[int, str]
+    to_node_id: Union[int, str]
+
+
+# --- Node in full tree request/response ---
+
+class TreeNodeInTree(BaseModel):
+    id: Union[int, str]  # int for existing, "temp-N" for new
+    level_ring: int
+    position_x: float = 0.0
+    position_y: float = 0.0
+    name: str
+    description: Optional[str] = None
+    node_type: str = "regular"
+    icon_image: Optional[str] = None
+    sort_order: int = 0
+    skills: List[TreeNodeSkillEntry] = []
+
+
+class TreeNodeInTreeResponse(BaseModel):
+    id: int
+    tree_id: int
+    level_ring: int
+    position_x: float
+    position_y: float
+    name: str
+    description: Optional[str] = None
+    node_type: str
+    icon_image: Optional[str] = None
+    sort_order: int
+    skills: List[TreeNodeSkillRead] = []
+
+    class Config:
+        orm_mode = True
+
+
+# --- Full Tree ---
+
+class FullClassTreeResponse(BaseModel):
+    id: int
+    class_id: int
+    name: str
+    description: Optional[str] = None
+    tree_type: str
+    parent_tree_id: Optional[int] = None
+    subclass_name: Optional[str] = None
+    tree_image: Optional[str] = None
+    nodes: List[TreeNodeInTreeResponse] = []
+    connections: List[TreeNodeConnectionInTree] = []
+
+    class Config:
+        orm_mode = True
+
+
+class FullClassTreeUpdateRequest(BaseModel):
+    id: int
+    class_id: int
+    name: str
+    description: Optional[str] = None
+    tree_type: str = "class"
+    parent_tree_id: Optional[int] = None
+    subclass_name: Optional[str] = None
+    tree_image: Optional[str] = None
+    nodes: List[TreeNodeInTree] = []
+    connections: List[TreeNodeConnectionInTree] = []

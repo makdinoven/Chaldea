@@ -1,5 +1,6 @@
 from sqlalchemy.orm import relationship, Mapped, mapped_column
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Float, TIMESTAMP, UniqueConstraint
+from sqlalchemy.sql import func
 from database import Base
 
 class Skill(Base):
@@ -137,3 +138,116 @@ class CharacterSkill(Base):
 
     # Для логики "один ранг" или "несколько" — зависит от геймдизайна
     skill_rank = relationship("SkillRank")
+
+
+# ====================================================================
+# Class Skill Tree models (FEAT-056)
+# ====================================================================
+
+class ClassSkillTree(Base):
+    """
+    Дерево навыков класса или подкласса.
+    tree_type='class' — основное дерево класса (кольца 1-30).
+    tree_type='subclass' — дерево подкласса (кольца 30-50).
+    """
+    __tablename__ = "class_skill_trees"
+    __table_args__ = (
+        UniqueConstraint("class_id", "tree_type", "subclass_name", name="uq_class_tree_type_subclass"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    tree_type: Mapped[str] = mapped_column(String(20), nullable=False, default="class")
+    parent_tree_id: Mapped[int] = mapped_column(ForeignKey("class_skill_trees.id"), nullable=True)
+    subclass_name: Mapped[str] = mapped_column(String(100), nullable=True)
+    tree_image: Mapped[str] = mapped_column(Text, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    nodes = relationship("TreeNode", back_populates="tree", cascade="all, delete-orphan")
+    connections = relationship("TreeNodeConnection", back_populates="tree", cascade="all, delete-orphan")
+    parent_tree = relationship("ClassSkillTree", remote_side=[id], foreign_keys=[parent_tree_id])
+
+
+class TreeNode(Base):
+    """
+    Узел дерева навыков класса/подкласса.
+    level_ring — уровень кольца (1, 5, 10, 15, 20, 25, 30 для класса; 30-50 для подкласса).
+    node_type — 'regular', 'root', 'subclass_choice'.
+    """
+    __tablename__ = "tree_nodes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    tree_id: Mapped[int] = mapped_column(ForeignKey("class_skill_trees.id"), nullable=False)
+    level_ring: Mapped[int] = mapped_column(Integer, nullable=False)
+    position_x: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    position_y: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    node_type: Mapped[str] = mapped_column(String(20), nullable=False, default="regular")
+    icon_image: Mapped[str] = mapped_column(Text, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Relationships
+    tree = relationship("ClassSkillTree", back_populates="nodes")
+    node_skills = relationship("TreeNodeSkill", back_populates="node", cascade="all, delete-orphan")
+
+
+class TreeNodeConnection(Base):
+    """
+    Связь между узлами дерева навыков (ребро графа).
+    from_node (нижнее кольцо) -> to_node (верхнее кольцо).
+    """
+    __tablename__ = "tree_node_connections"
+    __table_args__ = (
+        UniqueConstraint("from_node_id", "to_node_id", name="uq_connection_from_to"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    tree_id: Mapped[int] = mapped_column(ForeignKey("class_skill_trees.id"), nullable=False)
+    from_node_id: Mapped[int] = mapped_column(ForeignKey("tree_nodes.id"), nullable=False)
+    to_node_id: Mapped[int] = mapped_column(ForeignKey("tree_nodes.id"), nullable=False)
+
+    # Relationships
+    tree = relationship("ClassSkillTree", back_populates="connections")
+    from_node = relationship("TreeNode", foreign_keys=[from_node_id])
+    to_node = relationship("TreeNode", foreign_keys=[to_node_id])
+
+
+class TreeNodeSkill(Base):
+    """
+    Привязка навыка к узлу дерева. Один навык может быть в нескольких узлах разных деревьев.
+    """
+    __tablename__ = "tree_node_skills"
+    __table_args__ = (
+        UniqueConstraint("node_id", "skill_id", name="uq_node_skill"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    node_id: Mapped[int] = mapped_column(ForeignKey("tree_nodes.id"), nullable=False)
+    skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Relationships
+    node = relationship("TreeNode", back_populates="node_skills")
+    skill = relationship("Skill")
+
+
+class CharacterTreeProgress(Base):
+    """
+    Прогресс персонажа по дереву навыков — какие узлы выбраны.
+    Таблица создаётся сейчас для полноты схемы, активно используется в будущих PR.
+    """
+    __tablename__ = "character_tree_progress"
+    __table_args__ = (
+        UniqueConstraint("character_id", "node_id", name="uq_character_node"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    character_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    tree_id: Mapped[int] = mapped_column(ForeignKey("class_skill_trees.id"), nullable=False)
+    node_id: Mapped[int] = mapped_column(ForeignKey("tree_nodes.id"), nullable=False)
+    chosen_at = Column(TIMESTAMP, server_default=func.now())

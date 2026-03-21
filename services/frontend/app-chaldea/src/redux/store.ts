@@ -18,6 +18,7 @@ import worldMapReducer from './slices/worldMapSlice';
 import racesReducer from './slices/racesSlice';
 import chatReducer from './slices/chatSlice';
 import gameTimeReducer from './slices/gameTimeSlice';
+import classTreeAdminReducer from './slices/classTreeAdminSlice';
 
 export const store = configureStore({
   reducer: {
@@ -39,6 +40,7 @@ export const store = configureStore({
     races: racesReducer,
     chat: chatReducer,
     gameTime: gameTimeReducer,
+    classTreeAdmin: classTreeAdminReducer,
   },
 });
 

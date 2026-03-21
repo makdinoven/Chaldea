@@ -30,6 +30,7 @@ import OnlineUsersPage from "../pages/OnlineUsersPage/OnlineUsersPage";
 import ProtectedRoute from "../CommonComponents/ProtectedRoute/ProtectedRoute";
 import ChatHistoryPage from "../Chat/ChatHistoryPage";
 import GameTimeAdminPage from "../Admin/GameTimeAdminPage";
+import AdminClassTreePage from "../AdminClassTreeEditor/AdminClassTreePage";
 
 const App = () => {
   const dispatch = useAppDispatch();
@@ -84,6 +85,11 @@ const App = () => {
             <Route path="home/admin/skills" element={
               <ProtectedRoute requiredPermission="skills:read">
                 <AdminSkillsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="home/admin/class-trees" element={
+              <ProtectedRoute requiredPermission="skill_trees:read">
+                <AdminClassTreePage />
               </ProtectedRoute>
             } />
             <Route path="admin/items" element={

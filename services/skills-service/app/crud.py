@@ -317,6 +317,358 @@ async def sync_effects(db: AsyncSession, rank_obj: models.SkillRank, new_effect_
             await db.delete(old_obj)
 
 
+# ====================================================================
+# CRUD: Class Skill Tree (FEAT-056)
+# ====================================================================
+
+async def create_class_tree(db: AsyncSession, data: schemas.ClassSkillTreeCreate) -> models.ClassSkillTree:
+    tree = models.ClassSkillTree(**data.dict())
+    db.add(tree)
+    await db.commit()
+    await db.refresh(tree)
+    return tree
+
+
+async def get_class_tree(db: AsyncSession, tree_id: int) -> models.ClassSkillTree | None:
+    stmt = (
+        select(models.ClassSkillTree)
+        .options(
+            selectinload(models.ClassSkillTree.nodes)
+                .selectinload(models.TreeNode.node_skills),
+            selectinload(models.ClassSkillTree.connections),
+        )
+        .where(models.ClassSkillTree.id == tree_id)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def list_class_trees(
+    db: AsyncSession,
+    class_id: int | None = None,
+    tree_type: str | None = None,
+) -> list[models.ClassSkillTree]:
+    stmt = select(models.ClassSkillTree)
+    if class_id is not None:
+        stmt = stmt.where(models.ClassSkillTree.class_id == class_id)
+    if tree_type is not None:
+        stmt = stmt.where(models.ClassSkillTree.tree_type == tree_type)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def delete_class_tree(db: AsyncSession, tree_id: int) -> bool:
+    tree = await get_class_tree(db, tree_id)
+    if not tree:
+        return False
+    await db.delete(tree)
+    await db.commit()
+    return True
+
+
+async def get_full_class_tree(db: AsyncSession, tree_id: int) -> dict | None:
+    """Load tree with all nested data and build the full response dict with denormalized skill info."""
+    stmt = (
+        select(models.ClassSkillTree)
+        .options(
+            selectinload(models.ClassSkillTree.nodes)
+                .selectinload(models.TreeNode.node_skills)
+                .selectinload(models.TreeNodeSkill.skill),
+            selectinload(models.ClassSkillTree.connections),
+        )
+        .where(models.ClassSkillTree.id == tree_id)
+    )
+    result = await db.execute(stmt)
+    tree = result.scalar_one_or_none()
+    if not tree:
+        return None
+
+    nodes_data = []
+    for node in tree.nodes:
+        skills_data = []
+        for ns in node.node_skills:
+            skill_obj = ns.skill
+            skills_data.append({
+                "id": ns.id,
+                "skill_id": ns.skill_id,
+                "sort_order": ns.sort_order,
+                "skill_name": skill_obj.name if skill_obj else None,
+                "skill_type": skill_obj.skill_type if skill_obj else None,
+                "skill_image": skill_obj.skill_image if skill_obj else None,
+            })
+        nodes_data.append({
+            "id": node.id,
+            "tree_id": node.tree_id,
+            "level_ring": node.level_ring,
+            "position_x": node.position_x,
+            "position_y": node.position_y,
+            "name": node.name,
+            "description": node.description,
+            "node_type": node.node_type,
+            "icon_image": node.icon_image,
+            "sort_order": node.sort_order,
+            "skills": skills_data,
+        })
+
+    connections_data = []
+    for conn in tree.connections:
+        connections_data.append({
+            "id": conn.id,
+            "from_node_id": conn.from_node_id,
+            "to_node_id": conn.to_node_id,
+        })
+
+    return {
+        "id": tree.id,
+        "class_id": tree.class_id,
+        "name": tree.name,
+        "description": tree.description,
+        "tree_type": tree.tree_type,
+        "parent_tree_id": tree.parent_tree_id,
+        "subclass_name": tree.subclass_name,
+        "tree_image": tree.tree_image,
+        "nodes": nodes_data,
+        "connections": connections_data,
+    }
+
+
+async def save_full_class_tree(
+    db: AsyncSession,
+    tree_id: int,
+    data: schemas.FullClassTreeUpdateRequest,
+) -> dict:
+    """
+    Bulk save the entire class tree: nodes, connections, skill assignments.
+    Follows the same temp-ID pattern as update_skill_full_tree.
+    Returns {"detail": ..., "temp_id_map": {...}}.
+    """
+    # 1. Load existing tree
+    stmt = (
+        select(models.ClassSkillTree)
+        .options(
+            selectinload(models.ClassSkillTree.nodes)
+                .selectinload(models.TreeNode.node_skills),
+            selectinload(models.ClassSkillTree.connections),
+        )
+        .where(models.ClassSkillTree.id == tree_id)
+    )
+    result = await db.execute(stmt)
+    tree = result.scalar_one_or_none()
+    if not tree:
+        raise HTTPException(status_code=404, detail="Class tree not found")
+
+    # 2. Update tree metadata
+    tree.class_id = data.class_id
+    tree.name = data.name
+    tree.description = data.description
+    tree.tree_type = data.tree_type
+    tree.parent_tree_id = data.parent_tree_id
+    tree.subclass_name = data.subclass_name
+    tree.tree_image = data.tree_image
+
+    # 3. Build old nodes map
+    old_nodes_map = {n.id: n for n in tree.nodes}
+    old_connections_map = {c.id: c for c in tree.connections}
+
+    # 4. Separate new and existing nodes
+    new_nodes_data = []
+    existing_nodes_data = []
+    for node_data in data.nodes:
+        if isinstance(node_data.id, str) and node_data.id.startswith("temp-"):
+            new_nodes_data.append(node_data)
+        elif isinstance(node_data.id, int):
+            existing_nodes_data.append(node_data)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="New nodes must have a temporary ID starting with 'temp-'"
+            )
+
+    temp_id_map = {}  # temp string ID -> real int ID
+
+    # 5. Create new nodes
+    new_node_objects = {}
+    for node_data in new_nodes_data:
+        new_node = models.TreeNode(
+            tree_id=tree_id,
+            level_ring=node_data.level_ring,
+            position_x=node_data.position_x,
+            position_y=node_data.position_y,
+            name=node_data.name,
+            description=node_data.description,
+            node_type=node_data.node_type,
+            icon_image=node_data.icon_image,
+            sort_order=node_data.sort_order,
+        )
+        db.add(new_node)
+        await db.flush()
+        temp_id_map[node_data.id] = new_node.id
+        new_node_objects[new_node.id] = new_node
+
+    # 6. Update existing nodes
+    existing_ids = []
+    for node_data in existing_nodes_data:
+        if node_data.id not in old_nodes_map:
+            raise HTTPException(status_code=400, detail=f"Node {node_data.id} not found in tree")
+        node_obj = old_nodes_map[node_data.id]
+        node_obj.level_ring = node_data.level_ring
+        node_obj.position_x = node_data.position_x
+        node_obj.position_y = node_data.position_y
+        node_obj.name = node_data.name
+        node_obj.description = node_data.description
+        node_obj.node_type = node_data.node_type
+        node_obj.icon_image = node_data.icon_image
+        node_obj.sort_order = node_data.sort_order
+        existing_ids.append(node_data.id)
+
+    # 7. Delete removed nodes (not in request)
+    wanted_node_ids = set(existing_ids) | set(temp_id_map.values())
+    for old_id, old_node in old_nodes_map.items():
+        if old_id not in wanted_node_ids:
+            await db.delete(old_node)
+
+    # 8. Sync node_skills for each node
+    all_nodes_map = {**old_nodes_map, **new_node_objects}
+    for node_data in data.nodes:
+        if isinstance(node_data.id, str):
+            real_node_id = temp_id_map.get(node_data.id)
+        else:
+            real_node_id = node_data.id
+        if not real_node_id or real_node_id not in all_nodes_map:
+            continue
+        node_obj = all_nodes_map[real_node_id]
+
+        # Build set of desired (skill_id, sort_order) pairs
+        desired_skills = {(s.skill_id, s.sort_order) for s in node_data.skills}
+        desired_skill_ids = {s.skill_id for s in node_data.skills}
+
+        # Remove skills no longer in the list
+        existing_node_skills = list(node_obj.node_skills) if node_obj.node_skills else []
+        for ns in existing_node_skills:
+            if ns.skill_id not in desired_skill_ids:
+                await db.delete(ns)
+            else:
+                # Update sort_order for existing skill assignments
+                for s in node_data.skills:
+                    if s.skill_id == ns.skill_id:
+                        ns.sort_order = s.sort_order
+                        break
+
+        # Add new skill assignments
+        existing_skill_ids = {ns.skill_id for ns in existing_node_skills}
+        for s in node_data.skills:
+            if s.skill_id not in existing_skill_ids:
+                new_ns = models.TreeNodeSkill(
+                    node_id=real_node_id,
+                    skill_id=s.skill_id,
+                    sort_order=s.sort_order,
+                )
+                db.add(new_ns)
+
+    # 9. Resolve connections
+    # Separate new and existing connections
+    new_conns_data = []
+    existing_conns_data = []
+    for conn_data in data.connections:
+        conn_id = conn_data.id
+        if conn_id is None or (isinstance(conn_id, str) and conn_id.startswith("temp-")):
+            new_conns_data.append(conn_data)
+        elif isinstance(conn_id, int):
+            existing_conns_data.append(conn_data)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="New connections must have a temporary ID starting with 'temp-' or be null"
+            )
+
+    def resolve_node_id(node_ref):
+        """Resolve a node ID reference (int or temp string) to a real int ID."""
+        if isinstance(node_ref, str):
+            resolved = temp_id_map.get(node_ref)
+            if resolved is None:
+                raise HTTPException(400, f"Temp node ID {node_ref} not found in temp_id_map")
+            return resolved
+        return node_ref
+
+    # Create new connections
+    for conn_data in new_conns_data:
+        from_id = resolve_node_id(conn_data.from_node_id)
+        to_id = resolve_node_id(conn_data.to_node_id)
+        new_conn = models.TreeNodeConnection(
+            tree_id=tree_id,
+            from_node_id=from_id,
+            to_node_id=to_id,
+        )
+        db.add(new_conn)
+        await db.flush()
+        if conn_data.id and isinstance(conn_data.id, str):
+            temp_id_map[conn_data.id] = new_conn.id
+
+    # Update existing connections
+    existing_conn_ids = []
+    for conn_data in existing_conns_data:
+        if conn_data.id not in old_connections_map:
+            raise HTTPException(status_code=400, detail=f"Connection {conn_data.id} not found in tree")
+        conn_obj = old_connections_map[conn_data.id]
+        conn_obj.from_node_id = resolve_node_id(conn_data.from_node_id)
+        conn_obj.to_node_id = resolve_node_id(conn_data.to_node_id)
+        existing_conn_ids.append(conn_data.id)
+
+    # Delete removed connections
+    wanted_conn_ids = set(existing_conn_ids)
+    # Also add the newly created connection IDs
+    for conn_data in new_conns_data:
+        if conn_data.id and isinstance(conn_data.id, str) and conn_data.id in temp_id_map:
+            wanted_conn_ids.add(temp_id_map[conn_data.id])
+    for old_id, old_conn in old_connections_map.items():
+        if old_id not in wanted_conn_ids:
+            await db.delete(old_conn)
+
+    # 10. Single commit
+    await db.commit()
+
+    return {"detail": "Class tree updated successfully", "temp_id_map": temp_id_map}
+
+
+# -----------------------
+# CRUD: TreeNode (individual operations)
+# -----------------------
+async def create_tree_node(db: AsyncSession, data: schemas.TreeNodeCreate) -> models.TreeNode:
+    node = models.TreeNode(**data.dict())
+    db.add(node)
+    await db.commit()
+    await db.refresh(node)
+    return node
+
+
+async def update_tree_node(db: AsyncSession, node_id: int, data: schemas.TreeNodeBase) -> models.TreeNode | None:
+    stmt = select(models.TreeNode).where(models.TreeNode.id == node_id)
+    result = await db.execute(stmt)
+    node = result.scalar_one_or_none()
+    if not node:
+        return None
+    for field, value in data.dict(exclude_unset=True).items():
+        setattr(node, field, value)
+    await db.commit()
+    await db.refresh(node)
+    return node
+
+
+async def delete_tree_node(db: AsyncSession, node_id: int) -> bool:
+    stmt = (
+        select(models.TreeNode)
+        .options(selectinload(models.TreeNode.node_skills))
+        .where(models.TreeNode.id == node_id)
+    )
+    result = await db.execute(stmt)
+    node = result.scalar_one_or_none()
+    if not node:
+        return False
+    await db.delete(node)
+    await db.commit()
+    return True
+
+
 async def build_conflicts_for_skill(db: AsyncSession, skill_id: int) -> set[tuple[int,int]]:
     """
     Собирает все пары конфликтующих rank_id (x,y),
