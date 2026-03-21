@@ -83,10 +83,11 @@ const AdminNpcsPage = () => {
     setLoading(true);
     try {
       const params: Record<string, string> = {};
-      if (debouncedQuery) params.search = debouncedQuery;
+      if (debouncedQuery) params.q = debouncedQuery;
       if (roleFilter) params.npc_role = roleFilter;
-      const res = await axios.get<NpcListItem[]>(`${BASE_URL}/characters/admin/npcs`, { params });
-      setNpcs(res.data);
+      const res = await axios.get(`${BASE_URL}/characters/admin/npcs`, { params });
+      const data = res.data;
+      setNpcs(Array.isArray(data) ? data : (data.items ?? []));
     } catch {
       toast.error('Не удалось загрузить список НПС');
     } finally {
@@ -100,7 +101,7 @@ const AdminNpcsPage = () => {
 
   const fetchLocations = useCallback(async () => {
     try {
-      const res = await axios.get<LocationOption[]>(`${BASE_URL}/locations/admin/locations-list`);
+      const res = await axios.get<LocationOption[]>(`${BASE_URL}/locations/locations/lookup`);
       setLocations(res.data);
     } catch {
       // Locations list not critical, silently fail
