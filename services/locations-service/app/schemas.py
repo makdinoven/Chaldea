@@ -276,6 +276,9 @@ class PostResponse(BaseModel):
     class Config:
         orm_mode = True
 
+class PostLikeRequest(BaseModel):
+    character_id: int
+
 
 # -------------------------------
 #   LOOKUP SCHEMAS
@@ -435,6 +438,7 @@ class NeighborClient(BaseModel):
     energy_cost: int
 
 class ClientPost(BaseModel):
+    post_id: int
     character_id: int
     character_photo: str
     character_title: str
@@ -443,6 +447,9 @@ class ClientPost(BaseModel):
     user_nickname: str
     content: str
     length: int
+    created_at: datetime
+    likes_count: int = 0
+    liked_by: List[int] = []
 
 class LocationClientDetails(BaseModel):
     id: int

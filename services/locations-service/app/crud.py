@@ -3,13 +3,14 @@ import httpx
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import List, Optional
+from typing import List, Optional, Dict
 from sqlalchemy.orm import selectinload
-from sqlalchemy import text, delete
+from sqlalchemy import text, delete, func as sa_func
+from sqlalchemy.exc import IntegrityError
 from config import settings
 import models
 from models import (
-    Country, Region, District, Location, LocationNeighbor, Post, GameRule,
+    Country, Region, District, Location, LocationNeighbor, Post, PostLike, GameRule,
     Area, ClickableZone, GameTimeConfig
 )
 from schemas import (
@@ -636,6 +637,61 @@ async def get_posts_by_location(session: AsyncSession, location_id: int) -> list
     result = await session.execute(select(Post).where(Post.location_id == location_id).order_by(Post.id.desc()))
     return result.scalars().all()
 
+
+async def like_post(session: AsyncSession, post_id: int, character_id: int) -> PostLike:
+    """Add a like to a post. Raises 404 if post not found, 409 if already liked."""
+    # Verify the post exists
+    result = await session.execute(select(Post).where(Post.id == post_id))
+    if not result.scalars().first():
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    new_like = PostLike(post_id=post_id, character_id=character_id)
+    session.add(new_like)
+    try:
+        await session.commit()
+        await session.refresh(new_like)
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Post already liked by this character")
+    return new_like
+
+
+async def unlike_post(session: AsyncSession, post_id: int, character_id: int) -> None:
+    """Remove a like from a post. Raises 404 if like not found."""
+    result = await session.execute(
+        select(PostLike).where(
+            PostLike.post_id == post_id,
+            PostLike.character_id == character_id
+        )
+    )
+    like = result.scalars().first()
+    if not like:
+        raise HTTPException(status_code=404, detail="Like not found")
+    await session.delete(like)
+    await session.commit()
+
+
+async def get_likes_for_posts(session: AsyncSession, post_ids: List[int]) -> Dict[int, dict]:
+    """Batch-fetch likes for a list of post IDs.
+    Returns: {post_id: {"likes_count": int, "liked_by": [character_id, ...]}}
+    """
+    if not post_ids:
+        return {}
+
+    result = await session.execute(
+        select(PostLike).where(PostLike.post_id.in_(post_ids))
+    )
+    likes = result.scalars().all()
+
+    likes_map: Dict[int, dict] = {pid: {"likes_count": 0, "liked_by": []} for pid in post_ids}
+    for like in likes:
+        if like.post_id in likes_map:
+            likes_map[like.post_id]["likes_count"] += 1
+            likes_map[like.post_id]["liked_by"].append(like.character_id)
+
+    return likes_map
+
+
 async def get_admin_panel_data(session: AsyncSession) -> dict:
     """
     Получает все данные для админ панели одним запросом
@@ -1056,6 +1112,14 @@ async def get_client_location_details(session: AsyncSession, location_id: int) -
         detailed_post = await get_post_details(post)
         detailed_posts.append(detailed_post)
 
+    # 5. Batch-fetch likes for all posts
+    post_ids = [p["post_id"] for p in detailed_posts]
+    likes_map = await get_likes_for_posts(session, post_ids)
+    for post_dict in detailed_posts:
+        pid = post_dict["post_id"]
+        post_dict["likes_count"] = likes_map.get(pid, {}).get("likes_count", 0)
+        post_dict["liked_by"] = likes_map.get(pid, {}).get("liked_by", [])
+
     return {
         "id": loc.id,
         "name": loc.name,
@@ -1100,6 +1164,7 @@ async def get_post_details(post: Post) -> dict:
                 "character_name": ""
             }
     return {
+        "post_id": post.id,
         "character_id": post.character_id,
         "character_photo": profile_data.get("character_photo", ""),
         "character_title": profile_data.get("character_title", ""),
@@ -1107,7 +1172,8 @@ async def get_post_details(post: Post) -> dict:
         "user_nickname": profile_data.get("user_nickname", ""),
         "character_name": profile_data.get("character_name", ""),
         "content": post.content,
-        "length": len(post.content)
+        "length": len(post.content),
+        "created_at": post.created_at,
     }
 
 async def get_players_in_location(location_id: int) -> List[dict]:

@@ -446,6 +446,33 @@ async def create_new_post(post_data: schemas.PostCreate, session: AsyncSession =
 async def get_posts_in_location(location_id: int, session: AsyncSession = Depends(get_db)):
     return await crud.get_posts_by_location(session, location_id)
 
+
+@router.post("/posts/{post_id}/like", status_code=201)
+async def like_post(
+    post_id: int,
+    body: schemas.PostLikeRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Add a like to a post. Requires character ownership."""
+    await verify_character_ownership(session, body.character_id, current_user.id)
+    like = await crud.like_post(session, post_id, body.character_id)
+    return {"status": "liked", "post_id": post_id, "character_id": body.character_id}
+
+
+@router.delete("/posts/{post_id}/like", status_code=200)
+async def unlike_post(
+    post_id: int,
+    character_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Remove a like from a post. Requires character ownership."""
+    await verify_character_ownership(session, character_id, current_user.id)
+    await crud.unlike_post(session, post_id, character_id)
+    return {"status": "unliked", "post_id": post_id, "character_id": character_id}
+
+
 @router.get("/admin/data", response_model=schemas.AdminPanelData)
 async def get_admin_panel_data_route(session: AsyncSession = Depends(get_db), current_user=Depends(require_permission("locations:read"))):
     """

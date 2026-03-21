@@ -1,297 +1,275 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useEffect, useState, useCallback } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { BASE_URL, BASE_URL_BATTLES } from '../../../api/api';
 import axios from 'axios';
+import { BASE_URL } from '../../../api/api';
 import { useBodyBackground } from '../../../hooks/useBodyBackground';
-import Textarea from '../../CommonComponents/Textarea/Textarea';
-import BlueGradientButton from '../../CommonComponents/BlueGradientButton/BlueGradientButton';
-import PlayerCard from '../../CommonComponents/PlayerCard/PlayerCard';
-import NeighborCard from '../../CommonComponents/NeighborCard/NeighborCard';
-import Loader from '../../CommonComponents/Loader/Loader';
-import { useSelector } from 'react-redux';
-import BackButton from '../../CommonComponents/BackButton/BackButton';
-
-const DEFAULT_TAB = 'players';
-
-interface Player {
-  character_name: string;
-  character_title: string;
-  character_photo: string;
-  character_id: number;
-}
-
-interface NeighborLocation {
-  name: string;
-  energy_cost: number;
-  image_url: string;
-  neighbor_id: number;
-}
-
-interface Post {
-  character_name: string;
-  character_title: string;
-  character_photo: string;
-  character_id: number;
-  user_nickname: string;
-  content: string;
-  length: number;
-}
-
-interface LocationData {
-  name: string;
-  description: string;
-  image_url: string | null;
-  recommended_level: number;
-  players: Player[];
-  neighbors: NeighborLocation[];
-  posts: Post[];
-}
-
-interface UserState {
-  character: { id: number; current_location?: number } | null;
-  username: string;
-}
-
-interface RootState {
-  user: UserState;
-}
+import { useAppSelector } from '../../../redux/store';
+import { LocationData } from './types';
+import LocationHeader from './LocationHeader';
+import PlayersSection from './PlayersSection';
+import PostCard from './PostCard';
+import PostCreateForm from './PostCreateForm';
+import NeighborsSection from './NeighborsSection';
+import PlaceholderSection from './PlaceholderSection';
 
 const LocationPage = () => {
   const navigate = useNavigate();
   const { locationId } = useParams<{ locationId: string }>();
   const [location, setLocation] = useState<LocationData | null>(null);
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [currentTab, setCurrentTab] = useState(
-    searchParams.get('tab') || DEFAULT_TAB
-  );
-  const [loading, setLoading] = useState(false);
-  const [textareaValue, setTextareaValue] = useState('');
-  const { character, username } = useSelector(
-    (state: RootState) => state.user
-  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const character = useAppSelector((state) => state.user.character);
 
   useBodyBackground(location?.image_url);
 
-  useEffect(() => {
-    if (locationId) {
-      fetchLocationData();
+  const fetchLocationData = useCallback(async () => {
+    if (!locationId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await axios.get<LocationData>(
+        `${BASE_URL}/locations/${locationId}/client/details`
+      );
+      setLocation(res.data);
+    } catch (err) {
+      const message =
+        axios.isAxiosError(err) && err.response?.status === 404
+          ? 'Локация не найдена'
+          : 'Не удалось загрузить данные локации';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setLoading(false);
     }
   }, [locationId]);
 
   useEffect(() => {
-    const tab = searchParams.get('tab');
-    setCurrentTab(tab || DEFAULT_TAB);
-  }, [searchParams]);
+    fetchLocationData();
+  }, [fetchLocationData]);
 
-  const handleTabChange = (tab: string) => {
-    setCurrentTab(tab);
-    setSearchParams({ tab });
-  };
+  // --- Like handlers (optimistic) ---
 
-  const fetchLocationData = async () => {
-    setLoading(true);
-    const res = await axios.get(
-      `${BASE_URL}/locations/${locationId}/client/details`
+  const handleLike = useCallback(
+    async (postId: number) => {
+      if (!character?.id) return;
+
+      // Optimistic update
+      setLocation((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          posts: prev.posts.map((p) =>
+            p.post_id === postId
+              ? {
+                  ...p,
+                  likes_count: p.likes_count + 1,
+                  liked_by: [...p.liked_by, character.id],
+                }
+              : p
+          ),
+        };
+      });
+
+      try {
+        await axios.post(`${BASE_URL}/locations/posts/${postId}/like`, {
+          character_id: character.id,
+        });
+      } catch {
+        // Revert on error
+        setLocation((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            posts: prev.posts.map((p) =>
+              p.post_id === postId
+                ? {
+                    ...p,
+                    likes_count: Math.max(0, p.likes_count - 1),
+                    liked_by: p.liked_by.filter((id) => id !== character.id),
+                  }
+                : p
+            ),
+          };
+        });
+        toast.error('Не удалось поставить лайк');
+      }
+    },
+    [character?.id]
+  );
+
+  const handleUnlike = useCallback(
+    async (postId: number) => {
+      if (!character?.id) return;
+
+      // Optimistic update
+      setLocation((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          posts: prev.posts.map((p) =>
+            p.post_id === postId
+              ? {
+                  ...p,
+                  likes_count: Math.max(0, p.likes_count - 1),
+                  liked_by: p.liked_by.filter((id) => id !== character.id),
+                }
+              : p
+          ),
+        };
+      });
+
+      try {
+        await axios.delete(
+          `${BASE_URL}/locations/posts/${postId}/like?character_id=${character.id}`
+        );
+      } catch {
+        // Revert on error
+        setLocation((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            posts: prev.posts.map((p) =>
+              p.post_id === postId
+                ? {
+                    ...p,
+                    likes_count: p.likes_count + 1,
+                    liked_by: [...p.liked_by, character.id],
+                  }
+                : p
+            ),
+          };
+        });
+        toast.error('Не удалось убрать лайк');
+      }
+    },
+    [character?.id]
+  );
+
+  // --- Post submit ---
+
+  const handleSubmitPost = useCallback(
+    async (content: string) => {
+      try {
+        await axios.post(`${BASE_URL}/locations/${locationId}/move_and_post`, {
+          character_id: character?.id,
+          location_id: locationId,
+          content,
+        });
+        toast.success('Пост отправлен');
+        await fetchLocationData();
+      } catch {
+        toast.error('Не удалось отправить пост');
+      }
+    },
+    [locationId, character?.id, fetchLocationData]
+  );
+
+  // --- Loading state ---
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="w-10 h-10 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
+      </div>
     );
-    setLocation(res.data);
-    setLoading(false);
-  };
+  }
 
-  const handleSubmitPost = async () => {
-    try {
-      await axios.post(`${BASE_URL}/locations/${locationId}/move_and_post`, {
-        character_id: character?.id,
-        location_id: locationId,
-        content: textareaValue,
-      });
-      toast.success('Пост отправлен');
-      fetchLocationData();
-      setTextareaValue('');
-    } catch (error) {
-      toast.error('Не удалось отправить пост');
-      console.log(error);
-    }
-  };
+  // --- Error state ---
+  if (error || !location) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <p className="text-white/60 text-lg">{error || 'Локация не найдена'}</p>
+        <button
+          onClick={() => navigate(-1)}
+          className="btn-blue text-sm px-6 py-2"
+        >
+          Назад
+        </button>
+      </div>
+    );
+  }
 
-  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const { value } = e.target;
-    setTextareaValue(value);
-  };
-
-  const handleClickCallengeToFightBtn = (opponentId: number) => {
-    createBattle(opponentId);
-  };
-
-  const createBattle = async (opponentId: number) => {
-    try {
-      const res = await axios.post(`${BASE_URL_BATTLES}/battles/`, {
-        players: [
-          { character_id: opponentId },
-          { character_id: character?.id },
-        ],
-      });
-      navigate(`battle/${res.data.battle_id}`);
-      toast.success('Битва началась!');
-    } catch (error) {
-      toast.error('Не удалось начать битву');
-      console.log(error);
-    }
-  };
-
-  const renderTab = () => {
-    if (!location) return null;
-    switch (currentTab) {
-      case 'players':
-        return (
-          <div className="grid grid-cols-[repeat(5,188px)] gap-5">
-            {location.players.map((player, index) => (
-              <PlayerCard
-                name={player.character_name}
-                price={player.character_title}
-                img={player.character_photo}
-                key={index}
-              />
-            ))}
-          </div>
-        );
-      case 'locations':
-        return (
-          <div className="grid grid-cols-[repeat(5,179px)] gap-5">
-            {location.neighbors.map((neighbor, index) => (
-              <NeighborCard
-                name={neighbor.name}
-                price={neighbor.energy_cost}
-                img={neighbor.image_url}
-                key={index}
-                link={`/location/${neighbor.neighbor_id}`}
-              />
-            ))}
-          </div>
-        );
-      default:
-        return null;
-    }
-  };
+  const isCharacterHere = character?.current_location?.id === location.id;
 
   return (
-    location && (
-      <div>
-        <BackButton />
-        {loading ? (
-          <Loader />
+    <div className="flex flex-col gap-6 sm:gap-8 pb-10">
+      {/* Back button */}
+      <button
+        onClick={() => navigate(-1)}
+        className="self-start flex items-center gap-2 text-white/60 hover:text-white transition-colors text-sm"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+        Назад
+      </button>
+
+      {/* Header */}
+      <LocationHeader location={location} />
+
+      <div className="gradient-divider-h relative pb-2" />
+
+      {/* Players */}
+      <section className="bg-black/30 rounded-card p-4 sm:p-6">
+        <PlayersSection players={location.players} />
+      </section>
+
+      <div className="gradient-divider-h relative pb-2" />
+
+      {/* Posts */}
+      <section className="bg-black/30 rounded-card p-4 sm:p-6 flex flex-col gap-4">
+        <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
+          Посты
+        </h2>
+
+        {/* Create form — shown if character exists */}
+        {character && (
+          <PostCreateForm
+            onSubmit={handleSubmitPost}
+            disabled={!isCharacterHere && !character}
+          />
+        )}
+
+        {location.posts.length === 0 ? (
+          <p className="text-white/50 text-sm">Пока нет постов</p>
         ) : (
-          <div className="flex flex-col gap-[60px]">
-            <div className="rounded-[15px] bg-[var(--gray-background)] flex gap-[65px] p-[35px] text-white w-full">
-              <div className="flex justify-center min-w-[160px] w-[160px]">
-                <div className="flex flex-col items-center gap-[30px]">
-                  <div
-                    className="relative min-w-[120px] w-[120px] h-[120px] m-1.5 bg-[#3d3d3d] rounded-full bg-center bg-no-repeat bg-cover gold-outline"
-                    style={{
-                      backgroundImage: `url('${location?.image_url ?? ''}')`,
-                    }}
-                  />
-                  <span className="text-base uppercase bg-gradient-to-b from-[#fff9b8] to-[#bcab4c] bg-clip-text text-transparent">
-                    {location.recommended_level}+ LVL
-                  </span>
-                  <div className="flex flex-col flex-1">
-                    <button
-                      className={`relative text-white font-medium text-xl py-[15px] hover:bg-gradient-to-b hover:from-[#fff9b8] hover:to-[#bcab4c] hover:bg-clip-text hover:text-transparent ${
-                        currentTab === 'players'
-                          ? 'uppercase bg-gradient-to-b from-[#fff9b8] to-[#bcab4c] bg-clip-text text-transparent'
-                          : ''
-                      }`}
-                      onClick={() => handleTabChange('players')}
-                    >
-                      Игроки
-                    </button>
-                    <button
-                      className={`relative text-white font-medium text-xl py-[15px] hover:bg-gradient-to-b hover:from-[#fff9b8] hover:to-[#bcab4c] hover:bg-clip-text hover:text-transparent ${
-                        currentTab === 'locations'
-                          ? 'uppercase bg-gradient-to-b from-[#fff9b8] to-[#bcab4c] bg-clip-text text-transparent'
-                          : ''
-                      }`}
-                      onClick={() => handleTabChange('locations')}
-                    >
-                      Переходы
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <div className="flex flex-col gap-5">
-                <h1 className="uppercase text-2xl bg-gradient-to-b from-[#fff9b8] to-[#bcab4c] bg-clip-text text-transparent">
-                  {location.name}
-                </h1>
-                <p className="text-lg">{location.description}</p>
-                {renderTab()}
-              </div>
-            </div>
-
-            <div className="p-[35px] flex flex-col gap-[30px] rounded-[15px] bg-[var(--gray-background)]">
-              <Textarea
-                value={textareaValue}
-                onChange={handleTextareaChange}
-                text="Введите текст..."
-                name="post"
-                id="post"
-                cols="30"
-                rows="10"
+          <div className="flex flex-col gap-3">
+            {location.posts.map((post) => (
+              <PostCard
+                key={post.post_id}
+                post={post}
+                currentCharacterId={character?.id ?? null}
+                onLike={handleLike}
+                onUnlike={handleUnlike}
               />
-              <BlueGradientButton
-                onClick={handleSubmitPost}
-                text="Отправить"
-              />
-            </div>
-
-            {location.posts &&
-              location.posts.map((post, index) => (
-                <div className="flex gap-5" key={index}>
-                  <div className="min-w-[440px] w-[440px] p-10 flex flex-col gap-5 items-center rounded-[15px] bg-[var(--gray-background)] max-h-[428px]">
-                    <div className="w-full flex gap-5">
-                      <div className="flex flex-col items-center gap-5">
-                        <PlayerCard
-                          name={post.character_name}
-                          title={post.character_title}
-                          img={post.character_photo}
-                          key={index}
-                        />
-                      </div>
-
-                      {post.user_nickname !== username && (
-                        <div className="flex flex-col flex-1">
-                          <button className="relative text-white font-medium text-xl py-[15px]">
-                            Пожаловаться
-                          </button>
-                          <button className="relative text-white font-medium text-xl py-[15px]">
-                            Уведомить
-                          </button>
-                          <button className="relative text-white font-medium text-xl py-[15px]">
-                            Написать
-                          </button>
-                          <button
-                            onClick={() =>
-                              handleClickCallengeToFightBtn(post.character_id)
-                            }
-                            className="relative text-white font-medium text-xl py-[15px]"
-                          >
-                            Вызвать на бой
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="rounded-[15px] bg-[var(--gray-background)] py-20 px-[60px] flex w-full flex-col justify-between text-white text-lg">
-                    <p>{post.content}</p>
-                    <div className="text-white text-xl">
-                      <span>Длина поста: {post.length}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
+            ))}
           </div>
         )}
+      </section>
+
+      <div className="gradient-divider-h relative pb-2" />
+
+      {/* Neighbors */}
+      <section className="bg-black/30 rounded-card p-4 sm:p-6">
+        <NeighborsSection neighbors={location.neighbors} />
+      </section>
+
+      <div className="gradient-divider-h relative pb-2" />
+
+      {/* Placeholder sections */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:gap-4">
+        <div className="flex-1">
+          <PlaceholderSection title="НПС" message="Скоро здесь появятся неигровые персонажи" />
+        </div>
+        <div className="flex-1">
+          <PlaceholderSection title="Враги" message="Скоро здесь появятся враги для сражений" />
+        </div>
+        <div className="flex-1">
+          <PlaceholderSection title="Бой на локации" message="Скоро здесь можно будет сражаться" />
+        </div>
       </div>
-    )
+    </div>
   );
 };
 
