@@ -1687,6 +1687,216 @@ async def sell_to_npc(
 
 
 # --------------------------------------------------------------------
+# QUESTS — Admin endpoints
+# --------------------------------------------------------------------
+@router.post("/admin/quests", response_model=schemas.QuestRead)
+async def create_quest(
+    body: schemas.QuestCreate,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """Create a new quest with objectives."""
+    data = body.dict()
+    # Convert objectives from Pydantic models to dicts
+    data["objectives"] = [obj.dict() for obj in body.objectives]
+    quest = await crud.create_quest(session, data)
+    return quest
+
+
+@router.get("/admin/quests", response_model=List[schemas.QuestListItem])
+async def list_quests_admin(
+    npc_id: Optional[int] = None,
+    quest_type: Optional[str] = None,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """List all quests with optional filters."""
+    return await crud.get_quests_admin(session, npc_id=npc_id, quest_type=quest_type)
+
+
+@router.get("/admin/quests/{quest_id}", response_model=schemas.QuestRead)
+async def get_quest_admin(
+    quest_id: int,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """Get quest details with objectives."""
+    quest = await crud.get_quest_by_id(session, quest_id)
+    if not quest:
+        raise HTTPException(status_code=404, detail="Квест не найден")
+    return quest
+
+
+@router.put("/admin/quests/{quest_id}", response_model=schemas.QuestRead)
+async def update_quest_admin(
+    quest_id: int,
+    body: schemas.QuestUpdate,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """Update a quest. If objectives are provided, they replace existing ones."""
+    data = body.dict(exclude_unset=True)
+    if "objectives" in data and data["objectives"] is not None:
+        data["objectives"] = [obj.dict() for obj in body.objectives]
+    updated = await crud.update_quest(session, quest_id, data)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Квест не найден")
+    return updated
+
+
+@router.delete("/admin/quests/{quest_id}")
+async def delete_quest_admin(
+    quest_id: int,
+    session: AsyncSession = Depends(get_db),
+    admin: UserRead = Depends(get_admin_user),
+):
+    """Delete a quest."""
+    deleted = await crud.delete_quest(session, quest_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Квест не найден")
+    return {"detail": "Квест удалён"}
+
+
+# --------------------------------------------------------------------
+# QUESTS — Player-facing endpoints
+# --------------------------------------------------------------------
+@router.get("/npcs/{npc_id}/quests", response_model=List[schemas.QuestAvailableRead])
+async def get_npc_quests(
+    npc_id: int,
+    character_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Get available quests from an NPC for a specific character."""
+    return await crud.get_available_quests_for_npc(session, npc_id, character_id)
+
+
+@router.post("/quests/{quest_id}/accept")
+async def accept_quest(
+    quest_id: int,
+    body: schemas.QuestAcceptRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Accept a quest."""
+    await verify_character_ownership(session, body.character_id, current_user.id)
+    cq = await crud.accept_quest(session, quest_id, body.character_id)
+    return {"detail": "Квест принят", "character_quest_id": cq.id}
+
+
+@router.get("/quests/active", response_model=List[schemas.ActiveQuestRead])
+async def get_active_quests(
+    character_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Get player's active quests with progress."""
+    return await crud.get_active_quests(session, character_id)
+
+
+@router.post("/quests/{quest_id}/complete", response_model=schemas.QuestCompleteResponse)
+async def complete_quest(
+    quest_id: int,
+    body: schemas.QuestCompleteRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """
+    Attempt to complete a quest. Checks all objectives are done.
+    Awards rewards: currency (direct SQL), exp (direct SQL), items (inventory-service).
+    """
+    await verify_character_ownership(session, body.character_id, current_user.id)
+
+    # Check if quest is completable
+    check = await crud.check_quest_completable(session, body.character_id, quest_id)
+    if not check:
+        raise HTTPException(status_code=404, detail="Активный квест не найден")
+    if not check["all_completed"]:
+        raise HTTPException(status_code=400, detail="Не все задачи выполнены")
+
+    # Get quest for rewards
+    quest = await crud.get_quest_by_id(session, quest_id)
+    if not quest:
+        raise HTTPException(status_code=404, detail="Квест не найден")
+
+    # Award currency
+    new_balance = None
+    if quest.reward_currency > 0:
+        new_balance = await crud.add_currency(session, body.character_id, quest.reward_currency)
+
+    # Award experience
+    if quest.reward_exp > 0:
+        await crud.add_experience(session, body.character_id, quest.reward_exp)
+
+    # Award items via inventory-service
+    if quest.reward_items:
+        auth_header = request.headers.get("authorization", "")
+        for reward_item in quest.reward_items:
+            item_id = reward_item.get("item_id")
+            quantity = reward_item.get("quantity", 1)
+            if not item_id:
+                continue
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    add_url = f"{settings.INVENTORY_SERVICE_URL}/inventory/{body.character_id}/items"
+                    add_resp = await client.post(
+                        add_url,
+                        json={"item_id": item_id, "quantity": quantity},
+                        headers={"Authorization": auth_header},
+                    )
+                    if add_resp.status_code != 200:
+                        logger.warning(
+                            f"Failed to add reward item {item_id} for quest {quest_id}: "
+                            f"{add_resp.status_code}"
+                        )
+            except httpx.HTTPError as e:
+                logger.warning(f"Inventory service error for quest reward: {e}")
+
+    # Mark quest as completed
+    await crud.complete_quest_record(session, check["character_quest_id"])
+
+    return {
+        "success": True,
+        "message": "Квест выполнен! Награды получены.",
+        "reward_currency": quest.reward_currency,
+        "reward_exp": quest.reward_exp,
+        "reward_items": quest.reward_items,
+        "new_balance": new_balance,
+    }
+
+
+@router.post("/quests/{quest_id}/abandon")
+async def abandon_quest(
+    quest_id: int,
+    body: schemas.QuestAbandonRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Abandon an active quest."""
+    await verify_character_ownership(session, body.character_id, current_user.id)
+    abandoned = await crud.abandon_quest(session, body.character_id, quest_id)
+    if not abandoned:
+        raise HTTPException(status_code=404, detail="Активный квест не найден")
+    return {"detail": "Квест отменён"}
+
+
+@router.post("/quests/progress/update")
+async def update_quest_progress(
+    body: schemas.QuestProgressUpdateRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Update objective progress. Called by game systems when player kills mob,
+    collects item, etc.
+    """
+    result = await crud.update_quest_progress(
+        session, body.character_id, body.quest_id, body.objective_id, body.increment
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Прогресс квеста не найден")
+    return result
+
+
+# --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------
 app.include_router(router)

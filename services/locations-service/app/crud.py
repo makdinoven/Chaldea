@@ -13,7 +13,7 @@ from models import (
     Country, Region, District, Location, LocationNeighbor, Post, PostLike, GameRule,
     Area, ClickableZone, GameTimeConfig, LocationLoot, LocationFavorite,
     PostDeletionRequest, PostReport, DialogueTree, DialogueNode, DialogueOption,
-    NpcShopItem
+    NpcShopItem, Quest, QuestObjective, CharacterQuest, CharacterQuestProgress
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -2406,3 +2406,478 @@ async def find_sell_price_for_item(session: AsyncSession, npc_id: int, item_id: 
     )
     row = result.fetchone()
     return row[0] if row else None
+
+
+# -------------------------------
+#   QUESTS (Admin CRUD)
+# -------------------------------
+async def create_quest(session: AsyncSession, data: dict) -> Quest:
+    """Create a quest with objectives."""
+    objectives_data = data.pop("objectives", [])
+    quest = Quest(
+        npc_id=data["npc_id"],
+        title=data["title"],
+        description=data.get("description"),
+        quest_type=data.get("quest_type", "standard"),
+        min_level=data.get("min_level", 1),
+        reward_currency=data.get("reward_currency", 0),
+        reward_exp=data.get("reward_exp", 0),
+        reward_items=data.get("reward_items"),
+        is_active=data.get("is_active", True),
+    )
+    session.add(quest)
+    await session.flush()
+
+    for obj_data in objectives_data:
+        objective = QuestObjective(
+            quest_id=quest.id,
+            description=obj_data["description"],
+            objective_type=obj_data["objective_type"],
+            target_id=obj_data.get("target_id"),
+            target_count=obj_data.get("target_count", 1),
+            sort_order=obj_data.get("sort_order", 0),
+        )
+        session.add(objective)
+
+    await session.commit()
+    await session.refresh(quest)
+
+    # Eagerly load objectives
+    result = await session.execute(
+        select(Quest)
+        .options(selectinload(Quest.objectives))
+        .where(Quest.id == quest.id)
+    )
+    return result.scalars().first()
+
+
+async def get_quests_admin(
+    session: AsyncSession,
+    npc_id: Optional[int] = None,
+    quest_type: Optional[str] = None,
+) -> List[Quest]:
+    """List all quests with optional filters."""
+    stmt = select(Quest).options(selectinload(Quest.objectives))
+    if npc_id is not None:
+        stmt = stmt.where(Quest.npc_id == npc_id)
+    if quest_type is not None:
+        stmt = stmt.where(Quest.quest_type == quest_type)
+    stmt = stmt.order_by(Quest.id.asc())
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+async def get_quest_by_id(session: AsyncSession, quest_id: int) -> Optional[Quest]:
+    """Get a single quest with objectives."""
+    result = await session.execute(
+        select(Quest)
+        .options(selectinload(Quest.objectives))
+        .where(Quest.id == quest_id)
+    )
+    return result.scalars().first()
+
+
+async def update_quest(session: AsyncSession, quest_id: int, data: dict) -> Optional[Quest]:
+    """Update a quest. If objectives are provided, replace them entirely."""
+    result = await session.execute(
+        select(Quest)
+        .options(selectinload(Quest.objectives))
+        .where(Quest.id == quest_id)
+    )
+    quest = result.scalars().first()
+    if not quest:
+        return None
+
+    if "title" in data and data["title"] is not None:
+        quest.title = data["title"]
+    if "description" in data and data["description"] is not None:
+        quest.description = data["description"]
+    if "quest_type" in data and data["quest_type"] is not None:
+        quest.quest_type = data["quest_type"]
+    if "min_level" in data and data["min_level"] is not None:
+        quest.min_level = data["min_level"]
+    if "reward_currency" in data and data["reward_currency"] is not None:
+        quest.reward_currency = data["reward_currency"]
+    if "reward_exp" in data and data["reward_exp"] is not None:
+        quest.reward_exp = data["reward_exp"]
+    if "reward_items" in data:
+        quest.reward_items = data["reward_items"]
+    if "is_active" in data and data["is_active"] is not None:
+        quest.is_active = data["is_active"]
+
+    # Replace objectives if provided
+    if "objectives" in data and data["objectives"] is not None:
+        # Delete old objectives
+        await session.execute(
+            delete(QuestObjective).where(QuestObjective.quest_id == quest_id)
+        )
+        for obj_data in data["objectives"]:
+            objective = QuestObjective(
+                quest_id=quest_id,
+                description=obj_data["description"],
+                objective_type=obj_data["objective_type"],
+                target_id=obj_data.get("target_id"),
+                target_count=obj_data.get("target_count", 1),
+                sort_order=obj_data.get("sort_order", 0),
+            )
+            session.add(objective)
+
+    await session.commit()
+    # Re-fetch with objectives
+    result = await session.execute(
+        select(Quest)
+        .options(selectinload(Quest.objectives))
+        .where(Quest.id == quest_id)
+    )
+    return result.scalars().first()
+
+
+async def delete_quest(session: AsyncSession, quest_id: int) -> bool:
+    """Delete a quest and its objectives (cascade)."""
+    result = await session.execute(
+        select(Quest).where(Quest.id == quest_id)
+    )
+    quest = result.scalars().first()
+    if not quest:
+        return False
+    await session.delete(quest)
+    await session.commit()
+    return True
+
+
+# -------------------------------
+#   QUESTS (Player)
+# -------------------------------
+async def get_available_quests_for_npc(
+    session: AsyncSession, npc_id: int, character_id: int
+) -> List[Quest]:
+    """
+    Get quests from an NPC that are:
+    - active
+    - character meets min_level
+    - character hasn't already accepted (unless repeatable and completed)
+    """
+    # Get character level
+    char_result = await session.execute(
+        text("SELECT level FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    char_row = char_result.fetchone()
+    char_level = char_row[0] if char_row else 1
+
+    # Get IDs of quests this character currently has active
+    active_result = await session.execute(
+        text("""
+            SELECT quest_id FROM character_quests
+            WHERE character_id = :cid AND status = 'active'
+        """),
+        {"cid": character_id},
+    )
+    active_quest_ids = {row[0] for row in active_result.fetchall()}
+
+    # Get IDs of quests this character has completed (for non-repeatable)
+    completed_result = await session.execute(
+        text("""
+            SELECT quest_id FROM character_quests
+            WHERE character_id = :cid AND status = 'completed'
+        """),
+        {"cid": character_id},
+    )
+    completed_quest_ids = {row[0] for row in completed_result.fetchall()}
+
+    # Get all active quests for this NPC
+    stmt = (
+        select(Quest)
+        .options(selectinload(Quest.objectives))
+        .where(Quest.npc_id == npc_id, Quest.is_active == True, Quest.min_level <= char_level)
+        .order_by(Quest.id.asc())
+    )
+    result = await session.execute(stmt)
+    all_quests = result.scalars().all()
+
+    available = []
+    for q in all_quests:
+        if q.id in active_quest_ids:
+            continue
+        if q.id in completed_quest_ids and q.quest_type != 'repeatable':
+            continue
+        available.append(q)
+
+    return available
+
+
+async def accept_quest(
+    session: AsyncSession, quest_id: int, character_id: int
+) -> CharacterQuest:
+    """Accept a quest. Creates character_quest and progress entries."""
+    # Verify quest exists and is active
+    quest = await get_quest_by_id(session, quest_id)
+    if not quest or not quest.is_active:
+        raise HTTPException(status_code=404, detail="Квест не найден или неактивен")
+
+    # Check character level
+    char_result = await session.execute(
+        text("SELECT level FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    char_row = char_result.fetchone()
+    if not char_row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if char_row[0] < quest.min_level:
+        raise HTTPException(status_code=400, detail=f"Требуется уровень {quest.min_level}")
+
+    # Check if already has this quest active
+    existing = await session.execute(
+        text("""
+            SELECT id, status FROM character_quests
+            WHERE character_id = :cid AND quest_id = :qid
+        """),
+        {"cid": character_id, "qid": quest_id},
+    )
+    existing_row = existing.fetchone()
+    if existing_row:
+        if existing_row[1] == 'active':
+            raise HTTPException(status_code=400, detail="Квест уже принят")
+        if existing_row[1] == 'completed' and quest.quest_type != 'repeatable':
+            raise HTTPException(status_code=400, detail="Квест уже выполнен")
+        # For repeatable quests that were completed or abandoned, delete old entry
+        await session.execute(
+            text("DELETE FROM character_quests WHERE id = :id"),
+            {"id": existing_row[0]},
+        )
+        await session.flush()
+
+    # Create character_quest
+    cq = CharacterQuest(
+        character_id=character_id,
+        quest_id=quest_id,
+        status='active',
+    )
+    session.add(cq)
+    await session.flush()
+
+    # Create progress entries for each objective
+    for objective in quest.objectives:
+        progress = CharacterQuestProgress(
+            character_quest_id=cq.id,
+            objective_id=objective.id,
+            current_count=0,
+            is_completed=False,
+        )
+        session.add(progress)
+
+    await session.commit()
+    await session.refresh(cq)
+    return cq
+
+
+async def get_active_quests(session: AsyncSession, character_id: int) -> List[dict]:
+    """Get all active quests for a character with progress details."""
+    result = await session.execute(
+        text("""
+            SELECT cq.id, cq.quest_id, cq.status, cq.accepted_at,
+                   q.title, q.description, q.quest_type, q.npc_id,
+                   q.reward_currency, q.reward_exp, q.reward_items
+            FROM character_quests cq
+            JOIN quests q ON cq.quest_id = q.id
+            WHERE cq.character_id = :cid AND cq.status = 'active'
+            ORDER BY cq.accepted_at DESC
+        """),
+        {"cid": character_id},
+    )
+    rows = result.fetchall()
+
+    quests = []
+    for row in rows:
+        cq_id = row[0]
+        # Get progress for this character_quest
+        prog_result = await session.execute(
+            text("""
+                SELECT cqp.objective_id, cqp.current_count, cqp.is_completed,
+                       qo.description, qo.objective_type, qo.target_id, qo.target_count
+                FROM character_quest_progress cqp
+                JOIN quest_objectives qo ON cqp.objective_id = qo.id
+                WHERE cqp.character_quest_id = :cqid
+                ORDER BY qo.sort_order ASC
+            """),
+            {"cqid": cq_id},
+        )
+        prog_rows = prog_result.fetchall()
+
+        import json
+        reward_items_raw = row[10]
+        if isinstance(reward_items_raw, str):
+            try:
+                reward_items_raw = json.loads(reward_items_raw)
+            except (json.JSONDecodeError, TypeError):
+                reward_items_raw = None
+
+        objectives = [
+            {
+                "objective_id": p[0],
+                "description": p[3],
+                "objective_type": p[4],
+                "target_id": p[5],
+                "target_count": p[6],
+                "current_count": p[1],
+                "is_completed": bool(p[2]),
+            }
+            for p in prog_rows
+        ]
+
+        quests.append({
+            "id": cq_id,
+            "quest_id": row[1],
+            "status": row[2],
+            "accepted_at": row[3],
+            "title": row[4],
+            "description": row[5],
+            "quest_type": row[6],
+            "npc_id": row[7],
+            "reward_currency": row[8],
+            "reward_exp": row[9],
+            "reward_items": reward_items_raw,
+            "objectives": objectives,
+        })
+
+    return quests
+
+
+async def update_quest_progress(
+    session: AsyncSession,
+    character_id: int,
+    quest_id: int,
+    objective_id: int,
+    increment: int = 1,
+) -> Optional[dict]:
+    """
+    Update progress on a quest objective.
+    Returns updated progress info or None if not found.
+    """
+    # Find the character_quest
+    cq_result = await session.execute(
+        text("""
+            SELECT cq.id FROM character_quests cq
+            WHERE cq.character_id = :cid AND cq.quest_id = :qid AND cq.status = 'active'
+        """),
+        {"cid": character_id, "qid": quest_id},
+    )
+    cq_row = cq_result.fetchone()
+    if not cq_row:
+        return None
+    cq_id = cq_row[0]
+
+    # Get objective target_count
+    obj_result = await session.execute(
+        text("SELECT target_count FROM quest_objectives WHERE id = :oid"),
+        {"oid": objective_id},
+    )
+    obj_row = obj_result.fetchone()
+    if not obj_row:
+        return None
+    target_count = obj_row[0]
+
+    # Update progress
+    await session.execute(
+        text("""
+            UPDATE character_quest_progress
+            SET current_count = LEAST(current_count + :inc, :target),
+                is_completed = CASE WHEN current_count + :inc >= :target THEN 1 ELSE 0 END
+            WHERE character_quest_id = :cqid AND objective_id = :oid
+        """),
+        {"inc": increment, "target": target_count, "cqid": cq_id, "oid": objective_id},
+    )
+    await session.commit()
+
+    # Fetch updated progress
+    prog_result = await session.execute(
+        text("""
+            SELECT current_count, is_completed
+            FROM character_quest_progress
+            WHERE character_quest_id = :cqid AND objective_id = :oid
+        """),
+        {"cqid": cq_id, "oid": objective_id},
+    )
+    prog_row = prog_result.fetchone()
+    if not prog_row:
+        return None
+
+    return {
+        "objective_id": objective_id,
+        "current_count": prog_row[0],
+        "is_completed": bool(prog_row[1]),
+        "target_count": target_count,
+    }
+
+
+async def check_quest_completable(session: AsyncSession, character_id: int, quest_id: int) -> Optional[dict]:
+    """
+    Check if all objectives are completed for a quest.
+    Returns dict with character_quest info or None.
+    """
+    cq_result = await session.execute(
+        text("""
+            SELECT cq.id FROM character_quests cq
+            WHERE cq.character_id = :cid AND cq.quest_id = :qid AND cq.status = 'active'
+        """),
+        {"cid": character_id, "qid": quest_id},
+    )
+    cq_row = cq_result.fetchone()
+    if not cq_row:
+        return None
+    cq_id = cq_row[0]
+
+    # Check if all objectives are completed
+    incomplete = await session.execute(
+        text("""
+            SELECT COUNT(*) FROM character_quest_progress
+            WHERE character_quest_id = :cqid AND is_completed = 0
+        """),
+        {"cqid": cq_id},
+    )
+    incomplete_count = incomplete.fetchone()[0]
+
+    return {
+        "character_quest_id": cq_id,
+        "all_completed": incomplete_count == 0,
+    }
+
+
+async def complete_quest_record(session: AsyncSession, character_quest_id: int) -> None:
+    """Mark a character_quest as completed."""
+    await session.execute(
+        text("""
+            UPDATE character_quests
+            SET status = 'completed', completed_at = NOW()
+            WHERE id = :cqid
+        """),
+        {"cqid": character_quest_id},
+    )
+    await session.commit()
+
+
+async def abandon_quest(session: AsyncSession, character_id: int, quest_id: int) -> bool:
+    """Abandon a quest. Returns True if found and abandoned."""
+    result = await session.execute(
+        text("""
+            UPDATE character_quests
+            SET status = 'abandoned'
+            WHERE character_id = :cid AND quest_id = :qid AND status = 'active'
+        """),
+        {"cid": character_id, "qid": quest_id},
+    )
+    await session.commit()
+    return result.rowcount > 0
+
+
+async def add_experience(session: AsyncSession, character_id: int, amount: int) -> None:
+    """Add experience to a character via direct SQL on shared DB."""
+    await session.execute(
+        text("""
+            UPDATE characters
+            SET experience = experience + :amount
+            WHERE id = :cid
+        """),
+        {"cid": character_id, "amount": amount},
+    )
+    await session.commit()

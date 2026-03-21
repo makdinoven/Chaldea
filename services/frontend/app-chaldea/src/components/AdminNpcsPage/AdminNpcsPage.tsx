@@ -6,6 +6,7 @@ import useDebounce from '../../hooks/useDebounce';
 import { NPC_ROLES, NPC_ROLE_LABELS, NPC_SEXES, NPC_CLASSES, NPC_RACES } from '../../constants/npc';
 import DialogueEditor from './DialogueEditor';
 import NpcShopEditor from './NpcShopEditor';
+import QuestEditor from './QuestEditor';
 
 /* ── Types ── */
 
@@ -76,6 +77,7 @@ const AdminNpcsPage = () => {
   const [locations, setLocations] = useState<LocationOption[]>([]);
   const [dialogueNpc, setDialogueNpc] = useState<{ id: number; name: string } | null>(null);
   const [shopNpc, setShopNpc] = useState<{ id: number; name: string } | null>(null);
+  const [questNpc, setQuestNpc] = useState<{ id: number; name: string } | null>(null);
 
   const fetchNpcs = useCallback(async () => {
     setLoading(true);
@@ -208,6 +210,18 @@ const AdminNpcsPage = () => {
   const filteredNpcs = npcs;
 
   /* ── Render ── */
+
+  if (questNpc) {
+    return (
+      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+        <QuestEditor
+          npcId={questNpc.id}
+          npcName={questNpc.name}
+          onClose={() => setQuestNpc(null)}
+        />
+      </div>
+    );
+  }
 
   if (shopNpc) {
     return (
@@ -457,6 +471,12 @@ const AdminNpcsPage = () => {
                           >
                             Диалоги
                           </button>
+                          <button
+                            onClick={() => setQuestNpc({ id: npc.id, name: npc.name })}
+                            className="text-sm text-gold hover:text-gold-light transition-colors duration-200"
+                          >
+                            Квесты
+                          </button>
                           {npc.npc_role === 'merchant' && (
                             <button
                               onClick={() => setShopNpc({ id: npc.id, name: npc.name })}
@@ -516,6 +536,12 @@ const AdminNpcsPage = () => {
                       className="text-sm text-gold hover:text-gold-light transition-colors"
                     >
                       Диалоги
+                    </button>
+                    <button
+                      onClick={() => setQuestNpc({ id: npc.id, name: npc.name })}
+                      className="text-sm text-gold hover:text-gold-light transition-colors"
+                    >
+                      Квесты
                     </button>
                     {npc.npc_role === 'merchant' && (
                       <button

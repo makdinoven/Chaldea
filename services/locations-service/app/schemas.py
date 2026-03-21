@@ -799,3 +799,145 @@ class ShopTransactionResponse(BaseModel):
     quantity: int = 0
     total_price: int = 0
 
+
+# -------------------------------
+#   QUEST SCHEMAS (Admin)
+# -------------------------------
+class QuestObjectiveCreate(BaseModel):
+    description: str
+    objective_type: str  # 'kill', 'collect', 'talk_to', 'visit_location', 'deliver', 'custom'
+    target_id: Optional[int] = None
+    target_count: int = 1
+    sort_order: int = 0
+
+class QuestObjectiveRead(BaseModel):
+    id: int
+    quest_id: int
+    description: str
+    objective_type: str
+    target_id: Optional[int] = None
+    target_count: int = 1
+    sort_order: int = 0
+
+    class Config:
+        orm_mode = True
+
+class QuestCreate(BaseModel):
+    npc_id: int
+    title: str
+    description: Optional[str] = None
+    quest_type: str = 'standard'
+    min_level: int = 1
+    reward_currency: int = 0
+    reward_exp: int = 0
+    reward_items: Optional[List[dict]] = None  # [{item_id, quantity}]
+    is_active: bool = True
+    objectives: List[QuestObjectiveCreate] = []
+
+class QuestUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    quest_type: Optional[str] = None
+    min_level: Optional[int] = None
+    reward_currency: Optional[int] = None
+    reward_exp: Optional[int] = None
+    reward_items: Optional[List[dict]] = None
+    is_active: Optional[bool] = None
+    objectives: Optional[List[QuestObjectiveCreate]] = None
+
+class QuestRead(BaseModel):
+    id: int
+    npc_id: int
+    title: str
+    description: Optional[str] = None
+    quest_type: str = 'standard'
+    min_level: int = 1
+    reward_currency: int = 0
+    reward_exp: int = 0
+    reward_items: Optional[List[dict]] = None
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+    objectives: List[QuestObjectiveRead] = []
+
+    class Config:
+        orm_mode = True
+
+class QuestListItem(BaseModel):
+    id: int
+    npc_id: int
+    title: str
+    quest_type: str = 'standard'
+    min_level: int = 1
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+
+# -------------------------------
+#   QUEST SCHEMAS (Player)
+# -------------------------------
+class QuestAcceptRequest(BaseModel):
+    character_id: int
+
+class QuestCompleteRequest(BaseModel):
+    character_id: int
+
+class QuestAbandonRequest(BaseModel):
+    character_id: int
+
+class QuestProgressUpdateRequest(BaseModel):
+    character_id: int
+    quest_id: int
+    objective_id: int
+    increment: int = 1
+
+class ObjectiveProgressRead(BaseModel):
+    objective_id: int
+    description: str
+    objective_type: str
+    target_id: Optional[int] = None
+    target_count: int = 1
+    current_count: int = 0
+    is_completed: bool = False
+
+class ActiveQuestRead(BaseModel):
+    id: int
+    quest_id: int
+    title: str
+    description: Optional[str] = None
+    quest_type: str
+    npc_id: int
+    status: str
+    accepted_at: Optional[datetime] = None
+    reward_currency: int = 0
+    reward_exp: int = 0
+    reward_items: Optional[List[dict]] = None
+    objectives: List[ObjectiveProgressRead] = []
+
+    class Config:
+        orm_mode = True
+
+class QuestCompleteResponse(BaseModel):
+    success: bool
+    message: str
+    reward_currency: int = 0
+    reward_exp: int = 0
+    reward_items: Optional[List[dict]] = None
+    new_balance: Optional[int] = None
+
+class QuestAvailableRead(BaseModel):
+    id: int
+    title: str
+    description: Optional[str] = None
+    quest_type: str = 'standard'
+    min_level: int = 1
+    reward_currency: int = 0
+    reward_exp: int = 0
+    reward_items: Optional[List[dict]] = None
+    objectives: List[QuestObjectiveRead] = []
+
+    class Config:
+        orm_mode = True
+

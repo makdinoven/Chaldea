@@ -6,6 +6,7 @@ interface Tab {
 const TABS: Tab[] = [
   { key: 'character', label: 'Персонаж' },
   { key: 'skills', label: 'Навыки' },
+  { key: 'quests', label: 'Квесты' },
   { key: 'logs', label: 'Логи персонажа' },
   { key: 'titles', label: 'Титулы' },
   { key: 'craft', label: 'Крафт' },
@@ -18,7 +19,7 @@ interface ProfileTabsProps {
 
 const ProfileTabs = ({ activeTab, onTabChange }: ProfileTabsProps) => {
   return (
-    <nav className="flex items-center gap-8 mb-8">
+    <nav className="flex items-center gap-4 sm:gap-8 mb-8 overflow-x-auto pb-1 gold-scrollbar">
       {TABS.map((tab) => {
         const isActive = activeTab === tab.key;
         return (

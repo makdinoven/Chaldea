@@ -298,6 +298,69 @@ class NpcShopItem(Base):
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
 
 
+class Quest(Base):
+    __tablename__ = 'quests'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    npc_id = Column(Integer, nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    quest_type = Column(String(50), nullable=False, default='standard', server_default=text("'standard'"))
+    min_level = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    reward_currency = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    reward_exp = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    reward_items = Column(JSON, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text("1"))
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    objectives = relationship("QuestObjective", back_populates="quest", cascade="all, delete-orphan")
+
+
+class QuestObjective(Base):
+    __tablename__ = 'quest_objectives'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    quest_id = Column(BigInteger, ForeignKey('quests.id', ondelete='CASCADE'), nullable=False, index=True)
+    description = Column(String(500), nullable=False)
+    objective_type = Column(String(50), nullable=False)
+    target_id = Column(Integer, nullable=True)
+    target_count = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    sort_order = Column(Integer, nullable=False, default=0, server_default=text("0"))
+
+    quest = relationship("Quest", back_populates="objectives")
+
+
+class CharacterQuest(Base):
+    __tablename__ = 'character_quests'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False, index=True)
+    quest_id = Column(BigInteger, ForeignKey('quests.id', ondelete='CASCADE'), nullable=False)
+    status = Column(String(20), nullable=False, default='active', server_default=text("'active'"))
+    accepted_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    completed_at = Column(TIMESTAMP, nullable=True)
+
+    quest = relationship("Quest")
+    progress = relationship("CharacterQuestProgress", back_populates="character_quest", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint('character_id', 'quest_id', name='uq_character_quest'),
+    )
+
+
+class CharacterQuestProgress(Base):
+    __tablename__ = 'character_quest_progress'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    character_quest_id = Column(BigInteger, ForeignKey('character_quests.id', ondelete='CASCADE'), nullable=False, index=True)
+    objective_id = Column(BigInteger, ForeignKey('quest_objectives.id', ondelete='CASCADE'), nullable=False)
+    current_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    is_completed = Column(Boolean, nullable=False, default=False, server_default=text("0"))
+
+    character_quest = relationship("CharacterQuest", back_populates="progress")
+    objective = relationship("QuestObjective")
+
+
 class DialogueOption(Base):
     __tablename__ = 'dialogue_options'
 
