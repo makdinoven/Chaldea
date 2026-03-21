@@ -38,6 +38,28 @@ async def delete_skill(db: AsyncSession, skill_id: int) -> bool:
     skill = await get_skill(db, skill_id)
     if not skill:
         return False
+
+    # Delete character_skills referencing this skill's ranks
+    rank_ids_stmt = select(models.SkillRank.id).where(models.SkillRank.skill_id == skill_id)
+    rank_ids_result = await db.execute(rank_ids_stmt)
+    rank_ids = [r[0] for r in rank_ids_result.fetchall()]
+
+    if rank_ids:
+        # Delete character_skills
+        cs_stmt = select(models.CharacterSkill).where(
+            models.CharacterSkill.skill_rank_id.in_(rank_ids)
+        )
+        cs_result = await db.execute(cs_stmt)
+        for cs in cs_result.scalars().all():
+            await db.delete(cs)
+
+    # Delete tree_node_skills referencing this skill
+    tns_stmt = select(models.TreeNodeSkill).where(models.TreeNodeSkill.skill_id == skill_id)
+    tns_result = await db.execute(tns_stmt)
+    for tns in tns_result.scalars().all():
+        await db.delete(tns)
+
+    # Now delete the skill (cascades to ranks → damage/effects via ORM)
     await db.delete(skill)
     await db.commit()
     return True
@@ -172,16 +194,38 @@ async def list_character_skills_for_character(db: AsyncSession, character_id: in
         select(models.CharacterSkill)
         .where(models.CharacterSkill.character_id == character_id)
         .options(
-            # skill_rank
             selectinload(models.CharacterSkill.skill_rank)
-                # внутри skill_rank – оба списка
                 .selectinload(models.SkillRank.damage_entries),
             selectinload(models.CharacterSkill.skill_rank)
                 .selectinload(models.SkillRank.effects),
         )
     )
     result = await db.execute(stmt)
-    return result.scalars().all()
+    char_skills = result.scalars().all()
+
+    # Denormalize skill info (name, type, image) from the Skill table
+    skill_ids = list({cs.skill_rank.skill_id for cs in char_skills if cs.skill_rank})
+    skill_map: dict[int, models.Skill] = {}
+    if skill_ids:
+        skills_result = await db.execute(
+            select(models.Skill).where(models.Skill.id.in_(skill_ids))
+        )
+        for skill in skills_result.scalars().all():
+            skill_map[skill.id] = skill
+
+    # Attach denormalized fields
+    for cs in char_skills:
+        if cs.skill_rank and cs.skill_rank.skill_id in skill_map:
+            skill = skill_map[cs.skill_rank.skill_id]
+            cs.skill_name = skill.name
+            cs.skill_type = skill.skill_type
+            cs.skill_image = skill.skill_image
+        else:
+            cs.skill_name = None
+            cs.skill_type = None
+            cs.skill_image = None
+
+    return char_skills
 
 async def delete_character_skill(db: AsyncSession, cs_id: int) -> bool:
     cs = await get_character_skill(db, cs_id)
@@ -283,7 +327,7 @@ async def sync_effects(db: AsyncSession, rank_obj: models.SkillRank, new_effect_
     rank = result.scalar_one_or_none()
     if not rank:
         raise HTTPException(status_code=404, detail=f"Rank {rank_obj.id} not found")
-    old_map = {e.id: e for e in rank_obj.effects}
+    old_map = {e.id: e for e in rank.effects}
 
     keep_ids = []
     for eff_data in new_effect_list:

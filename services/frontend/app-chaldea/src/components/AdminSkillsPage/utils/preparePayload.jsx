@@ -61,6 +61,18 @@ const transformResist = (arr = [], side = "self") =>
     })
   );
 
+const transformVulnerability = (arr = [], side = "self") =>
+  arr.map((i) =>
+    makeEffectRow({
+      id: i.id,
+      target_side: side,
+      effect_name: `Vulnerability: ${i.damage_type}`,
+      magnitude: i.percent,
+      duration: i.duration,
+      chance: i.chance,
+    })
+  );
+
 /* ---------- Stat Modifiers ---------- */
 const transformStatMods = (arr = [], side = "self") =>
   arr.map((i) =>
@@ -91,6 +103,9 @@ export const prepareRankPayload = (rankData) => {
     selfResist = [],
     enemyResist = [],
 
+    selfVulnerability = [],
+    enemyVulnerability = [],
+
     selfStatMods = [],
     enemyStatMods = [],
 
@@ -105,6 +120,8 @@ export const prepareRankPayload = (rankData) => {
     ...transformBuff(enemyDamageBuff, "enemy"),
     ...transformResist(selfResist, "self"),
     ...transformResist(enemyResist, "enemy"),
+    ...transformVulnerability(selfVulnerability, "self"),
+    ...transformVulnerability(enemyVulnerability, "enemy"),
     ...transformStatMods(selfStatMods, "self"),
     ...transformStatMods(enemyStatMods, "enemy"),
     ...transformComplex(selfComplexEffects, "self"),

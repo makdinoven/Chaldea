@@ -180,6 +180,9 @@ class CharacterSkillUpdate(CharacterSkillBase):
 class CharacterSkillRead(CharacterSkillBase):
     id: int
     skill_rank: SkillRankRead
+    skill_name: Optional[str] = None
+    skill_type: Optional[str] = None
+    skill_image: Optional[str] = None
 
     class Config:
         orm_mode = True

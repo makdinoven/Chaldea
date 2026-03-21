@@ -45,6 +45,7 @@ const parseComplex = (effects, side) =>
       e.target_side === side &&
       !e.effect_name.startsWith("Resist") &&
       !e.effect_name.startsWith("Buff") &&
+      !e.effect_name.startsWith("Vulnerability") &&
       e.effect_name !== "StatModifier"
   );
 
@@ -67,6 +68,10 @@ export const transformReceivedSkillTree = (skillTree) => ({
 
       selfDamageBuff: parsePrefix(effects, "self", "Buff"),
       enemyDamageBuff: parsePrefix(effects, "enemy", "Buff"),
+
+      /* vulnerability */
+      selfVulnerability: parsePrefix(effects, "self", "Vulnerability"),
+      enemyVulnerability: parsePrefix(effects, "enemy", "Vulnerability"),
 
       /* NEW stat modifiers */
       selfStatMods: parseStatMods(effects, "self"),
