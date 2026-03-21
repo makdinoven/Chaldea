@@ -321,10 +321,11 @@ class TestSaveFullClassTree:
     @pytest.mark.asyncio
     async def test_update_existing_nodes(self, db):
         tree = await _create_tree(db)
+        tree_id = tree.id
 
         # Create a node first
         data1 = schemas.FullClassTreeUpdateRequest(
-            id=tree.id, class_id=1, name="Tree", tree_type="class",
+            id=tree_id, class_id=1, name="Tree", tree_type="class",
             nodes=[
                 schemas.TreeNodeInTree(
                     id="temp-1", level_ring=1, position_x=0, position_y=0,
@@ -333,12 +334,15 @@ class TestSaveFullClassTree:
             ],
             connections=[],
         )
-        r1 = await crud.save_full_class_tree(db, tree.id, data1)
+        r1 = await crud.save_full_class_tree(db, tree_id, data1)
         real_id = r1["temp_id_map"]["temp-1"]
+
+        # Expunge all cached objects so the next query reloads from DB
+        db.expunge_all()
 
         # Update with the real ID
         data2 = schemas.FullClassTreeUpdateRequest(
-            id=tree.id, class_id=1, name="Tree", tree_type="class",
+            id=tree_id, class_id=1, name="Tree", tree_type="class",
             nodes=[
                 schemas.TreeNodeInTree(
                     id=real_id, level_ring=1, position_x=50, position_y=50,
@@ -347,10 +351,11 @@ class TestSaveFullClassTree:
             ],
             connections=[],
         )
-        r2 = await crud.save_full_class_tree(db, tree.id, data2)
+        r2 = await crud.save_full_class_tree(db, tree_id, data2)
         assert r2["temp_id_map"] == {}  # No temp IDs in second save
 
-        full = await crud.get_full_class_tree(db, tree.id)
+        db.expunge_all()
+        full = await crud.get_full_class_tree(db, tree_id)
         assert len(full["nodes"]) == 1
         assert full["nodes"][0]["name"] == "Updated"
         assert full["nodes"][0]["position_x"] == 50.0
@@ -358,10 +363,11 @@ class TestSaveFullClassTree:
     @pytest.mark.asyncio
     async def test_delete_removed_nodes(self, db):
         tree = await _create_tree(db)
+        tree_id = tree.id
 
         # Create two nodes
         data1 = schemas.FullClassTreeUpdateRequest(
-            id=tree.id, class_id=1, name="Tree", tree_type="class",
+            id=tree_id, class_id=1, name="Tree", tree_type="class",
             nodes=[
                 schemas.TreeNodeInTree(
                     id="temp-1", level_ring=1, position_x=0, position_y=0,
@@ -374,12 +380,15 @@ class TestSaveFullClassTree:
             ],
             connections=[],
         )
-        r1 = await crud.save_full_class_tree(db, tree.id, data1)
+        r1 = await crud.save_full_class_tree(db, tree_id, data1)
         id_a = r1["temp_id_map"]["temp-1"]
+
+        # Expunge all cached objects so the next query reloads from DB
+        db.expunge_all()
 
         # Save again with only node A — node B should be deleted
         data2 = schemas.FullClassTreeUpdateRequest(
-            id=tree.id, class_id=1, name="Tree", tree_type="class",
+            id=tree_id, class_id=1, name="Tree", tree_type="class",
             nodes=[
                 schemas.TreeNodeInTree(
                     id=id_a, level_ring=1, position_x=0, position_y=0,
@@ -388,18 +397,20 @@ class TestSaveFullClassTree:
             ],
             connections=[],
         )
-        await crud.save_full_class_tree(db, tree.id, data2)
+        await crud.save_full_class_tree(db, tree_id, data2)
 
-        full = await crud.get_full_class_tree(db, tree.id)
+        db.expunge_all()
+        full = await crud.get_full_class_tree(db, tree_id)
         assert len(full["nodes"]) == 1
         assert full["nodes"][0]["name"] == "A"
 
     @pytest.mark.asyncio
     async def test_connection_temp_id_resolution(self, db):
         tree = await _create_tree(db)
+        tree_id = tree.id
 
         data = schemas.FullClassTreeUpdateRequest(
-            id=tree.id, class_id=1, name="Tree", tree_type="class",
+            id=tree_id, class_id=1, name="Tree", tree_type="class",
             nodes=[
                 schemas.TreeNodeInTree(
                     id="temp-1", level_ring=1, position_x=0, position_y=0,
@@ -416,10 +427,13 @@ class TestSaveFullClassTree:
                 ),
             ],
         )
-        result = await crud.save_full_class_tree(db, tree.id, data)
+        result = await crud.save_full_class_tree(db, tree_id, data)
         assert "temp-c1" in result["temp_id_map"]
 
-        full = await crud.get_full_class_tree(db, tree.id)
+        # Expunge all cached objects so the next query reloads from DB
+        db.expunge_all()
+
+        full = await crud.get_full_class_tree(db, tree_id)
         assert len(full["connections"]) == 1
         assert full["connections"][0]["from_node_id"] == result["temp_id_map"]["temp-1"]
         assert full["connections"][0]["to_node_id"] == result["temp_id_map"]["temp-2"]
@@ -429,10 +443,11 @@ class TestSaveFullClassTree:
         await _seed_skill(db, skill_id=1, name="Fireball")
         await _seed_skill(db, skill_id=2, name="Ice Bolt")
         tree = await _create_tree(db)
+        tree_id = tree.id
 
         # First save: assign skill 1
         data1 = schemas.FullClassTreeUpdateRequest(
-            id=tree.id, class_id=1, name="Tree", tree_type="class",
+            id=tree_id, class_id=1, name="Tree", tree_type="class",
             nodes=[
                 schemas.TreeNodeInTree(
                     id="temp-1", level_ring=1, position_x=0, position_y=0,
@@ -442,16 +457,22 @@ class TestSaveFullClassTree:
             ],
             connections=[],
         )
-        r1 = await crud.save_full_class_tree(db, tree.id, data1)
+        r1 = await crud.save_full_class_tree(db, tree_id, data1)
         real_id = r1["temp_id_map"]["temp-1"]
 
-        full1 = await crud.get_full_class_tree(db, tree.id)
+        # Expunge all cached objects so the next query reloads from DB
+        db.expunge_all()
+
+        full1 = await crud.get_full_class_tree(db, tree_id)
         assert len(full1["nodes"][0]["skills"]) == 1
         assert full1["nodes"][0]["skills"][0]["skill_id"] == 1
 
+        # Expunge again before second save
+        db.expunge_all()
+
         # Second save: replace skill 1 with skill 2
         data2 = schemas.FullClassTreeUpdateRequest(
-            id=tree.id, class_id=1, name="Tree", tree_type="class",
+            id=tree_id, class_id=1, name="Tree", tree_type="class",
             nodes=[
                 schemas.TreeNodeInTree(
                     id=real_id, level_ring=1, position_x=0, position_y=0,
@@ -461,9 +482,10 @@ class TestSaveFullClassTree:
             ],
             connections=[],
         )
-        await crud.save_full_class_tree(db, tree.id, data2)
+        await crud.save_full_class_tree(db, tree_id, data2)
 
-        full2 = await crud.get_full_class_tree(db, tree.id)
+        db.expunge_all()
+        full2 = await crud.get_full_class_tree(db, tree_id)
         assert len(full2["nodes"][0]["skills"]) == 1
         assert full2["nodes"][0]["skills"][0]["skill_id"] == 2
 

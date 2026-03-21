@@ -129,12 +129,15 @@ class TestUpgradeSkillAuth:
         finally:
             app.dependency_overrides.pop(get_db, None)
 
+    @patch("crud.get_skill_rank", new_callable=AsyncMock, return_value=None)
     @patch("auth_http.requests.get")
-    def test_correct_owner_passes_auth(self, mock_auth_get):
+    def test_correct_owner_passes_auth(self, mock_auth_get, mock_get_skill_rank):
         """Authenticated user owns the character -> passes ownership check.
 
         The request may still fail downstream (e.g. SkillRank not found),
         but the important thing is that it does NOT return 401 or 403.
+        We mock crud.get_skill_rank to return None so the endpoint returns 404
+        without making cross-service HTTP calls.
         """
         user_id = 5
         mock_auth_get.return_value = _mock_response(
@@ -144,8 +147,6 @@ class TestUpgradeSkillAuth:
         # DB returns character owned by user_id=5
         mock_db = _make_mock_db(owner_user_id=user_id)
 
-        # Mock crud.get_skill_rank to return None -> 404 "SkillRank not found"
-        # This proves auth + ownership passed successfully.
         mock_db.refresh = AsyncMock()
 
         async def _fake_get_db():
@@ -160,6 +161,7 @@ class TestUpgradeSkillAuth:
                     headers={"Authorization": "Bearer fake-token"},
                 )
             # Should NOT be 401 or 403 — auth and ownership passed
+            # With get_skill_rank mocked to None, expect 404 "SkillRank not found"
             assert response.status_code not in (401, 403)
         finally:
             app.dependency_overrides.pop(get_db, None)

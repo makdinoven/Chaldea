@@ -167,10 +167,17 @@ async def admin_client(setup_db):
     app.dependency_overrides.clear()
 
 
+def _reject_auth():
+    """Simulate missing auth by raising 401."""
+    from fastapi import HTTPException
+    raise HTTPException(status_code=401, detail="Not authenticated")
+
+
 @pytest_asyncio.fixture()
 async def no_auth_client(setup_db):
-    """Client without any auth (no dependency override for get_current_user_via_http)."""
+    """Client without any auth — override get_current_user_via_http to always raise 401."""
     app.dependency_overrides[_original_get_db] = _override_get_db
+    app.dependency_overrides[get_current_user_via_http] = _reject_auth
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
@@ -432,10 +439,9 @@ class TestGetTreeProgress:
         assert data["purchased_skills"][0]["skill_id"] == ids["skill1_id"]
 
     @pytest.mark.asyncio
-    async def test_requires_auth(self, no_auth_client, seeded_tree):
-        ids = seeded_tree
+    async def test_requires_auth(self, no_auth_client):
         resp = await no_auth_client.get(
-            f"/skills/class_trees/{ids['tree_id']}/progress/{ids['character_id']}"
+            "/skills/class_trees/1/progress/100"
         )
         assert resp.status_code == 401
 
@@ -570,11 +576,10 @@ class TestChooseNode:
         assert "класс" in resp.json()["detail"].lower()
 
     @pytest.mark.asyncio
-    async def test_requires_auth(self, no_auth_client, seeded_tree):
-        ids = seeded_tree
+    async def test_requires_auth(self, no_auth_client):
         resp = await no_auth_client.post(
-            f"/skills/class_trees/{ids['tree_id']}/choose_node",
-            json={"character_id": ids["character_id"], "node_id": ids["root_id"]},
+            "/skills/class_trees/1/choose_node",
+            json={"character_id": 100, "node_id": 1},
         )
         assert resp.status_code == 401
 
@@ -735,14 +740,13 @@ class TestPurchaseSkill:
         assert "опыт" in resp.json()["detail"].lower()
 
     @pytest.mark.asyncio
-    async def test_requires_auth(self, no_auth_client, seeded_tree):
-        ids = seeded_tree
+    async def test_requires_auth(self, no_auth_client):
         resp = await no_auth_client.post(
             "/skills/class_trees/purchase_skill",
             json={
-                "character_id": ids["character_id"],
-                "node_id": ids["root_id"],
-                "skill_id": ids["skill1_id"],
+                "character_id": 100,
+                "node_id": 1,
+                "skill_id": 1,
             },
         )
         assert resp.status_code == 401
@@ -886,11 +890,10 @@ class TestResetTree:
         assert len(cs_resp.json()) == 0
 
     @pytest.mark.asyncio
-    async def test_requires_auth(self, no_auth_client, seeded_tree):
-        ids = seeded_tree
+    async def test_requires_auth(self, no_auth_client):
         resp = await no_auth_client.post(
-            f"/skills/class_trees/{ids['tree_id']}/reset",
-            json={"character_id": ids["character_id"]},
+            "/skills/class_trees/1/reset",
+            json={"character_id": 100},
         )
         assert resp.status_code == 401
 
@@ -902,7 +905,7 @@ class TestResetTree:
 class TestGetSubclassTrees:
 
     @pytest.mark.asyncio
-    async def test_returns_subclass_trees(self, admin_client, player_client, seeded_tree):
+    async def test_returns_subclass_trees(self, admin_client, seeded_tree):
         ids = seeded_tree
         # Create a subclass tree via admin API
         subclass_payload = {
@@ -919,7 +922,7 @@ class TestGetSubclassTrees:
         )
         assert create_resp.status_code == 200
 
-        # Fetch subclass trees (public endpoint, but use admin_client to avoid route conflicts)
+        # Fetch subclass trees (public endpoint, use admin_client which has DB override)
         resp = await admin_client.get(
             f"/skills/class_trees/subclass_trees/{ids['tree_id']}"
         )
