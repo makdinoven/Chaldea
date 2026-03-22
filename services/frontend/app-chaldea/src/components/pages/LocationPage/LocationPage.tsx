@@ -14,6 +14,7 @@ import PostCreateForm from './PostCreateForm';
 import NeighborsSection from './NeighborsSection';
 import LootSection from './LootSection';
 import PlaceholderSection from './PlaceholderSection';
+import LocationMobs from '../../LocationMobs';
 
 const LocationPage = () => {
   const navigate = useNavigate();
@@ -359,6 +360,14 @@ const LocationPage = () => {
       {/* Players + NPCs */}
       <PlayersSection players={location.players} npcs={location.npcs ?? []} />
 
+      <div className="gradient-divider-h relative pb-2" />
+
+      {/* Mobs / Enemies */}
+      <LocationMobs
+        locationId={location.id}
+        characterId={isCharacterHere ? (character?.id ?? null) : null}
+      />
+
       {/* Loot — only shown when items exist */}
       {(location.loot ?? []).length > 0 && (
         <>
@@ -423,14 +432,7 @@ const LocationPage = () => {
       <div className="gradient-divider-h relative pb-2" />
 
       {/* Placeholder sections */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:gap-4">
-        <div className="flex-1">
-          <PlaceholderSection title="Враги" message="Скоро здесь появятся враги для сражений" />
-        </div>
-        <div className="flex-1">
-          <PlaceholderSection title="Бой на локации" message="Скоро здесь можно будет сражаться" />
-        </div>
-      </div>
+      <PlaceholderSection title="Бой на локации" message="Скоро здесь можно будет сражаться" />
     </div>
   );
 };
