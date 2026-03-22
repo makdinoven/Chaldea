@@ -34,6 +34,8 @@ import AdminClassTreePage from "../AdminClassTreeEditor/AdminClassTreePage";
 import AdminModerationPage from "../AdminModerationPage/AdminModerationPage";
 import AdminNpcsPage from "../AdminNpcsPage/AdminNpcsPage";
 import SkillTreePage from "../SkillTreeView/SkillTreePage";
+import CharactersHubPage from "../pages/CharactersPage/CharactersHubPage";
+import CharactersListPage from "../pages/CharactersPage/CharactersListPage";
 
 const App = () => {
   const dispatch = useAppDispatch();
@@ -64,6 +66,8 @@ const App = () => {
           <Route path="/" element={<StartPage />} />
           <Route path="/*" element={<Layout />}>
             <Route path="home" element={<HomePage />} />
+            <Route path="characters" element={<CharactersHubPage />} />
+            <Route path="characters/list" element={<CharactersListPage />} />
             <Route path="createCharacter" element={<CreateCharacterPage />} />
             <Route path="requestsPage" element={
               <ProtectedRoute requiredPermission="characters:approve">

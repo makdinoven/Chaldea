@@ -24,7 +24,7 @@ export default function HomePage() {
       titleLink: "/world",
       img: button1img,
       links: [
-        { name: "Персонажи", link: "/createCharacter" },
+        { name: "Персонажи", link: "/characters" },
         { name: "Навыки", link: "/skill-tree" },
         { name: "Аукцион", link: "/auction" },
       ],

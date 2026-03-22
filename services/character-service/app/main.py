@@ -1043,10 +1043,56 @@ def get_short_info(character_id: int, db: Session = Depends(get_db)):
         "subrace_name": subrace.name if subrace else None,
     }
 
-@router.get("/list", response_model=List[schemas.CharacterShort])
-def list_characters(db: Session = Depends(get_db)):
-    characters = db.query(models.Character).all()
-    return characters
+@router.get("/list")
+def list_characters(
+    q: Optional[str] = Query(None),
+    id_class: Optional[int] = Query(None),
+    id_race: Optional[int] = Query(None),
+    include_npcs: bool = Query(False),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Public list of all characters with search/filters."""
+    query = db.query(models.Character)
+    if not include_npcs:
+        query = query.filter(models.Character.is_npc == False)
+    if q:
+        query = query.filter(models.Character.name.ilike(f"%{q}%"))
+    if id_class is not None:
+        query = query.filter(models.Character.id_class == id_class)
+    if id_race is not None:
+        query = query.filter(models.Character.id_race == id_race)
+
+    total = query.count()
+    characters = query.order_by(models.Character.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+
+    result = []
+    for ch in characters:
+        race = db.query(models.Race).filter(models.Race.id_race == ch.id_race).first()
+        cls = db.query(models.Class).filter(models.Class.id_class == ch.id_class).first()
+        subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == ch.id_subrace).first()
+        result.append({
+            "id": ch.id,
+            "name": ch.name,
+            "avatar": ch.avatar,
+            "level": ch.level,
+            "id_class": ch.id_class,
+            "id_race": ch.id_race,
+            "id_subrace": ch.id_subrace,
+            "biography": ch.biography,
+            "personality": ch.personality,
+            "appearance": ch.appearance,
+            "background": ch.background,
+            "sex": ch.sex,
+            "age": ch.age,
+            "is_npc": ch.is_npc,
+            "user_id": ch.user_id,
+            "class_name": cls.name if cls else None,
+            "race_name": race.name if race else None,
+            "subrace_name": subrace.name if subrace else None,
+        })
+    return {"items": result, "total": total, "page": page, "page_size": page_size}
 
 
 # ============================================================

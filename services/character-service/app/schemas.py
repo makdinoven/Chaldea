@@ -168,6 +168,27 @@ class CharacterShort(BaseModel):
         orm_mode = True
 
 
+class CharacterPublicListItem(BaseModel):
+    id: int
+    name: str
+    avatar: Optional[str] = None
+    level: int = 1
+    id_class: int
+    id_race: int
+    id_subrace: int
+    biography: Optional[str] = None
+    personality: Optional[str] = None
+    appearance: Optional[str] = None
+    background: Optional[str] = None
+    sex: Optional[str] = None
+    age: Optional[int] = None
+    is_npc: bool = False
+    user_id: Optional[int] = None
+    class_name: Optional[str] = None
+    race_name: Optional[str] = None
+    subrace_name: Optional[str] = None
+
+
 # Starter Kit schemas
 class StarterKitItem(BaseModel):
     item_id: int
