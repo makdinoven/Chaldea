@@ -1769,13 +1769,13 @@ async def delete_quest_admin(
 # --------------------------------------------------------------------
 # QUESTS — Player-facing endpoints
 # --------------------------------------------------------------------
-@router.get("/npcs/{npc_id}/quests", response_model=List[schemas.QuestAvailableRead])
+@router.get("/npcs/{npc_id}/quests")
 async def get_npc_quests(
     npc_id: int,
     character_id: int,
     session: AsyncSession = Depends(get_db),
 ):
-    """Get available quests from an NPC for a specific character."""
+    """Get all quests from an NPC with player_status for a specific character."""
     return await crud.get_available_quests_for_npc(session, npc_id, character_id)
 
 

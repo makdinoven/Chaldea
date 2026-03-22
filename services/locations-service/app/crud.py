@@ -2616,10 +2616,26 @@ async def get_available_quests_for_npc(
     available = []
     for q in all_quests:
         if q.id in active_quest_ids:
-            continue
-        if q.id in completed_quest_ids and q.quest_type != 'repeatable':
-            continue
-        available.append(q)
+            status = 'active'
+        elif q.id in completed_quest_ids:
+            status = 'completed'
+        else:
+            status = 'available'
+        available.append({
+            "id": q.id,
+            "title": q.title,
+            "description": q.description,
+            "quest_type": q.quest_type,
+            "min_level": q.min_level,
+            "reward_currency": q.reward_currency,
+            "reward_exp": q.reward_exp,
+            "reward_items": q.reward_items,
+            "objectives": [
+                {"id": o.id, "description": o.description, "objective_type": o.objective_type, "target_count": o.target_count, "sort_order": o.sort_order}
+                for o in sorted(q.objectives, key=lambda x: x.sort_order)
+            ],
+            "player_status": status,
+        })
 
     return available
 

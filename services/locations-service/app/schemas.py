@@ -937,7 +937,5 @@ class QuestAvailableRead(BaseModel):
     reward_exp: int = 0
     reward_items: Optional[List[dict]] = None
     objectives: List[QuestObjectiveRead] = []
-
-    class Config:
-        orm_mode = True
+    player_status: str = 'available'  # available, active, completed
 
