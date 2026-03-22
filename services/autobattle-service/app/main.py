@@ -231,6 +231,19 @@ async def handle_turn(bid: int, pid: int) -> None:
 
         # ---------- стратегия ----------
         skills, item_id = strategy.select_actions(ctx)
+        log.info("battle=%s pid=%s strategy chose: skills=%s item=%s", bid, pid, skills, item_id)
+
+        # Debug: log available skills
+        snap = next(s for s in ctx["snapshot"] if s["participant_id"] == pid)
+        snap_skills = snap.get("skills", [])
+        log.info("battle=%s pid=%s snapshot has %d skills: %s",
+                 bid, pid, len(snap_skills),
+                 [(s.get("id"), s.get("skill_type"), s.get("cost_energy")) for s in snap_skills])
+
+        me_rt = ctx["runtime"]["participants"][str(pid)]
+        log.info("battle=%s pid=%s runtime: energy=%s mana=%s cooldowns=%s",
+                 bid, pid, me_rt.get("energy"), me_rt.get("mana"), me_rt.get("cooldowns"))
+
         payload = {"participant_id": pid, "skills": skills}
         if item_id:
             payload["skills"]["item_id"] = item_id
