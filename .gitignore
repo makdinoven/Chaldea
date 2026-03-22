@@ -39,3 +39,7 @@ services/notification-service/app/__pycache__
 services/notification-service/app/consumers/__pycache__
 **/__pycache__/
 
+# Celery runtime files
+celerybeat-schedule
+celerybeat-schedule.db
+

@@ -1,6 +1,6 @@
 import s from "./InventoryItem.module.scss";
 import TooltipPortal from "../../../../../CommonComponents/TooltipPortal/TooltipPortal";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SKILLS_KEYS } from "../../../../../../helpers/commonConstants";
 import { translateSkillSign } from "../../../../../../helpers/helpers";
 import {
@@ -111,8 +111,18 @@ const InventoryItem = ({
     });
   };
 
-  // Track mousedown position to distinguish click from drag
-  const mouseDownPos = useRef(null);
+  // Native click listener as guaranteed fallback (React synthetic events
+  // don't fire reliably on draggable elements in production builds)
+  useEffect(() => {
+    const el = itemRef.current;
+    if (!el || !isDraggable) return;
+    const handler = (e) => {
+      e.stopPropagation();
+      handleSelectSkill();
+    };
+    el.addEventListener("click", handler);
+    return () => el.removeEventListener("click", handler);
+  });
 
   return (
     <>
@@ -121,32 +131,10 @@ const InventoryItem = ({
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={handleMouseLeave}
         onContextMenu={handleContextMenu}
-        onMouseDown={(e) => {
-          mouseDownPos.current = { x: e.clientX, y: e.clientY };
-        }}
-        onClick={(e) => {
-          e.stopPropagation();
-          handleSelectSkill();
-        }}
-        onMouseUp={(e) => {
-          // Fallback: fire on mouseUp if onClick doesn't work (draggable conflict)
-          if (mouseDownPos.current) {
-            const dx = Math.abs(e.clientX - mouseDownPos.current.x);
-            const dy = Math.abs(e.clientY - mouseDownPos.current.y);
-            if (dx < 5 && dy < 5) {
-              handleSelectSkill();
-            }
-          }
-          mouseDownPos.current = null;
-        }}
         draggable={!isCooldown && isDraggable}
         onDragStart={(e) => {
           if (isCooldown) return;
-          mouseDownPos.current = null;
           e.dataTransfer.setData("application/json", JSON.stringify(item));
-        }}
-        onDragEnd={() => {
-          mouseDownPos.current = null;
         }}
         className={` ${s.item_wrapper} ${isCooldown ? s.cooldown_item : ""}`}
       >
