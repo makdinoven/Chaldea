@@ -93,6 +93,64 @@ def create_inventory(inventory_request: schemas.InventoryRequest, db: Session = 
     return {"character_id": character_id, "items": inventory_data}
 
 
+# --- Item catalog (must be BEFORE /{character_id}/... to avoid route conflict) ---
+
+@router.get("/items", response_model=List[schemas.Item])
+def list_items(
+    q: Optional[str] = Query(None, description="Поиск по названию"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Возвращает список предметов с поиском и пагинацией."""
+    query = db.query(models.Items)
+    if q:
+        query = query.filter(models.Items.name.ilike(f"%{q}%"))
+    items = (
+        query
+        .order_by(models.Items.id.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return items
+
+@router.post("/items", response_model=schemas.Item, status_code=201)
+def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(require_permission("items:create"))):
+    """Создаёт новый предмет."""
+    if db.query(models.Items).filter(models.Items.name == item_in.name).first():
+        raise HTTPException(status_code=400, detail="Предмет с таким названием уже существует")
+    db_item = models.Items(**item_in.dict(exclude_unset=True))
+    db.add(db_item)
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+
+@router.get("/items/{item_id}", response_model=schemas.Item)
+def get_item(item_id: int, db: Session = Depends(get_db)):
+    db_item = db.query(models.Items).get(item_id)
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+    return db_item
+
+@router.put("/items/{item_id}", response_model=schemas.Item)
+def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(require_permission("items:update"))):
+    """Обновляет все переданные поля предмета."""
+    db_item = db.query(models.Items).get(item_id)
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+    if item_in.name and item_in.name != db_item.name:
+        if db.query(models.Items).filter(models.Items.name == item_in.name).first():
+            raise HTTPException(status_code=400, detail="Предмет с таким названием уже существует")
+    for field, value in item_in.dict(exclude_unset=True).items():
+        setattr(db_item, field, value)
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+
+
+# --- Character inventory ---
+
 @router.get("/{character_id}/items", response_model=List[schemas.CharacterInventory])
 def get_character_inventory(character_id: int, db: Session = Depends(get_db)):
     """
@@ -418,92 +476,6 @@ async def use_item(character_id: int, req: schemas.InventoryItem, db: Session = 
         await recover_in_attributes_service(character_id, recover_payload)
 
     return {"status": "ok", "detail": "Предмет использован"}
-
-@router.get("/items", response_model=List[schemas.Item])
-def list_items(
-    q: Optional[str] = Query(None, description="Поиск по названию"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db),
-):
-    """
-    Возвращает список предметов.
-
-    * q — подстрочный поиск по полю name (ILIKE %q%).
-    * page, page_size — пагинация.
-    """
-    query = db.query(models.Items)
-
-    if q:
-        query = query.filter(models.Items.name.ilike(f"%{q}%"))
-
-    items = (
-        query
-        .order_by(models.Items.id.asc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
-
-    return items
-
-@router.post("/items", response_model=schemas.Item, status_code=201)
-def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(require_permission("items:create"))):
-    """
-    Создаёт новый предмет.
-
-    • Проверяет уникальность `name`.
-    • При успехе возвращает сохранённый объект.
-    """
-
-    # 1) проверяем дубликат имени
-    if db.query(models.Items).filter(models.Items.name == item_in.name).first():
-        raise HTTPException(
-            status_code=400,
-            detail="Предмет с таким названием уже существует",
-        )
-
-    # 2) создаём объект (Pydantic → SQLAlchemy), пропуская неуказанные поля
-    db_item = models.Items(**item_in.dict(exclude_unset=True))
-    db.add(db_item)
-    db.commit()
-    db.refresh(db_item)
-
-    return db_item
-
-@router.get("/items/{item_id}", response_model=schemas.Item)
-def get_item(item_id: int, db: Session = Depends(get_db)):
-    db_item = db.query(models.Items).get(item_id)          # .get = by PK
-    if not db_item:
-        raise HTTPException(status_code=404, detail="Предмет не найден")
-    return db_item
-
-@router.put("/items/{item_id}", response_model=schemas.Item)
-def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(require_permission("items:update"))):
-    """
-    Обновляет все переданные поля предмета (exclude_unset=True).
-    Проверка уникальности имени сохраняется.
-    """
-    db_item = db.query(models.Items).get(item_id)
-    if not db_item:
-        raise HTTPException(status_code=404, detail="Предмет не найден")
-
-    # если меняем name – проверяем дубликат
-    if item_in.name and item_in.name != db_item.name:
-        if db.query(models.Items).filter(models.Items.name == item_in.name).first():
-            raise HTTPException(
-                status_code=400,
-                detail="Предмет с таким названием уже существует",
-            )
-
-    # частичное обновление
-    for field, value in item_in.dict(exclude_unset=True).items():
-        setattr(db_item, field, value)
-
-    db.add(db_item)
-    db.commit()
-    db.refresh(db_item)
-    return db_item
 
 @router.delete("/items/{item_id}", status_code=204)
 def delete_item(item_id: int, db: Session = Depends(get_db), current_user = Depends(require_permission("items:delete"))):
