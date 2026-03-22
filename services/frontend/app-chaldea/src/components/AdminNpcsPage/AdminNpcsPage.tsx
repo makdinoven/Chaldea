@@ -23,8 +23,9 @@ interface NpcListItem {
 interface NpcFormData {
   name: string;
   npc_role: string;
-  class_name: string;
-  race_name: string;
+  id_class: number;
+  id_race: number;
+  id_subrace: number;
   level: number;
   avatar: string;
   biography: string;
@@ -32,10 +33,10 @@ interface NpcFormData {
   appearance: string;
   sex: string;
   age: number;
-  weight: number;
-  height: number;
-  location_id: number | null;
-  currency: number;
+  weight: string;
+  height: string;
+  current_location_id: number | null;
+  currency_balance: number;
 }
 
 interface LocationOption {
@@ -46,8 +47,9 @@ interface LocationOption {
 const INITIAL_FORM: NpcFormData = {
   name: '',
   npc_role: 'merchant',
-  class_name: 'Воин',
-  race_name: 'Человек',
+  id_class: 1,
+  id_race: 1,
+  id_subrace: 1,
   level: 1,
   avatar: '',
   biography: '',
@@ -55,10 +57,10 @@ const INITIAL_FORM: NpcFormData = {
   appearance: '',
   sex: 'male',
   age: 25,
-  weight: 70,
-  height: 170,
-  location_id: null,
-  currency: 0,
+  weight: '70',
+  height: '170',
+  current_location_id: null,
+  currency_balance: 0,
 };
 
 /* ── Component ── */
@@ -129,8 +131,9 @@ const AdminNpcsPage = () => {
       setForm({
         name: npc.name || '',
         npc_role: npc.npc_role || 'merchant',
-        class_name: npc.class_name || 'Воин',
-        race_name: npc.race_name || 'Человек',
+        id_class: npc.id_class || 1,
+        id_race: npc.id_race || 1,
+        id_subrace: npc.id_subrace || 1,
         level: npc.level || 1,
         avatar: npc.avatar || '',
         biography: npc.biography || '',
@@ -138,10 +141,10 @@ const AdminNpcsPage = () => {
         appearance: npc.appearance || '',
         sex: npc.sex || 'male',
         age: npc.age || 25,
-        weight: npc.weight || 70,
-        height: npc.height || 170,
-        location_id: npc.location_id ?? null,
-        currency: npc.currency || 0,
+        weight: npc.weight || '70',
+        height: npc.height || '170',
+        current_location_id: npc.current_location_id ?? null,
+        currency_balance: npc.currency_balance || 0,
       });
       setEditingId(id);
       setAvatarFile(null);
@@ -196,7 +199,7 @@ const AdminNpcsPage = () => {
     const val = e.target.value;
     setForm((prev) => ({
       ...prev,
-      location_id: val === '' ? null : Number(val),
+      current_location_id: val === '' ? null : Number(val),
     }));
   };
 
@@ -230,10 +233,15 @@ const AdminNpcsPage = () => {
       setEditingId(null);
       fetchNpcs();
     } catch (err) {
-      const message =
-        axios.isAxiosError(err) && err.response?.data?.detail
-          ? err.response.data.detail
-          : 'Не удалось сохранить НПС';
+      let message = 'Не удалось сохранить НПС';
+      if (axios.isAxiosError(err) && err.response?.data?.detail) {
+        const detail = err.response.data.detail;
+        if (typeof detail === 'string') {
+          message = detail;
+        } else if (Array.isArray(detail)) {
+          message = detail.map((d: { msg?: string }) => d.msg || String(d)).join('; ');
+        }
+      }
       toast.error(message);
     } finally {
       setSaving(false);
@@ -338,7 +346,7 @@ const AdminNpcsPage = () => {
             {/* Class */}
             <label className="flex flex-col gap-1">
               <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Класс</span>
-              <select name="class_name" value={form.class_name} onChange={handleChange} className="input-underline">
+              <select name="id_class" value={form.id_class} onChange={handleChange} className="input-underline">
                 {NPC_CLASSES.map((c) => (
                   <option key={c.value} value={c.value} className="bg-site-dark text-white">{c.label}</option>
                 ))}
@@ -348,7 +356,7 @@ const AdminNpcsPage = () => {
             {/* Race */}
             <label className="flex flex-col gap-1">
               <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Раса</span>
-              <select name="race_name" value={form.race_name} onChange={handleChange} className="input-underline">
+              <select name="id_race" value={form.id_race} onChange={handleChange} className="input-underline">
                 {NPC_RACES.map((r) => (
                   <option key={r.value} value={r.value} className="bg-site-dark text-white">{r.label}</option>
                 ))}
@@ -392,13 +400,13 @@ const AdminNpcsPage = () => {
             {/* Currency */}
             <label className="flex flex-col gap-1">
               <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Валюта</span>
-              <input type="number" name="currency" value={form.currency} onChange={handleChange} min={0} className="input-underline" />
+              <input type="number" name="currency_balance" value={form.currency_balance} onChange={handleChange} min={0} className="input-underline" />
             </label>
 
             {/* Location */}
             <label className="flex flex-col gap-1">
               <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Локация</span>
-              <select value={form.location_id ?? ''} onChange={handleLocationChange} className="input-underline">
+              <select value={form.current_location_id ?? ''} onChange={handleLocationChange} className="input-underline">
                 <option value="" className="bg-site-dark text-white">Без локации</option>
                 {locations.map((loc) => (
                   <option key={loc.id} value={loc.id} className="bg-site-dark text-white">{loc.name}</option>

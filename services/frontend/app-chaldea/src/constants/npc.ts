@@ -27,18 +27,18 @@ export const NPC_SEXES = [
 ] as const;
 
 export const NPC_CLASSES = [
-  { value: 'Воин', label: 'Воин' },
-  { value: 'Плут', label: 'Плут' },
-  { value: 'Маг', label: 'Маг' },
+  { value: 1, label: 'Воин' },
+  { value: 2, label: 'Плут' },
+  { value: 3, label: 'Маг' },
 ] as const;
 
 export const NPC_RACES = [
-  { value: 'Человек', label: 'Человек' },
-  { value: 'Эльф', label: 'Эльф' },
-  { value: 'Дварф', label: 'Дварф' },
-  { value: 'Орк', label: 'Орк' },
-  { value: 'Полуэльф', label: 'Полуэльф' },
-  { value: 'Тифлинг', label: 'Тифлинг' },
-  { value: 'Гном', label: 'Гном' },
-  { value: 'Полурослик', label: 'Полурослик' },
+  { value: 1, label: 'Человек' },
+  { value: 2, label: 'Эльф' },
+  { value: 3, label: 'Дварф' },
+  { value: 4, label: 'Орк' },
+  { value: 5, label: 'Полуэльф' },
+  { value: 6, label: 'Тифлинг' },
+  { value: 7, label: 'Гном' },
+  { value: 8, label: 'Полурослик' },
 ] as const;
