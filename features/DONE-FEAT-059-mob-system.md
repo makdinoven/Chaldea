@@ -909,6 +909,13 @@ Cross-phase dependencies:
 [LOG] 2026-03-22 — Reviewer: баг #21 из ISSUES.md исправлен, отмечен как DONE
 [LOG] 2026-03-22 — Reviewer: py_compile — PASS для всех изменённых Python-файлов (8 шт)
 [LOG] 2026-03-22 — Reviewer: проверка завершена, результат PASS (с исправлениями в рамках ревью)
+[LOG] 2026-03-22 — PM: фича задеплоена. Обнаружены пост-релизные баги при live-тестировании:
+[LOG] 2026-03-22 — PM: баг — таблица battles не существует (Alembic не запускался в dev). Исправлено: добавлен alembic upgrade head в docker-compose command
+[LOG] 2026-03-22 — PM: баг — battle-service не дожидался MySQL (depends_on без healthcheck). Исправлено: condition: service_healthy
+[LOG] 2026-03-22 — PM: баг — навыки не отображались в бою. Причина: skills_client вызывал admin endpoint без JWT. Исправлено: публичный endpoint + использование данных из первого ответа (ISSUES #24)
+[LOG] 2026-03-22 — PM: баг — _normalize_effect падал при effect_name без двоеточия. Исправлено: проверка len(parts) (ISSUES #23)
+[LOG] 2026-03-22 — PM: баг — урон лечил врага вместо нанесения повреждений. Причина: apply_new_effects не учитывал is_enemy. Исправлено: параметр is_enemy для инверсии magnitude (ISSUES #22)
+[LOG] 2026-03-22 — PM: баг — CI test_mob_spawning падал (mock не работал через ThreadPoolExecutor). Исправлено: упрощён spawn_mob_from_template
 ```
 
 ---

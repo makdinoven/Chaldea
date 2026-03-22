@@ -74,6 +74,24 @@
 ~~**Сервис:** character-service~~
 ~~**Исправлено в FEAT-059 Review:** Renamed schema field `loot_table` to `loot_entries` in `MobTemplateDetailResponse` and updated frontend TypeScript interface to match.~~
 
+### ~~22. Баг: вражеские эффекты лечат вместо нанесения урона~~ DONE
+~~**Сервис:** battle-service~~
+~~**Файл:** `services/battle-service/app/buffs.py`~~
+~~**Описание:** `apply_new_effects` для enemy-эффектов с положительной magnitude на HP/mana/energy/stamina прибавляла значение (лечила врага) вместо вычитания.~~
+~~**Исправлено:** Добавлен параметр `is_enemy` — при `True` положительная magnitude инвертируется для мгновенных атрибутов.~~
+
+### ~~23. Баг: _normalize_effect падает при effect_name без двоеточия~~ DONE
+~~**Сервис:** battle-service~~
+~~**Файл:** `services/battle-service/app/buffs.py`~~
+~~**Описание:** `kind, tail = name.split(":", 1)` падал с `ValueError` если effect_name не содержал `:` (например "Bleeding").~~
+~~**Исправлено:** Проверка `len(parts)` перед распаковкой.~~
+
+### ~~24. battle-service skills_client вызывает admin endpoint без авторизации~~ DONE
+~~**Сервис:** battle-service~~
+~~**Файл:** `services/battle-service/app/skills_client.py`~~
+~~**Описание:** `get_rank()` и `character_ranks()` вызывали `/skills/admin/skill_ranks/{id}` (требует JWT), battle-service не отправлял токен → навыки не загружались в бою.~~
+~~**Исправлено:** `character_ranks()` использует данные из публичного ответа `/skills/characters/{id}/skills`. `get_rank()` использует новый публичный endpoint `/skills/skill_ranks/{id}`.~~
+
 ### 19. Несогласованность типов participant_id в battle-service
 **Сервис:** battle-service
 **Описание:** participant_id хранится как string ключ в Redis dict, но используется как int в разных местах кода. Потенциальный `KeyError`.
