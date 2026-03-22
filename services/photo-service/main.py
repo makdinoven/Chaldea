@@ -79,6 +79,25 @@ async def change_character_avatar_photo(character_id: int = Form(...), user_id: 
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/photo/change_npc_avatar")
+async def change_npc_avatar(
+    character_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user=Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Admin-only: upload avatar for an NPC character."""
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("npc_avatar", character_id, extension=result.extension)
+        avatar_url = upload_file_to_s3(result.data, unique_filename, subdirectory="character_avatars", content_type=result.content_type)
+        update_character_avatar(db, character_id, avatar_url, current_user.id)
+        return {"message": "Аватар НПС загружен", "avatar_url": avatar_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/photo/change_area_map")
 async def change_area_map_photo(area_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
     """

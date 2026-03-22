@@ -78,6 +78,8 @@ const AdminNpcsPage = () => {
   const [dialogueNpc, setDialogueNpc] = useState<{ id: number; name: string } | null>(null);
   const [shopNpc, setShopNpc] = useState<{ id: number; name: string } | null>(null);
   const [questNpc, setQuestNpc] = useState<{ id: number; name: string } | null>(null);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
 
   const fetchNpcs = useCallback(async () => {
     setLoading(true);
@@ -115,6 +117,8 @@ const AdminNpcsPage = () => {
   const openCreateForm = () => {
     setEditingId(null);
     setForm(INITIAL_FORM);
+    setAvatarFile(null);
+    setAvatarPreview(null);
     setFormOpen(true);
   };
 
@@ -140,6 +144,8 @@ const AdminNpcsPage = () => {
         currency: npc.currency || 0,
       });
       setEditingId(id);
+      setAvatarFile(null);
+      setAvatarPreview(null);
       setFormOpen(true);
     } catch {
       toast.error('Не удалось загрузить данные НПС');
@@ -171,6 +177,21 @@ const AdminNpcsPage = () => {
     }));
   };
 
+  const handleAvatarFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAvatarFile(file);
+    setAvatarPreview(URL.createObjectURL(file));
+  };
+
+  const uploadNpcAvatar = async (npcId: number, file: File) => {
+    const formData = new FormData();
+    formData.append('character_id', String(npcId));
+    formData.append('file', file);
+    const res = await axios.post(`${BASE_URL}/photo/change_npc_avatar`, formData);
+    return res.data.avatar_url as string;
+  };
+
   const handleLocationChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
     setForm((prev) => ({
@@ -187,13 +208,24 @@ const AdminNpcsPage = () => {
     }
     setSaving(true);
     try {
+      let npcId = editingId;
       if (editingId) {
         await axios.put(`${BASE_URL}/characters/admin/npcs/${editingId}`, form);
         toast.success('НПС обновлён');
       } else {
-        await axios.post(`${BASE_URL}/characters/admin/npcs`, form);
+        const res = await axios.post(`${BASE_URL}/characters/admin/npcs`, form);
+        npcId = res.data.id;
         toast.success('НПС создан');
       }
+      if (avatarFile && npcId) {
+        try {
+          await uploadNpcAvatar(npcId, avatarFile);
+        } catch {
+          toast.error('НПС сохранён, но не удалось загрузить аватар');
+        }
+      }
+      setAvatarFile(null);
+      setAvatarPreview(null);
       setFormOpen(false);
       setEditingId(null);
       fetchNpcs();
@@ -374,10 +406,24 @@ const AdminNpcsPage = () => {
               </select>
             </label>
 
-            {/* Avatar URL */}
+            {/* Avatar upload */}
             <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">URL аватара</span>
-              <input name="avatar" value={form.avatar} onChange={handleChange} placeholder="https://..." className="input-underline" />
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Аватар</span>
+              <div className="flex items-center gap-3">
+                {(avatarPreview || form.avatar) && (
+                  <img
+                    src={avatarPreview || form.avatar}
+                    alt="Превью"
+                    className="w-12 h-12 rounded-full object-cover shrink-0 border border-white/20"
+                  />
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleAvatarFile}
+                  className="text-sm text-white/70 file:mr-3 file:py-1.5 file:px-4 file:rounded file:border-0 file:text-sm file:bg-white/10 file:text-white/70 hover:file:bg-white/20 file:cursor-pointer"
+                />
+              </div>
             </label>
           </div>
 
