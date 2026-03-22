@@ -45,13 +45,21 @@ jobs:
             working-dir: services/notification-service/app
             requirements: services/notification-service/app/requirements.txt
             pytest-args: ''
+          - service: battle-service
+            working-dir: services/battle-service/app
+            requirements: services/battle-service/app/requirements.txt
+            pytest-args: '--asyncio-mode=auto'
+          - service: autobattle-service
+            working-dir: services/autobattle-service/app
+            requirements: services/autobattle-service/app/requirements.txt
+            pytest-args: ''
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc libmariadb-dev-compat libmariadb-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y gcc libmariadb-dev-compat libmariadb-dev pkg-config libgomp1
 
       - name: Setup Python
         uses: actions/setup-python@v5

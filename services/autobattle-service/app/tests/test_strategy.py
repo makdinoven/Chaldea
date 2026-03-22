@@ -10,8 +10,14 @@ Verifies that:
 
 import sys
 import os
+from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+# Remove any mocked version of strategy left by other test files
+# (e.g. test_endpoint_auth.py injects MagicMock into sys.modules at module level)
+if "strategy" in sys.modules and isinstance(sys.modules["strategy"], MagicMock):
+    del sys.modules["strategy"]
 
 from strategy import Strategy
 

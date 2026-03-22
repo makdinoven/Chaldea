@@ -57,8 +57,9 @@ def _ensure_not_on_cooldown(state: Dict, pid: int, rank_ids: list[int]) -> None:
     """
     cd = state["participants"][str(pid)]["cooldowns"]
     for rid in rank_ids:
-        if cd.get(str(rid), 0) > 0:
-            raise HTTPException(400, f"Rank {rid} is on cooldown")
+        remaining = cd.get(str(rid), 0)
+        if remaining > 0:
+            raise HTTPException(400, f"Навык на перезарядке (осталось ходов: {remaining})")
 
 async def verify_character_ownership(db: AsyncSession, character_id: int, user_id: int):
     """Check that a character belongs to the given user."""
@@ -255,10 +256,11 @@ async def _pay_skill_costs(state: dict, pid: int, ranks: list[dict]) -> dict:
     pstate = state["participants"][str(pid)]
 
     # Проверка «хватает ли»
+    res_names_ru = {"energy": "энергии", "mana": "маны", "stamina": "выносливости"}
     for res, value in spend.items():
         if pstate[res] < value:
             raise HTTPException(
-                400, f"Not enough {res}: need {value}, have {pstate[res]}"
+                400, f"Недостаточно {res_names_ru[res]}: нужно {value}, есть {pstate[res]}"
             )
 
     # Списываем
@@ -540,7 +542,7 @@ async def _make_action_core(
     battle_state: Dict | None = await load_state(battle_id)
     logger.debug(f"[ACTION] battle_id={battle_id}, request={request.dict()}")
     if battle_state is None:
-        raise HTTPException(404, "Battle not found in Redis")
+        raise HTTPException(404, "Бой не найден")
 
     # ------------------------------------------------------------------------------
     # 1.5. Ownership check (skipped for internal/autobattle calls)
@@ -557,7 +559,7 @@ async def _make_action_core(
     # 2. Проверяем, что сейчас ход указанного участника
     # ------------------------------------------------------------------------------
     if battle_state["next_actor"] != request.participant_id:
-        raise HTTPException(403, "Not your turn")
+        raise HTTPException(403, "Сейчас не ваш ход")
 
     # ------------------------------------------------------------------------------
     # 3. Уменьшаем длительность старых баффов/дебаффов
@@ -582,7 +584,7 @@ async def _make_action_core(
         if not await character_has_rank(attacker_character_id, rank_id):
             raise HTTPException(
                 400,
-                f"Character {attacker_character_id} does not own rank {rank_id}",
+                "Персонаж не владеет этим навыком",
             )
     rank_ids = [
         r_id for r_id in [

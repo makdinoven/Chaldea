@@ -25,6 +25,12 @@ os.environ.setdefault("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# Remove any mocked versions of skills_client left by other test files
+# (e.g. test_battle_fixes.py injects MagicMock into sys.modules at module level)
+for _mod in ("skills_client",):
+    if _mod in sys.modules and isinstance(sys.modules[_mod], MagicMock):
+        del sys.modules[_mod]
+
 # Patch database engine before importing anything that touches it
 import database  # noqa: E402
 database.engine = MagicMock()

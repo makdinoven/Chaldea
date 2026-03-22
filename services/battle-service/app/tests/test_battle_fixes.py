@@ -506,7 +506,7 @@ class TestCooldownDecrement:
         patches = _build_common_patches(state, attack_rank)
         response, _ = _run_action(patches)
         assert response.status_code == 400
-        assert "cooldown" in response.json()["detail"].lower()
+        assert "перезарядке" in response.json()["detail"].lower()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

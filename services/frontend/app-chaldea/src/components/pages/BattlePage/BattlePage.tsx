@@ -5,6 +5,7 @@ import { useEffect, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
 
+import toast from "react-hot-toast";
 import { useBodyBackground } from "../../../hooks/useBodyBackground";
 import { useAppSelector } from "../../../redux/store";
 import { BASE_URL_AUTOBATTLES, BASE_URL_BATTLES } from "../../../api/api";
@@ -301,17 +302,19 @@ const BattlePage = () => {
       },
     };
 
-    await setTurnApi(turnDataApi);
+    const success = await setTurnApi(turnDataApi);
 
-    setTurnData({
-      [SKILLS_KEYS.attack]: null,
-      [SKILLS_KEYS.defense]: null,
-      [SKILLS_KEYS.support]: null,
-      [SKILLS_KEYS.item]: null,
-    });
+    if (success) {
+      setTurnData({
+        [SKILLS_KEYS.attack]: null,
+        [SKILLS_KEYS.defense]: null,
+        [SKILLS_KEYS.support]: null,
+        [SKILLS_KEYS.item]: null,
+      });
+    }
   };
 
-  const setTurnApi = async (actionData: unknown) => {
+  const setTurnApi = async (actionData: unknown): Promise<boolean> => {
     try {
       const { data } = await axios.post<ActionResponseData>(
         `${BASE_URL_BATTLES}/battles/${battleId}/action`,
@@ -324,8 +327,13 @@ const BattlePage = () => {
       }
 
       getBattleState(false);
+      return true;
     } catch (e) {
-      console.error(e);
+      const err = e as { response?: { data?: { detail?: string } } };
+      const msg =
+        err?.response?.data?.detail || "Ошибка при выполнении хода";
+      toast.error(msg);
+      return false;
     }
   };
 

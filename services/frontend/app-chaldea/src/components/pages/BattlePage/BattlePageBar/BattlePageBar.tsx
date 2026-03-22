@@ -9,6 +9,7 @@ import {
   SKILLS_KEYS,
 } from "../../../../helpers/commonConstants";
 import axios from "axios";
+import toast from "react-hot-toast";
 import { BASE_URL_BATTLES } from "../../../../api/api";
 import { formatDateTime } from "../../../../helpers/helpers";
 import { DAMAGE_TYPES } from "../../../AdminSkillsPage/skillConstants";
@@ -254,7 +255,10 @@ const BattlePageBar = ({
       );
       setTurnLogs(data);
     } catch (e) {
-      console.error(e);
+      const err = e as { response?: { data?: { detail?: string } } };
+      const msg =
+        err?.response?.data?.detail || "Не удалось загрузить логи хода";
+      toast.error(msg);
     }
   };
 
