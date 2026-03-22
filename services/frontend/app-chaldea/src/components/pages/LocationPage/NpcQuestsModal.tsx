@@ -50,7 +50,9 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
   useEffect(() => {
     const fetchQuests = async () => {
       try {
-        const res = await axios.get<Quest[]>(`${BASE_URL}/locations/npcs/${npcId}/quests`);
+        const res = await axios.get<Quest[]>(`${BASE_URL}/locations/npcs/${npcId}/quests`, {
+          params: characterId ? { character_id: characterId } : {},
+        });
         setQuests(res.data);
       } catch {
         toast.error('Не удалось загрузить квесты');

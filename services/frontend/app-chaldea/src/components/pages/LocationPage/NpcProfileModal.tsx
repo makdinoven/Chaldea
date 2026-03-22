@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../../api/api';
 import { NPC_ROLE_LABELS } from '../../../constants/npc';
+import { useAppSelector } from '../../../redux/store';
 import NpcDialogueModal from './NpcDialogueModal';
 import NpcShopModal from './NpcShopModal';
 import NpcQuestsModal from './NpcQuestsModal';
@@ -35,6 +36,7 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
   const [shopOpen, setShopOpen] = useState(false);
   const [hasQuests, setHasQuests] = useState(false);
   const [questsOpen, setQuestsOpen] = useState(false);
+  const characterId = useAppSelector((state) => state.user.character?.id) as number | null;
 
   useEffect(() => {
     const fetchNpc = async () => {
@@ -79,16 +81,19 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
 
   // Check if NPC has quests
   useEffect(() => {
+    if (!characterId) return;
     const checkQuests = async () => {
       try {
-        const res = await axios.get(`${BASE_URL}/locations/npcs/${npcId}/quests`);
+        const res = await axios.get(`${BASE_URL}/locations/npcs/${npcId}/quests`, {
+          params: { character_id: characterId },
+        });
         setHasQuests(Array.isArray(res.data) && res.data.length > 0);
       } catch {
         setHasQuests(false);
       }
     };
     checkQuests();
-  }, [npcId]);
+  }, [npcId, characterId]);
 
   const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget) onClose();
