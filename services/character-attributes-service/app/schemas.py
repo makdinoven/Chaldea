@@ -40,48 +40,48 @@ class CharacterAttributesCreate(CharacterAttributesBase):
 class CharacterAttributesResponse(CharacterAttributesBase):
     id: int
     character_id: int
-    current_health: int
-    max_health: int
-    current_mana: int
-    max_mana: int
-    current_energy: int
-    max_energy: int
-    current_stamina: int
-    max_stamina: int
-    passive_experience: int
-    active_experience: int
-    dodge: float
-    critical_hit_chance: float
-    critical_damage: float
-    damage: int
+    current_health: Optional[int] = 100
+    max_health: Optional[int] = 100
+    current_mana: Optional[int] = 75
+    max_mana: Optional[int] = 75
+    current_energy: Optional[int] = 50
+    max_energy: Optional[int] = 50
+    current_stamina: Optional[int] = 100
+    max_stamina: Optional[int] = 100
+    passive_experience: Optional[int] = 0
+    active_experience: Optional[int] = 0
+    dodge: Optional[float] = 5.0
+    critical_hit_chance: Optional[float] = 20.0
+    critical_damage: Optional[float] = 125.0
+    damage: Optional[int] = 0
 
-    res_effects: float
-    res_physical: float
-    res_catting: float
-    res_crushing: float
-    res_piercing: float
-    res_magic: float
-    res_fire: float
-    res_ice: float
-    res_watering: float
-    res_electricity: float
-    res_sainting: float
-    res_wind: float
-    res_damning: float
+    res_effects: Optional[float] = 0.0
+    res_physical: Optional[float] = 0.0
+    res_catting: Optional[float] = 0.0
+    res_crushing: Optional[float] = 0.0
+    res_piercing: Optional[float] = 0.0
+    res_magic: Optional[float] = 0.0
+    res_fire: Optional[float] = 0.0
+    res_ice: Optional[float] = 0.0
+    res_watering: Optional[float] = 0.0
+    res_electricity: Optional[float] = 0.0
+    res_sainting: Optional[float] = 0.0
+    res_wind: Optional[float] = 0.0
+    res_damning: Optional[float] = 0.0
 
-    vul_effects: float
-    vul_physical: float
-    vul_catting: float
-    vul_crushing: float
-    vul_piercing: float
-    vul_magic: float
-    vul_fire: float
-    vul_ice: float
-    vul_watering: float
-    vul_electricity: float
-    vul_sainting: float
-    vul_wind: float
-    vul_damning: float
+    vul_effects: Optional[float] = 0.0
+    vul_physical: Optional[float] = 0.0
+    vul_catting: Optional[float] = 0.0
+    vul_crushing: Optional[float] = 0.0
+    vul_piercing: Optional[float] = 0.0
+    vul_magic: Optional[float] = 0.0
+    vul_fire: Optional[float] = 0.0
+    vul_ice: Optional[float] = 0.0
+    vul_watering: Optional[float] = 0.0
+    vul_electricity: Optional[float] = 0.0
+    vul_sainting: Optional[float] = 0.0
+    vul_wind: Optional[float] = 0.0
+    vul_damning: Optional[float] = 0.0
 
     class Config:
         orm_mode = True

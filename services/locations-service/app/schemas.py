@@ -459,8 +459,8 @@ class ClientPost(BaseModel):
     character_title: str
     character_level: Optional[int] = None
     character_name: Optional[str]
-    user_id: int
-    user_nickname: str
+    user_id: Optional[int] = None
+    user_nickname: Optional[str] = None
     content: str
     length: int
     created_at: datetime
