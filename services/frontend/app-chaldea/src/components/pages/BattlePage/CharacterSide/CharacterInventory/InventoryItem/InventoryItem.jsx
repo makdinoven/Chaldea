@@ -144,8 +144,8 @@ const InventoryItem = ({
         className={` ${s.item_wrapper} ${isCooldown ? s.cooldown_item : ""}`}
       >
         <div className={`${s.item} ${isCooldown ? s.cooldown : ""}`}>
-          {item.rank_image && <img src={item.rank_image} alt="" />}
-          {item.image && <img src={item.image} alt="" />}
+          {item.rank_image && <img src={item.rank_image} alt="" draggable={false} style={{ pointerEvents: 'none' }} />}
+          {item.image && <img src={item.image} alt="" draggable={false} style={{ pointerEvents: 'none' }} />}
         </div>
         {isCooldown && <div className={s.cooldown_status}>{cooldownValue}</div>}
       </div>
