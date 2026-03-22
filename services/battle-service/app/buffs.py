@@ -35,10 +35,12 @@ def _normalize_effect(row: Dict) -> Dict:
     }
 
 
-def apply_new_effects(state: Dict, pid: int, raw_effect_rows: List[Dict]) -> None:
+def apply_new_effects(state: Dict, pid: int, raw_effect_rows: List[Dict], is_enemy: bool = False) -> None:
     """
     • Для hp/mana/energy/stamina — применяем сразу (clamp 0..max_*)
     • Для остальных — нормализуем и добавляем в active_effects[pid]
+    • is_enemy=True — эффекты применяются к врагу (положительные мгновенные
+      значения инвертируются в урон, чтобы не лечить противника)
     """
     inst_attrs = {"hp", "mana", "energy", "stamina"}
     aid = str(pid)
@@ -46,9 +48,14 @@ def apply_new_effects(state: Dict, pid: int, raw_effect_rows: List[Dict]) -> Non
     for row in raw_effect_rows:
         eff = _normalize_effect(row)
         if eff["attribute"] in inst_attrs:
+            magnitude = eff["magnitude"]
+            # Вражеские эффекты с положительной magnitude на HP/mana/etc
+            # должны наносить урон, а не лечить
+            if is_enemy and magnitude > 0:
+                magnitude = -magnitude
             part = state["participants"][aid]
             mx = part[f"max_{eff['attribute']}"]
-            new = part[eff["attribute"]] + eff["magnitude"]
+            new = part[eff["attribute"]] + magnitude
             part[eff["attribute"]] = max(0, min(mx, new))
         else:
             state.setdefault("active_effects", {}).setdefault(aid, []).append(eff)

@@ -834,20 +834,7 @@ def spawn_mob_from_template(db: Session, template_id: int, location_id: int, spa
         # Fallback: generate from subrace
         attributes = generate_attributes_for_subrace(db, template.id_subrace)
 
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                attributes_response = pool.submit(
-                    _sync_send_attributes_request, new_character.id, dict(attributes)
-                ).result(timeout=15)
-        else:
-            attributes_response = loop.run_until_complete(
-                send_attributes_request(new_character.id, dict(attributes))
-            )
-    except Exception:
-        attributes_response = _sync_send_attributes_request(new_character.id, dict(attributes))
+    attributes_response = _sync_send_attributes_request(new_character.id, dict(attributes))
 
     if attributes_response:
         new_character.id_attributes = attributes_response.get("id")

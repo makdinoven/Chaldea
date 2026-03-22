@@ -598,7 +598,7 @@ async def make_action(
         enemy_effects = [e for e in support_rank.get("effects", [])
                          if e.get("target_side") == "enemy"]
         if enemy_effects:
-            apply_new_effects(battle_state, defender_pid, enemy_effects)
+            apply_new_effects(battle_state, defender_pid, enemy_effects, is_enemy=True)
             turn_events.append({
                 "event": "apply_effects", "who": defender_pid,
                 "kind": "support", "effects": [e["effect_name"] for e in enemy_effects],
@@ -623,7 +623,7 @@ async def make_action(
         enemy_effects = [e for e in defense_rank.get("effects", [])
                          if e.get("target_side") == "enemy"]
         if enemy_effects:
-            apply_new_effects(battle_state, defender_pid, enemy_effects)
+            apply_new_effects(battle_state, defender_pid, enemy_effects, is_enemy=True)
             turn_events.append({
                 "event": "apply_effects", "who": defender_pid,
                 "kind": "defense", "effects": [e["effect_name"] for e in enemy_effects],
@@ -721,7 +721,7 @@ async def make_action(
         enemy_effects = [e for e in attack_rank.get("effects", [])
                          if e.get("target_side") == "enemy"]
         if enemy_effects:
-            apply_new_effects(battle_state, defender_pid, enemy_effects)
+            apply_new_effects(battle_state, defender_pid, enemy_effects, is_enemy=True)
             turn_events.append({
                 "event": "apply_effects", "who": defender_pid,
                 "kind": "attack",
