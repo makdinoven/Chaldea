@@ -124,8 +124,12 @@ const InventoryItem = ({
         onMouseDown={(e) => {
           mouseDownPos.current = { x: e.clientX, y: e.clientY };
         }}
+        onClick={(e) => {
+          e.stopPropagation();
+          handleSelectSkill();
+        }}
         onMouseUp={(e) => {
-          // Only fire click if mouse didn't move much (not a drag)
+          // Fallback: fire on mouseUp if onClick doesn't work (draggable conflict)
           if (mouseDownPos.current) {
             const dx = Math.abs(e.clientX - mouseDownPos.current.x);
             const dy = Math.abs(e.clientY - mouseDownPos.current.y);
@@ -138,8 +142,11 @@ const InventoryItem = ({
         draggable={!isCooldown && isDraggable}
         onDragStart={(e) => {
           if (isCooldown) return;
-          mouseDownPos.current = null; // Cancel click on drag
+          mouseDownPos.current = null;
           e.dataTransfer.setData("application/json", JSON.stringify(item));
+        }}
+        onDragEnd={() => {
+          mouseDownPos.current = null;
         }}
         className={` ${s.item_wrapper} ${isCooldown ? s.cooldown_item : ""}`}
       >
