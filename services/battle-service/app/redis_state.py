@@ -103,7 +103,7 @@ async def init_battle_state(
     # уведомляем первого игрока / автобоя
     await redis_client.publish(
         f"battle:{battle_id}:your_turn",
-        json.dumps(battle_state),
+        str(first_actor_participant_id),
     )
 
 

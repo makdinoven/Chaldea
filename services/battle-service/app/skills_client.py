@@ -61,6 +61,9 @@ async def character_ranks(character_id: int) -> list[dict]:
         for field in ("skill_type", "skill_image", "skill_name", "skill_description"):
             if field not in rank_data and field in row and row[field]:
                 rank_data[field] = row[field]
+        # Normalize skill_type to lowercase for consistent downstream usage
+        if "skill_type" in rank_data and isinstance(rank_data["skill_type"], str):
+            rank_data["skill_type"] = rank_data["skill_type"].lower()
         # Фоллбэк: если rank_image пуст, используем skill_image
         if not rank_data.get("rank_image") and rank_data.get("skill_image"):
             rank_data["rank_image"] = rank_data["skill_image"]

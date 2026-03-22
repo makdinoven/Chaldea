@@ -91,12 +91,13 @@ class Strategy:
         out: Dict[int, float] = {}
         for rid, row in avail["skills"].items():
             base  = 1.0
-            bonus = _MODE_BONUS[self.mode].get(row.get("skill_type", "attack"), 0.0)
+            stype = row.get("skill_type", "attack").lower()
+            bonus = _MODE_BONUS[self.mode].get(stype, 0.0)
 
             # влияние HP: чем меньше, тем важнее support/defense
-            if row.get("skill_type") == "support":
+            if stype == "support":
                 bonus += (1.0 - f.get("hp_ratio", 1.0)) * 0.5
-            if row.get("skill_type") == "defense":
+            if stype == "defense":
                 bonus += (1.0 - f.get("hp_ratio", 1.0)) * 0.3
 
             # пользовательские лайки
@@ -117,7 +118,7 @@ class Strategy:
         # ------------- выбор навыков -----------------
         buckets = {"attack": [], "defense": [], "support": []}
         for rid, weight in w.items():
-            t = avail["skills"][rid].get("skill_type", "attack")
+            t = avail["skills"][rid].get("skill_type", "attack").lower()
             buckets.setdefault(t, []).append((rid, weight))
 
         skills = {"attack_rank_id": None, "defense_rank_id": None, "support_rank_id": None}

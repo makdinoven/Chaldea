@@ -13,3 +13,4 @@ lightgbm
 scikit-learn
 numpy
 requests
+pytest
