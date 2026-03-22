@@ -56,9 +56,14 @@ async def character_ranks(character_id: int) -> list[dict]:
         rank_data = row.get("skill_rank", {})
         if not rank_data:
             continue
-        # Добавляем skill_type из верхнего уровня ответа
-        if "skill_type" not in rank_data and "skill_type" in row:
-            rank_data["skill_type"] = row["skill_type"]
+        # Добавляем поля из верхнего уровня ответа (CharacterSkillRead),
+        # которых нет в skill_rank (SkillRankRead)
+        for field in ("skill_type", "skill_image", "skill_name", "skill_description"):
+            if field not in rank_data and field in row and row[field]:
+                rank_data[field] = row[field]
+        # Фоллбэк: если rank_image пуст, используем skill_image
+        if not rank_data.get("rank_image") and rank_data.get("skill_image"):
+            rank_data["rank_image"] = rank_data["skill_image"]
         results.append(rank_data)
     return results
 

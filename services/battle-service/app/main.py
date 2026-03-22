@@ -393,6 +393,66 @@ async def create_battle_endpoint(
     )
 
 
+# -----------------------------------------------------------
+# Internal endpoints (no auth, for service-to-service calls)
+# -----------------------------------------------------------
+@router.get("/internal/{battle_id}/state")
+async def get_state_internal(battle_id: int):
+    """Internal endpoint for autobattle-service — no JWT required."""
+    state = await load_state(battle_id)
+    if not state:
+        raise HTTPException(404, "State not found")
+
+    rds = await get_redis_client()
+    snapshot = await get_cached_snapshot(rds, battle_id)
+    if snapshot is None:
+        snap_doc = await load_snapshot(battle_id)
+        if snap_doc:
+            snapshot = snap_doc["participants"]
+            await cache_snapshot(rds, battle_id, snapshot)
+
+    runtime = {
+        "turn_number": state["turn_number"],
+        "deadline_at": state["deadline_at"],
+        "current_actor": state["next_actor"],
+        "next_actor": next_pid_after(state["next_actor"], state["turn_order"]),
+        "first_actor": state["first_actor"],
+        "turn_order": state["turn_order"],
+        "total_turns": state["total_turns"],
+        "last_turn": state["last_turn"],
+        "participants": {
+            pid: {
+                "hp": state["participants"][pid]["hp"],
+                "mana": state["participants"][pid]["mana"],
+                "energy": state["participants"][pid]["energy"],
+                "stamina": state["participants"][pid]["stamina"],
+                "cooldowns": state["participants"][pid]["cooldowns"],
+                "fast_slots": state["participants"][pid].get("fast_slots", []),
+                "team": state["participants"][pid]["team"],
+                "character_id": state["participants"][pid]["character_id"],
+                "max_hp": state["participants"][pid].get("max_hp", 0),
+                "max_mana": state["participants"][pid].get("max_mana", 0),
+                "max_energy": state["participants"][pid].get("max_energy", 0),
+                "max_stamina": state["participants"][pid].get("max_stamina", 0),
+            }
+            for pid in state["participants"]
+        },
+        "active_effects": state["active_effects"],
+    }
+
+    return {"snapshot": snapshot, "runtime": runtime}
+
+
+@router.post("/internal/{battle_id}/action", response_model=ActionResponse)
+async def make_action_internal(
+    battle_id: int,
+    request: ActionRequest,
+    db_session: AsyncSession = Depends(get_db),
+):
+    """Internal endpoint for autobattle-service — no JWT required."""
+    return await _make_action_core(battle_id, request, db_session, skip_ownership=True)
+
+
 # battle_service/main.py
 @router.get("/{battle_id}/state")
 async def get_state(
@@ -461,31 +521,18 @@ async def get_state(
 
 
 
-@router.post("/{battle_id}/action", response_model=ActionResponse)
-async def make_action(
+async def _make_action_core(
     battle_id: int,
     request: ActionRequest,
-    db_session: AsyncSession = Depends(get_db),
-    current_user: UserRead = Depends(get_current_user_via_http),
+    db_session: AsyncSession,
+    skip_ownership: bool = False,
+    current_user=None,
 ):
-    """
-    Обработка полного хода:
-      1. читаем текущее состояние из Redis;
-      2. убеждаемся, что сейчас ходит именно participant_id;
-      3. уменьшаем длительность активных эффектов;
-      4. валидируем право владения rank-ами;
-      5. применяем support- и defense-эффекты (target=self);
-      6. применяем предмет из fast-слота (восстановление ресурсов);
-      7. рассчитываем damage / эффекты attack-ранга (target=enemy);
-      8. пишем ход в БД, обновляем Redis-state и дедлайны;
-      9. отправляем детальный список событий в Celery → Mongo;
-     10. возвращаем ActionResponse.
-    """
+    """Core action logic shared by authenticated and internal endpoints."""
 
     # ------------------------------------------------------------------------------
     # 1. Получаем Redis-состояние боя
     # ------------------------------------------------------------------------------
-    # Check if battle is already finished in MySQL
     battle_record = await get_battle(db_session, battle_id)
     if battle_record and battle_record.status.value == "finished":
         raise HTTPException(400, "Бой уже завершён")
@@ -496,14 +543,15 @@ async def make_action(
         raise HTTPException(404, "Battle not found in Redis")
 
     # ------------------------------------------------------------------------------
-    # 1.5. Ownership: verify participant's character belongs to the user
+    # 1.5. Ownership check (skipped for internal/autobattle calls)
     # ------------------------------------------------------------------------------
-    participant_info_auth = battle_state["participants"].get(str(request.participant_id))
-    if participant_info_auth is None:
-        raise HTTPException(404, "Участник не найден в этом бою")
-    await verify_character_ownership(
-        db_session, participant_info_auth["character_id"], current_user.id
-    )
+    if not skip_ownership and current_user:
+        participant_info_auth = battle_state["participants"].get(str(request.participant_id))
+        if participant_info_auth is None:
+            raise HTTPException(404, "Участник не найден в этом бою")
+        await verify_character_ownership(
+            db_session, participant_info_auth["character_id"], current_user.id
+        )
 
     # ------------------------------------------------------------------------------
     # 2. Проверяем, что сейчас ход указанного участника
@@ -798,6 +846,32 @@ async def make_action(
         # Update battle status in MySQL
         await finish_battle(db_session, battle_id)
 
+        # Sync final resources (HP, mana, energy, stamina) back to character_attributes DB
+        for pid_str, pdata in battle_state["participants"].items():
+            char_id = pdata["character_id"]
+            try:
+                await db_session.execute(
+                    text("""
+                        UPDATE character_attributes
+                        SET current_health = :hp,
+                            current_mana = :mana,
+                            current_energy = :energy,
+                            current_stamina = :stamina
+                        WHERE character_id = :cid
+                    """),
+                    {
+                        "hp": max(0, int(pdata["hp"])),
+                        "mana": max(0, int(pdata["mana"])),
+                        "energy": max(0, int(pdata["energy"])),
+                        "stamina": max(0, int(pdata["stamina"])),
+                        "cid": char_id,
+                    },
+                )
+                await db_session.commit()
+                logger.info(f"Ресурсы персонажа {char_id} синхронизированы после боя")
+            except Exception as e:
+                logger.error(f"Не удалось синхронизировать ресурсы персонажа {char_id}: {e}")
+
         # Update Redis state one last time with final HP values
         battle_state["turn_number"] = new_turn_number
         await save_state(battle_id, battle_state)
@@ -879,6 +953,21 @@ async def make_action(
         deadline_at=new_deadline,
         events=turn_events
     )
+
+
+@router.post("/{battle_id}/action", response_model=ActionResponse)
+async def make_action(
+    battle_id: int,
+    request: ActionRequest,
+    db_session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Authenticated action endpoint for player turns."""
+    return await _make_action_core(
+        battle_id, request, db_session,
+        skip_ownership=False, current_user=current_user,
+    )
+
 
 @router.get("/battles/{battle_id}/logs")
 async def list_turn_logs(battle_id: int, limit: int = 50):

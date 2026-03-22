@@ -127,8 +127,13 @@ async def compute_damage_with_rolls(
     • roll_dodge, roll_chance, roll_crit
     • применяет +%баффы, криты, −%резисты
     """
-    # 1) базовый урон
-    base = attacker_attr["damage"] + (weapon["damage_modifier"] if weapon else 0)
+    # 1) базовый урон = сила персонажа + модификатор оружия + бонус damage
+    #    strength — основной стат урона для всех классов
+    #    damage — дополнительный бонус от экипировки/эффектов
+    base_stat = attacker_attr.get("strength", 0)
+    damage_bonus = attacker_attr.get("damage", 0)
+    weapon_mod = weapon["damage_modifier"] if weapon else 0
+    base = max(0, base_stat + damage_bonus + weapon_mod)
     dmg_type = damage_entry["damage_type"]
     if dmg_type == "all":
         dmg_type = weapon["primary_damage_type"] if weapon else "physical"
@@ -169,6 +174,8 @@ async def compute_damage_with_rolls(
     # resist
     resist_pct = percent_resists.get("all", 0) + percent_resists.get(dmg_type, 0)
     final = raw * (1 - resist_pct / 100.0)
+    # Урон не может быть отрицательным (отрицательный урон = лечение врага)
+    final = max(0.0, final)
     log.update({
         "resist_pct": resist_pct,
         "final": round(final, 2),
