@@ -55,6 +55,9 @@ interface RuntimeState {
   current_actor: number;
   next_actor: number;
   turn_number: number;
+  turn_order: number[];
+  total_turns: number;
+  first_actor: number;
   deadline_at: string;
 }
 
@@ -236,7 +239,7 @@ const BattlePage = () => {
 
       setCurrentTurn({
         currentCharacterParticipant: {
-          id: runtime.next_actor,
+          id: runtime.current_actor,
           characterName: currentActorSnapshot?.name ?? "",
         },
         turn_number: runtime.turn_number,
@@ -289,7 +292,7 @@ const BattlePage = () => {
   const handleSendTurn = async () => {
     if (!runtimeData) return;
     const turnDataApi = {
-      participant_id: runtimeData.current_actor,
+      participant_id: myData.participant_id!,
       skills: {
         attack_rank_id: turnData.attack ? (turnData.attack as SkillSlot).id ?? null : null,
         defense_rank_id: turnData.defense ? (turnData.defense as SkillSlot).id ?? null : null,
