@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { useNavigate, Link } from 'react-router-dom';
+import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../../api/api';
+import { useAppSelector } from '../../../redux/store';
 
 interface CharacterItem {
   id: number;
@@ -17,6 +18,7 @@ interface CharacterItem {
   age: number | null;
   is_npc: boolean;
   user_id: number | null;
+  username: string | null;
 }
 
 interface CharacterDetail extends CharacterItem {
@@ -40,6 +42,9 @@ const CLASS_OPTIONS = [
 
 const CharactersListPage = () => {
   const navigate = useNavigate();
+  const userId = useAppSelector((state) => state.user.id);
+  const isAuthenticated = userId !== null;
+
   const [characters, setCharacters] = useState<CharacterItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -51,6 +56,12 @@ const CharactersListPage = () => {
   // Detail modal
   const [selectedChar, setSelectedChar] = useState<CharacterDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // Claim functionality
+  const [claimTarget, setClaimTarget] = useState<CharacterItem | null>(null);
+  const [claimLoading, setClaimLoading] = useState(false);
+  const [characterCount, setCharacterCount] = useState(0);
+  const [characterLimit, setCharacterLimit] = useState(5);
 
   const fetchCharacters = useCallback(async () => {
     setLoading(true);
@@ -76,6 +87,46 @@ const CharactersListPage = () => {
   useEffect(() => {
     setPage(1);
   }, [search, classFilter]);
+
+  // Fetch character count for limit check
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const token = localStorage.getItem('accessToken');
+    if (!token) return;
+    axios
+      .get(`${BASE_URL}/characters/my-character-count`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .then((res) => {
+        setCharacterCount(res.data.count ?? 0);
+        setCharacterLimit(res.data.limit ?? 5);
+      })
+      .catch(() => {
+        // silently fail — button will remain enabled by default
+      });
+  }, [isAuthenticated]);
+
+  const handleClaimConfirm = async () => {
+    if (!claimTarget) return;
+    setClaimLoading(true);
+    try {
+      const token = localStorage.getItem('accessToken');
+      await axios.post(
+        `${BASE_URL}/characters/requests/claim`,
+        { character_id: claimTarget.id },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success('Заявка успешно подана');
+      setClaimTarget(null);
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { detail?: string } } };
+      toast.error(error.response?.data?.detail || 'Ошибка при подаче заявки');
+    } finally {
+      setClaimLoading(false);
+    }
+  };
+
+  const isAtCharacterLimit = characterCount >= characterLimit;
 
   const openDetail = async (charId: number) => {
     setDetailLoading(true);
@@ -199,6 +250,47 @@ const CharactersListPage = () => {
                   {char.race_name}{char.subrace_name ? ` (${char.subrace_name})` : ''}
                 </span>
               )}
+
+              {/* Owner / claim section */}
+              {!char.is_npc && (
+                <div className="w-full mt-1 flex flex-col items-center gap-1">
+                  {char.user_id && char.username ? (
+                    <Link
+                      to={`/user-profile/${char.user_id}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-site-blue text-[10px] sm:text-xs hover:underline transition-colors truncate max-w-full"
+                    >
+                      {char.username}
+                    </Link>
+                  ) : (
+                    <>
+                      <span className="text-white/30 text-[10px] sm:text-xs italic">Свободен</span>
+                      {isAuthenticated && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isAtCharacterLimit) {
+                              setClaimTarget(char);
+                            }
+                          }}
+                          disabled={isAtCharacterLimit}
+                          title={isAtCharacterLimit ? 'Достигнут лимит персонажей' : undefined}
+                          className={`
+                            text-[9px] sm:text-[11px] px-2 py-0.5 rounded-card
+                            transition-all duration-200
+                            ${isAtCharacterLimit
+                              ? 'text-white/30 border border-white/10 cursor-not-allowed'
+                              : 'text-site-blue border border-site-blue/40 hover:bg-site-blue/10 hover:border-site-blue/60'
+                            }
+                          `}
+                        >
+                          Подать заявку
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </button>
           ))}
         </div>
@@ -226,6 +318,46 @@ const CharactersListPage = () => {
           </button>
         </div>
       )}
+
+      {/* Claim confirmation modal */}
+      <AnimatePresence>
+        {claimTarget && (
+          <div className="modal-overlay" onClick={() => setClaimTarget(null)}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className="modal-content gold-outline gold-outline-thick relative max-w-md w-full mx-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 className="gold-text text-lg sm:text-xl font-medium uppercase text-center mb-4">
+                Подать заявку
+              </h2>
+              <p className="text-white text-sm sm:text-base text-center mb-6">
+                Вы уверены, что хотите подать заявку на персонажа{' '}
+                <span className="text-gold font-medium">{claimTarget.name}</span>?
+              </p>
+              <div className="flex gap-3 justify-center">
+                <button
+                  onClick={handleClaimConfirm}
+                  disabled={claimLoading}
+                  className="btn-blue !text-sm disabled:opacity-50"
+                >
+                  {claimLoading ? 'Отправка...' : 'Подтвердить'}
+                </button>
+                <button
+                  onClick={() => setClaimTarget(null)}
+                  disabled={claimLoading}
+                  className="btn-line !text-sm"
+                >
+                  Отмена
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Character detail modal */}
       {selectedChar && (

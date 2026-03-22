@@ -184,9 +184,32 @@ class CharacterPublicListItem(BaseModel):
     age: Optional[int] = None
     is_npc: bool = False
     user_id: Optional[int] = None
+    username: Optional[str] = None
     class_name: Optional[str] = None
     race_name: Optional[str] = None
     subrace_name: Optional[str] = None
+
+
+class ClaimRequestCreate(BaseModel):
+    character_id: int
+
+
+class ClaimRequestResponse(BaseModel):
+    id: int
+    character_id: int
+    user_id: int
+    status: str
+    request_type: str
+    name: str
+    created_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+
+class CharacterCountResponse(BaseModel):
+    count: int
+    limit: int
 
 
 # Starter Kit schemas

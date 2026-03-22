@@ -23,6 +23,8 @@ interface ModerationRequest {
   status: string;
   created_at: string;
   avatar: string | null;
+  request_type: string;
+  character_id: number | null;
 }
 
 export default function RequestsPage() {
@@ -70,7 +72,7 @@ export default function RequestsPage() {
       <div className="flex flex-col gap-20">
         {pendingRequests.length > 0 ? (
           pendingRequests.map((item) => (
-            <Request key={item.request_id} data={item} onStatusChange={handleStatusChange} />
+            <Request key={item.request_id} data={item} requestType={item.request_type} onStatusChange={handleStatusChange} />
           ))
         ) : (
           <h2 className="font-semibold text-[26px] text-center text-[color:var(--zoloto)]">

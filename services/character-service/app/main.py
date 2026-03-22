@@ -22,6 +22,8 @@ import logging
 # Universal subrace skill applied to all subraces (1-16)
 SUBRACE_SKILL_ID = 7  # "Выживание"
 
+MAX_CHARACTERS_PER_USER = 5
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("character-service")
 
@@ -70,6 +72,108 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
         logger.error(f"Ошибка при создании заявки: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при создании заявки на персонажа.")
 
+
+# Создание заявки на присвоение существующего персонажа
+@router.post("/requests/claim", response_model=schemas.ClaimRequestResponse)
+def create_claim_request(
+    data: schemas.ClaimRequestCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """
+    Создаёт заявку на присвоение существующего свободного персонажа.
+    """
+    # 1. Check character exists
+    character = db.query(models.Character).filter(models.Character.id == data.character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    # 2. Not NPC
+    if character.is_npc:
+        raise HTTPException(status_code=400, detail="Нельзя подать заявку на NPC")
+
+    # 3. No owner
+    if character.user_id is not None:
+        raise HTTPException(status_code=400, detail="Персонаж уже принадлежит другому пользователю")
+
+    # 4. User under character limit
+    try:
+        char_count = db.execute(
+            text("SELECT COUNT(*) FROM users_character WHERE user_id = :uid"),
+            {"uid": current_user.id}
+        ).scalar() or 0
+        if char_count >= MAX_CHARACTERS_PER_USER:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Достигнут лимит персонажей (максимум {MAX_CHARACTERS_PER_USER})"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Could not check character limit: {e}")
+
+    # 5. No duplicate pending claim
+    existing_claim = db.query(models.CharacterRequest).filter(
+        models.CharacterRequest.user_id == current_user.id,
+        models.CharacterRequest.character_id == data.character_id,
+        models.CharacterRequest.request_type == 'claim',
+        models.CharacterRequest.status == 'pending',
+    ).first()
+    if existing_claim:
+        raise HTTPException(status_code=409, detail="Вы уже подали заявку на этого персонажа")
+
+    # 6. Create claim request with bio fields copied from character
+    db_request = models.CharacterRequest(
+        user_id=current_user.id,
+        character_id=data.character_id,
+        request_type='claim',
+        name=character.name,
+        id_subrace=character.id_subrace,
+        id_race=character.id_race,
+        id_class=character.id_class,
+        biography=character.biography,
+        personality=character.personality,
+        appearance=character.appearance,
+        background=character.background,
+        sex=character.sex,
+        age=character.age,
+        weight=character.weight,
+        height=character.height,
+        avatar=character.avatar,
+    )
+    try:
+        db.add(db_request)
+        db.commit()
+        db.refresh(db_request)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при создании заявки на присвоение: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при создании заявки на присвоение персонажа")
+
+    return db_request
+
+
+# Получение количества персонажей текущего пользователя
+@router.get("/my-character-count", response_model=schemas.CharacterCountResponse)
+def get_my_character_count(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """
+    Возвращает количество персонажей текущего пользователя и лимит.
+    """
+    try:
+        count = db.execute(
+            text("SELECT COUNT(*) FROM users_character WHERE user_id = :uid"),
+            {"uid": current_user.id}
+        ).scalar() or 0
+    except Exception as e:
+        logger.warning(f"Could not get character count: {e}")
+        count = 0
+
+    return {"count": count, "limit": MAX_CHARACTERS_PER_USER}
+
+
 # Эндпоинт для одобрения заявки
 @router.post("/requests/{request_id}/approve")
 async def approve_character_request(request_id: int, db: Session = Depends(get_db), current_user = Depends(require_permission("characters:approve")), token: str = Depends(OAUTH2_SCHEME)):
@@ -100,7 +204,6 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
         logger.info(f"Заявка с ID {request_id} найдена, статус: {db_request.status}")
 
         # 1.5) Проверка лимита персонажей (максимум 5 на аккаунт)
-        MAX_CHARACTERS_PER_USER = 5
         try:
             char_count = db.execute(
                 text("SELECT COUNT(*) FROM users_character WHERE user_id = :uid"),
@@ -115,6 +218,42 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             raise
         except Exception as e:
             logger.warning(f"Could not check character limit: {e}")
+
+        # --- CLAIM approval branch ---
+        if getattr(db_request, 'request_type', 'creation') == 'claim':
+            character_id = db_request.character_id
+            if not character_id:
+                raise HTTPException(status_code=400, detail="Заявка на присвоение не содержит ID персонажа")
+
+            character = db.query(models.Character).filter(models.Character.id == character_id).first()
+            if not character:
+                raise HTTPException(status_code=404, detail="Персонаж не найден")
+            if character.user_id is not None:
+                raise HTTPException(status_code=400, detail="Персонаж уже принадлежит другому пользователю")
+
+            # Set owner on the existing character
+            character.user_id = db_request.user_id
+            db.flush()
+
+            # Mark request as approved
+            crud.update_character_request_status(db, request_id, "approved", auto_commit=False)
+
+            # Assign character to user in user-service
+            assign_result = await crud.assign_character_to_user(db_request.user_id, character_id, token=token)
+            if not assign_result:
+                db.rollback()
+                raise HTTPException(status_code=500, detail="Не удалось присвоить персонажа пользователю")
+
+            db.commit()
+            logger.info(f"Заявка на присвоение #{request_id} одобрена: персонаж {character_id} присвоен пользователю {db_request.user_id}")
+
+            # Send notification (non-blocking)
+            try:
+                await send_character_approved_notification(db_request.user_id, character.name)
+            except Exception as e:
+                logger.warning(f"Не удалось отправить уведомление: {e}")
+
+            return {"message": f"Персонаж с ID {character_id} успешно присвоен пользователю."}
 
         # 2) Читаем стартовый набор из БД
         class_id = db_request.id_class
@@ -1084,6 +1223,21 @@ def list_characters(
     total = query.count()
     characters = query.order_by(models.Character.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
+    # Batch-fetch usernames for all unique user_ids
+    unique_user_ids = set()
+    for ch in characters:
+        if ch.user_id is not None:
+            unique_user_ids.add(ch.user_id)
+
+    username_map = {}
+    for uid in unique_user_ids:
+        try:
+            resp = httpx.get(f"{settings.USER_SERVICE_URL}/users/{uid}", timeout=5.0)
+            if resp.status_code == 200:
+                username_map[uid] = resp.json().get("username")
+        except Exception as e:
+            logger.warning(f"Не удалось получить username для user_id {uid}: {e}")
+
     result = []
     for ch in characters:
         race = db.query(models.Race).filter(models.Race.id_race == ch.id_race).first()
@@ -1105,6 +1259,7 @@ def list_characters(
             "age": ch.age,
             "is_npc": ch.is_npc,
             "user_id": ch.user_id,
+            "username": username_map.get(ch.user_id) if ch.user_id else None,
             "class_name": cls.name if cls else None,
             "race_name": race.name if race else None,
             "subrace_name": subrace.name if subrace else None,

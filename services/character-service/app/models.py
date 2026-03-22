@@ -22,6 +22,8 @@ class CharacterRequest(Base):
     height = Column(String(10), nullable=True)
     id_race = Column(Integer, ForeignKey('races.id_race'), nullable=False)
     avatar = Column(String(255), nullable=True)
+    character_id = Column(Integer, nullable=True)
+    request_type = Column(Enum('creation', 'claim'), nullable=False, server_default='creation')
 
 
 

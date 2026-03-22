@@ -266,7 +266,9 @@ def get_moderation_requests(db: Session):
                 Race.name.label('race_name'),
                 CharacterRequest.id_subrace,
                 Subrace.name.label('subrace_name'),
-                CharacterRequest.avatar  # добавляем поле avatar
+                CharacterRequest.avatar,  # добавляем поле avatar
+                CharacterRequest.request_type,
+                CharacterRequest.character_id,
             )
             .join(Race, CharacterRequest.id_race == Race.id_race, isouter=True)
             .join(Subrace, CharacterRequest.id_subrace == Subrace.id_subrace, isouter=True)
@@ -297,7 +299,9 @@ def get_moderation_requests(db: Session):
             race_name,
             id_subrace,
             subrace_name,
-            avatar  # поле avatar
+            avatar,  # поле avatar
+            request_type,
+            character_id,
         ) in moderation_requests:
             created_at_str = created_at.strftime('%Y-%m-%dT%H:%M:%S') if created_at else None
 
@@ -322,7 +326,9 @@ def get_moderation_requests(db: Session):
                 "subrace_name": subrace_name if subrace_name else "Unknown",
                 "status": status,
                 "created_at": created_at_str,
-                "avatar": avatar if avatar else ""  # возвращаем пустую строку, если avatar нет
+                "avatar": avatar if avatar else "",  # возвращаем пустую строку, если avatar нет
+                "request_type": request_type if request_type else "creation",
+                "character_id": character_id,
             }
 
         # Возвращаем результат как словарь с ключом id заявки

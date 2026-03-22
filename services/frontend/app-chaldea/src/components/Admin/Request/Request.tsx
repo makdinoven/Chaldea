@@ -22,10 +22,12 @@ interface RequestData {
 
 interface RequestProps {
   data: RequestData;
+  requestType?: string;
   onStatusChange?: (requestId: number) => void;
 }
 
-const Request = ({ data, onStatusChange }: RequestProps) => {
+const Request = ({ data, requestType, onStatusChange }: RequestProps) => {
+  const isClaim = requestType === 'claim';
   const biographyItems = [
     { title: 'Биография', text: data.biography },
     { title: 'Личность', text: data.background },
@@ -74,6 +76,44 @@ const Request = ({ data, onStatusChange }: RequestProps) => {
         });
     }
   };
+
+  if (isClaim) {
+    return (
+      <div className="w-full bg-[rgba(24,30,32,0.7)] rounded-[15px] flex gap-5">
+        <div className="py-[21px] pl-9 flex flex-col items-center">
+          <UserAvatar img={data.avatar} name={data.name} />
+          <div className="mt-2">
+            {characterItemsSmall.map(
+              (item, index) =>
+                item.text && (
+                  <CharacterInfoSmall
+                    key={index}
+                    text={item.text}
+                  />
+                )
+            )}
+          </div>
+        </div>
+        <div className="py-5 flex flex-col gap-4 w-full justify-center">
+          <h3 className="gold-text text-lg font-medium uppercase">
+            Заявка на присвоение персонажа
+          </h3>
+          <p className="text-white text-sm">
+            Игрок хочет получить персонажа <span className="text-gold font-medium">{data.name}</span>
+          </p>
+        </div>
+        <div className="relative pt-2.5 w-[208px] shrink-0 flex flex-col gap-2.5 before:content-[''] before:absolute before:top-0 before:left-0 before:h-full before:w-px before:bg-gradient-to-b before:from-transparent before:via-[#999] before:to-transparent before:z-[1]">
+          {buttons.map((button) => (
+            <RequestButton
+              key={button.type}
+              text={button.text}
+              onClick={() => handleButtonClick(button.type)}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full bg-[rgba(24,30,32,0.7)] rounded-[15px] flex gap-5">
