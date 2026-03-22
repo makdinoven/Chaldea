@@ -7,6 +7,7 @@ import { NPC_ROLES, NPC_ROLE_LABELS, NPC_SEXES, NPC_CLASSES, NPC_RACES } from '.
 import DialogueEditor from './DialogueEditor';
 import NpcShopEditor from './NpcShopEditor';
 import QuestEditor from './QuestEditor';
+import NpcStatsEditor from './NpcStatsEditor';
 
 /* ── Types ── */
 
@@ -80,6 +81,7 @@ const AdminNpcsPage = () => {
   const [dialogueNpc, setDialogueNpc] = useState<{ id: number; name: string } | null>(null);
   const [shopNpc, setShopNpc] = useState<{ id: number; name: string } | null>(null);
   const [questNpc, setQuestNpc] = useState<{ id: number; name: string } | null>(null);
+  const [statsNpc, setStatsNpc] = useState<{ id: number; name: string } | null>(null);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
 
@@ -251,6 +253,18 @@ const AdminNpcsPage = () => {
   const filteredNpcs = npcs;
 
   /* ── Render ── */
+
+  if (statsNpc) {
+    return (
+      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+        <NpcStatsEditor
+          npcId={statsNpc.id}
+          npcName={statsNpc.name}
+          onClose={() => setStatsNpc(null)}
+        />
+      </div>
+    );
+  }
 
   if (questNpc) {
     return (
@@ -521,6 +535,12 @@ const AdminNpcsPage = () => {
                             Редактировать
                           </button>
                           <button
+                            onClick={() => setStatsNpc({ id: npc.id, name: npc.name })}
+                            className="text-sm text-green-400 hover:text-green-300 transition-colors duration-200"
+                          >
+                            Статы и навыки
+                          </button>
+                          <button
                             onClick={() => setDialogueNpc({ id: npc.id, name: npc.name })}
                             className="text-sm text-gold hover:text-gold-light transition-colors duration-200"
                           >
@@ -587,6 +607,12 @@ const AdminNpcsPage = () => {
                       Редактировать
                     </button>
                     <button
+                      onClick={() => setStatsNpc({ id: npc.id, name: npc.name })}
+                      className="text-sm text-green-400 hover:text-green-300 transition-colors"
+                    >
+                      Статы
+                    </button>
+                    <button
                       onClick={() => setDialogueNpc({ id: npc.id, name: npc.name })}
                       className="text-sm text-gold hover:text-gold-light transition-colors"
                     >
@@ -596,7 +622,7 @@ const AdminNpcsPage = () => {
                       onClick={() => setQuestNpc({ id: npc.id, name: npc.name })}
                       className="text-sm text-gold hover:text-gold-light transition-colors"
                     >
-                      Квесты
+                      Задания
                     </button>
                     {npc.npc_role === 'merchant' && (
                       <button
