@@ -19,4 +19,4 @@ COPY ./services/battle-service/app /app
 
 EXPOSE 8010
 
-CMD PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8010 --app-dir /app
+CMD ["sh", "-c", "cd /app && alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8010"]

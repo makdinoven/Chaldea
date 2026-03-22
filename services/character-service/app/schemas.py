@@ -449,3 +449,294 @@ class NpcInLocation(BaseModel):
     class_name: Optional[str] = None
     race_name: Optional[str] = None
     npc_role: Optional[str] = None
+
+
+# ========== Mob Template Schemas ==========
+
+class MobTemplateCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    tier: str = "normal"
+    level: int = 1
+    avatar: Optional[str] = None
+    id_race: int
+    id_subrace: int
+    id_class: int
+    sex: Optional[str] = "genderless"
+    base_attributes: Optional[Dict] = None
+    xp_reward: int = 0
+    gold_reward: int = 0
+    respawn_enabled: bool = False
+    respawn_seconds: Optional[int] = None
+
+    @validator("tier")
+    def validate_tier(cls, v):
+        if v not in ("normal", "elite", "boss"):
+            raise ValueError("Тип моба должен быть normal, elite или boss")
+        return v
+
+    @validator("level")
+    def validate_level(cls, v):
+        if v < 1:
+            raise ValueError("Уровень моба должен быть >= 1")
+        return v
+
+    @validator("xp_reward", "gold_reward")
+    def validate_rewards(cls, v):
+        if v < 0:
+            raise ValueError("Награда не может быть отрицательной")
+        return v
+
+
+class MobTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    tier: Optional[str] = None
+    level: Optional[int] = None
+    avatar: Optional[str] = None
+    id_race: Optional[int] = None
+    id_subrace: Optional[int] = None
+    id_class: Optional[int] = None
+    sex: Optional[str] = None
+    base_attributes: Optional[Dict] = None
+    xp_reward: Optional[int] = None
+    gold_reward: Optional[int] = None
+    respawn_enabled: Optional[bool] = None
+    respawn_seconds: Optional[int] = None
+
+    @validator("tier")
+    def validate_tier(cls, v):
+        if v is not None and v not in ("normal", "elite", "boss"):
+            raise ValueError("Тип моба должен быть normal, elite или boss")
+        return v
+
+    @validator("level")
+    def validate_level(cls, v):
+        if v is not None and v < 1:
+            raise ValueError("Уровень моба должен быть >= 1")
+        return v
+
+    @validator("xp_reward", "gold_reward")
+    def validate_rewards(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Награда не может быть отрицательной")
+        return v
+
+
+class MobTemplateResponse(BaseModel):
+    id: int
+    name: str
+    tier: str
+    level: int
+    avatar: Optional[str] = None
+    xp_reward: int
+    gold_reward: int
+    respawn_enabled: bool
+    respawn_seconds: Optional[int] = None
+
+    class Config:
+        orm_mode = True
+
+
+class MobTemplateListResponse(BaseModel):
+    items: List[MobTemplateResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class MobSkillResponse(BaseModel):
+    id: int
+    skill_rank_id: int
+
+    class Config:
+        orm_mode = True
+
+
+class MobLootEntryResponse(BaseModel):
+    id: int
+    item_id: int
+    drop_chance: float
+    min_quantity: int
+    max_quantity: int
+
+    class Config:
+        orm_mode = True
+
+
+class MobSpawnResponse(BaseModel):
+    id: int
+    location_id: int
+    spawn_chance: float
+    max_active: int
+    is_enabled: bool
+
+    class Config:
+        orm_mode = True
+
+
+class MobTemplateDetailResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    tier: str
+    level: int
+    avatar: Optional[str] = None
+    id_race: int
+    id_subrace: int
+    id_class: int
+    sex: Optional[str] = None
+    base_attributes: Optional[Dict] = None
+    xp_reward: int
+    gold_reward: int
+    respawn_enabled: bool
+    respawn_seconds: Optional[int] = None
+    skills: List[MobSkillResponse] = []
+    loot_entries: List[MobLootEntryResponse] = []
+    spawn_locations: List[MobSpawnResponse] = []
+
+    class Config:
+        orm_mode = True
+
+
+class MobSkillsUpdate(BaseModel):
+    skill_rank_ids: List[int]
+
+
+class MobLootEntry(BaseModel):
+    item_id: int
+    drop_chance: float
+    min_quantity: int = 1
+    max_quantity: int = 1
+
+    @validator("drop_chance")
+    def validate_drop_chance(cls, v):
+        if v < 0.0 or v > 100.0:
+            raise ValueError("Шанс дропа должен быть от 0 до 100")
+        return v
+
+    @validator("min_quantity", "max_quantity")
+    def validate_quantity(cls, v):
+        if v < 1:
+            raise ValueError("Количество должно быть >= 1")
+        return v
+
+
+class MobLootUpdate(BaseModel):
+    entries: List[MobLootEntry]
+
+
+class MobSpawnEntry(BaseModel):
+    location_id: int
+    spawn_chance: float = 5.0
+    max_active: int = 1
+    is_enabled: bool = True
+
+    @validator("spawn_chance")
+    def validate_spawn_chance(cls, v):
+        if v < 0.0 or v > 100.0:
+            raise ValueError("Шанс спавна должен быть от 0 до 100")
+        return v
+
+    @validator("max_active")
+    def validate_max_active(cls, v):
+        if v < 1:
+            raise ValueError("Максимальное количество должно быть >= 1")
+        return v
+
+
+class MobSpawnUpdate(BaseModel):
+    spawns: List[MobSpawnEntry]
+
+
+class ActiveMobResponse(BaseModel):
+    id: int
+    mob_template_id: int
+    character_id: int
+    location_id: int
+    status: str
+    battle_id: Optional[int] = None
+    spawn_type: str
+    spawned_at: Optional[datetime] = None
+    killed_at: Optional[datetime] = None
+    respawn_at: Optional[datetime] = None
+    template_name: Optional[str] = None
+    template_tier: Optional[str] = None
+    template_level: Optional[int] = None
+
+    class Config:
+        orm_mode = True
+
+
+class ActiveMobListResponse(BaseModel):
+    items: List[ActiveMobResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class ManualSpawnRequest(BaseModel):
+    mob_template_id: int
+    location_id: int
+
+
+class TrySpawnRequest(BaseModel):
+    location_id: int
+    character_id: int
+
+
+class TrySpawnResponse(BaseModel):
+    spawned: bool
+    mob: Optional[Dict] = None
+
+
+class MobInLocation(BaseModel):
+    active_mob_id: int
+    character_id: int
+    name: str
+    level: int
+    tier: str
+    avatar: Optional[str] = None
+    status: str
+
+
+class AddRewardsRequest(BaseModel):
+    xp: int = 0
+    gold: int = 0
+
+    @validator("xp", "gold")
+    def validate_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("Значение награды не может быть отрицательным")
+        return v
+
+
+class AddRewardsResponse(BaseModel):
+    ok: bool
+    new_balance: int
+    new_xp: Optional[int] = None
+
+
+class MobLootTableEntryResponse(BaseModel):
+    item_id: int
+    drop_chance: float
+    min_quantity: int
+    max_quantity: int
+
+
+class MobRewardDataResponse(BaseModel):
+    xp_reward: int
+    gold_reward: int
+    loot_table: List[MobLootTableEntryResponse] = []
+    template_name: str
+    tier: str
+
+
+class UpdateActiveMobStatusRequest(BaseModel):
+    status: str
+
+    @validator("status")
+    def validate_status(cls, v):
+        if v not in ("alive", "in_battle", "dead"):
+            raise ValueError("Статус должен быть alive, in_battle или dead")
+        return v

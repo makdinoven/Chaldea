@@ -1,5 +1,6 @@
 # battle-service/app/crud.py
 from datetime import datetime, timedelta
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Sequence
@@ -55,6 +56,16 @@ async def write_turn(
     await db.commit()
     await db.refresh(turn)
     return turn
+
+async def finish_battle(db: AsyncSession, battle_id: int) -> None:
+    """Set battle status to 'finished' in MySQL."""
+    await db.execute(
+        sa.update(models.Battle)
+        .where(models.Battle.id == battle_id)
+        .values(status=models.BattleStatus.finished)
+    )
+    await db.commit()
+
 
 async def get_battle(db: AsyncSession, battle_id: int) -> models.Battle | None:
     result = await db.execute(

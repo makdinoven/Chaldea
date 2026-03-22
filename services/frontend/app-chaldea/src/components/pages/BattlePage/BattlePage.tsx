@@ -1,36 +1,135 @@
 import s from "./BattlePage.module.scss";
 import CharacterSide from "./CharacterSide/CharacterSide";
 import Loader from "../../CommonComponents/Loader/Loader";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useSelector } from "react-redux";
 import axios from "axios";
 
 import { useBodyBackground } from "../../../hooks/useBodyBackground";
+import { useAppSelector } from "../../../redux/store";
 import { BASE_URL_AUTOBATTLES, BASE_URL_BATTLES } from "../../../api/api";
 import battleBg from "/battle-img-3.png";
 import BattlePageBar from "./BattlePageBar/BattlePageBar";
 import { SKILLS_KEYS } from "../../../helpers/commonConstants";
 import Modal from "../../CommonComponents/Modal/Modal";
 import BlueGradientButton from "../../CommonComponents/BlueGradientButton/BlueGradientButton";
+import BattleRewardsModal from "./BattleRewardsModal";
+import type { BattleRewards } from "../../../api/mobs";
+
+// --- Types ---
+
+interface ResourceEntry {
+  current: number;
+  max: number;
+}
+
+interface ResourceBlock {
+  health?: ResourceEntry;
+  mana?: ResourceEntry;
+  stamina?: ResourceEntry;
+  energy?: ResourceEntry;
+}
+
+// TODO: type these properly when sub-components are migrated to TS
+interface ParticipantSnapshot {
+  participant_id: number;
+  character_id: number;
+  name: string;
+  avatar: string | null;
+  skills: unknown;
+  attributes: Record<string, number>;
+}
+
+interface RuntimeState {
+  participants: Record<
+    number,
+    {
+      hp: number;
+      mana: number;
+      stamina: number;
+      energy: number;
+      fast_slots: unknown;
+      team: number;
+    }
+  >;
+  current_actor: number;
+  next_actor: number;
+  turn_number: number;
+  deadline_at: string;
+}
+
+interface CharacterData {
+  character_id?: number;
+  participant_id?: number;
+  name?: string;
+  avatar?: string | null;
+  skills?: unknown;
+  attributes?: Record<string, number>;
+  items?: unknown;
+  resources?: ResourceBlock[];
+}
+
+interface TurnInfo {
+  currentCharacterParticipant: {
+    id: number;
+    characterName: string;
+  };
+  turn_number: number;
+  isOpponentTurn: boolean;
+  endsAt: number;
+}
+
+interface SkillSlot {
+  id?: number;
+  item_id?: number;
+}
+
+interface TurnDataState {
+  [key: string]: SkillSlot | null;
+}
+
+interface BattleResultState {
+  winner: string;
+  isLose: boolean;
+}
+
+interface ActionResponseData {
+  ok: boolean;
+  turn_number: number;
+  next_actor: number;
+  deadline_at: string;
+  events: unknown[];
+  battle_finished?: boolean;
+  winner_team?: number;
+  rewards?: BattleRewards;
+}
+
+// --- Component ---
 
 const BattlePage = () => {
   useBodyBackground(battleBg);
   const navigate = useNavigate();
-  const { locationId, battleId } = useParams();
-  const character = useSelector((state) => state.user.character);
-  const [battleResult, setBattleResult] = useState(null);
+  const { locationId, battleId } = useParams<{
+    locationId: string;
+    battleId: string;
+  }>();
+  const character = useAppSelector((state) => state.user.character);
+  const [battleResult, setBattleResult] = useState<BattleResultState | null>(
+    null,
+  );
 
   const [loading, setLoading] = useState(true);
-  const [currentTurn, setCurrentTurn] = useState(null);
+  const [currentTurn, setCurrentTurn] = useState<TurnInfo | null>(null);
 
-  const [snapshotData, setSnapshotData] = useState(null);
-  const [runtimeData, setRuntimeData] = useState(null);
+  const [snapshotData, setSnapshotData] = useState<
+    ParticipantSnapshot[] | null
+  >(null);
+  const [runtimeData, setRuntimeData] = useState<RuntimeState | null>(null);
 
-  const [myData, setMyData] = useState({});
-  const [opponentData, setOpponentData] = useState(null);
+  const [myData, setMyData] = useState<CharacterData>({});
+  const [opponentData, setOpponentData] = useState<CharacterData | null>(null);
 
-  const [turnData, setTurnData] = useState({
+  const [turnData, setTurnData] = useState<TurnDataState>({
     [SKILLS_KEYS.attack]: null,
     [SKILLS_KEYS.defense]: null,
     [SKILLS_KEYS.support]: null,
@@ -40,7 +139,16 @@ const BattlePage = () => {
   const [isAutoBattleOn, setIsAutoBattleOn] = useState(false);
   const [autobattleMode, setAutobattleMode] = useState("balance");
 
-  const getResources = (snapshot, runtime, id) => [
+  // PvE rewards state
+  const [pveRewards, setPveRewards] = useState<BattleRewards | null>(null);
+  const [showRewardsModal, setShowRewardsModal] = useState(false);
+  const battleResultSetRef = useRef(false);
+
+  const getResources = (
+    snapshot: ParticipantSnapshot,
+    runtime: RuntimeState,
+    id: number,
+  ): ResourceBlock[] => [
     {
       health: {
         current: runtime.participants[id].hp,
@@ -67,7 +175,7 @@ const BattlePage = () => {
     },
   ];
 
-  const getBattleState = async (withLoading) => {
+  const getBattleState = async (withLoading?: boolean) => {
     if (withLoading) {
       setLoading(true);
     }
@@ -75,13 +183,20 @@ const BattlePage = () => {
       const { data } = await axios.get(
         `${BASE_URL_BATTLES}/battles/${battleId}/state`,
       );
-      const { snapshot, runtime } = data;
+      const { snapshot, runtime } = data as {
+        snapshot: ParticipantSnapshot[];
+        runtime: RuntimeState;
+      };
 
       setSnapshotData(snapshot);
       setRuntimeData(runtime);
 
-      const mySnapshot = snapshot.find((p) => p.character_id === character.id);
-      const oppSnapshot = snapshot.find((p) => p.character_id !== character.id);
+      const mySnapshot = snapshot.find(
+        (p: ParticipantSnapshot) => p.character_id === character.id,
+      );
+      const oppSnapshot = snapshot.find(
+        (p: ParticipantSnapshot) => p.character_id !== character.id,
+      );
 
       if (!mySnapshot || !oppSnapshot) return;
 
@@ -114,12 +229,15 @@ const BattlePage = () => {
       const turnEnd = new Date(runtime.deadline_at).getTime();
       const timeLeft = Math.max(0, turnEnd - now);
 
+      const currentActorSnapshot = snapshot.find(
+        (p: ParticipantSnapshot) =>
+          p.participant_id === runtime.current_actor,
+      );
+
       setCurrentTurn({
         currentCharacterParticipant: {
           id: runtime.next_actor,
-          characterName: snapshot.find(
-            (p) => p.participant_id === runtime.current_actor,
-          ).name,
+          characterName: currentActorSnapshot?.name ?? "",
         },
         turn_number: runtime.turn_number,
         isOpponentTurn: runtime.current_actor !== myParticipantId,
@@ -140,32 +258,43 @@ const BattlePage = () => {
       getBattleState();
     }, 5000);
 
-    getBattleState();
+    getBattleState(true);
 
     return () => clearInterval(intervalId);
-  }, [battleId, character]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [battleId, character, battleResult]);
 
   useEffect(() => {
-    if (opponentData && myData) {
-      const oppHealth = opponentData.resources[0].health.current;
-      const myHealth = myData.resources[0].health.current;
+    if (battleResultSetRef.current) return;
+    if (opponentData?.resources && myData?.resources) {
+      const oppHealth = (opponentData.resources[0] as { health: ResourceEntry })
+        .health.current;
+      const myHealth = (myData.resources[0] as { health: ResourceEntry }).health
+        .current;
 
       if (myHealth <= 0) {
-        setBattleResult({ winner: opponentData.name, isLose: true });
+        battleResultSetRef.current = true;
+        setBattleResult({ winner: opponentData.name ?? "", isLose: true });
       } else if (oppHealth <= 0) {
-        setBattleResult({ winner: myData.name, isLose: false });
+        battleResultSetRef.current = true;
+        setBattleResult({ winner: myData.name ?? "", isLose: false });
+        // Show rewards modal if we have PvE rewards
+        if (pveRewards) {
+          setShowRewardsModal(true);
+        }
       }
     }
-  }, [opponentData, myData]);
+  }, [opponentData, myData, pveRewards]);
 
   const handleSendTurn = async () => {
+    if (!runtimeData) return;
     const turnDataApi = {
       participant_id: runtimeData.current_actor,
       skills: {
-        attack_rank_id: turnData.attack ? turnData.attack.id : null,
-        defense_rank_id: turnData.defense ? turnData.defense.id : null,
-        support_rank_id: turnData.support ? turnData.support.id : null,
-        item_id: turnData.item ? turnData.item.item_id : null,
+        attack_rank_id: turnData.attack ? (turnData.attack as SkillSlot).id ?? null : null,
+        defense_rank_id: turnData.defense ? (turnData.defense as SkillSlot).id ?? null : null,
+        support_rank_id: turnData.support ? (turnData.support as SkillSlot).id ?? null : null,
+        item_id: turnData.item ? (turnData.item as SkillSlot).item_id ?? null : null,
       },
     };
 
@@ -179,12 +308,17 @@ const BattlePage = () => {
     });
   };
 
-  const setTurnApi = async (turnData) => {
+  const setTurnApi = async (actionData: unknown) => {
     try {
-      await axios.post(
+      const { data } = await axios.post<ActionResponseData>(
         `${BASE_URL_BATTLES}/battles/${battleId}/action`,
-        turnData,
+        actionData,
       );
+
+      // Capture PvE rewards from action response
+      if (data.battle_finished && data.rewards) {
+        setPveRewards(data.rewards);
+      }
 
       getBattleState(false);
     } catch (e) {
@@ -208,7 +342,9 @@ const BattlePage = () => {
         participant_id: myData.participant_id,
         battle_id: Number(battleId),
       });
-    } catch (error) {}
+    } catch {
+      // silently handled — autobattle is optional
+    }
   };
 
   const postAutoBattleOff = async () => {
@@ -216,7 +352,9 @@ const BattlePage = () => {
       await axios.post(`${BASE_URL_AUTOBATTLES}/unregister`, {
         participant_id: myData.participant_id,
       });
-    } catch (error) {}
+    } catch {
+      // silently handled — autobattle is optional
+    }
   };
 
   const handleSetAutobattleMode = async () => {
@@ -224,13 +362,16 @@ const BattlePage = () => {
       await axios.post(`${BASE_URL_AUTOBATTLES}/mode`, {
         mode: autobattleMode,
       });
-    } catch (error) {}
+    } catch {
+      // silently handled — autobattle is optional
+    }
   };
 
   useEffect(() => {
     if (isAutoBattleOn) {
       handleSetAutobattleMode();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autobattleMode, isAutoBattleOn]);
 
   if (loading) return <Loader />;
@@ -265,7 +406,9 @@ const BattlePage = () => {
           characterData={opponentData}
           isOpponent={true}
         />
-        {battleResult && (
+
+        {/* Battle result modal — standard win/lose */}
+        {battleResult && !showRewardsModal && (
           <Modal>
             <div className={s.modal_container}>
               <h2 className={`${battleResult.isLose ? s.lose : s.win}`}>
@@ -280,6 +423,18 @@ const BattlePage = () => {
               />
             </div>
           </Modal>
+        )}
+
+        {/* PvE rewards modal — shown on mob defeat with rewards */}
+        {pveRewards && (
+          <BattleRewardsModal
+            rewards={pveRewards}
+            visible={showRewardsModal}
+            onClose={() => {
+              setShowRewardsModal(false);
+              navigate(`/location/${locationId}`);
+            }}
+          />
         )}
       </div>
     )

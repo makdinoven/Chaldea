@@ -11,7 +11,7 @@ BASE = settings.SKILLS_URL.rstrip("/")
 # -----------------------------------------------------------
 async def get_rank(rank_id: int) -> dict:
     async with httpx.AsyncClient() as client:
-        r = await client.get(f"{BASE}/skills/admin/skill_ranks/{rank_id}")
+        r = await client.get(f"{BASE}/skills/skill_ranks/{rank_id}")
         r.raise_for_status()
         rank_json = r.json()
 
@@ -19,13 +19,13 @@ async def get_rank(rank_id: int) -> dict:
         if "skill_type" in rank_json:
             return rank_json
 
-        # иначе запрашиваем сам skill
+        # иначе запрашиваем сам skill через публичный endpoint
         skill_id = rank_json["skill_id"]
-        rs = await client.get(f"{BASE}/skills/admin/skills/{skill_id}")
+        rs = await client.get(f"{BASE}/skills/skills/{skill_id}/full_tree")
         rs.raise_for_status()
         skill_json = rs.json()
 
-        rank_json["skill_type"] = skill_json["skill_type"]
+        rank_json["skill_type"] = skill_json.get("skill_type", "")
         return rank_json
 
 
@@ -47,11 +47,20 @@ async def character_ranks(character_id: int) -> list[dict]:
     async with httpx.AsyncClient() as c:
         r = await c.get(f"{BASE}/skills/characters/{character_id}/skills")
         r.raise_for_status()
-        char_skill_rows = r.json()                      # [{'skill_rank_id': …}, …]
+        char_skill_rows = r.json()
 
-    # параллельные запросы + skill_type уже будет добавлен в get_rank
-    coro_list = [get_rank(row["skill_rank_id"]) for row in char_skill_rows]
-    return await asyncio.gather(*coro_list)
+    # Публичный эндпоинт уже возвращает полные данные ранга (skill_rank)
+    # и skill_type — используем их напрямую, без повторных запросов к admin API
+    results = []
+    for row in char_skill_rows:
+        rank_data = row.get("skill_rank", {})
+        if not rank_data:
+            continue
+        # Добавляем skill_type из верхнего уровня ответа
+        if "skill_type" not in rank_data and "skill_type" in row:
+            rank_data["skill_type"] = row["skill_type"]
+        results.append(rank_data)
+    return results
 
 
 # -----------------------------------------------------------

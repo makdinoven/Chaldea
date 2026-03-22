@@ -24,6 +24,8 @@ const sections: AdminSection[] = [
   { label: 'Игровое время', path: '/admin/game-time', description: 'Настройка внутриигрового календаря', module: 'gametime' },
   { label: 'Модерация постов', path: '/admin/moderation', description: 'Жалобы и запросы на удаление постов локаций', module: 'moderation' },
   { label: 'НПС', path: '/admin/npcs', description: 'Управление НПС: создание, редактирование, размещение на локациях', module: 'npcs' },
+  { label: 'Мобы', path: '/admin/mobs', description: 'Управление шаблонами мобов: создание, навыки, лут, спавн', module: 'mobs' },
+  { label: 'Активные мобы', path: '/admin/active-mobs', description: 'Мониторинг активных мобов, ручное размещение и удаление', module: 'mobs' },
 ];
 
 const AdminPage = () => {

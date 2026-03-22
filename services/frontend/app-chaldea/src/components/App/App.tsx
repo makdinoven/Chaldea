@@ -33,6 +33,8 @@ import GameTimeAdminPage from "../Admin/GameTimeAdminPage";
 import AdminClassTreePage from "../AdminClassTreeEditor/AdminClassTreePage";
 import AdminModerationPage from "../AdminModerationPage/AdminModerationPage";
 import AdminNpcsPage from "../AdminNpcsPage/AdminNpcsPage";
+import AdminMobTemplates from "../Admin/MobsPage/AdminMobTemplates";
+import AdminActiveMobs from "../Admin/MobsPage/AdminActiveMobs";
 import SkillTreePage from "../SkillTreeView/SkillTreePage";
 import CharactersHubPage from "../pages/CharactersPage/CharactersHubPage";
 import CharactersListPage from "../pages/CharactersPage/CharactersListPage";
@@ -151,6 +153,16 @@ const App = () => {
             <Route path="admin/npcs" element={
               <ProtectedRoute requiredPermission="npcs:read">
                 <AdminNpcsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/mobs" element={
+              <ProtectedRoute requiredPermission="mobs:manage">
+                <AdminMobTemplates />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/active-mobs" element={
+              <ProtectedRoute requiredPermission="mobs:manage">
+                <AdminActiveMobs />
               </ProtectedRoute>
             } />
             <Route path="chat/history" element={<ChatHistoryPage />} />

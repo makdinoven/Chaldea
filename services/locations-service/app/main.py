@@ -23,6 +23,29 @@ logger = logging.getLogger(__name__)
 
 OAUTH2_SCHEME_OPTIONAL = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
+
+async def _try_spawn_mob(location_id: int, character_id: int):
+    """
+    Fire-and-forget: call character-service to try spawning a mob at the location.
+    Errors are caught and logged — never blocks or fails the calling endpoint.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{settings.CHARACTER_SERVICE_URL}/characters/internal/try-spawn",
+                json={"location_id": location_id, "character_id": character_id},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("spawned"):
+                    logger.info(
+                        f"Моб заспавнен на локации {location_id}: {data.get('mob', {}).get('name', '?')}"
+                    )
+            else:
+                logger.warning(f"try-spawn вернул статус {resp.status_code}: {resp.text}")
+    except Exception as e:
+        logger.warning(f"Ошибка при вызове try-spawn для локации {location_id}: {e}")
+
 app = FastAPI()
 
 cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
@@ -461,9 +484,21 @@ async def update_location_neighbors(
 # POSTS
 # --------------------------------------------------------------------
 @router.post("/posts/", response_model=schemas.PostResponse)
-async def create_new_post(post_data: schemas.PostCreate, session: AsyncSession = Depends(get_db), current_user=Depends(get_current_user_via_http)):
+async def create_new_post(
+    post_data: schemas.PostCreate,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
     await verify_character_ownership(session, post_data.character_id, current_user.id)
-    return await crud.create_post(session, post_data)
+    result = await crud.create_post(session, post_data)
+
+    # Fire-and-forget: trigger mob spawn check
+    background_tasks.add_task(
+        _try_spawn_mob, post_data.location_id, post_data.character_id
+    )
+
+    return result
 
 @router.get("/{location_id}/posts/", response_model=List[schemas.PostResponse])
 async def get_posts_in_location(location_id: int, session: AsyncSession = Depends(get_db)):
@@ -703,6 +738,11 @@ async def move_and_post(
             if uid != author_user_id:
                 msg = f"Новый пост на локации «{location_name}»"
                 background_tasks.add_task(publish_notification_sync, uid, msg)
+
+    # Fire-and-forget: trigger mob spawn check at destination location
+    background_tasks.add_task(
+        _try_spawn_mob, destination_location_id, movement.character_id
+    )
 
     return new_post
 

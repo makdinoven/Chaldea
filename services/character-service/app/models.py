@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON, Boolean
+from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON, Boolean, Float, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -128,5 +128,104 @@ class StarterKit(Base):
     items = Column(JSON, nullable=False, default=list)
     skills = Column(JSON, nullable=False, default=list)
     currency_amount = Column(Integer, nullable=False, default=0)
+
+
+class MobTemplate(Base):
+    __tablename__ = "mob_templates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    tier = Column(Enum('normal', 'elite', 'boss'), nullable=False, default='normal', index=True)
+    level = Column(Integer, nullable=False, default=1)
+    avatar = Column(String(255), nullable=True)
+    # Character creation data
+    id_race = Column(Integer, nullable=False)
+    id_subrace = Column(Integer, nullable=False)
+    id_class = Column(Integer, nullable=False)
+    sex = Column(Enum('male', 'female', 'genderless'), default='genderless')
+    # Base attributes override (JSON with stat keys)
+    base_attributes = Column(JSON, nullable=True)
+    # Reward configuration
+    xp_reward = Column(Integer, nullable=False, default=0)
+    gold_reward = Column(Integer, nullable=False, default=0)
+    # Respawn configuration
+    respawn_enabled = Column(Boolean, nullable=False, default=False)
+    respawn_seconds = Column(Integer, nullable=True)
+    # Metadata
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    skills = relationship("MobTemplateSkill", back_populates="mob_template", cascade="all, delete-orphan")
+    loot_entries = relationship("MobLootTable", back_populates="mob_template", cascade="all, delete-orphan")
+    spawn_locations = relationship("LocationMobSpawn", back_populates="mob_template", cascade="all, delete-orphan")
+    active_mobs = relationship("ActiveMob", back_populates="mob_template", cascade="all, delete-orphan")
+
+
+class MobTemplateSkill(Base):
+    __tablename__ = "mob_template_skills"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mob_template_id = Column(Integer, ForeignKey("mob_templates.id", ondelete="CASCADE"), nullable=False)
+    skill_rank_id = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('mob_template_id', 'skill_rank_id', name='uq_mob_template_skill'),
+    )
+
+    mob_template = relationship("MobTemplate", back_populates="skills")
+
+
+class MobLootTable(Base):
+    __tablename__ = "mob_loot_table"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mob_template_id = Column(Integer, ForeignKey("mob_templates.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id = Column(Integer, nullable=False)
+    drop_chance = Column(Float, nullable=False, default=0.0)
+    min_quantity = Column(Integer, nullable=False, default=1)
+    max_quantity = Column(Integer, nullable=False, default=1)
+
+    mob_template = relationship("MobTemplate", back_populates="loot_entries")
+
+
+class LocationMobSpawn(Base):
+    __tablename__ = "location_mob_spawns"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mob_template_id = Column(Integer, ForeignKey("mob_templates.id", ondelete="CASCADE"), nullable=False)
+    location_id = Column(BigInteger, nullable=False, index=True)
+    spawn_chance = Column(Float, nullable=False, default=5.0)
+    max_active = Column(Integer, nullable=False, default=1)
+    is_enabled = Column(Boolean, nullable=False, default=True)
+
+    __table_args__ = (
+        UniqueConstraint('mob_template_id', 'location_id', name='uq_template_location'),
+    )
+
+    mob_template = relationship("MobTemplate", back_populates="spawn_locations")
+
+
+class ActiveMob(Base):
+    __tablename__ = "active_mobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mob_template_id = Column(Integer, ForeignKey("mob_templates.id", ondelete="CASCADE"), nullable=False)
+    character_id = Column(Integer, nullable=False)
+    location_id = Column(BigInteger, nullable=False)
+    status = Column(Enum('alive', 'in_battle', 'dead'), nullable=False, default='alive')
+    battle_id = Column(Integer, nullable=True)
+    spawn_type = Column(Enum('random', 'manual'), nullable=False, default='random')
+    spawned_at = Column(TIMESTAMP, server_default=func.now())
+    killed_at = Column(TIMESTAMP, nullable=True)
+    respawn_at = Column(TIMESTAMP, nullable=True)
+
+    __table_args__ = (
+        Index('idx_active_mobs_location', 'location_id', 'status'),
+        Index('idx_active_mobs_respawn', 'respawn_at', 'status'),
+    )
+
+    mob_template = relationship("MobTemplate", back_populates="active_mobs")
 
 

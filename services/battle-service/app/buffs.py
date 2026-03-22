@@ -15,11 +15,15 @@ def _normalize_effect(row: Dict) -> Dict:
     if row.get("attribute_key"):  # StatModifier
         attribute = ALIASES.get(row["attribute_key"], row["attribute_key"])
     else:
-        kind, tail = [s.strip().lower() for s in name.split(":", 1)]
-        if kind == "buff":
-            attribute = "percent_damage" if tail == "all" else f"percent_damage_{tail}"
-        elif kind == "resist":
-            attribute = f"percent_resist_{tail}"
+        parts = [s.strip().lower() for s in name.split(":", 1)]
+        if len(parts) == 2:
+            kind, tail = parts
+            if kind == "buff":
+                attribute = "percent_damage" if tail == "all" else f"percent_damage_{tail}"
+            elif kind == "resist":
+                attribute = f"percent_resist_{tail}"
+            else:
+                attribute = name.replace(" ", "_").lower()
         else:
             attribute = name.replace(" ", "_").lower()
 

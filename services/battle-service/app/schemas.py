@@ -33,12 +33,27 @@ class ActionRequest(BaseModel):
     skills: SkillSelection
 
 
+class BattleRewardItem(BaseModel):
+    item_id: int
+    item_name: Optional[str] = None
+    quantity: int
+
+
+class BattleRewards(BaseModel):
+    xp: int = 0
+    gold: int = 0
+    items: list[BattleRewardItem] = []
+
+
 class ActionResponse(BaseModel):
     ok: bool
     turn_number: int
     next_actor: int
     deadline_at: datetime
     events: list[dict]
+    battle_finished: Optional[bool] = None
+    winner_team: Optional[int] = None
+    rewards: Optional[BattleRewards] = None
 
 class BattleLog(BaseModel):
     battle_id: int

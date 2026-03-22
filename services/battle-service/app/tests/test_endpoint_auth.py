@@ -230,8 +230,9 @@ class TestBattleActionAuth:
         assert response.status_code == 401
 
     @patch("main.load_state", new_callable=AsyncMock, return_value=None)
+    @patch("main.get_battle", new_callable=AsyncMock, return_value=None)
     @patch("auth_http.requests.get")
-    def test_no_battle_state_returns_404(self, mock_auth_get, mock_load_state):
+    def test_no_battle_state_returns_404(self, mock_auth_get, mock_get_battle, mock_load_state):
         """Battle state not in Redis -> 404 (after auth passes)."""
         mock_auth_get.return_value = _mock_response(
             200, {"id": 5, "username": "user", "role": "user", "permissions": []}
@@ -255,8 +256,9 @@ class TestBattleActionAuth:
             app.dependency_overrides.pop(get_db, None)
 
     @patch("main.load_state", new_callable=AsyncMock)
+    @patch("main.get_battle", new_callable=AsyncMock, return_value=None)
     @patch("auth_http.requests.get")
-    def test_wrong_owner_returns_403(self, mock_auth_get, mock_load_state):
+    def test_wrong_owner_returns_403(self, mock_auth_get, mock_get_battle, mock_load_state):
         """Participant's character does not belong to user -> 403."""
         mock_auth_get.return_value = _mock_response(
             200, {"id": 99, "username": "hacker", "role": "user", "permissions": []}

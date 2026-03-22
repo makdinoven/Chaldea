@@ -7,8 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
-from crud import create_battle, write_turn, get_logs_for_turn
-from schemas import BattleCreated, BattleCreate, ActionResponse, ActionRequest, LogResponse
+from crud import create_battle, write_turn, get_logs_for_turn, finish_battle, get_battle
+from schemas import BattleCreated, BattleCreate, ActionResponse, ActionRequest, LogResponse, BattleRewards, BattleRewardItem
 from auth_http import get_current_user_via_http, UserRead
 from mongo_client import get_mongo_db
 from database import get_db
@@ -19,13 +19,15 @@ from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, b
     build_percent_resist_buffs
 from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, compute_damage_with_rolls
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
-    get_cached_snapshot, KEY_BATTLE_TURNS
+    get_cached_snapshot, KEY_BATTLE_TURNS, state_key
 from config import settings
 from mongo_helpers import save_snapshot, load_snapshot
 from tasks import save_log
 from skills_client import character_has_rank, get_rank, get_item, character_ranks
+import httpx
 import logging
 import os
+import random
 logging.basicConfig(
     level=logging.DEBUG,               # DEBUG, чтобы видеть максимум
     format="%(levelname)s | %(name)s | %(asctime)s | %(message)s",
@@ -79,19 +81,165 @@ async def build_participant_info(char_id: int, participant_id: int) -> dict:
     Сбор ВСЕГО, что нужно зафиксировать на старте боя
     (avatar, name, attributes, skills, fast-slots).
     """
-    attr   = await fetch_full_attributes(char_id)
-    ranks  = await character_ranks (char_id)
-    slots  = await get_fast_slots(char_id)
-    profile = await get_character_profile(char_id)
+    try:
+        attr = await fetch_full_attributes(char_id)
+    except Exception as e:
+        logger.error(f"Не удалось получить атрибуты персонажа {char_id}: {e}")
+        raise HTTPException(500, f"Не удалось получить атрибуты персонажа {char_id}")
+
+    try:
+        ranks = await character_ranks(char_id)
+    except Exception as e:
+        logger.warning(f"Не удалось получить навыки персонажа {char_id}: {e}")
+        ranks = []
+
+    try:
+        slots = await get_fast_slots(char_id)
+    except Exception as e:
+        logger.warning(f"Не удалось получить быстрые слоты персонажа {char_id}: {e}")
+        slots = []
+
+    try:
+        profile = await get_character_profile(char_id)
+        name = profile["character_name"]
+        avatar = profile.get("character_photo", "")
+    except Exception as e:
+        logger.warning(f"Не удалось получить профиль персонажа {char_id}: {e}")
+        name = f"Персонаж #{char_id}"
+        avatar = ""
+
     return {
         "participant_id": participant_id,
         "character_id"  : char_id,
-        "name"          : profile["character_name"],
-        "avatar"        : profile["character_photo"],
+        "name"          : name,
+        "avatar"        : avatar,
         "attributes"    : attr,
         "skills"        : ranks,
         "fast_slots"    : slots,
     }
+
+
+async def _distribute_pve_rewards(
+    battle_state: dict,
+    winner_team: int,
+    turn_events: list,
+) -> BattleRewards | None:
+    """
+    After a battle finishes, check if any defeated participant is a mob.
+    If so, distribute rewards (XP, gold, loot) to the winning team's player characters.
+    Returns BattleRewards or None if not a PvE battle.
+    """
+    char_service = settings.CHARACTER_SERVICE_URL
+    inv_service = settings.INVENTORY_SERVICE_URL
+
+    # Find defeated mob participants (HP <= 0 and is_npc)
+    defeated_mob_char_ids = []
+    winner_char_ids = []
+
+    for pid_str, pdata in battle_state["participants"].items():
+        char_id = pdata["character_id"]
+        if pdata["hp"] <= 0 and pdata["team"] != winner_team:
+            # Check if this character is a mob via character-service
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.get(
+                        f"{char_service}/characters/internal/mob-reward-data/{char_id}"
+                    )
+                    if resp.status_code == 200:
+                        defeated_mob_char_ids.append((char_id, resp.json()))
+            except httpx.RequestError as e:
+                logger.error(f"Ошибка при проверке моба char_id={char_id}: {e}")
+        elif pdata["team"] == winner_team and pdata["hp"] > 0:
+            winner_char_ids.append(char_id)
+
+    if not defeated_mob_char_ids or not winner_char_ids:
+        return None
+
+    # Aggregate rewards from all defeated mobs
+    total_xp = 0
+    total_gold = 0
+    dropped_items: list[BattleRewardItem] = []
+
+    for mob_char_id, reward_data in defeated_mob_char_ids:
+        total_xp += reward_data.get("xp_reward", 0)
+        total_gold += reward_data.get("gold_reward", 0)
+
+        # Roll loot table
+        for loot_entry in reward_data.get("loot_table", []):
+            roll = random.random() * 100
+            if roll < loot_entry["drop_chance"]:
+                quantity = random.randint(
+                    loot_entry["min_quantity"],
+                    loot_entry["max_quantity"],
+                )
+                dropped_items.append(BattleRewardItem(
+                    item_id=loot_entry["item_id"],
+                    quantity=quantity,
+                ))
+
+        # Update active mob status to 'dead'
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.put(
+                    f"{char_service}/characters/internal/active-mob-status/{mob_char_id}",
+                    json={"status": "dead"},
+                )
+        except httpx.RequestError as e:
+            logger.error(f"Ошибка при обновлении статуса моба char_id={mob_char_id}: {e}")
+
+    # Distribute rewards to each winner
+    for winner_id in winner_char_ids:
+        # Add XP and gold
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(
+                    f"{char_service}/characters/{winner_id}/add_rewards",
+                    json={"xp": total_xp, "gold": total_gold},
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Награды добавлены для персонажа {winner_id}: xp={total_xp}, gold={total_gold}")
+                else:
+                    logger.error(f"Ошибка при добавлении наград для {winner_id}: {resp.status_code}")
+        except httpx.RequestError as e:
+            logger.error(f"Ошибка при отправке наград для {winner_id}: {e}")
+
+        # Add dropped items to inventory
+        for item in dropped_items:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.post(
+                        f"{inv_service}/inventory/{winner_id}/items",
+                        json={"item_id": item.item_id, "quantity": item.quantity},
+                    )
+                    if resp.status_code == 200:
+                        logger.info(f"Предмет {item.item_id} x{item.quantity} добавлен в инвентарь {winner_id}")
+                    else:
+                        logger.error(f"Ошибка при добавлении предмета {item.item_id} для {winner_id}: {resp.status_code}")
+            except httpx.RequestError as e:
+                logger.error(f"Ошибка при добавлении предмета {item.item_id} для {winner_id}: {e}")
+
+    # Try to resolve item names for the reward response
+    for item in dropped_items:
+        try:
+            item_data = await get_item(item.item_id)
+            item.item_name = item_data.get("name")
+        except Exception:
+            pass
+
+    turn_events.append({
+        "event": "pve_rewards",
+        "xp": total_xp,
+        "gold": total_gold,
+        "items": [{"item_id": i.item_id, "item_name": i.item_name, "quantity": i.quantity} for i in dropped_items],
+    })
+
+    return BattleRewards(
+        xp=total_xp,
+        gold=total_gold,
+        items=dropped_items,
+    )
+
+
 async def _pay_skill_costs(state: dict, pid: int, ranks: list[dict]) -> dict:
     """
     Проверяет и списывает cost_energy / cost_mana / cost_stamina
@@ -202,7 +350,41 @@ async def create_battle_endpoint(
     )
     await rds.zadd(KEY_BATTLE_TURNS.format(id=battle_obj.id), {"0": 1})
 
-    # 5. Возвращаем ответ
+    # 5. Auto-register NPC/mob participants with autobattle-service
+    for p in participant_objs:
+        try:
+            result = await db.execute(
+                text("SELECT is_npc FROM characters WHERE id = :cid"),
+                {"cid": p.character_id},
+            )
+            row = result.fetchone()
+            if row and row[0]:
+                # This is an NPC — register with autobattle-service (internal endpoint, no auth)
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        reg_resp = await client.post(
+                            f"{settings.AUTOBATTLE_SERVICE_URL}/internal/register",
+                            json={
+                                "participant_id": p.id,
+                                "battle_id": battle_obj.id,
+                            },
+                        )
+                        if reg_resp.status_code == 200:
+                            logger.info(
+                                f"Моб participant_id={p.id} (char={p.character_id}) "
+                                f"зарегистрирован в autobattle для боя {battle_obj.id}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Не удалось зарегистрировать моба в autobattle: "
+                                f"{reg_resp.status_code} - {reg_resp.text}"
+                            )
+                except httpx.RequestError as e:
+                    logger.error(f"Ошибка при регистрации моба в autobattle: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка при проверке NPC для participant {p.id}: {e}")
+
+    # 6. Возвращаем ответ
     return BattleCreated(
         battle_id=battle_obj.id,
         participants=[p.id for p in participant_objs],
@@ -303,6 +485,11 @@ async def make_action(
     # ------------------------------------------------------------------------------
     # 1. Получаем Redis-состояние боя
     # ------------------------------------------------------------------------------
+    # Check if battle is already finished in MySQL
+    battle_record = await get_battle(db_session, battle_id)
+    if battle_record and battle_record.status.value == "finished":
+        raise HTTPException(400, "Бой уже завершён")
+
     battle_state: Dict | None = await load_state(battle_id)
     logger.debug(f"[ACTION] battle_id={battle_id}, request={request.dict()}")
     if battle_state is None:
@@ -541,20 +728,6 @@ async def make_action(
                 "effects": [e["effect_name"] for e in enemy_effects],
             })
 
-        # 3.2  Эффекты, которые накладываются на enemy
-        enemy_effects = [
-            eff for eff in attack_rank.get("effects", [])  # ← безопасно
-            if eff.get("target_side") == "enemy"
-        ]
-        if enemy_effects:
-            apply_new_effects(battle_state, int(defender_pid), enemy_effects)
-            turn_events.append({
-                "event": "apply_effects",
-                "who": int(defender_pid),
-                "kind": "attack",
-                "effects": [e["effect_name"] for e in enemy_effects],
-            })
-
     attack_rank = await get_rank(request.skills.attack_rank_id) if request.skills.attack_rank_id else None
     defense_rank = await get_rank(request.skills.defense_rank_id) if request.skills.defense_rank_id else None
     support_rank = await get_rank(request.skills.support_rank_id) if request.skills.support_rank_id else None
@@ -578,6 +751,30 @@ async def make_action(
         {"event": "resource_spend", "who": request.participant_id, **spend}
     )
     logger.debug("[EVENTS] turn_events=%s", turn_events)
+
+    # ------------------------------------------------------------------------------
+    # 9.5. Проверка HP <= 0 — завершение боя при гибели участника
+    # ------------------------------------------------------------------------------
+    battle_finished = False
+    winner_team = None
+
+    for pid_str, pdata in battle_state["participants"].items():
+        if pdata["hp"] <= 0:
+            battle_finished = True
+            # The losing team is this participant's team; winner is the other team
+            losing_team = pdata["team"]
+            # Find the winning team (any team that is not the losing one)
+            for other_pid_str, other_pdata in battle_state["participants"].items():
+                if other_pdata["team"] != losing_team:
+                    winner_team = other_pdata["team"]
+                    break
+            turn_events.append({
+                "event": "participant_defeated",
+                "who": int(pid_str),
+                "hp": pdata["hp"],
+            })
+            break
+
     # ------------------------------------------------------------------------------
     # 10. Записываем ход в БД
     # ------------------------------------------------------------------------------
@@ -593,6 +790,51 @@ async def make_action(
         skills=request.skills,
         deadline_at=new_deadline,
     )
+
+    # ------------------------------------------------------------------------------
+    # 10.5. Если бой завершён — обновляем MySQL и Redis, возвращаем результат
+    # ------------------------------------------------------------------------------
+    if battle_finished:
+        # Update battle status in MySQL
+        await finish_battle(db_session, battle_id)
+
+        # Update Redis state one last time with final HP values
+        battle_state["turn_number"] = new_turn_number
+        await save_state(battle_id, battle_state)
+
+        # Expire Redis state (keep for 5 minutes for final reads, then auto-delete)
+        redis = await get_redis_client()
+        await redis.expire(state_key(battle_id), 300)
+
+        # Clean up deadline entries
+        for pid_str in battle_state["participants"]:
+            await redis.zrem(ZSET_DEADLINES, f"{battle_id}:{pid_str}")
+
+        turn_events.append({
+            "event": "battle_finished",
+            "winner_team": winner_team,
+        })
+
+        # PvE rewards: check if defeated participant is a mob
+        battle_rewards = None
+        if winner_team is not None:
+            battle_rewards = await _distribute_pve_rewards(
+                battle_state, winner_team, turn_events
+            )
+
+        # Save log via Celery
+        save_log.delay(battle_id, new_turn_number, turn_events)
+
+        return ActionResponse(
+            ok=True,
+            turn_number=new_turn_number,
+            next_actor=request.participant_id,
+            deadline_at=new_deadline,
+            events=turn_events,
+            battle_finished=True,
+            winner_team=winner_team,
+            rewards=battle_rewards,
+        )
 
     # ------------------------------------------------------------------------------
     # 11. Обновляем Redis-state (turn_number, next_actor, дедлайн)

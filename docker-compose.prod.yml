@@ -113,7 +113,7 @@ services:
       AUTH_SERVICE_URL: http://user-service:8000
 
   battle-service:
-    command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8010 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8010 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
     environment:
@@ -124,6 +124,10 @@ services:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       REDIS_URL: redis://redis:6379/0
       MONGODB_URL: mongodb://mongo:27017/${DB_DATABASE}
+      CHARACTER_SERVICE_URL: http://character-service:8005
+      SKILLS_SERVICE_URL: http://skills-service:8003
+      INVENTORY_SERVICE_URL: http://inventory-service:8004
+      AUTOBATTLE_SERVICE_URL: http://autobattle-service:8011
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
 
   autobattle-service:

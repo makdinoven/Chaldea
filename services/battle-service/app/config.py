@@ -10,9 +10,10 @@ class Settings(BaseSettings):
     MONGO_URI: str = os.getenv("MONGO_URI", "mongodb://mongo:27017")
     TURN_TIMEOUT_HOURS: int = int(os.getenv("TURN_TIMEOUT_HOURS", 24))
     CHARACTER_SERVICE_URL: str = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8005")
-    SKILLS_URL = os.getenv("SKILLS_SERVICE_URL", "http://skills-service:8003")
-    INVENTORY_URL = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
-    INVENTORY_SERVICE_URL = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
+    SKILLS_URL: str = os.getenv("SKILLS_SERVICE_URL", "http://skills-service:8003")
+    INVENTORY_URL: str = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
+    INVENTORY_SERVICE_URL: str = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
+    AUTOBATTLE_SERVICE_URL: str = os.getenv("AUTOBATTLE_SERVICE_URL", "http://autobattle-service:8011")
 
     class Config:
         env_file = ".env"

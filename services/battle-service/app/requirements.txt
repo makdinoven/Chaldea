@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
+alembic
 celery
 watchfiles
 redis

@@ -347,6 +347,20 @@ async def list_skills_for_character(
     return await crud.list_character_skills_for_character(db, character_id)
 
 # -----------------------------------------------------------
+# 6b) Публичный endpoint для получения ранга навыка (для battle-service)
+# -----------------------------------------------------------
+@router.get("/skill_ranks/{rank_id}", response_model=schemas.SkillRankRead)
+async def get_skill_rank_public(
+    rank_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public endpoint for internal service-to-service calls (battle-service)."""
+    rank = await crud.get_skill_rank(db, rank_id)
+    if not rank:
+        raise HTTPException(status_code=404, detail="SkillRank not found")
+    return rank
+
+# -----------------------------------------------------------
 # 7) Прокачка навыка
 # -----------------------------------------------------------
 @router.post("/character_skills/upgrade")

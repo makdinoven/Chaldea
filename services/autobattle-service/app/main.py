@@ -107,6 +107,26 @@ async def register(p: RegisterPayload, _user: UserRead = Depends(require_permiss
             asyncio.create_task(handle_turn(bid, p.participant_id))
     return {"ok": True, "allowed": list(ALLOWED)}
 
+@app.post("/internal/register")
+async def internal_register(p: RegisterPayload):
+    """
+    Internal endpoint (no auth) — called by battle-service to register mob AI
+    when a PvE battle is created. Not exposed via Nginx.
+    """
+    ALLOWED.add(p.participant_id)
+    if p.battle_id:
+        PID_BATTLE[p.participant_id] = p.battle_id
+
+    # если уже наш ход → сразу ходим
+    bid = PID_BATTLE.get(p.participant_id)
+    if bid:
+        ctx = await get_battle_state(bid)
+        if ctx["runtime"]["current_actor"] == p.participant_id:
+            asyncio.create_task(handle_turn(bid, p.participant_id))
+    log.info("internal register pid=%s bid=%s", p.participant_id, p.battle_id)
+    return {"ok": True, "allowed": list(ALLOWED)}
+
+
 @app.post("/unregister")
 def unregister(participant_id: int = Body(..., embed=True), _user: UserRead = Depends(require_permission("battles:manage"))):
     ALLOWED.discard(participant_id)

@@ -6,23 +6,17 @@
 
 ## HIGH
 
-### 3. Баг: бой не завершается при HP <= 0
-**Сервис:** battle-service
-**Файл:** `services/battle-service/app/main.py`
-**Описание:** Нет проверки, что HP участника упало до 0 или ниже. Бой продолжается бесконечно, урон уходит в отрицательные значения. Фронтенд сам проверяет HP и показывает modal, но на бэкенде бой не завершается (status не меняется на "finished").
-**Решение:** После применения урона проверять HP <= 0, ставить `battle.status = "finished"`, возвращать winner в response.
+### ~~3. Баг: бой не завершается при HP <= 0~~ DONE (FEAT-059, Phase 1)
+~~**Сервис:** battle-service~~
+~~**Исправлено в FEAT-059:** Добавлена проверка HP<=0 после применения урона. При обнаружении — battle.status='finished' в MySQL, Redis state expire 5 мин, winner_team в ActionResponse. Повторные action на finished battle возвращают 400.~~
 
-### 4. Баг: кулдаун навыков не обновляется в dict
-**Сервис:** battle-service
-**Файл:** `services/battle-service/app/battle_engine.py:205`
-**Описание:** `remaining -= 1` изменяет локальную переменную, но не записывает обратно в словарь кулдаунов. Навыки с кулдауном могут использоваться каждый ход.
-**Решение:** `cd_map[rank_id] = remaining - 1`
+### ~~4. Баг: кулдаун навыков не обновляется в dict~~ DONE (FEAT-059, Phase 1)
+~~**Сервис:** battle-service~~
+~~**Исправлено в FEAT-059:** `remaining -= 1` заменено на `new_val = remaining - 1` с записью `cd_map[rank_id] = new_val`.~~
 
-### 5. Баг: дублирование enemy_effects в бою
-**Сервис:** battle-service
-**Файл:** `services/battle-service/app/main.py:478-501`
-**Описание:** Enemy-эффекты применяются дважды (copy-paste ошибка). Дебаффы на врага работают с двойной силой.
-**Решение:** Удалить дублирующий блок (строки 490-501).
+### ~~5. Баг: дублирование enemy_effects в бою~~ DONE (FEAT-059, Phase 1)
+~~**Сервис:** battle-service~~
+~~**Исправлено в FEAT-059:** Удалён дублирующий блок apply_new_effects для enemy в секции ATTACK.~~
 
 ### 6. Memory leak в autobattle-service
 **Сервис:** autobattle-service
@@ -76,6 +70,10 @@
 - `credentials/gcs-credentials.json` в photo-service — не используется
 **Решение:** Удалить неиспользуемый код и зависимости.
 
+### ~~21. Schema/ORM mismatch: loot_table vs loot_entries in MobTemplateDetailResponse~~ DONE (FEAT-059, Review)
+~~**Сервис:** character-service~~
+~~**Исправлено в FEAT-059 Review:** Renamed schema field `loot_table` to `loot_entries` in `MobTemplateDetailResponse` and updated frontend TypeScript interface to match.~~
+
 ### 19. Несогласованность типов participant_id в battle-service
 **Сервис:** battle-service
 **Описание:** participant_id хранится как string ключ в Redis dict, но используется как int в разных местах кода. Потенциальный `KeyError`.
@@ -108,7 +106,7 @@
 
 ### T2. Backend: добавить Alembic во все сервисы
 **Сервисы:** все backend-сервисы
-**Статус:** IN PROGRESS (7/9 сервисов готовы)
+**Статус:** IN PROGRESS (8/9 сервисов готовы)
 **Описание:** Цель — единообразное управление схемой БД через Alembic во всех сервисах с автоматическим запуском миграций при старте контейнера.
 
 **Сервисы с Alembic (DONE — auto-migration при старте):**
@@ -119,10 +117,10 @@
 - character-service — `alembic_version_character` (sync)
 - inventory-service — `alembic_version_inventory` (sync)
 - photo-service — `alembic_version_photo` (sync, mirror models, no own migrations)
+- battle-service — `alembic_version_battle` (async) — added in FEAT-059
 
 **Сервисы без Alembic (нужно добавить при первой работе с ними):**
 - notification-service
-- battle-service
 
 **Стратегия: органическое добавление.** Не делать за раз. Вместо этого:
 - **Работа в сервисе без Alembic** — добавить Alembic в рамках текущей задачи: инициализировать, создать initial-миграцию по существующим моделям, добавить `alembic` в `requirements.txt`.

@@ -4,7 +4,10 @@ from config import settings
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
-from models import CharacterRequest, Race, Subrace, Class, Character, LevelThreshold
+from models import (
+    CharacterRequest, Race, Subrace, Class, Character, LevelThreshold,
+    MobTemplate, MobTemplateSkill, MobLootTable, LocationMobSpawn, ActiveMob,
+)
 import logging
 
 logger = logging.getLogger("character-service.crud")
@@ -671,3 +674,466 @@ async def send_skills_presets_request(character_id: int, skill_ids: list[int]):
     except httpx.RequestError as e:
         logger.error(f"Ошибка при отправке запроса в сервис навыков: {e}")
         return None
+
+
+# ============================================================
+# Mob Template CRUD
+# ============================================================
+
+def get_mob_templates(
+    db: Session,
+    q: str = "",
+    tier: str = None,
+    page: int = 1,
+    page_size: int = 20,
+):
+    """Paginated list of mob templates with optional search and tier filter."""
+    query = db.query(MobTemplate)
+    if q:
+        query = query.filter(MobTemplate.name.ilike(f"%{q}%"))
+    if tier:
+        query = query.filter(MobTemplate.tier == tier)
+    total = query.count()
+    offset = (page - 1) * page_size
+    items = query.order_by(MobTemplate.id).offset(offset).limit(page_size).all()
+    return items, total
+
+
+def get_mob_template_by_id(db: Session, template_id: int):
+    """Get a single mob template by ID with relationships loaded."""
+    return db.query(MobTemplate).options(
+        joinedload(MobTemplate.skills),
+        joinedload(MobTemplate.loot_entries),
+        joinedload(MobTemplate.spawn_locations),
+    ).filter(MobTemplate.id == template_id).first()
+
+
+def create_mob_template(db: Session, data: schemas.MobTemplateCreate):
+    """Create a new mob template."""
+    template = MobTemplate(
+        name=data.name,
+        description=data.description,
+        tier=data.tier,
+        level=data.level,
+        avatar=data.avatar,
+        id_race=data.id_race,
+        id_subrace=data.id_subrace,
+        id_class=data.id_class,
+        sex=data.sex,
+        base_attributes=data.base_attributes,
+        xp_reward=data.xp_reward,
+        gold_reward=data.gold_reward,
+        respawn_enabled=data.respawn_enabled,
+        respawn_seconds=data.respawn_seconds,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    return template
+
+
+def update_mob_template(db: Session, template: MobTemplate, data: schemas.MobTemplateUpdate):
+    """Update an existing mob template."""
+    update_data = data.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(template, field, value)
+    db.commit()
+    db.refresh(template)
+    return template
+
+
+def delete_mob_template(db: Session, template: MobTemplate):
+    """Delete a mob template (cascades to skills, loot, spawns, active mobs)."""
+    db.delete(template)
+    db.commit()
+
+
+def replace_mob_skills(db: Session, template_id: int, skill_rank_ids: list):
+    """Replace all skills for a mob template."""
+    db.query(MobTemplateSkill).filter(MobTemplateSkill.mob_template_id == template_id).delete()
+    for rank_id in skill_rank_ids:
+        db.add(MobTemplateSkill(mob_template_id=template_id, skill_rank_id=rank_id))
+    db.commit()
+
+
+def replace_mob_loot(db: Session, template_id: int, entries: list):
+    """Replace all loot entries for a mob template."""
+    db.query(MobLootTable).filter(MobLootTable.mob_template_id == template_id).delete()
+    for entry in entries:
+        db.add(MobLootTable(
+            mob_template_id=template_id,
+            item_id=entry.item_id,
+            drop_chance=entry.drop_chance,
+            min_quantity=entry.min_quantity,
+            max_quantity=entry.max_quantity,
+        ))
+    db.commit()
+
+
+def replace_mob_spawns(db: Session, template_id: int, spawns: list):
+    """Replace all spawn rules for a mob template."""
+    db.query(LocationMobSpawn).filter(LocationMobSpawn.mob_template_id == template_id).delete()
+    for spawn in spawns:
+        db.add(LocationMobSpawn(
+            mob_template_id=template_id,
+            location_id=spawn.location_id,
+            spawn_chance=spawn.spawn_chance,
+            max_active=spawn.max_active,
+            is_enabled=spawn.is_enabled,
+        ))
+    db.commit()
+
+
+# ============================================================
+# Mob Spawning & Lifecycle (Phase 3)
+# ============================================================
+
+def spawn_mob_from_template(db: Session, template_id: int, location_id: int, spawn_type: str = "random"):
+    """
+    Create a mob instance from a template:
+    1. Load MobTemplate
+    2. Create a Character record (is_npc=True, npc_role='mob')
+    3. Call character-attributes-service to create attributes
+    4. Call skills-service to assign skills (via shared DB)
+    5. Create an ActiveMob record
+    Returns (active_mob, character) tuple.
+    """
+    import asyncio
+    from sqlalchemy import text as sa_text
+
+    template = db.query(MobTemplate).filter(MobTemplate.id == template_id).first()
+    if not template:
+        raise ValueError(f"MobTemplate {template_id} не найден")
+
+    # 1. Create Character record
+    new_character = Character(
+        name=template.name,
+        id_race=template.id_race,
+        id_subrace=template.id_subrace,
+        id_class=template.id_class,
+        sex=template.sex or "genderless",
+        level=template.level,
+        avatar=template.avatar or "",
+        appearance="",
+        is_npc=True,
+        npc_role="mob",
+        user_id=None,
+        request_id=None,
+        currency_balance=0,
+        stat_points=0,
+        current_location_id=location_id,
+    )
+    db.add(new_character)
+    db.flush()
+    db.refresh(new_character)
+    logger.info(f"Создан персонаж моба ID {new_character.id} из шаблона {template.name}")
+
+    # 2. Create attributes via character-attributes-service
+    attributes = template.base_attributes or {}
+    if not attributes:
+        # Fallback: generate from subrace
+        attributes = generate_attributes_for_subrace(db, template.id_subrace)
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                attributes_response = pool.submit(
+                    _sync_send_attributes_request, new_character.id, dict(attributes)
+                ).result(timeout=15)
+        else:
+            attributes_response = loop.run_until_complete(
+                send_attributes_request(new_character.id, dict(attributes))
+            )
+    except Exception:
+        attributes_response = _sync_send_attributes_request(new_character.id, dict(attributes))
+
+    if attributes_response:
+        new_character.id_attributes = attributes_response.get("id")
+        db.flush()
+        logger.info(f"Атрибуты созданы для моба {new_character.id}")
+    else:
+        logger.warning(f"Не удалось создать атрибуты для моба {new_character.id}")
+
+    # 3. Assign skills from template via shared DB (direct INSERT into character_skills)
+    template_skills = db.query(MobTemplateSkill).filter(
+        MobTemplateSkill.mob_template_id == template_id
+    ).all()
+    for ts in template_skills:
+        try:
+            db.execute(
+                sa_text(
+                    "INSERT INTO character_skills (character_id, skill_rank_id) VALUES (:cid, :srid)"
+                ),
+                {"cid": new_character.id, "srid": ts.skill_rank_id},
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось назначить навык skill_rank_id={ts.skill_rank_id} мобу {new_character.id}: {e}")
+    if template_skills:
+        logger.info(f"Назначено {len(template_skills)} навыков мобу {new_character.id}")
+
+    # 4. Create ActiveMob record
+    active_mob = ActiveMob(
+        mob_template_id=template_id,
+        character_id=new_character.id,
+        location_id=location_id,
+        status="alive",
+        spawn_type=spawn_type,
+    )
+    db.add(active_mob)
+    db.commit()
+    db.refresh(active_mob)
+    logger.info(f"ActiveMob ID {active_mob.id} создан на локации {location_id}")
+
+    return active_mob, new_character
+
+
+def _sync_send_attributes_request(character_id: int, attributes: dict):
+    """Synchronous version of send_attributes_request for use in sync context."""
+    attributes["character_id"] = character_id
+    try:
+        response = httpx.post(
+            f"{settings.ATTRIBUTES_SERVICE_URL}",
+            json=attributes,
+            timeout=10.0,
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.error(f"Ошибка при создании атрибутов моба: {response.status_code} - {response.text}")
+            return None
+    except httpx.RequestError as e:
+        logger.error(f"Ошибка при отправке запроса на атрибуты моба: {e}")
+        return None
+
+
+def try_spawn_at_location(db: Session, location_id: int):
+    """
+    Check spawn rules for a location and try to spawn a mob.
+    Returns (active_mob, character) if spawned, or None.
+    """
+    import random
+
+    spawn_rules = db.query(LocationMobSpawn).filter(
+        LocationMobSpawn.location_id == location_id,
+        LocationMobSpawn.is_enabled == True,
+    ).all()
+
+    if not spawn_rules:
+        return None
+
+    for rule in spawn_rules:
+        # Count current active mobs of this template at this location
+        active_count = db.query(ActiveMob).filter(
+            ActiveMob.mob_template_id == rule.mob_template_id,
+            ActiveMob.location_id == location_id,
+            ActiveMob.status != "dead",
+        ).count()
+
+        if active_count >= rule.max_active:
+            continue
+
+        # Roll the dice
+        roll = random.random() * 100
+        if roll < rule.spawn_chance:
+            try:
+                active_mob, character = spawn_mob_from_template(
+                    db, rule.mob_template_id, location_id, "random"
+                )
+                template = db.query(MobTemplate).filter(MobTemplate.id == rule.mob_template_id).first()
+                return active_mob, character, template
+            except Exception as e:
+                logger.error(f"Ошибка при спавне моба template={rule.mob_template_id} на локации {location_id}: {e}")
+                db.rollback()
+                continue
+
+    return None
+
+
+def get_active_mobs(
+    db: Session,
+    location_id: int = None,
+    status: str = None,
+    template_id: int = None,
+    page: int = 1,
+    page_size: int = 20,
+):
+    """Paginated list of active mobs with optional filters."""
+    query = db.query(ActiveMob)
+    if location_id is not None:
+        query = query.filter(ActiveMob.location_id == location_id)
+    if status is not None:
+        query = query.filter(ActiveMob.status == status)
+    if template_id is not None:
+        query = query.filter(ActiveMob.mob_template_id == template_id)
+
+    total = query.count()
+    offset = (page - 1) * page_size
+    items = query.order_by(ActiveMob.id.desc()).offset(offset).limit(page_size).all()
+    return items, total
+
+
+def get_active_mob_by_id(db: Session, active_mob_id: int):
+    """Get a single active mob by ID."""
+    return db.query(ActiveMob).filter(ActiveMob.id == active_mob_id).first()
+
+
+def delete_active_mob(db: Session, active_mob: ActiveMob):
+    """Delete an active mob and its associated Character record."""
+    character_id = active_mob.character_id
+
+    # Delete the active mob record
+    db.delete(active_mob)
+    db.flush()
+
+    # Delete the associated Character record
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if character:
+        db.delete(character)
+
+    db.commit()
+    logger.info(f"ActiveMob ID {active_mob.id} и персонаж ID {character_id} удалены")
+
+
+def get_mobs_at_location(db: Session, location_id: int):
+    """Get alive/in_battle mobs at a location for public display."""
+    active_mobs = db.query(ActiveMob).filter(
+        ActiveMob.location_id == location_id,
+        ActiveMob.status.in_(["alive", "in_battle"]),
+    ).all()
+
+    result = []
+    for am in active_mobs:
+        template = db.query(MobTemplate).filter(MobTemplate.id == am.mob_template_id).first()
+        character = db.query(Character).filter(Character.id == am.character_id).first()
+        if template and character:
+            result.append({
+                "active_mob_id": am.id,
+                "character_id": am.character_id,
+                "name": character.name,
+                "level": character.level,
+                "tier": template.tier,
+                "avatar": character.avatar,
+                "status": am.status,
+            })
+    return result
+
+
+# ============================================================
+# Rewards (Phase 4)
+# ============================================================
+
+def add_rewards_to_character(db: Session, character_id: int, xp: int, gold: int):
+    """
+    Adds gold to character's currency_balance and XP via shared DB (character_attributes table).
+    Returns (new_balance, new_xp) or None if character not found.
+    """
+    from sqlalchemy import text as sa_text
+
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        return None
+
+    # Add gold directly
+    character.currency_balance = (character.currency_balance or 0) + gold
+    db.flush()
+
+    # Add XP via shared DB — directly update character_attributes table
+    new_xp = None
+    try:
+        # Get current passive_experience from shared DB
+        row = db.execute(
+            sa_text("SELECT passive_experience FROM character_attributes WHERE character_id = :cid"),
+            {"cid": character_id},
+        ).fetchone()
+        if row:
+            current_xp = row[0] or 0
+            new_xp = current_xp + xp
+            db.execute(
+                sa_text("UPDATE character_attributes SET passive_experience = :xp WHERE character_id = :cid"),
+                {"xp": new_xp, "cid": character_id},
+            )
+            logger.info(f"XP обновлён для персонажа {character_id}: {current_xp} -> {new_xp}")
+        else:
+            logger.error(f"Атрибуты не найдены для персонажа {character_id}")
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении XP для персонажа {character_id}: {e}")
+
+    db.commit()
+    db.refresh(character)
+    new_balance = character.currency_balance
+
+    # Check and update level based on new XP
+    if new_xp is not None:
+        check_and_update_level(db, character_id, new_xp)
+
+    return new_balance, new_xp
+
+
+def get_mob_reward_data(db: Session, character_id: int):
+    """
+    Given a mob's character_id, find the active_mob record, then load the mob_template.
+    Returns reward data dict or None if not a mob.
+    """
+    # Verify this is a mob character
+    character = db.query(Character).filter(
+        Character.id == character_id,
+        Character.is_npc == True,
+        Character.npc_role == 'mob',
+    ).first()
+    if not character:
+        return None
+
+    # Find active_mob record for this character
+    active_mob = db.query(ActiveMob).filter(
+        ActiveMob.character_id == character_id,
+    ).first()
+    if not active_mob:
+        return None
+
+    # Load template with loot entries
+    template = db.query(MobTemplate).options(
+        joinedload(MobTemplate.loot_entries),
+    ).filter(MobTemplate.id == active_mob.mob_template_id).first()
+    if not template:
+        return None
+
+    loot_table = []
+    for entry in template.loot_entries:
+        loot_table.append({
+            "item_id": entry.item_id,
+            "drop_chance": entry.drop_chance,
+            "min_quantity": entry.min_quantity,
+            "max_quantity": entry.max_quantity,
+        })
+
+    return {
+        "xp_reward": template.xp_reward,
+        "gold_reward": template.gold_reward,
+        "loot_table": loot_table,
+        "template_name": template.name,
+        "tier": template.tier,
+    }
+
+
+def update_active_mob_status(db: Session, character_id: int, new_status: str):
+    """Update the status of an active mob by its character_id."""
+    from datetime import datetime, timedelta
+
+    active_mob = db.query(ActiveMob).filter(
+        ActiveMob.character_id == character_id,
+    ).first()
+    if not active_mob:
+        return None
+
+    active_mob.status = new_status
+    if new_status == 'dead':
+        active_mob.killed_at = datetime.utcnow()
+        # If respawn enabled, set respawn_at
+        template = db.query(MobTemplate).filter(MobTemplate.id == active_mob.mob_template_id).first()
+        if template and template.respawn_enabled and template.respawn_seconds:
+            active_mob.respawn_at = datetime.utcnow() + timedelta(seconds=template.respawn_seconds)
+    db.commit()
+    db.refresh(active_mob)
+    return active_mob

@@ -202,10 +202,10 @@ def decrement_cooldowns(state: dict) -> None:
         cd_map = p.get("cooldowns", {})
         to_delete = []
         for rank_id, remaining in cd_map.items():
-            remaining -= 1
-            if remaining <= 0:
+            new_val = remaining - 1
+            if new_val <= 0:
                 to_delete.append(rank_id)
             else:
-                cd_map[rank_id] = remaining
+                cd_map[rank_id] = new_val
         for rid in to_delete:
             cd_map.pop(rid, None)
