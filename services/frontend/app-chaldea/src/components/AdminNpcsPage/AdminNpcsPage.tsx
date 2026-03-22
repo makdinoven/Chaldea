@@ -214,11 +214,13 @@ const AdminNpcsPage = () => {
     setSaving(true);
     try {
       let npcId = editingId;
+      // Exclude avatar from payload — it's handled separately via photo-service
+      const { avatar: _avatar, ...payload } = form;
       if (editingId) {
-        await axios.put(`${BASE_URL}/characters/admin/npcs/${editingId}`, form);
+        await axios.put(`${BASE_URL}/characters/admin/npcs/${editingId}`, payload);
         toast.success('НПС обновлён');
       } else {
-        const res = await axios.post(`${BASE_URL}/characters/admin/npcs`, form);
+        const res = await axios.post(`${BASE_URL}/characters/admin/npcs`, payload);
         npcId = res.data.id;
         toast.success('НПС создан');
       }
