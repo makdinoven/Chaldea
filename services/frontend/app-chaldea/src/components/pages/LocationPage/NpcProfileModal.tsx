@@ -79,15 +79,19 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
     checkShop();
   }, [npcId]);
 
-  // Check if NPC has quests
+  // Check if NPC has quests (available OR dialogue-only)
   useEffect(() => {
-    if (!characterId) return;
     const checkQuests = async () => {
       try {
-        const res = await axios.get(`${BASE_URL}/locations/npcs/${npcId}/quests`, {
-          params: { character_id: characterId },
-        });
-        setHasQuests(Array.isArray(res.data) && res.data.length > 0);
+        const [questsRes, dqRes] = await Promise.allSettled([
+          characterId
+            ? axios.get(`${BASE_URL}/locations/npcs/${npcId}/quests`, { params: { character_id: characterId } })
+            : Promise.resolve({ data: [] }),
+          axios.get<number[]>(`${BASE_URL}/locations/npcs/${npcId}/dialogue-quest-ids`),
+        ]);
+        const hasAvailable = questsRes.status === 'fulfilled' && Array.isArray(questsRes.value.data) && questsRes.value.data.length > 0;
+        const hasDialogueQuests = dqRes.status === 'fulfilled' && Array.isArray(dqRes.value.data) && dqRes.value.data.length > 0;
+        setHasQuests(hasAvailable || hasDialogueQuests);
       } catch {
         setHasQuests(false);
       }
