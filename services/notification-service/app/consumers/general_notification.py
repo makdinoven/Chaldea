@@ -40,22 +40,29 @@ def consume():
             ch.basic_ack(delivery_tag=method.delivery_tag)
             return
 
+        # Extract optional ws_type / ws_data for structured WebSocket messages
+        ws_type = data.get("ws_type")
+        ws_data = data.get("ws_data")
+
         db: Session = next(get_db())
         try:
             if payload.target_type == NotificationTargetType.user:
                 user_id = payload.target_value
                 if user_id is not None:
-                    create_and_send(db, user_id, payload.message)
+                    create_and_send(db, user_id, payload.message,
+                                    ws_type=ws_type, ws_data=ws_data)
                 else:
                     logger.error("target_value is None for 'user'")
             elif payload.target_type == NotificationTargetType.all:
                 users = get_all_users()
                 for user_data in users:
-                    create_and_send(db, user_data["id"], payload.message)
+                    create_and_send(db, user_data["id"], payload.message,
+                                    ws_type=ws_type, ws_data=ws_data)
             elif payload.target_type == NotificationTargetType.admins:
                 admins = get_admins()
                 for admin_data in admins:
-                    create_and_send(db, admin_data["id"], payload.message)
+                    create_and_send(db, admin_data["id"], payload.message,
+                                    ws_type=ws_type, ws_data=ws_data)
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
         except Exception as ex:
@@ -68,9 +75,14 @@ def consume():
     logger.info("[general_notifications_consumer] Waiting for messages...")
     channel.start_consuming()
 
-def create_and_send(db: Session, user_id: int, message: str):
+def create_and_send(db: Session, user_id: int, message: str,
+                    ws_type: str = None, ws_data: dict = None):
     """
-    Создаём запись в БД и сразу отправляем через SSE
+    Создаём запись в БД и сразу отправляем через WebSocket.
+
+    If ws_type is provided, the WebSocket message uses that type with ws_data
+    instead of the generic "notification" format. The text message is always
+    saved to the DB for persistence.
     """
     new_data = NotificationCreate(user_id=user_id, message=message)
     db_obj = Notification(**new_data.dict())
@@ -79,14 +91,26 @@ def create_and_send(db: Session, user_id: int, message: str):
     db.refresh(db_obj)
 
     # Отправляем через WebSocket, если пользователь подключён
-    notification_data = {
-        "id": db_obj.id,
-        "user_id": db_obj.user_id,
-        "message": db_obj.message,
-        "status": db_obj.status,
-        "created_at": str(db_obj.created_at)
-    }
-    send_to_user(user_id, {"type": "notification", "data": notification_data})
+    if ws_type:
+        # Structured WS message with custom type
+        ws_payload = {
+            "type": ws_type,
+            "data": ws_data or {},
+        }
+        # Also include the notification ID and message for reference
+        ws_payload["data"]["notification_id"] = db_obj.id
+        ws_payload["data"]["message"] = db_obj.message
+        send_to_user(user_id, ws_payload)
+    else:
+        # Default notification format (backward compatible)
+        notification_data = {
+            "id": db_obj.id,
+            "user_id": db_obj.user_id,
+            "message": db_obj.message,
+            "status": db_obj.status,
+            "created_at": str(db_obj.created_at)
+        }
+        send_to_user(user_id, {"type": "notification", "data": notification_data})
 
     logger.info(f"[general_notifications_consumer] Created notification {db_obj.id} for user {user_id}")
 

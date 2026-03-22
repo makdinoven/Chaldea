@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     INVENTORY_URL: str = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
     INVENTORY_SERVICE_URL: str = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
     AUTOBATTLE_SERVICE_URL: str = os.getenv("AUTOBATTLE_SERVICE_URL", "http://autobattle-service:8011")
+    RABBITMQ_URL: str = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
 
     class Config:
         env_file = ".env"

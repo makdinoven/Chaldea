@@ -16,9 +16,11 @@ DEFAULT_DEADLINE_HOURS = 24
 async def create_battle(
     db: AsyncSession,
     player_ids: list[int],
-    teams: list[int],) -> tuple[models.Battle, list[models.BattleParticipant]]:
+    teams: list[int],
+    battle_type: models.BattleType = models.BattleType.pve,
+) -> tuple[models.Battle, list[models.BattleParticipant]]:
 
-    battle = models.Battle()
+    battle = models.Battle(battle_type=battle_type)
     db.add(battle)
     await db.flush()
 
@@ -72,6 +74,25 @@ async def get_battle(db: AsyncSession, battle_id: int) -> models.Battle | None:
         select(models.Battle).where(models.Battle.id == battle_id)
     )
     return result.scalar_one_or_none()
+
+async def get_active_battle_for_character(
+    db: AsyncSession, character_id: int
+) -> int | None:
+    """Return battle_id if character is in an active battle, else None."""
+    result = await db.execute(
+        sa.text("""
+            SELECT b.id
+            FROM battles b
+            JOIN battle_participants bp ON b.id = bp.battle_id
+            WHERE bp.character_id = :cid
+              AND b.status IN ('pending', 'in_progress')
+            LIMIT 1
+        """),
+        {"cid": character_id},
+    )
+    row = result.fetchone()
+    return row[0] if row else None
+
 
 async def get_logs_for_turn(
     battle_id: int,

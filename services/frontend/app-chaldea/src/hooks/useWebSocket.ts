@@ -84,6 +84,26 @@ const useWebSocket = (): UseWebSocketReturn => {
               );
               break;
             }
+            case 'pvp_battle_start': {
+              const pvpData = parsed.data as {
+                battle_id: number;
+                attacker_name?: string;
+                battle_type?: string;
+              };
+              const battleType = pvpData.battle_type;
+              if (battleType === 'pvp_attack') {
+                toast.error(
+                  `${pvpData.attacker_name ?? 'Кто-то'} напал на вас! Бой #${pvpData.battle_id} начинается.`,
+                  { duration: 8000 },
+                );
+              } else {
+                toast.success(
+                  `Бой #${pvpData.battle_id} начинается!`,
+                  { duration: 6000 },
+                );
+              }
+              break;
+            }
             case 'ping':
               // Keepalive — ignore
               break;

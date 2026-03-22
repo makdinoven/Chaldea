@@ -16,12 +16,30 @@ class BattleStatus(str, Enum):
     forfeit = "forfeit"
 
 
+class BattleType(str, Enum):
+    pve = "pve"
+    pvp_training = "pvp_training"
+    pvp_death = "pvp_death"
+    pvp_attack = "pvp_attack"
+
+
+class PvpInvitationStatus(str, Enum):
+    pending = "pending"
+    accepted = "accepted"
+    declined = "declined"
+    expired = "expired"
+    cancelled = "cancelled"
+
+
 class Battle(Base):
     __tablename__ = "battles"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     status: Mapped[BattleStatus] = mapped_column(
         SQLEnum(BattleStatus), default=BattleStatus.in_progress
+    )
+    battle_type: Mapped[BattleType] = mapped_column(
+        SQLEnum(BattleType), default=BattleType.pve
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow
@@ -89,3 +107,22 @@ class BattleTurn(Base):
     deadline_at: Mapped[datetime] = mapped_column(DateTime)
 
     battle = relationship("Battle", back_populates="turns")
+
+
+class PvpInvitation(Base):
+    __tablename__ = "pvp_invitations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    initiator_character_id: Mapped[int] = mapped_column(Integer, index=True)
+    target_character_id: Mapped[int] = mapped_column(Integer, index=True)
+    location_id: Mapped[int] = mapped_column(Integer)
+    battle_type: Mapped[BattleType] = mapped_column(
+        SQLEnum('pvp_training', 'pvp_death', name='pvp_invitation_battle_type')
+    )
+    status: Mapped[PvpInvitationStatus] = mapped_column(
+        SQLEnum(PvpInvitationStatus), default=PvpInvitationStatus.pending
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime)

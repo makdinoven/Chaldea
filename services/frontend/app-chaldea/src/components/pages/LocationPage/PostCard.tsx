@@ -1,11 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
 import { Post, Player } from './types';
+import PlayerActionsMenu from './PlayerActionsMenu';
 
 interface PostCardProps {
   post: Post;
   currentCharacterId: number | null;
+  currentCharacterLevel?: number;
   currentUserId: number | null;
   players: Player[];
+  locationId: number;
+  locationMarkerType?: string;
   onLike: (postId: number) => void;
   onUnlike: (postId: number) => void;
   onTagPlayer: (targetUserId: number) => void;
@@ -40,8 +44,11 @@ const formatRelativeTime = (dateStr: string): string => {
 const PostCard = ({
   post,
   currentCharacterId,
+  currentCharacterLevel = 0,
   currentUserId,
   players,
+  locationId,
+  locationMarkerType = 'safe',
   onLike,
   onUnlike,
   onTagPlayer,
@@ -169,6 +176,20 @@ const PostCard = ({
         <span className="gold-text text-[10px] sm:text-xs font-medium">
           LVL {post.character_level ?? '?'}
         </span>
+
+        {/* Actions menu — only for other players' posts */}
+        {currentCharacterId !== null && currentUserId !== null && post.user_id !== currentUserId && (
+          <PlayerActionsMenu
+            targetCharacterId={post.character_id}
+            targetUserId={post.user_id}
+            targetName={post.character_name}
+            targetLevel={post.character_level ?? 1}
+            currentCharacterId={currentCharacterId}
+            currentCharacterLevel={currentCharacterLevel}
+            locationId={locationId}
+            locationMarkerType={locationMarkerType}
+          />
+        )}
       </div>
 
       {/* Right: content + actions */}

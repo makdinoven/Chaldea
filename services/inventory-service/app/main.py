@@ -564,4 +564,235 @@ def delete_all_inventory(
     }
 
 
+
+# ---------------------------------------------------------------------------
+# Trade endpoints
+# ---------------------------------------------------------------------------
+
+from rabbitmq_publisher import publish_notification_sync
+
+
+@router.post("/trade/propose", response_model=schemas.TradeProposeResponse, status_code=201)
+def trade_propose(
+    req: schemas.TradeProposeRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Create a new trade offer between two characters on the same location."""
+    # Ownership check
+    verify_character_ownership(db, req.initiator_character_id, current_user.id)
+
+    # Cannot trade with yourself
+    if req.initiator_character_id == req.target_character_id:
+        raise HTTPException(status_code=400, detail="Нельзя предложить обмен самому себе")
+
+    # Target character must exist and belong to a user
+    target_user_id = crud.get_character_user_id(db, req.target_character_id)
+    if target_user_id is None:
+        raise HTTPException(status_code=404, detail="Целевой персонаж не найден")
+
+    # Same location check
+    init_loc = crud.get_character_location(db, req.initiator_character_id)
+    target_loc = crud.get_character_location(db, req.target_character_id)
+    if init_loc is None or target_loc is None or init_loc != target_loc:
+        raise HTTPException(status_code=400, detail="Персонажи должны находиться на одной локации")
+
+    # Neither in battle
+    if crud.is_character_in_battle(db, req.initiator_character_id):
+        raise HTTPException(status_code=400, detail="Ваш персонаж сейчас в бою")
+    if crud.is_character_in_battle(db, req.target_character_id):
+        raise HTTPException(status_code=400, detail="Целевой персонаж сейчас в бою")
+
+    # No existing active trade between them
+    existing = crud.get_active_trade_between(db, req.initiator_character_id, req.target_character_id)
+    if existing:
+        raise HTTPException(status_code=400, detail="Между этими персонажами уже есть активное предложение обмена")
+
+    trade = crud.create_trade_offer(db, req.initiator_character_id, req.target_character_id, init_loc)
+
+    # Notify target user
+    initiator_name = crud.get_character_name(db, req.initiator_character_id)
+    try:
+        publish_notification_sync(target_user_id, f"{initiator_name} предлагает вам обмен.")
+    except Exception:
+        pass  # Non-critical: trade is created even if notification fails
+
+    return schemas.TradeProposeResponse(
+        trade_id=trade.id,
+        initiator_character_id=trade.initiator_character_id,
+        target_character_id=trade.target_character_id,
+        status=trade.status,
+    )
+
+
+@router.put("/trade/{trade_id}/items", response_model=schemas.TradeStateResponse)
+def trade_update_items(
+    trade_id: int,
+    req: schemas.TradeUpdateItemsRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Update items and gold for one side of the trade."""
+    trade = crud.get_trade_offer(db, trade_id)
+    if not trade:
+        raise HTTPException(status_code=404, detail="Предложение обмена не найдено")
+
+    if trade.status not in ('pending', 'negotiating'):
+        raise HTTPException(status_code=400, detail="Этот обмен уже завершён или отменён")
+
+    # Verify participant
+    if req.character_id not in (trade.initiator_character_id, trade.target_character_id):
+        raise HTTPException(status_code=403, detail="Вы не являетесь участником этого обмена")
+
+    # Verify ownership of character
+    verify_character_ownership(db, req.character_id, current_user.id)
+
+    # Validate gold >= 0
+    if req.gold < 0:
+        raise HTTPException(status_code=400, detail="Количество золота не может быть отрицательным")
+
+    # Validate character has enough gold
+    if req.gold > 0:
+        balance = crud.get_character_gold(db, req.character_id)
+        if balance < req.gold:
+            raise HTTPException(status_code=400, detail="Недостаточно золота")
+
+    # Validate item ownership
+    if req.items:
+        error = crud.verify_item_ownership(db, req.character_id, req.items)
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+
+    trade = crud.update_trade_items(db, trade, req.character_id, req.items, req.gold)
+    state = crud.build_trade_state(db, trade)
+    return state
+
+
+@router.post("/trade/{trade_id}/confirm", response_model=schemas.TradeConfirmResponse)
+def trade_confirm(
+    trade_id: int,
+    req: schemas.TradeConfirmRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Confirm trade from one side. If both confirmed, execute atomically."""
+    trade = crud.get_trade_offer(db, trade_id)
+    if not trade:
+        raise HTTPException(status_code=404, detail="Предложение обмена не найдено")
+
+    if trade.status not in ('pending', 'negotiating'):
+        raise HTTPException(status_code=400, detail="Этот обмен уже завершён или отменён")
+
+    # Verify participant
+    if req.character_id not in (trade.initiator_character_id, trade.target_character_id):
+        raise HTTPException(status_code=403, detail="Вы не являетесь участником этого обмена")
+
+    verify_character_ownership(db, req.character_id, current_user.id)
+
+    both_confirmed = crud.confirm_trade(db, trade, req.character_id)
+
+    if both_confirmed:
+        # Execute trade atomically
+        try:
+            crud.execute_trade(db, trade)
+            db.commit()
+        except ValueError as e:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Ошибка при выполнении обмена: {e}")
+
+        # Notify both parties
+        init_name = crud.get_character_name(db, trade.initiator_character_id)
+        target_name = crud.get_character_name(db, trade.target_character_id)
+        init_user = crud.get_character_user_id(db, trade.initiator_character_id)
+        target_user = crud.get_character_user_id(db, trade.target_character_id)
+
+        try:
+            if init_user:
+                publish_notification_sync(init_user, f"Обмен с {target_name} завершён успешно!")
+            if target_user:
+                publish_notification_sync(target_user, f"Обмен с {init_name} завершён успешно!")
+        except Exception:
+            pass
+
+        return schemas.TradeConfirmResponse(
+            trade_id=trade.id,
+            status="completed",
+            message="Обмен завершён успешно!",
+        )
+    else:
+        db.commit()
+        return schemas.TradeConfirmResponse(
+            trade_id=trade.id,
+            status=trade.status,
+            message="Ожидание подтверждения второй стороны",
+        )
+
+
+@router.post("/trade/{trade_id}/cancel", response_model=schemas.TradeCancelResponse)
+def trade_cancel(
+    trade_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Cancel an active trade."""
+    trade = crud.get_trade_offer(db, trade_id)
+    if not trade:
+        raise HTTPException(status_code=404, detail="Предложение обмена не найдено")
+
+    if trade.status not in ('pending', 'negotiating'):
+        raise HTTPException(status_code=400, detail="Этот обмен уже завершён или отменён")
+
+    # Verify participant — check which character belongs to the current user
+    init_user = crud.get_character_user_id(db, trade.initiator_character_id)
+    target_user = crud.get_character_user_id(db, trade.target_character_id)
+
+    if current_user.id not in (init_user, target_user):
+        raise HTTPException(status_code=403, detail="Вы не являетесь участником этого обмена")
+
+    trade.status = 'cancelled'
+    db.commit()
+
+    # Notify the other party
+    if current_user.id == init_user:
+        other_user_id = target_user
+        canceller_char_id = trade.initiator_character_id
+    else:
+        other_user_id = init_user
+        canceller_char_id = trade.target_character_id
+
+    canceller_name = crud.get_character_name(db, canceller_char_id)
+    try:
+        if other_user_id:
+            publish_notification_sync(other_user_id, f"{canceller_name} отменил предложение обмена.")
+    except Exception:
+        pass
+
+    return schemas.TradeCancelResponse(trade_id=trade.id, status="cancelled")
+
+
+@router.get("/trade/{trade_id}", response_model=schemas.TradeStateResponse)
+def trade_get_state(
+    trade_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Get the full state of a trade offer."""
+    trade = crud.get_trade_offer(db, trade_id)
+    if not trade:
+        raise HTTPException(status_code=404, detail="Предложение обмена не найдено")
+
+    # Verify participant
+    init_user = crud.get_character_user_id(db, trade.initiator_character_id)
+    target_user = crud.get_character_user_id(db, trade.target_character_id)
+
+    if current_user.id not in (init_user, target_user):
+        raise HTTPException(status_code=403, detail="Вы не являетесь участником этого обмена")
+
+    state = crud.build_trade_state(db, trade)
+    return state
+
+
 app.include_router(router)

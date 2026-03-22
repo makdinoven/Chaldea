@@ -57,6 +57,11 @@ for col in models.EquipmentSlot.__table__.columns:
     if col_type == "Enum":
         col.type = String(100)
 
+for col in models.TradeOffer.__table__.columns:
+    col_type = type(col.type).__name__
+    if col_type == "Enum":
+        col.type = String(100)
+
 from fastapi.testclient import TestClient  # noqa: E402
 from main import app  # noqa: E402
 

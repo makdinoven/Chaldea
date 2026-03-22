@@ -15,5 +15,6 @@ redis
 aiomysql>=0.3.0
 motor
 requests
+pika
 pytest
 pytest-asyncio

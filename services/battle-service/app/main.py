@@ -7,8 +7,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
-from crud import create_battle, write_turn, get_logs_for_turn, finish_battle, get_battle
-from schemas import BattleCreated, BattleCreate, ActionResponse, ActionRequest, LogResponse, BattleRewards, BattleRewardItem
+from crud import create_battle, write_turn, get_logs_for_turn, finish_battle, get_battle, get_active_battle_for_character
+from schemas import (
+    BattleCreated, BattleCreate, ActionResponse, ActionRequest, LogResponse,
+    BattleRewards, BattleRewardItem,
+    PvpInviteRequest, PvpInviteResponse, PvpRespondRequest, PvpRespondAcceptResponse,
+    PendingInvitationsResponse, IncomingInvitation, OutgoingInvitation,
+    CancelInvitationResponse, InBattleResponse,
+    PvpAttackRequest, PvpAttackResponse,
+)
+from models import BattleType, PvpInvitation, PvpInvitationStatus
+from rabbitmq_publisher import publish_notification
 from auth_http import get_current_user_via_http, UserRead
 from mongo_client import get_mongo_db
 from database import get_db
@@ -891,6 +900,87 @@ async def _make_action_core(
             "winner_team": winner_team,
         })
 
+        # PvP post-battle consequences: training duel → set loser HP to 1
+        if winner_team is not None:
+            try:
+                bt_result = await db_session.execute(
+                    text("SELECT battle_type FROM battles WHERE id = :bid"),
+                    {"bid": battle_id},
+                )
+                bt_row = bt_result.fetchone()
+                if bt_row and bt_row[0] == "pvp_training":
+                    for pid_str, pdata in battle_state["participants"].items():
+                        if pdata["hp"] <= 0 and pdata["team"] != winner_team:
+                            await db_session.execute(
+                                text("UPDATE character_attributes SET current_health = 1 WHERE character_id = :cid"),
+                                {"cid": pdata["character_id"]},
+                            )
+                            await db_session.commit()
+                            logger.info(
+                                f"PvP training: HP персонажа {pdata['character_id']} установлен в 1"
+                            )
+                elif bt_row and bt_row[0] == "pvp_death":
+                    for pid_str, pdata in battle_state["participants"].items():
+                        if pdata["hp"] <= 0 and pdata["team"] != winner_team:
+                            loser_char_id = pdata["character_id"]
+                            # Fetch loser's user_id BEFORE unlink (it will be set to NULL)
+                            loser_user_id = None
+                            try:
+                                loser_user_result = await db_session.execute(
+                                    text("SELECT user_id FROM characters WHERE id = :cid"),
+                                    {"cid": loser_char_id},
+                                )
+                                loser_user_row = loser_user_result.fetchone()
+                                if loser_user_row:
+                                    loser_user_id = loser_user_row[0]
+                            except Exception as lookup_err:
+                                logger.error(
+                                    f"PvP death: ошибка поиска user_id для персонажа "
+                                    f"{loser_char_id}: {lookup_err}"
+                                )
+                            # Unlink loser's character via character-service internal endpoint
+                            try:
+                                async with httpx.AsyncClient(timeout=10.0) as client:
+                                    resp = await client.post(
+                                        f"{settings.CHARACTER_SERVICE_URL}/characters/internal/unlink",
+                                        json={"character_id": loser_char_id},
+                                    )
+                                    if resp.status_code == 200:
+                                        logger.info(
+                                            f"PvP death: персонаж {loser_char_id} отвязан от пользователя"
+                                        )
+                                    else:
+                                        logger.error(
+                                            f"PvP death: ошибка отвязки персонажа {loser_char_id}: "
+                                            f"{resp.status_code} - {resp.text}"
+                                        )
+                            except httpx.RequestError as exc:
+                                logger.error(
+                                    f"PvP death: не удалось связаться с character-service для отвязки "
+                                    f"персонажа {loser_char_id}: {exc}"
+                                )
+                            # Send notification to loser about character loss
+                            if loser_user_id:
+                                try:
+                                    await publish_notification(
+                                        target_user_id=loser_user_id,
+                                        message="Ваш персонаж погиб в смертельном бою! Персонаж отвязан от аккаунта.",
+                                        ws_type="pvp_death_character_lost",
+                                        ws_data={"character_id": loser_char_id},
+                                    )
+                                except Exception as notify_err:
+                                    logger.error(
+                                        f"PvP death: ошибка отправки уведомления для персонажа "
+                                        f"{loser_char_id}: {notify_err}"
+                                    )
+                            else:
+                                logger.warning(
+                                    f"PvP death: не удалось отправить уведомление — "
+                                    f"user_id не найден для персонажа {loser_char_id}"
+                                )
+            except Exception as e:
+                logger.error(f"Ошибка при обработке последствий PvP-боя: {e}")
+
         # PvE rewards: check if defeated participant is a mob
         battle_rewards = None
         if winner_team is not None:
@@ -994,5 +1084,573 @@ async def logs_for_turn(battle_id: int, turn_number: int):
     if not logs:
         return {"logs": []}              # возвращаем пустой список, не 404
     return {"logs": logs}
+
+# ---------------------------------------------------------------------------
+# PvP: "Character in battle" check (Task 1.3)
+# ---------------------------------------------------------------------------
+@router.get("/character/{character_id}/in-battle", response_model=InBattleResponse)
+async def check_character_in_battle(
+    character_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Check if a character is currently in an active battle (no auth — internal)."""
+    battle_id = await get_active_battle_for_character(db, character_id)
+    if battle_id:
+        return InBattleResponse(in_battle=True, battle_id=battle_id)
+    return InBattleResponse(in_battle=False)
+
+
+# ---------------------------------------------------------------------------
+# PvP: Send invitation (Task 1.4)
+# ---------------------------------------------------------------------------
+PVP_INVITE_EXPIRY_HOURS = 3
+
+
+async def _get_character_info(db: AsyncSession, character_id: int) -> dict | None:
+    """Fetch basic character info from shared DB."""
+    result = await db.execute(
+        text("SELECT id, user_id, current_location_id, level FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    row = result.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "current_location_id": row[2],
+        "level": row[3],
+    }
+
+
+async def _get_character_name(db: AsyncSession, character_id: int) -> str:
+    """Fetch character name from shared DB."""
+    result = await db.execute(
+        text("SELECT name FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    row = result.fetchone()
+    return row[0] if row else f"Персонаж #{character_id}"
+
+
+async def _get_character_profile_info(db: AsyncSession, character_id: int) -> dict:
+    """Fetch character name, avatar, level from shared DB."""
+    result = await db.execute(
+        text("SELECT name, avatar, level FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    row = result.fetchone()
+    if not row:
+        return {"name": f"Персонаж #{character_id}", "avatar": None, "level": 0}
+    return {"name": row[0], "avatar": row[1], "level": row[2]}
+
+
+@router.post("/pvp/invite", response_model=PvpInviteResponse, status_code=201)
+async def send_pvp_invitation(
+    req: PvpInviteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Send a PvP duel invitation (training or death duel)."""
+    # Validate battle_type
+    if req.battle_type not in ("pvp_training", "pvp_death"):
+        raise HTTPException(400, "Недопустимый тип боя")
+
+    # Cannot invite yourself
+    if req.initiator_character_id == req.target_character_id:
+        raise HTTPException(400, "Вы не можете вызвать самого себя")
+
+    # Ownership check
+    initiator = await _get_character_info(db, req.initiator_character_id)
+    if not initiator:
+        raise HTTPException(404, "Персонаж не найден")
+    if initiator["user_id"] != current_user.id:
+        raise HTTPException(403, "Вы должны использовать своего персонажа")
+
+    # Target exists
+    target = await _get_character_info(db, req.target_character_id)
+    if not target:
+        raise HTTPException(404, "Целевой персонаж не найден")
+
+    # Same location
+    if initiator["current_location_id"] != target["current_location_id"]:
+        raise HTTPException(400, "Персонажи должны находиться в одной локации")
+
+    # Not in battle
+    if await get_active_battle_for_character(db, req.initiator_character_id):
+        raise HTTPException(400, "Персонаж уже в бою")
+    if await get_active_battle_for_character(db, req.target_character_id):
+        raise HTTPException(400, "Целевой персонаж уже в бою")
+
+    # No duplicate pending invitation
+    dup_result = await db.execute(
+        text("""
+            SELECT id FROM pvp_invitations
+            WHERE initiator_character_id = :init_id
+              AND target_character_id = :target_id
+              AND status = 'pending'
+            LIMIT 1
+        """),
+        {"init_id": req.initiator_character_id, "target_id": req.target_character_id},
+    )
+    if dup_result.fetchone():
+        raise HTTPException(409, "У вас уже есть активное приглашение для этого игрока")
+
+    # Phase 2 validations for pvp_death (level 30+, not safe location)
+    if req.battle_type == "pvp_death":
+        if initiator["level"] < 30 or target["level"] < 30:
+            raise HTTPException(400, "Оба персонажа должны быть 30+ уровня для смертельного боя")
+        loc_result = await db.execute(
+            text("SELECT marker_type FROM Locations WHERE id = :lid"),
+            {"lid": initiator["current_location_id"]},
+        )
+        loc_row = loc_result.fetchone()
+        if loc_row and loc_row[0] == "safe":
+            raise HTTPException(400, "Смертельный бой невозможен на безопасной локации")
+
+    # Create invitation
+    from datetime import timedelta
+    expires_at = datetime.utcnow() + timedelta(hours=PVP_INVITE_EXPIRY_HOURS)
+    invitation = PvpInvitation(
+        initiator_character_id=req.initiator_character_id,
+        target_character_id=req.target_character_id,
+        location_id=initiator["current_location_id"],
+        battle_type=req.battle_type,
+        status=PvpInvitationStatus.pending,
+        expires_at=expires_at,
+    )
+    db.add(invitation)
+    await db.commit()
+    await db.refresh(invitation)
+
+    # Send notification to target user
+    initiator_name = await _get_character_name(db, req.initiator_character_id)
+    battle_type_label = "тренировочный бой" if req.battle_type == "pvp_training" else "смертельный бой"
+    await publish_notification(
+        target_user_id=target["user_id"],
+        message=f"{initiator_name} вызывает вас на {battle_type_label}!",
+        ws_type="pvp_invitation",
+        ws_data={
+            "invitation_id": invitation.id,
+            "initiator_name": initiator_name,
+            "battle_type": req.battle_type,
+        },
+    )
+
+    return PvpInviteResponse(
+        invitation_id=invitation.id,
+        initiator_character_id=invitation.initiator_character_id,
+        target_character_id=invitation.target_character_id,
+        battle_type=invitation.battle_type,
+        status=invitation.status.value if hasattr(invitation.status, 'value') else invitation.status,
+        expires_at=invitation.expires_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# PvP: Respond to invitation (Task 1.4)
+# ---------------------------------------------------------------------------
+@router.post("/pvp/invite/{invitation_id}/respond", response_model=PvpRespondAcceptResponse)
+async def respond_to_pvp_invitation(
+    invitation_id: int,
+    req: PvpRespondRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Accept or decline a PvP duel invitation."""
+    if req.action not in ("accept", "decline"):
+        raise HTTPException(400, "Действие должно быть 'accept' или 'decline'")
+
+    # Fetch invitation
+    result = await db.execute(
+        text("SELECT * FROM pvp_invitations WHERE id = :iid"),
+        {"iid": invitation_id},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(404, "Приглашение не найдено")
+
+    inv_id = row[0]
+    init_char_id = row[1]
+    target_char_id = row[2]
+    location_id = row[3]
+    inv_battle_type = row[4]
+    inv_status = row[5]
+    inv_expires_at = row[7]
+
+    # Must be pending
+    if inv_status != "pending":
+        raise HTTPException(400, "Приглашение уже было обработано")
+
+    # Check expiry
+    if datetime.utcnow() > inv_expires_at:
+        await db.execute(
+            text("UPDATE pvp_invitations SET status = 'expired' WHERE id = :iid"),
+            {"iid": invitation_id},
+        )
+        await db.commit()
+        raise HTTPException(400, "Приглашение истекло")
+
+    # Must be the target character's owner
+    target = await _get_character_info(db, target_char_id)
+    if not target or target["user_id"] != current_user.id:
+        raise HTTPException(403, "Это приглашение адресовано другому игроку")
+
+    initiator_name = await _get_character_name(db, init_char_id)
+    target_name = await _get_character_name(db, target_char_id)
+    initiator = await _get_character_info(db, init_char_id)
+
+    if req.action == "decline":
+        await db.execute(
+            text("UPDATE pvp_invitations SET status = 'declined' WHERE id = :iid"),
+            {"iid": invitation_id},
+        )
+        await db.commit()
+
+        # Notify initiator
+        if initiator:
+            await publish_notification(
+                target_user_id=initiator["user_id"],
+                message=f"{target_name} отклонил ваш вызов на бой.",
+            )
+
+        return PvpRespondAcceptResponse(
+            invitation_id=invitation_id,
+            status="declined",
+        )
+
+    # --- ACCEPT ---
+    # Re-validate: same location, not in battle
+    if not initiator:
+        raise HTTPException(400, "Персонаж инициатора не найден")
+    if initiator["current_location_id"] != target["current_location_id"]:
+        raise HTTPException(400, "Персонажи должны находиться в одной локации")
+    if await get_active_battle_for_character(db, init_char_id):
+        raise HTTPException(400, "Персонаж инициатора уже в бою")
+    if await get_active_battle_for_character(db, target_char_id):
+        raise HTTPException(400, "Персонаж уже в бою")
+
+    # Update invitation status
+    await db.execute(
+        text("UPDATE pvp_invitations SET status = 'accepted' WHERE id = :iid"),
+        {"iid": invitation_id},
+    )
+    await db.commit()
+
+    # Create battle
+    bt = BattleType(inv_battle_type)
+    battle_obj, participant_objs = await create_battle(
+        db,
+        player_ids=[init_char_id, target_char_id],
+        teams=[0, 1],
+        battle_type=bt,
+    )
+
+    # Initialize Redis state (same pattern as create_battle_endpoint)
+    from datetime import timedelta
+    first_actor_pid = participant_objs[0].id
+    moscow_tz = timezone(timedelta(hours=3))
+    deadline = datetime.now(timezone.utc).astimezone(moscow_tz) + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
+
+    participants_info = []
+    for p in participant_objs:
+        participants_info.append(
+            await build_participant_info(p.character_id, p.id)
+        )
+
+    participants_payload = []
+    for snap in participants_info:
+        participants_payload.append({
+            "participant_id": snap["participant_id"],
+            "character_id": snap["character_id"],
+            "team": next(
+                pl.team for pl in participant_objs
+                if pl.id == snap["participant_id"]
+            ),
+            "hp": snap["attributes"]["current_health"],
+            "mana": snap["attributes"]["current_mana"],
+            "energy": snap["attributes"]["current_energy"],
+            "stamina": snap["attributes"]["current_stamina"],
+            "max_hp": snap["attributes"]["max_health"],
+            "max_mana": snap["attributes"]["max_mana"],
+            "max_energy": snap["attributes"]["max_energy"],
+            "max_stamina": snap["attributes"]["max_stamina"],
+            "fast_slots": snap["fast_slots"],
+        })
+
+    await save_snapshot(battle_obj.id, participants_info)
+    rds = await get_redis_client()
+    await cache_snapshot(rds, battle_obj.id, participants_info)
+
+    await init_battle_state(
+        battle_id=battle_obj.id,
+        participants_payload=participants_payload,
+        first_actor_participant_id=first_actor_pid,
+        deadline_at=deadline,
+    )
+    await rds.zadd(KEY_BATTLE_TURNS.format(id=battle_obj.id), {"0": 1})
+
+    # Notify initiator about acceptance
+    battle_type_label = "тренировочный бой" if inv_battle_type == "pvp_training" else "смертельный бой"
+    await publish_notification(
+        target_user_id=initiator["user_id"],
+        message=f"{target_name} принял ваш вызов на {battle_type_label}! Бой начинается.",
+        ws_type="pvp_battle_start",
+        ws_data={
+            "battle_id": battle_obj.id,
+            "opponent_name": target_name,
+            "battle_type": inv_battle_type,
+        },
+    )
+    # Also notify target (the acceptor) with battle start info
+    await publish_notification(
+        target_user_id=target["user_id"],
+        message=f"Бой с {initiator_name} начинается!",
+        ws_type="pvp_battle_start",
+        ws_data={
+            "battle_id": battle_obj.id,
+            "opponent_name": initiator_name,
+            "battle_type": inv_battle_type,
+        },
+    )
+
+    return PvpRespondAcceptResponse(
+        invitation_id=invitation_id,
+        status="accepted",
+        battle_id=battle_obj.id,
+        battle_url=f"/battle/{battle_obj.id}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# PvP: Get pending invitations (Task 1.4)
+# ---------------------------------------------------------------------------
+@router.get("/pvp/invitations/pending", response_model=PendingInvitationsResponse)
+async def get_pending_invitations(
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Get all pending PvP invitations for the current user."""
+    # Get all character IDs owned by the current user
+    char_result = await db.execute(
+        text("SELECT id FROM characters WHERE user_id = :uid"),
+        {"uid": current_user.id},
+    )
+    user_char_ids = [r[0] for r in char_result.fetchall()]
+    if not user_char_ids:
+        return PendingInvitationsResponse(incoming=[], outgoing=[])
+
+    # Incoming invitations (user is target)
+    placeholders = ", ".join(f":c{i}" for i in range(len(user_char_ids)))
+    params = {f"c{i}": cid for i, cid in enumerate(user_char_ids)}
+
+    incoming_result = await db.execute(
+        text(f"""
+            SELECT id, initiator_character_id, battle_type, created_at, expires_at
+            FROM pvp_invitations
+            WHERE target_character_id IN ({placeholders})
+              AND status = 'pending'
+              AND expires_at > NOW()
+            ORDER BY created_at DESC
+        """),
+        params,
+    )
+    incoming_rows = incoming_result.fetchall()
+
+    incoming = []
+    for row in incoming_rows:
+        profile = await _get_character_profile_info(db, row[1])
+        incoming.append(IncomingInvitation(
+            invitation_id=row[0],
+            initiator_character_id=row[1],
+            initiator_name=profile["name"],
+            initiator_avatar=profile["avatar"],
+            initiator_level=profile["level"],
+            battle_type=row[2],
+            created_at=row[3],
+            expires_at=row[4],
+        ))
+
+    # Outgoing invitations (user is initiator)
+    outgoing_result = await db.execute(
+        text(f"""
+            SELECT id, target_character_id, battle_type, status, created_at
+            FROM pvp_invitations
+            WHERE initiator_character_id IN ({placeholders})
+              AND status = 'pending'
+              AND expires_at > NOW()
+            ORDER BY created_at DESC
+        """),
+        params,
+    )
+    outgoing_rows = outgoing_result.fetchall()
+
+    outgoing = []
+    for row in outgoing_rows:
+        target_name = await _get_character_name(db, row[1])
+        outgoing.append(OutgoingInvitation(
+            invitation_id=row[0],
+            target_character_id=row[1],
+            target_name=target_name,
+            battle_type=row[2],
+            status=row[3],
+            created_at=row[4],
+        ))
+
+    return PendingInvitationsResponse(incoming=incoming, outgoing=outgoing)
+
+
+# ---------------------------------------------------------------------------
+# PvP: Cancel invitation (Task 1.4)
+# ---------------------------------------------------------------------------
+@router.delete("/pvp/invite/{invitation_id}", response_model=CancelInvitationResponse)
+async def cancel_pvp_invitation(
+    invitation_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Cancel a pending PvP invitation (only initiator can cancel)."""
+    result = await db.execute(
+        text("SELECT id, initiator_character_id, status FROM pvp_invitations WHERE id = :iid"),
+        {"iid": invitation_id},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(404, "Приглашение не найдено")
+
+    if row[2] != "pending":
+        raise HTTPException(400, "Приглашение уже было обработано")
+
+    # Verify ownership of initiator character
+    init_info = await _get_character_info(db, row[1])
+    if not init_info or init_info["user_id"] != current_user.id:
+        raise HTTPException(403, "Вы можете отменять только свои приглашения")
+
+    await db.execute(
+        text("UPDATE pvp_invitations SET status = 'cancelled' WHERE id = :iid"),
+        {"iid": invitation_id},
+    )
+    await db.commit()
+
+    return CancelInvitationResponse(invitation_id=invitation_id, status="cancelled")
+
+
+# ---------------------------------------------------------------------------
+# PvP: Attack (forced PvP, Task 1.5)
+# ---------------------------------------------------------------------------
+@router.post("/pvp/attack", response_model=PvpAttackResponse, status_code=201)
+async def pvp_attack(
+    req: PvpAttackRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Force a PvP attack without consent. Not available on safe locations."""
+    # Cannot attack yourself
+    if req.attacker_character_id == req.victim_character_id:
+        raise HTTPException(400, "Нельзя напасть на самого себя")
+
+    # Ownership check
+    attacker = await _get_character_info(db, req.attacker_character_id)
+    if not attacker:
+        raise HTTPException(404, "Персонаж не найден")
+    if attacker["user_id"] != current_user.id:
+        raise HTTPException(403, "Вы должны использовать своего персонажа")
+
+    # Target exists
+    victim = await _get_character_info(db, req.victim_character_id)
+    if not victim:
+        raise HTTPException(404, "Целевой персонаж не найден")
+
+    # Same location
+    if attacker["current_location_id"] != victim["current_location_id"]:
+        raise HTTPException(400, "Персонажи должны находиться в одной локации")
+
+    # Location must not be safe
+    loc_result = await db.execute(
+        text("SELECT marker_type FROM Locations WHERE id = :lid"),
+        {"lid": attacker["current_location_id"]},
+    )
+    loc_row = loc_result.fetchone()
+    if loc_row and loc_row[0] == "safe":
+        raise HTTPException(400, "Нападение невозможно на безопасной локации")
+
+    # Not in battle
+    if await get_active_battle_for_character(db, req.attacker_character_id):
+        raise HTTPException(400, "Персонаж уже в бою")
+    if await get_active_battle_for_character(db, req.victim_character_id):
+        raise HTTPException(400, "Целевой персонаж уже в бою")
+
+    # Create battle immediately
+    battle_obj, participant_objs = await create_battle(
+        db,
+        player_ids=[req.attacker_character_id, req.victim_character_id],
+        teams=[0, 1],
+        battle_type=BattleType.pvp_attack,
+    )
+
+    # Initialize Redis state (same pattern as create_battle_endpoint)
+    from datetime import timedelta
+    first_actor_pid = participant_objs[0].id
+    moscow_tz = timezone(timedelta(hours=3))
+    deadline = datetime.now(timezone.utc).astimezone(moscow_tz) + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
+
+    participants_info = []
+    for p in participant_objs:
+        participants_info.append(
+            await build_participant_info(p.character_id, p.id)
+        )
+
+    participants_payload = []
+    for snap in participants_info:
+        participants_payload.append({
+            "participant_id": snap["participant_id"],
+            "character_id": snap["character_id"],
+            "team": next(
+                pl.team for pl in participant_objs
+                if pl.id == snap["participant_id"]
+            ),
+            "hp": snap["attributes"]["current_health"],
+            "mana": snap["attributes"]["current_mana"],
+            "energy": snap["attributes"]["current_energy"],
+            "stamina": snap["attributes"]["current_stamina"],
+            "max_hp": snap["attributes"]["max_health"],
+            "max_mana": snap["attributes"]["max_mana"],
+            "max_energy": snap["attributes"]["max_energy"],
+            "max_stamina": snap["attributes"]["max_stamina"],
+            "fast_slots": snap["fast_slots"],
+        })
+
+    await save_snapshot(battle_obj.id, participants_info)
+    rds = await get_redis_client()
+    await cache_snapshot(rds, battle_obj.id, participants_info)
+
+    await init_battle_state(
+        battle_id=battle_obj.id,
+        participants_payload=participants_payload,
+        first_actor_participant_id=first_actor_pid,
+        deadline_at=deadline,
+    )
+    await rds.zadd(KEY_BATTLE_TURNS.format(id=battle_obj.id), {"0": 1})
+
+    # Notify victim
+    attacker_name = await _get_character_name(db, req.attacker_character_id)
+    await publish_notification(
+        target_user_id=victim["user_id"],
+        message=f"{attacker_name} напал на вас! Бой начинается.",
+        ws_type="pvp_battle_start",
+        ws_data={
+            "battle_id": battle_obj.id,
+            "attacker_name": attacker_name,
+            "battle_type": "pvp_attack",
+        },
+    )
+
+    return PvpAttackResponse(
+        battle_id=battle_obj.id,
+        battle_url=f"/battle/{battle_obj.id}",
+        attacker_character_id=req.attacker_character_id,
+        victim_character_id=req.victim_character_id,
+    )
+
 
 app.include_router(router)

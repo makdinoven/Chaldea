@@ -1,14 +1,20 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Player, NpcInLocation } from './types';
 import { NPC_ROLE_LABELS, NPC_ROLE_ICONS } from '../../../constants/npc';
 import NpcProfileModal from './NpcProfileModal';
+import PlayerActionsMenu from './PlayerActionsMenu';
 
 interface PlayersSectionProps {
   players: Player[];
   npcs: NpcInLocation[];
+  currentUserId?: number | null;
+  currentCharacterId?: number | null;
+  currentCharacterLevel?: number;
+  locationId: number;
+  locationMarkerType?: string;
 }
 
-const AvatarCard = ({ avatar, name, level }: { avatar: string | null; name: string; level?: number }) => (
+const AvatarCard = ({ avatar, name, level, actionsSlot }: { avatar: string | null; name: string; level?: number; actionsSlot?: ReactNode }) => (
   <div className="flex flex-col items-center gap-2 p-2 rounded-card hover:bg-white/5 transition-colors">
     <div className="gold-outline relative w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden bg-black/40 shrink-0">
       {avatar ? (
@@ -29,6 +35,7 @@ const AvatarCard = ({ avatar, name, level }: { avatar: string | null; name: stri
         LVL {level}
       </span>
     )}
+    {actionsSlot}
   </div>
 );
 
@@ -76,7 +83,7 @@ const NpcCard = ({ npc, onClick }: NpcCardProps) => {
   );
 };
 
-const PlayersSection = ({ players, npcs }: PlayersSectionProps) => {
+const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, currentCharacterLevel = 0, locationId, locationMarkerType = 'safe' }: PlayersSectionProps) => {
   const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
 
   return (
@@ -97,6 +104,22 @@ const PlayersSection = ({ players, npcs }: PlayersSectionProps) => {
                   avatar={player.avatar}
                   name={player.name}
                   level={player.level}
+                  actionsSlot={
+                    currentCharacterId != null &&
+                    currentUserId != null &&
+                    player.user_id !== currentUserId ? (
+                      <PlayerActionsMenu
+                        targetCharacterId={player.id}
+                        targetUserId={player.user_id}
+                        targetName={player.name}
+                        targetLevel={player.level}
+                        currentCharacterId={currentCharacterId}
+                        currentCharacterLevel={currentCharacterLevel}
+                        locationId={locationId}
+                        locationMarkerType={locationMarkerType}
+                      />
+                    ) : undefined
+                  }
                 />
               ))}
             </div>

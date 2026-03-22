@@ -13,7 +13,7 @@ import PostCard from './PostCard';
 import PostCreateForm from './PostCreateForm';
 import NeighborsSection from './NeighborsSection';
 import LootSection from './LootSection';
-import PlaceholderSection from './PlaceholderSection';
+import PendingInvitationsPanel from './PendingInvitationsPanel';
 import LocationMobs from '../../LocationMobs';
 
 const LocationPage = () => {
@@ -358,7 +358,15 @@ const LocationPage = () => {
       <div className="gradient-divider-h relative pb-2" />
 
       {/* Players + NPCs */}
-      <PlayersSection players={location.players} npcs={location.npcs ?? []} />
+      <PlayersSection
+        players={location.players}
+        npcs={location.npcs ?? []}
+        currentUserId={userId}
+        currentCharacterId={character?.id ?? null}
+        currentCharacterLevel={Number(character?.level) || 0}
+        locationId={location.id}
+        locationMarkerType={location.marker_type}
+      />
 
       <div className="gradient-divider-h relative pb-2" />
 
@@ -409,8 +417,11 @@ const LocationPage = () => {
                 key={post.post_id}
                 post={post}
                 currentCharacterId={character?.id ?? null}
+                currentCharacterLevel={Number(character?.level) || 0}
                 currentUserId={userId}
                 players={location.players}
+                locationId={location.id}
+                locationMarkerType={location.marker_type}
                 onLike={handleLike}
                 onUnlike={handleUnlike}
                 onTagPlayer={handleTagPlayer}
@@ -429,10 +440,13 @@ const LocationPage = () => {
         <NeighborsSection neighbors={location.neighbors} />
       </section>
 
-      <div className="gradient-divider-h relative pb-2" />
-
-      {/* Placeholder sections */}
-      <PlaceholderSection title="Бой на локации" message="Скоро здесь можно будет сражаться" />
+      {/* PvP Invitations — shown when there are pending invitations */}
+      {isCharacterHere && character?.id && (
+        <>
+          <div className="gradient-divider-h relative pb-2" />
+          <PendingInvitationsPanel locationId={location.id} />
+        </>
+      )}
     </div>
   );
 };

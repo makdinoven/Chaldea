@@ -1,6 +1,7 @@
-from sqlalchemy import Column, Integer, String, Enum, Boolean, DECIMAL, Text, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, Enum, Boolean, DECIMAL, Text, ForeignKey, Float, DateTime
 from sqlalchemy.orm import relationship
 from database import Base
+from datetime import datetime
 
 # Определяем модель для хранения инвентаря персонажа
 class Items(Base):
@@ -134,4 +135,40 @@ class EquipmentSlot(Base):
     item = relationship("Items", back_populates="equipment_slots")
 
     is_enabled = Column(Boolean, default=True)
+
+
+# Trade system models
+class TradeOffer(Base):
+    __tablename__ = "trade_offers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    initiator_character_id = Column(Integer, nullable=False)
+    target_character_id = Column(Integer, nullable=False)
+    location_id = Column(Integer, nullable=False)
+    initiator_gold = Column(Integer, nullable=False, default=0)
+    target_gold = Column(Integer, nullable=False, default=0)
+    initiator_confirmed = Column(Boolean, nullable=False, default=False)
+    target_confirmed = Column(Boolean, nullable=False, default=False)
+    status = Column(
+        Enum('pending', 'negotiating', 'completed', 'cancelled', 'expired', name='trade_status_enum'),
+        nullable=False,
+        default='pending'
+    )
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    items = relationship("TradeOfferItem", back_populates="trade_offer", cascade="all, delete-orphan")
+
+
+class TradeOfferItem(Base):
+    __tablename__ = "trade_offer_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_offer_id = Column(Integer, ForeignKey('trade_offers.id', ondelete='CASCADE'), nullable=False)
+    character_id = Column(Integer, nullable=False)
+    item_id = Column(Integer, ForeignKey('items.id'), nullable=False)
+    quantity = Column(Integer, nullable=False, default=1)
+
+    trade_offer = relationship("TradeOffer", back_populates="items")
+    item = relationship("Items")
 

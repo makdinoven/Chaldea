@@ -608,6 +608,75 @@ async def admin_unlink_character(
     }
 
 
+class InternalUnlinkRequest(schemas.BaseModel):
+    character_id: int
+
+
+@router.post("/internal/unlink")
+async def internal_unlink_character(
+    body: InternalUnlinkRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth) to unlink a character from its user.
+    Used by battle-service after a death duel to "kill" the loser's character.
+    Should be blocked by Nginx for external access.
+    """
+    character = db.query(models.Character).filter(
+        models.Character.id == body.character_id
+    ).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    if character.user_id is None:
+        # Already unlinked — idempotent success
+        return {"detail": "Character already unlinked", "character_id": body.character_id}
+
+    previous_user_id = character.user_id
+
+    # Clear user-character relation in shared DB directly (no auth needed)
+    try:
+        db.execute(
+            text(
+                "DELETE FROM user_characters WHERE user_id = :uid AND character_id = :cid"
+            ),
+            {"uid": previous_user_id, "cid": body.character_id},
+        )
+    except Exception as e:
+        logger.warning(f"Failed to delete user_characters relation: {e}")
+
+    # Clear current_character_id in users table if it matches
+    try:
+        db.execute(
+            text(
+                "UPDATE users SET current_character_id = NULL "
+                "WHERE id = :uid AND current_character_id = :cid"
+            ),
+            {"uid": previous_user_id, "cid": body.character_id},
+        )
+    except Exception as e:
+        logger.warning(f"Failed to clear current_character_id: {e}")
+
+    # Set user_id to None on the character
+    character.user_id = None
+    try:
+        db.commit()
+        db.refresh(character)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Error unlinking character {body.character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+    logger.info(
+        f"Internal unlink: character {body.character_id} unlinked from user {previous_user_id}"
+    )
+    return {
+        "detail": "Character unlinked from user",
+        "character_id": body.character_id,
+        "previous_user_id": previous_user_id,
+    }
+
+
 # Эндпоинт для удаления персонажа (enhanced with cascade cleanup)
 @router.delete("/{character_id}")
 async def delete_character(

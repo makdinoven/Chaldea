@@ -293,3 +293,75 @@ class FastSlot(BaseModel):
     quantity: int
     name : str
     image : str
+
+
+# -----------------------------------------------------------------------------
+# 6. Trade schemas
+# -----------------------------------------------------------------------------
+
+class TradeStatus(str, Enum):
+    pending = "pending"
+    negotiating = "negotiating"
+    completed = "completed"
+    cancelled = "cancelled"
+    expired = "expired"
+
+
+class TradeProposeRequest(BaseModel):
+    initiator_character_id: int
+    target_character_id: int
+
+
+class TradeProposeResponse(BaseModel):
+    trade_id: int
+    initiator_character_id: int
+    target_character_id: int
+    status: str
+
+
+class TradeItemEntry(BaseModel):
+    item_id: int
+    quantity: int
+
+
+class TradeUpdateItemsRequest(BaseModel):
+    character_id: int
+    items: List[TradeItemEntry] = []
+    gold: int = 0
+
+
+class TradeConfirmRequest(BaseModel):
+    character_id: int
+
+
+class TradeConfirmResponse(BaseModel):
+    trade_id: int
+    status: str
+    message: Optional[str] = None
+
+
+class TradeCancelResponse(BaseModel):
+    trade_id: int
+    status: str
+
+
+class TradeItemDetail(BaseModel):
+    item_id: int
+    item_name: str
+    item_image: Optional[str] = None
+    quantity: int
+
+
+class TradeSideState(BaseModel):
+    character_id: int
+    character_name: str
+    items: List[TradeItemDetail] = []
+    gold: int = 0
+    confirmed: bool = False
+
+
+class TradeStateResponse(BaseModel):
+    trade_id: int
+    status: str
+    initiator: TradeSideState
+    target: TradeSideState
