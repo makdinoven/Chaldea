@@ -93,6 +93,27 @@ const InventoryItem = ({
     </ul>
   );
 
+  const handleSelectSkill = () => {
+    if (isDraggable && isCooldown) return;
+    if (!setTurnData) return;
+    setTurnData((prev) => {
+      if (item.skill_type) {
+        return {
+          ...prev,
+          [SKILLS_KEYS[item.skill_type]]: item,
+        };
+      } else {
+        return {
+          ...prev,
+          [SKILLS_KEYS.item]: item,
+        };
+      }
+    });
+  };
+
+  // Track mousedown position to distinguish click from drag
+  const mouseDownPos = useRef(null);
+
   return (
     <>
       <div
@@ -100,29 +121,24 @@ const InventoryItem = ({
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={handleMouseLeave}
         onContextMenu={handleContextMenu}
-        onClick={(e) => {
-          if (isDraggable && isCooldown) {
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-          }
-          setTurnData((prev) => {
-            if (item.skill_type) {
-              return {
-                ...prev,
-                [SKILLS_KEYS[item.skill_type]]: item,
-              };
-            } else {
-              return {
-                ...prev,
-                [SKILLS_KEYS.item]: item,
-              };
+        onMouseDown={(e) => {
+          mouseDownPos.current = { x: e.clientX, y: e.clientY };
+        }}
+        onMouseUp={(e) => {
+          // Only fire click if mouse didn't move much (not a drag)
+          if (mouseDownPos.current) {
+            const dx = Math.abs(e.clientX - mouseDownPos.current.x);
+            const dy = Math.abs(e.clientY - mouseDownPos.current.y);
+            if (dx < 5 && dy < 5) {
+              handleSelectSkill();
             }
-          });
+          }
+          mouseDownPos.current = null;
         }}
         draggable={!isCooldown && isDraggable}
         onDragStart={(e) => {
           if (isCooldown) return;
+          mouseDownPos.current = null; // Cancel click on drag
           e.dataTransfer.setData("application/json", JSON.stringify(item));
         }}
         className={` ${s.item_wrapper} ${isCooldown ? s.cooldown_item : ""}`}
