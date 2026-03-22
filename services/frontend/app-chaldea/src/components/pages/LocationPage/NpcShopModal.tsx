@@ -186,7 +186,7 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
   const balance = character?.currency_balance ?? 0;
 
   return (
-    <div className="modal-overlay" onClick={handleOverlayClick}>
+    <div className="modal-overlay !bg-black/80" onClick={handleOverlayClick}>
       <div className="modal-content gold-outline gold-outline-thick relative max-w-2xl w-full mx-3 sm:mx-4 max-h-[90vh] flex flex-col overflow-hidden">
         {/* Close button */}
         <button

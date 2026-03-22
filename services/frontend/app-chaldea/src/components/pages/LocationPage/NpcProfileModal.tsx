@@ -135,7 +135,7 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
   }
 
   return (
-    <div className="modal-overlay" onClick={handleOverlayClick}>
+    <div className="modal-overlay !bg-black/80" onClick={handleOverlayClick}>
       <div className="modal-content gold-outline gold-outline-thick relative max-w-lg w-full mx-4">
         {/* Close button */}
         <button

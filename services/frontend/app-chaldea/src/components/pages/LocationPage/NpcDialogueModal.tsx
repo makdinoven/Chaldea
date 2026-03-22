@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../../api/api';
+import { useAppSelector } from '../../../redux/store';
 
 /* ── Types ── */
 
@@ -16,6 +17,7 @@ interface DialogueNode {
   npc_text: string;
   is_end: boolean;
   action_type: string | null;
+  action_data: Record<string, unknown> | null;
   options: DialogueOption[];
 }
 
@@ -26,6 +28,12 @@ interface NpcDialogueModalProps {
   onClose: () => void;
 }
 
+const ACTION_LABELS: Record<string, string> = {
+  give_quest: 'Принять квест',
+  open_shop: 'Открыть магазин',
+  heal: 'Исцелиться',
+};
+
 /* ── Component ── */
 
 const NpcDialogueModal = ({ npcId, npcName, npcAvatar, onClose }: NpcDialogueModalProps) => {
@@ -33,13 +41,14 @@ const NpcDialogueModal = ({ npcId, npcName, npcAvatar, onClose }: NpcDialogueMod
   const [loading, setLoading] = useState(true);
   const [choosing, setChoosing] = useState(false);
   const [fadeIn, setFadeIn] = useState(false);
+  const [actionProcessing, setActionProcessing] = useState(false);
+  const characterId = useAppSelector((state) => state.user.character?.id) as number | null;
 
   const startDialogue = useCallback(async () => {
     setLoading(true);
     try {
       const res = await axios.get<DialogueNode>(`${BASE_URL}/locations/npcs/${npcId}/dialogue`);
       setCurrentNode(res.data);
-      // Trigger fade-in animation
       setTimeout(() => setFadeIn(true), 50);
     } catch {
       toast.error('Не удалось начать диалог');
@@ -63,7 +72,6 @@ const NpcDialogueModal = ({ npcId, npcName, npcAvatar, onClose }: NpcDialogueMod
         `${BASE_URL}/locations/npcs/${npcId}/dialogue/${currentNode.id}/choose`,
         { option_id: option.id },
       );
-      // Small delay for smooth transition
       setTimeout(() => {
         setCurrentNode(res.data);
         setFadeIn(true);
@@ -76,14 +84,47 @@ const NpcDialogueModal = ({ npcId, npcName, npcAvatar, onClose }: NpcDialogueMod
     }
   };
 
+  const handleAction = async () => {
+    if (!currentNode?.action_type || !characterId) return;
+    setActionProcessing(true);
+
+    try {
+      if (currentNode.action_type === 'give_quest') {
+        const questId = currentNode.action_data?.quest_id;
+        if (!questId) {
+          toast.error('Квест не настроен');
+          return;
+        }
+        await axios.post(`${BASE_URL}/locations/quests/${questId}/accept`, {
+          character_id: characterId,
+        });
+        toast.success('Квест принят!');
+      } else if (currentNode.action_type === 'open_shop') {
+        toast('Магазин откроется после завершения диалога');
+      } else if (currentNode.action_type === 'heal') {
+        toast.success('Вы исцелены!');
+      }
+    } catch (err) {
+      let message = 'Не удалось выполнить действие';
+      if (axios.isAxiosError(err) && err.response?.data?.detail) {
+        const detail = err.response.data.detail;
+        message = typeof detail === 'string' ? detail : message;
+      }
+      toast.error(message);
+    } finally {
+      setActionProcessing(false);
+    }
+  };
+
   const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget) onClose();
   };
 
   const isEnd = currentNode?.is_end || (currentNode && currentNode.options.length === 0);
+  const hasAction = currentNode?.action_type && currentNode.action_type !== '';
 
   return (
-    <div className="modal-overlay" onClick={handleOverlayClick}>
+    <div className="modal-overlay !bg-black/80" onClick={handleOverlayClick}>
       <div className="relative flex flex-col w-full max-w-2xl mx-4 max-h-[90vh]">
         {/* Close button */}
         <button
@@ -129,7 +170,6 @@ const NpcDialogueModal = ({ npcId, npcName, npcAvatar, onClose }: NpcDialogueMod
                 ${fadeIn ? 'opacity-100' : 'opacity-0'}
               `}
             >
-              {/* Decorative quote icon */}
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 className="w-6 h-6 text-gold/30 absolute top-3 right-3 hidden sm:block"
@@ -142,6 +182,32 @@ const NpcDialogueModal = ({ npcId, npcName, npcAvatar, onClose }: NpcDialogueMod
                 {currentNode.npc_text}
               </p>
             </div>
+
+            {/* Action button (give_quest, open_shop, heal, etc.) */}
+            {hasAction && characterId && (
+              <div className={`transition-opacity duration-300 ease-in-out delay-75 ${fadeIn ? 'opacity-100' : 'opacity-0'}`}>
+                <button
+                  onClick={handleAction}
+                  disabled={actionProcessing}
+                  className="
+                    w-full text-left px-4 py-3 rounded-card
+                    border border-green-500/50 bg-green-900/30
+                    text-green-300 text-sm sm:text-base font-medium
+                    hover:bg-green-900/50 hover:border-green-400/70
+                    disabled:opacity-50 disabled:cursor-not-allowed
+                    transition-all duration-200
+                    flex items-center gap-2
+                  "
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  {actionProcessing
+                    ? 'Выполнение...'
+                    : (ACTION_LABELS[currentNode.action_type!] || currentNode.action_type)}
+                </button>
+              </div>
+            )}
 
             {/* Player options */}
             <div

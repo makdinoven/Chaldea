@@ -92,7 +92,7 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
   };
 
   return (
-    <div className="modal-overlay" onClick={handleOverlayClick}>
+    <div className="modal-overlay !bg-black/80" onClick={handleOverlayClick}>
       <div className="modal-content gold-outline gold-outline-thick relative max-w-2xl w-full mx-4 max-h-[90vh] flex flex-col">
         {/* Close button */}
         <button
