@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Player, NpcInLocation } from './types';
-import { NPC_ROLE_LABELS } from '../../../constants/npc';
+import { NPC_ROLE_LABELS, NPC_ROLE_ICONS } from '../../../constants/npc';
 import NpcProfileModal from './NpcProfileModal';
 
 interface PlayersSectionProps {
@@ -39,21 +39,29 @@ interface NpcCardProps {
 
 const NpcCard = ({ npc, onClick }: NpcCardProps) => {
   const roleLabel = npc.npc_role ? (NPC_ROLE_LABELS[npc.npc_role] || npc.npc_role) : null;
+  const roleIcon = npc.npc_role ? (NPC_ROLE_ICONS[npc.npc_role] || null) : null;
 
   return (
     <button
       onClick={onClick}
       className="flex flex-col items-center gap-2 p-2 rounded-card hover:bg-white/5 transition-colors cursor-pointer bg-transparent border-0"
     >
-      <div className="gold-outline relative w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden bg-black/40 shrink-0">
-        {npc.avatar ? (
-          <img src={npc.avatar} alt={npc.name} className="w-full h-full object-cover" />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-white/20">
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-            </svg>
-          </div>
+      <div className="relative">
+        <div className="gold-outline relative w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden bg-black/40 shrink-0">
+          {npc.avatar ? (
+            <img src={npc.avatar} alt={npc.name} className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-white/20">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+            </div>
+          )}
+        </div>
+        {roleIcon && (
+          <span className="absolute -bottom-1 -right-1 w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-full bg-black/80 border border-gold-dark/50 text-sm sm:text-base leading-none">
+            {roleIcon}
+          </span>
         )}
       </div>
       <span className="text-white text-xs sm:text-sm text-center truncate w-full">

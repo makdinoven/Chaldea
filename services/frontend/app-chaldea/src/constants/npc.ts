@@ -20,6 +20,24 @@ export const NPC_ROLE_LABELS: Record<string, string> = Object.fromEntries(
   NPC_ROLES.map((r) => [r.value, r.label])
 );
 
+export const NPC_ROLE_ICONS: Record<string, string> = {
+  merchant: '🪙',
+  guard: '🛡️',
+  hero: '⚔️',
+  king: '👑',
+  ruler: '🏛️',
+  sage: '📖',
+  blacksmith: '🔨',
+  alchemist: '⚗️',
+  mercenary: '🗡️',
+  priest: '✝️',
+  bandit: '🏴',
+  wanderer: '🧭',
+  healer: '💚',
+  bard: '🎵',
+  hunter: '🏹',
+};
+
 export const NPC_SEXES = [
   { value: 'male', label: 'Мужской' },
   { value: 'female', label: 'Женский' },
