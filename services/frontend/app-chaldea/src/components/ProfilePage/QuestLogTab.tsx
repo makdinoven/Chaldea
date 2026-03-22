@@ -60,7 +60,7 @@ const QuestLogTab = ({ characterId }: QuestLogTabProps) => {
       );
       setQuests(res.data);
     } catch {
-      toast.error('Не удалось загрузить активные квесты');
+      toast.error('Не удалось загрузить активные задания');
     } finally {
       setLoading(false);
     }
@@ -80,13 +80,13 @@ const QuestLogTab = ({ characterId }: QuestLogTabProps) => {
       await axios.post(`${BASE_URL}/locations/quests/${questId}/complete`, {
         character_id: characterId,
       });
-      toast.success('Квест выполнен! Награда получена');
+      toast.success('Задание выполнено! Награда получена');
       setQuests((prev) => prev.filter((q) => q.id !== questId));
     } catch (err) {
       const message =
         axios.isAxiosError(err) && err.response?.data?.detail
           ? err.response.data.detail
-          : 'Не удалось сдать квест';
+          : 'Не удалось сдать задание';
       toast.error(message);
     } finally {
       setCompleting(null);
@@ -94,19 +94,19 @@ const QuestLogTab = ({ characterId }: QuestLogTabProps) => {
   };
 
   const handleAbandon = async (questId: number) => {
-    if (!window.confirm('Отказаться от квеста? Прогресс будет потерян.')) return;
+    if (!window.confirm('Отказаться от задания? Прогресс будет потерян.')) return;
     setAbandoning(questId);
     try {
       await axios.post(`${BASE_URL}/locations/quests/${questId}/abandon`, {
         character_id: characterId,
       });
-      toast.success('Вы отказались от квеста');
+      toast.success('Вы отказались от задания');
       setQuests((prev) => prev.filter((q) => q.id !== questId));
     } catch (err) {
       const message =
         axios.isAxiosError(err) && err.response?.data?.detail
           ? err.response.data.detail
-          : 'Не удалось отказаться от квеста';
+          : 'Не удалось отказаться от задания';
       toast.error(message);
     } finally {
       setAbandoning(null);
@@ -133,7 +133,7 @@ const QuestLogTab = ({ characterId }: QuestLogTabProps) => {
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
         </svg>
         <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase mb-2">
-          Нет активных квестов
+          Нет активных заданий
         </h2>
         <p className="text-white/50 text-sm">
           Поговорите с НПС, чтобы получить задания
@@ -267,7 +267,7 @@ const QuestLogTab = ({ characterId }: QuestLogTabProps) => {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
                   )}
-                  Сдать квест
+                  Сдать задание
                 </button>
               )}
               <button

@@ -44,24 +44,35 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
   const [quests, setQuests] = useState<Quest[]>([]);
   const [loading, setLoading] = useState(true);
   const [accepting, setAccepting] = useState<number | null>(null);
+  const [dialogueQuestIds, setDialogueQuestIds] = useState<Set<number>>(new Set());
   const character = useAppSelector((state) => state.user.character);
   const characterId = character?.id ?? null;
 
   useEffect(() => {
-    const fetchQuests = async () => {
+    const fetchData = async () => {
       try {
-        const res = await axios.get<Quest[]>(`${BASE_URL}/locations/npcs/${npcId}/quests`, {
-          params: characterId ? { character_id: characterId } : {},
-        });
-        setQuests(res.data);
-      } catch {
-        toast.error('Не удалось загрузить квесты');
+        const [questsRes, dqRes] = await Promise.allSettled([
+          axios.get<Quest[]>(`${BASE_URL}/locations/npcs/${npcId}/quests`, {
+            params: characterId ? { character_id: characterId } : {},
+          }),
+          axios.get<number[]>(`${BASE_URL}/locations/npcs/${npcId}/dialogue-quest-ids`),
+        ]);
+
+        if (questsRes.status === 'fulfilled') {
+          setQuests(questsRes.value.data);
+        } else {
+          toast.error('Не удалось загрузить задания');
+        }
+
+        if (dqRes.status === 'fulfilled') {
+          setDialogueQuestIds(new Set(dqRes.value.data));
+        }
       } finally {
         setLoading(false);
       }
     };
-    fetchQuests();
-  }, [npcId]);
+    fetchData();
+  }, [npcId, characterId]);
 
   const handleAccept = async (questId: number) => {
     if (!characterId) {
@@ -73,14 +84,14 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
       await axios.post(`${BASE_URL}/locations/quests/${questId}/accept`, {
         character_id: characterId,
       });
-      toast.success('Квест принят!');
+      toast.success('Задание принято!');
       // Remove accepted quest from list
       setQuests((prev) => prev.filter((q) => q.id !== questId));
     } catch (err) {
       const message =
         axios.isAxiosError(err) && err.response?.data?.detail
           ? err.response.data.detail
-          : 'Не удалось принять квест';
+          : 'Не удалось принять задание';
       toast.error(message);
     } finally {
       setAccepting(null);
@@ -120,7 +131,7 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
           </div>
           <div>
             <h2 className="gold-text text-lg sm:text-xl font-medium uppercase tracking-wide">
-              Квесты
+              Задания
             </h2>
             <p className="text-white/50 text-xs sm:text-sm">{npcName}</p>
           </div>
@@ -134,7 +145,7 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
             </div>
           ) : quests.length === 0 ? (
             <p className="text-center text-white/50 text-sm py-8">
-              Нет доступных квестов
+              Нет доступных заданий
             </p>
           ) : (
             quests.map((quest) => (
@@ -196,28 +207,46 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
                 </div>
 
                 {/* Accept button */}
-                <button
-                  onClick={() => handleAccept(quest.id)}
-                  disabled={accepting === quest.id}
-                  className="
-                    w-full px-4 py-2.5 rounded-card
-                    border border-gold/50 bg-gold/10
-                    text-gold text-sm font-medium uppercase tracking-wide
-                    hover:bg-gold/20 hover:border-gold/80
-                    disabled:opacity-50 disabled:cursor-not-allowed
-                    transition-all duration-200
-                    flex items-center justify-center gap-2
-                  "
-                >
-                  {accepting === quest.id ? (
-                    <div className="w-4 h-4 border-2 border-gold/30 border-t-gold rounded-full animate-spin" />
-                  ) : (
+                {dialogueQuestIds.has(quest.id) ? (
+                  <button
+                    disabled
+                    className="
+                      w-full px-4 py-2.5 rounded-card
+                      border border-red-500/50 bg-red-900/20
+                      text-red-400 text-sm font-medium uppercase tracking-wide
+                      cursor-not-allowed opacity-80
+                      flex items-center justify-center gap-2
+                    "
+                  >
                     <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                     </svg>
-                  )}
-                  Принять квест
-                </button>
+                    Можно взять в диалоге
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleAccept(quest.id)}
+                    disabled={accepting === quest.id}
+                    className="
+                      w-full px-4 py-2.5 rounded-card
+                      border border-gold/50 bg-gold/10
+                      text-gold text-sm font-medium uppercase tracking-wide
+                      hover:bg-gold/20 hover:border-gold/80
+                      disabled:opacity-50 disabled:cursor-not-allowed
+                      transition-all duration-200
+                      flex items-center justify-center gap-2
+                    "
+                  >
+                    {accepting === quest.id ? (
+                      <div className="w-4 h-4 border-2 border-gold/30 border-t-gold rounded-full animate-spin" />
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    )}
+                    Принять задание
+                  </button>
+                )}
               </div>
             ))
           )}

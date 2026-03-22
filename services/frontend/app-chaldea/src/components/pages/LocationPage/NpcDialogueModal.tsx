@@ -29,7 +29,7 @@ interface NpcDialogueModalProps {
 }
 
 const ACTION_LABELS: Record<string, string> = {
-  give_quest: 'Принять квест',
+  give_quest: 'Принять задание',
   open_shop: 'Открыть магазин',
   heal: 'Исцелиться',
 };
@@ -92,13 +92,13 @@ const NpcDialogueModal = ({ npcId, npcName, npcAvatar, onClose }: NpcDialogueMod
       if (currentNode.action_type === 'give_quest') {
         const questId = currentNode.action_data?.quest_id;
         if (!questId) {
-          toast.error('Квест не настроен');
+          toast.error('Задание не настроено');
           return;
         }
         await axios.post(`${BASE_URL}/locations/quests/${questId}/accept`, {
           character_id: characterId,
         });
-        toast.success('Квест принят!');
+        toast.success('Задание принято!');
       } else if (currentNode.action_type === 'open_shop') {
         toast('Магазин откроется после завершения диалога');
       } else if (currentNode.action_type === 'heal') {

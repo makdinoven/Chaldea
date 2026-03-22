@@ -14,7 +14,13 @@ interface DialogueNodeForm {
   npc_text: string;
   is_root: boolean;
   action_type: string;
+  action_data: Record<string, unknown> | null;
   options: DialogueOptionForm[];
+}
+
+interface QuestOption {
+  id: number;
+  title: string;
 }
 
 interface DialogueTreeSummary {
@@ -74,6 +80,7 @@ const apiTreeToForm = (tree: ApiDialogueTree): { title: string; nodes: DialogueN
     npc_text: node.npc_text,
     is_root: node.is_root,
     action_type: node.action_type || '',
+    action_data: (node as unknown as { action_data: Record<string, unknown> | null }).action_data || null,
     options: node.options.map((opt) => ({
       text: opt.text,
       next_node_index: opt.next_node_id !== null ? (nodeIdToIndex.get(opt.next_node_id) ?? null) : null,
@@ -95,6 +102,7 @@ const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
   const [nodes, setNodes] = useState<DialogueNodeForm[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [npcQuests, setNpcQuests] = useState<QuestOption[]>([]);
 
   const fetchTrees = useCallback(async () => {
     setLoadingTrees(true);
@@ -115,6 +123,22 @@ const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
     fetchTrees();
   }, [fetchTrees]);
 
+  // Fetch NPC quests for the quest picker
+  useEffect(() => {
+    const fetchQuests = async () => {
+      try {
+        const res = await axios.get(`${BASE_URL}/locations/admin/quests`, {
+          params: { npc_id: npcId },
+        });
+        const items = Array.isArray(res.data) ? res.data : (res.data.items ?? []);
+        setNpcQuests(items.map((q: { id: number; title: string }) => ({ id: q.id, title: q.title })));
+      } catch {
+        // silently fail
+      }
+    };
+    fetchQuests();
+  }, [npcId]);
+
   const openNewTree = () => {
     setEditingTreeId(null);
     setTitle('');
@@ -123,6 +147,7 @@ const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
         npc_text: '',
         is_root: true,
         action_type: '',
+        action_data: null,
         options: [],
       },
     ]);
@@ -166,6 +191,7 @@ const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
         npc_text: '',
         is_root: false,
         action_type: '',
+        action_data: null,
         options: [],
       },
     ]);
@@ -188,17 +214,21 @@ const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
     });
   };
 
-  const updateNode = (nodeIndex: number, field: keyof DialogueNodeForm, value: string | boolean) => {
+  const updateNode = (nodeIndex: number, field: keyof DialogueNodeForm, value: string | boolean | Record<string, unknown> | null) => {
     setNodes((prev) =>
       prev.map((node, i) => {
         if (i !== nodeIndex) {
-          // If setting is_root, unset it on other nodes
           if (field === 'is_root' && value === true) {
             return { ...node, is_root: false };
           }
           return node;
         }
-        return { ...node, [field]: value };
+        const updated = { ...node, [field]: value };
+        // Reset action_data when action_type changes
+        if (field === 'action_type') {
+          updated.action_data = null;
+        }
+        return updated;
       }),
     );
   };
@@ -266,6 +296,7 @@ const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
         npc_text: node.npc_text,
         is_root: node.is_root,
         action_type: node.action_type || null,
+        action_data: node.action_data || null,
         options: node.options.map((opt) => ({
           text: opt.text,
           next_node_index: opt.next_node_index,
@@ -462,6 +493,33 @@ const DialogueEditor = ({ npcId, npcName, onClose }: DialogueEditorProps) => {
                       ))}
                     </select>
                   </label>
+
+                  {/* Quest picker when action_type is give_quest */}
+                  {node.action_type === 'give_quest' && (
+                    <label className="flex items-center gap-2 flex-1 max-w-xs">
+                      <span className="text-white/50 text-xs font-medium uppercase whitespace-nowrap">
+                        Квест:
+                      </span>
+                      <select
+                        value={(node.action_data?.quest_id as number) ?? ''}
+                        onChange={(e) => {
+                          const qid = e.target.value ? Number(e.target.value) : null;
+                          updateNode(nodeIndex, 'action_data', qid ? { quest_id: qid } : null);
+                        }}
+                        className="input-underline !text-sm"
+                      >
+                        <option value="" className="bg-site-dark text-white">Выберите квест...</option>
+                        {npcQuests.map((q) => (
+                          <option key={q.id} value={q.id} className="bg-site-dark text-white">
+                            {q.title}
+                          </option>
+                        ))}
+                      </select>
+                      {npcQuests.length === 0 && (
+                        <span className="text-site-red text-xs whitespace-nowrap">Нет квестов</span>
+                      )}
+                    </label>
+                  )}
                 </div>
 
                 {/* Options */}

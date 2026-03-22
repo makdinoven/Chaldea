@@ -2105,6 +2105,24 @@ async def delete_dialogue_tree(session: AsyncSession, tree_id: int) -> bool:
     return True
 
 
+async def get_dialogue_quest_ids(session: AsyncSession, npc_id: int) -> List[int]:
+    """Get all quest IDs referenced in dialogue nodes of active trees for an NPC."""
+    result = await session.execute(
+        select(DialogueTree)
+        .options(selectinload(DialogueTree.nodes))
+        .where(DialogueTree.npc_id == npc_id, DialogueTree.is_active == True)
+    )
+    trees = result.scalars().all()
+    quest_ids = []
+    for tree in trees:
+        for node in tree.nodes:
+            if node.action_type == 'give_quest' and node.action_data:
+                qid = node.action_data.get('quest_id') if isinstance(node.action_data, dict) else None
+                if qid:
+                    quest_ids.append(int(qid))
+    return quest_ids
+
+
 async def get_active_dialogue_for_npc(session: AsyncSession, npc_id: int) -> Optional[dict]:
     """Get the active dialogue tree root node for a given NPC (player-facing)."""
     result = await session.execute(

@@ -1394,6 +1394,15 @@ async def get_npc_dialogue(
     return node_data
 
 
+@router.get("/npcs/{npc_id}/dialogue-quest-ids")
+async def get_npc_dialogue_quest_ids(
+    npc_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Get quest IDs that are linked to dialogue nodes for this NPC."""
+    return await crud.get_dialogue_quest_ids(session, npc_id)
+
+
 @router.post("/npcs/{npc_id}/dialogue/{node_id}/choose", response_model=schemas.DialogueNodeResponse)
 async def choose_dialogue_option(
     npc_id: int,
