@@ -128,6 +128,8 @@ def test_session_factory():
 def mock_db_session():
     """Create a mock DB session to avoid real database connections."""
     session = MagicMock()
+    # Default: character count check returns 0 (under limit)
+    session.execute.return_value.scalar.return_value = 0
     return session
 
 
