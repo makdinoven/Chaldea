@@ -36,6 +36,7 @@ import AdminNpcsPage from "../AdminNpcsPage/AdminNpcsPage";
 import SkillTreePage from "../SkillTreeView/SkillTreePage";
 import CharactersHubPage from "../pages/CharactersPage/CharactersHubPage";
 import CharactersListPage from "../pages/CharactersPage/CharactersListPage";
+import SelectCharacterPage from "../pages/SelectCharacterPage/SelectCharacterPage";
 
 const App = () => {
   const dispatch = useAppDispatch();
@@ -69,6 +70,7 @@ const App = () => {
             <Route path="characters" element={<CharactersHubPage />} />
             <Route path="characters/list" element={<CharactersListPage />} />
             <Route path="createCharacter" element={<CreateCharacterPage />} />
+            <Route path="selectCharacter" element={<SelectCharacterPage />} />
             <Route path="requestsPage" element={
               <ProtectedRoute requiredPermission="characters:approve">
                 <RequestsPage />

@@ -99,6 +99,18 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
 
         logger.info(f"Заявка с ID {request_id} найдена, статус: {db_request.status}")
 
+        # 1.5) Проверка лимита персонажей (максимум 5 на аккаунт)
+        MAX_CHARACTERS_PER_USER = 5
+        char_count = db.execute(
+            text("SELECT COUNT(*) FROM users_character WHERE user_id = :uid"),
+            {"uid": db_request.user_id}
+        ).scalar()
+        if char_count >= MAX_CHARACTERS_PER_USER:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Достигнут лимит персонажей (максимум {MAX_CHARACTERS_PER_USER})"
+            )
+
         # 2) Читаем стартовый набор из БД
         class_id = db_request.id_class
         starter_kit = db.query(models.StarterKit).filter(models.StarterKit.class_id == class_id).first()

@@ -53,6 +53,7 @@ const Header = () => {
               },
             ]
           : []),
+        { label: 'Сменить персонажа', path: '/selectCharacter' },
       ]
     : [
         { label: 'Создать', path: '/createCharacter' },
