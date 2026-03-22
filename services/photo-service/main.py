@@ -14,6 +14,7 @@ from crud import (
     update_skill_rank_image, update_skill_image, update_item_image, update_rule_image,
     update_profile_bg_image, get_profile_bg_image, get_character_owner_id,
     update_race_image, update_subrace_image, update_location_icon,
+    update_mob_template_avatar,
 )
 from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime
 from fastapi.middleware.cors import CORSMiddleware
@@ -94,6 +95,25 @@ async def change_npc_avatar(
         avatar_url = upload_file_to_s3(result.data, unique_filename, subdirectory="character_avatars", content_type=result.content_type)
         update_character_avatar(db, character_id, avatar_url, current_user.id)
         return {"message": "Аватар НПС загружен", "avatar_url": avatar_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/photo/change_mob_avatar")
+async def change_mob_avatar(
+    mob_template_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user=Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Admin-only: upload avatar for a mob template."""
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("mob_avatar", mob_template_id, extension=result.extension)
+        avatar_url = upload_file_to_s3(result.data, unique_filename, subdirectory="mob_avatars", content_type=result.content_type)
+        update_mob_template_avatar(db, mob_template_id, avatar_url)
+        return {"message": "Аватар моба загружен", "avatar_url": avatar_url}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

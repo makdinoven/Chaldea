@@ -87,6 +87,13 @@ class Item(Base):
     image = Column(String(500), nullable=True)
 
 
+class MobTemplate(Base):
+    __tablename__ = "mob_templates"
+
+    id = Column(Integer, primary_key=True)
+    avatar = Column(String(255), nullable=True)
+
+
 class Race(Base):
     __tablename__ = "races"
 

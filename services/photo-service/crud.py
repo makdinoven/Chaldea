@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from models import (
     User, Character, Area, Country, Region, District,
     Location, Skill, SkillRank, Item, GameRule, Race, Subrace,
+    MobTemplate,
 )
 
 
@@ -164,4 +165,11 @@ def update_subrace_image(db: Session, subrace_id: int, image_url: str):
     subrace = db.query(Subrace).filter(Subrace.id_subrace == subrace_id).first()
     if subrace:
         subrace.image = image_url
+        db.commit()
+
+
+def update_mob_template_avatar(db: Session, mob_template_id: int, avatar_url: str):
+    mob = db.query(MobTemplate).filter(MobTemplate.id == mob_template_id).first()
+    if mob:
+        mob.avatar = avatar_url
         db.commit()

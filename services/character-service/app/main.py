@@ -1759,10 +1759,11 @@ async def admin_delete_npc(
 
 @router.get("/npcs/by_location", response_model=List[schemas.NpcInLocation])
 def get_npcs_by_location(location_id: int, db: Session = Depends(get_db)):
-    """Returns list of NPCs at a given location (public endpoint)."""
+    """Returns list of NPCs at a given location (excludes mobs)."""
     npcs = db.query(models.Character).filter(
         models.Character.current_location_id == location_id,
         models.Character.is_npc == True,
+        models.Character.npc_role != 'mob',
     ).all()
 
     result = []
@@ -1779,6 +1780,412 @@ def get_npcs_by_location(location_id: int, db: Session = Depends(get_db)):
             "npc_role": npc.npc_role,
         })
     return result
+
+
+# ============================================================
+# Mob Template Admin endpoints
+# ============================================================
+
+@router.get("/admin/mob-templates", response_model=schemas.MobTemplateListResponse)
+def admin_list_mob_templates(
+    q: str = Query("", description="Поиск по имени моба"),
+    tier: Optional[str] = Query(None, description="Фильтр по типу: normal, elite, boss"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Paginated list of mob templates with search and tier filter. Admin only."""
+    try:
+        items, total = crud.get_mob_templates(db, q=q, tier=tier, page=page, page_size=page_size)
+        return schemas.MobTemplateListResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении шаблонов мобов: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.post("/admin/mob-templates", status_code=201)
+def admin_create_mob_template(
+    data: schemas.MobTemplateCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Create a new mob template. Admin only."""
+    try:
+        template = crud.create_mob_template(db, data)
+        return {
+            "id": template.id,
+            "name": template.name,
+            "description": template.description,
+            "tier": template.tier,
+            "level": template.level,
+            "avatar": template.avatar,
+            "id_race": template.id_race,
+            "id_subrace": template.id_subrace,
+            "id_class": template.id_class,
+            "sex": template.sex,
+            "base_attributes": template.base_attributes,
+            "xp_reward": template.xp_reward,
+            "gold_reward": template.gold_reward,
+            "respawn_enabled": template.respawn_enabled,
+            "respawn_seconds": template.respawn_seconds,
+        }
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при создании шаблона моба: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при создании шаблона моба")
+
+
+@router.get("/admin/mob-templates/{template_id}", response_model=schemas.MobTemplateDetailResponse)
+def admin_get_mob_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Get mob template detail with skills, loot, and spawn config. Admin only."""
+    template = crud.get_mob_template_by_id(db, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Шаблон моба не найден")
+    return template
+
+
+@router.put("/admin/mob-templates/{template_id}")
+def admin_update_mob_template(
+    template_id: int,
+    data: schemas.MobTemplateUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Update mob template. Admin only."""
+    template = db.query(models.MobTemplate).filter(models.MobTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Шаблон моба не найден")
+
+    update_data = data.dict(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="Нет данных для обновления")
+
+    try:
+        updated = crud.update_mob_template(db, template, data)
+        return {
+            "id": updated.id,
+            "name": updated.name,
+            "description": updated.description,
+            "tier": updated.tier,
+            "level": updated.level,
+            "avatar": updated.avatar,
+            "id_race": updated.id_race,
+            "id_subrace": updated.id_subrace,
+            "id_class": updated.id_class,
+            "sex": updated.sex,
+            "base_attributes": updated.base_attributes,
+            "xp_reward": updated.xp_reward,
+            "gold_reward": updated.gold_reward,
+            "respawn_enabled": updated.respawn_enabled,
+            "respawn_seconds": updated.respawn_seconds,
+        }
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении шаблона моба {template_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении шаблона моба")
+
+
+@router.delete("/admin/mob-templates/{template_id}")
+def admin_delete_mob_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Delete mob template. Admin only."""
+    template = db.query(models.MobTemplate).filter(models.MobTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Шаблон моба не найден")
+
+    try:
+        crud.delete_mob_template(db, template)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при удалении шаблона моба {template_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при удалении шаблона моба")
+
+    return {"detail": "Шаблон моба удалён"}
+
+
+# ============================================================
+# Mob Template Skills, Loot, Spawn Config endpoints
+# ============================================================
+
+@router.put("/admin/mob-templates/{template_id}/skills")
+def admin_update_mob_skills(
+    template_id: int,
+    data: schemas.MobSkillsUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Replace all skills for a mob template. Admin only."""
+    template = db.query(models.MobTemplate).filter(models.MobTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Шаблон моба не найден")
+
+    try:
+        crud.replace_mob_skills(db, template_id, data.skill_rank_ids)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении навыков моба {template_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении навыков моба")
+
+    return {"detail": "Навыки обновлены", "skill_rank_ids": data.skill_rank_ids}
+
+
+@router.put("/admin/mob-templates/{template_id}/loot")
+def admin_update_mob_loot(
+    template_id: int,
+    data: schemas.MobLootUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Replace all loot entries for a mob template. Admin only."""
+    template = db.query(models.MobTemplate).filter(models.MobTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Шаблон моба не найден")
+
+    try:
+        crud.replace_mob_loot(db, template_id, data.entries)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении лут-таблицы моба {template_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении лут-таблицы моба")
+
+    return {
+        "detail": "Лут-таблица обновлена",
+        "entries": [e.dict() for e in data.entries],
+    }
+
+
+@router.put("/admin/mob-templates/{template_id}/spawns")
+def admin_update_mob_spawns(
+    template_id: int,
+    data: schemas.MobSpawnUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Replace all spawn rules for a mob template. Admin only."""
+    template = db.query(models.MobTemplate).filter(models.MobTemplate.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Шаблон моба не найден")
+
+    try:
+        crud.replace_mob_spawns(db, template_id, data.spawns)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении спавн-конфигурации моба {template_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении спавн-конфигурации моба")
+
+    return {
+        "detail": "Спавн-конфигурация обновлена",
+        "spawns": [s.dict() for s in data.spawns],
+    }
+
+
+# ============================================================
+# Mob Spawning & Lifecycle endpoints (Phase 3)
+# ============================================================
+
+@router.post("/internal/try-spawn")
+def internal_try_spawn(
+    data: schemas.TrySpawnRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth) — called by locations-service after post creation.
+    Queries spawn rules for the given location, rolls chance, spawns mob if successful.
+    """
+    try:
+        result = crud.try_spawn_at_location(db, data.location_id)
+        if result is None:
+            return {"spawned": False}
+
+        active_mob, character, template = result
+        return {
+            "spawned": True,
+            "mob": {
+                "active_mob_id": active_mob.id,
+                "character_id": character.id,
+                "name": character.name,
+                "tier": template.tier,
+            },
+        }
+    except Exception as e:
+        logger.error(f"Ошибка при попытке спавна моба на локации {data.location_id}: {e}")
+        return {"spawned": False}
+
+
+@router.post("/admin/active-mobs/spawn", status_code=201)
+def admin_manual_spawn(
+    data: schemas.ManualSpawnRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Admin manually spawns a mob at a location."""
+    template = db.query(models.MobTemplate).filter(models.MobTemplate.id == data.mob_template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Шаблон моба не найден")
+
+    try:
+        active_mob, character = crud.spawn_mob_from_template(
+            db, data.mob_template_id, data.location_id, "manual"
+        )
+        return {
+            "id": active_mob.id,
+            "character_id": character.id,
+            "location_id": active_mob.location_id,
+            "status": active_mob.status,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ошибка при ручном спавне моба: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при создании моба")
+
+
+@router.get("/admin/active-mobs", response_model=schemas.ActiveMobListResponse)
+def admin_list_active_mobs(
+    location_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    template_id: Optional[int] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """List active mobs with filters. Admin only."""
+    try:
+        items, total = crud.get_active_mobs(
+            db, location_id=location_id, status=status,
+            template_id=template_id, page=page, page_size=page_size,
+        )
+        result_items = []
+        for am in items:
+            template = db.query(models.MobTemplate).filter(models.MobTemplate.id == am.mob_template_id).first()
+            result_items.append(schemas.ActiveMobResponse(
+                id=am.id,
+                mob_template_id=am.mob_template_id,
+                character_id=am.character_id,
+                location_id=am.location_id,
+                status=am.status,
+                battle_id=am.battle_id,
+                spawn_type=am.spawn_type,
+                spawned_at=am.spawned_at,
+                killed_at=am.killed_at,
+                respawn_at=am.respawn_at,
+                template_name=template.name if template else None,
+                template_tier=template.tier if template else None,
+                template_level=template.level if template else None,
+            ))
+        return schemas.ActiveMobListResponse(
+            items=result_items,
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении активных мобов: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.delete("/admin/active-mobs/{active_mob_id}")
+def admin_delete_active_mob(
+    active_mob_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Remove an active mob and its Character record. Admin only."""
+    active_mob = crud.get_active_mob_by_id(db, active_mob_id)
+    if not active_mob:
+        raise HTTPException(status_code=404, detail="Активный моб не найден")
+
+    try:
+        crud.delete_active_mob(db, active_mob)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при удалении активного моба {active_mob_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при удалении моба")
+
+    return {"detail": "Моб удалён"}
+
+
+@router.get("/mobs/by_location", response_model=List[schemas.MobInLocation])
+def get_mobs_by_location(
+    location_id: int = Query(..., description="ID локации"),
+    db: Session = Depends(get_db),
+):
+    """Public endpoint: returns alive/in_battle mobs at a given location."""
+    try:
+        return crud.get_mobs_at_location(db, location_id)
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении мобов на локации {location_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+# ============================================================
+# Rewards & Internal Mob Endpoints (Phase 4)
+# ============================================================
+
+@router.post("/{character_id}/add_rewards", response_model=schemas.AddRewardsResponse)
+def add_rewards(
+    character_id: int,
+    data: schemas.AddRewardsRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth) — adds XP and gold to a character.
+    Called by battle-service after PvE victory.
+    """
+    result = crud.add_rewards_to_character(db, character_id, data.xp, data.gold)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    new_balance, new_xp = result
+    return schemas.AddRewardsResponse(
+        ok=True,
+        new_balance=new_balance,
+        new_xp=new_xp,
+    )
+
+
+@router.get("/internal/mob-reward-data/{character_id}", response_model=schemas.MobRewardDataResponse)
+def get_mob_reward_data_endpoint(
+    character_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth) — returns mob template reward data for a given mob character_id.
+    Used by battle-service to determine PvE rewards.
+    """
+    reward_data = crud.get_mob_reward_data(db, character_id)
+    if reward_data is None:
+        raise HTTPException(status_code=404, detail="Персонаж не является мобом или не найден")
+    return reward_data
+
+
+@router.put("/internal/active-mob-status/{character_id}")
+def update_mob_status(
+    character_id: int,
+    data: schemas.UpdateActiveMobStatusRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth) — updates active mob status.
+    Called by battle-service after PvE battle ends.
+    """
+    result = crud.update_active_mob_status(db, character_id, data.status)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Активный моб не найден")
+    return {"ok": True, "status": result.status}
 
 
 app.include_router(router)
