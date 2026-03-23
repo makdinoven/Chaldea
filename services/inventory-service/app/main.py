@@ -57,6 +57,12 @@ def verify_character_ownership(db: Session, character_id: int, user_id: int):
         raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
 
 
+def check_not_in_battle(db: Session, character_id: int, message: str = "Действие заблокировано во время боя"):
+    """Raise 400 if character is in an active battle (shared DB query)."""
+    if crud.is_character_in_battle(db, character_id):
+        raise HTTPException(status_code=400, detail=message)
+
+
 @router.post("/", response_model=schemas.InventoryResponse)
 def create_inventory(inventory_request: schemas.InventoryRequest, db: Session = Depends(get_db)):
     """
@@ -285,6 +291,7 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
       6) По окончании — пересчитываем быстрые слоты (recalc_fast_slots).
     """
     verify_character_ownership(db, character_id, current_user.id)
+    check_not_in_battle(db, character_id, "Вы не можете менять экипировку во время боя")
 
     try:
         # 1) Проверяем предмет
@@ -381,6 +388,7 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
       5) Вызываем recalc_fast_slots (после commit)
     """
     verify_character_ownership(db, character_id, current_user.id)
+    check_not_in_battle(db, character_id, "Вы не можете менять экипировку во время боя")
     try:
         slot = db.query(models.EquipmentSlot).filter(
             models.EquipmentSlot.character_id == character_id,

@@ -15,6 +15,8 @@ import NeighborsSection from './NeighborsSection';
 import LootSection from './LootSection';
 import PendingInvitationsPanel from './PendingInvitationsPanel';
 import LocationMobs from '../../LocationMobs';
+import useBattleLock from '../../../hooks/useBattleLock';
+import BattleLockBanner from '../../CommonComponents/BattleLockBanner';
 
 const LocationPage = () => {
   const navigate = useNavigate();
@@ -27,6 +29,7 @@ const LocationPage = () => {
   const userId = useAppSelector((state) => state.user.id);
   const userRole = useAppSelector((state) => state.user.role);
   const userIsStaff = isStaff(userRole);
+  const { inBattle } = useBattleLock(character?.id);
 
   useBodyBackground(location?.image_url);
 
@@ -348,6 +351,11 @@ const LocationPage = () => {
         Назад
       </button>
 
+      {/* Battle lock banner */}
+      {inBattle && (
+        <BattleLockBanner message="Вы в бою! Завершите бой, чтобы продолжить." />
+      )}
+
       {/* Header */}
       <LocationHeader
         location={location}
@@ -399,13 +407,18 @@ const LocationPage = () => {
 
         {/* Create form — shown if character exists or user is staff */}
         {(character || userIsStaff) && (
-          <PostCreateForm
-            onSubmit={handleSubmitPost}
-            onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
-            disabled={!isCharacterHere && !character && !userIsStaff}
-            isStaff={userIsStaff}
-            npcs={location.npcs ?? []}
-          />
+          <>
+            {inBattle && (
+              <p className="text-yellow-400 text-sm font-medium">Вы в бою</p>
+            )}
+            <PostCreateForm
+              onSubmit={handleSubmitPost}
+              onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
+              disabled={inBattle || (!isCharacterHere && !character && !userIsStaff)}
+              isStaff={userIsStaff}
+              npcs={location.npcs ?? []}
+            />
+          </>
         )}
 
         {location.posts.length === 0 ? (
@@ -436,7 +449,7 @@ const LocationPage = () => {
       <div className="gradient-divider-h relative pb-2" />
 
       {/* Neighbors */}
-      <section className="bg-black/50 rounded-card p-4 sm:p-6">
+      <section className={`bg-black/50 rounded-card p-4 sm:p-6 ${inBattle ? 'pointer-events-none opacity-50' : ''}`}>
         <NeighborsSection neighbors={location.neighbors} />
       </section>
 

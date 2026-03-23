@@ -73,6 +73,21 @@ async def verify_character_ownership(db: AsyncSession, character_id: int, user_i
         raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
 
 
+async def check_not_in_battle(db: AsyncSession, character_id: int, message: str = "Действие заблокировано во время боя"):
+    """Raise 400 if character is in an active battle (shared DB query)."""
+    result = await db.execute(
+        text(
+            "SELECT b.id FROM battles b "
+            "JOIN battle_participants bp ON b.id = bp.battle_id "
+            "WHERE bp.character_id = :cid AND b.status IN ('pending', 'in_progress') "
+            "LIMIT 1"
+        ),
+        {"cid": character_id},
+    )
+    if result.fetchone():
+        raise HTTPException(status_code=400, detail=message)
+
+
 def get_optional_user(token: Optional[str] = Depends(OAUTH2_SCHEME_OPTIONAL)) -> Optional[UserRead]:
     """Try to authenticate user, return None if no token or invalid token."""
     if not token:
@@ -491,6 +506,7 @@ async def create_new_post(
     current_user=Depends(get_current_user_via_http),
 ):
     await verify_character_ownership(session, post_data.character_id, current_user.id)
+    await check_not_in_battle(session, post_data.character_id, "Вы не можете писать посты во время боя")
     result = await crud.create_post(session, post_data)
 
     # Fire-and-forget: trigger mob spawn check
@@ -653,6 +669,7 @@ async def move_and_post(
     """
     # 0. Проверяем, что персонаж принадлежит текущему пользователю
     await verify_character_ownership(session, movement.character_id, current_user.id)
+    await check_not_in_battle(session, movement.character_id, "Вы не можете покинуть локацию во время боя")
 
     # 1. Получаем профиль персонажа (чтобы узнать current_location_id)
     async with httpx.AsyncClient(timeout=5.0) as client:

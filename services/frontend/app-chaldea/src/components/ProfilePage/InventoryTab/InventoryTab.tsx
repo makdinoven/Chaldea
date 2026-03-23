@@ -6,12 +6,16 @@ import EquipmentPanel from '../EquipmentPanel/EquipmentPanel';
 import FastSlots from '../EquipmentPanel/FastSlots';
 import CharacterInfoPanel from '../CharacterInfoPanel/CharacterInfoPanel';
 import InventoryDndProvider from './dnd/InventoryDndContext';
+import useBattleLock from '../../../hooks/useBattleLock';
+import BattleLockBanner from '../../CommonComponents/BattleLockBanner';
 
 interface InventoryTabProps {
   characterId: number;
 }
 
 const InventoryTab = ({ characterId }: InventoryTabProps) => {
+  const { inBattle } = useBattleLock(characterId);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -19,12 +23,18 @@ const InventoryTab = ({ characterId }: InventoryTabProps) => {
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="relative"
     >
+      {inBattle && (
+        <div className="mb-4">
+          <BattleLockBanner message="Экипировка заблокирована во время боя" />
+        </div>
+      )}
+
       <InventoryDndProvider characterId={characterId}>
         {/*
           Layout from Figma (left to right):
           [CategorySidebar] | [ItemGrid (scrollable)] | [EquipmentSlots] | [FastSlots] | [CharacterInfo]
         */}
-        <div className="relative z-10 flex gap-4 items-start">
+        <div className={`relative z-10 flex gap-4 items-start ${inBattle ? 'pointer-events-none opacity-60' : ''}`}>
           {/* Left: Category sidebar + Item grid */}
           <div className="flex gap-2 shrink-0">
             <CategorySidebar />
