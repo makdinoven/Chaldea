@@ -27,6 +27,7 @@ const sections: AdminSection[] = [
   { label: 'Мобы', path: '/admin/mobs', description: 'Управление шаблонами мобов: создание, навыки, лут, спавн', module: 'mobs' },
   { label: 'Активные мобы', path: '/admin/active-mobs', description: 'Мониторинг активных мобов, ручное размещение и удаление', module: 'mobs' },
   { label: 'Бои', path: '/admin/battles', description: 'Мониторинг активных боёв, принудительное завершение', module: 'battles' },
+  { label: 'Архив', path: '/admin/archive', description: 'Управление статьями и категориями архива', module: 'archive' },
 ];
 
 const AdminPage = () => {

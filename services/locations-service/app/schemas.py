@@ -939,3 +939,106 @@ class QuestAvailableRead(BaseModel):
     objectives: List[QuestObjectiveRead] = []
     player_status: str = 'available'  # available, active, completed
 
+
+# -------------------------------
+#   ARCHIVE CATEGORY SCHEMAS
+# -------------------------------
+class ArchiveCategoryCreate(BaseModel):
+    name: str
+    slug: str
+    description: Optional[str] = None
+    sort_order: int = 0
+
+class ArchiveCategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    slug: Optional[str] = None
+    description: Optional[str] = None
+    sort_order: Optional[int] = None
+
+class ArchiveCategoryRead(BaseModel):
+    id: int
+    name: str
+    slug: str
+    description: Optional[str] = None
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+class ArchiveCategoryWithCount(ArchiveCategoryRead):
+    article_count: int = 0
+
+
+# -------------------------------
+#   ARCHIVE ARTICLE SCHEMAS
+# -------------------------------
+class ArchiveArticleCreate(BaseModel):
+    title: str
+    slug: str
+    content: Optional[str] = None
+    summary: Optional[str] = None
+    cover_image_url: Optional[str] = None
+    is_featured: bool = False
+    featured_sort_order: int = 0
+    category_ids: List[int] = []
+
+class ArchiveArticleUpdate(BaseModel):
+    title: Optional[str] = None
+    slug: Optional[str] = None
+    content: Optional[str] = None
+    summary: Optional[str] = None
+    cover_image_url: Optional[str] = None
+    is_featured: Optional[bool] = None
+    featured_sort_order: Optional[int] = None
+    category_ids: Optional[List[int]] = None
+
+class ArchiveArticleRead(BaseModel):
+    id: int
+    title: str
+    slug: str
+    content: Optional[str] = None
+    summary: Optional[str] = None
+    cover_image_url: Optional[str] = None
+    is_featured: bool
+    featured_sort_order: int
+    created_by_user_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+    categories: List[ArchiveCategoryRead] = []
+
+    class Config:
+        orm_mode = True
+
+class ArchiveArticleListItem(BaseModel):
+    """Lightweight schema for list views — no content field."""
+    id: int
+    title: str
+    slug: str
+    summary: Optional[str] = None
+    cover_image_url: Optional[str] = None
+    is_featured: bool
+    featured_sort_order: int
+    created_at: datetime
+    updated_at: datetime
+    categories: List[ArchiveCategoryRead] = []
+
+    class Config:
+        orm_mode = True
+
+class ArchiveArticlePreview(BaseModel):
+    """Minimal schema for hover preview tooltips."""
+    id: int
+    title: str
+    slug: str
+    summary: Optional[str] = None
+    cover_image_url: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+class ArchiveSearchResult(BaseModel):
+    articles: List[ArchiveArticleListItem]
+    total: int
+

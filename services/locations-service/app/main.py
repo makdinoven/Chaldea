@@ -1963,8 +1963,127 @@ async def update_quest_progress(
 
 
 # --------------------------------------------------------------------
+# ARCHIVE (Lore Wiki)
+# --------------------------------------------------------------------
+archive_router = APIRouter(prefix="/archive")
+
+
+@archive_router.get("/articles", response_model=schemas.ArchiveSearchResult)
+async def list_articles(
+    category_slug: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 20,
+    session: AsyncSession = Depends(get_db),
+):
+    """List articles with optional category/search filters and pagination."""
+    articles, total = await crud.get_articles(session, category_slug=category_slug, search=search, page=page, per_page=per_page)
+    return {"articles": articles, "total": total}
+
+
+@archive_router.get("/articles/preview/{slug}", response_model=schemas.ArchiveArticlePreview)
+async def get_article_preview(slug: str, session: AsyncSession = Depends(get_db)):
+    """Get minimal article data for hover preview tooltip."""
+    return await crud.get_article_preview(session, slug)
+
+
+@archive_router.get("/articles/{slug}", response_model=schemas.ArchiveArticleRead)
+async def get_article_by_slug(slug: str, session: AsyncSession = Depends(get_db)):
+    """Get full article by slug."""
+    return await crud.get_article_by_slug(session, slug)
+
+
+@archive_router.get("/categories", response_model=List[schemas.ArchiveCategoryWithCount])
+async def list_categories(session: AsyncSession = Depends(get_db)):
+    """List all categories with article counts."""
+    return await crud.get_all_categories(session)
+
+
+@archive_router.get("/featured", response_model=List[schemas.ArchiveArticleListItem])
+async def get_featured_articles(session: AsyncSession = Depends(get_db)):
+    """Get featured articles."""
+    return await crud.get_featured_articles(session)
+
+
+@archive_router.post("/articles/create", response_model=schemas.ArchiveArticleRead)
+async def create_article(
+    body: schemas.ArchiveArticleCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("archive:create")),
+):
+    """Create a new archive article."""
+    return await crud.create_article(session, body, user_id=current_user.id)
+
+
+@archive_router.put("/articles/{id}/update", response_model=schemas.ArchiveArticleRead)
+async def update_article(
+    id: int,
+    body: schemas.ArchiveArticleUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("archive:update")),
+):
+    """Update an existing archive article."""
+    return await crud.update_article(session, id, body)
+
+
+@archive_router.delete("/articles/{id}/delete")
+async def delete_article(
+    id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("archive:delete")),
+):
+    """Delete an archive article."""
+    await crud.delete_article(session, id)
+    return {"status": "success"}
+
+
+@archive_router.post("/categories/create", response_model=schemas.ArchiveCategoryRead)
+async def create_category(
+    body: schemas.ArchiveCategoryCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("archive:create")),
+):
+    """Create a new archive category."""
+    return await crud.create_category(session, body)
+
+
+@archive_router.put("/categories/{id}/update", response_model=schemas.ArchiveCategoryRead)
+async def update_category(
+    id: int,
+    body: schemas.ArchiveCategoryUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("archive:update")),
+):
+    """Update an existing archive category."""
+    return await crud.update_category(session, id, body)
+
+
+@archive_router.delete("/categories/{id}/delete")
+async def delete_category(
+    id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("archive:delete")),
+):
+    """Delete an archive category."""
+    await crud.delete_category(session, id)
+    return {"status": "success"}
+
+
+@archive_router.put("/categories/reorder")
+async def reorder_categories(
+    items: List[dict],
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("archive:update")),
+):
+    """Reorder categories by providing list of {id, sort_order} dicts."""
+    await crud.reorder_categories(session, items)
+    return {"status": "success"}
+
+
+# --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------
 app.include_router(router)
 app.include_router(rules_router)
+app.include_router(archive_router)
 

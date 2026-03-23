@@ -373,3 +373,55 @@ class DialogueOption(Base):
 
     node = relationship("DialogueNode", back_populates="options", foreign_keys=[node_id])
     next_node = relationship("DialogueNode", foreign_keys=[next_node_id])
+
+
+class ArchiveCategory(Base):
+    __tablename__ = 'archive_categories'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    slug = Column(String(255), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    articles = relationship(
+        "ArchiveArticle",
+        secondary="archive_article_categories",
+        back_populates="categories"
+    )
+
+
+class ArchiveArticle(Base):
+    __tablename__ = 'archive_articles'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    title = Column(String(500), nullable=False)
+    slug = Column(String(255), nullable=False, unique=True)
+    content = Column(Text, nullable=True)
+    summary = Column(String(500), nullable=True)
+    cover_image_url = Column(String(512), nullable=True)
+    is_featured = Column(Boolean, nullable=False, default=False)
+    featured_sort_order = Column(Integer, nullable=False, default=0)
+    created_by_user_id = Column(Integer, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    categories = relationship(
+        "ArchiveCategory",
+        secondary="archive_article_categories",
+        back_populates="articles"
+    )
+
+
+class ArchiveArticleCategory(Base):
+    __tablename__ = 'archive_article_categories'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    article_id = Column(BigInteger, ForeignKey('archive_articles.id', ondelete='CASCADE'), nullable=False)
+    category_id = Column(BigInteger, ForeignKey('archive_categories.id', ondelete='CASCADE'), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('article_id', 'category_id', name='uq_article_category'),
+    )

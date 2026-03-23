@@ -1,5 +1,7 @@
 import os
+import time
 import traceback
+from uuid import uuid4
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends
 from sqlalchemy.orm import Session
@@ -518,4 +520,31 @@ async def delete_profile_background(user_id: int, current_user = Depends(get_cur
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/photo/upload_archive_image")
+async def upload_archive_image(
+    file: UploadFile = File(...),
+    current_user=Depends(require_permission("photos:upload")),
+):
+    """
+    Загружает изображение для статьи архива (Lore Wiki).
+    Не привязано к конкретной сущности — просто загружает файл в S3 и возвращает URL.
+    URL затем вставляется в HTML-контент статьи через WYSIWYG-редактор.
+    """
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        timestamp = int(time.time())
+        unique_filename = f"archive_{uuid4().hex}_{timestamp}{result.extension}"
+        image_url = upload_file_to_s3(
+            result.data, unique_filename, subdirectory="archive_images", content_type=result.content_type
+        )
+
+        return {"image_url": image_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

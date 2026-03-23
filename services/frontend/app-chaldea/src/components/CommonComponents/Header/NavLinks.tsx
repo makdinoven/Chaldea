@@ -23,7 +23,7 @@ const navItems: NavItem[] = [
           { label: 'Поиск соигрока', path: '/search-player' },
           { label: 'Администрация', path: '/administration' },
           { label: 'Предложения', path: '/suggestions' },
-          { label: 'Фандом', path: '/fandom' },
+          { label: 'Архив', path: '/archive' },
         ],
       },
       {

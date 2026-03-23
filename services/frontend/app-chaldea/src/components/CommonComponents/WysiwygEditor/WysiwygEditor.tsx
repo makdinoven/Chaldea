@@ -7,6 +7,7 @@ import Color from "@tiptap/extension-color";
 import Highlight from "@tiptap/extension-highlight";
 import Link from "@tiptap/extension-link";
 import { ResizableImage } from "./ResizableImageExtension";
+import ArchiveLink from "./ArchiveLinkExtension";
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Bold,
@@ -19,14 +20,17 @@ import {
   List,
   Image as ImageIcon,
   Link as LinkIcon,
+  BookOpen,
 } from "react-feather";
 import ColorPicker from "../../common/ColorPicker";
+import { fetchArticles, type ArchiveArticleListItem } from "../../../api/archive";
 
 /* ── Types ── */
 
 interface WysiwygEditorProps {
   content: string;
   onChange: (html: string) => void;
+  enableArchiveLinks?: boolean;
 }
 
 interface ToolbarBtnProps {
@@ -150,18 +154,111 @@ const UrlPopover = ({ onSubmit, onClose, placeholder, submitLabel, initialValue 
   );
 };
 
+/* ── Archive Link Search Popover ── */
+
+interface ArchiveLinkPopoverProps {
+  onSelect: (slug: string, title: string) => void;
+  onClose: () => void;
+}
+
+const ArchiveLinkPopover = ({ onSelect, onClose }: ArchiveLinkPopoverProps) => {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<ArchiveArticleListItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useClickOutside(ref, onClose);
+
+  useEffect(() => {
+    if (!query.trim()) {
+      setResults([]);
+      setError(null);
+      return;
+    }
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await fetchArticles({ search: query.trim(), per_page: 6 });
+        setResults(data.articles);
+      } catch {
+        setError("Не удалось загрузить статьи");
+        setResults([]);
+      } finally {
+        setLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query]);
+
+  return (
+    <div
+      ref={ref}
+      className="absolute top-full left-0 mt-1 z-50 bg-site-bg border border-white/10 rounded-card p-3 shadow-dropdown min-w-[280px] max-w-[340px]"
+    >
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Поиск статьи..."
+        className="input-underline w-full text-sm mb-2"
+        autoFocus
+      />
+
+      {loading && (
+        <p className="text-xs text-white/40 py-2 text-center">Загрузка...</p>
+      )}
+
+      {error && (
+        <p className="text-xs text-red-400 py-2 text-center">{error}</p>
+      )}
+
+      {!loading && !error && query.trim() && results.length === 0 && (
+        <p className="text-xs text-white/40 py-2 text-center">Статьи не найдены</p>
+      )}
+
+      {results.length > 0 && (
+        <ul className="max-h-[200px] overflow-y-auto gold-scrollbar space-y-0.5">
+          {results.map((article) => (
+            <li key={article.id}>
+              <button
+                type="button"
+                onClick={() => onSelect(article.slug, article.title)}
+                className="w-full text-left px-2 py-1.5 rounded text-sm text-white/80 hover:text-white hover:bg-white/[0.07] transition-colors duration-150"
+              >
+                <span className="block truncate font-medium">{article.title}</span>
+                <span className="block truncate text-xs text-white/40">/archive/{article.slug}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
 /* ── Component ── */
 
-const WysiwygEditor = ({ content, onChange }: WysiwygEditorProps) => {
+const WysiwygEditor = ({ content, onChange, enableArchiveLinks = false }: WysiwygEditorProps) => {
   const [showTextColor, setShowTextColor] = useState(false);
   const [showHighlight, setShowHighlight] = useState(false);
   const [showImageUrl, setShowImageUrl] = useState(false);
   const [showLinkUrl, setShowLinkUrl] = useState(false);
+  const [showArchiveLink, setShowArchiveLink] = useState(false);
 
   const textColorRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLDivElement>(null);
   const linkRef = useRef<HTMLDivElement>(null);
+  const archiveLinkRef = useRef<HTMLDivElement>(null);
 
   const editor = useEditor({
     extensions: [
@@ -182,6 +279,7 @@ const WysiwygEditor = ({ content, onChange }: WysiwygEditorProps) => {
           class: "editor-link",
         },
       }),
+      ...(enableArchiveLinks ? [ArchiveLink] : []),
     ],
     content,
     onUpdate: ({ editor: ed }) => {
@@ -191,7 +289,7 @@ const WysiwygEditor = ({ content, onChange }: WysiwygEditorProps) => {
 
   const togglePopover = useCallback(
     (setter: React.Dispatch<React.SetStateAction<boolean>>) => {
-      const setters = [setShowTextColor, setShowHighlight, setShowImageUrl, setShowLinkUrl];
+      const setters = [setShowTextColor, setShowHighlight, setShowImageUrl, setShowLinkUrl, setShowArchiveLink];
       setters.forEach((s) => {
         if (s === setter) {
           s((prev) => !prev);
@@ -441,6 +539,36 @@ const WysiwygEditor = ({ content, onChange }: WysiwygEditorProps) => {
             />
           )}
         </div>
+
+        {/* Archive Link */}
+        {enableArchiveLinks && (
+          <>
+            <Separator />
+            <div className="relative" ref={archiveLinkRef}>
+              <ToolbarBtn
+                icon={<BookOpen size={15} />}
+                isActive={editor.isActive("archiveLink")}
+                onClick={() => {
+                  if (editor.isActive("archiveLink")) {
+                    editor.chain().focus().unsetArchiveLink().run();
+                  } else {
+                    togglePopover(setShowArchiveLink);
+                  }
+                }}
+                title="Ссылка на статью архива"
+              />
+              {showArchiveLink && (
+                <ArchiveLinkPopover
+                  onSelect={(slug, title) => {
+                    editor.chain().focus().setArchiveLink({ slug, title }).run();
+                    setShowArchiveLink(false);
+                  }}
+                  onClose={() => setShowArchiveLink(false)}
+                />
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Editor area */}

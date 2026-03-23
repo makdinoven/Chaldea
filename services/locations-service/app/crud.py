@@ -13,12 +13,15 @@ from models import (
     Country, Region, District, Location, LocationNeighbor, Post, PostLike, GameRule,
     Area, ClickableZone, GameTimeConfig, LocationLoot, LocationFavorite,
     PostDeletionRequest, PostReport, DialogueTree, DialogueNode, DialogueOption,
-    NpcShopItem, Quest, QuestObjective, CharacterQuest, CharacterQuestProgress
+    NpcShopItem, Quest, QuestObjective, CharacterQuest, CharacterQuestProgress,
+    ArchiveCategory, ArchiveArticle, ArchiveArticleCategory
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
     GameRuleCreate, GameRuleUpdate, GameRuleReorderItem,
-    AreaCreate, AreaUpdate, ClickableZoneCreate, ClickableZoneUpdate
+    AreaCreate, AreaUpdate, ClickableZoneCreate, ClickableZoneUpdate,
+    ArchiveCategoryCreate, ArchiveCategoryUpdate,
+    ArchiveArticleCreate, ArchiveArticleUpdate
 )
 
 # -------------------------------
@@ -2915,3 +2918,306 @@ async def add_experience(session: AsyncSession, character_id: int, amount: int) 
         {"cid": character_id, "amount": amount},
     )
     await session.commit()
+
+
+# -------------------------------
+#   ARCHIVE CATEGORIES
+# -------------------------------
+async def get_all_categories(session: AsyncSession):
+    """Get all archive categories ordered by sort_order, with article_count."""
+    # Subquery for article count per category
+    count_subq = (
+        select(
+            ArchiveArticleCategory.category_id,
+            sa_func.count(ArchiveArticleCategory.article_id).label("article_count"),
+        )
+        .group_by(ArchiveArticleCategory.category_id)
+        .subquery()
+    )
+
+    stmt = (
+        select(ArchiveCategory, sa_func.coalesce(count_subq.c.article_count, 0).label("article_count"))
+        .outerjoin(count_subq, ArchiveCategory.id == count_subq.c.category_id)
+        .order_by(ArchiveCategory.sort_order.asc(), ArchiveCategory.id.asc())
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    categories = []
+    for row in rows:
+        cat = row[0]
+        cat.article_count = row[1]
+        categories.append(cat)
+    return categories
+
+
+async def create_category(session: AsyncSession, data: ArchiveCategoryCreate) -> ArchiveCategory:
+    """Create a new archive category. Raises 409 if slug already exists."""
+    existing = await session.execute(
+        select(ArchiveCategory).where(ArchiveCategory.slug == data.slug)
+    )
+    if existing.scalars().first():
+        raise HTTPException(status_code=409, detail="Категория с таким slug уже существует")
+
+    new_cat = ArchiveCategory(
+        name=data.name,
+        slug=data.slug,
+        description=data.description,
+        sort_order=data.sort_order,
+    )
+    session.add(new_cat)
+    await session.commit()
+    await session.refresh(new_cat)
+    return new_cat
+
+
+async def update_category(session: AsyncSession, category_id: int, data: ArchiveCategoryUpdate) -> ArchiveCategory:
+    """Partial update of archive category. Raises 404 if not found, 409 if slug duplicate."""
+    result = await session.execute(
+        select(ArchiveCategory).where(ArchiveCategory.id == category_id)
+    )
+    db_cat = result.scalars().first()
+    if not db_cat:
+        raise HTTPException(status_code=404, detail="Категория не найдена")
+
+    update_data = data.dict(exclude_unset=True)
+
+    # Validate slug uniqueness if slug is being changed
+    if "slug" in update_data and update_data["slug"] != db_cat.slug:
+        dup = await session.execute(
+            select(ArchiveCategory).where(ArchiveCategory.slug == update_data["slug"])
+        )
+        if dup.scalars().first():
+            raise HTTPException(status_code=409, detail="Категория с таким slug уже существует")
+
+    for field, value in update_data.items():
+        setattr(db_cat, field, value)
+
+    await session.commit()
+    await session.refresh(db_cat)
+    return db_cat
+
+
+async def delete_category(session: AsyncSession, category_id: int) -> None:
+    """Delete archive category by ID. Raises 404 if not found. CASCADE handles join table."""
+    result = await session.execute(
+        select(ArchiveCategory).where(ArchiveCategory.id == category_id)
+    )
+    db_cat = result.scalars().first()
+    if not db_cat:
+        raise HTTPException(status_code=404, detail="Категория не найдена")
+
+    await session.execute(
+        delete(ArchiveCategory).where(ArchiveCategory.id == category_id)
+    )
+    await session.commit()
+
+
+async def reorder_categories(session: AsyncSession, items: list) -> None:
+    """Bulk update sort_order for archive categories. items = [{id, sort_order}, ...]."""
+    for item in items:
+        result = await session.execute(
+            select(ArchiveCategory).where(ArchiveCategory.id == item["id"])
+        )
+        db_cat = result.scalars().first()
+        if db_cat:
+            db_cat.sort_order = item["sort_order"]
+    await session.commit()
+
+
+# -------------------------------
+#   ARCHIVE ARTICLES
+# -------------------------------
+async def get_articles(
+    session: AsyncSession,
+    category_slug: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 20,
+):
+    """List articles with pagination, optional category filter and search.
+    Returns (articles_list, total_count). Does not load content field."""
+    # Base query — select specific columns to avoid loading content
+    base_stmt = select(ArchiveArticle).options(selectinload(ArchiveArticle.categories))
+
+    # Category filter via join table
+    if category_slug:
+        base_stmt = base_stmt.join(
+            ArchiveArticleCategory,
+            ArchiveArticle.id == ArchiveArticleCategory.article_id,
+        ).join(
+            ArchiveCategory,
+            ArchiveArticleCategory.category_id == ArchiveCategory.id,
+        ).where(ArchiveCategory.slug == category_slug)
+
+    # Search filter
+    if search:
+        base_stmt = base_stmt.where(ArchiveArticle.title.like(f"%{search}%"))
+
+    # Count total
+    count_stmt = select(sa_func.count()).select_from(base_stmt.subquery())
+    total_result = await session.execute(count_stmt)
+    total = total_result.scalar() or 0
+
+    # Paginate and order
+    offset = (page - 1) * per_page
+    data_stmt = base_stmt.order_by(ArchiveArticle.created_at.desc()).offset(offset).limit(per_page)
+    result = await session.execute(data_stmt)
+    articles = result.scalars().unique().all()
+
+    # Strip content from list results to keep payloads lightweight
+    for article in articles:
+        article.content = None
+
+    return articles, total
+
+
+async def get_article_by_slug(session: AsyncSession, slug: str) -> ArchiveArticle:
+    """Get single article by slug with full content and categories. Raises 404 if not found."""
+    result = await session.execute(
+        select(ArchiveArticle)
+        .options(selectinload(ArchiveArticle.categories))
+        .where(ArchiveArticle.slug == slug)
+    )
+    article = result.scalars().first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Статья не найдена")
+    return article
+
+
+async def get_article_preview(session: AsyncSession, slug: str):
+    """Get minimal article data for hover preview (id, title, slug, summary, cover_image_url)."""
+    result = await session.execute(
+        select(
+            ArchiveArticle.id,
+            ArchiveArticle.title,
+            ArchiveArticle.slug,
+            ArchiveArticle.summary,
+            ArchiveArticle.cover_image_url,
+        ).where(ArchiveArticle.slug == slug)
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Статья не найдена")
+    return {
+        "id": row[0],
+        "title": row[1],
+        "slug": row[2],
+        "summary": row[3],
+        "cover_image_url": row[4],
+    }
+
+
+async def create_article(session: AsyncSession, data: ArchiveArticleCreate, user_id: int) -> ArchiveArticle:
+    """Create article with category assignments. Raises 409 if slug duplicate."""
+    existing = await session.execute(
+        select(ArchiveArticle).where(ArchiveArticle.slug == data.slug)
+    )
+    if existing.scalars().first():
+        raise HTTPException(status_code=409, detail="Статья с таким slug уже существует")
+
+    new_article = ArchiveArticle(
+        title=data.title,
+        slug=data.slug,
+        content=data.content,
+        summary=data.summary,
+        cover_image_url=data.cover_image_url,
+        is_featured=data.is_featured,
+        featured_sort_order=data.featured_sort_order,
+        created_by_user_id=user_id,
+    )
+    session.add(new_article)
+    await session.flush()  # Get the ID before creating join entries
+
+    # Create category assignments
+    for cat_id in data.category_ids:
+        session.add(ArchiveArticleCategory(article_id=new_article.id, category_id=cat_id))
+
+    await session.commit()
+    await session.refresh(new_article)
+
+    # Eagerly load categories for the response
+    result = await session.execute(
+        select(ArchiveArticle)
+        .options(selectinload(ArchiveArticle.categories))
+        .where(ArchiveArticle.id == new_article.id)
+    )
+    return result.scalars().first()
+
+
+async def update_article(session: AsyncSession, article_id: int, data: ArchiveArticleUpdate) -> ArchiveArticle:
+    """Partial update of archive article. Handles category_ids reassignment. Raises 404/409."""
+    result = await session.execute(
+        select(ArchiveArticle).where(ArchiveArticle.id == article_id)
+    )
+    db_article = result.scalars().first()
+    if not db_article:
+        raise HTTPException(status_code=404, detail="Статья не найдена")
+
+    update_data = data.dict(exclude_unset=True)
+
+    # Validate slug uniqueness if slug is being changed
+    if "slug" in update_data and update_data["slug"] != db_article.slug:
+        dup = await session.execute(
+            select(ArchiveArticle).where(ArchiveArticle.slug == update_data["slug"])
+        )
+        if dup.scalars().first():
+            raise HTTPException(status_code=409, detail="Статья с таким slug уже существует")
+
+    # Handle category_ids separately
+    category_ids = update_data.pop("category_ids", None)
+    if category_ids is not None:
+        # Delete existing join entries
+        await session.execute(
+            delete(ArchiveArticleCategory).where(ArchiveArticleCategory.article_id == article_id)
+        )
+        # Create new join entries
+        for cat_id in category_ids:
+            session.add(ArchiveArticleCategory(article_id=article_id, category_id=cat_id))
+
+    # Update scalar fields
+    for field, value in update_data.items():
+        setattr(db_article, field, value)
+
+    await session.commit()
+    await session.refresh(db_article)
+
+    # Eagerly load categories for the response
+    result = await session.execute(
+        select(ArchiveArticle)
+        .options(selectinload(ArchiveArticle.categories))
+        .where(ArchiveArticle.id == db_article.id)
+    )
+    return result.scalars().first()
+
+
+async def delete_article(session: AsyncSession, article_id: int) -> None:
+    """Delete archive article by ID. Raises 404 if not found. CASCADE handles join table."""
+    result = await session.execute(
+        select(ArchiveArticle).where(ArchiveArticle.id == article_id)
+    )
+    db_article = result.scalars().first()
+    if not db_article:
+        raise HTTPException(status_code=404, detail="Статья не найдена")
+
+    await session.execute(
+        delete(ArchiveArticle).where(ArchiveArticle.id == article_id)
+    )
+    await session.commit()
+
+
+async def get_featured_articles(session: AsyncSession):
+    """Get articles where is_featured=True, ordered by featured_sort_order. No content loaded."""
+    result = await session.execute(
+        select(ArchiveArticle)
+        .options(selectinload(ArchiveArticle.categories))
+        .where(ArchiveArticle.is_featured == True)
+        .order_by(ArchiveArticle.featured_sort_order.asc(), ArchiveArticle.id.asc())
+    )
+    articles = result.scalars().unique().all()
+
+    # Strip content for list response
+    for article in articles:
+        article.content = None
+
+    return articles

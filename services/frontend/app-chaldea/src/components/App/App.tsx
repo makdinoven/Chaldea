@@ -41,6 +41,9 @@ import CharactersHubPage from "../pages/CharactersPage/CharactersHubPage";
 import CharactersListPage from "../pages/CharactersPage/CharactersListPage";
 import SelectCharacterPage from "../pages/SelectCharacterPage/SelectCharacterPage";
 import BestiaryPage from "../Bestiary/BestiaryPage";
+import ArchivePage from "../pages/ArchivePage/ArchivePage";
+import ArchiveArticlePage from "../pages/ArchivePage/ArchiveArticlePage";
+import ArchiveAdminPage from "../Admin/ArchiveAdminPage/ArchiveAdminPage";
 
 const App = () => {
   const dispatch = useAppDispatch();
@@ -87,6 +90,8 @@ const App = () => {
             <Route path="location/:locationId" element={<LocationPage />} />
             <Route path="skill-tree" element={<SkillTreePage />} />
             <Route path="bestiary" element={<BestiaryPage />} />
+            <Route path="archive" element={<ArchivePage />} />
+            <Route path="archive/:slug" element={<ArchiveArticlePage />} />
             <Route path="admin" element={
               <ProtectedRoute requiredRole="editor">
                 <AdminPage />
@@ -171,6 +176,11 @@ const App = () => {
             <Route path="admin/battles" element={
               <ProtectedRoute requiredPermission="battles:manage">
                 <AdminBattlesPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/archive" element={
+              <ProtectedRoute requiredPermission="archive:read">
+                <ArchiveAdminPage />
               </ProtectedRoute>
             } />
             <Route path="chat/history" element={<ChatHistoryPage />} />

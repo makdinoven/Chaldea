@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
+import DOMPurify from 'dompurify';
 import { Post, Player } from './types';
 import PlayerActionsMenu from './PlayerActionsMenu';
 import useNpcAttack from '../../../hooks/useNpcAttack';
+import ArchiveLinkPreview from '../../CommonComponents/ArchiveLinkPreview/ArchiveLinkPreview';
 
 interface PostCardProps {
   post: Post;
@@ -243,9 +245,15 @@ const PostCard = ({
         </div>
 
         {/* Content */}
-        <div className="text-white/90 text-sm leading-relaxed whitespace-pre-wrap break-words prose-rules"
-          dangerouslySetInnerHTML={{ __html: post.content }}
-        />
+        <ArchiveLinkPreview>
+          <div className="text-white/90 text-sm leading-relaxed whitespace-pre-wrap break-words prose-rules"
+            dangerouslySetInnerHTML={{
+              __html: DOMPurify.sanitize(post.content, {
+                ADD_ATTR: ['data-archive-slug'],
+              }),
+            }}
+          />
+        </ArchiveLinkPreview>
 
         {/* Actions row: like + tag + menu */}
       <div className="flex items-center gap-3">

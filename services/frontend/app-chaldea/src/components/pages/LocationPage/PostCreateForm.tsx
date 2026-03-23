@@ -157,6 +157,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
               key={editorKey}
               content={content}
               onChange={setContent}
+              enableArchiveLinks
             />
             <div className="flex justify-end gap-3">
               <button

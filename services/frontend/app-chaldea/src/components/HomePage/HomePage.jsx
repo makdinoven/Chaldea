@@ -38,7 +38,7 @@ export default function HomePage() {
       links: [
         { name: "Обучение", link: "/learning" },
         { name: "Консультант", link: "/consultant" },
-        { name: "Фандом", link: "/fandom" },
+        { name: "Архив", link: "/archive" },
       ],
       type: "large",
     },
