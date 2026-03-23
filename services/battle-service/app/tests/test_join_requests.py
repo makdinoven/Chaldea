@@ -677,7 +677,7 @@ class TestActionRejectedWhilePaused:
         client = _get_client_with_mocks(user, mock_db)
         response = client.post(
             "/battles/1/action",
-            json={"participant_id": 1, "action_type": "attack", "target_id": 2},
+            json={"participant_id": 1, "skills": {"attack_rank_id": 1, "defense_rank_id": None, "support_rank_id": None}},
         )
 
         assert response.status_code == 400
@@ -746,34 +746,23 @@ class TestAdminJoinRequests:
     def teardown_method(self):
         app.dependency_overrides.clear()
 
-    def _setup_admin_client(self, mock_db, admin=True):
-        """Create a client with admin or regular user overrides."""
-        if admin:
-            user = _make_admin()
-        else:
-            user = _make_user(user_id=2, username="player", role="user")
-
-        def override_auth():
-            return user
-
+    def _setup_admin_client(self, mock_db):
+        """Create a client with admin overrides using auth_http.requests.get mock."""
         async def override_get_db():
             yield mock_db
 
-        app.dependency_overrides[get_current_user_via_http] = override_auth
         app.dependency_overrides[get_db] = override_get_db
-
-        # Override the require_permission dependency for admin endpoints
-        perm_checker = require_permission("battles:manage")
-        if admin:
-            app.dependency_overrides[perm_checker] = override_auth
-        else:
-            # For non-admin, let the default check run (will fail with 403)
-            pass
-
         return TestClient(app)
 
-    def test_admin_list_pending_requests(self):
+    @patch("auth_http.requests.get")
+    def test_admin_list_pending_requests(self, mock_auth_get):
         """GET /battles/admin/join-requests returns pending requests for admin."""
+        mock_auth_get.return_value = MagicMock(
+            status_code=200,
+            json=MagicMock(return_value={
+                "id": 1, "username": "admin", "role": "admin", "permissions": ["battles:manage"],
+            }),
+        )
         mock_db = AsyncMock()
 
         now = datetime(2026, 3, 23, 12, 0, 0)
@@ -797,8 +786,11 @@ class TestAdminJoinRequests:
 
         mock_db.execute = AsyncMock(side_effect=execute_side_effect)
 
-        client = self._setup_admin_client(mock_db, admin=True)
-        response = client.get("/battles/admin/join-requests?status=pending")
+        client = self._setup_admin_client(mock_db)
+        response = client.get(
+            "/battles/admin/join-requests?status=pending",
+            headers={"Authorization": "Bearer admin-token"},
+        )
 
         assert response.status_code == 200
         data = response.json()
