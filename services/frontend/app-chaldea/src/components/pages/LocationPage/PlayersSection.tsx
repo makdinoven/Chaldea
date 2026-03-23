@@ -17,7 +17,7 @@ interface PlayersSectionProps {
 
 const AvatarCard = ({ avatar, name, level, actionsSlot }: { avatar: string | null; name: string; level?: number; actionsSlot?: ReactNode }) => (
   <div className="flex flex-col items-center gap-2 p-2 rounded-card hover:bg-white/5 transition-colors">
-    <div className="gold-outline relative w-14 h-14 sm:w-16 sm:h-16 rounded-full overflow-hidden bg-black/40 shrink-0">
+    <div className="gold-outline relative w-[4.5rem] h-[4.5rem] sm:w-20 sm:h-20 rounded-full overflow-hidden bg-black/40 shrink-0">
       {avatar ? (
         <img src={avatar} alt={name} className="w-full h-full object-cover" />
       ) : (
@@ -90,7 +90,7 @@ const NpcCard = ({ npc, onClick, currentCharacterId }: NpcCardProps) => {
         className="flex flex-col items-center gap-2 cursor-pointer bg-transparent border-0 w-full"
       >
         <div className="relative">
-          <div className="gold-outline relative w-14 h-14 sm:w-16 sm:h-16 rounded-full overflow-hidden bg-black/40 shrink-0">
+          <div className="gold-outline relative w-[4.5rem] h-[4.5rem] sm:w-20 sm:h-20 rounded-full overflow-hidden bg-black/40 shrink-0">
             {npc.avatar ? (
               <img src={npc.avatar} alt={npc.name} className="w-full h-full object-cover" />
             ) : (
@@ -141,7 +141,7 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
           {players.length === 0 ? (
             <p className="text-white/50 text-sm">На локации никого нет</p>
           ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 sm:gap-4">
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 sm:gap-2 max-h-[340px] sm:max-h-[360px] overflow-y-auto pr-1">
               {players.map((player) => (
                 <AvatarCard
                   key={player.id}
@@ -178,7 +178,7 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
           {npcs.length === 0 ? (
             <p className="text-white/50 text-sm">НПС отсутствуют на этой локации</p>
           ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 sm:gap-4">
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 sm:gap-2 max-h-[340px] sm:max-h-[360px] overflow-y-auto pr-1">
               {npcs.map((npc) => (
                 <NpcCard
                   key={npc.id}
