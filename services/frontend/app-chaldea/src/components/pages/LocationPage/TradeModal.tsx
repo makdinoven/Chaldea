@@ -21,6 +21,7 @@ interface TradeModalProps {
 }
 
 const POLL_INTERVAL = 3000;
+const MIN_DISPLAY_CELLS = 8;
 
 const getRarityClass = (rarity: string | undefined): string => {
   if (!rarity || rarity === 'common') return '';
@@ -31,6 +32,11 @@ const getRarityClass = (rarity: string | undefined): string => {
     legendary: 'rarity-legendary',
   };
   return map[rarity] || '';
+};
+
+const cellVariants = {
+  hidden: { opacity: 0, y: 8 },
+  visible: { opacity: 1, y: 0 },
 };
 
 const TradeModal = ({
@@ -92,7 +98,6 @@ const TradeModal = ({
   // Sync local state from fetched trade state (only on first load)
   useEffect(() => {
     if (!mySide) return;
-    // Only set initial values if we haven't started editing
     if (selectedItems.length === 0 && mySide.items.length > 0) {
       setSelectedItems(mySide.items.map((i) => ({ item_id: i.item_id, quantity: i.quantity })));
     }
@@ -168,7 +173,7 @@ const TradeModal = ({
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
         transition={{ duration: 0.2, ease: 'easeOut' }}
-        className="modal-content gold-outline gold-outline-thick relative w-full max-w-3xl mx-3 sm:mx-4 max-h-[90vh] overflow-y-auto gold-scrollbar-wide"
+        className="modal-content gold-outline gold-outline-thick relative w-full max-w-4xl mx-3 sm:mx-4 max-h-[90vh] overflow-y-auto gold-scrollbar-wide"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -194,20 +199,22 @@ const TradeModal = ({
         {/* Trade content */}
         {trade && !completed && (
           <>
-            {/* Two-column layout: stacked on mobile, side by side on md+ */}
+            {/* Two-column layout */}
             <div className="flex flex-col md:flex-row gap-4 sm:gap-6">
               {/* My side */}
               <div className="flex-1 min-w-0">
-                <h3 className="text-white font-medium text-sm sm:text-base mb-3 uppercase tracking-wide">
-                  Ваше предложение
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="gold-text text-sm sm:text-base font-medium uppercase tracking-wide">
+                    Ваше предложение
+                  </h3>
                   {mySide?.confirmed && (
-                    <span className="ml-2 text-green-400 text-xs normal-case">
-                      (подтверждено)
+                    <span className="text-green-400 text-xs bg-green-400/10 px-2 py-0.5 rounded-full border border-green-400/20">
+                      подтверждено
                     </span>
                   )}
-                </h3>
+                </div>
 
-                {/* Item selector */}
+                {/* Item selector (inventory grid) */}
                 <TradeItemSelector
                   characterId={currentCharacterId}
                   selectedItems={selectedItems}
@@ -215,40 +222,40 @@ const TradeModal = ({
                 />
 
                 {/* Gold input */}
-                <div className="flex items-center gap-2 mt-3">
-                  <img src={goldCoinsIcon} alt="Золото" className="w-5 h-5" />
+                <div className="flex items-center gap-2 mt-3 px-1.5">
+                  <img src={goldCoinsIcon} alt="Золото" className="w-5 h-5 flex-shrink-0" />
                   <input
                     type="number"
                     min="0"
                     value={goldInput}
                     onChange={(e) => setGoldInput(e.target.value)}
-                    className="input-underline w-24 text-sm"
+                    className="input-underline w-20 sm:w-24 text-sm"
                     placeholder="0"
                   />
                   <span className="text-white/50 text-xs">золота</span>
                 </div>
 
-                {/* Update offer button */}
-                <button
-                  onClick={handleUpdateOffer}
-                  disabled={updating || isCompleteOrClosed}
-                  className="btn-line text-xs sm:text-sm mt-3 w-full disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {updating ? 'Обновление...' : 'Обновить предложение'}
-                </button>
-
-                {/* Confirm button */}
-                <button
-                  onClick={handleConfirm}
-                  disabled={confirming || mySide?.confirmed || isCompleteOrClosed}
-                  className="btn-blue text-xs sm:text-sm mt-2 w-full disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {confirming
-                    ? 'Подтверждение...'
-                    : mySide?.confirmed
-                      ? 'Подтверждено'
-                      : 'Подтвердить'}
-                </button>
+                {/* Action buttons */}
+                <div className="flex flex-col gap-2 mt-3">
+                  <button
+                    onClick={handleUpdateOffer}
+                    disabled={updating || isCompleteOrClosed}
+                    className="btn-line text-xs sm:text-sm w-full disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {updating ? 'Обновление...' : 'Обновить предложение'}
+                  </button>
+                  <button
+                    onClick={handleConfirm}
+                    disabled={confirming || mySide?.confirmed || isCompleteOrClosed}
+                    className="btn-blue text-xs sm:text-sm w-full disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {confirming
+                      ? 'Подтверждение...'
+                      : mySide?.confirmed
+                        ? 'Подтверждено'
+                        : 'Подтвердить'}
+                  </button>
+                </div>
               </div>
 
               {/* Divider */}
@@ -257,34 +264,24 @@ const TradeModal = ({
 
               {/* Their side */}
               <div className="flex-1 min-w-0">
-                <h3 className="text-white font-medium text-sm sm:text-base mb-3 uppercase tracking-wide">
-                  Предложение {theirSide?.character_name || targetCharacterName}
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="gold-text text-sm sm:text-base font-medium uppercase tracking-wide">
+                    Предложение {theirSide?.character_name || targetCharacterName}
+                  </h3>
                   {theirSide?.confirmed && (
-                    <span className="ml-2 text-green-400 text-xs normal-case">
-                      (подтверждено)
+                    <span className="text-green-400 text-xs bg-green-400/10 px-2 py-0.5 rounded-full border border-green-400/20">
+                      подтверждено
                     </span>
                   )}
-                </h3>
+                </div>
 
-                {/* Their items display */}
-                {theirSide && theirSide.items.length > 0 ? (
-                  <div className="gold-scrollbar-wide overflow-y-auto max-h-[240px] sm:max-h-[300px]">
-                    <div className="grid grid-cols-4 sm:grid-cols-5 gap-2">
-                      {theirSide.items.map((item) => (
-                        <TradeItemDisplay key={item.item_id} item={item} />
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-white/40 text-sm text-center py-6">
-                    Пока ничего не предложено
-                  </p>
-                )}
+                {/* Their items grid */}
+                <TheirItemsGrid items={theirSide?.items || []} />
 
                 {/* Their gold */}
                 {theirSide && theirSide.gold > 0 && (
-                  <div className="flex items-center gap-2 mt-3">
-                    <img src={goldCoinsIcon} alt="Золото" className="w-5 h-5" />
+                  <div className="flex items-center gap-2 mt-3 px-1.5">
+                    <img src={goldCoinsIcon} alt="Золото" className="w-5 h-5 flex-shrink-0" />
                     <span className="text-gold text-sm font-medium">
                       {theirSide.gold}
                     </span>
@@ -292,9 +289,9 @@ const TradeModal = ({
                   </div>
                 )}
 
-                {/* Status indicator for their side */}
+                {/* Status indicator */}
                 {theirSide && !theirSide.confirmed && theirSide.items.length === 0 && theirSide.gold === 0 && (
-                  <p className="text-white/30 text-xs text-center mt-2">
+                  <p className="text-white/30 text-xs text-center mt-3">
                     Ожидание предложения...
                   </p>
                 )}
@@ -318,37 +315,93 @@ const TradeModal = ({
   );
 };
 
-// --- Sub-component: display a single trade item from the other side ---
+// --- Sub-component: other player's items displayed as inventory grid ---
 
-const TradeItemDisplay = ({ item }: { item: TradeItem }) => {
-  const iconSrc = ITEM_TYPE_ICONS[item.rarity || ''] || null;
+const TheirItemsGrid = ({ items }: { items: TradeItem[] }) => {
+  const emptyCellsCount = Math.max(0, MIN_DISPLAY_CELLS - items.length);
+
+  if (items.length === 0) {
+    return (
+      <div className="gold-scrollbar-wide overflow-y-auto max-h-[240px] sm:max-h-[300px] pr-1 rounded-lg">
+        <div className="grid grid-cols-4 gap-1.5 p-1.5">
+          {Array.from({ length: MIN_DISPLAY_CELLS }).map((_, idx) => (
+            <motion.div
+              key={`empty-${idx}`}
+              variants={cellVariants}
+              initial="hidden"
+              animate="visible"
+            >
+              <div className="item-cell item-cell-empty" />
+            </motion.div>
+          ))}
+        </div>
+        <p className="text-white/40 text-xs text-center py-2">
+          Пока ничего не предложено
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col items-center gap-1">
-      <div className={`item-cell ${getRarityClass(item.rarity)}`}>
-        {item.item_image ? (
-          <img
-            src={item.item_image}
-            alt={item.item_name}
-            className="w-full h-full object-cover"
-            draggable={false}
-          />
-        ) : iconSrc ? (
-          <img
-            src={iconSrc}
-            alt={item.item_name}
-            className="w-10 h-10 opacity-70"
-            draggable={false}
-          />
-        ) : null}
+    <motion.div
+      className="gold-scrollbar-wide overflow-y-auto max-h-[240px] sm:max-h-[300px] pr-1 rounded-lg"
+      initial="hidden"
+      animate="visible"
+      variants={{
+        hidden: {},
+        visible: { transition: { staggerChildren: 0.03 } },
+      }}
+    >
+      <div className="grid grid-cols-4 gap-1.5 p-1.5">
+        {items.map((item) => {
+          const iconSrc = ITEM_TYPE_ICONS[item.rarity || ''] || null;
+
+          return (
+            <motion.div key={item.item_id} variants={cellVariants} className="relative">
+              <div className={`item-cell ${getRarityClass(item.rarity)}`}>
+                {item.item_image ? (
+                  <img
+                    src={item.item_image}
+                    alt={item.item_name}
+                    className="w-full h-full object-cover"
+                    draggable={false}
+                  />
+                ) : iconSrc ? (
+                  <img
+                    src={iconSrc}
+                    alt={item.item_name}
+                    className="w-10 h-10 opacity-70"
+                    draggable={false}
+                  />
+                ) : null}
+              </div>
+
+              {/* Quantity badge */}
+              {item.quantity > 1 && (
+                <span
+                  className="
+                    absolute -bottom-1 -right-1 z-10 min-w-[20px] h-[20px]
+                    flex items-center justify-center
+                    text-[10px] font-medium text-white
+                    bg-site-bg rounded-full
+                    border border-white/30 px-1
+                  "
+                >
+                  {item.quantity}
+                </span>
+              )}
+            </motion.div>
+          );
+        })}
+
+        {/* Empty placeholder cells */}
+        {Array.from({ length: emptyCellsCount }).map((_, idx) => (
+          <motion.div key={`empty-${idx}`} variants={cellVariants}>
+            <div className="item-cell item-cell-empty" />
+          </motion.div>
+        ))}
       </div>
-      <span className="text-[10px] text-white/70 text-center truncate w-full max-w-[60px]">
-        {item.item_name}
-      </span>
-      {item.quantity > 1 && (
-        <span className="text-[9px] text-white/40">x{item.quantity}</span>
-      )}
-    </div>
+    </motion.div>
   );
 };
 

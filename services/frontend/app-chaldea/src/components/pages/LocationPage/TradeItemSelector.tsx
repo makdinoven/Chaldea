@@ -16,6 +16,8 @@ interface TradeItemSelectorProps {
   onItemsChange: (items: SelectedItem[]) => void;
 }
 
+const MIN_TRADE_CELLS = 16;
+
 const getRarityClass = (rarity: string | null | undefined): string => {
   if (!rarity || rarity === 'common') return '';
   const map: Record<string, string> = {
@@ -25,6 +27,18 @@ const getRarityClass = (rarity: string | null | undefined): string => {
     legendary: 'rarity-legendary',
   };
   return map[rarity] || '';
+};
+
+const containerVariants = {
+  hidden: {},
+  visible: {
+    transition: { staggerChildren: 0.03 },
+  },
+};
+
+const cellVariants = {
+  hidden: { opacity: 0, y: 8 },
+  visible: { opacity: 1, y: 0 },
 };
 
 const TradeItemSelector = ({
@@ -66,10 +80,8 @@ const TradeItemSelector = ({
     (invItem: InventoryItem) => {
       const existing = selectedItems.find((s) => s.item_id === invItem.item_id);
       if (existing) {
-        // Remove item
         onItemsChange(selectedItems.filter((s) => s.item_id !== invItem.item_id));
       } else {
-        // Add item with quantity 1
         onItemsChange([...selectedItems, { item_id: invItem.item_id, quantity: 1 }]);
       }
     },
@@ -105,29 +117,30 @@ const TradeItemSelector = ({
     );
   }
 
+  const emptyCellsCount = Math.max(0, MIN_TRADE_CELLS - inventory.length);
+
   return (
-    <div className="gold-scrollbar-wide overflow-y-auto max-h-[240px] sm:max-h-[300px]">
-      <div className="grid grid-cols-4 sm:grid-cols-5 gap-2">
+    <motion.div
+      className="gold-scrollbar-wide overflow-y-auto max-h-[240px] sm:max-h-[300px] pr-1 rounded-lg"
+      initial="hidden"
+      animate="visible"
+      variants={containerVariants}
+    >
+      <div className="grid grid-cols-4 gap-1.5 p-1.5">
         {inventory.map((invItem) => {
           const selected = getSelectedQuantity(invItem.item_id) > 0;
           const selQty = getSelectedQuantity(invItem.item_id);
           const iconSrc = ITEM_TYPE_ICONS[invItem.item.item_type];
 
           return (
-            <motion.div
-              key={invItem.id}
-              className="flex flex-col items-center gap-1"
-              whileHover={{ scale: 1.05 }}
-              transition={{ duration: 0.15 }}
-            >
-              {/* Item cell */}
+            <motion.div key={invItem.id} variants={cellVariants} className="relative">
               <button
                 type="button"
                 onClick={() => toggleItem(invItem)}
                 className={`
-                  item-cell cursor-pointer transition-all duration-200
+                  item-cell cursor-pointer transition-all duration-200 hover:scale-105
                   ${getRarityClass(invItem.item.item_rarity)}
-                  ${selected ? 'ring-2 ring-site-blue ring-offset-1 ring-offset-transparent' : ''}
+                  ${selected ? 'ring-2 ring-site-blue ring-offset-1 ring-offset-transparent shadow-[0_0_8px_rgba(118,166,189,0.4)]' : ''}
                 `}
                 title={invItem.item.name}
               >
@@ -148,45 +161,64 @@ const TradeItemSelector = ({
                 ) : null}
               </button>
 
-              {/* Item name (truncated) */}
-              <span className="text-[10px] text-white/70 text-center truncate w-full max-w-[60px]">
-                {invItem.item.name}
-              </span>
+              {/* Quantity badge (like ItemCell) */}
+              {invItem.quantity > 1 && (
+                <span
+                  className="
+                    absolute -bottom-1 -right-1 z-10 min-w-[20px] h-[20px]
+                    flex items-center justify-center
+                    text-[10px] font-medium text-white
+                    bg-site-bg rounded-full
+                    border border-white/30 px-1
+                  "
+                >
+                  {invItem.quantity}
+                </span>
+              )}
 
-              {/* Quantity selector — shown only when selected and stackable */}
+              {/* Selected quantity controls overlay */}
               {selected && invItem.quantity > 1 && (
-                <div className="flex items-center gap-1">
+                <div className="absolute -top-1 left-1/2 -translate-x-1/2 z-20 flex items-center gap-0.5 bg-site-bg/90 rounded-full px-1 py-0.5 border border-white/20">
                   <button
                     type="button"
-                    onClick={() => changeQuantity(invItem.item_id, invItem.quantity, -1)}
-                    className="w-5 h-5 flex items-center justify-center text-xs text-white bg-white/10 rounded hover:bg-white/20 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); changeQuantity(invItem.item_id, invItem.quantity, -1); }}
+                    className="w-4 h-4 flex items-center justify-center text-[10px] text-white hover:text-site-blue transition-colors"
                   >
                     -
                   </button>
-                  <span className="text-xs text-white min-w-[18px] text-center">
+                  <span className="text-[10px] text-white min-w-[14px] text-center font-medium">
                     {selQty}
                   </span>
                   <button
                     type="button"
-                    onClick={() => changeQuantity(invItem.item_id, invItem.quantity, 1)}
-                    className="w-5 h-5 flex items-center justify-center text-xs text-white bg-white/10 rounded hover:bg-white/20 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); changeQuantity(invItem.item_id, invItem.quantity, 1); }}
+                    className="w-4 h-4 flex items-center justify-center text-[10px] text-white hover:text-site-blue transition-colors"
                   >
                     +
                   </button>
                 </div>
               )}
 
-              {/* Owned quantity badge */}
-              {invItem.quantity > 1 && (
-                <span className="text-[9px] text-white/40">
-                  x{invItem.quantity}
-                </span>
+              {/* Selected checkmark */}
+              {selected && (
+                <div className="absolute top-0 right-0 z-10 w-4 h-4 bg-site-blue rounded-full flex items-center justify-center">
+                  <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
               )}
             </motion.div>
           );
         })}
+
+        {/* Empty placeholder cells */}
+        {Array.from({ length: emptyCellsCount }).map((_, idx) => (
+          <motion.div key={`empty-${idx}`} variants={cellVariants}>
+            <div className="item-cell item-cell-empty" />
+          </motion.div>
+        ))}
       </div>
-    </div>
+    </motion.div>
   );
 };
 
