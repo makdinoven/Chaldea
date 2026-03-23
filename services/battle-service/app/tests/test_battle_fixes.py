@@ -89,7 +89,19 @@ char_mock.get_character_profile = AsyncMock(return_value={
     "character_photo": "",
 })
 
-# Now import the actual modules we want to test
+# Ensure the real battle_engine module is loaded (other test files may have
+# replaced it with a MagicMock in sys.modules during collection).
+import importlib
+if isinstance(sys.modules.get("battle_engine"), MagicMock):
+    # Remove the mock so importlib can load the real module
+    del sys.modules["battle_engine"]
+import battle_engine  # noqa: E402
+if isinstance(battle_engine, MagicMock):
+    # Fallback: force-reload the real module
+    del sys.modules["battle_engine"]
+    battle_engine = importlib.import_module("battle_engine")
+    sys.modules["battle_engine"] = battle_engine
+
 from battle_engine import decrement_cooldowns, set_cooldown  # noqa: E402
 from main import app  # noqa: E402
 from database import get_db  # noqa: E402

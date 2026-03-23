@@ -24,13 +24,32 @@ def authed_client(client, db_session):
     """
     from main import app
     # Create characters table using db_session (same connection in StaticPool)
+    # Use DROP + CREATE to ensure clean state (these tables are not managed by
+    # SQLAlchemy metadata, so drop_all/create_all in conftest won't touch them).
+    db_session.execute(text("DROP TABLE IF EXISTS battle_participants"))
+    db_session.execute(text("DROP TABLE IF EXISTS battles"))
+    db_session.execute(text("DROP TABLE IF EXISTS characters"))
     db_session.execute(text(
-        """CREATE TABLE IF NOT EXISTS characters (
+        """CREATE TABLE characters (
             id INTEGER PRIMARY KEY,
             user_id INTEGER
         )"""
     ))
-    db_session.execute(text("INSERT OR IGNORE INTO characters (id, user_id) VALUES (1, 1)"))
+    db_session.execute(text("INSERT INTO characters (id, user_id) VALUES (1, 1)"))
+    # Create battle tables needed by is_character_in_battle() check (FEAT-066)
+    db_session.execute(text(
+        """CREATE TABLE battles (
+            id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'pending'
+        )"""
+    ))
+    db_session.execute(text(
+        """CREATE TABLE battle_participants (
+            id INTEGER PRIMARY KEY,
+            battle_id INTEGER NOT NULL,
+            character_id INTEGER NOT NULL
+        )"""
+    ))
     db_session.commit()
 
     _user = UserRead(id=1, username="testuser", role="user", permissions=[])

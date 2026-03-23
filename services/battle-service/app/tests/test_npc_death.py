@@ -39,7 +39,11 @@ import database  # noqa: E402
 
 database.engine = MagicMock()
 
-# Mock all external client modules to prevent actual connections
+# Mock all external client modules to prevent actual connections.
+# NOTE: battle_engine is intentionally NOT mocked here — it has no side effects
+# on import and its functions are patched on `main` via @patch decorators in tests.
+# Mocking it in sys.modules would poison test_battle_fixes.py which imports the
+# real decrement_cooldowns/set_cooldown functions.
 for mod_name in [
     "redis_state",
     "mongo_client",
@@ -49,7 +53,6 @@ for mod_name in [
     "character_client",
     "skills_client",
     "buffs",
-    "battle_engine",
     "rabbitmq_publisher",
 ]:
     if mod_name not in sys.modules:
@@ -72,15 +75,6 @@ tasks_mock = sys.modules["tasks"]
 tasks_mock.save_log = MagicMock()
 tasks_mock.save_log.delay = MagicMock()
 
-# Ensure battle_engine
-engine_mock = sys.modules["battle_engine"]
-engine_mock.decrement_cooldowns = MagicMock()
-engine_mock.set_cooldown = MagicMock()
-engine_mock.fetch_full_attributes = AsyncMock(return_value={})
-engine_mock.apply_flat_modifiers = MagicMock(return_value={})
-engine_mock.fetch_main_weapon = AsyncMock(return_value={"damage_type": "physical", "base_damage": 10})
-engine_mock.compute_damage_with_rolls = AsyncMock(return_value=(999, {}))  # lethal damage
-
 # Ensure buffs
 buffs_mock = sys.modules["buffs"]
 buffs_mock.decrement_durations = MagicMock()
@@ -95,7 +89,9 @@ skills_mock.character_has_rank = AsyncMock(return_value=True)
 skills_mock.get_rank = AsyncMock(return_value={
     "id": 1, "skill_type": "attack", "damage_type": "physical",
     "base_damage": 50, "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
-    "cooldown_turns": 0, "effect_type": None,
+    "cooldown_turns": 0, "cooldown": 0, "effect_type": None,
+    "damage_entries": [{"damage_type": "physical", "amount": 50, "chance": 100}],
+    "effects": [],
 })
 skills_mock.get_item = AsyncMock(return_value={})
 skills_mock.character_ranks = AsyncMock(return_value=[])
@@ -235,12 +231,48 @@ class TestNpcDeathHook:
     @patch("main.write_turn", new_callable=AsyncMock)
     @patch("main.get_battle", new_callable=AsyncMock)
     @patch("main.load_state", new_callable=AsyncMock)
+    @patch("main.compute_damage_with_rolls", new_callable=AsyncMock)
+    @patch("main.fetch_main_weapon", new_callable=AsyncMock)
+    @patch("main.fetch_full_attributes", new_callable=AsyncMock)
+    @patch("main.apply_flat_modifiers", MagicMock(return_value={}))
+    @patch("main.decrement_cooldowns", MagicMock())
+    @patch("main.set_cooldown", MagicMock())
+    @patch("main.decrement_durations", MagicMock())
+    @patch("main.aggregate_modifiers", MagicMock(return_value={}))
+    @patch("main.apply_new_effects", MagicMock())
+    @patch("main.build_percent_damage_buffs", MagicMock(return_value={}))
+    @patch("main.build_percent_resist_buffs", MagicMock(return_value={}))
+    @patch("main.character_has_rank", new_callable=AsyncMock)
+    @patch("main.get_rank", new_callable=AsyncMock)
+    @patch("main.save_state", new_callable=AsyncMock)
+    @patch("main.get_redis_client", new_callable=AsyncMock)
+    @patch("main.save_log", MagicMock())
     def test_npc_marked_dead_after_defeat(
-        self, mock_load_state, mock_get_battle, mock_write_turn,
+        self,
+        mock_get_redis, mock_save_state,
+        mock_get_rank, mock_has_rank,
+        mock_fetch_attrs, mock_fetch_weapon, mock_compute_damage,
+        mock_load_state, mock_get_battle, mock_write_turn,
         mock_finish_battle, mock_httpx_client,
     ):
         """When an NPC (is_npc=True, npc_role != 'mob') is defeated,
         the hook should call PUT /internal/npc-status/{id} with status=dead."""
+        # Configure battle_engine / skills mocks
+        mock_fetch_attrs.return_value = {
+            "damage": 5, "dodge": 0, "critical_hit_chance": 0,
+            "critical_damage": 100, "current_health": 100,
+            "current_mana": 50, "current_energy": 50, "current_stamina": 50,
+        }
+        mock_fetch_weapon.return_value = {"damage_type": "physical", "base_damage": 10}
+        mock_compute_damage.return_value = (999, {"damage_type": "physical", "final": 999})
+        mock_has_rank.return_value = True
+        mock_get_rank.return_value = {
+            "id": 1, "damage_entries": [{"damage_type": "physical", "amount": 50, "chance": 100}],
+            "effects": [], "cooldown": 0,
+            "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
+        }
+        mock_get_redis.return_value = AsyncMock()
+
         user = _make_user(user_id=1)
         battle_state = _build_battle_state()
         mock_load_state.return_value = battle_state
@@ -338,8 +370,13 @@ class TestNpcDeathHook:
         assert len(npc_check_calls) >= 1, "Should have checked if defeated char 20 is an NPC"
 
         # Verify HTTP PUT was called to mark NPC as dead
-        assert len(httpx_put_calls) >= 1, "Should have called PUT to mark NPC as dead"
-        put_args, put_kwargs = httpx_put_calls[0]
+        # Filter for npc-status calls specifically (exclude active-mob-status from PvE rewards)
+        npc_status_puts = [
+            (a, k) for a, k in httpx_put_calls
+            if "npc-status" in (a[0] if a else k.get("url", ""))
+        ]
+        assert len(npc_status_puts) >= 1, "Should have called PUT to mark NPC as dead"
+        put_args, put_kwargs = npc_status_puts[0]
         put_url = put_args[0] if put_args else put_kwargs.get("url", "")
         assert "internal/npc-status/20" in put_url
         put_json = put_kwargs.get("json", {})
@@ -350,12 +387,48 @@ class TestNpcDeathHook:
     @patch("main.write_turn", new_callable=AsyncMock)
     @patch("main.get_battle", new_callable=AsyncMock)
     @patch("main.load_state", new_callable=AsyncMock)
+    @patch("main.compute_damage_with_rolls", new_callable=AsyncMock)
+    @patch("main.fetch_main_weapon", new_callable=AsyncMock)
+    @patch("main.fetch_full_attributes", new_callable=AsyncMock)
+    @patch("main.apply_flat_modifiers", MagicMock(return_value={}))
+    @patch("main.decrement_cooldowns", MagicMock())
+    @patch("main.set_cooldown", MagicMock())
+    @patch("main.decrement_durations", MagicMock())
+    @patch("main.aggregate_modifiers", MagicMock(return_value={}))
+    @patch("main.apply_new_effects", MagicMock())
+    @patch("main.build_percent_damage_buffs", MagicMock(return_value={}))
+    @patch("main.build_percent_resist_buffs", MagicMock(return_value={}))
+    @patch("main.character_has_rank", new_callable=AsyncMock)
+    @patch("main.get_rank", new_callable=AsyncMock)
+    @patch("main.save_state", new_callable=AsyncMock)
+    @patch("main.get_redis_client", new_callable=AsyncMock)
+    @patch("main.save_log", MagicMock())
     def test_mob_not_affected_by_npc_death_hook(
-        self, mock_load_state, mock_get_battle, mock_write_turn,
+        self,
+        mock_get_redis, mock_save_state,
+        mock_get_rank, mock_has_rank,
+        mock_fetch_attrs, mock_fetch_weapon, mock_compute_damage,
+        mock_load_state, mock_get_battle, mock_write_turn,
         mock_finish_battle, mock_httpx_client,
     ):
         """When a mob (npc_role='mob') is defeated, the NPC death hook should
         NOT fire — mob death is handled by the PvE reward system instead."""
+        # Configure battle_engine / skills mocks
+        mock_fetch_attrs.return_value = {
+            "damage": 5, "dodge": 0, "critical_hit_chance": 0,
+            "critical_damage": 100, "current_health": 100,
+            "current_mana": 50, "current_energy": 50, "current_stamina": 50,
+        }
+        mock_fetch_weapon.return_value = {"damage_type": "physical", "base_damage": 10}
+        mock_compute_damage.return_value = (999, {"damage_type": "physical", "final": 999})
+        mock_has_rank.return_value = True
+        mock_get_rank.return_value = {
+            "id": 1, "damage_entries": [{"damage_type": "physical", "amount": 50, "chance": 100}],
+            "effects": [], "cooldown": 0,
+            "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
+        }
+        mock_get_redis.return_value = AsyncMock()
+
         user = _make_user(user_id=1)
         battle_state = _build_battle_state()
         mock_load_state.return_value = battle_state
@@ -444,12 +517,48 @@ class TestNpcDeathHook:
     @patch("main.write_turn", new_callable=AsyncMock)
     @patch("main.get_battle", new_callable=AsyncMock)
     @patch("main.load_state", new_callable=AsyncMock)
+    @patch("main.compute_damage_with_rolls", new_callable=AsyncMock)
+    @patch("main.fetch_main_weapon", new_callable=AsyncMock)
+    @patch("main.fetch_full_attributes", new_callable=AsyncMock)
+    @patch("main.apply_flat_modifiers", MagicMock(return_value={}))
+    @patch("main.decrement_cooldowns", MagicMock())
+    @patch("main.set_cooldown", MagicMock())
+    @patch("main.decrement_durations", MagicMock())
+    @patch("main.aggregate_modifiers", MagicMock(return_value={}))
+    @patch("main.apply_new_effects", MagicMock())
+    @patch("main.build_percent_damage_buffs", MagicMock(return_value={}))
+    @patch("main.build_percent_resist_buffs", MagicMock(return_value={}))
+    @patch("main.character_has_rank", new_callable=AsyncMock)
+    @patch("main.get_rank", new_callable=AsyncMock)
+    @patch("main.save_state", new_callable=AsyncMock)
+    @patch("main.get_redis_client", new_callable=AsyncMock)
+    @patch("main.save_log", MagicMock())
     def test_player_not_affected_by_npc_death_hook(
-        self, mock_load_state, mock_get_battle, mock_write_turn,
+        self,
+        mock_get_redis, mock_save_state,
+        mock_get_rank, mock_has_rank,
+        mock_fetch_attrs, mock_fetch_weapon, mock_compute_damage,
+        mock_load_state, mock_get_battle, mock_write_turn,
         mock_finish_battle, mock_httpx_client,
     ):
         """When a player character (is_npc=False) is defeated, the NPC death
         hook should NOT fire."""
+        # Configure battle_engine / skills mocks
+        mock_fetch_attrs.return_value = {
+            "damage": 5, "dodge": 0, "critical_hit_chance": 0,
+            "critical_damage": 100, "current_health": 100,
+            "current_mana": 50, "current_energy": 50, "current_stamina": 50,
+        }
+        mock_fetch_weapon.return_value = {"damage_type": "physical", "base_damage": 10}
+        mock_compute_damage.return_value = (999, {"damage_type": "physical", "final": 999})
+        mock_has_rank.return_value = True
+        mock_get_rank.return_value = {
+            "id": 1, "damage_entries": [{"damage_type": "physical", "amount": 50, "chance": 100}],
+            "effects": [], "cooldown": 0,
+            "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
+        }
+        mock_get_redis.return_value = AsyncMock()
+
         user = _make_user(user_id=1)
         battle_state = _build_battle_state()
         mock_load_state.return_value = battle_state

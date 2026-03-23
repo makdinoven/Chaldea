@@ -30,7 +30,7 @@ def _create_characters_table(db):
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL DEFAULT 'TestChar',
             user_id INTEGER NOT NULL,
-            current_location INTEGER DEFAULT 1,
+            current_location_id INTEGER DEFAULT 1,
             currency_balance INTEGER DEFAULT 0
         )"""
     ))
@@ -52,9 +52,10 @@ def _create_characters_table(db):
 
 def _insert_character(db, char_id, user_id, name="TestChar", location=1, gold=0):
     db.execute(text(
-        "INSERT OR IGNORE INTO characters (id, name, user_id, current_location, currency_balance) "
+        "INSERT OR IGNORE INTO characters (id, name, user_id, current_location_id, currency_balance) "
         "VALUES (:cid, :name, :uid, :loc, :gold)"
     ), {"cid": char_id, "name": name, "uid": user_id, "loc": location, "gold": gold})
+
     db.commit()
 
 
@@ -174,7 +175,7 @@ def test_propose_trade_different_location(trade_env):
     c = trade_env["client"]
 
     # Move Bob to a different location
-    db.execute(text("UPDATE characters SET current_location = 99 WHERE id = 2"))
+    db.execute(text("UPDATE characters SET current_location_id = 99 WHERE id = 2"))
     db.commit()
 
     with patch("main.publish_notification_sync"):
