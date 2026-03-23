@@ -236,37 +236,62 @@ export const ArcaneCircle = ({ className = '', size = 120 }: { className?: strin
   </svg>
 );
 
-/* ── Shimmer effect for the lore intro text ── */
+/* ── LoreShimmer — now just a passthrough, shimmer removed ── */
 export const LoreShimmer = ({ children }: { children: React.ReactNode }) => (
-  <div className="relative">
-    {children}
-    {/* Traveling light shimmer across text */}
-    <div
-      className="absolute inset-0 pointer-events-none"
-      style={{
-        background:
-          'linear-gradient(105deg, transparent 40%, rgba(220,200,140,0.15) 48%, rgba(180,200,240,0.1) 50%, rgba(220,200,140,0.15) 52%, transparent 60%)',
-        backgroundSize: '200% 100%',
-        animation: 'lore-shimmer 6s ease-in-out infinite',
-      }}
-    />
-    <style>{`
-      @keyframes lore-shimmer {
-        0%, 100% { background-position: 200% 0; }
-        50% { background-position: -200% 0; }
-      }
-    `}</style>
-  </div>
+  <>{children}</>
 );
 
-/* ── Rune watermarks scattered on parchment background ── */
+/* ── Rune watermarks densely covering the parchment ── */
 export const ParchmentWatermarks = () => {
+  const allRunes = 'ᚠᚢᚦᚨᚱᚲᚷᚹᚺᚾᛁᛃᛈᛉᛊᛏᛒᛗᛚᛞᛟ';
   const marks = [
-    { char: 'ᚢ', x: '15%', y: '12%', size: '24px', rotate: -15 },
-    { char: 'ᛊ', x: '78%', y: '28%', size: '20px', rotate: 25 },
-    { char: 'ᛃ', x: '25%', y: '55%', size: '28px', rotate: -8 },
-    { char: 'ᛈ', x: '70%', y: '72%', size: '22px', rotate: 18 },
-    { char: 'ᛞ', x: '50%', y: '40%', size: '32px', rotate: -20 },
+    /* Row 1 */
+    { char: allRunes[0], x: '5%', y: '3%', size: '22px', rotate: -12, delay: '0s' },
+    { char: allRunes[1], x: '22%', y: '5%', size: '18px', rotate: 20, delay: '1.5s' },
+    { char: allRunes[2], x: '42%', y: '2%', size: '26px', rotate: -5, delay: '3s' },
+    { char: allRunes[3], x: '65%', y: '4%', size: '20px', rotate: 15, delay: '0.8s' },
+    { char: allRunes[4], x: '85%', y: '3%', size: '24px', rotate: -18, delay: '2.2s' },
+    /* Row 2 */
+    { char: allRunes[5], x: '8%', y: '14%', size: '28px', rotate: 8, delay: '1s' },
+    { char: allRunes[6], x: '32%', y: '16%', size: '16px', rotate: -22, delay: '2.8s' },
+    { char: allRunes[7], x: '55%', y: '13%', size: '24px', rotate: 12, delay: '0.3s' },
+    { char: allRunes[8], x: '78%', y: '15%', size: '20px', rotate: -8, delay: '1.8s' },
+    /* Row 3 */
+    { char: allRunes[9], x: '12%', y: '26%', size: '20px', rotate: -15, delay: '2.5s' },
+    { char: allRunes[10], x: '38%', y: '28%', size: '30px', rotate: 5, delay: '0.5s' },
+    { char: allRunes[11], x: '60%', y: '25%', size: '18px', rotate: -20, delay: '3.2s' },
+    { char: allRunes[12], x: '82%', y: '27%', size: '22px', rotate: 10, delay: '1.2s' },
+    /* Row 4 */
+    { char: allRunes[13], x: '6%', y: '38%', size: '24px', rotate: 18, delay: '2s' },
+    { char: allRunes[14], x: '28%', y: '40%', size: '20px', rotate: -10, delay: '0.7s' },
+    { char: allRunes[15], x: '50%', y: '37%', size: '26px', rotate: 14, delay: '2.8s' },
+    { char: allRunes[16], x: '72%', y: '39%', size: '18px', rotate: -25, delay: '1.5s' },
+    { char: allRunes[17], x: '90%', y: '38%', size: '22px', rotate: 7, delay: '3.5s' },
+    /* Row 5 */
+    { char: allRunes[18], x: '15%', y: '50%', size: '26px', rotate: -8, delay: '1.3s' },
+    { char: allRunes[19], x: '40%', y: '52%', size: '22px', rotate: 22, delay: '2.6s' },
+    { char: allRunes[20], x: '62%', y: '49%', size: '28px', rotate: -12, delay: '0.4s' },
+    { char: allRunes[0], x: '85%', y: '51%', size: '20px', rotate: 16, delay: '1.9s' },
+    /* Row 6 */
+    { char: allRunes[1], x: '8%', y: '62%', size: '20px', rotate: 10, delay: '3s' },
+    { char: allRunes[2], x: '30%', y: '64%', size: '24px', rotate: -18, delay: '0.6s' },
+    { char: allRunes[3], x: '52%', y: '61%', size: '18px', rotate: 25, delay: '2.2s' },
+    { char: allRunes[4], x: '75%', y: '63%', size: '26px', rotate: -6, delay: '1.1s' },
+    /* Row 7 */
+    { char: allRunes[5], x: '12%', y: '74%', size: '22px', rotate: -20, delay: '2.4s' },
+    { char: allRunes[6], x: '35%', y: '76%', size: '28px', rotate: 8, delay: '0.9s' },
+    { char: allRunes[7], x: '58%', y: '73%', size: '20px', rotate: -14, delay: '3.1s' },
+    { char: allRunes[8], x: '80%', y: '75%', size: '24px', rotate: 12, delay: '1.6s' },
+    /* Row 8 */
+    { char: allRunes[9], x: '6%', y: '86%', size: '18px', rotate: 15, delay: '2.7s' },
+    { char: allRunes[10], x: '25%', y: '88%', size: '24px', rotate: -10, delay: '0.2s' },
+    { char: allRunes[11], x: '48%', y: '85%', size: '22px', rotate: 20, delay: '1.8s' },
+    { char: allRunes[12], x: '70%', y: '87%', size: '26px', rotate: -15, delay: '3.4s' },
+    { char: allRunes[13], x: '88%', y: '86%', size: '20px', rotate: 5, delay: '0.8s' },
+    /* Row 9 */
+    { char: allRunes[14], x: '18%', y: '95%', size: '22px', rotate: -8, delay: '2.1s' },
+    { char: allRunes[15], x: '45%', y: '96%', size: '20px', rotate: 18, delay: '1.4s' },
+    { char: allRunes[16], x: '72%', y: '94%', size: '24px', rotate: -22, delay: '3.3s' },
   ];
 
   return (
@@ -280,13 +305,21 @@ export const ParchmentWatermarks = () => {
             top: m.y,
             fontSize: m.size,
             fontFamily: 'serif',
-            color: 'rgba(180,160,120,0.06)',
+            color: 'rgba(201,168,76,0.25)',
             transform: `rotate(${m.rotate}deg)`,
+            animation: 'rune-watermark-breathe 6s ease-in-out infinite',
+            animationDelay: m.delay,
           }}
         >
           {m.char}
         </span>
       ))}
+      <style>{`
+        @keyframes rune-watermark-breathe {
+          0%, 100% { opacity: 0.4; }
+          50% { opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 };

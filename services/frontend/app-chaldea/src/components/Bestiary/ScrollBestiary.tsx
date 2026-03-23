@@ -17,7 +17,6 @@ import {
   RollerGlow,
   ScrollEnergyLines,
   ParchmentWatermarks,
-  LoreShimmer,
 } from './GrimoireMagic';
 
 const titleFont = "'MedievalSharp', 'Georgia', serif";
@@ -299,23 +298,21 @@ const ScrollBestiary = () => {
                     <div className="w-12 h-px" style={{ background: 'linear-gradient(to right, rgba(139,105,20,0.4), transparent)' }} />
                   </div>
 
-                  <LoreShimmer>
-                    <p
-                      className="text-sm sm:text-base leading-relaxed max-w-lg mx-auto mb-2"
-                      style={{ fontFamily: scriptFont, color: '#4a3520' }}
-                    >
-                      Ты держишь в руках древний артефакт, пропитанный забытыми плетениями.
-                      Чернила на этом свитке живут собственной жизнью — они проступают лишь тогда,
-                      когда охотник сам познаёт природу зверя через кровь и сталь.
-                    </p>
-                    <p
-                      className="text-xs sm:text-sm leading-relaxed max-w-md mx-auto"
-                      style={{ fontFamily: scriptFont, color: '#7a6a4a' }}
-                    >
-                      Чем больше тварей падёт от твоей руки, тем больше тайн откроет свиток.
-                      Ступай на путь охотника, скиталец.
-                    </p>
-                  </LoreShimmer>
+                  <p
+                    className="text-sm sm:text-base leading-relaxed max-w-lg mx-auto mb-2"
+                    style={{ fontFamily: scriptFont, color: '#4a3520' }}
+                  >
+                    Ты держишь в руках древний артефакт, пропитанный забытыми плетениями.
+                    Чернила на этом свитке живут собственной жизнью — они проступают лишь тогда,
+                    когда охотник сам познаёт природу зверя через кровь и сталь.
+                  </p>
+                  <p
+                    className="text-xs sm:text-sm leading-relaxed max-w-md mx-auto"
+                    style={{ fontFamily: scriptFont, color: '#7a6a4a' }}
+                  >
+                    Чем больше тварей падёт от твоей руки, тем больше тайн откроет свиток.
+                    Ступай на путь охотника, скиталец.
+                  </p>
                 </div>
 
                 <ScrollDivider />
