@@ -134,7 +134,7 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
     <>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
         {/* Left: Players */}
-        <section className="bg-black/50 rounded-card p-4 sm:p-6 flex flex-col gap-4">
+        <section className="bg-black/70 rounded-card p-4 sm:p-6 flex flex-col gap-4">
           <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
             Игроки в локации
           </h2>
@@ -171,7 +171,7 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
         </section>
 
         {/* Right: NPCs */}
-        <section className="bg-black/50 rounded-card p-4 sm:p-6 flex flex-col gap-4">
+        <section className="bg-black/70 rounded-card p-4 sm:p-6 flex flex-col gap-4">
           <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
             НПС на локации
           </h2>

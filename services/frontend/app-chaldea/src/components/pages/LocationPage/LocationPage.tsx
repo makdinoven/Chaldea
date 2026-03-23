@@ -342,7 +342,7 @@ const LocationPage = () => {
   return (
     <div className="flex flex-col gap-4 sm:gap-6 pb-10">
       {/* Header block */}
-      <div className="bg-black/40 rounded-card p-4 sm:p-6 backdrop-blur-sm flex flex-col gap-4">
+      <div className="bg-black/70 rounded-card p-4 sm:p-6 backdrop-blur-sm flex flex-col gap-4">
         {/* Back button */}
         <button
           onClick={() => navigate(-1)}
@@ -393,6 +393,11 @@ const LocationPage = () => {
           inBattle={inBattle}
         />
 
+        {/* PvP Invitations & Trade requests — hidden when empty */}
+        {isCharacterHere && character?.id && (
+          <PendingInvitationsPanel locationId={location.id} />
+        )}
+
         {/* Loot — only shown when items exist */}
         {(location.loot ?? []).length > 0 && (
           <LootSection
@@ -404,7 +409,7 @@ const LocationPage = () => {
         )}
 
         {/* Posts */}
-        <section className="bg-black/50 rounded-card p-4 sm:p-6 flex flex-col gap-4">
+        <section className="bg-black/70 rounded-card p-4 sm:p-6 flex flex-col gap-4">
           <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
             Посты
           </h2>
@@ -451,14 +456,9 @@ const LocationPage = () => {
         </section>
 
         {/* Neighbors */}
-        <section className={`bg-black/50 rounded-card p-4 sm:p-6 ${inBattle ? 'pointer-events-none opacity-50' : ''}`}>
+        <section className={`bg-black/70 rounded-card p-4 sm:p-6 ${inBattle ? 'pointer-events-none opacity-50' : ''}`}>
           <NeighborsSection neighbors={location.neighbors} />
         </section>
-
-        {/* PvP Invitations & Trade requests */}
-        {isCharacterHere && character?.id && (
-          <PendingInvitationsPanel locationId={location.id} />
-        )}
       </div>
     </div>
   );

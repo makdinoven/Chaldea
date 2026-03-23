@@ -237,6 +237,7 @@ const ProfileSettingsModal = ({ isOpen, onClose, profile }: ProfileSettingsModal
   const [newUsername, setNewUsername] = useState(profile.username);
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [postColor, setPostColor] = useState(profile.post_color ?? '');
+  const [siteBgUrl, setSiteBgUrl] = useState(() => localStorage.getItem('site_bg_url') ?? '');
 
   // Nickname gradient state (Task 7)
   const pss = profile.profile_style_settings;
@@ -272,6 +273,7 @@ const ProfileSettingsModal = ({ isOpen, onClose, profile }: ProfileSettingsModal
       setNewUsername(profile.username);
       setUsernameError(null);
       setPostColor(profile.post_color ?? '');
+      setSiteBgUrl(localStorage.getItem('site_bg_url') ?? '');
       setStyleSettings(profile.profile_style_settings ?? {});
 
       const s = profile.profile_style_settings;
@@ -318,6 +320,16 @@ const ProfileSettingsModal = ({ isOpen, onClose, profile }: ProfileSettingsModal
           },
         }),
       ).unwrap();
+
+      // Save site background URL to localStorage
+      if (siteBgUrl.trim()) {
+        localStorage.setItem('site_bg_url', siteBgUrl.trim());
+        document.body.style.backgroundImage = `url(${siteBgUrl.trim()})`;
+      } else {
+        localStorage.removeItem('site_bg_url');
+        document.body.style.backgroundImage = '';
+      }
+
       toast.success('Настройки сохранены');
       onClose();
     } catch (err) {
@@ -762,6 +774,32 @@ const ProfileSettingsModal = ({ isOpen, onClose, profile }: ProfileSettingsModal
                   styleSettings={styleSettings}
                   onSliderChange={handleSliderChange}
                 />
+              </div>
+
+              {/* Section: Site background URL */}
+              <div>
+                <h3 className="text-white text-sm font-medium uppercase tracking-wider mb-3">
+                  Фон сайта (URL)
+                </h3>
+                <input
+                  type="url"
+                  value={siteBgUrl}
+                  onChange={(e) => setSiteBgUrl(e.target.value)}
+                  className="input-underline w-full"
+                  placeholder="https://example.com/image.jpg"
+                />
+                <p className="text-white/30 text-xs mt-1">
+                  Вставьте ссылку на изображение. Оставьте пустым для стандартного фона.
+                </p>
+                {siteBgUrl.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => setSiteBgUrl('')}
+                    className="text-site-red text-xs mt-2 hover:text-site-red/80 transition-colors"
+                  >
+                    Сбросить фон
+                  </button>
+                )}
               </div>
 
               {/* Section: Status text */}

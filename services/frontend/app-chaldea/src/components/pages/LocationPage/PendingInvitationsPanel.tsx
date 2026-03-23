@@ -187,7 +187,7 @@ const PendingInvitationsPanel = ({ locationId }: PendingInvitationsPanelProps) =
 
   return (
     <>
-      <section className="gold-outline relative rounded-card bg-black/50 p-4 sm:p-5 flex flex-col gap-4">
+      <section className="gold-outline relative rounded-card bg-black/70 p-4 sm:p-5 flex flex-col gap-4">
         {/* Battle invitations */}
         {hasBattleInvitations && (
           <>
