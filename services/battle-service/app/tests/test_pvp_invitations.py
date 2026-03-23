@@ -53,7 +53,7 @@ redis_state_mock.KEY_BATTLE_TURNS = "battle:{id}:turns"
 redis_state_mock.init_battle_state = AsyncMock()
 redis_state_mock.load_state = AsyncMock(return_value=None)
 redis_state_mock.save_state = AsyncMock()
-redis_state_mock.get_redis_client = AsyncMock(return_value=MagicMock())
+redis_state_mock.get_redis_client = AsyncMock(return_value=AsyncMock())
 redis_state_mock.cache_snapshot = AsyncMock()
 redis_state_mock.get_cached_snapshot = AsyncMock(return_value=None)
 redis_state_mock.state_key = MagicMock(return_value="battle:1:state")
@@ -163,9 +163,9 @@ def _result_with_rows(rows):
 # Character info mock helper
 # ---------------------------------------------------------------------------
 # _get_character_info queries:
-#   SELECT id, user_id, current_location, level FROM characters WHERE id = :cid
+#   SELECT id, user_id, current_location_id, level FROM characters WHERE id = :cid
 # _get_character_name queries:
-#   SELECT character_name FROM characters WHERE id = :cid
+#   SELECT name FROM characters WHERE id = :cid
 # get_active_battle_for_character queries:
 #   SELECT b.id FROM battles b JOIN battle_participants bp ...
 # Duplicate check:
@@ -194,10 +194,10 @@ def _build_invite_execute_side_effects(
         query_str = str(query) if not isinstance(query, str) else query
 
         # _get_character_info for initiator
-        if "user_id, current_location, level" in query_str and params and params.get("cid") == 1:
+        if "user_id, current_location_id, level" in query_str and params and params.get("cid") == 1:
             return _result_with_row(initiator_char)
         # _get_character_info for target
-        if "user_id, current_location, level" in query_str and params and params.get("cid") == 2:
+        if "user_id, current_location_id, level" in query_str and params and params.get("cid") == 2:
             return _result_with_row(target_char)
         # get_active_battle_for_character for initiator
         if "battles" in query_str and "battle_participants" in query_str and params and params.get("cid") == 1:
@@ -215,7 +215,7 @@ def _build_invite_execute_side_effects(
                 return _result_with_row(_row(duplicate_invitation))
             return _result_empty()
         # _get_character_name
-        if "character_name" in query_str:
+        if "name" in query_str and "characters" in query_str and "user_id" not in query_str and "battles" not in query_str:
             return _result_with_row(initiator_name)
         # Default
         return _result_empty()
@@ -465,10 +465,10 @@ class TestRespondToInvitation:
             if "UPDATE" in query_str.upper() and "pvp_invitations" in query_str:
                 return _result_empty()
             # _get_character_info for target
-            if "user_id, current_location, level" in query_str and params and params.get("cid") == 2:
+            if "user_id, current_location_id, level" in query_str and params and params.get("cid") == 2:
                 return _result_with_row(target_char)
             # _get_character_info for initiator
-            if "user_id, current_location, level" in query_str and params and params.get("cid") == 1:
+            if "user_id, current_location_id, level" in query_str and params and params.get("cid") == 1:
                 return _result_with_row(initiator_char)
             # _get_character_name
             if "character_name" in query_str:
@@ -633,7 +633,7 @@ class TestRespondToInvitation:
             if "pvp_invitations" in query_str and "UPDATE" not in query_str.upper():
                 return _result_with_row(invitation_row)
             # _get_character_info for target (char 2 belongs to user 20, not 999)
-            if "user_id, current_location, level" in query_str and params and params.get("cid") == 2:
+            if "user_id, current_location_id, level" in query_str and params and params.get("cid") == 2:
                 return _result_with_row(CHAR_2)
             return _result_empty()
 
@@ -688,7 +688,7 @@ class TestCancelInvitation:
             if "pvp_invitations" in query_str and "SELECT" in query_str.upper() and "UPDATE" not in query_str.upper():
                 return _result_with_row(_row(1, 1, "pending"))  # id=1, initiator_char=1, status=pending
             # _get_character_info for initiator char
-            if "user_id, current_location, level" in query_str:
+            if "user_id, current_location_id, level" in query_str:
                 return _result_with_row(CHAR_1)
             # UPDATE
             return _result_empty()
@@ -748,7 +748,7 @@ class TestCancelInvitation:
             query_str = str(query)
             if "pvp_invitations" in query_str and "SELECT" in query_str.upper():
                 return _result_with_row(_row(1, 1, "pending"))
-            if "user_id, current_location, level" in query_str:
+            if "user_id, current_location_id, level" in query_str:
                 return _result_with_row(CHAR_1)  # char 1 belongs to user 10
             return _result_empty()
 

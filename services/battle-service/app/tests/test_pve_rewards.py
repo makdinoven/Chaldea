@@ -210,20 +210,12 @@ class TestDistributePveRewards:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        # First call: mob-reward-data (mob character 20)
-        # Second call: update mob status to dead
-        # Third call: add_rewards (winner character 10)
-        # Fourth+: add items
-        call_responses = [
-            _mock_httpx_response(200, MOB_REWARD_DATA),  # mob-reward-data
-            _mock_httpx_response(200, {"ok": True}),      # update mob status
-            _mock_httpx_response(200, {"ok": True, "new_balance": 110, "new_xp": 250}),  # add_rewards
-            _mock_httpx_response(200, {}),  # add item 1
-            _mock_httpx_response(200, {}),  # add item 2 (if dropped)
-        ]
-        mock_client.get = AsyncMock(side_effect=[call_responses[0]])
-        mock_client.put = AsyncMock(side_effect=[call_responses[1]])
-        mock_client.post = AsyncMock(side_effect=call_responses[2:])
+        # GET: mob-reward-data
+        # PUT: update mob status to dead
+        # POST: add_rewards, add items, record-mob-kill
+        mock_client.get = AsyncMock(return_value=_mock_httpx_response(200, MOB_REWARD_DATA))
+        mock_client.put = AsyncMock(return_value=_mock_httpx_response(200, {"ok": True}))
+        mock_client.post = AsyncMock(return_value=_mock_httpx_response(200, {"ok": True, "new_balance": 110, "new_xp": 250}))
 
         # Mock random so both items drop
         with patch("main.random.random", return_value=0.05), \

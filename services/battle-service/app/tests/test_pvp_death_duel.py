@@ -52,7 +52,7 @@ redis_state_mock.KEY_BATTLE_TURNS = "battle:{id}:turns"
 redis_state_mock.init_battle_state = AsyncMock()
 redis_state_mock.load_state = AsyncMock(return_value=None)
 redis_state_mock.save_state = AsyncMock()
-redis_state_mock.get_redis_client = AsyncMock(return_value=MagicMock())
+redis_state_mock.get_redis_client = AsyncMock(return_value=AsyncMock())
 redis_state_mock.cache_snapshot = AsyncMock()
 redis_state_mock.get_cached_snapshot = AsyncMock(return_value=None)
 redis_state_mock.state_key = MagicMock(return_value="battle:1:state")
@@ -149,7 +149,7 @@ def _get_client_with_mocks(user, mock_db):
 
 
 # Characters at level 30+ for death duel
-# _get_character_info: SELECT id, user_id, current_location, level FROM characters WHERE id = :cid
+# _get_character_info: SELECT id, user_id, current_location_id, level FROM characters WHERE id = :cid
 CHAR_HIGH_1 = _row(1, 10, 100, 35)  # id=1, user_id=10, location=100, level=35
 CHAR_HIGH_2 = _row(2, 20, 100, 40)  # id=2, user_id=20, location=100, level=40
 CHAR_LOW_1 = _row(1, 10, 100, 15)   # id=1, user_id=10, location=100, level=15
@@ -178,10 +178,10 @@ def _build_death_duel_execute_side_effects(
         query_str = str(query) if not isinstance(query, str) else query
 
         # _get_character_info for initiator
-        if "user_id, current_location, level" in query_str and params and params.get("cid") == 1:
+        if "user_id, current_location_id, level" in query_str and params and params.get("cid") == 1:
             return _result_with_row(initiator_char)
         # _get_character_info for target
-        if "user_id, current_location, level" in query_str and params and params.get("cid") == 2:
+        if "user_id, current_location_id, level" in query_str and params and params.get("cid") == 2:
             return _result_with_row(target_char)
         # get_active_battle_for_character for initiator
         if "battles" in query_str and "battle_participants" in query_str and params and params.get("cid") == 1:
@@ -202,7 +202,7 @@ def _build_death_duel_execute_side_effects(
         if "marker_type" in query_str and "Locations" in query_str:
             return _result_with_row(_row(location_marker))
         # _get_character_name
-        if "character_name" in query_str:
+        if "name" in query_str and "characters" in query_str and "user_id" not in query_str and "battles" not in query_str:
             return _result_with_row(initiator_name)
         # Default
         return _result_empty()

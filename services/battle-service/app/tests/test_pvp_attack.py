@@ -53,7 +53,7 @@ redis_state_mock.KEY_BATTLE_TURNS = "battle:{id}:turns"
 redis_state_mock.init_battle_state = AsyncMock()
 redis_state_mock.load_state = AsyncMock(return_value=None)
 redis_state_mock.save_state = AsyncMock()
-redis_state_mock.get_redis_client = AsyncMock(return_value=MagicMock())
+redis_state_mock.get_redis_client = AsyncMock(return_value=AsyncMock())
 redis_state_mock.cache_snapshot = AsyncMock()
 redis_state_mock.get_cached_snapshot = AsyncMock(return_value=None)
 redis_state_mock.state_key = MagicMock(return_value="battle:1:state")
@@ -172,10 +172,10 @@ def _build_attack_side_effects(
         query_str = str(query) if not isinstance(query, str) else query
 
         # _get_character_info for attacker
-        if "user_id, current_location, level" in query_str and params and params.get("cid") == 1:
+        if "user_id, current_location_id, level" in query_str and params and params.get("cid") == 1:
             return _result_with_row(attacker_char) if attacker_char else _result_empty()
         # _get_character_info for victim
-        if "user_id, current_location, level" in query_str and params and params.get("cid") == 2:
+        if "user_id, current_location_id, level" in query_str and params and params.get("cid") == 2:
             return _result_with_row(victim_char) if victim_char else _result_empty()
         # Location check
         if "marker_type" in query_str and "Locations" in query_str:
@@ -191,7 +191,7 @@ def _build_attack_side_effects(
                 return _result_with_row(_row(active_battle_victim))
             return _result_empty()
         # _get_character_name
-        if "character_name" in query_str:
+        if "name" in query_str and "characters" in query_str and "user_id" not in query_str and "battles" not in query_str:
             return _result_with_row(CHAR_NAME_ATTACKER)
         return _result_empty()
 

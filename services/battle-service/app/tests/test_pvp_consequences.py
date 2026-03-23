@@ -86,7 +86,9 @@ skills_mock.character_has_rank = AsyncMock(return_value=True)
 skills_mock.get_rank = AsyncMock(return_value={
     "id": 1, "skill_type": "attack", "damage_type": "physical",
     "base_damage": 50, "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
-    "cooldown_turns": 0, "effect_type": None,
+    "cooldown_turns": 0, "cooldown": 0, "effect_type": None,
+    "damage_entries": [{"damage_type": "physical", "base_damage": 50}],
+    "effects": [],
 })
 skills_mock.get_item = AsyncMock(return_value={})
 skills_mock.character_ranks = AsyncMock(return_value=[])
@@ -208,10 +210,22 @@ class TestPvpTrainingConsequences:
     @patch("main.write_turn", new_callable=AsyncMock)
     @patch("main.get_battle", new_callable=AsyncMock)
     @patch("main.load_state", new_callable=AsyncMock)
+    @patch("main.character_has_rank", new_callable=AsyncMock, return_value=True)
+    @patch("main.get_rank", new_callable=AsyncMock)
+    @patch("main.compute_damage_with_rolls", new_callable=AsyncMock, return_value=(999, {}))
     def test_pvp_training_sets_loser_hp_to_1(
-        self, mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
+        self, mock_compute, mock_get_rank, mock_has_rank,
+        mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
     ):
         """After pvp_training finishes, loser's HP in character_attributes is set to 1."""
+        mock_get_rank.return_value = {
+            "id": 1, "skill_type": "attack", "damage_type": "physical",
+            "base_damage": 50, "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
+            "cooldown_turns": 0, "cooldown": 0, "effect_type": None,
+            "damage_entries": [{"damage_type": "physical", "base_damage": 50}],
+            "effects": [],
+        }
+
         user = _make_user(user_id=1)
         battle_state = _build_battle_state("pvp_training")
         mock_load_state.return_value = battle_state
@@ -281,10 +295,22 @@ class TestPvpTrainingConsequences:
     @patch("main.write_turn", new_callable=AsyncMock)
     @patch("main.get_battle", new_callable=AsyncMock)
     @patch("main.load_state", new_callable=AsyncMock)
+    @patch("main.character_has_rank", new_callable=AsyncMock, return_value=True)
+    @patch("main.get_rank", new_callable=AsyncMock)
+    @patch("main.compute_damage_with_rolls", new_callable=AsyncMock, return_value=(999, {}))
     def test_pvp_attack_no_hp_override(
-        self, mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
+        self, mock_compute, mock_get_rank, mock_has_rank,
+        mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
     ):
         """After pvp_attack finishes, no special HP override happens."""
+        mock_get_rank.return_value = {
+            "id": 1, "skill_type": "attack", "damage_type": "physical",
+            "base_damage": 50, "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
+            "cooldown_turns": 0, "cooldown": 0, "effect_type": None,
+            "damage_entries": [{"damage_type": "physical", "base_damage": 50}],
+            "effects": [],
+        }
+
         user = _make_user(user_id=1)
         battle_state = _build_battle_state("pvp_attack")
         mock_load_state.return_value = battle_state
@@ -344,10 +370,22 @@ class TestPvpTrainingConsequences:
     @patch("main.write_turn", new_callable=AsyncMock)
     @patch("main.get_battle", new_callable=AsyncMock)
     @patch("main.load_state", new_callable=AsyncMock)
+    @patch("main.character_has_rank", new_callable=AsyncMock, return_value=True)
+    @patch("main.get_rank", new_callable=AsyncMock)
+    @patch("main.compute_damage_with_rolls", new_callable=AsyncMock, return_value=(999, {}))
     def test_pve_no_hp_override(
-        self, mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
+        self, mock_compute, mock_get_rank, mock_has_rank,
+        mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
     ):
         """After PvE battle finishes, no HP=1 override happens."""
+        mock_get_rank.return_value = {
+            "id": 1, "skill_type": "attack", "damage_type": "physical",
+            "base_damage": 50, "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
+            "cooldown_turns": 0, "cooldown": 0, "effect_type": None,
+            "damage_entries": [{"damage_type": "physical", "base_damage": 50}],
+            "effects": [],
+        }
+
         user = _make_user(user_id=1)
         battle_state = _build_battle_state("pve")
         mock_load_state.return_value = battle_state

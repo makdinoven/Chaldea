@@ -7,47 +7,13 @@ Covers:
 - Already unlinked character -> 200 (idempotent)
 """
 
-import sys
-import os
+import pytest
+from sqlalchemy import text
+from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-# Set DB env vars BEFORE importing config/database
-os.environ.setdefault("DB_HOST", "localhost")
-os.environ.setdefault("DB_USERNAME", "testuser")
-os.environ.setdefault("DB_PASSWORD", "testpass")
-os.environ.setdefault("DB_DATABASE", "testdb")
-
-from sqlalchemy import create_engine, event, text
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-_test_engine = create_engine(
-    "sqlite://",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-
-
-@event.listens_for(_test_engine, "connect")
-def _set_sqlite_pragma(dbapi_conn, connection_record):
-    cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
-
-
-_TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_test_engine)
-
-import database  # noqa: E402
-database.engine = _test_engine
-database.SessionLocal = _TestSessionLocal
-
-import pytest  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from unittest.mock import MagicMock  # noqa: E402
-
-import models  # noqa: E402
-from main import app, get_db  # noqa: E402
+import models
+import database
+from main import app, get_db
 
 
 # ---------------------------------------------------------------------------
@@ -55,17 +21,17 @@ from main import app, get_db  # noqa: E402
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def setup_tables():
+def setup_tables(test_engine):
     """Create all tables before each test, drop after."""
-    models.Base.metadata.create_all(bind=_test_engine)
+    models.Base.metadata.create_all(bind=test_engine)
     yield
-    models.Base.metadata.drop_all(bind=_test_engine)
+    models.Base.metadata.drop_all(bind=test_engine)
 
 
 @pytest.fixture
-def db_session():
+def db_session(test_session_factory):
     """Provide a clean DB session for each test."""
-    session = _TestSessionLocal()
+    session = test_session_factory()
     try:
         yield session
     finally:
