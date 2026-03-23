@@ -792,6 +792,8 @@ class TestAdminJoinRequests:
         client = self._setup_admin_client(mock_db, admin=True)
         response = client.get("/battles/admin/join-requests?status=pending")
 
+        if response.status_code != 200:
+            print(f"RESPONSE {response.status_code}: {response.text}")
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 2
@@ -806,6 +808,8 @@ class TestAdminJoinRequests:
         client = self._setup_admin_client(mock_db, admin=False)
         response = client.get("/battles/admin/join-requests")
 
+        if response.status_code not in (403, 401):
+            print(f"RESPONSE {response.status_code}: {response.text}")
         assert response.status_code == 403
 
     @patch("main.get_battle", new_callable=AsyncMock)

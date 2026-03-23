@@ -2579,7 +2579,7 @@ async def list_join_requests(
 
 @router.get("/admin/join-requests", response_model=AdminJoinRequestListResponse)
 async def admin_list_join_requests(
-    status: str = Query(default="pending", description="Filter by status: pending, approved, rejected"),
+    filter_status: str = Query(default="pending", alias="status", description="Filter by status: pending, approved, rejected"),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -2594,7 +2594,7 @@ async def admin_list_join_requests(
             FROM battle_join_requests bjr
             WHERE bjr.status = :status
         """),
-        {"status": status},
+        {"status": filter_status},
     )
     total = count_result.scalar() or 0
 
@@ -2614,7 +2614,7 @@ async def admin_list_join_requests(
             ORDER BY bjr.created_at DESC
             LIMIT :lim OFFSET :off
         """),
-        {"status": status, "lim": per_page, "off": offset},
+        {"status": filter_status, "lim": per_page, "off": offset},
     )
     rows = result.fetchall()
 
