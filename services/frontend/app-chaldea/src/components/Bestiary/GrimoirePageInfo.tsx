@@ -1,6 +1,5 @@
 import type { BestiaryEntry } from '../../api/bestiary';
-
-const serifFont = "'Georgia', 'Palatino Linotype', 'Palatino', 'Times New Roman', serif";
+import { titleFont, scriptFont, statFont } from './GrimoireBook';
 
 interface GrimoirePageInfoProps {
   entry: BestiaryEntry;
@@ -29,14 +28,20 @@ const STAT_LABELS: Record<string, string> = {
 
 const MAIN_STATS = ['strength', 'agility', 'endurance', 'intelligence', 'wisdom', 'luck'];
 
+/* Colors for "ink on parchment" look */
+const inkColor = '#2a1a08';
+const inkLight = '#5a4020';
+const inkFaded = '#8a7050';
+
 const LockIcon = () => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
-    className="w-4 h-4 sm:w-5 sm:h-5 opacity-40"
+    className="w-4 h-4 sm:w-5 sm:h-5"
     fill="none"
     viewBox="0 0 24 24"
-    stroke="currentColor"
+    stroke={inkFaded}
     strokeWidth={1.5}
+    style={{ opacity: 0.5 }}
   >
     <path
       strokeLinecap="round"
@@ -53,17 +58,12 @@ const LockedSection = ({ tier }: { tier: string }) => {
       : 'Этот противник окутан тайной. Победите его, чтобы раскрыть информацию';
 
   return (
-    <div className="flex items-center gap-2 text-amber-200/25 py-3">
+    <div className="flex items-center gap-2 py-3" style={{ color: inkFaded }}>
       <LockIcon />
+      <span className="text-sm" style={{ fontFamily: scriptFont }}>???</span>
       <span
-        className="text-sm italic tracking-wide"
-        style={{ fontFamily: serifFont }}
-      >
-        ???
-      </span>
-      <span
-        className="text-[10px] sm:text-xs italic ml-1 hidden sm:inline text-amber-200/20"
-        style={{ fontFamily: serifFont }}
+        className="text-[10px] sm:text-xs ml-1 hidden sm:inline"
+        style={{ fontFamily: scriptFont, opacity: 0.6 }}
       >
         {message}
       </span>
@@ -73,17 +73,15 @@ const LockedSection = ({ tier }: { tier: string }) => {
 
 const SectionTitle = ({ children }: { children: React.ReactNode }) => (
   <h3
-    className="text-sm sm:text-base font-medium uppercase tracking-widest mb-2 sm:mb-3"
+    className="text-sm sm:text-base tracking-wider mb-2 sm:mb-3"
     style={{
-      fontFamily: serifFont,
-      color: '#c9a84c',
-      textShadow: '0 0 6px rgba(201,168,76,0.15)',
+      fontFamily: titleFont,
+      color: '#4a3018',
     }}
   >
-    {/* Decorative dash before title */}
-    <span className="text-gold/30 mr-2">&#x2014;</span>
+    <span style={{ color: inkFaded, marginRight: '6px' }}>&mdash;</span>
     {children}
-    <span className="text-gold/30 ml-2">&#x2014;</span>
+    <span style={{ color: inkFaded, marginLeft: '6px' }}>&mdash;</span>
   </h3>
 );
 
@@ -97,14 +95,16 @@ const GrimoirePageInfo = ({ entry }: GrimoirePageInfoProps) => {
   return (
     <div
       className="flex flex-col gap-4 sm:gap-5 p-4 sm:p-6 h-full overflow-y-auto gold-scrollbar"
-      style={{ fontFamily: serifFont }}
     >
       {/* Description */}
       {hasDescription ? (
         entry.description && (
           <div>
             <SectionTitle>Описание</SectionTitle>
-            <p className="text-amber-100/70 text-sm sm:text-base leading-relaxed italic">
+            <p
+              className="text-sm sm:text-base leading-relaxed"
+              style={{ fontFamily: scriptFont, color: inkColor }}
+            >
               {entry.description}
             </p>
           </div>
@@ -121,19 +121,18 @@ const GrimoirePageInfo = ({ entry }: GrimoirePageInfoProps) => {
         entry.base_attributes && Object.keys(entry.base_attributes).length > 0 && (
           <div>
             <SectionTitle>Характеристики</SectionTitle>
-            {/* Main stats */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5 mb-3">
               {MAIN_STATS.map((key) => {
                 const value = entry.base_attributes?.[key];
                 if (value === undefined) return null;
                 return (
                   <div key={key} className="flex items-center justify-between gap-1">
-                    <span className="text-amber-200/50 text-xs sm:text-sm">
+                    <span className="text-xs sm:text-sm" style={{ fontFamily: statFont, color: inkLight, fontStyle: 'italic' }}>
                       {STAT_LABELS[key] ?? key}
                     </span>
                     <span
-                      className="text-amber-100 text-xs sm:text-sm font-medium"
-                      style={{ fontVariantNumeric: 'tabular-nums' }}
+                      className="text-xs sm:text-sm font-semibold"
+                      style={{ fontFamily: statFont, color: inkColor, fontVariantNumeric: 'tabular-nums' }}
                     >
                       {value}
                     </span>
@@ -150,27 +149,27 @@ const GrimoirePageInfo = ({ entry }: GrimoirePageInfoProps) => {
               return (
                 <>
                   <div className="flex items-center gap-2 my-2">
-                    <div className="flex-1 h-px bg-gradient-to-r from-transparent to-gold/15" />
-                    <span className="text-gold/40 text-[10px] uppercase tracking-[0.2em]">
+                    <div className="flex-1 h-px" style={{ background: `linear-gradient(to right, transparent, ${inkFaded}40)` }} />
+                    <span
+                      className="text-[10px] uppercase tracking-[0.2em]"
+                      style={{ fontFamily: statFont, color: inkFaded }}
+                    >
                       Сопротивления
                     </span>
-                    <div className="flex-1 h-px bg-gradient-to-r from-gold/15 to-transparent" />
+                    <div className="flex-1 h-px" style={{ background: `linear-gradient(to right, ${inkFaded}40, transparent)` }} />
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                     {resistanceKeys.map((key) => {
                       const value = entry.base_attributes?.[key];
                       if (value === undefined || value === 0) return null;
                       return (
-                        <div
-                          key={key}
-                          className="flex items-center justify-between gap-1"
-                        >
-                          <span className="text-amber-200/40 text-[10px] sm:text-xs">
+                        <div key={key} className="flex items-center justify-between gap-1">
+                          <span className="text-[10px] sm:text-xs" style={{ fontFamily: statFont, color: inkFaded, fontStyle: 'italic' }}>
                             {STAT_LABELS[key] ?? key}
                           </span>
                           <span
-                            className="text-amber-100/70 text-[10px] sm:text-xs font-medium"
-                            style={{ fontVariantNumeric: 'tabular-nums' }}
+                            className="text-[10px] sm:text-xs font-medium"
+                            style={{ fontFamily: statFont, color: inkLight, fontVariantNumeric: 'tabular-nums' }}
                           >
                             {value}
                           </span>
@@ -199,8 +198,13 @@ const GrimoirePageInfo = ({ entry }: GrimoirePageInfoProps) => {
               {entry.skills.map((skill) => (
                 <span
                   key={skill.skill_rank_id}
-                  className="px-2.5 py-1 rounded-sm bg-purple-900/30 text-purple-200/80 text-xs sm:text-sm
-                             border border-purple-400/15"
+                  className="px-2.5 py-1 rounded-sm text-xs sm:text-sm"
+                  style={{
+                    fontFamily: scriptFont,
+                    color: '#4a2868',
+                    background: 'rgba(106,58,138,0.08)',
+                    border: '1px solid rgba(106,58,138,0.15)',
+                  }}
                 >
                   {skill.skill_name ?? `Навык #${skill.skill_rank_id}`}
                 </span>
@@ -224,20 +228,19 @@ const GrimoirePageInfo = ({ entry }: GrimoirePageInfoProps) => {
               {entry.loot_entries.map((loot) => (
                 <div
                   key={loot.item_id}
-                  className="flex items-center justify-between bg-amber-900/10 border border-gold/5
-                             rounded-sm px-3 py-1.5"
+                  className="flex items-center justify-between rounded-sm px-3 py-1.5"
+                  style={{ background: 'rgba(139,105,20,0.06)', border: '1px solid rgba(139,105,20,0.1)' }}
                 >
-                  <span className="text-amber-100/70 text-xs sm:text-sm">
+                  <span className="text-xs sm:text-sm" style={{ fontFamily: scriptFont, color: inkColor }}>
                     {loot.item_name ?? `Предмет #${loot.item_id}`}
                   </span>
                   <div className="flex items-center gap-2 sm:gap-3 text-xs sm:text-sm">
-                    <span className="text-gold/70" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    <span style={{ fontFamily: statFont, color: '#8b6914', fontVariantNumeric: 'tabular-nums' }}>
                       {loot.drop_chance}%
                     </span>
-                    <span className="text-amber-200/40" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    <span style={{ fontFamily: statFont, color: inkFaded, fontVariantNumeric: 'tabular-nums' }}>
                       x{loot.min_quantity}
-                      {loot.max_quantity > loot.min_quantity &&
-                        `-${loot.max_quantity}`}
+                      {loot.max_quantity > loot.min_quantity && `-${loot.max_quantity}`}
                     </span>
                   </div>
                 </div>
@@ -261,8 +264,13 @@ const GrimoirePageInfo = ({ entry }: GrimoirePageInfoProps) => {
               {entry.spawn_locations.map((spawn) => (
                 <span
                   key={spawn.location_id}
-                  className="px-2.5 py-1 rounded-sm bg-amber-900/15 border border-gold/10
-                             text-amber-100/60 text-xs sm:text-sm"
+                  className="px-2.5 py-1 rounded-sm text-xs sm:text-sm"
+                  style={{
+                    fontFamily: scriptFont,
+                    color: inkLight,
+                    background: 'rgba(139,105,20,0.06)',
+                    border: '1px solid rgba(139,105,20,0.12)',
+                  }}
                 >
                   {spawn.location_name ?? `Локация #${spawn.location_id}`}
                 </span>

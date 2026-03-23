@@ -1226,7 +1226,7 @@ def _load_resistances_for_template(db: Session, template_id: int):
         "res_electricity", "res_catting", "res_crushing", "res_piercing",
         "res_watering", "res_sainting", "res_wind", "res_damning",
     ]
-    return {k: v for k, v in zip(keys, row) if v and v != 0.0}
+    return {k: (v if v is not None else 0) for k, v in zip(keys, row)}
 
 
 def get_bestiary(db: Session, character_id: int = None):

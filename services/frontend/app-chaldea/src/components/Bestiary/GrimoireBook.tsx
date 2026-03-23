@@ -11,64 +11,32 @@ import {
 } from '../../redux/slices/bestiarySlice';
 import GrimoireSpread from './GrimoireSpread';
 import GrimoireNavigation from './GrimoireNavigation';
+import { MagicParticles, ArcaneGlow, CoverRunes, CoverEmblem } from './GrimoireMagic';
 
-const serifFont = "'Georgia', 'Palatino Linotype', 'Palatino', serif";
+/*
+ * Font constants for the grimoire:
+ * - titleFont: MedievalSharp — for the book title and section headings
+ * - scriptFont: Marck Script — for handwritten body text (quill pen feel)
+ * - statFont: Cormorant Garamond — for stats, numbers, elegant serif text
+ */
+export const titleFont = "'MedievalSharp', 'Georgia', serif";
+export const scriptFont = "'Marck Script', 'Georgia', cursive";
+export const statFont = "'Cormorant Garamond', 'Georgia', serif";
 
 /* ═══════════════════════════════════════════════
-   SVG filters — inline so they're available to the whole book.
-   - parchmentNoise: feTurbulence grain for paper texture
-   - inkBleed: feGaussianBlur for slight ink spread effect
+   SVG definitions: clip paths, gradients
    ═══════════════════════════════════════════════ */
-const SvgFilters = () => (
+const SvgDefs = () => (
   <svg className="absolute w-0 h-0" aria-hidden="true">
     <defs>
-      {/* Paper grain noise */}
-      <filter id="parchmentNoise" x="0%" y="0%" width="100%" height="100%">
-        <feTurbulence
-          type="fractalNoise"
-          baseFrequency="0.65"
-          numOctaves="6"
-          stitchTiles="stitch"
-          result="noise"
-        />
-        <feColorMatrix
-          type="saturate"
-          values="0"
-          in="noise"
-          result="gray"
-        />
-        <feBlend in="SourceGraphic" in2="gray" mode="multiply" />
-      </filter>
-
-      {/* Coarser noise for leather */}
-      <filter id="leatherGrain" x="0%" y="0%" width="100%" height="100%">
-        <feTurbulence
-          type="turbulence"
-          baseFrequency="0.8"
-          numOctaves="3"
-          seed="2"
-          stitchTiles="stitch"
-          result="noise"
-        />
-        <feColorMatrix
-          type="saturate"
-          values="0"
-          in="noise"
-          result="gray"
-        />
-        <feBlend in="SourceGraphic" in2="gray" mode="soft-light" />
-      </filter>
-
-      {/* Ornament gradient */}
       <linearGradient id="ornGold" x1="0" y1="0" x2="1" y2="0">
         <stop offset="0%" stopColor="transparent" />
-        <stop offset="25%" stopColor="#c9a84c" />
-        <stop offset="50%" stopColor="#e8d48b" />
-        <stop offset="75%" stopColor="#c9a84c" />
+        <stop offset="25%" stopColor="#8b6914" />
+        <stop offset="50%" stopColor="#c9a84c" />
+        <stop offset="75%" stopColor="#8b6914" />
         <stop offset="100%" stopColor="transparent" />
       </linearGradient>
 
-      {/* Ragged edge clip for pages */}
       <clipPath id="raggedLeft" clipPathUnits="objectBoundingBox">
         <path d="M0,0 L0.98,0 C0.985,0.05 0.99,0.08 0.985,0.12 C0.98,0.16 0.995,0.2 0.99,0.25
                  C0.985,0.3 0.992,0.35 0.987,0.4 C0.982,0.45 0.993,0.5 0.988,0.55
@@ -86,7 +54,7 @@ const SvgFilters = () => (
   </svg>
 );
 
-/* ── Decorative SVG ornament (more elaborate) ── */
+/* ── Decorative SVG ornament ── */
 const BookOrnament = ({ flip }: { flip?: boolean }) => (
   <svg
     viewBox="0 0 240 20"
@@ -94,36 +62,23 @@ const BookOrnament = ({ flip }: { flip?: boolean }) => (
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
   >
-    {/* Center diamond */}
     <rect x="115" y="5" width="10" height="10" rx="1" transform="rotate(45 120 10)"
       stroke="url(#ornGold)" strokeWidth="0.8" fill="none" />
     <rect x="117" y="7" width="6" height="6" rx="0.5" transform="rotate(45 120 10)"
-      fill="#c9a84c" fillOpacity="0.3" />
-    {/* Left flourish */}
+      fill="#8b6914" fillOpacity="0.3" />
     <path d="M110 10 C100 10 95 6 85 6 C78 6 74 10 65 10 C58 10 54 7 45 7 C38 7 34 10 20 10 L0 10"
-      stroke="url(#ornGold)" strokeWidth="0.8" strokeLinecap="round" opacity="0.5" />
-    <path d="M110 10 C100 10 95 14 85 14 C78 14 74 10 65 10"
-      stroke="url(#ornGold)" strokeWidth="0.6" strokeLinecap="round" opacity="0.3" />
-    {/* Right flourish */}
+      stroke="url(#ornGold)" strokeWidth="0.8" strokeLinecap="round" opacity="0.6" />
     <path d="M130 10 C140 10 145 6 155 6 C162 6 166 10 175 10 C182 10 186 7 195 7 C202 7 206 10 220 10 L240 10"
-      stroke="url(#ornGold)" strokeWidth="0.8" strokeLinecap="round" opacity="0.5" />
-    <path d="M130 10 C140 10 145 14 155 14 C162 14 166 10 175 10"
-      stroke="url(#ornGold)" strokeWidth="0.6" strokeLinecap="round" opacity="0.3" />
-    {/* Small dots */}
-    <circle cx="45" cy="10" r="1.2" fill="#c9a84c" fillOpacity="0.4" />
-    <circle cx="195" cy="10" r="1.2" fill="#c9a84c" fillOpacity="0.4" />
+      stroke="url(#ornGold)" strokeWidth="0.8" strokeLinecap="round" opacity="0.6" />
+    <circle cx="45" cy="10" r="1.2" fill="#8b6914" fillOpacity="0.5" />
+    <circle cx="195" cy="10" r="1.2" fill="#8b6914" fillOpacity="0.5" />
   </svg>
 );
 
-/* ── Corner clasp ornament (more detailed) ── */
+/* ── Corner clasp ── */
 const CornerClasp = ({ position }: { position: 'tl' | 'tr' | 'bl' | 'br' }) => {
   const rotations = { tl: '', tr: 'scale(-1,1)', bl: 'scale(1,-1)', br: 'scale(-1,-1)' };
-  const positions = {
-    tl: 'top-1 left-1',
-    tr: 'top-1 right-1',
-    bl: 'bottom-1 left-1',
-    br: 'bottom-1 right-1',
-  };
+  const positions = { tl: 'top-1 left-1', tr: 'top-1 right-1', bl: 'bottom-1 left-1', br: 'bottom-1 right-1' };
   return (
     <svg
       viewBox="0 0 32 32"
@@ -132,20 +87,19 @@ const CornerClasp = ({ position }: { position: 'tl' | 'tr' | 'bl' | 'br' }) => {
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
     >
-      <path d="M2 2 L14 2 C14 2 12 4 12 6 L12 8" stroke="#c9a84c" strokeWidth="1.2" strokeOpacity="0.5" strokeLinecap="round" />
-      <path d="M2 2 L2 14 C2 14 4 12 6 12 L8 12" stroke="#c9a84c" strokeWidth="1.2" strokeOpacity="0.5" strokeLinecap="round" />
-      <circle cx="2" cy="2" r="1.5" fill="#c9a84c" fillOpacity="0.4" />
-      <path d="M6 6 L4 8 M6 6 L8 4" stroke="#c9a84c" strokeWidth="0.6" strokeOpacity="0.3" />
+      <path d="M2 2 L14 2 C14 2 12 4 12 6 L12 8" stroke="#8b6914" strokeWidth="1.2" strokeOpacity="0.6" strokeLinecap="round" />
+      <path d="M2 2 L2 14 C2 14 4 12 6 12 L8 12" stroke="#8b6914" strokeWidth="1.2" strokeOpacity="0.6" strokeLinecap="round" />
+      <circle cx="2" cy="2" r="1.5" fill="#8b6914" fillOpacity="0.5" />
     </svg>
   );
 };
 
-/* ── Ink stain decorative element ── */
-const InkStain = ({ className }: { className: string }) => (
+/* ── Age spots on pages ── */
+const AgeSpot = ({ className }: { className: string }) => (
   <div
     className={`absolute pointer-events-none ${className}`}
     style={{
-      background: 'radial-gradient(ellipse, rgba(80,60,30,0.08) 0%, rgba(60,40,15,0.04) 40%, transparent 70%)',
+      background: 'radial-gradient(ellipse, rgba(160,130,80,0.12) 0%, rgba(140,110,60,0.06) 40%, transparent 70%)',
       borderRadius: '50% 40% 60% 45% / 55% 45% 50% 40%',
     }}
   />
@@ -177,43 +131,39 @@ const GrimoireBook = () => {
 
   return (
     <div className="max-w-5xl mx-auto w-full px-2 sm:px-4" style={{ perspective: '1200px' }}>
-      <SvgFilters />
+      <SvgDefs />
 
-      {/* ══════ OUTER BOOK — 3D leather cover ══════ */}
+      {/* ══════ LEATHER COVER ══════ */}
       <div
         className="relative rounded-xl"
         style={{
           transform: 'rotateX(1deg)',
           transformOrigin: 'center bottom',
           boxShadow:
-            '0 12px 50px rgba(0,0,0,0.8), 0 4px 20px rgba(0,0,0,0.6), inset 0 1px 0 rgba(201,168,76,0.12), 0 -2px 0 rgba(40,25,10,1)',
+            '0 12px 50px rgba(80,50,20,0.4), 0 4px 20px rgba(60,30,10,0.3), inset 0 1px 0 rgba(201,168,76,0.15)',
         }}
       >
-        {/* Leather base */}
+        {/* Arcane glow */}
+        <ArcaneGlow />
+
+        {/* Leather base — warm dark brown */}
         <div
           className="absolute inset-0 rounded-xl"
           style={{
             background:
-              'radial-gradient(ellipse at 25% 15%, #4a3020 0%, #2c1a0e 40%, #1a0f08 70%, #0f0805 100%)',
+              'radial-gradient(ellipse at 30% 20%, #6b4a2a 0%, #4a3018 40%, #3a2210 70%, #2a1808 100%)',
           }}
         />
 
-        {/* Leather grain texture via SVG filter */}
+        {/* Leather texture */}
         <div
-          className="absolute inset-0 rounded-xl opacity-30 pointer-events-none"
-          style={{ filter: 'url(#leatherGrain)' }}
+          className="absolute inset-0 rounded-xl opacity-30 pointer-events-none mix-blend-overlay"
+          style={{ backgroundImage: 'url(/textures/leather.png)', backgroundRepeat: 'repeat' }}
         />
 
-        {/* Leather tooling / emboss lines */}
-        <div
-          className="absolute inset-3 rounded-lg pointer-events-none border border-gold/15"
-          style={{
-            boxShadow: 'inset 0 0 0 1px rgba(201,168,76,0.05)',
-          }}
-        />
-        <div
-          className="absolute inset-5 rounded-md pointer-events-none border border-gold/8"
-        />
+        {/* Emboss lines */}
+        <div className="absolute inset-3 rounded-lg pointer-events-none border border-amber-600/20" />
+        <div className="absolute inset-5 rounded-md pointer-events-none border border-amber-600/10" />
 
         {/* Corner clasps */}
         <CornerClasp position="tl" />
@@ -221,26 +171,29 @@ const GrimoireBook = () => {
         <CornerClasp position="bl" />
         <CornerClasp position="br" />
 
+        {/* Magical effects */}
+        <CoverRunes />
+        <CoverEmblem />
+        <MagicParticles />
+
         {/* ── Inner content ── */}
         <div className="relative p-4 sm:p-6 md:p-8">
 
-          {/* Title / Header */}
+          {/* Title */}
           <div className="flex items-center justify-between mb-1 sm:mb-2">
             <h1
-              className="text-xl sm:text-2xl md:text-3xl font-bold uppercase tracking-[0.15em]"
+              className="text-xl sm:text-2xl md:text-3xl tracking-wide"
               style={{
-                fontFamily: serifFont,
-                background: 'linear-gradient(180deg, #f0e0a0 0%, #d4b050 40%, #a07830 80%, #806020 100%)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.8))',
+                fontFamily: titleFont,
+                color: '#c9a84c',
+                textShadow: '0 1px 3px rgba(0,0,0,0.6), 0 0 12px rgba(201,168,76,0.3)',
               }}
             >
               Гримуар охотника
             </h1>
             <span
-              className="text-amber-300/30 text-[10px] sm:text-xs tracking-wider italic"
-              style={{ fontFamily: serifFont }}
+              className="text-amber-300/40 text-[10px] sm:text-xs tracking-wider"
+              style={{ fontFamily: statFont, fontStyle: 'italic' }}
             >
               Изучено: {killedCount} / {total}
             </span>
@@ -251,109 +204,80 @@ const GrimoireBook = () => {
             <BookOrnament />
           </div>
 
-          {/* ══════ PAGES AREA ══════ */}
+          {/* ══════ PARCHMENT PAGES AREA ══════ */}
           <div
             className="relative rounded-sm overflow-hidden"
             style={{
               boxShadow:
-                'inset 0 3px 12px rgba(0,0,0,0.6), inset 0 -2px 8px rgba(0,0,0,0.4), 0 1px 0 rgba(201,168,76,0.08)',
+                'inset 0 2px 8px rgba(100,70,30,0.3), inset 0 -2px 6px rgba(100,70,30,0.2), 0 1px 0 rgba(201,168,76,0.1)',
             }}
           >
-            {/* — Parchment base color — */}
+            {/* — Light parchment base — */}
             <div
               className="absolute inset-0 pointer-events-none"
               style={{
                 background:
-                  'linear-gradient(170deg, #32291e 0%, #28211a 20%, #2e2518 40%, #251e15 60%, #2b2319 80%, #32291e 100%)',
+                  'linear-gradient(170deg, #e8dcc8 0%, #dfd0b8 20%, #e4d8c2 40%, #d8cab0 60%, #e0d4be 80%, #e8dcc8 100%)',
               }}
             />
 
-            {/* — Paper grain via SVG feTurbulence — */}
+            {/* — Paper texture overlay — */}
             <div
-              className="absolute inset-0 pointer-events-none opacity-20"
-              style={{ filter: 'url(#parchmentNoise)' }}
+              className="absolute inset-0 pointer-events-none opacity-15 mix-blend-multiply"
+              style={{ backgroundImage: 'url(/textures/paper.png)', backgroundRepeat: 'repeat' }}
             />
 
-            {/* — Foxing / age spots scattered across the page — */}
-            <InkStain className="w-24 h-20 top-[10%] left-[5%]" />
-            <InkStain className="w-32 h-24 top-[60%] right-[8%]" />
-            <InkStain className="w-20 h-28 top-[30%] right-[45%]" />
-            <InkStain className="w-16 h-16 bottom-[5%] left-[20%]" />
-            <InkStain className="w-28 h-20 top-[5%] right-[25%]" />
-
-            {/* — Burn / scorch marks on edges — */}
+            {/* — Aged stain overlay — */}
             <div
-              className="absolute top-0 left-0 w-full h-3 pointer-events-none"
-              style={{
-                background:
-                  'linear-gradient(to bottom, rgba(60,40,15,0.3) 0%, transparent 100%)',
-              }}
-            />
-            <div
-              className="absolute bottom-0 left-0 w-full h-3 pointer-events-none"
-              style={{
-                background:
-                  'linear-gradient(to top, rgba(60,40,15,0.3) 0%, transparent 100%)',
-              }}
+              className="absolute inset-0 pointer-events-none opacity-20 mix-blend-multiply"
+              style={{ backgroundImage: 'url(/textures/old-wall.png)', backgroundRepeat: 'repeat' }}
             />
 
-            {/* — Deep vignette for worn edges — */}
+            {/* — Age spots — */}
+            <AgeSpot className="w-24 h-20 top-[10%] left-[5%]" />
+            <AgeSpot className="w-32 h-24 top-[60%] right-[8%]" />
+            <AgeSpot className="w-20 h-28 top-[30%] right-[45%]" />
+            <AgeSpot className="w-28 h-20 top-[5%] right-[25%]" />
+
+            {/* — Edge darkening / vignette (soft) — */}
             <div
               className="absolute inset-0 pointer-events-none"
               style={{
                 boxShadow:
-                  'inset 0 0 50px rgba(0,0,0,0.5), inset 0 0 100px rgba(0,0,0,0.25), inset 0 0 150px rgba(0,0,0,0.1)',
+                  'inset 0 0 40px rgba(140,110,60,0.25), inset 0 0 80px rgba(120,90,40,0.1)',
               }}
             />
 
-            {/* — Book spine / center gutter (desktop only) — */}
+            {/* — Book spine / center gutter — */}
             <div className="hidden md:block absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-8 z-10 pointer-events-none">
-              {/* Spine shadow / valley */}
               <div
                 className="w-full h-full"
                 style={{
                   background:
-                    'linear-gradient(90deg, transparent 0%, rgba(0,0,0,0.4) 20%, rgba(0,0,0,0.7) 45%, rgba(0,0,0,0.8) 50%, rgba(0,0,0,0.7) 55%, rgba(0,0,0,0.4) 80%, transparent 100%)',
+                    'linear-gradient(90deg, transparent 0%, rgba(120,90,40,0.2) 20%, rgba(100,70,30,0.4) 45%, rgba(90,60,25,0.5) 50%, rgba(100,70,30,0.4) 55%, rgba(120,90,40,0.2) 80%, transparent 100%)',
                 }}
               />
-              {/* Stitching thread */}
+              {/* Stitching */}
               <div
                 className="absolute top-6 bottom-6 left-1/2 -translate-x-1/2 w-px"
                 style={{
                   backgroundImage:
-                    'repeating-linear-gradient(to bottom, rgba(201,168,76,0.35) 0px, rgba(201,168,76,0.35) 6px, transparent 6px, transparent 14px)',
-                }}
-              />
-              {/* Stitch holes */}
-              <div
-                className="absolute top-6 bottom-6 left-1/2 -translate-x-[3px] w-[5px]"
-                style={{
-                  backgroundImage:
-                    'repeating-linear-gradient(to bottom, transparent 0px, transparent 5px, rgba(201,168,76,0.15) 5px, rgba(201,168,76,0.15) 7px, transparent 7px, transparent 14px)',
+                    'repeating-linear-gradient(to bottom, rgba(139,105,20,0.4) 0px, rgba(139,105,20,0.4) 6px, transparent 6px, transparent 14px)',
                 }}
               />
             </div>
 
-            {/* — Page curl effect (bottom-right corner) — */}
+            {/* — Page curl (bottom-right) — */}
             <div
-              className="hidden md:block absolute bottom-0 right-0 w-12 h-12 z-10 pointer-events-none"
+              className="hidden md:block absolute bottom-0 right-0 w-10 h-10 z-10 pointer-events-none"
               style={{
-                background:
-                  'linear-gradient(315deg, rgba(50,40,25,0.9) 0%, rgba(40,32,20,0.6) 30%, transparent 60%)',
+                background: 'linear-gradient(315deg, rgba(190,170,130,0.9) 0%, rgba(210,190,150,0.5) 30%, transparent 60%)',
                 borderTopLeftRadius: '8px',
-              }}
-            />
-            <div
-              className="hidden md:block absolute bottom-[2px] right-[2px] w-8 h-8 z-10 pointer-events-none"
-              style={{
-                background:
-                  'linear-gradient(315deg, rgba(70,55,30,0.5) 0%, transparent 50%)',
-                borderTopLeftRadius: '12px',
-                boxShadow: '-2px -2px 4px rgba(0,0,0,0.3)',
+                boxShadow: '-1px -1px 3px rgba(100,70,30,0.2)',
               }}
             />
 
-            {/* ── Actual spread content ── */}
+            {/* ── Spread content ── */}
             <div className="relative z-[1]">
               <GrimoireSpread
                 entry={currentEntry}
@@ -371,8 +295,8 @@ const GrimoireBook = () => {
           <div className="flex justify-center mt-2">
             {currentEntry.killed ? (
               <span
-                className="text-green-400/50 text-[10px] sm:text-xs flex items-center gap-1.5 italic tracking-wider"
-                style={{ fontFamily: serifFont }}
+                className="text-green-300/60 text-[10px] sm:text-xs flex items-center gap-1.5 tracking-wider"
+                style={{ fontFamily: scriptFont }}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
@@ -381,8 +305,8 @@ const GrimoireBook = () => {
               </span>
             ) : (
               <span
-                className="text-amber-300/20 text-[10px] sm:text-xs flex items-center gap-1.5 italic tracking-wider"
-                style={{ fontFamily: serifFont }}
+                className="text-amber-300/30 text-[10px] sm:text-xs flex items-center gap-1.5 tracking-wider"
+                style={{ fontFamily: scriptFont }}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />

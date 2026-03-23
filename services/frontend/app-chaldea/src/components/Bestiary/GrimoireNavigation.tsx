@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react';
 
-const serifFont = "'Georgia', 'Palatino Linotype', 'Palatino', serif";
+const titleFont = "'MedievalSharp', 'Georgia', serif";
+const statFont = "'Cormorant Garamond', 'Georgia', serif";
 
 interface GrimoireNavigationProps {
   currentIndex: number;
@@ -66,16 +67,16 @@ const GrimoireNavigation = ({
                      group-hover:scale-110 group-disabled:group-hover:scale-100"
           style={{
             background:
-              'radial-gradient(circle, rgba(60,40,20,0.6) 0%, rgba(30,20,10,0.8) 100%)',
-            border: '1px solid rgba(201,168,76,0.2)',
+              'radial-gradient(circle, rgba(90,60,25,0.7) 0%, rgba(60,35,15,0.9) 100%)',
+            border: '1px solid rgba(139,105,20,0.3)',
             boxShadow:
-              'inset 0 1px 3px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.3)',
+              'inset 0 1px 3px rgba(0,0,0,0.3), 0 2px 6px rgba(60,30,10,0.2)',
           }}
         />
         <svg
           xmlns="http://www.w3.org/2000/svg"
-          className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300/60 relative z-10
-                     group-hover:text-amber-200/80 transition-colors"
+          className="w-4 h-4 sm:w-5 sm:h-5 relative z-10 transition-colors"
+          style={{ color: '#c9a84c' }}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -88,20 +89,20 @@ const GrimoireNavigation = ({
       {/* Page counter — Roman numeral style */}
       <div className="flex flex-col items-center gap-0.5 min-w-[90px]">
         <span
-          className="text-amber-300/40 text-base sm:text-lg tracking-[0.2em]"
-          style={{ fontFamily: serifFont }}
+          className="text-base sm:text-lg tracking-[0.2em]"
+          style={{ fontFamily: titleFont, color: 'rgba(201,168,76,0.5)' }}
         >
           {mobilePageLabel ?? toRoman(currentIndex + 1)}
         </span>
         <div className="flex items-center gap-1.5">
-          <div className="w-4 h-px bg-gold/20" />
+          <div className="w-4 h-px" style={{ background: 'rgba(139,105,20,0.25)' }} />
           <span
-            className="text-amber-300/20 text-[9px] tracking-widest uppercase"
-            style={{ fontFamily: serifFont }}
+            className="text-[9px] tracking-widest uppercase"
+            style={{ fontFamily: statFont, color: 'rgba(201,168,76,0.3)' }}
           >
             из {total}
           </span>
-          <div className="w-4 h-px bg-gold/20" />
+          <div className="w-4 h-px" style={{ background: 'rgba(139,105,20,0.25)' }} />
         </div>
       </div>
 
@@ -119,16 +120,16 @@ const GrimoireNavigation = ({
                      group-hover:scale-110 group-disabled:group-hover:scale-100"
           style={{
             background:
-              'radial-gradient(circle, rgba(60,40,20,0.6) 0%, rgba(30,20,10,0.8) 100%)',
-            border: '1px solid rgba(201,168,76,0.2)',
+              'radial-gradient(circle, rgba(90,60,25,0.7) 0%, rgba(60,35,15,0.9) 100%)',
+            border: '1px solid rgba(139,105,20,0.3)',
             boxShadow:
-              'inset 0 1px 3px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.3)',
+              'inset 0 1px 3px rgba(0,0,0,0.3), 0 2px 6px rgba(60,30,10,0.2)',
           }}
         />
         <svg
           xmlns="http://www.w3.org/2000/svg"
-          className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300/60 relative z-10
-                     group-hover:text-amber-200/80 transition-colors"
+          className="w-4 h-4 sm:w-5 sm:h-5 relative z-10 transition-colors"
+          style={{ color: '#c9a84c' }}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
