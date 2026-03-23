@@ -780,10 +780,10 @@ class TestAdminJoinRequests:
         data_result = _result_with_rows(data_rows)
 
         call_count = [0]
-        async def execute_side_effect(query, params=None):
+        async def execute_side_effect(*args, **kwargs):
             call_count[0] += 1
-            query_str = str(query)
-            if "COUNT" in query_str:
+            # First call is COUNT, second is data
+            if call_count[0] == 1:
                 return count_result
             return data_result
 
