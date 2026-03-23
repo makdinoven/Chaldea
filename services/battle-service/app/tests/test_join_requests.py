@@ -746,23 +746,26 @@ class TestAdminJoinRequests:
     def teardown_method(self):
         app.dependency_overrides.clear()
 
-    def _setup_admin_client(self, mock_db):
-        """Create a client with admin overrides using auth_http.requests.get mock."""
+    def _setup_admin_client(self, mock_db, admin=True):
+        """Create a client with admin or regular user overrides."""
+        if admin:
+            user = _make_admin()
+        else:
+            user = _make_user(user_id=2, username="player", role="user")
+
         async def override_get_db():
             yield mock_db
 
+        def override_auth():
+            return user
+
         app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides[get_current_user_via_http] = override_auth
+
         return TestClient(app)
 
-    @patch("auth_http.requests.get")
-    def test_admin_list_pending_requests(self, mock_auth_get):
+    def test_admin_list_pending_requests(self):
         """GET /battles/admin/join-requests returns pending requests for admin."""
-        mock_auth_get.return_value = MagicMock(
-            status_code=200,
-            json=MagicMock(return_value={
-                "id": 1, "username": "admin", "role": "admin", "permissions": ["battles:manage"],
-            }),
-        )
         mock_db = AsyncMock()
 
         now = datetime(2026, 3, 23, 12, 0, 0)
@@ -786,11 +789,8 @@ class TestAdminJoinRequests:
 
         mock_db.execute = AsyncMock(side_effect=execute_side_effect)
 
-        client = self._setup_admin_client(mock_db)
-        response = client.get(
-            "/battles/admin/join-requests?status=pending",
-            headers={"Authorization": "Bearer admin-token"},
-        )
+        client = self._setup_admin_client(mock_db, admin=True)
+        response = client.get("/battles/admin/join-requests?status=pending")
 
         assert response.status_code == 200
         data = response.json()
@@ -799,29 +799,12 @@ class TestAdminJoinRequests:
         assert data["requests"][0]["character_name"] == "Воин"
         assert data["requests"][1]["team"] == 1
 
-    @patch("auth_http.requests.get")
-    def test_non_admin_gets_403_on_list(self, mock_auth_get):
+    def test_non_admin_gets_403_on_list(self):
         """Non-admin user gets 403 on admin join-requests list."""
-        mock_auth_get.return_value = MagicMock(
-            status_code=200,
-            json=MagicMock(return_value={
-                "id": 2, "username": "player", "role": "user", "permissions": [],
-            }),
-        )
         mock_db = AsyncMock()
 
-        # Do NOT override require_permission so it checks actual permissions
-        async def override_get_db():
-            yield mock_db
-
-        app.dependency_overrides[get_db] = override_get_db
-        # Don't override auth — let it call the real function which we mock via requests.get
-
-        client = TestClient(app)
-        response = client.get(
-            "/battles/admin/join-requests",
-            headers={"Authorization": "Bearer fake-token"},
-        )
+        client = self._setup_admin_client(mock_db, admin=False)
+        response = client.get("/battles/admin/join-requests")
 
         assert response.status_code == 403
 
