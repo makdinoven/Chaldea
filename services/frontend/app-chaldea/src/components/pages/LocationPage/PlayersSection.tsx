@@ -141,7 +141,7 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
           {players.length === 0 ? (
             <p className="text-white/50 text-sm">На локации никого нет</p>
           ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 sm:gap-2 max-h-[340px] sm:max-h-[360px] overflow-y-auto pr-1">
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 sm:gap-2 max-h-[380px] sm:max-h-[400px] overflow-y-auto gold-scrollbar pr-1">
               {players.map((player) => (
                 <AvatarCard
                   key={player.id}
@@ -178,7 +178,7 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
           {npcs.length === 0 ? (
             <p className="text-white/50 text-sm">НПС отсутствуют на этой локации</p>
           ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 sm:gap-2 max-h-[340px] sm:max-h-[360px] overflow-y-auto pr-1">
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 sm:gap-2 max-h-[380px] sm:max-h-[400px] overflow-y-auto gold-scrollbar pr-1">
               {npcs.map((npc) => (
                 <NpcCard
                   key={npc.id}
