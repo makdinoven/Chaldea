@@ -40,6 +40,7 @@ import SkillTreePage from "../SkillTreeView/SkillTreePage";
 import CharactersHubPage from "../pages/CharactersPage/CharactersHubPage";
 import CharactersListPage from "../pages/CharactersPage/CharactersListPage";
 import SelectCharacterPage from "../pages/SelectCharacterPage/SelectCharacterPage";
+import BestiaryPage from "../Bestiary/BestiaryPage";
 
 const App = () => {
   const dispatch = useAppDispatch();
@@ -85,6 +86,7 @@ const App = () => {
             <Route path="world/region/:regionId" element={<WorldPage />} />
             <Route path="location/:locationId" element={<LocationPage />} />
             <Route path="skill-tree" element={<SkillTreePage />} />
+            <Route path="bestiary" element={<BestiaryPage />} />
             <Route path="admin" element={
               <ProtectedRoute requiredRole="editor">
                 <AdminPage />

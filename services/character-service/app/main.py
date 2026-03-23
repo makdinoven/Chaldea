@@ -2298,4 +2298,44 @@ def update_npc_status(
     return {"ok": True, "status": npc.npc_status}
 
 
+# ============================================================
+# Internal: Record mob kill (used by battle-service for bestiary)
+# ============================================================
+
+@router.post("/internal/record-mob-kill", response_model=schemas.RecordMobKillResponse)
+def record_mob_kill_endpoint(
+    req: schemas.RecordMobKillRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth) — records a mob kill for the bestiary.
+    Called by battle-service after PvE battle ends.
+    Idempotent — duplicate calls return already_recorded=true.
+    """
+    result = crud.record_mob_kill(db, req.character_id, req.mob_character_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Моб не найден по указанному character_id")
+    return result
+
+
+# ============================================================
+# Public: Bestiary endpoint
+# ============================================================
+
+@router.get("/bestiary", response_model=schemas.BestiaryResponse)
+def get_bestiary_endpoint(
+    character_id: Optional[int] = Query(None, description="ID персонажа для проверки убийств"),
+    db: Session = Depends(get_db),
+):
+    """
+    Public endpoint (no auth) — returns bestiary data with visibility rules.
+    If character_id is given, shows which mobs the character has killed.
+    """
+    try:
+        return crud.get_bestiary(db, character_id=character_id)
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении бестиария: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
 app.include_router(router)

@@ -232,6 +232,18 @@ async def _distribute_pve_rewards(
             except httpx.RequestError as e:
                 logger.error(f"Ошибка при добавлении предмета {item.item_id} для {winner_id}: {e}")
 
+    # Record kills for bestiary (fire-and-forget)
+    for mob_char_id, reward_data in defeated_mob_char_ids:
+        for winner_id in winner_char_ids:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    await client.post(
+                        f"{char_service}/characters/internal/record-mob-kill",
+                        json={"character_id": winner_id, "mob_character_id": mob_char_id},
+                    )
+            except httpx.RequestError as e:
+                logger.error(f"Ошибка записи kill для бестиария char={winner_id}, mob={mob_char_id}: {e}")
+
     # Try to resolve item names for the reward response
     for item in dropped_items:
         try:

@@ -758,3 +758,66 @@ class UpdateNpcStatusRequest(BaseModel):
         if v not in ("alive", "dead"):
             raise ValueError("Статус NPC должен быть alive или dead")
         return v
+
+
+# ========== Bestiary Schemas ==========
+
+class RecordMobKillRequest(BaseModel):
+    character_id: int
+    mob_character_id: int
+
+
+class RecordMobKillResponse(BaseModel):
+    ok: bool
+    mob_template_id: int
+    already_recorded: bool
+
+
+class BestiarySkillEntry(BaseModel):
+    skill_rank_id: int
+    skill_name: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+class BestiaryLootEntry(BaseModel):
+    item_id: int
+    item_name: Optional[str] = None
+    drop_chance: float
+    min_quantity: int
+    max_quantity: int
+
+    class Config:
+        orm_mode = True
+
+
+class BestiarySpawnEntry(BaseModel):
+    location_id: int
+    location_name: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+class BestiaryEntry(BaseModel):
+    id: int
+    name: str
+    tier: str
+    level: int
+    avatar: Optional[str] = None
+    killed: bool
+    description: Optional[str] = None
+    base_attributes: Optional[Dict] = None
+    skills: Optional[List[BestiarySkillEntry]] = None
+    loot_entries: Optional[List[BestiaryLootEntry]] = None
+    spawn_locations: Optional[List[BestiarySpawnEntry]] = None
+
+    class Config:
+        orm_mode = True
+
+
+class BestiaryResponse(BaseModel):
+    entries: List[BestiaryEntry]
+    total: int
+    killed_count: int

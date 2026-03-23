@@ -230,3 +230,18 @@ class ActiveMob(Base):
     mob_template = relationship("MobTemplate", back_populates="active_mobs")
 
 
+class MobKill(Base):
+    __tablename__ = "mob_kills"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False, index=True)
+    mob_template_id = Column(Integer, ForeignKey("mob_templates.id", ondelete="CASCADE"), nullable=False, index=True)
+    killed_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('character_id', 'mob_template_id', name='uq_character_mob_kill'),
+    )
+
+    mob_template = relationship("MobTemplate")
+
+

@@ -21,6 +21,7 @@ import gameTimeReducer from './slices/gameTimeSlice';
 import classTreeAdminReducer from './slices/classTreeAdminSlice';
 import playerTreeReducer from './slices/playerTreeSlice';
 import mobsReducer from './slices/mobsSlice';
+import bestiaryReducer from './slices/bestiarySlice';
 
 export const store = configureStore({
   reducer: {
@@ -45,6 +46,7 @@ export const store = configureStore({
     classTreeAdmin: classTreeAdminReducer,
     playerTree: playerTreeReducer,
     mobs: mobsReducer,
+    bestiary: bestiaryReducer,
   },
 });
 

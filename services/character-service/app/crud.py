@@ -1,12 +1,14 @@
 import httpx
 import models, schemas
 from config import settings
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text as sa_text
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
 from models import (
     CharacterRequest, Race, Subrace, Class, Character, LevelThreshold,
     MobTemplate, MobTemplateSkill, MobLootTable, LocationMobSpawn, ActiveMob,
+    MobKill,
 )
 import logging
 
@@ -1124,3 +1126,214 @@ def update_active_mob_status(db: Session, character_id: int, new_status: str):
     db.commit()
     db.refresh(active_mob)
     return active_mob
+
+
+# ============================================================
+# Bestiary CRUD
+# ============================================================
+
+def record_mob_kill(db: Session, character_id: int, mob_character_id: int):
+    """
+    Record that a player character killed a mob.
+    Resolves mob_template_id via ActiveMob lookup (same pattern as get_mob_reward_data).
+    Returns dict with result or None if mob not found.
+    """
+    # Find active_mob record for the defeated mob's character_id
+    active_mob = db.query(ActiveMob).filter(
+        ActiveMob.character_id == mob_character_id,
+    ).first()
+    if not active_mob or not active_mob.mob_template_id:
+        return None
+
+    template_id = active_mob.mob_template_id
+
+    # Try to insert the kill record
+    kill = MobKill(character_id=character_id, mob_template_id=template_id)
+    try:
+        db.add(kill)
+        db.commit()
+        return {"ok": True, "mob_template_id": template_id, "already_recorded": False}
+    except IntegrityError:
+        db.rollback()
+        return {"ok": True, "mob_template_id": template_id, "already_recorded": True}
+
+
+def _query_names_by_ids(db: Session, query: str, ids: set):
+    """Execute a query with IN clause for a set of IDs. Returns dict {id: name}."""
+    if not ids:
+        return {}
+    # Build safe IN clause with numbered params
+    id_list = list(ids)
+    placeholders = ", ".join(f":id_{i}" for i in range(len(id_list)))
+    params = {f"id_{i}": v for i, v in enumerate(id_list)}
+    rows = db.execute(sa_text(query.replace(":ids", placeholders)), params).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def _load_name_lookups(db: Session, templates):
+    """Load name lookups for skills, items, and locations from shared DB."""
+    skill_rank_ids = set()
+    item_ids = set()
+    location_ids = set()
+    for t in templates:
+        for s in t.skills:
+            skill_rank_ids.add(s.skill_rank_id)
+        for le in t.loot_entries:
+            item_ids.add(le.item_id)
+        for sl in t.spawn_locations:
+            location_ids.add(sl.location_id)
+
+    skill_names = _query_names_by_ids(
+        db,
+        "SELECT sr.id, s.name FROM skill_ranks sr JOIN skills s ON sr.skill_id = s.id WHERE sr.id IN (:ids)",
+        skill_rank_ids,
+    )
+
+    item_names = _query_names_by_ids(
+        db,
+        "SELECT id, name FROM items WHERE id IN (:ids)",
+        item_ids,
+    )
+
+    location_names = _query_names_by_ids(
+        db,
+        "SELECT id, name FROM Locations WHERE id IN (:ids)",
+        location_ids,
+    )
+
+    return skill_names, item_names, location_names
+
+
+def _load_resistances_for_template(db: Session, template_id: int):
+    """Load resistances from character_attributes for one active mob of this template."""
+    row = db.execute(
+        sa_text(
+            "SELECT ca.res_physical, ca.res_magic, ca.res_fire, ca.res_ice, "
+            "ca.res_electricity, ca.res_catting, ca.res_crushing, ca.res_piercing, "
+            "ca.res_watering, ca.res_sainting, ca.res_wind, ca.res_damning "
+            "FROM character_attributes ca "
+            "JOIN characters c ON ca.character_id = c.id "
+            "JOIN active_mobs am ON am.character_id = c.id "
+            "WHERE am.mob_template_id = :tid "
+            "LIMIT 1"
+        ),
+        {"tid": template_id},
+    ).fetchone()
+    if not row:
+        return {}
+    keys = [
+        "res_physical", "res_magic", "res_fire", "res_ice",
+        "res_electricity", "res_catting", "res_crushing", "res_piercing",
+        "res_watering", "res_sainting", "res_wind", "res_damning",
+    ]
+    return {k: v for k, v in zip(keys, row) if v and v != 0.0}
+
+
+def get_bestiary(db: Session, character_id: int = None):
+    """
+    Load all MobTemplates with relationships and apply visibility rules.
+    If character_id is given, check mob_kills for killed status.
+    Enriches data with names from shared DB and resistances from character_attributes.
+    """
+    # Load all templates with relationships
+    templates = db.query(MobTemplate).options(
+        joinedload(MobTemplate.skills),
+        joinedload(MobTemplate.loot_entries),
+        joinedload(MobTemplate.spawn_locations),
+    ).order_by(MobTemplate.id).all()
+
+    # Get set of killed template IDs for this character
+    killed_ids = set()
+    if character_id is not None:
+        kills = db.query(MobKill.mob_template_id).filter(
+            MobKill.character_id == character_id,
+        ).all()
+        killed_ids = {k[0] for k in kills}
+
+    # Load name lookups (non-critical — fallback to empty if tables don't exist)
+    try:
+        skill_names, item_names, location_names = _load_name_lookups(db, templates)
+    except Exception as e:
+        logger.warning(f"Не удалось загрузить имена для бестиария: {e}")
+        skill_names, item_names, location_names = {}, {}, {}
+
+    entries = []
+    for t in templates:
+        killed = t.id in killed_ids
+        is_elite_or_boss = t.tier in ('elite', 'boss')
+
+        entry = {
+            "id": t.id,
+            "name": t.name,
+            "tier": t.tier,
+            "level": t.level,
+            "avatar": t.avatar,
+            "killed": killed,
+        }
+
+        # Enrich base_attributes with resistances from character_attributes
+        def _get_full_attributes():
+            attrs = dict(t.base_attributes) if t.base_attributes else {}
+            try:
+                resistances = _load_resistances_for_template(db, t.id)
+                attrs.update(resistances)
+            except Exception as e:
+                logger.warning(f"Не удалось загрузить сопротивления для шаблона {t.id}: {e}")
+            return attrs if attrs else None
+
+        def _get_skills():
+            return [
+                {"skill_rank_id": s.skill_rank_id, "skill_name": skill_names.get(s.skill_rank_id)}
+                for s in t.skills
+            ]
+
+        def _get_loot():
+            return [
+                {
+                    "item_id": le.item_id,
+                    "item_name": item_names.get(le.item_id),
+                    "drop_chance": le.drop_chance,
+                    "min_quantity": le.min_quantity,
+                    "max_quantity": le.max_quantity,
+                }
+                for le in t.loot_entries
+            ]
+
+        def _get_spawns():
+            return [
+                {"location_id": sl.location_id, "location_name": location_names.get(sl.location_id)}
+                for sl in t.spawn_locations
+            ]
+
+        # Visibility rules:
+        # Normal not killed: show description + attributes, hide skills/loot/spawns
+        # Normal killed: show everything
+        # Elite/Boss not killed: hide all except id/name/tier/level/avatar
+        # Elite/Boss killed: show everything
+
+        if killed:
+            entry["description"] = t.description
+            entry["base_attributes"] = _get_full_attributes()
+            entry["skills"] = _get_skills()
+            entry["loot_entries"] = _get_loot()
+            entry["spawn_locations"] = _get_spawns()
+        elif is_elite_or_boss:
+            entry["description"] = None
+            entry["base_attributes"] = None
+            entry["skills"] = None
+            entry["loot_entries"] = None
+            entry["spawn_locations"] = None
+        else:
+            entry["description"] = t.description
+            entry["base_attributes"] = _get_full_attributes()
+            entry["skills"] = None
+            entry["loot_entries"] = None
+            entry["spawn_locations"] = None
+
+        entries.append(entry)
+
+    return {
+        "entries": entries,
+        "total": len(templates),
+        "killed_count": len(killed_ids),
+    }
