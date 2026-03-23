@@ -781,6 +781,45 @@ def trade_cancel(
     return schemas.TradeCancelResponse(trade_id=trade.id, status="cancelled")
 
 
+@router.get("/trade/pending/{character_id}", response_model=schemas.PendingTradesResponse)
+def trade_get_pending(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Get all pending/negotiating trades for a character."""
+    verify_character_ownership(db, character_id, current_user.id)
+
+    trades = crud.get_pending_trades_for_character(db, character_id)
+    incoming = []
+    outgoing = []
+
+    for trade in trades:
+        initiator_name = crud.get_character_name(db, trade.initiator_character_id)
+        target_name = crud.get_character_name(db, trade.target_character_id)
+
+        is_incoming = trade.target_character_id == character_id
+        direction = "incoming" if is_incoming else "outgoing"
+
+        entry = schemas.PendingTradeEntry(
+            trade_id=trade.id,
+            initiator_character_id=trade.initiator_character_id,
+            initiator_name=initiator_name,
+            target_character_id=trade.target_character_id,
+            target_name=target_name,
+            status=trade.status,
+            created_at=trade.created_at.isoformat() if trade.created_at else "",
+            direction=direction,
+        )
+
+        if is_incoming:
+            incoming.append(entry)
+        else:
+            outgoing.append(entry)
+
+    return schemas.PendingTradesResponse(incoming=incoming, outgoing=outgoing)
+
+
 @router.get("/trade/{trade_id}", response_model=schemas.TradeStateResponse)
 def trade_get_state(
     trade_id: int,

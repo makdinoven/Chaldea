@@ -454,6 +454,11 @@ const LocationPage = () => {
         <section className={`bg-black/50 rounded-card p-4 sm:p-6 ${inBattle ? 'pointer-events-none opacity-50' : ''}`}>
           <NeighborsSection neighbors={location.neighbors} />
         </section>
+
+        {/* PvP Invitations & Trade requests */}
+        {isCharacterHere && character?.id && (
+          <PendingInvitationsPanel locationId={location.id} />
+        )}
       </div>
     </div>
   );

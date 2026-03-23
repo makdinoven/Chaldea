@@ -49,10 +49,10 @@ const TradeModal = ({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Determine which side is "mine" and which is "theirs"
-  const mySide = trade?.initiator.character_id === currentCharacterId
+  const mySide = trade?.initiator?.character_id === currentCharacterId
     ? trade?.initiator
     : trade?.target;
-  const theirSide = trade?.initiator.character_id === currentCharacterId
+  const theirSide = trade?.initiator?.character_id === currentCharacterId
     ? trade?.target
     : trade?.initiator;
 

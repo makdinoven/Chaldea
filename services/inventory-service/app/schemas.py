@@ -365,3 +365,19 @@ class TradeStateResponse(BaseModel):
     status: str
     initiator: TradeSideState
     target: TradeSideState
+
+
+class PendingTradeEntry(BaseModel):
+    trade_id: int
+    initiator_character_id: int
+    initiator_name: str
+    target_character_id: int
+    target_name: str
+    status: str
+    created_at: str
+    direction: str  # "incoming" or "outgoing"
+
+
+class PendingTradesResponse(BaseModel):
+    incoming: List[PendingTradeEntry] = []
+    outgoing: List[PendingTradeEntry] = []

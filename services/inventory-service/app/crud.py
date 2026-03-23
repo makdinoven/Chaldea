@@ -684,6 +684,19 @@ def _get_trade_side_items(
     return result
 
 
+def get_pending_trades_for_character(
+    db: Session, character_id: int
+) -> List[models.TradeOffer]:
+    """Get all active (pending/negotiating) trades involving a character."""
+    return db.query(models.TradeOffer).filter(
+        models.TradeOffer.status.in_(['pending', 'negotiating']),
+        or_(
+            models.TradeOffer.initiator_character_id == character_id,
+            models.TradeOffer.target_character_id == character_id,
+        )
+    ).order_by(models.TradeOffer.created_at.desc()).all()
+
+
 def verify_item_ownership(
     db: Session, character_id: int, items: List[schemas.TradeItemEntry]
 ) -> Optional[str]:

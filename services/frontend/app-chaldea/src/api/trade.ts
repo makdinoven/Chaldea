@@ -37,7 +37,32 @@ export interface TradeCancelResult {
   status: string;
 }
 
+export interface PendingTradeEntry {
+  trade_id: number;
+  initiator_character_id: number;
+  initiator_name: string;
+  target_character_id: number;
+  target_name: string;
+  status: string;
+  created_at: string;
+  direction: 'incoming' | 'outgoing';
+}
+
+export interface PendingTradesResponse {
+  incoming: PendingTradeEntry[];
+  outgoing: PendingTradeEntry[];
+}
+
 // --- API calls ---
+
+export const getPendingTrades = async (
+  characterId: number,
+): Promise<PendingTradesResponse> => {
+  const { data } = await axios.get<PendingTradesResponse>(
+    `/inventory/trade/pending/${characterId}`,
+  );
+  return data;
+};
 
 export const proposeTrade = async (
   initiatorCharacterId: number,
