@@ -1582,6 +1582,7 @@ def admin_list_npcs(
     q: str = Query("", description="Search by NPC name"),
     npc_role: Optional[str] = Query(None, description="Filter by NPC role"),
     location_id: Optional[int] = Query(None, description="Filter by location"),
+    npc_status: Optional[str] = Query(None, description="Filter by NPC status (alive/dead)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -1597,6 +1598,8 @@ def admin_list_npcs(
             query = query.filter(models.Character.npc_role == npc_role)
         if location_id is not None:
             query = query.filter(models.Character.current_location_id == location_id)
+        if npc_status is not None:
+            query = query.filter(models.Character.npc_status == npc_status)
 
         total = query.count()
         offset = (page - 1) * page_size
@@ -1715,6 +1718,7 @@ def admin_get_npc(
         "height": npc.height,
         "avatar": npc.avatar,
         "current_location_id": npc.current_location_id,
+        "npc_status": npc.npc_status,
     }
 
 
@@ -1833,6 +1837,7 @@ def get_npcs_by_location(location_id: int, db: Session = Depends(get_db)):
         models.Character.current_location_id == location_id,
         models.Character.is_npc == True,
         models.Character.npc_role != 'mob',
+        models.Character.npc_status != 'dead',
     ).all()
 
     result = []
@@ -2255,6 +2260,42 @@ def update_mob_status(
     if result is None:
         raise HTTPException(status_code=404, detail="Активный моб не найден")
     return {"ok": True, "status": result.status}
+
+
+# ============================================================
+# Internal: NPC status update (used by battle-service)
+# ============================================================
+
+@router.put("/internal/npc-status/{character_id}")
+def update_npc_status(
+    character_id: int,
+    data: schemas.UpdateNpcStatusRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth) — updates NPC status (alive/dead).
+    Called by battle-service after a battle where an NPC is defeated.
+    Only works for NPCs (is_npc=True, npc_role != 'mob').
+    Should be blocked by Nginx for external access.
+    """
+    npc = db.query(models.Character).filter(
+        models.Character.id == character_id,
+        models.Character.is_npc == True,
+        models.Character.npc_role != 'mob',
+    ).first()
+    if not npc:
+        raise HTTPException(status_code=404, detail="NPC не найден")
+
+    npc.npc_status = data.status
+    try:
+        db.commit()
+        db.refresh(npc)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении статуса NPC {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении статуса NPC")
+
+    return {"ok": True, "status": npc.npc_status}
 
 
 app.include_router(router)

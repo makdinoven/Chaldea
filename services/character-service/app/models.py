@@ -54,6 +54,7 @@ class Character(Base):
     current_location_id = Column(BigInteger, nullable=True)
     is_npc = Column(Boolean, nullable=False, default=False, index=True)
     npc_role = Column(String(50), nullable=True)
+    npc_status = Column(Enum('alive', 'dead', name='npc_status_enum'), nullable=False, default='alive', server_default='alive')
 
     titles = relationship("CharacterTitle", back_populates="character")
     current_title = relationship("Title")

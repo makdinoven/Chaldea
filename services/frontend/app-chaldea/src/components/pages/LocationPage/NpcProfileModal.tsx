@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { BASE_URL } from '../../../api/api';
 import { NPC_ROLE_LABELS } from '../../../constants/npc';
 import { useAppSelector } from '../../../redux/store';
+import useNpcAttack from '../../../hooks/useNpcAttack';
 import NpcDialogueModal from './NpcDialogueModal';
 import NpcShopModal from './NpcShopModal';
 import NpcQuestsModal from './NpcQuestsModal';
@@ -37,12 +38,19 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
   const [hasQuests, setHasQuests] = useState(false);
   const [questsOpen, setQuestsOpen] = useState(false);
   const characterId = useAppSelector((state) => state.user.character?.id) as number | null;
+  const [npcNameForAttack, setNpcNameForAttack] = useState('');
+  const { attacking, handleAttack } = useNpcAttack({
+    npcId,
+    npcName: npcNameForAttack,
+    currentCharacterId: characterId,
+  });
 
   useEffect(() => {
     const fetchNpc = async () => {
       try {
         const res = await axios.get<NpcDetail>(`${BASE_URL}/characters/admin/npcs/${npcId}`);
         setNpc(res.data);
+        setNpcNameForAttack(res.data.name);
       } catch {
         toast.error('Не удалось загрузить данные НПС');
         onClose();
@@ -290,6 +298,32 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                 </svg>
                 Задания
+              </button>
+            )}
+
+            {/* Attack button */}
+            {characterId && (
+              <button
+                onClick={handleAttack}
+                disabled={attacking}
+                className="
+                  mt-2 w-full px-6 py-3 rounded-card
+                  border border-site-red/50 bg-site-red/10
+                  text-site-red text-sm sm:text-base font-medium uppercase tracking-wide
+                  hover:bg-site-red/20 hover:border-site-red/80
+                  transition-all duration-200
+                  flex items-center justify-center gap-2
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                "
+              >
+                {attacking ? (
+                  <div className="w-5 h-5 border-2 border-site-red/30 border-t-site-red rounded-full animate-spin" />
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                )}
+                {attacking ? 'Атака...' : 'Напасть'}
               </button>
             )}
           </div>

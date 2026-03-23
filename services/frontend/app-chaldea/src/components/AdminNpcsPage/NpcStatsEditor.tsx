@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
+import useDebounce from '../../hooks/useDebounce';
 
 interface NpcStatsEditorProps {
   npcId: number;
@@ -18,6 +19,34 @@ interface SkillAssignment {
   skill_id: number;
   skill_name: string;
   rank_number: number;
+}
+
+interface SkillInfo {
+  id: number;
+  name: string;
+  skill_type: string;
+}
+
+interface SkillRank {
+  id: number;
+  rank_name: string | null;
+  rank_number: number;
+}
+
+interface SkillFullTree {
+  id: number;
+  name: string;
+  skill_type: string;
+  ranks: SkillRank[];
+}
+
+/** Tracks a skill that has been added to the NPC. */
+interface SelectedSkill {
+  skill_id: number;
+  skill_name: string;
+  rank_number: number;
+  /** skill_rank_id from the full_tree endpoint — needed for display/lookup */
+  skill_rank_id: number;
 }
 
 const STAT_LABELS: Record<string, string> = {
@@ -66,6 +95,17 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'stats' | 'skills'>('stats');
 
+  // Skills editor state
+  const [currentSkills, setCurrentSkills] = useState<SelectedSkill[]>([]);
+  const [originalSkills, setOriginalSkills] = useState<SelectedSkill[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const debouncedQuery = useDebounce(searchQuery);
+  const [searchResults, setSearchResults] = useState<SkillInfo[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [expandedSkill, setExpandedSkill] = useState<SkillFullTree | null>(null);
+  const [loadingTree, setLoadingTree] = useState(false);
+  const [savingSkills, setSavingSkills] = useState(false);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
@@ -77,7 +117,17 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
         setAttributes(attrRes.value.data);
       }
       if (skillsRes.status === 'fulfilled') {
-        setSkills(Array.isArray(skillsRes.value.data) ? skillsRes.value.data : []);
+        const skillData: SkillAssignment[] = Array.isArray(skillsRes.value.data) ? skillsRes.value.data : [];
+        setSkills(skillData);
+        // Convert to SelectedSkill format for the editor
+        const selected: SelectedSkill[] = skillData.map((s) => ({
+          skill_id: s.skill_id,
+          skill_name: s.skill_name,
+          rank_number: s.rank_number,
+          skill_rank_id: s.id, // the assignment ID is used as a key but we track by skill_id+rank_number
+        }));
+        setCurrentSkills(selected);
+        setOriginalSkills(selected);
       }
     } catch {
       toast.error('Не удалось загрузить данные');
@@ -89,6 +139,102 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Skill search
+  useEffect(() => {
+    if (!debouncedQuery) {
+      setSearchResults([]);
+      return;
+    }
+    setSearchLoading(true);
+    axios
+      .get<SkillInfo[]>(`${BASE_URL}/skills/admin/skills/`, { params: { q: debouncedQuery } })
+      .then((res) => setSearchResults(Array.isArray(res.data) ? res.data : []))
+      .catch(() => toast.error('Не удалось найти навыки'))
+      .finally(() => setSearchLoading(false));
+  }, [debouncedQuery]);
+
+  const handleExpandSkill = async (skillId: number) => {
+    if (expandedSkill?.id === skillId) {
+      setExpandedSkill(null);
+      return;
+    }
+    setLoadingTree(true);
+    try {
+      const res = await axios.get<SkillFullTree>(`${BASE_URL}/skills/admin/skills/${skillId}/full_tree`);
+      setExpandedSkill(res.data);
+    } catch {
+      toast.error('Не удалось загрузить ранги навыка');
+    } finally {
+      setLoadingTree(false);
+    }
+  };
+
+  const handleAddRank = (rank: SkillRank, skillName: string, skillId: number) => {
+    // Don't add duplicate (same skill_id + rank)
+    const exists = currentSkills.some(
+      (s) => s.skill_id === skillId && s.rank_number === rank.rank_number,
+    );
+    if (exists) return;
+    setCurrentSkills((prev) => [
+      ...prev,
+      {
+        skill_id: skillId,
+        skill_name: skillName,
+        rank_number: rank.rank_number,
+        skill_rank_id: rank.id,
+      },
+    ]);
+  };
+
+  const handleRemoveSkill = (skillId: number, rankNumber: number) => {
+    setCurrentSkills((prev) =>
+      prev.filter((s) => !(s.skill_id === skillId && s.rank_number === rankNumber)),
+    );
+  };
+
+  const isRankAdded = (skillId: number, rankNumber: number): boolean => {
+    return currentSkills.some((s) => s.skill_id === skillId && s.rank_number === rankNumber);
+  };
+
+  const hasSkillChanges = (() => {
+    if (originalSkills.length !== currentSkills.length) return true;
+    const origSet = originalSkills.map((s) => `${s.skill_id}:${s.rank_number}`).sort();
+    const currSet = currentSkills.map((s) => `${s.skill_id}:${s.rank_number}`).sort();
+    return origSet.some((v, i) => v !== currSet[i]);
+  })();
+
+  const handleSaveSkills = async () => {
+    setSavingSkills(true);
+    try {
+      // Step 1: Delete all current skills
+      await axios.delete(`${BASE_URL}/skills/admin/character_skills/by_character/${npcId}`);
+
+      // Step 2: Assign new skills (if any)
+      if (currentSkills.length > 0) {
+        await axios.post(`${BASE_URL}/skills/assign_multiple`, {
+          character_id: npcId,
+          skills: currentSkills.map((s) => ({
+            skill_id: s.skill_id,
+            rank_number: s.rank_number,
+          })),
+        });
+      }
+
+      toast.success('Навыки НПС обновлены');
+      // Refresh data
+      await fetchData();
+    } catch (err) {
+      let message = 'Не удалось сохранить навыки';
+      if (axios.isAxiosError(err) && err.response?.data?.detail) {
+        const detail = err.response.data.detail;
+        message = typeof detail === 'string' ? detail : message;
+      }
+      toast.error(message);
+    } finally {
+      setSavingSkills(false);
+    }
+  };
 
   const handleStatChange = (key: string, value: string) => {
     setAttributes((prev) => prev ? { ...prev, [key]: value === '' ? 0 : Number(value) } : prev);
@@ -151,6 +297,132 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
     </div>
   );
 
+  const renderSkillsEditor = () => (
+    <div className="flex flex-col gap-5">
+      {/* Current skills */}
+      <div>
+        <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em] mb-3">
+          Текущие навыки ({currentSkills.length})
+        </h3>
+        {currentSkills.length === 0 ? (
+          <p className="text-white/50 text-sm">Навыки не назначены</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {currentSkills.map((skill) => (
+              <div
+                key={`${skill.skill_id}-${skill.rank_number}`}
+                className="flex items-center gap-2 bg-white/[0.07] rounded-full px-3 py-1.5"
+              >
+                <span className="text-white text-sm">
+                  {skill.skill_name || `Навык #${skill.skill_id}`}
+                  <span className="text-white/50 ml-1">(Ранг {skill.rank_number})</span>
+                </span>
+                <button
+                  onClick={() => handleRemoveSkill(skill.skill_id, skill.rank_number)}
+                  className="text-site-red hover:text-white text-xs transition-colors"
+                  title="Удалить"
+                >
+                  &times;
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Search */}
+      <div>
+        <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em] mb-3">
+          Поиск навыков
+        </h3>
+        <input
+          className="input-underline max-w-[320px] mb-3"
+          placeholder="Введите название навыка..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+        {searchLoading && (
+          <div className="flex items-center gap-2 text-white/50 text-sm">
+            <div className="w-4 h-4 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
+            Поиск...
+          </div>
+        )}
+        {searchResults.length > 0 && (
+          <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto gold-scrollbar">
+            {searchResults.map((skill) => (
+              <div key={skill.id} className="flex flex-col">
+                <button
+                  onClick={() => handleExpandSkill(skill.id)}
+                  className="flex items-center gap-2 px-3 py-2 rounded hover:bg-white/[0.07] transition-colors text-left"
+                >
+                  <span className="text-white text-sm">{skill.name}</span>
+                  <span className="text-white/40 text-xs">{skill.skill_type}</span>
+                  <span className="text-white/30 text-xs ml-auto">
+                    {expandedSkill?.id === skill.id ? '\u25BC' : '\u25B6'}
+                  </span>
+                </button>
+
+                {/* Expanded ranks */}
+                {expandedSkill?.id === skill.id && (
+                  <div className="pl-6 flex flex-col gap-1 py-1">
+                    {loadingTree ? (
+                      <span className="text-white/50 text-xs">Загрузка...</span>
+                    ) : (
+                      expandedSkill.ranks?.map((rank) => {
+                        const added = isRankAdded(skill.id, rank.rank_number);
+                        return (
+                          <div
+                            key={rank.id}
+                            className="flex items-center gap-2 px-2 py-1"
+                          >
+                            <span className="text-white/70 text-sm">
+                              {rank.rank_name || `Ранг ${rank.rank_number}`}
+                            </span>
+                            <span className="text-white/40 text-xs">Ранг {rank.rank_number}</span>
+                            <button
+                              onClick={() =>
+                                added
+                                  ? handleRemoveSkill(skill.id, rank.rank_number)
+                                  : handleAddRank(rank, skill.name, skill.id)
+                              }
+                              className={`text-xs ml-auto px-2 py-0.5 rounded transition-colors ${
+                                added
+                                  ? 'text-site-red hover:text-white'
+                                  : 'text-site-blue hover:text-white'
+                              }`}
+                            >
+                              {added ? 'Убрать' : 'Добавить'}
+                            </button>
+                          </div>
+                        );
+                      })
+                    )}
+                    {!loadingTree && (!expandedSkill.ranks || expandedSkill.ranks.length === 0) && (
+                      <span className="text-white/50 text-xs">Ранги не найдены</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Save button */}
+      {hasSkillChanges && (
+        <div className="pt-2">
+          <button
+            onClick={handleSaveSkills}
+            disabled={savingSkills}
+            className="btn-blue !text-base !px-8 !py-2 disabled:opacity-50"
+          >
+            {savingSkills ? 'Сохранение...' : 'Сохранить навыки'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="flex flex-col gap-6">
       {/* Header */}
@@ -182,7 +454,7 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
             activeTab === 'skills' ? 'gold-text border-b-2 border-gold' : 'text-white/50 hover:text-white/80'
           }`}
         >
-          Навыки ({skills.length})
+          Навыки ({currentSkills.length})
         </button>
       </div>
 
@@ -224,34 +496,7 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
           )}
         </div>
       ) : (
-        <div className="flex flex-col gap-4">
-          {skills.length === 0 ? (
-            <p className="text-white/50 text-sm">
-              У НПС нет назначенных навыков. Навыки можно назначить через API:
-              <br />
-              <code className="text-site-blue text-xs">POST /skills/assign_multiple</code>
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {skills.map((skill) => (
-                <div
-                  key={skill.id}
-                  className="bg-black/30 rounded-card p-3 flex items-center gap-3"
-                >
-                  <div className="w-10 h-10 rounded bg-gold/10 flex items-center justify-center text-gold text-lg font-bold shrink-0">
-                    {skill.rank_number}
-                  </div>
-                  <div className="flex flex-col min-w-0">
-                    <span className="text-white text-sm font-medium truncate">
-                      {skill.skill_name || `Навык #${skill.skill_id}`}
-                    </span>
-                    <span className="text-white/40 text-xs">Ранг {skill.rank_number}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        renderSkillsEditor()
       )}
     </div>
   );

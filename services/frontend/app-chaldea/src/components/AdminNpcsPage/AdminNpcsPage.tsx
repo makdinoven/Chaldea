@@ -19,6 +19,7 @@ interface NpcListItem {
   npc_role: string | null;
   location_name: string | null;
   location_id: number | null;
+  npc_status: string | null;
 }
 
 interface NpcFormData {
@@ -71,6 +72,7 @@ const AdminNpcsPage = () => {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const debouncedQuery = useDebounce(query);
 
   const [formOpen, setFormOpen] = useState(false);
@@ -91,6 +93,7 @@ const AdminNpcsPage = () => {
       const params: Record<string, string> = {};
       if (debouncedQuery) params.q = debouncedQuery;
       if (roleFilter) params.npc_role = roleFilter;
+      if (statusFilter) params.npc_status = statusFilter;
       const res = await axios.get(`${BASE_URL}/characters/admin/npcs`, { params });
       const data = res.data;
       setNpcs(Array.isArray(data) ? data : (data.items ?? []));
@@ -99,7 +102,7 @@ const AdminNpcsPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [debouncedQuery, roleFilter]);
+  }, [debouncedQuery, roleFilter, statusFilter]);
 
   useEffect(() => {
     fetchNpcs();
@@ -169,6 +172,16 @@ const AdminNpcsPage = () => {
       }
     } catch {
       toast.error('Не удалось удалить НПС');
+    }
+  };
+
+  const handleResurrect = async (id: number) => {
+    try {
+      await axios.put(`${BASE_URL}/characters/admin/npcs/${id}`, { npc_status: 'alive' });
+      toast.success('НПС воскрешён');
+      fetchNpcs();
+    } catch {
+      toast.error('Не удалось воскресить НПС');
     }
   };
 
@@ -329,6 +342,15 @@ const AdminNpcsPage = () => {
               {r.label}
             </option>
           ))}
+        </select>
+        <select
+          className="input-underline max-w-[200px]"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+        >
+          <option value="" className="bg-site-dark text-white">Все статусы</option>
+          <option value="alive" className="bg-site-dark text-white">Жив</option>
+          <option value="dead" className="bg-site-dark text-white">Мёртв</option>
         </select>
         <button className="btn-blue !text-base !px-6 !py-2 sm:ml-auto" onClick={openCreateForm}>
           Создать НПС
@@ -502,6 +524,7 @@ const AdminNpcsPage = () => {
                     <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Уровень</th>
                     <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Роль</th>
                     <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Локация</th>
+                    <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Статус</th>
                     <th className="text-right text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">Действия</th>
                   </tr>
                 </thead>
@@ -528,6 +551,17 @@ const AdminNpcsPage = () => {
                         )}
                       </td>
                       <td className="px-4 py-3 text-sm text-white/70">{npc.location_name || '—'}</td>
+                      <td className="px-4 py-3">
+                        {npc.npc_status === 'dead' ? (
+                          <span className="px-2 py-0.5 rounded-full bg-site-red/20 text-site-red text-xs">
+                            Мёртв
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 text-xs">
+                            Жив
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-col items-end gap-1.5">
                           <button
@@ -560,6 +594,14 @@ const AdminNpcsPage = () => {
                               className="text-sm text-site-blue hover:text-white transition-colors duration-200"
                             >
                               Магазин
+                            </button>
+                          )}
+                          {npc.npc_status === 'dead' && (
+                            <button
+                              onClick={() => handleResurrect(npc.id)}
+                              className="text-sm text-green-400 hover:text-green-300 transition-colors duration-200"
+                            >
+                              Воскресить
                             </button>
                           )}
                           <button
@@ -598,8 +640,18 @@ const AdminNpcsPage = () => {
                       </span>
                     )}
                   </div>
-                  <div className="text-white/50 text-xs">
-                    Локация: {npc.location_name || '—'}
+                  <div className="flex items-center gap-2 text-white/50 text-xs">
+                    <span>Локация: {npc.location_name || '—'}</span>
+                    <span className="mx-1">|</span>
+                    {npc.npc_status === 'dead' ? (
+                      <span className="px-2 py-0.5 rounded-full bg-site-red/20 text-site-red text-[10px]">
+                        Мёртв
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 text-[10px]">
+                        Жив
+                      </span>
+                    )}
                   </div>
                   <div className="flex gap-3 flex-wrap">
                     <button
@@ -632,6 +684,14 @@ const AdminNpcsPage = () => {
                         className="text-sm text-site-blue hover:text-white transition-colors"
                       >
                         Магазин
+                      </button>
+                    )}
+                    {npc.npc_status === 'dead' && (
+                      <button
+                        onClick={() => handleResurrect(npc.id)}
+                        className="text-sm text-green-400 hover:text-green-300 transition-colors"
+                      >
+                        Воскресить
                       </button>
                     )}
                     <button

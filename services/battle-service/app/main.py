@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from os import supports_fd
 from typing import List, Dict
 
-from fastapi import FastAPI, Depends, HTTPException, APIRouter
+from fastapi import FastAPI, Depends, HTTPException, APIRouter, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -15,8 +15,9 @@ from schemas import (
     PendingInvitationsResponse, IncomingInvitation, OutgoingInvitation,
     CancelInvitationResponse, InBattleResponse,
     PvpAttackRequest, PvpAttackResponse,
+    BattleHistoryItem, BattleStats, BattleHistoryResponse,
 )
-from models import BattleType, PvpInvitation, PvpInvitationStatus
+from models import BattleType, BattleHistory, BattleResult, PvpInvitation, PvpInvitationStatus
 from rabbitmq_publisher import publish_notification
 from auth_http import get_current_user_via_http, UserRead
 from mongo_client import get_mongo_db
@@ -308,6 +309,12 @@ async def create_battle_endpoint(
             status_code=403,
             detail="Вы должны участвовать в бою своим персонажем",
         )
+
+    # 0.5. Check none of the players are already in battle
+    for cid in player_ids:
+        existing_battle = await get_active_battle_for_character(db, cid)
+        if existing_battle:
+            raise HTTPException(400, "Персонаж уже в бою")
 
     # 1. Проверка минимального количества участников
     if len(battle_in.players) < 2:
@@ -988,6 +995,102 @@ async def _make_action_core(
                 battle_state, winner_team, turn_events
             )
 
+        # NPC death: mark defeated NPCs (not mobs) as dead
+        if winner_team is not None:
+            for pid_str, pdata in battle_state["participants"].items():
+                if pdata["hp"] <= 0 and pdata["team"] != winner_team:
+                    defeated_char_id = pdata["character_id"]
+                    try:
+                        async with db_session.begin():
+                            npc_check = await db_session.execute(
+                                text(
+                                    "SELECT is_npc, npc_role FROM characters "
+                                    "WHERE id = :cid AND is_npc = 1 AND (npc_role IS NULL OR npc_role != 'mob')"
+                                ),
+                                {"cid": defeated_char_id},
+                            )
+                            npc_row = npc_check.fetchone()
+                        if npc_row:
+                            try:
+                                async with httpx.AsyncClient(timeout=10.0) as client:
+                                    resp = await client.put(
+                                        f"{settings.CHARACTER_SERVICE_URL}/characters/internal/npc-status/{defeated_char_id}",
+                                        json={"status": "dead"},
+                                    )
+                                    if resp.status_code == 200:
+                                        logger.info(
+                                            f"NPC death: NPC {defeated_char_id} помечен как dead"
+                                        )
+                                    else:
+                                        logger.error(
+                                            f"NPC death: ошибка обновления статуса NPC {defeated_char_id}: "
+                                            f"{resp.status_code} - {resp.text}"
+                                        )
+                            except httpx.RequestError as exc:
+                                logger.error(
+                                    f"NPC death: не удалось связаться с character-service "
+                                    f"для NPC {defeated_char_id}: {exc}"
+                                )
+                    except Exception as e:
+                        logger.error(f"NPC death: ошибка проверки NPC {defeated_char_id}: {e}")
+
+        # Save battle history to MySQL
+        try:
+            # Query battle_type from DB
+            bh_bt_result = await db_session.execute(
+                text("SELECT battle_type FROM battles WHERE id = :bid"),
+                {"bid": battle_id},
+            )
+            bh_bt_row = bh_bt_result.fetchone()
+            bh_battle_type = bh_bt_row[0] if bh_bt_row else "pve"
+
+            # Query character names from shared DB
+            char_ids = [pdata["character_id"] for pdata in battle_state["participants"].values()]
+            if char_ids:
+                placeholders = ", ".join(f":cid{i}" for i in range(len(char_ids)))
+                names_params = {f"cid{i}": cid for i, cid in enumerate(char_ids)}
+                names_result = await db_session.execute(
+                    text(f"SELECT id, name FROM characters WHERE id IN ({placeholders})"),
+                    names_params,
+                )
+                names_map = {row[0]: row[1] for row in names_result.fetchall()}
+            else:
+                names_map = {}
+
+            for pid_str, pdata in battle_state["participants"].items():
+                char_id = pdata["character_id"]
+                char_name = names_map.get(char_id, f"Персонаж #{char_id}")
+                is_winner = (winner_team is not None
+                             and pdata["team"] == winner_team
+                             and pdata["hp"] > 0)
+                result_val = BattleResult.victory if is_winner else BattleResult.defeat
+
+                # Collect opponent info
+                opp_names = []
+                opp_ids = []
+                for other_pid, other_pdata in battle_state["participants"].items():
+                    if other_pid != pid_str:
+                        other_id = other_pdata["character_id"]
+                        opp_names.append(names_map.get(other_id, f"Персонаж #{other_id}"))
+                        opp_ids.append(other_id)
+
+                history_entry = BattleHistory(
+                    battle_id=battle_id,
+                    character_id=char_id,
+                    character_name=char_name,
+                    opponent_names=opp_names,
+                    opponent_character_ids=opp_ids,
+                    battle_type=bh_battle_type,
+                    result=result_val,
+                    finished_at=datetime.utcnow(),
+                )
+                db_session.add(history_entry)
+
+            await db_session.commit()
+            logger.info(f"Battle history saved for battle {battle_id}")
+        except Exception as e:
+            logger.error(f"Failed to save battle history for battle {battle_id}: {e}")
+
         # Save log via Celery
         save_log.delay(battle_id, new_turn_number, turn_events)
 
@@ -1650,6 +1753,95 @@ async def pvp_attack(
         battle_url=f"/battle/{battle_obj.id}",
         attacker_character_id=req.attacker_character_id,
         victim_character_id=req.victim_character_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Battle History endpoint (FEAT-065)
+# ---------------------------------------------------------------------------
+@router.get("/history/{character_id}", response_model=BattleHistoryResponse)
+async def get_battle_history(
+    character_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=50),
+    battle_type: str | None = Query(None),
+    result: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Public endpoint: paginated battle history with stats for a character."""
+    # Build WHERE clause for filtered history query
+    conditions = ["character_id = :cid"]
+    params: dict = {"cid": character_id}
+
+    if battle_type:
+        conditions.append("battle_type = :bt")
+        params["bt"] = battle_type
+    if result:
+        conditions.append("result = :res")
+        params["res"] = result
+
+    where = " AND ".join(conditions)
+
+    # Stats query (always unfiltered — overall character stats)
+    stats_result = await db.execute(
+        text("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN result = 'victory' THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN result = 'defeat' THEN 1 ELSE 0 END) as losses
+            FROM battle_history
+            WHERE character_id = :cid
+        """),
+        {"cid": character_id},
+    )
+    stats_row = stats_result.fetchone()
+    total = stats_row[0] or 0
+    wins = stats_row[1] or 0
+    losses = stats_row[2] or 0
+    winrate = round((wins / total) * 100, 1) if total > 0 else 0.0
+
+    # Count query (with filters)
+    count_result = await db.execute(
+        text(f"SELECT COUNT(*) FROM battle_history WHERE {where}"),
+        params,
+    )
+    total_count = count_result.scalar() or 0
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+
+    # Paginated history query
+    offset = (page - 1) * per_page
+    rows = await db.execute(
+        text(f"""
+            SELECT battle_id, opponent_names, opponent_character_ids,
+                   battle_type, result, finished_at
+            FROM battle_history
+            WHERE {where}
+            ORDER BY finished_at DESC
+            LIMIT :limit OFFSET :offset
+        """),
+        {**params, "limit": per_page, "offset": offset},
+    )
+
+    history = []
+    for row in rows.fetchall():
+        opp_names = row[1] if isinstance(row[1], list) else []
+        opp_ids = row[2] if isinstance(row[2], list) else []
+        history.append(BattleHistoryItem(
+            battle_id=row[0],
+            opponent_names=opp_names,
+            opponent_character_ids=opp_ids,
+            battle_type=row[3],
+            result=row[4],
+            finished_at=row[5],
+        ))
+
+    return BattleHistoryResponse(
+        history=history,
+        stats=BattleStats(total=total, wins=wins, losses=losses, winrate=winrate),
+        page=page,
+        per_page=per_page,
+        total_count=total_count,
+        total_pages=total_pages,
     )
 
 

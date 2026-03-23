@@ -418,6 +418,13 @@ class NpcUpdate(BaseModel):
     stat_points: Optional[int] = None
     currency_balance: Optional[int] = None
     current_location_id: Optional[int] = None
+    npc_status: Optional[str] = None
+
+    @validator("npc_status")
+    def validate_npc_status(cls, v):
+        if v is not None and v not in ("alive", "dead"):
+            raise ValueError("Статус NPC должен быть alive или dead")
+        return v
 
 
 class NpcListItem(BaseModel):
@@ -429,6 +436,7 @@ class NpcListItem(BaseModel):
     npc_role: Optional[str] = None
     avatar: Optional[str] = None
     current_location_id: Optional[int] = None
+    npc_status: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -739,4 +747,14 @@ class UpdateActiveMobStatusRequest(BaseModel):
     def validate_status(cls, v):
         if v not in ("alive", "in_battle", "dead"):
             raise ValueError("Статус должен быть alive, in_battle или dead")
+        return v
+
+
+class UpdateNpcStatusRequest(BaseModel):
+    status: str
+
+    @validator("status")
+    def validate_status(cls, v):
+        if v not in ("alive", "dead"):
+            raise ValueError("Статус NPC должен быть alive или dead")
         return v
