@@ -2410,171 +2410,9 @@ async def get_battles_by_location(
 
 
 # ---------------------------------------------------------------------------
-# Join Requests: submit + list (FEAT-069 T5)
-# ---------------------------------------------------------------------------
-@router.post(
-    "/{battle_id}/join-request",
-    response_model=JoinRequestResponse,
-    status_code=201,
-)
-async def create_join_request(
-    battle_id: int,
-    req: JoinRequestCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: UserRead = Depends(get_current_user_via_http),
-):
-    """Submit a join request to an active battle."""
-
-    # 1. Validate team
-    if req.team not in (0, 1):
-        raise HTTPException(400, "Команда должна быть 0 или 1")
-
-    # 2. Battle exists and is active
-    battle = await get_battle(db, battle_id)
-    if not battle:
-        raise HTTPException(404, "Бой не найден")
-    battle_status = battle.status.value if hasattr(battle.status, "value") else str(battle.status)
-    if battle_status not in ("pending", "in_progress"):
-        raise HTTPException(404, "Бой не активен")
-
-    # 3. Character belongs to current user
-    await verify_character_ownership(db, req.character_id, current_user.id)
-
-    # 4. Character is at the same location as the battle
-    if not battle.location_id:
-        raise HTTPException(400, "Бой не привязан к локации")
-    char_result = await db.execute(
-        text("SELECT current_location_id FROM characters WHERE id = :cid"),
-        {"cid": req.character_id},
-    )
-    char_row = char_result.fetchone()
-    if not char_row:
-        raise HTTPException(404, "Персонаж не найден")
-    if char_row[0] != battle.location_id:
-        raise HTTPException(403, "Персонаж должен находиться на той же локации, что и бой")
-
-    # 5. Character is NOT already in any active battle
-    active_bid = await get_active_battle_for_character(db, req.character_id)
-    if active_bid:
-        raise HTTPException(400, "Персонаж уже участвует в активном бою")
-
-    # 6. Character is not already a participant in this battle
-    part_result = await db.execute(
-        text("""
-            SELECT id FROM battle_participants
-            WHERE battle_id = :bid AND character_id = :cid
-            LIMIT 1
-        """),
-        {"bid": battle_id, "cid": req.character_id},
-    )
-    if part_result.fetchone():
-        raise HTTPException(400, "Персонаж уже является участником этого боя")
-
-    # 7. No existing join request for this character in this battle
-    existing_result = await db.execute(
-        text("""
-            SELECT id, status FROM battle_join_requests
-            WHERE battle_id = :bid AND character_id = :cid
-            LIMIT 1
-        """),
-        {"bid": battle_id, "cid": req.character_id},
-    )
-    existing_row = existing_result.fetchone()
-    if existing_row:
-        raise HTTPException(400, "Заявка на вступление в этот бой уже подана")
-
-    # 8. Create join request
-    join_request = BattleJoinRequest(
-        battle_id=battle_id,
-        character_id=req.character_id,
-        user_id=current_user.id,
-        team=req.team,
-        status=JoinRequestStatus.pending,
-    )
-    db.add(join_request)
-    await db.commit()
-    await db.refresh(join_request)
-
-    # 9. Pause battle if not already paused
-    is_paused = battle.is_paused
-    if not is_paused:
-        await pause_battle(db, battle_id)
-
-        # Notify all participants about pause
-        participants_result = await db.execute(
-            text("""
-                SELECT DISTINCT c.user_id
-                FROM battle_participants bp
-                JOIN characters c ON bp.character_id = c.id
-                WHERE bp.battle_id = :bid AND c.is_npc = 0
-            """),
-            {"bid": battle_id},
-        )
-        for row in participants_result.fetchall():
-            try:
-                await publish_notification(
-                    target_user_id=row[0],
-                    message="Бой приостановлен — рассматривается заявка на присоединение",
-                    ws_type="battle_paused",
-                    ws_data={"battle_id": battle_id},
-                )
-            except Exception as e:
-                logger.error(f"Ошибка уведомления о паузе боя: {e}")
-
-    return JoinRequestResponse(
-        id=join_request.id,
-        battle_id=join_request.battle_id,
-        character_id=join_request.character_id,
-        team=join_request.team,
-        status=join_request.status.value if hasattr(join_request.status, "value") else str(join_request.status),
-        created_at=join_request.created_at,
-    )
-
-
-@router.get(
-    "/{battle_id}/join-requests",
-    response_model=JoinRequestListResponse,
-)
-async def list_join_requests(
-    battle_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: UserRead = Depends(get_current_user_via_http),
-):
-    """List join requests for a battle with character info."""
-    result = await db.execute(
-        text("""
-            SELECT bjr.id, bjr.character_id, c.name, c.level, c.avatar,
-                   bjr.team, bjr.status, bjr.created_at
-            FROM battle_join_requests bjr
-            JOIN characters c ON bjr.character_id = c.id
-            WHERE bjr.battle_id = :bid
-            ORDER BY bjr.created_at DESC
-        """),
-        {"bid": battle_id},
-    )
-    rows = result.fetchall()
-
-    requests = []
-    for row in rows:
-        status_val = row[6]
-        if hasattr(status_val, "value"):
-            status_val = status_val.value
-        requests.append(JoinRequestListItem(
-            id=row[0],
-            character_id=row[1],
-            character_name=row[2],
-            character_level=row[3],
-            character_avatar=row[4],
-            team=row[5],
-            status=status_val,
-            created_at=row[7],
-        ))
-
-    return JoinRequestListResponse(requests=requests)
-
-
-# ---------------------------------------------------------------------------
 # Admin join request endpoints (FEAT-069, T6)
+# NOTE: These MUST be registered BEFORE /{battle_id}/join-request* routes,
+# otherwise FastAPI matches "admin" as battle_id path parameter.
 # ---------------------------------------------------------------------------
 
 @router.get("/admin/join-requests", response_model=AdminJoinRequestListResponse)
@@ -2858,6 +2696,170 @@ async def admin_reject_join_request(
         request_id=request_id,
         message="Заявка отклонена",
     )
+
+
+# ---------------------------------------------------------------------------
+# Join Requests: submit + list (FEAT-069 T5)
+# ---------------------------------------------------------------------------
+@router.post(
+    "/{battle_id}/join-request",
+    response_model=JoinRequestResponse,
+    status_code=201,
+)
+async def create_join_request(
+    battle_id: int,
+    req: JoinRequestCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Submit a join request to an active battle."""
+
+    # 1. Validate team
+    if req.team not in (0, 1):
+        raise HTTPException(400, "Команда должна быть 0 или 1")
+
+    # 2. Battle exists and is active
+    battle = await get_battle(db, battle_id)
+    if not battle:
+        raise HTTPException(404, "Бой не найден")
+    battle_status = battle.status.value if hasattr(battle.status, "value") else str(battle.status)
+    if battle_status not in ("pending", "in_progress"):
+        raise HTTPException(404, "Бой не активен")
+
+    # 3. Character belongs to current user
+    await verify_character_ownership(db, req.character_id, current_user.id)
+
+    # 4. Character is at the same location as the battle
+    if not battle.location_id:
+        raise HTTPException(400, "Бой не привязан к локации")
+    char_result = await db.execute(
+        text("SELECT current_location_id FROM characters WHERE id = :cid"),
+        {"cid": req.character_id},
+    )
+    char_row = char_result.fetchone()
+    if not char_row:
+        raise HTTPException(404, "Персонаж не найден")
+    if char_row[0] != battle.location_id:
+        raise HTTPException(403, "Персонаж должен находиться на той же локации, что и бой")
+
+    # 5. Character is NOT already in any active battle
+    active_bid = await get_active_battle_for_character(db, req.character_id)
+    if active_bid:
+        raise HTTPException(400, "Персонаж уже участвует в активном бою")
+
+    # 6. Character is not already a participant in this battle
+    part_result = await db.execute(
+        text("""
+            SELECT id FROM battle_participants
+            WHERE battle_id = :bid AND character_id = :cid
+            LIMIT 1
+        """),
+        {"bid": battle_id, "cid": req.character_id},
+    )
+    if part_result.fetchone():
+        raise HTTPException(400, "Персонаж уже является участником этого боя")
+
+    # 7. No existing join request for this character in this battle
+    existing_result = await db.execute(
+        text("""
+            SELECT id, status FROM battle_join_requests
+            WHERE battle_id = :bid AND character_id = :cid
+            LIMIT 1
+        """),
+        {"bid": battle_id, "cid": req.character_id},
+    )
+    existing_row = existing_result.fetchone()
+    if existing_row:
+        raise HTTPException(400, "Заявка на вступление в этот бой уже подана")
+
+    # 8. Create join request
+    join_request = BattleJoinRequest(
+        battle_id=battle_id,
+        character_id=req.character_id,
+        user_id=current_user.id,
+        team=req.team,
+        status=JoinRequestStatus.pending,
+    )
+    db.add(join_request)
+    await db.commit()
+    await db.refresh(join_request)
+
+    # 9. Pause battle if not already paused
+    is_paused = battle.is_paused
+    if not is_paused:
+        await pause_battle(db, battle_id)
+
+        # Notify all participants about pause
+        participants_result = await db.execute(
+            text("""
+                SELECT DISTINCT c.user_id
+                FROM battle_participants bp
+                JOIN characters c ON bp.character_id = c.id
+                WHERE bp.battle_id = :bid AND c.is_npc = 0
+            """),
+            {"bid": battle_id},
+        )
+        for row in participants_result.fetchall():
+            try:
+                await publish_notification(
+                    target_user_id=row[0],
+                    message="Бой приостановлен — рассматривается заявка на присоединение",
+                    ws_type="battle_paused",
+                    ws_data={"battle_id": battle_id},
+                )
+            except Exception as e:
+                logger.error(f"Ошибка уведомления о паузе боя: {e}")
+
+    return JoinRequestResponse(
+        id=join_request.id,
+        battle_id=join_request.battle_id,
+        character_id=join_request.character_id,
+        team=join_request.team,
+        status=join_request.status.value if hasattr(join_request.status, "value") else str(join_request.status),
+        created_at=join_request.created_at,
+    )
+
+
+@router.get(
+    "/{battle_id}/join-requests",
+    response_model=JoinRequestListResponse,
+)
+async def list_join_requests(
+    battle_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """List join requests for a battle with character info."""
+    result = await db.execute(
+        text("""
+            SELECT bjr.id, bjr.character_id, c.name, c.level, c.avatar,
+                   bjr.team, bjr.status, bjr.created_at
+            FROM battle_join_requests bjr
+            JOIN characters c ON bjr.character_id = c.id
+            WHERE bjr.battle_id = :bid
+            ORDER BY bjr.created_at DESC
+        """),
+        {"bid": battle_id},
+    )
+    rows = result.fetchall()
+
+    requests = []
+    for row in rows:
+        status_val = row[6]
+        if hasattr(status_val, "value"):
+            status_val = status_val.value
+        requests.append(JoinRequestListItem(
+            id=row[0],
+            character_id=row[1],
+            character_name=row[2],
+            character_level=row[3],
+            character_avatar=row[4],
+            team=row[5],
+            status=status_val,
+            created_at=row[7],
+        ))
+
+    return JoinRequestListResponse(requests=requests)
 
 
 app.include_router(router)
