@@ -37,6 +37,12 @@ database.engine = MagicMock()
 
 import skills_client  # noqa: E402
 
+# IMPORTANT: Save a direct reference to the real character_ranks function.
+# Later test files (e.g. test_spectate.py) collected after this module will
+# overwrite skills_client.character_ranks with an AsyncMock via sys.modules.
+# By capturing the real function here, we can call it in tests regardless.
+_real_character_ranks = skills_client.character_ranks
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -73,6 +79,21 @@ def _mock_httpx_response(json_data):
     return mock_resp
 
 
+def _make_mock_client(api_response):
+    """Create a properly configured mock httpx.AsyncClient for Python 3.10+.
+
+    Uses MagicMock for the client (constructor is sync) with explicit
+    async context-manager protocol and an AsyncMock for the .get() method.
+    """
+    mock_resp = _mock_httpx_response(api_response)
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -89,13 +110,10 @@ class TestCharacterRanksCaseNormalization:
             _make_char_skill_row(3, "Support"),
         ]
 
-        mock_client = AsyncMock()
-        mock_client.get.return_value = _mock_httpx_response(api_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _make_mock_client(api_response)
 
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await skills_client.character_ranks(character_id=1)
+            results = await _real_character_ranks(character_id=1)
 
         assert len(results) == 3
         assert results[0]["skill_type"] == "attack"
@@ -111,13 +129,10 @@ class TestCharacterRanksCaseNormalization:
             _make_char_skill_row(3, "SUPPORT"),
         ]
 
-        mock_client = AsyncMock()
-        mock_client.get.return_value = _mock_httpx_response(api_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _make_mock_client(api_response)
 
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await skills_client.character_ranks(character_id=1)
+            results = await _real_character_ranks(character_id=1)
 
         assert len(results) == 3
         assert results[0]["skill_type"] == "attack"
@@ -133,13 +148,10 @@ class TestCharacterRanksCaseNormalization:
             _make_char_skill_row(3, "support"),
         ]
 
-        mock_client = AsyncMock()
-        mock_client.get.return_value = _mock_httpx_response(api_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _make_mock_client(api_response)
 
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await skills_client.character_ranks(character_id=1)
+            results = await _real_character_ranks(character_id=1)
 
         assert len(results) == 3
         assert results[0]["skill_type"] == "attack"
@@ -155,13 +167,10 @@ class TestCharacterRanksCaseNormalization:
             _make_char_skill_row(3, "support"),
         ]
 
-        mock_client = AsyncMock()
-        mock_client.get.return_value = _mock_httpx_response(api_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _make_mock_client(api_response)
 
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await skills_client.character_ranks(character_id=1)
+            results = await _real_character_ranks(character_id=1)
 
         assert len(results) == 3
         assert results[0]["skill_type"] == "attack"
@@ -190,13 +199,10 @@ class TestCharacterRanksCaseNormalization:
             },
         ]
 
-        mock_client = AsyncMock()
-        mock_client.get.return_value = _mock_httpx_response(api_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _make_mock_client(api_response)
 
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await skills_client.character_ranks(character_id=1)
+            results = await _real_character_ranks(character_id=1)
 
         assert len(results) == 1
         assert results[0]["skill_type"] == "attack"
@@ -204,14 +210,9 @@ class TestCharacterRanksCaseNormalization:
     @pytest.mark.asyncio
     async def test_empty_skills_returns_empty(self):
         """Character with no skills returns empty list."""
-        api_response = []
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = _mock_httpx_response(api_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _make_mock_client([])
 
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await skills_client.character_ranks(character_id=999)
+            results = await _real_character_ranks(character_id=999)
 
         assert results == []

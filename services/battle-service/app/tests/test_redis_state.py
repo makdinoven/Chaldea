@@ -39,6 +39,12 @@ database.engine = MagicMock()
 # Now import redis_state — it doesn't connect at import time (lazy singleton)
 import redis_state  # noqa: E402
 
+# IMPORTANT: Save a direct reference to the real init_battle_state function.
+# Later test files (e.g. test_spectate.py) collected after this module will
+# overwrite redis_state.init_battle_state with an AsyncMock via sys.modules.
+# By capturing the real function here, we can call it in tests regardless.
+_real_init_battle_state = redis_state.init_battle_state
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,8 +84,8 @@ class TestInitBattleStatePubsub:
         """The pubsub message should be str(first_actor_participant_id), not JSON."""
         mock_redis = AsyncMock()
 
-        with patch.object(redis_state, "get_redis_client", return_value=mock_redis):
-            await redis_state.init_battle_state(
+        with patch.object(redis_state, "get_redis_client", new=AsyncMock(return_value=mock_redis)):
+            await _real_init_battle_state(
                 battle_id=42,
                 participants_payload=_make_participants(pid1=7, pid2=8),
                 first_actor_participant_id=7,
@@ -104,8 +110,8 @@ class TestInitBattleStatePubsub:
         """The published message must be parseable as int() by autobattle reader."""
         mock_redis = AsyncMock()
 
-        with patch.object(redis_state, "get_redis_client", return_value=mock_redis):
-            await redis_state.init_battle_state(
+        with patch.object(redis_state, "get_redis_client", new=AsyncMock(return_value=mock_redis)):
+            await _real_init_battle_state(
                 battle_id=1,
                 participants_payload=_make_participants(pid1=42, pid2=99),
                 first_actor_participant_id=42,
@@ -129,8 +135,8 @@ class TestInitBattleStatePubsub:
         import json
         mock_redis = AsyncMock()
 
-        with patch.object(redis_state, "get_redis_client", return_value=mock_redis):
-            await redis_state.init_battle_state(
+        with patch.object(redis_state, "get_redis_client", new=AsyncMock(return_value=mock_redis)):
+            await _real_init_battle_state(
                 battle_id=5,
                 participants_payload=_make_participants(),
                 first_actor_participant_id=1,
@@ -160,8 +166,8 @@ class TestInitBattleStatePubsub:
         """When pid2 is first_actor, published message should be str(pid2)."""
         mock_redis = AsyncMock()
 
-        with patch.object(redis_state, "get_redis_client", return_value=mock_redis):
-            await redis_state.init_battle_state(
+        with patch.object(redis_state, "get_redis_client", new=AsyncMock(return_value=mock_redis)):
+            await _real_init_battle_state(
                 battle_id=10,
                 participants_payload=_make_participants(pid1=3, pid2=5),
                 first_actor_participant_id=5,
@@ -186,8 +192,8 @@ class TestInitBattleStateStorage:
         import json
         mock_redis = AsyncMock()
 
-        with patch.object(redis_state, "get_redis_client", return_value=mock_redis):
-            await redis_state.init_battle_state(
+        with patch.object(redis_state, "get_redis_client", new=AsyncMock(return_value=mock_redis)):
+            await _real_init_battle_state(
                 battle_id=42,
                 participants_payload=_make_participants(),
                 first_actor_participant_id=1,
@@ -215,8 +221,8 @@ class TestInitBattleStateStorage:
         mock_redis = AsyncMock()
         deadline = datetime(2026, 1, 1, 12, 0, 0)
 
-        with patch.object(redis_state, "get_redis_client", return_value=mock_redis):
-            await redis_state.init_battle_state(
+        with patch.object(redis_state, "get_redis_client", new=AsyncMock(return_value=mock_redis)):
+            await _real_init_battle_state(
                 battle_id=42,
                 participants_payload=_make_participants(),
                 first_actor_participant_id=1,
