@@ -11,7 +11,7 @@ DB_USER = os.environ["DB_USERNAME"]
 DB_PASS = os.environ["DB_PASSWORD"]
 
 DATABASE_URL = (
-    f"mysql+aiomysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}"
+    f"mysql+aiomysql://{DB_USER}:{DB_PASS}@{DB_HOST}:3306/{DB_NAME}?charset=utf8mb4"
 )
 
 engine = create_async_engine(

@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import axios from 'axios';
-import { createBattle } from '../api/mobs';
 
 interface UseNpcAttackOptions {
   npcId: number;
@@ -38,8 +37,14 @@ const useNpcAttack = ({ npcId, npcName, currentCharacterId }: UseNpcAttackOption
         return;
       }
 
-      // Create battle
-      const result = await createBattle(currentCharacterId, npcId);
+      // Create battle (NPC attack = pvp_attack type)
+      const { data: result } = await axios.post<{ battle_id: number }>('/battles/', {
+        players: [
+          { character_id: currentCharacterId, team: 0 },
+          { character_id: npcId, team: 1 },
+        ],
+        battle_type: 'pvp_attack',
+      });
       toast.success(`Бой с ${npcName} начинается!`);
       navigate(`/location/${locationId}/battle/${result.battle_id}`);
     } catch (err) {

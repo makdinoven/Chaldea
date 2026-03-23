@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 from os import supports_fd
 from typing import List, Dict
@@ -323,7 +324,8 @@ async def create_battle_endpoint(
         raise HTTPException(400, "Нужно минимум два участника")
 
     # 2. CRUD-создание записи в БД + участников
-    battle_obj, participant_objs = await create_battle(db, player_ids, teams)
+    bt = battle_in.battle_type or "pve"
+    battle_obj, participant_objs = await create_battle(db, player_ids, teams, battle_type=bt)
 
     # 3. Кто ходит первым (первый в списке → team-логика может быть иной)
     first_actor_pid = participant_objs[0].id
@@ -1003,15 +1005,14 @@ async def _make_action_core(
                 if pdata["hp"] <= 0 and pdata["team"] != winner_team:
                     defeated_char_id = pdata["character_id"]
                     try:
-                        async with db_session.begin():
-                            npc_check = await db_session.execute(
-                                text(
-                                    "SELECT is_npc, npc_role FROM characters "
-                                    "WHERE id = :cid AND is_npc = 1 AND (npc_role IS NULL OR npc_role != 'mob')"
-                                ),
-                                {"cid": defeated_char_id},
-                            )
-                            npc_row = npc_check.fetchone()
+                        npc_check = await db_session.execute(
+                            text(
+                                "SELECT is_npc, npc_role FROM characters "
+                                "WHERE id = :cid AND is_npc = 1 AND (npc_role IS NULL OR npc_role != 'mob')"
+                            ),
+                            {"cid": defeated_char_id},
+                        )
+                        npc_row = npc_check.fetchone()
                         if npc_row:
                             try:
                                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -1046,18 +1047,22 @@ async def _make_action_core(
             bh_bt_row = bh_bt_result.fetchone()
             bh_battle_type = bh_bt_row[0] if bh_bt_row else "pve"
 
-            # Query character names from shared DB
-            char_ids = [pdata["character_id"] for pdata in battle_state["participants"].values()]
-            if char_ids:
-                placeholders = ", ".join(f":cid{i}" for i in range(len(char_ids)))
-                names_params = {f"cid{i}": cid for i, cid in enumerate(char_ids)}
-                names_result = await db_session.execute(
-                    text(f"SELECT id, name FROM characters WHERE id IN ({placeholders})"),
-                    names_params,
-                )
-                names_map = {row[0]: row[1] for row in names_result.fetchall()}
-            else:
-                names_map = {}
+            # Get character names from snapshot (MongoDB/Redis) — avoids charset issues with raw SQL
+            names_map = {}
+            try:
+                rds = await get_redis_client()
+                snapshot = await get_cached_snapshot(rds, battle_id)
+                if snapshot is None:
+                    snap_doc = await load_snapshot(battle_id)
+                    if snap_doc:
+                        snapshot = snap_doc.get("participants", [])
+                if snapshot:
+                    for p in snapshot:
+                        names_map[p["character_id"]] = p.get("name", f"Персонаж #{p['character_id']}")
+            except Exception as snap_err:
+                logger.warning(f"[HISTORY] Failed to load snapshot for names: {snap_err}")
+
+            logger.info(f"[HISTORY] names_map from snapshot: {names_map}")
 
             for pid_str, pdata in battle_state["participants"].items():
                 char_id = pdata["character_id"]
@@ -1784,7 +1789,7 @@ async def get_battle_history(
 
     where = " AND ".join(conditions)
 
-    # Stats query (always unfiltered — overall character stats)
+    # Stats query — PvP only (pvp_training, pvp_death, pvp_attack)
     stats_result = await db.execute(
         text("""
             SELECT
@@ -1792,7 +1797,7 @@ async def get_battle_history(
                 SUM(CASE WHEN result = 'victory' THEN 1 ELSE 0 END) as wins,
                 SUM(CASE WHEN result = 'defeat' THEN 1 ELSE 0 END) as losses
             FROM battle_history
-            WHERE character_id = :cid
+            WHERE character_id = :cid AND battle_type != 'pve'
         """),
         {"cid": character_id},
     )
@@ -1826,8 +1831,10 @@ async def get_battle_history(
 
     history = []
     for row in rows.fetchall():
-        opp_names = row[1] if isinstance(row[1], list) else []
-        opp_ids = row[2] if isinstance(row[2], list) else []
+        raw_names = row[1]
+        raw_ids = row[2]
+        opp_names = raw_names if isinstance(raw_names, list) else (json.loads(raw_names) if isinstance(raw_names, str) else [])
+        opp_ids = raw_ids if isinstance(raw_ids, list) else (json.loads(raw_ids) if isinstance(raw_ids, str) else [])
         history.append(BattleHistoryItem(
             battle_id=row[0],
             opponent_names=opp_names,

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Post, Player } from './types';
 import PlayerActionsMenu from './PlayerActionsMenu';
+import useNpcAttack from '../../../hooks/useNpcAttack';
 
 interface PostCardProps {
   post: Post;
@@ -39,6 +40,39 @@ const formatRelativeTime = (dateStr: string): string => {
   } catch {
     return dateStr;
   }
+};
+
+const NpcPostAttackButton = ({ npcId, npcName, currentCharacterId }: { npcId: number; npcName: string; currentCharacterId: number }) => {
+  const { attacking, handleAttack } = useNpcAttack({
+    npcId,
+    npcName,
+    currentCharacterId,
+  });
+
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        handleAttack();
+      }}
+      disabled={attacking}
+      className="
+        text-site-red text-[10px] sm:text-xs font-medium uppercase tracking-wide
+        hover:text-white transition-colors duration-200
+        disabled:opacity-50 disabled:cursor-not-allowed
+        flex items-center gap-1
+      "
+    >
+      {attacking ? (
+        <div className="w-3 h-3 border-2 border-site-red/30 border-t-site-red rounded-full animate-spin" />
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+      )}
+      {attacking ? 'Атака...' : 'Напасть'}
+    </button>
+  );
 };
 
 const PostCard = ({
@@ -177,11 +211,18 @@ const PostCard = ({
           LVL {post.character_level ?? '?'}
         </span>
 
-        {/* Actions menu — only for other players' posts */}
-        {currentCharacterId !== null && currentUserId !== null && post.user_id !== currentUserId && (
+        {/* Actions menu — NPC attack or PvP menu for other players */}
+        {currentCharacterId !== null && !post.user_id && (
+          <NpcPostAttackButton
+            npcId={post.character_id}
+            npcName={post.character_name}
+            currentCharacterId={currentCharacterId}
+          />
+        )}
+        {currentCharacterId !== null && currentUserId !== null && !!post.user_id && post.user_id !== currentUserId && (
           <PlayerActionsMenu
             targetCharacterId={post.character_id}
-            targetUserId={post.user_id}
+            targetUserId={post.user_id as number}
             targetName={post.character_name}
             targetLevel={post.character_level ?? 1}
             currentCharacterId={currentCharacterId}

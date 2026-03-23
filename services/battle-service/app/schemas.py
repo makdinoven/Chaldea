@@ -16,6 +16,7 @@ class PlayerIn(BaseModel):
 
 class BattleCreate(BaseModel):
     players: List[PlayerIn]
+    battle_type: Optional[str] = None
 
 
 class SkillSelection(BaseModel):
