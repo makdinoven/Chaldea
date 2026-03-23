@@ -147,6 +147,7 @@ interface BattlePageBarProps {
   runtimeData: RuntimeState;
   myData: CharacterData;
   opponentData: CharacterData | null;
+  isPaused?: boolean;
 }
 
 // --- Constants ---
@@ -185,12 +186,13 @@ const BattlePageBar = ({
   runtimeData,
   myData,
   opponentData,
+  isPaused = false,
 }: BattlePageBarProps) => {
   const [isTurnLikeTextShown, setIsTurnLikeTextShown] = useState(true);
   const [isAllTurnsOpen, setIsAllTurnsOpen] = useState(false);
   const [turnLogs, setTurnLogs] = useState<TurnLogsResponse | null>(null);
   const [turns, setTurns] = useState<TurnPair[]>([]);
-  const isOpponentTurn = turn.isOpponentTurn;
+  const isOpponentTurn = turn.isOpponentTurn || isPaused;
   const [activeTurnIndex, setActiveTurnIndex] = useState(
     runtimeData.turn_number - 1,
   );

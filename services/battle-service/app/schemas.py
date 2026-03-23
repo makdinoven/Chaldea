@@ -213,3 +213,93 @@ class AdminForceFinishResponse(BaseModel):
     ok: bool
     battle_id: int
     message: str
+
+
+# --- Location Battles schemas ---
+
+class LocationBattleParticipant(BaseModel):
+    participant_id: int
+    character_id: int
+    character_name: str
+    level: int
+    team: int
+    is_npc: bool
+
+
+class LocationBattleItem(BaseModel):
+    id: int
+    status: str
+    battle_type: str
+    is_paused: bool
+    created_at: datetime
+    participants: List[LocationBattleParticipant]
+
+
+class LocationBattlesResponse(BaseModel):
+    battles: List[LocationBattleItem]
+
+
+# --- Spectate schemas ---
+
+class SpectateStateResponse(BaseModel):
+    snapshot: Optional[list] = None
+    runtime: Optional[dict] = None
+
+
+# --- Join Request schemas ---
+
+class JoinRequestCreate(BaseModel):
+    character_id: int
+    team: int
+
+
+class JoinRequestResponse(BaseModel):
+    id: int
+    battle_id: int
+    character_id: int
+    team: int
+    status: str
+    created_at: datetime
+
+
+class JoinRequestListItem(BaseModel):
+    id: int
+    character_id: int
+    character_name: str
+    character_level: int
+    character_avatar: Optional[str] = None
+    team: int
+    status: str
+    created_at: datetime
+
+
+class JoinRequestListResponse(BaseModel):
+    requests: List[JoinRequestListItem]
+
+
+# --- Admin Join Request schemas ---
+
+class AdminJoinRequestItem(BaseModel):
+    id: int
+    battle_id: int
+    character_id: int
+    character_name: str
+    character_level: int
+    team: int
+    status: str
+    created_at: datetime
+    battle_type: str
+    battle_participants_count: int
+
+
+class AdminJoinRequestListResponse(BaseModel):
+    requests: List[AdminJoinRequestItem]
+    total: int
+    page: int
+    per_page: int
+
+
+class AdminJoinRequestActionResponse(BaseModel):
+    ok: bool
+    request_id: int
+    message: str

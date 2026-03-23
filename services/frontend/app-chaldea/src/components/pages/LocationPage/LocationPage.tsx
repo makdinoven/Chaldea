@@ -15,6 +15,7 @@ import NeighborsSection from './NeighborsSection';
 import LootSection from './LootSection';
 import PendingInvitationsPanel from './PendingInvitationsPanel';
 import LocationMobs from '../../LocationMobs';
+import BattlesSection from './BattlesSection';
 import useBattleLock from '../../../hooks/useBattleLock';
 import BattleLockBanner from '../../CommonComponents/BattleLockBanner';
 
@@ -339,127 +340,121 @@ const LocationPage = () => {
   const isCharacterHere = character?.current_location?.id === location.id;
 
   return (
-    <div className="flex flex-col gap-6 sm:gap-8 pb-10 bg-black/40 rounded-card p-4 sm:p-6 backdrop-blur-sm">
-      {/* Back button */}
-      <button
-        onClick={() => navigate(-1)}
-        className="self-start flex items-center gap-2 text-white/60 hover:text-white transition-colors text-sm"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-        </svg>
-        Назад
-      </button>
+    <div className="flex flex-col gap-4 sm:gap-6 pb-10">
+      {/* Header block */}
+      <div className="bg-black/40 rounded-card p-4 sm:p-6 backdrop-blur-sm flex flex-col gap-4">
+        {/* Back button */}
+        <button
+          onClick={() => navigate(-1)}
+          className="self-start flex items-center gap-2 text-white/60 hover:text-white transition-colors text-sm"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+          Назад
+        </button>
 
-      {/* Battle lock banner */}
-      {inBattle && (
-        <BattleLockBanner message="Вы в бою! Завершите бой, чтобы продолжить." />
-      )}
+        {/* Battle lock banner */}
+        {inBattle && (
+          <BattleLockBanner message="Вы в бою! Завершите бой, чтобы продолжить." />
+        )}
 
-      {/* Header */}
-      <LocationHeader
-        location={location}
-        isFavorited={location.is_favorited ?? false}
-        onToggleFavorite={handleToggleFavorite}
-      />
+        {/* Header */}
+        <LocationHeader
+          location={location}
+          isFavorited={location.is_favorited ?? false}
+          onToggleFavorite={handleToggleFavorite}
+        />
+      </div>
 
-      <div className="gradient-divider-h relative pb-2" />
+      {/* Content block */}
+      <div className="flex flex-col gap-4 sm:gap-6">
+        {/* Players + NPCs */}
+        <PlayersSection
+          players={location.players}
+          npcs={location.npcs ?? []}
+          currentUserId={userId}
+          currentCharacterId={character?.id ?? null}
+          currentCharacterLevel={Number(character?.level) || 0}
+          locationId={location.id}
+          locationMarkerType={location.marker_type}
+        />
 
-      {/* Players + NPCs */}
-      <PlayersSection
-        players={location.players}
-        npcs={location.npcs ?? []}
-        currentUserId={userId}
-        currentCharacterId={character?.id ?? null}
-        currentCharacterLevel={Number(character?.level) || 0}
-        locationId={location.id}
-        locationMarkerType={location.marker_type}
-      />
+        {/* Mobs / Enemies */}
+        <LocationMobs
+          locationId={location.id}
+          characterId={isCharacterHere ? (character?.id ?? null) : null}
+        />
 
-      <div className="gradient-divider-h relative pb-2" />
+        {/* Active battles */}
+        <BattlesSection
+          locationId={location.id}
+          characterId={character?.id ?? null}
+          inBattle={inBattle}
+        />
 
-      {/* Mobs / Enemies */}
-      <LocationMobs
-        locationId={location.id}
-        characterId={isCharacterHere ? (character?.id ?? null) : null}
-      />
-
-      {/* Loot — only shown when items exist */}
-      {(location.loot ?? []).length > 0 && (
-        <>
-          <div className="gradient-divider-h relative pb-2" />
+        {/* Loot — only shown when items exist */}
+        {(location.loot ?? []).length > 0 && (
           <LootSection
             loot={location.loot}
             currentCharacterId={isCharacterHere ? (character?.id ?? null) : null}
             locationId={location.id}
             onPickup={handlePickupLoot}
           />
-        </>
-      )}
-
-      <div className="gradient-divider-h relative pb-2" />
-
-      {/* Posts */}
-      <section className="bg-black/50 rounded-card p-4 sm:p-6 flex flex-col gap-4">
-        <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
-          Посты
-        </h2>
-
-        {/* Create form — shown if character exists or user is staff */}
-        {(character || userIsStaff) && (
-          <>
-            {inBattle && (
-              <p className="text-yellow-400 text-sm font-medium">Вы в бою</p>
-            )}
-            <PostCreateForm
-              onSubmit={handleSubmitPost}
-              onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
-              disabled={inBattle || (!isCharacterHere && !character && !userIsStaff)}
-              isStaff={userIsStaff}
-              npcs={location.npcs ?? []}
-            />
-          </>
         )}
 
-        {location.posts.length === 0 ? (
-          <p className="text-white/50 text-sm">Пока нет постов</p>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {location.posts.map((post) => (
-              <PostCard
-                key={post.post_id}
-                post={post}
-                currentCharacterId={character?.id ?? null}
-                currentCharacterLevel={Number(character?.level) || 0}
-                currentUserId={userId}
-                players={location.players}
-                locationId={location.id}
-                locationMarkerType={location.marker_type}
-                onLike={handleLike}
-                onUnlike={handleUnlike}
-                onTagPlayer={handleTagPlayer}
-                onReport={handleReport}
-                onRequestDeletion={handleRequestDeletion}
+        {/* Posts */}
+        <section className="bg-black/50 rounded-card p-4 sm:p-6 flex flex-col gap-4">
+          <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
+            Посты
+          </h2>
+
+          {/* Create form — shown if character exists or user is staff */}
+          {(character || userIsStaff) && (
+            <>
+              {inBattle && (
+                <p className="text-yellow-400 text-sm font-medium">Вы в бою</p>
+              )}
+              <PostCreateForm
+                onSubmit={handleSubmitPost}
+                onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
+                disabled={inBattle || (!isCharacterHere && !character && !userIsStaff)}
+                isStaff={userIsStaff}
+                npcs={location.npcs ?? []}
               />
-            ))}
-          </div>
-        )}
-      </section>
+            </>
+          )}
 
-      <div className="gradient-divider-h relative pb-2" />
+          {location.posts.length === 0 ? (
+            <p className="text-white/50 text-sm">Пока нет постов</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {location.posts.map((post) => (
+                <PostCard
+                  key={post.post_id}
+                  post={post}
+                  currentCharacterId={character?.id ?? null}
+                  currentCharacterLevel={Number(character?.level) || 0}
+                  currentUserId={userId}
+                  players={location.players}
+                  locationId={location.id}
+                  locationMarkerType={location.marker_type}
+                  onLike={handleLike}
+                  onUnlike={handleUnlike}
+                  onTagPlayer={handleTagPlayer}
+                  onReport={handleReport}
+                  onRequestDeletion={handleRequestDeletion}
+                />
+              ))}
+            </div>
+          )}
+        </section>
 
-      {/* Neighbors */}
-      <section className={`bg-black/50 rounded-card p-4 sm:p-6 ${inBattle ? 'pointer-events-none opacity-50' : ''}`}>
-        <NeighborsSection neighbors={location.neighbors} />
-      </section>
-
-      {/* PvP Invitations — shown when there are pending invitations */}
-      {isCharacterHere && character?.id && (
-        <>
-          <div className="gradient-divider-h relative pb-2" />
-          <PendingInvitationsPanel locationId={location.id} />
-        </>
-      )}
+        {/* Neighbors */}
+        <section className={`bg-black/50 rounded-card p-4 sm:p-6 ${inBattle ? 'pointer-events-none opacity-50' : ''}`}>
+          <NeighborsSection neighbors={location.neighbors} />
+        </section>
+      </div>
     </div>
   );
 };

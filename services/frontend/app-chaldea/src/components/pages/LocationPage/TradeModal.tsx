@@ -168,7 +168,7 @@ const TradeModal = ({
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
         transition={{ duration: 0.2, ease: 'easeOut' }}
-        className="modal-content gold-outline gold-outline-thick relative w-full max-w-3xl mx-3 sm:mx-4 max-h-[90vh] overflow-y-auto"
+        className="modal-content gold-outline gold-outline-thick relative w-full max-w-3xl mx-3 sm:mx-4 max-h-[90vh] overflow-y-auto gold-scrollbar-wide"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

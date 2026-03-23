@@ -986,7 +986,29 @@ def delete_active_mob(db: Session, active_mob: ActiveMob):
 
 
 def get_mobs_at_location(db: Session, location_id: int):
-    """Get alive/in_battle mobs at a location for public display."""
+    """Get alive/in_battle mobs at a location. Respawn dead mobs if respawn_at has passed."""
+    from datetime import datetime
+
+    # 1. Lazy respawn: find dead mobs at this location whose respawn_at <= now
+    now = datetime.utcnow()
+    dead_mobs = db.query(ActiveMob).filter(
+        ActiveMob.location_id == location_id,
+        ActiveMob.status == "dead",
+        ActiveMob.respawn_at != None,
+        ActiveMob.respawn_at <= now,
+    ).all()
+
+    for mob in dead_mobs:
+        mob.status = "alive"
+        mob.battle_id = None
+        mob.killed_at = None
+        mob.respawn_at = None
+        mob.spawned_at = now
+
+    if dead_mobs:
+        db.commit()
+
+    # 2. Original query (unchanged)
     active_mobs = db.query(ActiveMob).filter(
         ActiveMob.location_id == location_id,
         ActiveMob.status.in_(["alive", "in_battle"]),

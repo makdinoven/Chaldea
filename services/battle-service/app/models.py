@@ -3,7 +3,8 @@ from datetime import datetime
 from enum import Enum
 
 from sqlalchemy import (
-    Column, Integer, DateTime, ForeignKey, Enum as SQLEnum, String, JSON
+    Column, Integer, BigInteger, Boolean, DateTime, ForeignKey,
+    Enum as SQLEnum, String, JSON, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from database import Base
@@ -48,6 +49,12 @@ class Battle(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow
+    )
+    location_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
+    is_paused: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0"
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -149,3 +156,37 @@ class BattleHistory(Base):
         SQLEnum(BattleResult), nullable=False
     )
     finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class JoinRequestStatus(str, Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+
+
+class BattleJoinRequest(Base):
+    __tablename__ = "battle_join_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    battle_id: Mapped[int] = mapped_column(
+        ForeignKey("battles.id"), index=True
+    )
+    character_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(Integer)
+    team: Mapped[int] = mapped_column(Integer)
+    status: Mapped[JoinRequestStatus] = mapped_column(
+        SQLEnum(JoinRequestStatus), default=JoinRequestStatus.pending
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    reviewed_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'battle_id', 'character_id', name='uq_bjr_battle_character'
+        ),
+    )
