@@ -12,6 +12,7 @@ import PlaceholderTab from './PlaceholderTab';
 import CharacterTab from './CharacterTab/CharacterTab';
 import SkillsTab from './SkillsTab/SkillsTab';
 import QuestLogTab from './QuestLogTab';
+import BattlesTab from './BattlesTab/BattlesTab';
 
 const ProfilePage = () => {
   const dispatch = useAppDispatch();
@@ -60,6 +61,8 @@ const ProfilePage = () => {
         return <SkillsTab characterId={characterId} />;
       case 'quests':
         return <QuestLogTab characterId={characterId} />;
+      case 'battles':
+        return <BattlesTab characterId={characterId} />;
       case 'logs':
         return <PlaceholderTab tabName="Логи персонажа" />;
       case 'titles':

@@ -142,3 +142,33 @@ class PvpAttackResponse(BaseModel):
     battle_url: str
     attacker_character_id: int
     victim_character_id: int
+
+
+# --- Battle History schemas ---
+
+class BattleHistoryItem(BaseModel):
+    battle_id: int
+    opponent_names: List[str]
+    opponent_character_ids: List[int]
+    battle_type: str
+    result: str
+    finished_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class BattleStats(BaseModel):
+    total: int
+    wins: int
+    losses: int
+    winrate: float
+
+
+class BattleHistoryResponse(BaseModel):
+    history: List[BattleHistoryItem]
+    stats: BattleStats
+    page: int
+    per_page: int
+    total_count: int
+    total_pages: int

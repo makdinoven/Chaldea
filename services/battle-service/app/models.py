@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 
 from sqlalchemy import (
-    Column, Integer, DateTime, ForeignKey, Enum as SQLEnum, String
+    Column, Integer, DateTime, ForeignKey, Enum as SQLEnum, String, JSON
 )
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from database import Base
@@ -21,6 +21,11 @@ class BattleType(str, Enum):
     pvp_training = "pvp_training"
     pvp_death = "pvp_death"
     pvp_attack = "pvp_attack"
+
+
+class BattleResult(str, Enum):
+    victory = "victory"
+    defeat = "defeat"
 
 
 class PvpInvitationStatus(str, Enum):
@@ -126,3 +131,21 @@ class PvpInvitation(Base):
         DateTime, default=datetime.utcnow
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class BattleHistory(Base):
+    __tablename__ = "battle_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    battle_id: Mapped[int] = mapped_column(Integer, index=True)
+    character_id: Mapped[int] = mapped_column(Integer, index=True)
+    character_name: Mapped[str] = mapped_column(String(100))
+    opponent_names = Column(JSON, nullable=False)
+    opponent_character_ids = Column(JSON, nullable=False)
+    battle_type: Mapped[BattleType] = mapped_column(
+        SQLEnum(BattleType), nullable=False
+    )
+    result: Mapped[BattleResult] = mapped_column(
+        SQLEnum(BattleResult), nullable=False
+    )
+    finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
