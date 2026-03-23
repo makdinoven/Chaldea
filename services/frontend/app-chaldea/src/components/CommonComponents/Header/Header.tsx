@@ -65,7 +65,7 @@ const Header = () => {
   const userAvatar = avatar ?? '';
 
   return (
-    <header className={`relative z-50 w-full max-w-[1240px] mx-auto mt-5 flex items-center justify-between mb-20 px-4 sm:px-6 py-3 ${isLocationPage ? 'bg-black/70 rounded-card backdrop-blur-sm' : ''}`}>
+    <header className={`relative z-50 w-full max-w-[1240px] mx-auto mt-5 flex items-center justify-between mb-20 px-4 sm:px-6 py-3 ${isLocationPage ? 'bg-black/40 rounded-card backdrop-blur-sm' : ''}`}>
       {/* Left section: Logo + Nav */}
       <div className="flex items-center gap-10">
         <Link to="/home" className="flex-shrink-0">

@@ -87,7 +87,7 @@ const LocationMobs = ({ locationId, characterId }: LocationMobsProps) => {
   const mobCount = mobs.length;
 
   return (
-    <section className="bg-black/70 rounded-card">
+    <section className="bg-black/40 rounded-card">
       {/* Collapsible header */}
       <button
         onClick={() => setIsOpen((prev) => !prev)}

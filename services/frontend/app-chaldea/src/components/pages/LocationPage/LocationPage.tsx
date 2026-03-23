@@ -342,7 +342,7 @@ const LocationPage = () => {
   return (
     <div className="flex flex-col gap-4 sm:gap-6 pb-10">
       {/* Header block */}
-      <div className="bg-black/70 rounded-card p-4 sm:p-6 backdrop-blur-sm flex flex-col gap-4">
+      <div className="bg-black/40 rounded-card p-4 sm:p-6 backdrop-blur-sm flex flex-col gap-4">
         {/* Back button */}
         <button
           onClick={() => navigate(-1)}
@@ -409,7 +409,7 @@ const LocationPage = () => {
         )}
 
         {/* Posts */}
-        <section className="bg-black/70 rounded-card p-4 sm:p-6 flex flex-col gap-4">
+        <section className="bg-black/40 rounded-card p-4 sm:p-6 flex flex-col gap-4">
           <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
             Посты
           </h2>
@@ -456,7 +456,7 @@ const LocationPage = () => {
         </section>
 
         {/* Neighbors */}
-        <section className={`bg-black/70 rounded-card p-4 sm:p-6 ${inBattle ? 'pointer-events-none opacity-50' : ''}`}>
+        <section className={`bg-black/40 rounded-card p-4 sm:p-6 ${inBattle ? 'pointer-events-none opacity-50' : ''}`}>
           <NeighborsSection neighbors={location.neighbors} />
         </section>
       </div>
