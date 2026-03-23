@@ -35,6 +35,7 @@ import AdminModerationPage from "../AdminModerationPage/AdminModerationPage";
 import AdminNpcsPage from "../AdminNpcsPage/AdminNpcsPage";
 import AdminMobTemplates from "../Admin/MobsPage/AdminMobTemplates";
 import AdminActiveMobs from "../Admin/MobsPage/AdminActiveMobs";
+import AdminBattlesPage from "../Admin/BattlesPage/AdminBattlesPage";
 import SkillTreePage from "../SkillTreeView/SkillTreePage";
 import CharactersHubPage from "../pages/CharactersPage/CharactersHubPage";
 import CharactersListPage from "../pages/CharactersPage/CharactersListPage";
@@ -163,6 +164,11 @@ const App = () => {
             <Route path="admin/active-mobs" element={
               <ProtectedRoute requiredPermission="mobs:manage">
                 <AdminActiveMobs />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/battles" element={
+              <ProtectedRoute requiredPermission="battles:manage">
+                <AdminBattlesPage />
               </ProtectedRoute>
             } />
             <Route path="chat/history" element={<ChatHistoryPage />} />

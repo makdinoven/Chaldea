@@ -172,3 +172,43 @@ class BattleHistoryResponse(BaseModel):
     per_page: int
     total_count: int
     total_pages: int
+
+
+# --- Admin Battle Monitor schemas ---
+
+class AdminBattleParticipant(BaseModel):
+    participant_id: int
+    character_id: int
+    character_name: str
+    level: int
+    team: int
+    is_npc: bool
+
+
+class AdminBattleListItem(BaseModel):
+    id: int
+    status: str
+    battle_type: str
+    created_at: datetime
+    updated_at: datetime
+    participants: List[AdminBattleParticipant]
+
+
+class AdminBattleListResponse(BaseModel):
+    battles: List[AdminBattleListItem]
+    total: int
+    page: int
+    per_page: int
+
+
+class AdminBattleStateResponse(BaseModel):
+    battle: dict
+    snapshot: Optional[list] = None
+    runtime: Optional[dict] = None
+    has_redis_state: bool
+
+
+class AdminForceFinishResponse(BaseModel):
+    ok: bool
+    battle_id: int
+    message: str

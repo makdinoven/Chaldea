@@ -16,10 +16,12 @@ from schemas import (
     CancelInvitationResponse, InBattleResponse,
     PvpAttackRequest, PvpAttackResponse,
     BattleHistoryItem, BattleStats, BattleHistoryResponse,
+    AdminBattleParticipant, AdminBattleListItem, AdminBattleListResponse,
+    AdminBattleStateResponse, AdminForceFinishResponse,
 )
 from models import BattleType, BattleHistory, BattleResult, PvpInvitation, PvpInvitationStatus
 from rabbitmq_publisher import publish_notification
-from auth_http import get_current_user_via_http, UserRead
+from auth_http import get_current_user_via_http, UserRead, require_permission
 from mongo_client import get_mongo_db
 from database import get_db
 from battle_engine import decrement_cooldowns, set_cooldown
@@ -1842,6 +1844,253 @@ async def get_battle_history(
         per_page=per_page,
         total_count=total_count,
         total_pages=total_pages,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints — battle monitor (FEAT-067)
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/active", response_model=AdminBattleListResponse)
+async def admin_list_active_battles(
+    battle_type: str | None = Query(default=None, description="Filter by battle type"),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    _admin: UserRead = Depends(require_permission("battles:manage")),
+):
+    """List all active battles (pending / in_progress) with participant info."""
+
+    # Build WHERE clause
+    where = "b.status IN ('pending', 'in_progress')"
+    params: dict = {}
+    if battle_type:
+        where += " AND b.battle_type = :bt"
+        params["bt"] = battle_type
+
+    # Total count
+    count_result = await db.execute(
+        text(f"SELECT COUNT(*) FROM battles b WHERE {where}"),
+        params,
+    )
+    total = count_result.scalar() or 0
+
+    # Paginated battle IDs
+    offset = (page - 1) * per_page
+    battles_result = await db.execute(
+        text(f"""
+            SELECT b.id, b.status, b.battle_type, b.created_at, b.updated_at
+            FROM battles b
+            WHERE {where}
+            ORDER BY b.created_at DESC
+            LIMIT :lim OFFSET :off
+        """),
+        {**params, "lim": per_page, "off": offset},
+    )
+    battle_rows = battles_result.fetchall()
+
+    if not battle_rows:
+        return AdminBattleListResponse(battles=[], total=total, page=page, per_page=per_page)
+
+    # Collect battle IDs and fetch participants + character info
+    battle_ids = [r[0] for r in battle_rows]
+    placeholders = ", ".join(f":bid{i}" for i in range(len(battle_ids)))
+    bid_params = {f"bid{i}": bid for i, bid in enumerate(battle_ids)}
+
+    parts_result = await db.execute(
+        text(f"""
+            SELECT bp.battle_id, bp.id AS participant_id, bp.character_id, bp.team,
+                   c.name, c.level, c.is_npc
+            FROM battle_participants bp
+            JOIN characters c ON c.id = bp.character_id
+            WHERE bp.battle_id IN ({placeholders})
+            ORDER BY bp.battle_id, bp.id
+        """),
+        bid_params,
+    )
+    part_rows = parts_result.fetchall()
+
+    # Group participants by battle_id
+    parts_by_battle: dict[int, list[AdminBattleParticipant]] = {}
+    for pr in part_rows:
+        bid = pr[0]
+        parts_by_battle.setdefault(bid, []).append(
+            AdminBattleParticipant(
+                participant_id=pr[1],
+                character_id=pr[2],
+                team=pr[3],
+                character_name=pr[4] or f"Персонаж #{pr[2]}",
+                level=pr[5] or 1,
+                is_npc=bool(pr[6]),
+            )
+        )
+
+    battles = []
+    for br in battle_rows:
+        battles.append(AdminBattleListItem(
+            id=br[0],
+            status=br[1],
+            battle_type=br[2],
+            created_at=br[3],
+            updated_at=br[4],
+            participants=parts_by_battle.get(br[0], []),
+        ))
+
+    return AdminBattleListResponse(battles=battles, total=total, page=page, per_page=per_page)
+
+
+@router.get("/admin/{battle_id}/state", response_model=AdminBattleStateResponse)
+async def admin_get_battle_state(
+    battle_id: int,
+    db: AsyncSession = Depends(get_db),
+    _admin: UserRead = Depends(require_permission("battles:manage")),
+):
+    """Get full battle state for admin viewing (no ownership check)."""
+
+    # Verify battle exists in MySQL
+    battle = await get_battle(db, battle_id)
+    if not battle:
+        raise HTTPException(status_code=404, detail="Бой не найден")
+
+    battle_dict = {
+        "id": battle.id,
+        "status": battle.status.value if hasattr(battle.status, "value") else str(battle.status),
+        "battle_type": battle.battle_type.value if hasattr(battle.battle_type, "value") else str(battle.battle_type),
+        "created_at": battle.created_at.isoformat() if battle.created_at else None,
+    }
+
+    # Load Redis state
+    state = await load_state(battle_id)
+    has_redis_state = state is not None
+
+    # Load snapshot from Redis cache or MongoDB fallback
+    rds = await get_redis_client()
+    snapshot = await get_cached_snapshot(rds, battle_id)
+    if snapshot is None:
+        snap_doc = await load_snapshot(battle_id)
+        if snap_doc:
+            snapshot = snap_doc.get("participants")
+            if snapshot:
+                await cache_snapshot(rds, battle_id, snapshot)
+
+    runtime = None
+    if state is not None:
+        runtime = {
+            "turn_number": state["turn_number"],
+            "deadline_at": state["deadline_at"],
+            "current_actor": state["next_actor"],
+            "next_actor": next_pid_after(state["next_actor"], state["turn_order"]),
+            "first_actor": state["first_actor"],
+            "turn_order": state["turn_order"],
+            "total_turns": state.get("total_turns", 0),
+            "last_turn": state.get("last_turn", 0),
+            "participants": {
+                pid: {
+                    "hp": state["participants"][pid]["hp"],
+                    "mana": state["participants"][pid]["mana"],
+                    "energy": state["participants"][pid]["energy"],
+                    "stamina": state["participants"][pid]["stamina"],
+                    "max_hp": state["participants"][pid].get("max_hp", 0),
+                    "max_mana": state["participants"][pid].get("max_mana", 0),
+                    "max_energy": state["participants"][pid].get("max_energy", 0),
+                    "max_stamina": state["participants"][pid].get("max_stamina", 0),
+                    "cooldowns": state["participants"][pid]["cooldowns"],
+                    "fast_slots": state["participants"][pid].get("fast_slots", []),
+                    "team": state["participants"][pid]["team"],
+                    "character_id": state["participants"][pid]["character_id"],
+                }
+                for pid in state["participants"]
+            },
+            "active_effects": state.get("active_effects", {}),
+        }
+
+    return AdminBattleStateResponse(
+        battle=battle_dict,
+        snapshot=snapshot,
+        runtime=runtime,
+        has_redis_state=has_redis_state,
+    )
+
+
+@router.post("/admin/{battle_id}/force-finish", response_model=AdminForceFinishResponse)
+async def admin_force_finish_battle(
+    battle_id: int,
+    db: AsyncSession = Depends(get_db),
+    _admin: UserRead = Depends(require_permission("battles:manage")),
+):
+    """Force-finish a battle: no winner, no rewards, no PvP consequences."""
+
+    # 1. Validate battle exists and is active
+    battle = await get_battle(db, battle_id)
+    if not battle:
+        raise HTTPException(status_code=404, detail="Бой не найден")
+
+    battle_status = battle.status.value if hasattr(battle.status, "value") else str(battle.status)
+    if battle_status in ("finished", "forfeit"):
+        raise HTTPException(status_code=400, detail="Бой уже завершён")
+
+    # 2. Load Redis state (may be None if expired)
+    state = await load_state(battle_id)
+
+    # 3. Sync final resources back to character_attributes (if Redis state exists)
+    if state:
+        for pid_str, pdata in state["participants"].items():
+            char_id = pdata["character_id"]
+            try:
+                await db.execute(
+                    text("""
+                        UPDATE character_attributes
+                        SET current_health = :hp,
+                            current_mana = :mana,
+                            current_energy = :energy,
+                            current_stamina = :stamina
+                        WHERE character_id = :cid
+                    """),
+                    {
+                        "hp": max(0, int(pdata["hp"])),
+                        "mana": max(0, int(pdata["mana"])),
+                        "energy": max(0, int(pdata["energy"])),
+                        "stamina": max(0, int(pdata["stamina"])),
+                        "cid": char_id,
+                    },
+                )
+                await db.commit()
+                logger.info(f"Force-finish: ресурсы персонажа {char_id} синхронизированы")
+            except Exception as e:
+                logger.error(f"Force-finish: не удалось синхронизировать ресурсы персонажа {char_id}: {e}")
+
+    # 4. Set battle status to 'finished' in MySQL
+    await finish_battle(db, battle_id)
+
+    # 5. Clean up Redis state and deadlines
+    redis_client = await get_redis_client()
+    await redis_client.delete(state_key(battle_id))
+
+    # Clean up deadline ZSET entries
+    if state:
+        for pid_str in state["participants"]:
+            await redis_client.zrem(ZSET_DEADLINES, f"{battle_id}:{pid_str}")
+
+    # Clean up snapshot and turns keys
+    await redis_client.delete(f"battle:{battle_id}:snapshot")
+    await redis_client.delete(f"battle:{battle_id}:turns")
+
+    # 6. Publish force-finish event via Pub/Sub to notify connected clients
+    await redis_client.publish(
+        f"battle:{battle_id}:your_turn",
+        "force_finished",
+    )
+
+    # 7. Autobattle cleanup: with Redis state deleted, autobattle-service
+    # will get 404 on next state fetch and stop acting for this battle.
+    # No explicit deregistration needed.
+
+    logger.info(f"Battle {battle_id} force-finished by admin {_admin.username}")
+
+    return AdminForceFinishResponse(
+        ok=True,
+        battle_id=battle_id,
+        message="Бой принудительно завершён",
     )
 
 
