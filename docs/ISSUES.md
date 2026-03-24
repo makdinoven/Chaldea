@@ -18,11 +18,16 @@
 ~~**Сервис:** battle-service~~
 ~~**Исправлено в FEAT-059:** Удалён дублирующий блок apply_new_effects для enemy в секции ATTACK.~~
 
-### 6. Memory leak в autobattle-service
+### ~~6. Memory leak в autobattle-service~~ Частично исправлен (FEAT-071)
+~~**Сервис:** autobattle-service~~
+~~**Описание:** `LAST_STATS` dict растёт бесконечно — записи никогда не удаляются после завершения боя.~~
+**Частично исправлено:** `_cleanup_battle()` добавлена, но cleanup LAST_STATS не работает корректно из-за бага #22 (несовпадение ключей).
+
+### 22. Баг: несовпадение ключей LAST_STATS и HISTORY в autobattle-service
 **Сервис:** autobattle-service
 **Файл:** `services/autobattle-service/app/main.py`
-**Описание:** `LAST_STATS` dict растёт бесконечно — записи никогда не удаляются после завершения боя. При длительной работе сервис будет потреблять всё больше памяти.
-**Решение:** Очищать записи для (battle_id, pid) при завершении боя, или использовать TTL-cache (например `cachetools.TTLCache`).
+**Описание:** `build_features()` (строка 189, 227) использует ключ `(turn_number, pid)` для LAST_STATS и HISTORY, но `handle_turn()` (строка 300) записывает в HISTORY с ключом `(bid, pid)`. `_cleanup_battle()` (строки 254-257) ищет записи по `k[0] == bid`, но LAST_STATS хранит `(turn_number, pid)` — очистка не сработает если turn_number != bid. HISTORY имеет смешанные ключи.
+**Решение:** Привести все ключи к единому формату `(bid, pid)` в build_features и handle_turn.
 
 ### ~~7. Баг: shield нельзя экипировать через API~~ DONE (FEAT-041)
 ~~**Сервис:** inventory-service~~

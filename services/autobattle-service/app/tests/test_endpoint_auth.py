@@ -2,11 +2,12 @@
 Tests for endpoint authentication in autobattle-service.
 
 Covers:
-- AB1: POST /mode        — admin-only (battles:manage)
-- AB2: POST /register    — admin-only (battles:manage)
-- AB3: POST /unregister  — admin-only (battles:manage)
+- AB1: POST /mode        — JWT auth required (any authenticated user)
+- AB2: POST /register    — JWT auth required + ownership validation
+- AB3: POST /unregister  — JWT auth required + OWNER check
 
-All three endpoints require the `battles:manage` permission.
+After FEAT-071: endpoints no longer require `battles:manage` permission.
+They use `get_current_user_via_http` (JWT-only auth).
 
 Uses dependency overrides and patches to avoid real Redis connections.
 """
@@ -29,6 +30,7 @@ sys.modules["aioredis"] = aioredis_mock
 clients_mock = MagicMock()
 clients_mock.get_battle_state = AsyncMock(return_value={})
 clients_mock.post_battle_action = AsyncMock(return_value={})
+clients_mock.get_character_owner = AsyncMock(return_value=None)
 sys.modules["clients"] = clients_mock
 
 # Mock strategy module
@@ -54,12 +56,12 @@ def _mock_response(status_code: int, json_data: dict = None):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# AB1: POST /mode — requires battles:manage
+# AB1: POST /mode — JWT auth required (any authenticated user)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestSetModeAuth:
-    """Auth + permission tests for POST /mode."""
+    """Auth tests for POST /mode."""
 
     def test_missing_token_returns_401(self):
         with TestClient(app) as client:
@@ -78,8 +80,8 @@ class TestSetModeAuth:
         assert response.status_code == 401
 
     @patch("auth_http.requests.get")
-    def test_no_permission_returns_403(self, mock_auth_get):
-        """User without battles:manage permission -> 403."""
+    def test_regular_user_passes_auth(self, mock_auth_get):
+        """Any authenticated user can set mode (no permission check)."""
         mock_auth_get.return_value = _mock_response(
             200, {"id": 2, "username": "user", "role": "user", "permissions": []}
         )
@@ -89,7 +91,7 @@ class TestSetModeAuth:
                 json={"mode": "attack"},
                 headers={"Authorization": "Bearer fake-token"},
             )
-        assert response.status_code == 403
+        assert response.status_code not in (401, 403)
 
     @patch("auth_http.requests.get")
     def test_with_permission_passes_auth(self, mock_auth_get):
@@ -114,12 +116,12 @@ class TestSetModeAuth:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# AB2: POST /register — requires battles:manage
+# AB2: POST /register — JWT auth required
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestRegisterAuth:
-    """Auth + permission tests for POST /register."""
+    """Auth tests for POST /register."""
 
     def test_missing_token_returns_401(self):
         with TestClient(app) as client:
@@ -140,8 +142,8 @@ class TestRegisterAuth:
         assert response.status_code == 401
 
     @patch("auth_http.requests.get")
-    def test_no_permission_returns_403(self, mock_auth_get):
-        """User without battles:manage -> 403."""
+    def test_regular_user_passes_auth(self, mock_auth_get):
+        """Any authenticated user can register (no permission check, battle_id=0 skips ownership)."""
         mock_auth_get.return_value = _mock_response(
             200, {"id": 2, "username": "user", "role": "user", "permissions": []}
         )
@@ -151,7 +153,7 @@ class TestRegisterAuth:
                 json={"participant_id": 1, "battle_id": 0},
                 headers={"Authorization": "Bearer fake-token"},
             )
-        assert response.status_code == 403
+        assert response.status_code not in (401, 403)
 
     @patch("auth_http.requests.get")
     def test_with_permission_passes_auth(self, mock_auth_get):
@@ -175,12 +177,12 @@ class TestRegisterAuth:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# AB3: POST /unregister — requires battles:manage
+# AB3: POST /unregister — JWT auth required
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestUnregisterAuth:
-    """Auth + permission tests for POST /unregister."""
+    """Auth tests for POST /unregister."""
 
     def test_missing_token_returns_401(self):
         with TestClient(app) as client:
@@ -199,8 +201,8 @@ class TestUnregisterAuth:
         assert response.status_code == 401
 
     @patch("auth_http.requests.get")
-    def test_no_permission_returns_403(self, mock_auth_get):
-        """User without battles:manage -> 403."""
+    def test_regular_user_passes_auth(self, mock_auth_get):
+        """Any authenticated user can unregister (no permission check)."""
         mock_auth_get.return_value = _mock_response(
             200, {"id": 2, "username": "user", "role": "user", "permissions": []}
         )
@@ -210,7 +212,7 @@ class TestUnregisterAuth:
                 json={"participant_id": 1},
                 headers={"Authorization": "Bearer fake-token"},
             )
-        assert response.status_code == 403
+        assert response.status_code not in (401, 403)
 
     @patch("auth_http.requests.get")
     def test_with_permission_passes_auth(self, mock_auth_get):

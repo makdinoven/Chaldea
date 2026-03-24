@@ -63,6 +63,7 @@ interface RuntimeState {
   deadline_at: string;
   is_paused?: boolean;
   paused_reason?: string | null;
+  rewards?: BattleRewards | null;
 }
 
 interface CharacterData {
@@ -373,13 +374,16 @@ const BattlePage = () => {
       } else if (oppHealth <= 0) {
         battleResultSetRef.current = true;
         setBattleResult({ winner: myData.name ?? "", isLose: false });
-        // Show rewards modal if we have PvE rewards
-        if (pveRewards) {
+
+        // Use rewards from action response, or fall back to state (autobattle)
+        const rewards = pveRewards ?? runtimeData?.rewards ?? null;
+        if (rewards) {
+          setPveRewards(rewards);
           setShowRewardsModal(true);
         }
       }
     }
-  }, [opponentData, myData, pveRewards, isSpectateMode]);
+  }, [opponentData, myData, pveRewards, runtimeData, isSpectateMode]);
 
   const handleSendTurn = async () => {
     if (!runtimeData || isSpectateMode || isPaused) return;
@@ -431,21 +435,25 @@ const BattlePage = () => {
   const toggleAutoBattle = async () => {
     if (isAutoBattleOn) {
       await postAutoBattleOff();
+      setIsAutoBattleOn(false);
     } else {
-      await postAutoBattleOn();
+      const success = await postAutoBattleOn();
+      if (success) {
+        setIsAutoBattleOn(true);
+      }
     }
-
-    setIsAutoBattleOn((prev) => !prev);
   };
 
-  const postAutoBattleOn = async () => {
+  const postAutoBattleOn = async (): Promise<boolean> => {
     try {
       await axios.post(`${BASE_URL_AUTOBATTLES}/register`, {
         participant_id: myData.participant_id,
         battle_id: Number(battleId),
       });
+      return true;
     } catch {
-      // silently handled — autobattle is optional
+      toast.error("Не удалось включить автобой");
+      return false;
     }
   };
 

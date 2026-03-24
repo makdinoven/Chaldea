@@ -14,3 +14,4 @@ scikit-learn
 numpy
 requests
 pytest
+pytest-asyncio

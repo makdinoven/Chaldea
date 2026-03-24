@@ -486,6 +486,7 @@ async def get_state_internal(battle_id: int):
             for pid in state["participants"]
         },
         "active_effects": state["active_effects"],
+        "rewards": state.get("rewards"),
     }
 
     return {"snapshot": snapshot, "runtime": runtime}
@@ -570,6 +571,7 @@ async def get_state(
                 "active_effects": state["active_effects"],
                 "is_paused": is_paused,
                 "paused_reason": paused_reason,
+                "rewards": state.get("rewards"),
                 }
 
     return {"snapshot": snapshot, "runtime": runtime}
@@ -1239,6 +1241,11 @@ async def _make_action_core(
             battle_rewards = await _distribute_pve_rewards(
                 battle_state, winner_team, turn_events
             )
+
+        # Store rewards in Redis state so frontend can read them via polling
+        if battle_rewards:
+            battle_state["rewards"] = battle_rewards.dict()
+            await save_state(battle_id, battle_state)
 
         # NPC death: mark defeated NPCs (not mobs) as dead
         if winner_team is not None:
