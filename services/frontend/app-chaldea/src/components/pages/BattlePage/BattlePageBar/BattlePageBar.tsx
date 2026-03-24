@@ -461,6 +461,12 @@ const BattlePageBar = ({
                   [SKILLS_KEYS[btn.type as keyof typeof SKILLS_KEYS]]: data,
                 }));
               }}
+              onClear={() => {
+                setTurnData((prev) => ({
+                  ...prev,
+                  [SKILLS_KEYS[btn.type as keyof typeof SKILLS_KEYS]]: null,
+                }));
+              }}
               key={btn.type}
               isClosed={isOpponentTurn}
               type={btn.type}
@@ -476,9 +482,30 @@ const BattlePageBar = ({
                 [SKILLS_KEYS.item]: data,
               }));
             }}
+            onClear={() => {
+              setTurnData((prev) => ({
+                ...prev,
+                [SKILLS_KEYS.item]: null,
+              }));
+            }}
             type={SKILLS_KEYS.item}
             isClosed={isOpponentTurn}
           />
+          {!isOpponentTurn && Object.values(turnData).some(Boolean) && (
+            <button
+              onClick={() => {
+                setTurnData({
+                  [SKILLS_KEYS.attack]: null,
+                  [SKILLS_KEYS.defense]: null,
+                  [SKILLS_KEYS.support]: null,
+                  [SKILLS_KEYS.item]: null,
+                });
+              }}
+              className="ml-2 text-xs uppercase text-white/60 hover:text-site-blue transition-colors duration-200 ease-site"
+            >
+              Очистить
+            </button>
+          )}
         </div>
       </div>
 
