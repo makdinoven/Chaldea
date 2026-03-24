@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
+import { AnimatePresence, motion } from 'motion/react';
 import useNavigateTo from '../../hooks/useNavigateTo';
 import { useRequireAuth } from '../../hooks/useRequireAuth';
 
 import RacePage from './RacePage/RacePage';
+import SubracePage from './SubracePage/SubracePage';
 import ClassPage from './ClassPage/ClassPage';
 import BiographyPage from './BiographyPage/BiographyPage';
 import SubmitPage from './SubmitPage/SubmitPage';
@@ -73,6 +75,7 @@ const INITIAL_CLASSES: ClassData[] = [
 
 const PAGE_TITLES = [
   'Выбор расы',
+  'Выбор подрасы',
   'Выбор класса',
   'Ввод биографии',
   'Ваш персонаж',
@@ -145,7 +148,16 @@ export default function CreateCharacterPage() {
     { pageId: 1, pageTitle: PAGE_TITLES[1] },
     { pageId: 2, pageTitle: PAGE_TITLES[2] },
     { pageId: 3, pageTitle: PAGE_TITLES[3] },
+    { pageId: 4, pageTitle: PAGE_TITLES[4] },
   ];
+
+  const handleIndexChange = (newIndex: number) => {
+    // Reset subrace when going back from subrace step to race step
+    if (currentIndex === 1 && newIndex === 0) {
+      setSelectedSubraceId(null);
+    }
+    setCurrentIndex(newIndex);
+  };
 
   const renderComponentById = (id: number) => {
     if (loading) {
@@ -161,18 +173,26 @@ export default function CreateCharacterPage() {
       );
     }
 
+    const selectedRaceObj = races.find((r) => r.id_race === selectedRaceId);
+
     switch (id) {
       case 0:
         return (
           <RacePage
             races={races}
             selectedRaceId={selectedRaceId}
-            selectedSubraceId={selectedSubraceId}
             onSelectRaceId={(raceId: number) => setSelectedRaceId(raceId)}
-            onSelectSubraceId={(subraceId: number) => setSelectedSubraceId(subraceId)}
           />
         );
       case 1:
+        return selectedRaceObj ? (
+          <SubracePage
+            selectedRace={selectedRaceObj}
+            selectedSubraceId={selectedSubraceId}
+            onSelectSubraceId={(subraceId: number) => setSelectedSubraceId(subraceId)}
+          />
+        ) : null;
+      case 2:
         return (
           <ClassPage
             classes={INITIAL_CLASSES}
@@ -180,18 +200,15 @@ export default function CreateCharacterPage() {
             onSelectClass={(classId: number) => setSelectedClassId(classId)}
           />
         );
-      case 2:
+      case 3:
         return (
           <BiographyPage
             onFormValuesChange={handleFormValuesChange}
             enteredFormValues={biography}
           />
         );
-      case 3: {
-        const selectedRace = races.find(
-          (r) => r.id_race === selectedRaceId,
-        );
-        const selectedSubrace = selectedRace?.subraces?.find(
+      case 4: {
+        const selectedSubrace = selectedRaceObj?.subraces?.find(
           (s) => s.id_subrace === selectedSubraceId,
         );
         const selectedClass = INITIAL_CLASSES.find(
@@ -201,7 +218,7 @@ export default function CreateCharacterPage() {
         return (
           <SubmitPage
             biography={biography}
-            selectedRace={selectedRace?.name || ''}
+            selectedRace={selectedRaceObj?.name || ''}
             selectedRaceId={selectedRaceId}
             selectedSubrace={selectedSubrace?.name || ''}
             selectedSubraceId={selectedSubraceId}
@@ -244,14 +261,25 @@ export default function CreateCharacterPage() {
 
       {/* Page content */}
       <div className="flex flex-col items-center w-full flex-1 justify-between mb-10">
-        {renderComponentById(pages[currentIndex].pageId)}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={currentIndex}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.25 }}
+            className="w-full"
+          >
+            {renderComponentById(pages[currentIndex].pageId)}
+          </motion.div>
+        </AnimatePresence>
       </div>
 
       {/* Pagination */}
       <Pagination
         pages={pages}
         currentIndex={currentIndex}
-        onIndexChange={setCurrentIndex}
+        onIndexChange={handleIndexChange}
       />
     </div>
   );

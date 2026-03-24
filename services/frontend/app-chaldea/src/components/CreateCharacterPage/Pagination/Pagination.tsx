@@ -1,11 +1,18 @@
-import { useState } from 'react';
-
 import CircleButton from '../../HomePage/Slider/CircleButton/CircleButton';
 import PaginationButton from './PaginationButton/PaginationButton';
 
-import styles from './Pagination.module.scss';
+interface PageData {
+  pageId: number;
+  pageTitle: string;
+}
 
-export default function Pagination({ pages, currentIndex, onIndexChange }) {
+interface PaginationProps {
+  pages: PageData[];
+  currentIndex: number;
+  onIndexChange: (index: number) => void;
+}
+
+const Pagination = ({ pages, currentIndex, onIndexChange }: PaginationProps) => {
   const handlePrev = () => {
     onIndexChange(currentIndex === 0 ? 0 : currentIndex - 1);
   };
@@ -16,19 +23,19 @@ export default function Pagination({ pages, currentIndex, onIndexChange }) {
     );
   };
 
-  const handleCircleClick = (index) => {
+  const handleCircleClick = (index: number) => {
     onIndexChange(index);
   };
 
   return (
-    <div className={styles.pagination_container}>
+    <div className="flex justify-between w-full sm:w-1/2 items-center">
       <PaginationButton
         isDisabled={currentIndex === 0}
-        text='Назад'
+        text="Назад"
         onClick={handlePrev}
       />
 
-      <div className={styles.circle_buttons_container}>
+      <div className="flex gap-[10px] items-center">
         {pages.map((_, index) => (
           <CircleButton
             key={index}
@@ -40,9 +47,11 @@ export default function Pagination({ pages, currentIndex, onIndexChange }) {
 
       <PaginationButton
         isDisabled={currentIndex === pages.length - 1}
-        text='Вперед'
+        text="Вперед"
         onClick={handleNext}
       />
     </div>
   );
-}
+};
+
+export default Pagination;
