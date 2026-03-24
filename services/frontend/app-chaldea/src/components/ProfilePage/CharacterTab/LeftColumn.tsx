@@ -32,7 +32,8 @@ const LeftColumn = ({ characterId }: LeftColumnProps) => {
   const statPoints = profile?.stat_points ?? 0;
 
   return (
-    <div className="w-full lg:min-w-[260px] flex flex-col gap-4 lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto gold-scrollbar lg:pr-1 order-2 lg:order-1 bg-black/30 rounded-card p-4">
+    <div className="w-full lg:min-w-[260px] lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto gold-scrollbar-wide [direction:rtl] order-2 lg:order-1 bg-black/30 rounded-card">
+      <div className="flex flex-col gap-4 [direction:ltr] p-4">
       {/* Character name, race, class */}
       {profile && (
         <div className="flex flex-col gap-1.5">
@@ -100,6 +101,7 @@ const LeftColumn = ({ characterId }: LeftColumnProps) => {
           </div>
         </>
       )}
+      </div>
     </div>
   );
 };
