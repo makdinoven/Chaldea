@@ -1005,6 +1005,19 @@ def get_mobs_at_location(db: Session, location_id: int):
         mob.respawn_at = None
         mob.spawned_at = now
 
+        # Reset mob HP/mana/energy/stamina to max on respawn
+        db.execute(
+            sa_text(
+                "UPDATE character_attributes "
+                "SET current_health = max_health, "
+                "    current_mana = max_mana, "
+                "    current_energy = max_energy, "
+                "    current_stamina = max_stamina "
+                "WHERE character_id = :cid"
+            ),
+            {"cid": mob.character_id},
+        )
+
     if dead_mobs:
         db.commit()
 
