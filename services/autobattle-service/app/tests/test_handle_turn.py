@@ -120,12 +120,13 @@ class TestHandleTurnRetry:
         _cleanup()
 
     @pytest.mark.asyncio
+    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
     @patch("main.get_battle_state", new_callable=AsyncMock)
     async def test_retries_on_httpx_failure_then_succeeds(
-        self, mock_state, mock_action, mock_sleep, mock_features
+        self, mock_state, mock_action, mock_sleep, mock_features, mock_strategy
     ):
         """handle_turn retries when post_battle_action raises, then succeeds."""
         ctx = _make_battle_ctx(current_actor=10)
@@ -149,12 +150,13 @@ class TestHandleTurnRetry:
         mock_sleep.assert_called_with(2)
 
     @pytest.mark.asyncio
+    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
     @patch("main.get_battle_state", new_callable=AsyncMock)
     async def test_gives_up_after_max_retries(
-        self, mock_state, mock_action, mock_sleep, mock_features
+        self, mock_state, mock_action, mock_sleep, mock_features, mock_strategy
     ):
         """handle_turn gives up after MAX_RETRIES+1 attempts."""
         ctx = _make_battle_ctx(current_actor=10)
@@ -174,12 +176,13 @@ class TestHandleTurnRetry:
         assert mock_sleep.call_count == MAX_RETRIES
 
     @pytest.mark.asyncio
+    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
     @patch("main.get_battle_state", new_callable=AsyncMock)
     async def test_stops_retry_if_not_our_turn(
-        self, mock_state, mock_action, mock_sleep, mock_features
+        self, mock_state, mock_action, mock_sleep, mock_features, mock_strategy
     ):
         """On retry, if current_actor changed (not our turn), stop immediately."""
         ctx_our_turn = _make_battle_ctx(current_actor=10)
@@ -200,12 +203,13 @@ class TestHandleTurnRetry:
         assert mock_state.call_count == 2
 
     @pytest.mark.asyncio
+    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
     @patch("main.get_battle_state", new_callable=AsyncMock)
     async def test_exponential_backoff_delays(
-        self, mock_state, mock_action, mock_sleep, mock_features
+        self, mock_state, mock_action, mock_sleep, mock_features, mock_strategy
     ):
         """Retry delays follow exponential backoff: 2s, 4s, 8s."""
         ctx = _make_battle_ctx(current_actor=10)
@@ -286,11 +290,12 @@ class TestCleanupOnBattleFinish:
         assert (2, 30) in HISTORY  # untouched
 
     @pytest.mark.asyncio
+    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.post_battle_action", new_callable=AsyncMock)
     @patch("main.get_battle_state", new_callable=AsyncMock)
     async def test_handle_turn_triggers_cleanup_on_battle_finished(
-        self, mock_state, mock_action, mock_features
+        self, mock_state, mock_action, mock_features, mock_strategy
     ):
         """When post_battle_action returns battle_finished=true, cleanup is triggered."""
         ctx = _make_battle_ctx(current_actor=10)
@@ -319,11 +324,12 @@ class TestCleanupOnBattleFinish:
         assert (1, 10) not in HISTORY
 
     @pytest.mark.asyncio
+    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.post_battle_action", new_callable=AsyncMock)
     @patch("main.get_battle_state", new_callable=AsyncMock)
     async def test_handle_turn_no_cleanup_when_battle_continues(
-        self, mock_state, mock_action, mock_features
+        self, mock_state, mock_action, mock_features, mock_strategy
     ):
         """When battle is not finished, no cleanup occurs."""
         ctx = _make_battle_ctx(current_actor=10)
