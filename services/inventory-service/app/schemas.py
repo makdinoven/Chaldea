@@ -287,6 +287,19 @@ class EquipItemRequest(BaseModel):
     item_id: int
 
 
+# -----------------------------------------------------------------------------
+# Consume item (service-to-service, battle usage)
+# -----------------------------------------------------------------------------
+
+class ConsumeItemRequest(BaseModel):
+    item_id: int
+
+
+class ConsumeItemResponse(BaseModel):
+    status: str
+    remaining_quantity: int
+
+
 class FastSlot(BaseModel):
     slot_type: str
     item_id: int

@@ -13,6 +13,26 @@ async def get_item(item_id: int) -> dict:
         r.raise_for_status()
         return r.json()
 
+async def consume_item(character_id: int, item_id: int) -> dict:
+    """
+    Call inventory-service to consume 1 unit of item from character's inventory.
+    Returns {"status": "ok", "remaining_quantity": N} on success,
+    or {"status": "error", "detail": "..."} on failure.
+    """
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.post(
+            f"{BASE}/inventory/internal/characters/{character_id}/consume_item",
+            json={"item_id": item_id},
+        )
+        if r.status_code != 200:
+            try:
+                detail = r.json().get("detail", "Unknown error")
+            except Exception:
+                detail = r.text
+            return {"status": "error", "detail": detail}
+        return r.json()
+
+
 async def get_fast_slots(character_id: int) -> list[dict]:
     """
     Возвращает список слотов вида:

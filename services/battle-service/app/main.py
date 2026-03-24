@@ -30,7 +30,7 @@ from auth_http import get_current_user_via_http, UserRead, require_permission
 from mongo_client import get_mongo_db
 from database import get_db
 from battle_engine import decrement_cooldowns, set_cooldown
-from inventory_client import get_fast_slots
+from inventory_client import get_fast_slots, consume_item
 from character_client import get_character_profile
 from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, build_percent_damage_buffs, \
     build_percent_resist_buffs
@@ -940,53 +940,69 @@ async def _make_action_core(
             })
 
     # ------------------------------------------------------------------------------
-    # 8. Использование предмета из fast-слота
-    # ------------------------------------------------------------------------------
-    # ------------------------------------------------------------------------------
-    # 8. Использование предмета из fast-слота (только по выбору игрока)
+    # 8. Использование предмета из fast-слота (одноразовое)
     # ------------------------------------------------------------------------------
     item_id = request.skills.item_id  # может быть None / 0 / >0
 
     if item_id and item_id > 0:
-        # 1) Берём полный JSON по предмету (там же recovery-поля)
-        item_json = await get_item(item_id)
-
-        # 2) Собираем recovery-payload
-        recovery_payload = {
-            key.replace("_recovery", ""): item_json[key]
-            for key in (
-                "health_recovery",
-                "mana_recovery",
-                "energy_recovery",
-                "stamina_recovery",
-            )
-            if item_json.get(key)
-        }
-
-        # 3) Применяем к ресурсам персонажа в state
         me = str(request.participant_id)
         part = battle_state["participants"][me]
-        for res, delta in recovery_payload.items():
-            old = part[res if res != "health" else "hp"]
-            mx = part[f"max_{res if res != 'health' else 'hp'}"]
-            new = min(old + delta, mx)
-            part[res if res != "health" else "hp"] = new
 
-        # 4) Уменьшаем 1 шт. в соответствующем fast_slot
-        for slot in part.get("fast_slots", []):
-            if slot["item_id"] == item_id and slot.get("quantity", 0) > 0:
-                slot["quantity"] -= 1
+        # 1) Find matching slot by item_id in fast_slots
+        matched_slot = None
+        matched_idx = None
+        for idx, slot in enumerate(part.get("fast_slots", [])):
+            if slot["item_id"] == item_id:
+                matched_slot = slot
+                matched_idx = idx
                 break
 
-        # 5) Логируем событие
-        turn_events.append({
-            "event": "item_use",
-            "who": request.participant_id,
-            "item_id": item_id,
-            "item_name": item_json["name"],
-            "recovery": recovery_payload,
-        })
-        logger.debug(f"[ITEM] used item_id={item_id}, rec={recovery_payload}, rem={slot.get('quantity')}")
+        if matched_slot is None:
+            logger.warning(f"[ITEM] item_id={item_id} not found in fast_slots for participant {me}, skipping")
+        else:
+            # 2) Try to consume item in inventory (best-effort, does not block usage)
+            try:
+                consume_result = await consume_item(attacker_character_id, item_id)
+                if consume_result.get("status") != "ok":
+                    logger.warning(
+                        f"[ITEM] Failed to consume item_id={item_id} in inventory for character "
+                        f"{attacker_character_id}: {consume_result.get('detail', 'unknown error')}"
+                    )
+            except Exception as exc:
+                logger.warning(f"[ITEM] consume_item call failed for item_id={item_id}: {exc}")
+
+            # 3) Apply recovery from CACHED slot fields (always — slot exists in battle)
+            recovery_payload = {
+                key.replace("_recovery", ""): matched_slot[key]
+                for key in (
+                    "health_recovery",
+                    "mana_recovery",
+                    "energy_recovery",
+                    "stamina_recovery",
+                )
+                if matched_slot.get(key)
+            }
+
+            for res, delta in recovery_payload.items():
+                old = part[res if res != "health" else "hp"]
+                mx = part[f"max_{res if res != 'health' else 'hp'}"]
+                new = min(old + delta, mx)
+                part[res if res != "health" else "hp"] = new
+
+            # 4) Remove used slot from fast_slots array (one-time use)
+            part["fast_slots"].pop(matched_idx)
+
+            # 5) Log item_use event
+            turn_events.append({
+                "event": "item_use",
+                "who": request.participant_id,
+                "item_id": item_id,
+                "item_name": matched_slot.get("name", f"item#{item_id}"),
+                "recovery": recovery_payload,
+            })
+            logger.debug(
+                f"[ITEM] consumed item_id={item_id}, recovery={recovery_payload}"
+            )
 
     # ------------------------------------------------------------------------------
     # 9. ATTACK-навык

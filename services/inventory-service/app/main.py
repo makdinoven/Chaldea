@@ -842,4 +842,72 @@ def trade_get_state(
     return state
 
 
+# -----------------------------------------------------------------------------
+# Internal endpoints (service-to-service, no auth)
+# -----------------------------------------------------------------------------
+
+@router.post("/internal/characters/{character_id}/consume_item",
+             response_model=schemas.ConsumeItemResponse)
+def consume_item_internal(
+    character_id: int,
+    req: schemas.ConsumeItemRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Списывает 1 единицу предмета из инвентаря персонажа и очищает
+    быстрый слот, если предмет закончился.
+    Используется battle-service при применении расходника в бою.
+    Без авторизации — только для межсервисных вызовов.
+    """
+    # Atomic decrement: only succeeds if quantity > 0
+    result = db.execute(
+        text(
+            "UPDATE character_inventory "
+            "SET quantity = quantity - 1 "
+            "WHERE character_id = :cid AND item_id = :iid AND quantity > 0"
+        ),
+        {"cid": character_id, "iid": req.item_id},
+    )
+    db.commit()
+
+    remaining = 0
+
+    if result.rowcount > 0:
+        # Read remaining quantity
+        row = db.execute(
+            text(
+                "SELECT quantity FROM character_inventory "
+                "WHERE character_id = :cid AND item_id = :iid"
+            ),
+            {"cid": character_id, "iid": req.item_id},
+        ).fetchone()
+        remaining = row[0] if row else 0
+
+        # Clean up inventory row if quantity reached 0
+        if remaining == 0:
+            db.execute(
+                text(
+                    "DELETE FROM character_inventory "
+                    "WHERE character_id = :cid AND item_id = :iid AND quantity = 0"
+                ),
+                {"cid": character_id, "iid": req.item_id},
+            )
+            db.commit()
+
+    # Always clear fast slot for this item when quantity is 0 or item wasn't in inventory
+    # This prevents the item from reappearing in future battles
+    if remaining == 0:
+        db.execute(
+            text(
+                "UPDATE equipment_slots SET item_id = NULL "
+                "WHERE character_id = :cid AND item_id = :iid "
+                "AND slot_type LIKE 'fast_slot_%%'"
+            ),
+            {"cid": character_id, "iid": req.item_id},
+        )
+        db.commit()
+
+    return {"status": "ok", "remaining_quantity": remaining}
+
+
 app.include_router(router)
