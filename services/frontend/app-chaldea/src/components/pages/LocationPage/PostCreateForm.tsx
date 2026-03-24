@@ -91,7 +91,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="bg-black/40 px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-black/50 transition-colors rounded-card"
+            className="bg-black/60 px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-black/70 transition-colors rounded-card"
             onClick={() => !disabled && setIsEditorOpen(true)}
           >
             <Edit3 size={16} className="text-white/30 flex-shrink-0" />
@@ -104,7 +104,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="bg-black/40 p-5 flex flex-col gap-3 rounded-card"
+            className="bg-black/60 p-5 flex flex-col gap-3 rounded-card"
           >
             {/* NPC mode toggle for staff */}
             {isStaff && npcs.length > 0 && (

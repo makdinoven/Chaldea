@@ -110,7 +110,7 @@ const BattlesSection = ({ locationId, characterId, inBattle }: BattlesSectionPro
   const battleCount = battles.length;
 
   return (
-    <section className="bg-black/40 rounded-card">
+    <section className="bg-black/60 rounded-card">
       {/* Collapsible header */}
       <button
         onClick={() => setIsOpen((prev) => !prev)}
@@ -184,7 +184,7 @@ const BattlesSection = ({ locationId, characterId, inBattle }: BattlesSectionPro
                           hidden: { opacity: 0, y: 10 },
                           visible: { opacity: 1, y: 0 },
                         }}
-                        className="flex flex-col gap-3 p-3 sm:p-4 rounded-card bg-white/5 hover:bg-white/10 transition-colors"
+                        className="flex flex-col gap-3 p-3 sm:p-4 rounded-card bg-white/10 hover:bg-white/15 transition-colors"
                       >
                         {/* Header: badges */}
                         <div className="flex items-center gap-2 flex-wrap">

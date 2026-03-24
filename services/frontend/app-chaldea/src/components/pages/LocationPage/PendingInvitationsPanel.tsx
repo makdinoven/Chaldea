@@ -187,7 +187,7 @@ const PendingInvitationsPanel = ({ locationId }: PendingInvitationsPanelProps) =
 
   return (
     <>
-      <section className="gold-outline relative rounded-card bg-black/40 p-4 sm:p-5 flex flex-col gap-4">
+      <section className="gold-outline relative rounded-card bg-black/60 p-4 sm:p-5 flex flex-col gap-4">
         {/* Battle invitations */}
         {hasBattleInvitations && (
           <>
@@ -209,11 +209,11 @@ const PendingInvitationsPanel = ({ locationId }: PendingInvitationsPanelProps) =
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, x: -20 }}
                       transition={{ duration: 0.2 }}
-                      className="flex flex-col sm:flex-row sm:items-center gap-3 bg-black/40 rounded-card p-3"
+                      className="flex flex-col sm:flex-row sm:items-center gap-3 bg-black/60 rounded-card p-3"
                     >
                       {/* Initiator info */}
                       <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className="gold-outline relative w-10 h-10 sm:w-14 sm:h-14 rounded-full overflow-hidden bg-black/40 shrink-0">
+                        <div className="gold-outline relative w-10 h-10 sm:w-14 sm:h-14 rounded-full overflow-hidden bg-black/60 shrink-0">
                           {inv.initiator_avatar ? (
                             <img
                               src={inv.initiator_avatar}
@@ -278,7 +278,7 @@ const PendingInvitationsPanel = ({ locationId }: PendingInvitationsPanelProps) =
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, x: -20 }}
                       transition={{ duration: 0.2 }}
-                      className="flex flex-col sm:flex-row sm:items-center gap-3 bg-black/40 rounded-card p-3"
+                      className="flex flex-col sm:flex-row sm:items-center gap-3 bg-black/60 rounded-card p-3"
                     >
                       <div className="flex items-center gap-3 flex-1 min-w-0">
                         <div className="flex flex-col min-w-0">
@@ -334,10 +334,10 @@ const PendingInvitationsPanel = ({ locationId }: PendingInvitationsPanelProps) =
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, x: -20 }}
                       transition={{ duration: 0.2 }}
-                      className="flex flex-col sm:flex-row sm:items-center gap-3 bg-black/40 rounded-card p-3"
+                      className="flex flex-col sm:flex-row sm:items-center gap-3 bg-black/60 rounded-card p-3"
                     >
                       <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className="gold-outline relative w-10 h-10 sm:w-14 sm:h-14 rounded-full overflow-hidden bg-black/40 shrink-0 flex items-center justify-center">
+                        <div className="gold-outline relative w-10 h-10 sm:w-14 sm:h-14 rounded-full overflow-hidden bg-black/60 shrink-0 flex items-center justify-center">
                           <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 sm:w-7 sm:h-7 text-white/20" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                           </svg>
@@ -387,7 +387,7 @@ const PendingInvitationsPanel = ({ locationId }: PendingInvitationsPanelProps) =
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, x: -20 }}
                       transition={{ duration: 0.2 }}
-                      className="flex flex-col sm:flex-row sm:items-center gap-3 bg-black/40 rounded-card p-3"
+                      className="flex flex-col sm:flex-row sm:items-center gap-3 bg-black/60 rounded-card p-3"
                     >
                       <div className="flex items-center gap-3 flex-1 min-w-0">
                         <div className="flex flex-col min-w-0">

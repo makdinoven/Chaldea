@@ -21,7 +21,7 @@ const NeighborsSection = ({ neighbors }: NeighborsSectionProps) => {
           <button
             key={neighbor.id}
             onClick={() => navigate(`/location/${neighbor.id}`)}
-            className="group bg-black/50 rounded-card overflow-hidden hover:bg-black/60 transition-colors text-left"
+            className="group bg-black/70 rounded-card overflow-hidden hover:bg-black/80 transition-colors text-left"
           >
             {/* Image */}
             <div className="w-full aspect-[4/3] bg-black/40 overflow-hidden">

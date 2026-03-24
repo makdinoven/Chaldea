@@ -87,7 +87,7 @@ const LocationMobs = ({ locationId, characterId }: LocationMobsProps) => {
   const mobCount = mobs.length;
 
   return (
-    <section className="bg-black/40 rounded-card">
+    <section className="bg-black/60 rounded-card">
       {/* Collapsible header */}
       <button
         onClick={() => setIsOpen((prev) => !prev)}
@@ -161,7 +161,7 @@ const LocationMobs = ({ locationId, characterId }: LocationMobsProps) => {
                           hidden: { opacity: 0, y: 10 },
                           visible: { opacity: 1, y: 0 },
                         }}
-                        className="flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-card bg-white/5 hover:bg-white/10 transition-colors"
+                        className="flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-card bg-white/10 hover:bg-white/15 transition-colors"
                       >
                         {/* Avatar */}
                         <div className="gold-outline relative w-14 h-14 sm:w-16 sm:h-16 rounded-full overflow-hidden bg-black/40 shrink-0">

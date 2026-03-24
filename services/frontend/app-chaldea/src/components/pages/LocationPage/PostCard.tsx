@@ -174,7 +174,7 @@ const PostCard = ({
   };
 
   return (
-    <div className="bg-black/50 rounded-card p-3 sm:p-4 flex gap-3 sm:gap-4">
+    <div className="bg-black/70 rounded-card p-3 sm:p-4 flex gap-3 sm:gap-4">
       {/* Left: avatar panel */}
       <div className="flex flex-col items-center gap-1.5 shrink-0 w-[72px] sm:w-[90px]">
         {/* Title above avatar */}

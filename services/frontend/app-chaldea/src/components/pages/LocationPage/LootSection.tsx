@@ -12,7 +12,7 @@ const LootSection = ({ loot, currentCharacterId, onPickup }: LootSectionProps) =
   if (loot.length === 0) return null;
 
   return (
-    <section className="gold-outline relative rounded-card bg-black/50 p-4 sm:p-6 flex flex-col gap-4">
+    <section className="gold-outline relative rounded-card bg-black/70 p-4 sm:p-6 flex flex-col gap-4">
       <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
         Лут на локации
       </h2>
