@@ -443,12 +443,12 @@ class TestItemUsageSuccess:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class TestItemUsageFailedConsumption:
-    """Verify that when inventory-service rejects consumption,
-    the effect is NOT applied and the slot is NOT removed."""
+class TestItemUsageBestEffortConsumption:
+    """Verify that when inventory-service rejects consumption (best-effort),
+    the effect IS still applied and the slot IS removed (one-time use)."""
 
-    def test_failed_consume_no_effect(self):
-        """When consume_item returns error, HP does not change."""
+    def test_failed_consume_still_applies_effect(self):
+        """When consume_item returns error, HP is still recovered (best-effort)."""
         fast_slots = [
             {
                 "slot_type": "fast_slot_1",
@@ -471,12 +471,11 @@ class TestItemUsageFailedConsumption:
         save_state_mock = patches["main.save_state"]
         if save_state_mock.called:
             saved_state = save_state_mock.call_args[0][1]
-            # HP should remain unchanged
-            assert saved_state["participants"]["1"]["hp"] == 60, \
-                "HP should not change when consumption fails"
+            assert saved_state["participants"]["1"]["hp"] == 100, \
+                "HP should be recovered even when consume fails (best-effort, capped at max)"
 
-    def test_failed_consume_slot_not_removed(self):
-        """When consume_item returns error, the fast_slot remains."""
+    def test_failed_consume_slot_still_removed(self):
+        """When consume_item returns error, the fast_slot is still removed (one-time use)."""
         fast_slots = [
             {
                 "slot_type": "fast_slot_1",
@@ -500,8 +499,7 @@ class TestItemUsageFailedConsumption:
         if save_state_mock.called:
             saved_state = save_state_mock.call_args[0][1]
             p1_slots = saved_state["participants"]["1"]["fast_slots"]
-            assert len(p1_slots) == 1, "Slot should NOT be removed on failed consumption"
-            assert p1_slots[0]["item_id"] == 3
+            assert len(p1_slots) == 0, "Slot should be removed even on failed consumption (one-time use)"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

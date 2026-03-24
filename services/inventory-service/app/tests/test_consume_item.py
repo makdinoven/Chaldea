@@ -115,10 +115,9 @@ def test_consume_item_deletes_row_at_zero(client, db_session):
 # -- Error cases ------------------------------------------------------------
 
 
-def test_consume_item_quantity_zero_rejection(client, db_session):
-    """Consuming an item with quantity=0 in DB returns 400."""
+def test_consume_item_quantity_zero_returns_200(client, db_session):
+    """Consuming an item with quantity=0 returns 200 with remaining=0 (best-effort)."""
     item = _create_consumable(db_session, name="Empty Potion")
-    # Add with quantity=0 directly (edge case: row exists but empty)
     inv = CharacterInventory(character_id=1, item_id=item.id, quantity=0)
     db_session.add(inv)
     db_session.commit()
@@ -128,40 +127,42 @@ def test_consume_item_quantity_zero_rejection(client, db_session):
         json={"item_id": item.id},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 200
     data = response.json()
-    assert "Недостаточно предметов" in data["detail"]
+    assert data["status"] == "ok"
+    assert data["remaining_quantity"] == 0
 
 
-def test_consume_item_not_in_inventory(client, db_session):
-    """Consuming an item that does not exist in the character's inventory returns 400."""
+def test_consume_item_not_in_inventory_returns_200(client, db_session):
+    """Consuming an item not in character's inventory returns 200 (best-effort, clears slot)."""
     item = _create_consumable(db_session, name="Ghost Potion")
-    # Item exists in items table, but NOT in character_inventory for character 1
 
     response = client.post(
         "/inventory/internal/characters/1/consume_item",
         json={"item_id": item.id},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 200
     data = response.json()
-    assert "Недостаточно предметов" in data["detail"]
+    assert data["status"] == "ok"
+    assert data["remaining_quantity"] == 0
 
 
-def test_consume_item_nonexistent_item_id(client, db_session):
-    """Consuming a completely nonexistent item_id returns 400."""
+def test_consume_item_nonexistent_item_id_returns_200(client, db_session):
+    """Consuming a nonexistent item_id returns 200 (best-effort)."""
     response = client.post(
         "/inventory/internal/characters/1/consume_item",
         json={"item_id": 99999},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 200
     data = response.json()
-    assert "Недостаточно предметов" in data["detail"]
+    assert data["status"] == "ok"
+    assert data["remaining_quantity"] == 0
 
 
-def test_consume_item_wrong_character(client, db_session):
-    """Consuming an item that belongs to a different character returns 400."""
+def test_consume_item_wrong_character_returns_200(client, db_session):
+    """Consuming an item belonging to different character returns 200 (best-effort)."""
     item = _create_consumable(db_session, name="Other Potion")
     _add_to_inventory(db_session, character_id=2, item_id=item.id, quantity=5)
 
@@ -170,14 +171,15 @@ def test_consume_item_wrong_character(client, db_session):
         json={"item_id": item.id},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 200
+    assert response.json()["remaining_quantity"] == 0
 
 
-# -- After full consumption, second attempt also fails ----------------------
+# -- After full consumption, second attempt returns 200 with remaining=0 ----
 
 
-def test_consume_item_after_deletion_returns_400(client, db_session):
-    """After consuming the last unit (row deleted), next attempt returns 400."""
+def test_consume_item_after_deletion_returns_200(client, db_session):
+    """After consuming the last unit (row deleted), next attempt returns 200 (best-effort)."""
     item = _create_consumable(db_session, name="Single Potion")
     _add_to_inventory(db_session, character_id=1, item_id=item.id, quantity=1)
 
@@ -188,12 +190,13 @@ def test_consume_item_after_deletion_returns_400(client, db_session):
     )
     assert resp1.status_code == 200
 
-    # Second call: should fail
+    # Second call: best-effort, returns 200 with remaining=0
     resp2 = client.post(
         "/inventory/internal/characters/1/consume_item",
         json={"item_id": item.id},
     )
-    assert resp2.status_code == 400
+    assert resp2.status_code == 200
+    assert resp2.json()["remaining_quantity"] == 0
 
 
 # -- Security: SQL injection -----------------------------------------------
