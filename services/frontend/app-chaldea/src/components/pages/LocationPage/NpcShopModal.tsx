@@ -23,6 +23,7 @@ interface ShopItem {
   item_image: string | null;
   item_rarity: string | null;
   item_type: string | null;
+  discounted_buy_price?: number | null;
 }
 
 interface ShopTransactionResponse {
@@ -32,6 +33,7 @@ interface ShopTransactionResponse {
   item_name: string | null;
   quantity: number;
   total_price: number;
+  discount_percent: number;
 }
 
 interface NpcShopModalProps {
@@ -63,6 +65,14 @@ const getItemIcon = (type: string | null, image: string | null): string | null =
   return null;
 };
 
+const getEffectivePrice = (si: ShopItem): number =>
+  si.discounted_buy_price != null && si.discounted_buy_price !== si.buy_price
+    ? si.discounted_buy_price
+    : si.buy_price;
+
+const hasDiscount = (si: ShopItem): boolean =>
+  si.discounted_buy_price != null && si.discounted_buy_price < si.buy_price;
+
 /* ── Component ── */
 
 const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps) => {
@@ -81,14 +91,16 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
   const fetchShop = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await axios.get<ShopItem[]>(`${BASE_URL}/locations/npcs/${npcId}/shop`);
+      const params: Record<string, number> = {};
+      if (characterId) params.character_id = characterId;
+      const res = await axios.get<ShopItem[]>(`${BASE_URL}/locations/npcs/${npcId}/shop`, { params });
       setShopItems(res.data.filter((i) => i.is_active));
     } catch {
       toast.error('Не удалось загрузить товары магазина');
     } finally {
       setLoading(false);
     }
-  }, [npcId]);
+  }, [npcId, characterId]);
 
   useEffect(() => {
     fetchShop();
@@ -114,7 +126,8 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
   const handleBuy = async (shopItem: ShopItem) => {
     if (!characterId || processing) return;
     const qty = getQuantity(shopItem.id);
-    const totalPrice = shopItem.buy_price * qty;
+    const unitPrice = getEffectivePrice(shopItem);
+    const totalPrice = unitPrice * qty;
 
     if (character && totalPrice > character.currency_balance) {
       toast.error('Недостаточно золота');
@@ -183,6 +196,13 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
 
   const sellableInventory = inventory.filter((inv) => sellPriceMap.has(inv.item_id));
 
+  // Compute discount percent from first item that has a discount
+  const discountPercent = (() => {
+    const discounted = shopItems.find(hasDiscount);
+    if (!discounted || !discounted.discounted_buy_price) return 0;
+    return Math.round((1 - discounted.discounted_buy_price / discounted.buy_price) * 100);
+  })();
+
   const balance = character?.currency_balance ?? 0;
 
   return (
@@ -218,10 +238,17 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
             </h2>
             <span className="text-white/50 text-xs uppercase tracking-wide">Торговля</span>
           </div>
-          {/* Balance */}
-          <div className="ml-auto flex items-center gap-1.5 bg-black/30 rounded-card px-3 py-1.5 shrink-0">
-            <img src={goldCoinsIcon} alt="" className="w-5 h-5" />
-            <span className="text-gold font-medium text-sm sm:text-base">{balance.toLocaleString()}</span>
+          {/* Balance + discount */}
+          <div className="ml-auto flex items-center gap-2 shrink-0">
+            {discountPercent > 0 && (
+              <span className="bg-green-900/40 border border-green-500/30 text-green-400 text-[10px] sm:text-xs font-medium px-2 py-1 rounded-card whitespace-nowrap">
+                Скидка: {discountPercent}%
+              </span>
+            )}
+            <div className="flex items-center gap-1.5 bg-black/30 rounded-card px-3 py-1.5">
+              <img src={goldCoinsIcon} alt="" className="w-5 h-5" />
+              <span className="text-gold font-medium text-sm sm:text-base">{balance.toLocaleString()}</span>
+            </div>
           </div>
         </div>
 
@@ -269,10 +296,12 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {shopItems.map((si) => {
                   const qty = getQuantity(si.id);
-                  const totalPrice = si.buy_price * qty;
+                  const unitPrice = getEffectivePrice(si);
+                  const totalPrice = unitPrice * qty;
                   const canAfford = totalPrice <= balance;
                   const inStock = si.stock === null || si.stock >= qty;
                   const icon = getItemIcon(si.item_type, si.item_image);
+                  const itemHasDiscount = hasDiscount(si);
 
                   return (
                     <div
@@ -295,9 +324,16 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                         </span>
 
                         {/* Price per unit */}
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 flex-wrap">
                           <img src={goldCoinsIcon} alt="" className="w-4 h-4" />
-                          <span className="text-gold text-xs">{si.buy_price.toLocaleString()}</span>
+                          {itemHasDiscount ? (
+                            <>
+                              <span className="text-white/40 text-xs line-through">{si.buy_price.toLocaleString()}</span>
+                              <span className="text-green-400 text-xs font-medium">{unitPrice.toLocaleString()}</span>
+                            </>
+                          ) : (
+                            <span className="text-gold text-xs">{si.buy_price.toLocaleString()}</span>
+                          )}
                         </div>
 
                         {/* Stock */}

@@ -161,36 +161,28 @@ async def upgrade_attributes(
 
         b = 0.1  # bonus per stat point
 
-        # Strength: +0.1 to res_physical
+        # Strength: +0.1 to ALL physical resistance fields
         attr.strength += upgrade_request.strength
-        attr.res_physical += upgrade_request.strength * b
+        if upgrade_request.strength:
+            str_bonus = upgrade_request.strength * b
+            for field in PHYSICAL_RESISTANCE_FIELDS:
+                setattr(attr, field, getattr(attr, field) + str_bonus)
 
         # Agility: +0.1 to dodge
         attr.agility += upgrade_request.agility
         attr.dodge += upgrade_request.agility * b
 
-        # Intelligence: +0.1 to res_magic
+        # Intelligence: +0.1 to ALL magical resistance fields
         attr.intelligence += upgrade_request.intelligence
-        attr.res_magic += upgrade_request.intelligence * b
+        if upgrade_request.intelligence:
+            int_bonus = upgrade_request.intelligence * b
+            for field in MAGICAL_RESISTANCE_FIELDS:
+                setattr(attr, field, getattr(attr, field) + int_bonus)
 
-        # Endurance: +0.1 to ALL 13 resistance fields
+        # Endurance: +0.2 to res_effects ONLY
         attr.endurance += upgrade_request.endurance
         if upgrade_request.endurance:
-            endurance_bonus = upgrade_request.endurance * b
-            attr.res_physical += endurance_bonus
-            attr.res_catting += endurance_bonus
-            attr.res_crushing += endurance_bonus
-            attr.res_piercing += endurance_bonus
-            attr.res_magic += endurance_bonus
-            attr.res_fire += endurance_bonus
-            attr.res_ice += endurance_bonus
-            attr.res_watering += endurance_bonus
-            attr.res_electricity += endurance_bonus
-            attr.res_sainting += endurance_bonus
-            attr.res_wind += endurance_bonus
-            attr.res_damning += endurance_bonus
-            # res_effects: endurance adds resistance to effects
-            attr.res_effects += endurance_bonus
+            attr.res_effects += upgrade_request.endurance * ENDURANCE_RES_EFFECTS_MULTIPLIER
 
         # Health: +10 max_health per point
         attr.health += upgrade_request.health
@@ -288,7 +280,11 @@ async def upgrade_attributes(
 # -----------------------------
 # 5. apply_modifiers (общий)
 # -----------------------------
-from constants import HEALTH_MULTIPLIER, MANA_MULTIPLIER, ENERGY_MULTIPLIER, STAMINA_MULTIPLIER
+from constants import (
+    HEALTH_MULTIPLIER, MANA_MULTIPLIER, ENERGY_MULTIPLIER, STAMINA_MULTIPLIER,
+    PHYSICAL_RESISTANCE_FIELDS, MAGICAL_RESISTANCE_FIELDS,
+    ENDURANCE_RES_EFFECTS_MULTIPLIER,
+)
 
 @router.post("/{character_id}/apply_modifiers")
 def apply_modifiers(character_id: int, modifiers: dict, db: Session = Depends(get_db)):
@@ -628,6 +624,38 @@ def admin_delete_attributes(
         raise HTTPException(status_code=500, detail="Failed to delete attributes")
 
     return {"detail": "Attributes deleted"}
+
+
+# -----------------------------
+# 10. Admin: batch recalculate all characters
+# -----------------------------
+@router.post("/admin/recalculate_all")
+def admin_recalculate_all(
+    db: Session = Depends(get_db),
+    admin: UserRead = Depends(require_permission("characters:update")),
+):
+    """
+    Пересчитывает производные статы для ВСЕХ персонажей в базе.
+    Коммитит батчами по 100 записей. Предназначен для использования
+    после изменения формул расчёта.
+    """
+    BATCH_SIZE = 100
+    all_attrs = db.query(models.CharacterAttributes).all()
+    total = len(all_attrs)
+    logger.info(f"[recalculate_all] Starting batch recalculation for {total} characters")
+
+    for i, attr in enumerate(all_attrs, start=1):
+        crud.compute_derived_stats(attr)
+
+        if i % BATCH_SIZE == 0:
+            db.commit()
+            logger.info(f"[recalculate_all] Committed batch — {i}/{total} characters processed")
+
+    # Commit remaining records
+    db.commit()
+    logger.info(f"[recalculate_all] Done — {total} characters recalculated")
+
+    return {"detail": f"Recalculated {total} characters", "count": total}
 
 
 app.include_router(router)

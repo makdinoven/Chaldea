@@ -55,7 +55,8 @@ import crud  # noqa: E402
 from constants import (  # noqa: E402
     BASE_HEALTH, BASE_MANA, BASE_ENERGY, BASE_STAMINA,
     BASE_DODGE, BASE_CRIT, BASE_CRIT_DMG,
-    STAT_BONUS_PER_POINT,
+    STAT_BONUS_PER_POINT, ENDURANCE_RES_EFFECTS_MULTIPLIER,
+    PHYSICAL_RESISTANCE_FIELDS, MAGICAL_RESISTANCE_FIELDS,
 )
 from auth_http import get_current_user_via_http, UserRead  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -245,8 +246,8 @@ def upgrade_client_low_points(db_session):
 # ===========================================================================
 class TestUpgradeEndurance:
 
-    def test_endurance_increments_all_resistances(self, upgrade_client, db_session):
-        """Endurance should add +0.1 per point to ALL 13 resistance fields."""
+    def test_endurance_only_affects_res_effects(self, upgrade_client, db_session):
+        """Endurance should add +0.2 per point to res_effects ONLY."""
         _make_attrs(db_session, character_id=1)
         endurance_points = 10
         payload = _upgrade_payload(endurance=endurance_points)
@@ -255,21 +256,22 @@ class TestUpgradeEndurance:
         assert resp.status_code == 200
 
         attrs = resp.json()["updated_attributes"]
-        expected_bonus = endurance_points * STAT_BONUS_PER_POINT  # 1.0
+        expected_res_effects = endurance_points * ENDURANCE_RES_EFFECTS_MULTIPLIER  # 2.0
 
+        # Endurance does NOT affect any damage resistances
         for field in [
             "res_physical", "res_catting", "res_crushing", "res_piercing",
             "res_magic", "res_fire", "res_ice", "res_watering",
             "res_electricity", "res_sainting", "res_wind", "res_damning",
         ]:
-            assert attrs[field] == pytest.approx(expected_bonus, abs=1e-6), \
-                f"{field} should be {expected_bonus}, got {attrs[field]}"
+            assert attrs[field] == pytest.approx(0.0, abs=1e-6), \
+                f"{field} should be 0.0, got {attrs[field]}"
 
-        # res_effects also gets endurance bonus
-        assert attrs["res_effects"] == pytest.approx(expected_bonus, abs=1e-6)
+        # res_effects gets endurance bonus at 0.2x
+        assert attrs["res_effects"] == pytest.approx(expected_res_effects, abs=1e-6)
 
-    def test_endurance_also_added_to_res_physical_and_res_magic(self, upgrade_client, db_session):
-        """res_physical and res_magic should include endurance component."""
+    def test_endurance_does_not_affect_res_physical_or_res_magic(self, upgrade_client, db_session):
+        """res_physical and res_magic should NOT include endurance component."""
         _make_attrs(db_session, character_id=1)
         payload = _upgrade_payload(endurance=5)
 
@@ -277,10 +279,10 @@ class TestUpgradeEndurance:
         assert resp.status_code == 200
 
         attrs = resp.json()["updated_attributes"]
-        # With only endurance=5 and strength=0, res_physical = 0 + 5*0.1 = 0.5
-        assert attrs["res_physical"] == pytest.approx(0.5, abs=1e-6)
-        # With only endurance=5 and intelligence=0, res_magic = 0 + 5*0.1 = 0.5
-        assert attrs["res_magic"] == pytest.approx(0.5, abs=1e-6)
+        # With only endurance=5 and strength=0, res_physical = 0
+        assert attrs["res_physical"] == pytest.approx(0.0, abs=1e-6)
+        # With only endurance=5 and intelligence=0, res_magic = 0
+        assert attrs["res_magic"] == pytest.approx(0.0, abs=1e-6)
 
 
 # ===========================================================================
@@ -351,7 +353,7 @@ class TestUpgradeStamina:
 # ===========================================================================
 class TestUpgradeStrength:
 
-    def test_strength_increments_res_physical(self, upgrade_client, db_session):
+    def test_strength_increments_all_physical_resistances(self, upgrade_client, db_session):
         _make_attrs(db_session, character_id=1)
         payload = _upgrade_payload(strength=20)
 
@@ -359,9 +361,10 @@ class TestUpgradeStrength:
         assert resp.status_code == 200
 
         attrs = resp.json()["updated_attributes"]
-        assert attrs["res_physical"] == pytest.approx(
-            20 * STAT_BONUS_PER_POINT, abs=1e-6
-        )
+        expected = 20 * STAT_BONUS_PER_POINT
+        for field in PHYSICAL_RESISTANCE_FIELDS:
+            assert attrs[field] == pytest.approx(expected, abs=1e-6), \
+                f"{field} should be {expected}, got {attrs[field]}"
 
     def test_strength_does_not_affect_other_stats(self, upgrade_client, db_session):
         _make_attrs(db_session, character_id=1)
@@ -374,6 +377,9 @@ class TestUpgradeStrength:
         assert attrs["dodge"] == pytest.approx(BASE_DODGE, abs=1e-6)
         assert attrs["critical_hit_chance"] == pytest.approx(BASE_CRIT, abs=1e-6)
         assert attrs["res_magic"] == pytest.approx(0.0, abs=1e-6)
+        # Strength should not affect magical resistances
+        for field in MAGICAL_RESISTANCE_FIELDS:
+            assert attrs[field] == pytest.approx(0.0, abs=1e-6)
 
 
 # ===========================================================================
@@ -410,7 +416,7 @@ class TestUpgradeAgility:
 # ===========================================================================
 class TestUpgradeIntelligence:
 
-    def test_intelligence_increments_res_magic(self, upgrade_client, db_session):
+    def test_intelligence_increments_all_magical_resistances(self, upgrade_client, db_session):
         _make_attrs(db_session, character_id=1)
         payload = _upgrade_payload(intelligence=20)
 
@@ -418,11 +424,12 @@ class TestUpgradeIntelligence:
         assert resp.status_code == 200
 
         attrs = resp.json()["updated_attributes"]
-        assert attrs["res_magic"] == pytest.approx(
-            20 * STAT_BONUS_PER_POINT, abs=1e-6
-        )
+        expected = 20 * STAT_BONUS_PER_POINT
+        for field in MAGICAL_RESISTANCE_FIELDS:
+            assert attrs[field] == pytest.approx(expected, abs=1e-6), \
+                f"{field} should be {expected}, got {attrs[field]}"
 
-    def test_intelligence_does_not_affect_dodge_or_crit(self, upgrade_client, db_session):
+    def test_intelligence_does_not_affect_dodge_crit_or_physical(self, upgrade_client, db_session):
         _make_attrs(db_session, character_id=1)
         payload = _upgrade_payload(intelligence=10)
 
@@ -432,6 +439,9 @@ class TestUpgradeIntelligence:
         attrs = resp.json()["updated_attributes"]
         assert attrs["dodge"] == pytest.approx(BASE_DODGE, abs=1e-6)
         assert attrs["critical_hit_chance"] == pytest.approx(BASE_CRIT, abs=1e-6)
+        # Intelligence should not affect physical resistances
+        for field in PHYSICAL_RESISTANCE_FIELDS:
+            assert attrs[field] == pytest.approx(0.0, abs=1e-6)
 
 
 # ===========================================================================
@@ -567,7 +577,7 @@ class TestRecalculateEndpoint:
         assert attr.critical_hit_chance == pytest.approx(expected, abs=1e-6)
 
     def test_recalculate_res_physical(self, admin_client, db_session):
-        """res_physical = strength * 0.1 + endurance * 0.1"""
+        """res_physical = strength * 0.1 (endurance no longer contributes)"""
         _make_attrs(
             db_session, character_id=1,
             strength=15, endurance=10, res_physical=0.0,
@@ -581,11 +591,11 @@ class TestRecalculateEndpoint:
         ).first()
         db_session.refresh(attr)
 
-        expected = 15 * STAT_BONUS_PER_POINT + 10 * STAT_BONUS_PER_POINT
+        expected = 15 * STAT_BONUS_PER_POINT
         assert attr.res_physical == pytest.approx(expected, abs=1e-6)
 
     def test_recalculate_res_magic(self, admin_client, db_session):
-        """res_magic = intelligence * 0.1 + endurance * 0.1"""
+        """res_magic = intelligence * 0.1 (endurance no longer contributes)"""
         _make_attrs(
             db_session, character_id=1,
             intelligence=20, endurance=5, res_magic=0.0,
@@ -599,11 +609,11 @@ class TestRecalculateEndpoint:
         ).first()
         db_session.refresh(attr)
 
-        expected = 20 * STAT_BONUS_PER_POINT + 5 * STAT_BONUS_PER_POINT
+        expected = 20 * STAT_BONUS_PER_POINT
         assert attr.res_magic == pytest.approx(expected, abs=1e-6)
 
     def test_recalculate_res_effects(self, admin_client, db_session):
-        """res_effects = endurance * 0.1 + luck * 0.1"""
+        """res_effects = endurance * 0.2 + luck * 0.1"""
         _make_attrs(
             db_session, character_id=1,
             endurance=10, luck=20, res_effects=0.0,
@@ -617,12 +627,12 @@ class TestRecalculateEndpoint:
         ).first()
         db_session.refresh(attr)
 
-        expected = 10 * STAT_BONUS_PER_POINT + 20 * STAT_BONUS_PER_POINT
+        expected = 10 * ENDURANCE_RES_EFFECTS_MULTIPLIER + 20 * STAT_BONUS_PER_POINT
         assert attr.res_effects == pytest.approx(expected, abs=1e-6)
 
-    def test_recalculate_other_resistances(self, admin_client, db_session):
-        """Other resistances (catting, crushing, etc.) = endurance * 0.1"""
-        _make_attrs(db_session, character_id=1, endurance=15)
+    def test_recalculate_physical_resistances_from_strength(self, admin_client, db_session):
+        """Physical resistances (catting, crushing, piercing) = strength * 0.1"""
+        _make_attrs(db_session, character_id=1, strength=15, endurance=10)
 
         resp = admin_client.post("/attributes/1/recalculate")
         assert resp.status_code == 200
@@ -633,11 +643,24 @@ class TestRecalculateEndpoint:
         db_session.refresh(attr)
 
         expected = 15 * STAT_BONUS_PER_POINT
-        for field in [
-            "res_catting", "res_crushing", "res_piercing",
-            "res_fire", "res_ice", "res_watering",
-            "res_electricity", "res_sainting", "res_wind", "res_damning",
-        ]:
+        for field in PHYSICAL_RESISTANCE_FIELDS:
+            assert getattr(attr, field) == pytest.approx(expected, abs=1e-6), \
+                f"{field} should be {expected}, got {getattr(attr, field)}"
+
+    def test_recalculate_magical_resistances_from_intelligence(self, admin_client, db_session):
+        """Magical resistances (fire, ice, etc.) = intelligence * 0.1"""
+        _make_attrs(db_session, character_id=1, intelligence=15, endurance=10)
+
+        resp = admin_client.post("/attributes/1/recalculate")
+        assert resp.status_code == 200
+
+        attr = db_session.query(models.CharacterAttributes).filter_by(
+            character_id=1
+        ).first()
+        db_session.refresh(attr)
+
+        expected = 15 * STAT_BONUS_PER_POINT
+        for field in MAGICAL_RESISTANCE_FIELDS:
             assert getattr(attr, field) == pytest.approx(expected, abs=1e-6), \
                 f"{field} should be {expected}, got {getattr(attr, field)}"
 
@@ -694,17 +717,20 @@ class TestRecalculateEndpoint:
         )
         assert attr.critical_damage == BASE_CRIT_DMG
 
-        assert attr.res_physical == pytest.approx(10 * b + 5 * b, abs=1e-6)
-        assert attr.res_magic == pytest.approx(15 * b + 5 * b, abs=1e-6)
-        assert attr.res_effects == pytest.approx(5 * b + 12 * b, abs=1e-6)
+        # Physical resistances from strength only
+        assert attr.res_physical == pytest.approx(10 * b, abs=1e-6)
+        for field in PHYSICAL_RESISTANCE_FIELDS:
+            assert getattr(attr, field) == pytest.approx(10 * b, abs=1e-6)
 
-        endurance_res = 5 * b
-        for field in [
-            "res_catting", "res_crushing", "res_piercing",
-            "res_fire", "res_ice", "res_watering",
-            "res_electricity", "res_sainting", "res_wind", "res_damning",
-        ]:
-            assert getattr(attr, field) == pytest.approx(endurance_res, abs=1e-6)
+        # Magical resistances from intelligence only
+        assert attr.res_magic == pytest.approx(15 * b, abs=1e-6)
+        for field in MAGICAL_RESISTANCE_FIELDS:
+            assert getattr(attr, field) == pytest.approx(15 * b, abs=1e-6)
+
+        # res_effects = endurance * 0.2 + luck * 0.1
+        assert attr.res_effects == pytest.approx(
+            5 * ENDURANCE_RES_EFFECTS_MULTIPLIER + 12 * b, abs=1e-6
+        )
 
 
 # ===========================================================================
@@ -783,7 +809,7 @@ class TestUpgradeCombined:
     def test_endurance_and_luck_combined_on_res_effects(
         self, upgrade_client, db_session
     ):
-        """Both endurance and luck contribute to res_effects."""
+        """Both endurance (0.2x) and luck (0.1x) contribute to res_effects."""
         _make_attrs(db_session, character_id=1)
         payload = _upgrade_payload(endurance=10, luck=5)
 
@@ -792,7 +818,7 @@ class TestUpgradeCombined:
 
         attrs = resp.json()["updated_attributes"]
         assert attrs["res_effects"] == pytest.approx(
-            10 * STAT_BONUS_PER_POINT + 5 * STAT_BONUS_PER_POINT, abs=1e-6
+            10 * ENDURANCE_RES_EFFECTS_MULTIPLIER + 5 * STAT_BONUS_PER_POINT, abs=1e-6
         )
 
     def test_agility_and_luck_combined_on_dodge(self, upgrade_client, db_session):
@@ -812,7 +838,7 @@ class TestUpgradeCombined:
     def test_strength_and_endurance_combined_on_res_physical(
         self, upgrade_client, db_session
     ):
-        """Both strength and endurance contribute to res_physical."""
+        """Only strength contributes to res_physical (endurance does not)."""
         _make_attrs(db_session, character_id=1)
         payload = _upgrade_payload(strength=10, endurance=5)
 
@@ -820,14 +846,15 @@ class TestUpgradeCombined:
         assert resp.status_code == 200
 
         attrs = resp.json()["updated_attributes"]
+        # Only strength contributes to physical resistances
         assert attrs["res_physical"] == pytest.approx(
-            10 * STAT_BONUS_PER_POINT + 5 * STAT_BONUS_PER_POINT, abs=1e-6
+            10 * STAT_BONUS_PER_POINT, abs=1e-6
         )
 
     def test_intelligence_and_endurance_combined_on_res_magic(
         self, upgrade_client, db_session
     ):
-        """Both intelligence and endurance contribute to res_magic."""
+        """Only intelligence contributes to res_magic (endurance does not)."""
         _make_attrs(db_session, character_id=1)
         payload = _upgrade_payload(intelligence=10, endurance=5)
 
@@ -835,8 +862,9 @@ class TestUpgradeCombined:
         assert resp.status_code == 200
 
         attrs = resp.json()["updated_attributes"]
+        # Only intelligence contributes to magical resistances
         assert attrs["res_magic"] == pytest.approx(
-            10 * STAT_BONUS_PER_POINT + 5 * STAT_BONUS_PER_POINT, abs=1e-6
+            10 * STAT_BONUS_PER_POINT, abs=1e-6
         )
 
     def test_upgrade_zero_stats_rejected(self, upgrade_client, db_session):
@@ -896,6 +924,8 @@ class TestRecalculateCrud:
         )
         assert result.critical_damage == BASE_CRIT_DMG
 
-        assert result.res_physical == pytest.approx(10 * b + 5 * b, abs=1e-6)
-        assert result.res_magic == pytest.approx(15 * b + 5 * b, abs=1e-6)
-        assert result.res_effects == pytest.approx(5 * b + 12 * b, abs=1e-6)
+        assert result.res_physical == pytest.approx(10 * b, abs=1e-6)
+        assert result.res_magic == pytest.approx(15 * b, abs=1e-6)
+        assert result.res_effects == pytest.approx(
+            5 * ENDURANCE_RES_EFFECTS_MULTIPLIER + 12 * b, abs=1e-6
+        )

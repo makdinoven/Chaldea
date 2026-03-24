@@ -10,6 +10,7 @@ import {
 import AdminMobSkills from './AdminMobSkills';
 import AdminMobLoot from './AdminMobLoot';
 import AdminMobSpawns from './AdminMobSpawns';
+import MobStatsEditor from './MobStatsEditor';
 
 interface AdminMobDetailProps {
   templateId: number;
@@ -20,6 +21,7 @@ const TABS = [
   { key: 'skills', label: 'Навыки' },
   { key: 'loot', label: 'Лут-таблица' },
   { key: 'spawns', label: 'Спавн' },
+  { key: 'stats', label: 'Статы' },
 ] as const;
 
 type TabKey = typeof TABS[number]['key'];
@@ -138,6 +140,14 @@ const AdminMobDetail = ({ templateId, onClose }: AdminMobDetailProps) => {
         )}
         {activeTab === 'spawns' && (
           <AdminMobSpawns templateId={templateId} spawns={template.spawn_locations} onUpdate={reload} />
+        )}
+        {activeTab === 'stats' && (
+          <MobStatsEditor
+            templateId={templateId}
+            templateName={template.name}
+            idClass={template.id_class}
+            baseAttributes={template.base_attributes}
+          />
         )}
       </div>
     </div>

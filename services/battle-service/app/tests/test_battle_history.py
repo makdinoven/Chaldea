@@ -72,6 +72,7 @@ engine_mock.fetch_full_attributes = AsyncMock(return_value={})
 engine_mock.apply_flat_modifiers = MagicMock(return_value={})
 engine_mock.fetch_main_weapon = AsyncMock(return_value={})
 engine_mock.compute_damage_with_rolls = AsyncMock(return_value=(0, {}))
+engine_mock.roll_chance = MagicMock(return_value=True)
 
 # Configure buffs mock
 buffs_mock = sys.modules["buffs"]

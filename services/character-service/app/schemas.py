@@ -467,8 +467,8 @@ class MobTemplateCreate(BaseModel):
     tier: str = "normal"
     level: int = 1
     avatar: Optional[str] = None
-    id_race: int
-    id_subrace: int
+    id_race: int = 1
+    id_subrace: int = 1
     id_class: int
     sex: Optional[str] = "genderless"
     base_attributes: Optional[Dict] = None

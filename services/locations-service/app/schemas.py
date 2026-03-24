@@ -777,6 +777,7 @@ class NpcShopItemRead(BaseModel):
     item_rarity: Optional[str] = None
     item_type: Optional[str] = None
     created_at: Optional[datetime] = None
+    discounted_buy_price: Optional[int] = None
 
     class Config:
         orm_mode = True
@@ -798,6 +799,7 @@ class ShopTransactionResponse(BaseModel):
     item_name: Optional[str] = None
     quantity: int = 0
     total_price: int = 0
+    discount_percent: float = 0
 
 
 # -------------------------------

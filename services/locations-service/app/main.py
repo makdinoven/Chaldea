@@ -1,4 +1,5 @@
 import os
+import math
 import logging
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request, BackgroundTasks
@@ -1578,13 +1579,79 @@ async def delete_npc_shop_item(
 # --------------------------------------------------------------------
 # NPC SHOP — Player-facing endpoints
 # --------------------------------------------------------------------
+
+async def _fetch_charisma(character_id: int) -> Optional[int]:
+    """Fetch charisma value from character-attributes-service.
+    Returns None if the service is unreachable (graceful degradation).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{character_id}"
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("charisma", 0)
+            else:
+                logger.warning(
+                    "Не удалось получить атрибуты персонажа %s: статус %s",
+                    character_id, resp.status_code,
+                )
+                return None
+    except Exception as exc:
+        logger.warning(
+            "Сервис атрибутов недоступен для персонажа %s: %s",
+            character_id, exc,
+        )
+        return None
+
+
+def _compute_charisma_discount(charisma: Optional[int]) -> float:
+    """Return discount percentage (0..50) based on charisma value."""
+    if charisma is None or charisma <= 0:
+        return 0.0
+    return min(charisma * 0.2, 50.0)
+
+
 @router.get("/npcs/{npc_id}/shop", response_model=List[schemas.NpcShopItemRead])
 async def get_npc_shop(
     npc_id: int,
+    character_id: Optional[int] = None,
     session: AsyncSession = Depends(get_db),
 ):
-    """Get NPC's shop items (active only, with item details)."""
-    return await crud.get_npc_shop_items_player(session, npc_id)
+    """Get NPC's shop items (active only, with item details).
+    If character_id is provided, returns discounted_buy_price based on charisma.
+    """
+    items = await crud.get_npc_shop_items_player(session, npc_id)
+
+    if character_id is not None:
+        charisma = await _fetch_charisma(character_id)
+        discount_pct = _compute_charisma_discount(charisma)
+        result = []
+        for item in items:
+            item_dict = dict(item) if isinstance(item, dict) else {
+                "id": item.id,
+                "npc_id": item.npc_id,
+                "item_id": item.item_id,
+                "buy_price": item.buy_price,
+                "sell_price": item.sell_price,
+                "stock": item.stock,
+                "is_active": item.is_active,
+                "item_name": getattr(item, "item_name", None),
+                "item_image": getattr(item, "item_image", None),
+                "item_rarity": getattr(item, "item_rarity", None),
+                "item_type": getattr(item, "item_type", None),
+                "created_at": getattr(item, "created_at", None),
+            }
+            if discount_pct > 0:
+                item_dict["discounted_buy_price"] = math.ceil(
+                    item_dict["buy_price"] * (1 - discount_pct / 100)
+                )
+            else:
+                item_dict["discounted_buy_price"] = item_dict["buy_price"]
+            result.append(item_dict)
+        return result
+
+    return items
 
 
 @router.post("/npcs/{npc_id}/shop/buy", response_model=schemas.ShopTransactionResponse)
@@ -1629,8 +1696,14 @@ async def buy_from_npc(
     if shop_item.stock is not None and shop_item.stock < body.quantity:
         raise HTTPException(status_code=400, detail="Недостаточно товара на складе")
 
-    # 4. Calculate total price
-    total_price = shop_item.buy_price * body.quantity
+    # 4. Fetch charisma and calculate discounted price
+    charisma = await _fetch_charisma(body.character_id)
+    discount_pct = _compute_charisma_discount(charisma)
+    if discount_pct > 0:
+        discounted_unit_price = math.ceil(shop_item.buy_price * (1 - discount_pct / 100))
+    else:
+        discounted_unit_price = shop_item.buy_price
+    total_price = discounted_unit_price * body.quantity
 
     # 5. Atomically deduct currency
     new_balance = await crud.deduct_currency(session, body.character_id, total_price)
@@ -1674,6 +1747,7 @@ async def buy_from_npc(
         "item_name": item_name,
         "quantity": body.quantity,
         "total_price": total_price,
+        "discount_percent": discount_pct,
     }
 
 

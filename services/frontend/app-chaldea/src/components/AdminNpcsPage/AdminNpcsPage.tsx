@@ -46,6 +46,17 @@ interface LocationOption {
   name: string;
 }
 
+interface SubraceOption {
+  id_subrace: number;
+  name: string;
+}
+
+interface RaceWithSubraces {
+  id_race: number;
+  name: string;
+  subraces: SubraceOption[];
+}
+
 const INITIAL_FORM: NpcFormData = {
   name: '',
   npc_role: 'merchant',
@@ -86,6 +97,8 @@ const AdminNpcsPage = () => {
   const [statsNpc, setStatsNpc] = useState<{ id: number; name: string } | null>(null);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [racesData, setRacesData] = useState<RaceWithSubraces[]>([]);
+  const [subraceOptions, setSubraceOptions] = useState<SubraceOption[]>([]);
 
   const fetchNpcs = useCallback(async () => {
     setLoading(true);
@@ -120,6 +133,32 @@ const AdminNpcsPage = () => {
   useEffect(() => {
     fetchLocations();
   }, [fetchLocations]);
+
+  // Fetch all races with subraces once on mount
+  const fetchRacesData = useCallback(async () => {
+    try {
+      const res = await axios.get<RaceWithSubraces[]>(`${BASE_URL}/characters/races`);
+      setRacesData(res.data);
+    } catch {
+      toast.error('Не удалось загрузить список рас и подрас');
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchRacesData();
+  }, [fetchRacesData]);
+
+  // Update subrace options when race changes or racesData loads
+  const updateSubraceOptions = useCallback((raceId: number) => {
+    const race = racesData.find((r) => r.id_race === raceId);
+    setSubraceOptions(race?.subraces ?? []);
+  }, [racesData]);
+
+  useEffect(() => {
+    if (racesData.length > 0) {
+      updateSubraceOptions(form.id_race);
+    }
+  }, [form.id_race, racesData, updateSubraceOptions]);
 
   const openCreateForm = () => {
     setEditingId(null);
@@ -189,9 +228,23 @@ const AdminNpcsPage = () => {
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>,
   ) => {
     const { name, value, type } = e.target;
+    if (name === 'id_race') {
+      const newRaceId = Number(value);
+      const race = racesData.find((r) => r.id_race === newRaceId);
+      const firstSubrace = race?.subraces?.[0]?.id_subrace ?? 0;
+      setForm((prev) => ({
+        ...prev,
+        id_race: newRaceId,
+        id_subrace: firstSubrace,
+      }));
+      return;
+    }
+    const numericFields = ['id_class', 'id_subrace', 'level', 'age', 'currency_balance'];
     setForm((prev) => ({
       ...prev,
-      [name]: type === 'number' ? (value === '' ? 0 : Number(value)) : value,
+      [name]: type === 'number' || numericFields.includes(name)
+        ? (value === '' ? 0 : Number(value))
+        : value,
     }));
   };
 
@@ -395,9 +448,38 @@ const AdminNpcsPage = () => {
             <label className="flex flex-col gap-1">
               <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Раса</span>
               <select name="id_race" value={form.id_race} onChange={handleChange} className="input-underline">
-                {NPC_RACES.map((r) => (
-                  <option key={r.value} value={r.value} className="bg-site-dark text-white">{r.label}</option>
-                ))}
+                {racesData.length > 0
+                  ? racesData.map((r) => (
+                      <option key={r.id_race} value={r.id_race} className="bg-site-dark text-white">{r.name}</option>
+                    ))
+                  : NPC_RACES.map((r) => (
+                      <option key={r.value} value={r.value} className="bg-site-dark text-white">{r.label}</option>
+                    ))
+                }
+              </select>
+            </label>
+
+            {/* Subrace */}
+            <label className="flex flex-col gap-1">
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Подраса</span>
+              <select
+                name="id_subrace"
+                value={form.id_subrace}
+                onChange={handleChange}
+                className="input-underline"
+                disabled={subraceOptions.length === 0}
+              >
+                {subraceOptions.length === 0 ? (
+                  <option value={0} className="bg-site-dark text-white">
+                    {racesData.length === 0 ? 'Загрузка...' : 'Нет подрас'}
+                  </option>
+                ) : (
+                  subraceOptions.map((s) => (
+                    <option key={s.id_subrace} value={s.id_subrace} className="bg-site-dark text-white">
+                      {s.name}
+                    </option>
+                  ))
+                )}
               </select>
             </label>
 

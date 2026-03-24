@@ -104,8 +104,8 @@ export interface MobTemplateCreatePayload {
   tier: 'normal' | 'elite' | 'boss';
   level: number;
   avatar?: string;
-  id_race: number;
-  id_subrace: number;
+  id_race?: number;
+  id_subrace?: number;
   id_class: number;
   sex: 'male' | 'female' | 'genderless';
   base_attributes: Record<string, number>;

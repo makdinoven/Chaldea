@@ -50,6 +50,9 @@ async def fetch_main_weapon(character_id: int) -> Dict | None:
     return None
 
 
+# ---------- class → main attribute mapping ----------------------------------
+CLASS_MAIN_ATTRIBUTE = {1: "strength", 2: "agility", 3: "intelligence"}
+
 # ---------- основной расчёт ------------------------------------------------
 async def compute_single_damage_entry(
     damage_entry: Dict,                # один элемент из SkillRank.damage_entries
@@ -121,16 +124,18 @@ async def compute_damage_with_rolls(
     weapon: Dict | None,
     percent_buffs: Dict[str, float],
     defender_attr: Dict,
-    percent_resists: Dict[str, float],    # ← НОВОЕ
+    percent_resists: Dict[str, float],
+    class_id: int = 1,
 ) -> Tuple[float, Dict]:
     """
     • roll_dodge, roll_chance, roll_crit
     • применяет +%баффы, криты, −%резисты
+    • class_id определяет основной атрибут урона (1=strength, 2=agility, 3=intelligence)
+    • luck атакующего добавляет +0.1% за единицу ко всем шансовым проверкам
     """
-    # 1) базовый урон = сила персонажа + модификатор оружия + бонус damage
-    #    strength — основной стат урона для всех классов
-    #    damage — дополнительный бонус от экипировки/эффектов
-    base_stat = attacker_attr.get("strength", 0)
+    # 1) базовый урон = основной атрибут класса + модификатор оружия + бонус damage
+    main_attr_key = CLASS_MAIN_ATTRIBUTE.get(class_id, "strength")
+    base_stat = attacker_attr.get(main_attr_key, 0)
     damage_bonus = attacker_attr.get("damage", 0)
     weapon_mod = weapon["damage_modifier"] if weapon else 0
     base = max(0, base_stat + damage_bonus + weapon_mod)
@@ -150,20 +155,24 @@ async def compute_damage_with_rolls(
         "after_buffs": round(raw, 2),
     }
 
+    # luck bonus: +0.1% per point of luck to all attacker offensive procs
+    attacker_luck = attacker_attr.get("luck", 0)
+    luck_bonus = attacker_luck * 0.1
+
     # dodge
     if roll_dodge(defender_attr["dodge"]):
         log["dodged"] = True
         return 0.0, log
     log["dodged"] = False
 
-    # hit chance
-    if not roll_chance(damage_entry["chance"]):
+    # hit chance (luck improves hit chance for attacker)
+    if not roll_chance(damage_entry["chance"] + luck_bonus):
         log["hit_chance_failed"] = True
         return 0.0, log
     log["hit_chance_failed"] = False
 
-    # crit
-    if roll_crit(attacker_attr["critical_hit_chance"]):
+    # crit (luck improves crit chance for attacker)
+    if roll_crit(attacker_attr["critical_hit_chance"] + luck_bonus):
         crit_mul = attacker_attr["critical_damage"] / 100.0
         raw *= crit_mul
         log["critical"] = True

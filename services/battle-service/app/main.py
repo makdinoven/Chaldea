@@ -36,7 +36,7 @@ from inventory_client import get_fast_slots, consume_item
 from character_client import get_character_profile
 from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, build_percent_damage_buffs, \
     build_percent_resist_buffs
-from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, compute_damage_with_rolls
+from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, compute_damage_with_rolls, roll_chance
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
     get_cached_snapshot, KEY_BATTLE_TURNS, state_key
 from config import settings
@@ -94,6 +94,32 @@ async def verify_character_ownership(db: AsyncSession, character_id: int, user_i
             status_code=403,
             detail="Вы можете управлять только своими персонажами",
         )
+
+
+async def fetch_character_class_id(db: AsyncSession, character_id: int) -> int:
+    """Fetch id_class from characters table. Returns 1 (Warrior) as default."""
+    result = await db.execute(
+        text("SELECT id_class FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    )
+    row = result.fetchone()
+    return row[0] if row and row[0] else 1
+
+
+def _filter_effects_by_chance(effects: list, luck_bonus: float) -> list:
+    """Filter effects by their chance field, applying luck bonus.
+
+    Each effect has a 'chance' field (0..100). Luck adds +0.1% per point
+    to the proc probability. Effects with chance >= 100 always proc.
+    Returns only effects that passed the roll.
+    """
+    passed = []
+    for eff in effects:
+        base_chance = eff.get("chance", 100)
+        actual_chance = base_chance + luck_bonus
+        if actual_chance >= 100 or roll_chance(actual_chance):
+            passed.append(eff)
+    return passed
 
 
 async def build_participant_info(char_id: int, participant_id: int) -> dict:
@@ -890,6 +916,11 @@ async def _make_action_core(
     base_attacker_attributes = await attrs(attacker_character_id)
     attacker_weapon = await fetch_main_weapon(attacker_character_id)
 
+    # Fetch attacker's class for class-aware damage formula
+    attacker_class_id = await fetch_character_class_id(db_session, attacker_character_id)
+    # Luck bonus for all attacker offensive procs (+0.1% per luck point)
+    attacker_luck_bonus = base_attacker_attributes.get("luck", 0) * 0.1
+
     # События этого хода копим в список
     turn_events: List[Dict] = []
 
@@ -926,9 +957,10 @@ async def _make_action_core(
                 "kind": "support", "effects": [e["effect_name"] for e in self_effects],
             })
 
-        # enemy-эффекты
+        # enemy-эффекты (with luck-based proc chance)
         enemy_effects = [e for e in support_rank.get("effects", [])
                          if e.get("target_side") == "enemy"]
+        enemy_effects = _filter_effects_by_chance(enemy_effects, attacker_luck_bonus)
         if enemy_effects:
             apply_new_effects(battle_state, defender_pid, enemy_effects, is_enemy=True)
             turn_events.append({
@@ -952,8 +984,10 @@ async def _make_action_core(
                 "kind": "defense", "effects": [e["effect_name"] for e in self_effects],
             })
 
+        # enemy-эффекты (with luck-based proc chance)
         enemy_effects = [e for e in defense_rank.get("effects", [])
                          if e.get("target_side") == "enemy"]
+        enemy_effects = _filter_effects_by_chance(enemy_effects, attacker_luck_bonus)
         if enemy_effects:
             apply_new_effects(battle_state, defender_pid, enemy_effects, is_enemy=True)
             turn_events.append({
@@ -1058,6 +1092,7 @@ async def _make_action_core(
                 percent_buffs=percent_damage_buffs,
                 defender_attr=defender_attributes,
                 percent_resists=defender_percent_resists,
+                class_id=attacker_class_id,
             )
             battle_state["participants"][str(defender_pid)]["hp"] -= dealt
             turn_events.append({
@@ -1065,9 +1100,10 @@ async def _make_action_core(
                 "target": defender_pid, **log
             })
 
-        # enemy-эффекты
+        # enemy-эффекты (with luck-based proc chance)
         enemy_effects = [e for e in attack_rank.get("effects", [])
                          if e.get("target_side") == "enemy"]
+        enemy_effects = _filter_effects_by_chance(enemy_effects, attacker_luck_bonus)
         if enemy_effects:
             apply_new_effects(battle_state, defender_pid, enemy_effects, is_enemy=True)
             turn_events.append({

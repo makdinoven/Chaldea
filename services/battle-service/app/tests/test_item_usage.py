@@ -245,6 +245,7 @@ def _build_common_patches(
         "main.load_state": AsyncMock(return_value=battle_state),
         "main.fetch_full_attributes": AsyncMock(return_value=attrs),
         "main.fetch_main_weapon": AsyncMock(return_value=None),
+        "main.fetch_character_class_id": AsyncMock(return_value=1),
         "main.compute_damage_with_rolls": AsyncMock(return_value=damage_result),
         "main._distribute_pve_rewards": AsyncMock(return_value=None),
         "auth_http.requests.get": MagicMock(return_value=_mock_response(

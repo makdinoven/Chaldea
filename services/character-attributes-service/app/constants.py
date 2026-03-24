@@ -18,19 +18,32 @@ STAMINA_MULTIPLIER = 5
 # Per-point bonus for combat/resistance stats
 STAT_BONUS_PER_POINT = 0.1
 
-# All resistance fields affected by endurance
-ALL_RESISTANCE_FIELDS = [
+# Per-point bonus for endurance -> res_effects
+ENDURANCE_RES_EFFECTS_MULTIPLIER = 0.2
+
+# Physical resistance fields (boosted by Strength)
+PHYSICAL_RESISTANCE_FIELDS = [
     "res_physical",
     "res_catting",
     "res_crushing",
     "res_piercing",
+]
+
+# Magical resistance fields (boosted by Intelligence)
+MAGICAL_RESISTANCE_FIELDS = [
     "res_magic",
     "res_fire",
     "res_ice",
     "res_watering",
     "res_electricity",
-    "res_sainting",
     "res_wind",
+    "res_sainting",
     "res_damning",
-    "res_effects",
 ]
+
+# All resistance fields (union of physical + magical + effects)
+ALL_RESISTANCE_FIELDS = (
+    PHYSICAL_RESISTANCE_FIELDS
+    + MAGICAL_RESISTANCE_FIELDS
+    + ["res_effects"]
+)

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
@@ -7,7 +7,7 @@ import {
   updateMobTemplate,
   selectMobsSaving,
 } from '../../../redux/slices/mobsSlice';
-import { NPC_CLASSES, NPC_RACES, NPC_SEXES } from '../../../constants/npc';
+import { NPC_CLASSES, NPC_SEXES } from '../../../constants/npc';
 import type { MobTemplateCreatePayload } from '../../../api/mobs';
 
 interface AdminMobTemplateFormProps {
@@ -46,8 +46,6 @@ interface FormData {
   description: string;
   tier: 'normal' | 'elite' | 'boss';
   level: number;
-  id_race: number;
-  id_subrace: number;
   id_class: number;
   sex: 'male' | 'female' | 'genderless';
   base_attributes: Record<string, number>;
@@ -62,8 +60,6 @@ const INITIAL_FORM: FormData = {
   description: '',
   tier: 'normal',
   level: 1,
-  id_race: 1,
-  id_subrace: 1,
   id_class: 1,
   sex: 'genderless',
   base_attributes: { ...DEFAULT_ATTRIBUTES },
@@ -71,6 +67,76 @@ const INITIAL_FORM: FormData = {
   gold_reward: 0,
   respawn_enabled: false,
   respawn_seconds: null,
+};
+
+const DERIVED_STAT_LABELS: Record<string, string> = {
+  max_health: 'Макс. здоровье',
+  max_mana: 'Макс. мана',
+  max_energy: 'Макс. энергия',
+  max_stamina: 'Макс. выносливость',
+  damage: 'Урон',
+  dodge: 'Уклонение',
+  critical_hit_chance: 'Шанс крита',
+  critical_damage: 'Крит. урон',
+  res_physical: 'Физ. защита',
+  res_catting: 'Защ. реж.',
+  res_crushing: 'Защ. дроб.',
+  res_piercing: 'Защ. кол.',
+  res_magic: 'Маг. защита',
+  res_fire: 'Защ. огонь',
+  res_ice: 'Защ. лёд',
+  res_watering: 'Защ. вода',
+  res_electricity: 'Защ. электр.',
+  res_wind: 'Защ. ветер',
+  res_sainting: 'Защ. свет',
+  res_damning: 'Защ. тьма',
+  res_effects: 'Сопр. эффектам',
+};
+
+const PREVIEW_RESOURCE_KEYS = ['max_health', 'max_mana', 'max_energy', 'max_stamina'] as const;
+const PREVIEW_COMBAT_KEYS = ['damage', 'dodge', 'critical_hit_chance', 'critical_damage'] as const;
+const PREVIEW_RESISTANCE_KEYS = [
+  'res_physical', 'res_catting', 'res_crushing', 'res_piercing',
+  'res_magic', 'res_fire', 'res_ice', 'res_watering',
+  'res_electricity', 'res_wind', 'res_sainting', 'res_damning', 'res_effects',
+] as const;
+
+const computeDerivedStats = (base: Record<string, number>, idClass: number) => {
+  const str = base.strength ?? 0;
+  const agi = base.agility ?? 0;
+  const int = base.intelligence ?? 0;
+  const end = base.endurance ?? 0;
+  const luck = base.luck ?? 0;
+  const hp = base.health ?? 0;
+  const mana = base.mana ?? 0;
+  const energy = base.energy ?? 0;
+  const stamina = base.stamina ?? 0;
+
+  const mainAttrDamage = idClass === 1 ? str : idClass === 2 ? agi : int;
+
+  return {
+    max_health: 100 + hp * 10,
+    max_mana: 75 + mana * 10,
+    max_energy: 50 + energy * 5,
+    max_stamina: 100 + stamina * 5,
+    damage: mainAttrDamage,
+    dodge: 5.0 + agi * 0.1 + luck * 0.1,
+    critical_hit_chance: 20.0 + luck * 0.1,
+    critical_damage: 125.0,
+    res_physical: str * 0.1,
+    res_catting: str * 0.1,
+    res_crushing: str * 0.1,
+    res_piercing: str * 0.1,
+    res_magic: int * 0.1,
+    res_fire: int * 0.1,
+    res_ice: int * 0.1,
+    res_watering: int * 0.1,
+    res_electricity: int * 0.1,
+    res_wind: int * 0.1,
+    res_sainting: int * 0.1,
+    res_damning: int * 0.1,
+    res_effects: end * 0.2 + luck * 0.1,
+  };
 };
 
 const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps) => {
@@ -81,6 +147,32 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+
+  const derivedStats = useMemo(
+    () => computeDerivedStats(form.base_attributes, Number(form.id_class)),
+    [form.base_attributes, form.id_class],
+  );
+
+  const renderPreviewGroup = (title: string, keys: readonly string[], stats: Record<string, number>) => (
+    <div className="flex flex-col gap-2">
+      <h4 className="text-white/70 text-xs font-medium uppercase tracking-wide">{title}</h4>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+        {keys.map((key) => {
+          const val = stats[key];
+          if (val === undefined) return null;
+          const formatted = Number.isInteger(val) ? String(val) : val.toFixed(1);
+          return (
+            <div key={key} className="flex flex-col gap-0.5">
+              <span className="text-white/50 text-[10px] uppercase truncate" title={DERIVED_STAT_LABELS[key] || key}>
+                {DERIVED_STAT_LABELS[key] || key}
+              </span>
+              <span className="text-white/80 text-sm">{formatted}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 
   useEffect(() => {
     if (editingId) {
@@ -93,8 +185,6 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
             description: t.description || '',
             tier: t.tier || 'normal',
             level: t.level || 1,
-            id_race: t.id_race || 1,
-            id_subrace: t.id_subrace || 1,
             id_class: t.id_class || 1,
             sex: t.sex || 'genderless',
             base_attributes: t.base_attributes || { ...DEFAULT_ATTRIBUTES },
@@ -162,8 +252,6 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
       description: form.description,
       tier: form.tier,
       level: form.level,
-      id_race: form.id_race,
-      id_subrace: form.id_subrace,
       id_class: form.id_class,
       sex: form.sex,
       base_attributes: form.base_attributes,
@@ -236,26 +324,17 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
         </label>
 
         <label className="flex flex-col gap-1">
-          <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Раса</span>
-          <select name="id_race" value={form.id_race} onChange={handleChange} className="input-underline">
-            {NPC_RACES.map((r) => (
-              <option key={r.value} value={r.value} className="bg-site-dark text-white">{r.label}</option>
-            ))}
-          </select>
-        </label>
-
-        <label className="flex flex-col gap-1">
-          <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Подраса</span>
-          <input type="number" name="id_subrace" value={form.id_subrace} onChange={handleChange} min={1} className="input-underline" />
-        </label>
-
-        <label className="flex flex-col gap-1">
           <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Класс</span>
           <select name="id_class" value={form.id_class} onChange={handleChange} className="input-underline">
             {NPC_CLASSES.map((c) => (
               <option key={c.value} value={c.value} className="bg-site-dark text-white">{c.label}</option>
             ))}
           </select>
+          <span className="text-white/30 text-[10px] mt-0.5">
+            {form.id_class === 1 && 'Урон от Силы'}
+            {form.id_class === 2 && 'Урон от Ловкости'}
+            {form.id_class === 3 && 'Урон от Интеллекта'}
+          </span>
         </label>
 
         <label className="flex flex-col gap-1">
@@ -326,6 +405,16 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
             </label>
           ))}
         </div>
+      </div>
+
+      {/* Derived stats preview */}
+      <div className="flex flex-col gap-3 bg-white/[0.03] rounded-card p-3 sm:p-4">
+        <h3 className="gold-text text-sm font-medium uppercase tracking-[0.06em]">
+          Расчётные характеристики (предпросмотр)
+        </h3>
+        {renderPreviewGroup('Ресурсы', PREVIEW_RESOURCE_KEYS, derivedStats)}
+        {renderPreviewGroup('Боевые', PREVIEW_COMBAT_KEYS, derivedStats)}
+        {renderPreviewGroup('Сопротивления', PREVIEW_RESISTANCE_KEYS, derivedStats)}
       </div>
 
       {/* Respawn */}
