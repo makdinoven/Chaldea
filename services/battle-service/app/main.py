@@ -3,7 +3,8 @@ from datetime import datetime, timedelta, timezone
 from os import supports_fd
 from typing import List, Dict
 
-from fastapi import FastAPI, Depends, HTTPException, APIRouter, Query
+import asyncio
+from fastapi import FastAPI, Depends, HTTPException, APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -26,7 +27,8 @@ from schemas import (
 )
 from models import BattleType, BattleHistory, BattleResult, PvpInvitation, PvpInvitationStatus, BattleStatus, BattleJoinRequest, JoinRequestStatus, BattleParticipant
 from rabbitmq_publisher import publish_notification
-from auth_http import get_current_user_via_http, UserRead, require_permission
+from auth_http import get_current_user_via_http, UserRead, require_permission, authenticate_websocket
+import ws_manager
 from mongo_client import get_mongo_db
 from database import get_db
 from battle_engine import decrement_cooldowns, set_cooldown
@@ -694,6 +696,16 @@ async def pause_battle(db: AsyncSession, battle_id: int) -> None:
         for pid_str in state["participants"]:
             await rds.zrem(ZSET_DEADLINES, f"{battle_id}:{pid_str}")
 
+    # Publish battle_paused to WS clients (FEAT-074)
+    try:
+        rds_pub = await get_redis_client()
+        await rds_pub.publish(
+            f"battle:{battle_id}:state_update",
+            json.dumps({"type": "battle_paused", "data": {"is_paused": True, "reason": "Рассматривается заявка на присоединение"}}),
+        )
+    except Exception as e:
+        logger.error(f"WS publish (battle_paused) failed for battle {battle_id}: {e}")
+
     logger.info(f"Battle {battle_id} paused")
 
 
@@ -759,6 +771,16 @@ async def resume_battle_if_ready(db: AsyncSession, battle_id: int) -> bool:
             )
         except Exception as e:
             logger.error(f"Ошибка уведомления при возобновлении боя: {e}")
+
+    # Publish battle_paused (resumed) to WS clients (FEAT-074)
+    try:
+        rds_pub = await get_redis_client()
+        await rds_pub.publish(
+            f"battle:{battle_id}:state_update",
+            json.dumps({"type": "battle_paused", "data": {"is_paused": False, "reason": None}}),
+        )
+    except Exception as e:
+        logger.error(f"WS publish (battle_resumed) failed for battle {battle_id}: {e}")
 
     logger.info(f"Battle {battle_id} resumed")
     return True
@@ -1365,6 +1387,29 @@ async def _make_action_core(
         # Save log via Celery
         save_log.delay(battle_id, new_turn_number, turn_events)
 
+        # Publish battle_state + battle_finished to WS via Redis Pub/Sub (FEAT-074)
+        try:
+            rds_ws = await get_redis_client()
+            snapshot_ws = await get_cached_snapshot(rds_ws, battle_id)
+            if snapshot_ws is None:
+                snap_doc_ws = await load_snapshot(battle_id)
+                if snap_doc_ws:
+                    snapshot_ws = snap_doc_ws["participants"]
+            runtime_ws = _build_runtime(battle_state)
+            # Send final state
+            await rds_ws.publish(
+                f"battle:{battle_id}:state_update",
+                json.dumps({"type": "battle_state", "data": {"snapshot": snapshot_ws, "runtime": runtime_ws}}),
+            )
+            # Send battle_finished event
+            rewards_data = battle_rewards.dict() if battle_rewards else None
+            await rds_ws.publish(
+                f"battle:{battle_id}:state_update",
+                json.dumps({"type": "battle_finished", "data": {"winner_team": winner_team, "rewards": rewards_data}}),
+            )
+        except Exception as e:
+            logger.error(f"WS publish (battle_finished) failed for battle {battle_id}: {e}")
+
         return ActionResponse(
             ok=True,
             turn_number=new_turn_number,
@@ -1403,6 +1448,21 @@ async def _make_action_core(
     await redis.publish(
         f"battle:{battle_id}:your_turn", str(next_actor_participant_id)
     )
+
+    # Publish state_update for WS clients (FEAT-074)
+    try:
+        snapshot_ws = await get_cached_snapshot(redis, battle_id)
+        if snapshot_ws is None:
+            snap_doc_ws = await load_snapshot(battle_id)
+            if snap_doc_ws:
+                snapshot_ws = snap_doc_ws["participants"]
+        runtime_ws = _build_runtime(battle_state)
+        await redis.publish(
+            f"battle:{battle_id}:state_update",
+            json.dumps({"type": "battle_state", "data": {"snapshot": snapshot_ws, "runtime": runtime_ws}}),
+        )
+    except Exception as e:
+        logger.error(f"WS publish (state_update) failed for battle {battle_id}: {e}")
 
     # ------------------------------------------------------------------------------
     # 12. Асинхронно сохраняем лог хода в Mongo через Celery
@@ -2883,6 +2943,193 @@ async def list_join_requests(
         ))
 
     return JoinRequestListResponse(requests=requests)
+
+
+# ---------------------------------------------------------------------------
+# WebSocket endpoint for real-time battle state updates (FEAT-074)
+# ---------------------------------------------------------------------------
+@app.websocket("/battles/ws/{battle_id}")
+async def battle_websocket(websocket: WebSocket, battle_id: int, token: str = Query(...)):
+    """
+    WebSocket endpoint for real-time battle state push.
+    Auth via ?token= query param. Accepts participants and spectators.
+    Server-push only (client messages are ignored).
+    """
+    # 1. Authenticate via JWT
+    user = await authenticate_websocket(token)
+    if not user:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    user_id = user["id"]
+
+    # 2. Check if user is a participant or spectator
+    state = await load_state(battle_id)
+    if not state:
+        await websocket.close(code=4003, reason="Forbidden")
+        return
+
+    is_participant = False
+    participant_character_ids = [
+        state["participants"][pid]["character_id"]
+        for pid in state["participants"]
+    ]
+
+    # Use a fresh DB session for auth checks
+    async for db in get_db():
+        # Check participant
+        for cid in participant_character_ids:
+            result = await db.execute(
+                text("SELECT user_id FROM characters WHERE id = :cid"),
+                {"cid": cid},
+            )
+            row = result.fetchone()
+            if row and row[0] == user_id:
+                is_participant = True
+                break
+
+        # If not participant, check spectator (at same location)
+        if not is_participant:
+            battle_record = await get_battle(db, battle_id)
+            if not battle_record or not battle_record.location_id:
+                await websocket.close(code=4003, reason="Forbidden")
+                return
+            if battle_record.status not in (BattleStatus.pending, BattleStatus.in_progress):
+                await websocket.close(code=4003, reason="Forbidden")
+                return
+
+            result = await db.execute(
+                text("SELECT id, current_location_id FROM characters WHERE user_id = :uid"),
+                {"uid": user_id},
+            )
+            user_characters = result.fetchall()
+            user_at_location = any(
+                row[1] == battle_record.location_id for row in user_characters
+            )
+            if not user_at_location:
+                await websocket.close(code=4003, reason="Forbidden")
+                return
+        break
+
+    # 3. Accept connection
+    await websocket.accept()
+    await ws_manager.connect(battle_id, user_id, websocket)
+
+    # 4. Send initial battle_state message
+    try:
+        rds = await get_redis_client()
+        snapshot = await get_cached_snapshot(rds, battle_id)
+        if snapshot is None:
+            snap_doc = await load_snapshot(battle_id)
+            if snap_doc:
+                snapshot = snap_doc["participants"]
+                await cache_snapshot(rds, battle_id, snapshot)
+
+        # Reload state for freshest data
+        current_state = await load_state(battle_id)
+        if current_state:
+            runtime = _build_runtime(current_state)
+            await websocket.send_json({
+                "type": "battle_state",
+                "data": {"snapshot": snapshot, "runtime": runtime},
+            })
+    except Exception as e:
+        logger.error("WS: failed to send initial state for battle %d: %s", battle_id, e)
+
+    # 5. Read loop with 30s ping keepalive
+    try:
+        while True:
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                # Client messages are ignored (read-only push channel)
+            except asyncio.TimeoutError:
+                # Send application-level ping on timeout
+                await websocket.send_json({"type": "ping", "data": {}})
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await ws_manager.disconnect(battle_id, user_id)
+
+
+def _build_runtime(state: dict) -> dict:
+    """Build runtime dict from Redis state (reusable helper for WS messages)."""
+    return {
+        "turn_number": state["turn_number"],
+        "deadline_at": state["deadline_at"],
+        "current_actor": state["next_actor"],
+        "next_actor": next_pid_after(state["next_actor"], state["turn_order"]),
+        "first_actor": state["first_actor"],
+        "turn_order": state["turn_order"],
+        "total_turns": state.get("total_turns", 0),
+        "last_turn": state.get("last_turn", 0),
+        "participants": {
+            pid: {
+                "hp": state["participants"][pid]["hp"],
+                "mana": state["participants"][pid]["mana"],
+                "energy": state["participants"][pid]["energy"],
+                "stamina": state["participants"][pid]["stamina"],
+                "cooldowns": state["participants"][pid]["cooldowns"],
+                "fast_slots": state["participants"][pid].get("fast_slots", []),
+                "team": state["participants"][pid]["team"],
+                "character_id": state["participants"][pid]["character_id"],
+                "max_hp": state["participants"][pid].get("max_hp", 0),
+                "max_mana": state["participants"][pid].get("max_mana", 0),
+                "max_energy": state["participants"][pid].get("max_energy", 0),
+                "max_stamina": state["participants"][pid].get("max_stamina", 0),
+            }
+            for pid in state["participants"]
+        },
+        "active_effects": state["active_effects"],
+        "is_paused": state.get("paused", False),
+        "paused_reason": "Рассматривается заявка на присоединение" if state.get("paused") else None,
+        "rewards": state.get("rewards"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Redis Pub/Sub subscriber for state_update channel (FEAT-074, Task 3)
+# ---------------------------------------------------------------------------
+async def _redis_state_update_subscriber():
+    """
+    Subscribe to battle:*:state_update pattern and route messages
+    to ws_manager.broadcast_to_battle().
+    """
+    try:
+        rds = await get_redis_client()
+        pubsub = rds.pubsub()
+        await pubsub.psubscribe("battle:*:state_update")
+        logger.info("Redis Pub/Sub subscriber started for battle:*:state_update")
+
+        async for message in pubsub.listen():
+            if message["type"] != "pmessage":
+                continue
+            try:
+                channel = message["channel"]
+                # Channel format: "battle:{battle_id}:state_update"
+                parts = channel.split(":")
+                battle_id = int(parts[1])
+                data = json.loads(message["data"])
+                await ws_manager.broadcast_to_battle(battle_id, data)
+
+                # After broadcasting battle_finished, clean up WS connections
+                if data.get("type") == "battle_finished":
+                    # Small delay so clients receive the final message before disconnect
+                    await asyncio.sleep(0.5)
+                    await ws_manager.cleanup_battle(battle_id)
+                    logger.info("WS subscriber: cleaned up battle %d after battle_finished", battle_id)
+            except Exception as e:
+                logger.error("WS subscriber: error processing message: %s", e)
+    except Exception as e:
+        logger.error("Redis Pub/Sub subscriber failed: %s", e)
+
+
+@app.on_event("startup")
+async def startup_ws_subscriber():
+    """Start the Redis Pub/Sub subscriber as a background task."""
+    asyncio.create_task(_redis_state_update_subscriber())
+    logger.info("WS state_update subscriber task created")
 
 
 app.include_router(router)

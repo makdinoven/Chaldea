@@ -59,11 +59,9 @@
 **Описание:** Пропущена закрывающая скобка в dict comprehension при инициализации state.
 **Решение:** Исправить синтаксис.
 
-### 15. Polling вместо WebSocket на BattlePage
-**Сервис:** frontend
-**Файл:** `src/components/pages/BattlePage/BattlePage.jsx`
-**Описание:** BattlePage опрашивает `GET /battles/{id}/state` каждые 5 секунд. Redis Pub/Sub уже используется на бэкенде, но фронтенд его не слушает. Лишняя нагрузка и задержка до 5 сек.
-**Решение:** Реализовать WebSocket или SSE для push-обновлений состояния боя.
+### ~~15. Polling вместо WebSocket на BattlePage~~ DONE (FEAT-074)
+~~**Сервис:** frontend~~
+~~**Исправлено в FEAT-074:** Polling заменён на WebSocket (`/battles/ws/{battle_id}`). Оба игрока получают обновления мгновенно. Авто-переподключение с exponential backoff, fallback на polling при неудаче. Автобой тоже через WebSocket + управление скоростью (быстрый/медленный режим).~~
 
 ---
 

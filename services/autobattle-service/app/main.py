@@ -34,6 +34,7 @@ REDIS: aioredis.Redis                                       # клиент Redis
 ALLOWED: set[int]           = set()                         # pid, которыми управляем
 PID_BATTLE: dict[int, int]  = {}                            # pid → последний battle_id
 OWNER: dict[int, int]       = {}                            # pid → user_id (кто зарегистрировал)
+SPEED: dict[int, str]       = {}                            # pid → "fast" | "slow"
 
 LAST_STATS: dict[Tuple[int, int], Dict[str, int]] = {}      # (bid,pid) → {hp,…}
 HISTORY:    dict[Tuple[int, int], Deque[Dict[str, Any]]] = \
@@ -42,6 +43,10 @@ HISTORY:    dict[Tuple[int, int], Deque[Dict[str, Any]]] = \
 # ────────────────────────────  pydantic  ─────────────────────────
 class ModePayload(BaseModel):
     mode: str                 # attack / defense / balance
+
+class SpeedPayload(BaseModel):
+    participant_id: int
+    speed: str                # "fast" | "slow"
 
 class RegisterPayload(BaseModel):
     participant_id: int
@@ -114,6 +119,7 @@ async def register(p: RegisterPayload, user: UserRead = Depends(get_current_user
 
     ALLOWED.add(p.participant_id)
     OWNER[p.participant_id] = user.id
+    SPEED[p.participant_id] = "fast"
     if p.battle_id:
         PID_BATTLE[p.participant_id] = p.battle_id
 
@@ -155,7 +161,21 @@ def unregister(participant_id: int = Body(..., embed=True), user: UserRead = Dep
         raise HTTPException(403, "Вы не можете отменить автобой чужого персонажа")
     ALLOWED.discard(participant_id)
     OWNER.pop(participant_id, None)
+    SPEED.pop(participant_id, None)
     return {"ok": True, "allowed": list(ALLOWED)}
+
+
+@app.post("/speed")
+def set_speed(p: SpeedPayload, user: UserRead = Depends(get_current_user_via_http)):
+    if p.speed not in ("fast", "slow"):
+        raise HTTPException(400, "Допустимые значения скорости: fast, slow")
+    if p.participant_id not in ALLOWED:
+        raise HTTPException(404, "Участник не зарегистрирован в автобое")
+    registered_owner = OWNER.get(p.participant_id)
+    if registered_owner is not None and registered_owner != user.id:
+        raise HTTPException(403, "Вы не можете менять скорость чужого автобоя")
+    SPEED[p.participant_id] = p.speed
+    return {"ok": True, "participant_id": p.participant_id, "speed": p.speed}
 
 # ──────────────────────────  helpers  ────────────────────────────
 def _ratio(cur: int, mx: int) -> float:
@@ -250,6 +270,7 @@ def _cleanup_battle(bid: int) -> None:
         ALLOWED.discard(p)
         PID_BATTLE.pop(p, None)
         OWNER.pop(p, None)
+        SPEED.pop(p, None)
     # Чистим LAST_STATS и HISTORY по battle_id
     for key in [k for k in LAST_STATS if k[0] == bid]:
         del LAST_STATS[key]
@@ -262,6 +283,8 @@ MAX_RETRIES = 3
 
 async def handle_turn(bid: int, pid: int) -> None:
     """Один авто-ход с retry логикой."""
+    if SPEED.get(pid) == "slow":
+        await asyncio.sleep(settings.AUTOBATTLE_SLOW_DELAY)
     for attempt in range(MAX_RETRIES + 1):
         try:
             ctx = await get_battle_state(bid)

@@ -1,5 +1,6 @@
 import os
 import requests
+import httpx
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
@@ -65,3 +66,19 @@ def require_permission(permission: str):
             )
         return user
     return checker
+
+
+async def authenticate_websocket(token: str):
+    """Validate JWT by calling user-service. Returns user dict or None."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{AUTH_SERVICE_URL}/users/me",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return None
+    except Exception:
+        return None

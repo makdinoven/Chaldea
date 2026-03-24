@@ -1,7 +1,6 @@
-import s from "./BattlePage.module.scss";
 import CharacterSide from "./CharacterSide/CharacterSide";
 import Loader from "../../CommonComponents/Loader/Loader";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import axios from "axios";
 
@@ -17,6 +16,7 @@ import BlueGradientButton from "../../CommonComponents/BlueGradientButton/BlueGr
 import BattleRewardsModal from "./BattleRewardsModal";
 import type { BattleRewards } from "../../../api/mobs";
 import { fetchBattleSpectateState } from "../../../api/battles";
+import useBattleWebSocket from "../../../hooks/useBattleWebSocket";
 
 // --- Types ---
 
@@ -161,6 +161,16 @@ const BattlePage = () => {
   // Pause state
   const isPaused = runtimeData?.is_paused === true;
 
+  // --- WebSocket integration ---
+  const token = localStorage.getItem("accessToken");
+  const {
+    connected: wsConnected,
+    reconnecting: wsReconnecting,
+    fallbackToPolling,
+    state: wsState,
+    battleFinished: wsBattleFinished,
+  } = useBattleWebSocket(battleId ?? "", token);
+
   const getResources = (
     snapshot: ParticipantSnapshot,
     runtime: RuntimeState,
@@ -192,30 +202,9 @@ const BattlePage = () => {
     },
   ];
 
-  const getBattleState = async (withLoading?: boolean) => {
-    if (withLoading) {
-      setLoading(true);
-    }
-    try {
-      let snapshot: ParticipantSnapshot[];
-      let runtime: RuntimeState;
-
-      if (isSpectateMode) {
-        const spectateData = await fetchBattleSpectateState(Number(battleId));
-        snapshot = spectateData.snapshot;
-        runtime = spectateData.runtime;
-      } else {
-        const { data } = await axios.get(
-          `${BASE_URL_BATTLES}/battles/${battleId}/state`,
-        );
-        const response = data as {
-          snapshot: ParticipantSnapshot[];
-          runtime: RuntimeState;
-        };
-        snapshot = response.snapshot;
-        runtime = response.runtime;
-      }
-
+  // Process raw state (snapshot + runtime) into component state variables
+  const processState = useCallback(
+    (snapshot: ParticipantSnapshot[], runtime: RuntimeState) => {
       setSnapshotData(snapshot);
       setRuntimeData(runtime);
       setError(null);
@@ -259,7 +248,7 @@ const BattlePage = () => {
           });
         }
 
-        // Set turn info for spectate (both sides are "opponent" effectively)
+        // Set turn info for spectate
         const currentActorSnapshot = snapshot.find(
           (p) => p.participant_id === runtime.current_actor,
         );
@@ -273,11 +262,11 @@ const BattlePage = () => {
             characterName: currentActorSnapshot?.name ?? "",
           },
           turn_number: runtime.turn_number,
-          isOpponentTurn: true, // Always "opponent turn" in spectate — no actions allowed
+          isOpponentTurn: true,
           endsAt: timeLeft,
         });
       } else {
-        // Participant mode — existing logic
+        // Participant mode
         const mySnapshot = snapshot.find(
           (p: ParticipantSnapshot) => p.character_id === character.id,
         );
@@ -331,6 +320,84 @@ const BattlePage = () => {
           endsAt: timeLeft,
         });
       }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isSpectateMode, character],
+  );
+
+  // Process WS state updates
+  useEffect(() => {
+    if (!wsState) return;
+    const snapshot = wsState.snapshot as unknown as ParticipantSnapshot[];
+    const runtime = wsState.runtime as unknown as RuntimeState;
+    processState(snapshot, runtime);
+    setLoading(false);
+  }, [wsState, processState]);
+
+  // Handle WS battle_finished event
+  useEffect(() => {
+    if (!wsBattleFinished || battleResultSetRef.current) return;
+    if (isSpectateMode) return; // Spectate detects finish via HP check
+
+    // Determine winner from WS data
+    // We need snapshot to find names — use current snapshotData
+    if (!snapshotData || !runtimeData) return;
+
+    const winnerTeam = wsBattleFinished.winner_team;
+
+    const mySnapshot = snapshotData.find(
+      (p) => p.character_id === character?.id,
+    );
+    if (!mySnapshot) return;
+
+    const myPid = mySnapshot.participant_id;
+    const myTeam = runtimeData.participants[myPid]?.team;
+    const isLose = myTeam !== winnerTeam;
+
+    const winnerSnapshot = snapshotData.find((p) => {
+      const pid = p.participant_id;
+      return runtimeData.participants[pid]?.team === winnerTeam;
+    });
+
+    battleResultSetRef.current = true;
+    setBattleResult({
+      winner: winnerSnapshot?.name ?? "",
+      isLose,
+    });
+
+    // Handle rewards
+    const rewards = wsBattleFinished.rewards;
+    if (rewards && !isLose) {
+      setPveRewards(rewards);
+      setShowRewardsModal(true);
+    }
+  }, [wsBattleFinished, snapshotData, runtimeData, character, isSpectateMode]);
+
+  const getBattleState = async (withLoading?: boolean) => {
+    if (withLoading) {
+      setLoading(true);
+    }
+    try {
+      let snapshot: ParticipantSnapshot[];
+      let runtime: RuntimeState;
+
+      if (isSpectateMode) {
+        const spectateData = await fetchBattleSpectateState(Number(battleId));
+        snapshot = spectateData.snapshot;
+        runtime = spectateData.runtime;
+      } else {
+        const { data } = await axios.get(
+          `${BASE_URL_BATTLES}/battles/${battleId}/state`,
+        );
+        const response = data as {
+          snapshot: ParticipantSnapshot[];
+          runtime: RuntimeState;
+        };
+        snapshot = response.snapshot;
+        runtime = response.runtime;
+      }
+
+      processState(snapshot, runtime);
     } catch (e) {
       const err = e as { response?: { status?: number; data?: { detail?: string } } };
       const msg = err?.response?.data?.detail || "Не удалось загрузить состояние боя";
@@ -343,20 +410,48 @@ const BattlePage = () => {
     }
   };
 
+  // Polling: initial load + fallback when WS is not connected
   useEffect(() => {
-    // In spectate mode we don't need character to be set
     if (!isSpectateMode && !character) return;
     if (battleResult) return;
 
-    const intervalId = setInterval(() => {
-      getBattleState();
-    }, 5000);
+    // If WS is connected and not falling back to polling, skip polling entirely
+    if (wsConnected && !fallbackToPolling) {
+      // Still do initial load if we haven't loaded yet
+      if (!snapshotData) {
+        // WS will deliver initial state — just wait, but set loading false after a timeout
+        // Actually, WS sends initial state on connect, so wsState effect will handle loading
+      }
+      return;
+    }
 
-    getBattleState(true);
+    // If WS is reconnecting (not yet fallen back), don't start polling
+    // The WS hook will either reconnect or set fallbackToPolling
+    if (wsReconnecting && !fallbackToPolling) {
+      // Do initial load if nothing loaded yet
+      if (!snapshotData) {
+        getBattleState(true);
+      }
+      return;
+    }
 
-    return () => clearInterval(intervalId);
+    // Fallback polling mode OR initial load before WS connects
+    const needsInitialLoad = !snapshotData;
+
+    if (needsInitialLoad) {
+      getBattleState(true);
+    }
+
+    // Only set up interval if fallback to polling is active OR WS hasn't connected yet
+    if (fallbackToPolling || !wsConnected) {
+      const intervalId = setInterval(() => {
+        getBattleState();
+      }, 5000);
+
+      return () => clearInterval(intervalId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [battleId, character, battleResult, isSpectateMode]);
+  }, [battleId, character, battleResult, isSpectateMode, wsConnected, fallbackToPolling, wsReconnecting]);
 
   useEffect(() => {
     // Battle result detection only in participant mode
@@ -421,7 +516,10 @@ const BattlePage = () => {
         setPveRewards(data.rewards);
       }
 
-      getBattleState(false);
+      // If WS is connected, state will be pushed via WS; otherwise fetch manually
+      if (!wsConnected) {
+        getBattleState(false);
+      }
       return true;
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } } };
@@ -501,7 +599,22 @@ const BattlePage = () => {
   return (
     snapshotData &&
     runtimeData && (
-      <div>
+      <div className="-mx-10">
+        {/* WebSocket reconnection indicator */}
+        {wsReconnecting && (
+          <div className="flex items-center justify-center gap-2 mb-3 px-5 py-3 rounded-card shadow-card bg-gold-dark/90 text-white text-sm sm:text-base font-medium">
+            <span className="inline-block w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+            Переподключение...
+          </div>
+        )}
+
+        {/* Polling fallback indicator */}
+        {fallbackToPolling && !wsConnected && (
+          <div className="flex items-center justify-center gap-2 mb-3 px-5 py-3 rounded-card shadow-card bg-site-bg/90 text-white/80 text-sm sm:text-base border border-white/10">
+            Используется резервное соединение
+          </div>
+        )}
+
         {/* Spectate mode banner */}
         {isSpectateMode && (
           <div className="gold-outline relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center">
@@ -520,7 +633,7 @@ const BattlePage = () => {
           </div>
         )}
 
-        <div className={s.battlePage_container}>
+        <div className="grid grid-cols-[minmax(0,1fr)_240px_minmax(0,1fr)] sm:grid-cols-[minmax(0,1fr)_300px_minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_380px_minmax(0,1fr)] gap-2 sm:gap-4 text-white">
           <CharacterSide
             characterData={myData}
             isOpponent={false}
@@ -566,12 +679,18 @@ const BattlePage = () => {
           {/* Battle result modal — standard win/lose (participant mode only) */}
           {!isSpectateMode && battleResult && !showRewardsModal && (
             <Modal>
-              <div className={s.modal_container}>
-                <h2 className={`${battleResult.isLose ? s.lose : s.win}`}>
+              <div className="flex flex-col items-center gap-[30px]">
+                <h2
+                  className={
+                    battleResult.isLose
+                      ? "uppercase text-site-red text-3xl sm:text-[40px]"
+                      : "gold-text text-3xl sm:text-[40px]"
+                  }
+                >
                   {battleResult.isLose ? "Поражение" : "Вы выиграли"}
                 </h2>
-                <p>
-                  Победитель: <span>{battleResult.winner}</span>
+                <p className="text-xl sm:text-2xl text-white">
+                  Победитель: <span className="gold-text text-xl sm:text-2xl">{battleResult.winner}</span>
                 </p>
                 <BlueGradientButton
                   onClick={() => navigate(`/location/${locationId}`)}

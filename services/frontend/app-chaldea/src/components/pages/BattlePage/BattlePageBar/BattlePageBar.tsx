@@ -1,4 +1,3 @@
-import s from "./BattlePageBar.module.scss";
 import CountdownTimer from "./CountdownTimer/CountdownTimer";
 import ItemSkillCircle from "./ItemSkillCircle/ItemSkillCircle";
 import { useEffect, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
@@ -10,7 +9,7 @@ import {
 } from "../../../../helpers/commonConstants";
 import axios from "axios";
 import toast from "react-hot-toast";
-import { BASE_URL_BATTLES } from "../../../../api/api";
+import { BASE_URL_BATTLES, postAutobattleSpeed } from "../../../../api/api";
 import { formatDateTime } from "../../../../helpers/helpers";
 import { DAMAGE_TYPES } from "../../../AdminSkillsPage/skillConstants";
 import { getDamageLabel } from "../CharacterSide/CharacterInventory/InventoryItem/InventoryItem";
@@ -170,6 +169,12 @@ const SKILLS_BTNS = [
   { type: SKILLS_KEYS.support },
 ];
 
+// --- Autobattle mode SVG stroke color mapping ---
+const MODE_STROKE_COLORS: Record<string, string> = {
+  attack: "#f37753",
+  defence: "#76a6bd",
+};
+
 // --- Component ---
 
 const BattlePageBar = ({
@@ -196,6 +201,28 @@ const BattlePageBar = ({
   const [activeTurnIndex, setActiveTurnIndex] = useState(
     runtimeData.turn_number - 1,
   );
+  const [autobattleSpeed, setAutobattleSpeed] = useState<"fast" | "slow">("fast");
+  const [speedLoading, setSpeedLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isAutoBattleOn) {
+      setAutobattleSpeed("fast");
+    }
+  }, [isAutoBattleOn]);
+
+  const handleSpeedToggle = async () => {
+    if (!myData.participant_id) return;
+    const newSpeed = autobattleSpeed === "fast" ? "slow" : "fast";
+    setSpeedLoading(true);
+    try {
+      await postAutobattleSpeed(myData.participant_id, newSpeed);
+      setAutobattleSpeed(newSpeed);
+    } catch {
+      toast.error("Не удалось изменить скорость автобоя");
+    } finally {
+      setSpeedLoading(false);
+    }
+  };
 
   const toggleAllTurnsVisibility = () => {
     setIsAllTurnsOpen(!isAllTurnsOpen);
@@ -271,19 +298,18 @@ const BattlePageBar = ({
   const formatBattleEvent = (
     event: BattleEvent,
     snapshotData: ParticipantSnapshot[],
-    styles: Record<string, string>,
   ): ReactNode => {
     const getName = (id: number | undefined): ReactNode => {
       if (id === undefined) return null;
       const name = snapshotData.find((p) => p.participant_id === id)?.name;
-      return name ? <span className={styles.gold}>{name}</span> : null;
+      return name ? <span className="gold-text text-xs">{name}</span> : null;
     };
 
     const formatValue = (value: unknown): ReactNode => {
       if (typeof value === "number" || typeof value === "boolean") {
-        return <span className={styles.blue}>{String(value)}</span>;
+        return <span className="text-site-blue">{String(value)}</span>;
       }
-      return <span className={styles.white}>{String(value)}</span>;
+      return <span className="text-white">{String(value)}</span>;
     };
 
     const bold = (
@@ -293,12 +319,12 @@ const BattlePageBar = ({
       percentSign?: boolean,
     ): ReactNode =>
       value !== undefined ? (
-        <div className={styles.row}>
+        <div className="ml-2.5">
           {" "}
-          <span className={styles.gray}>{label ? label : ""}</span>
-          <span className={`${value === 0 ? styles.red : ""}`}>
+          <span className="text-white/50">{label ? label : ""}</span>
+          <span className={`${value === 0 ? "text-site-red" : ""}`}>
             {isPercent ? formatValue((value as number) / 100) : formatValue(value)}
-            {percentSign ? <span className={styles.blue}>%</span> : ""}
+            {percentSign ? <span className="text-site-blue">%</span> : ""}
           </span>
         </div>
       ) : null;
@@ -361,21 +387,21 @@ const BattlePageBar = ({
           {!!event.after_buffs && bold("После баффов: ", event.after_buffs)}
           {event.dodged ? (
             <>
-              <span className={styles.gray}>{getName(event.target)}</span>{" "}
-              <span className={styles.red}>уклонился. </span>
+              <span className="text-white/50">{getName(event.target)}</span>{" "}
+              <span className="text-site-red">уклонился. </span>
             </>
           ) : null}
           {event.hit_chance_failed ? (
             <>
               {" "}
-              <span className={styles.gray}>{getName(event.source)}</span>{" "}
-              <span className={styles.red}>промахнулся. </span>
+              <span className="text-white/50">{getName(event.source)}</span>{" "}
+              <span className="text-site-red">промахнулся. </span>
             </>
           ) : (
             <>
               {" "}
-              <span className={styles.gray}>{getName(event.source)}</span>{" "}
-              <span className={styles.blue}>попал.</span>
+              <span className="text-white/50">{getName(event.source)}</span>{" "}
+              <span className="text-site-blue">попал.</span>
             </>
           )}
           {event.critical && (
@@ -444,14 +470,15 @@ const BattlePageBar = ({
   };
 
   return (
-    <div className={s.container}>
-      <div className={s.battle_bar_top}>
+    <div className="w-full flex flex-col gap-[15px] font-medium">
+      {/* Battle bar top */}
+      <div className="p-5 flex flex-col items-center gap-2.5 gray-bg min-h-[160px]">
         <CountdownTimer startMilliseconds={turn.endsAt} />
-        <h3>{turn.currentCharacterParticipant.characterName}</h3>
+        <h3 className="gold-text text-lg font-medium uppercase">{turn.currentCharacterParticipant.characterName}</h3>
         {isOpponentTurn && (
-          <p className={s.opponent_turn_sign}>Ход противника</p>
+          <p className="text-base uppercase">Ход противника</p>
         )}
-        <div className={s.icons}>
+        <div className="flex gap-[18px] items-center flex-wrap justify-center">
           {SKILLS_BTNS.map((btn) => (
             <ItemSkillCircle
               choosedItem={turnData[btn.type]}
@@ -472,7 +499,8 @@ const BattlePageBar = ({
               type={btn.type}
             />
           ))}
-          <span className={s.line}></span>
+          {/* Vertical gradient line separator */}
+          <span className="w-px h-full bg-gradient-to-b from-transparent via-white/60 to-transparent" />
           <ItemSkillCircle
             choosedItem={turnData[SKILLS_KEYS.item]}
             onDropItem={(data: SkillSlot) => {
@@ -509,53 +537,121 @@ const BattlePageBar = ({
         </div>
       </div>
 
-      <div className={s.auto_battle_btns}>
-        <div className={s.mode_btns}>
-          {AUTOBATTLE_MODE_BTNS.map((btn) => (
-            <button
-              onClick={() => setAutobattleMode(btn.mode)}
-              className={`${s.auto_battle_mode_btn} ${s[btn.mode]} ${autobattleMode === btn.mode ? s.active : ""}`}
-              key={btn.mode}
-            >
-              {btn.icon}
-              <Tooltip className={s.tooltip} name={btn.name} />
-            </button>
-          ))}
+      {/* Autobattle controls */}
+      <div className="flex justify-between items-center min-h-[60px] gap-5 flex-wrap">
+        <div className="flex items-center gap-5">
+          {AUTOBATTLE_MODE_BTNS.map((btn) => {
+            const isActive = autobattleMode === btn.mode;
+            const strokeColor = MODE_STROKE_COLORS[btn.mode];
+            /* Inline style targets child SVG path stroke since AutobattleModeIcon has hardcoded stroke="#fff" */
+            const svgStyle: Record<string, string> = {};
+            if (strokeColor) svgStyle["--mode-stroke"] = strokeColor;
+
+            return (
+              <button
+                onClick={() => setAutobattleMode(btn.mode)}
+                className={`relative transition-all duration-200 ease-site group ${
+                  isActive ? "w-[45px] h-[57px]" : "w-[30px] h-10"
+                }`}
+                key={btn.mode}
+                style={svgStyle}
+              >
+                <span
+                  className={`block [&_svg]:transition-all [&_svg]:duration-200 [&_svg]:ease-site ${
+                    isActive ? "[&_svg]:w-[45px] [&_svg]:h-[57px]" : ""
+                  } ${strokeColor ? "[&_path]:[stroke:var(--mode-stroke)]" : ""}`}
+                >
+                  {btn.icon}
+                </span>
+                <Tooltip
+                  className="hidden group-hover:block group-hover:opacity-100"
+                  name={btn.name}
+                />
+              </button>
+            );
+          })}
         </div>
 
-        <button onClick={toggleAutobattle} className={s.auto_battle_btn}>
+        {isAutoBattleOn && (
+          <button
+            onClick={handleSpeedToggle}
+            disabled={speedLoading}
+            className={`
+              flex items-center gap-1.5 px-3 py-1.5 rounded-card text-sm font-medium
+              transition-all duration-200 ease-site
+              ${autobattleSpeed === "slow"
+                ? "bg-site-blue/20 text-site-blue border border-site-blue/40"
+                : "bg-white/10 text-white border border-white/20 hover:border-white/40"
+              }
+              ${speedLoading ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:bg-white/15"}
+            `}
+            title={autobattleSpeed === "fast" ? "Переключить на медленный режим" : "Переключить на быстрый режим"}
+          >
+            <span className="text-base leading-none">{autobattleSpeed === "fast" ? "\u{1F407}" : "\u{1F422}"}</span>
+            <span className="hidden sm:inline">
+              {autobattleSpeed === "fast" ? "Быстрый" : "Медленный"}
+            </span>
+          </button>
+        )}
+
+        <button
+          onClick={toggleAutobattle}
+          className="btn-line h-fit ml-auto rounded-card text-sm px-[13.5px] py-2.5"
+        >
           {isAutoBattleOn ? "остановить автобой" : "Включить автобой"}
         </button>
       </div>
+
+      {/* Turn history */}
       <div
-        className={`${s.battle_turns_container} ${isAllTurnsOpen ? s.opened : ""}`}
+        className={`gray-bg overflow-hidden flex flex-col gap-5 px-[30px] py-[35px] uppercase transition-all duration-300 ease-in-out ${
+          isAllTurnsOpen ? "max-h-[286px]" : "max-h-[140px]"
+        }`}
       >
-        <div className={s.battle_turns_container_top}>
+        <div className="flex justify-between items-center">
           <span>История ходов</span>
           {turns.length > 5 && (
-            <button onClick={toggleAllTurnsVisibility}>
+            <button
+              onClick={toggleAllTurnsVisibility}
+              className="text-white hover:text-site-blue transition-colors duration-200 ease-site"
+            >
               {isAllTurnsOpen ? "Скрыть" : "Показать все"}
             </button>
           )}
         </div>
         {turns.length > 0 && (
-          <ul className={s.turns_list}>
+          <ul
+            className={`grid grid-cols-5 gap-x-2.5 gap-y-10 items-center justify-items-center ${
+              isAllTurnsOpen ? "overflow-y-auto overflow-x-hidden" : ""
+            }`}
+          >
             {turns.map((turnPair, index) => (
-              <li key={index}>
+              <li
+                key={index}
+                className="relative flex w-full justify-start items-start gap-[5px]"
+              >
                 {turnPair.pair.map((turnEntry, i) => (
                   <div
                     key={i}
                     className={`
-              ${s.turn_circle}
-              ${turnEntry.waiting ? s.waiting : turnEntry.my ? s.my : s.opponent}
-              ${turnEntry.turnIndex === activeTurnIndex ? s.active : ""}
-            `}
+                      flex items-center justify-center text-sm font-medium relative
+                      w-[30px] h-[30px] rounded-full
+                      ${turnEntry.waiting
+                        ? "bg-white/40 cursor-default"
+                        : turnEntry.my
+                          ? "bg-white text-site-blue cursor-pointer"
+                          : "bg-site-blue cursor-pointer"
+                      }
+                      ${turnEntry.turnIndex === activeTurnIndex
+                        ? "gold-outline gold-outline-thick"
+                        : ""
+                      }
+                    `}
                     onClick={() => {
                       if (!turnEntry.waiting) {
                         setActiveTurnIndex(turnEntry.turnIndex);
                       }
                     }}
-                    style={{ cursor: turnEntry.waiting ? "default" : "pointer" }}
                   >
                     {turnEntry.turnIndex + 1}
                   </div>
@@ -565,15 +661,17 @@ const BattlePageBar = ({
           </ul>
         )}
       </div>
-      <div className={s.battle_logs_container}>
-        <div className={s.battle_logs_top}>
+
+      {/* Battle logs */}
+      <div className="flex flex-col gap-5 px-[30px] py-[35px] uppercase gray-bg h-[286px]">
+        <div className="flex justify-between">
           <span>
             Логи
             {activeTurnIndex + 1 > 0 && (
               <span>: Ход {activeTurnIndex + 1}</span>
             )}
           </span>
-          <span className={s.logs_character_name}>
+          <span className="gold-text text-base">
             {(() => {
               const currentParticipantId =
                 runtimeData.turn_order[
@@ -590,15 +688,18 @@ const BattlePageBar = ({
         </div>
 
         {turnLogs && (
-          <ul className={s.battle_logs_list}>
+          <ul className="flex-1 flex flex-col gap-2.5 overflow-y-auto overflow-x-hidden pr-2.5 gold-scrollbar">
             {turnLogs.logs.map((log, index) => (
-              <li key={index}>
+              <li
+                key={index}
+                className="w-full gap-[5px] flex flex-col justify-between items-end text-xs normal-case"
+              >
                 {log.events.map((event, i) => (
-                  <div key={i} className={s.event}>
-                    {formatBattleEvent(event, snapshotData, s)}
+                  <div key={i} className="w-full text-left">
+                    {formatBattleEvent(event, snapshotData)}
                   </div>
                 ))}
-                <div className={s.date_time_container}>
+                <div className="mt-2.5 w-full flex justify-between">
                   {isAutoBattleOn &&
                     (() => {
                       const currentParticipantId =
@@ -607,14 +708,14 @@ const BattlePageBar = ({
                         ];
 
                       if (currentParticipantId === myData.participant_id) {
-                        return <p>АВТОБОЙ</p>;
+                        return <p className="gold-text text-sm">АВТОБОЙ</p>;
                       } else if (
                         currentParticipantId === opponentData?.participant_id
                       ) {
                         return null;
                       }
                     })()}
-                  <div>{formatDateTime(log.timestamp)}</div>
+                  <div className="ml-auto">{formatDateTime(log.timestamp)}</div>
                 </div>
                 {isTurnLikeTextShown &&
                   isAutoBattleOn &&
@@ -626,17 +727,17 @@ const BattlePageBar = ({
 
                     if (currentParticipantId === myData.participant_id) {
                       return (
-                        <div className={s.doYouLike}>
+                        <div className="text-sm">
                           Понравился ли вам ход?{" "}
                           <span
                             onClick={() => setIsTurnLikeTextShown(false)}
-                            className={s.blue}
+                            className="cursor-pointer font-medium text-site-blue underline decoration-[1.5px]"
                           >
                             Да
                           </span>{" "}
                           <span
                             onClick={() => setIsTurnLikeTextShown(false)}
-                            className={s.red}
+                            className="cursor-pointer font-medium text-site-red underline decoration-[1.5px]"
                           >
                             Нет
                           </span>
@@ -654,10 +755,15 @@ const BattlePageBar = ({
         )}
       </div>
 
+      {/* Submit turn button */}
       <button
         disabled={isOpponentTurn}
         onClick={setTurn}
-        className={`${s.turn_btn} ${isOpponentTurn ? s.blocked : ""}`}
+        className={`relative rounded-map px-5 py-2.5 font-medium text-2xl uppercase gold-outline gold-outline-thick transition-colors duration-200 ease-site ${
+          isOpponentTurn
+            ? "cursor-not-allowed opacity-50"
+            : "hover:gold-text"
+        }`}
       >
         Передать ход
       </button>
