@@ -2837,97 +2837,111 @@ async def create_join_request(
     if req.team not in (0, 1):
         raise HTTPException(400, "Команда должна быть 0 или 1")
 
-    # 2. Battle exists and is active
-    battle = await get_battle(db, battle_id)
-    if not battle:
-        raise HTTPException(404, "Бой не найден")
-    battle_status = battle.status.value if hasattr(battle.status, "value") else str(battle.status)
-    if battle_status not in ("pending", "in_progress"):
-        raise HTTPException(404, "Бой не активен")
+    try:
+        # 2. Battle exists and is active
+        battle = await get_battle(db, battle_id)
+        if not battle:
+            raise HTTPException(404, "Бой не найден")
+        battle_status = battle.status.value if hasattr(battle.status, "value") else str(battle.status)
+        if battle_status not in ("pending", "in_progress"):
+            raise HTTPException(404, "Бой не активен")
 
-    # 3. Character belongs to current user
-    await verify_character_ownership(db, req.character_id, current_user.id)
+        # 3. Character belongs to current user
+        await verify_character_ownership(db, req.character_id, current_user.id)
 
-    # 4. Character is at the same location as the battle
-    if not battle.location_id:
-        raise HTTPException(400, "Бой не привязан к локации")
-    char_result = await db.execute(
-        text("SELECT current_location_id FROM characters WHERE id = :cid"),
-        {"cid": req.character_id},
-    )
-    char_row = char_result.fetchone()
-    if not char_row:
-        raise HTTPException(404, "Персонаж не найден")
-    if char_row[0] != battle.location_id:
-        raise HTTPException(403, "Персонаж должен находиться на той же локации, что и бой")
+        # 4. Character is at the same location as the battle
+        if not battle.location_id:
+            raise HTTPException(400, "Бой не привязан к локации")
+        char_result = await db.execute(
+            text("SELECT current_location_id FROM characters WHERE id = :cid"),
+            {"cid": req.character_id},
+        )
+        char_row = char_result.fetchone()
+        if not char_row:
+            raise HTTPException(404, "Персонаж не найден")
+        if char_row[0] != battle.location_id:
+            raise HTTPException(403, "Персонаж должен находиться на той же локации, что и бой")
 
-    # 5. Character is NOT already in any active battle
-    active_bid = await get_active_battle_for_character(db, req.character_id)
-    if active_bid:
-        raise HTTPException(400, "Персонаж уже участвует в активном бою")
+        # 5. Character is NOT already in any active battle
+        active_bid = await get_active_battle_for_character(db, req.character_id)
+        if active_bid:
+            raise HTTPException(400, "Персонаж уже участвует в активном бою")
 
-    # 6. Character is not already a participant in this battle
-    part_result = await db.execute(
-        text("""
-            SELECT id FROM battle_participants
-            WHERE battle_id = :bid AND character_id = :cid
-            LIMIT 1
-        """),
-        {"bid": battle_id, "cid": req.character_id},
-    )
-    if part_result.fetchone():
-        raise HTTPException(400, "Персонаж уже является участником этого боя")
+        # 6. Character is not already a participant in this battle
+        part_result = await db.execute(
+            text("""
+                SELECT id FROM battle_participants
+                WHERE battle_id = :bid AND character_id = :cid
+                LIMIT 1
+            """),
+            {"bid": battle_id, "cid": req.character_id},
+        )
+        if part_result.fetchone():
+            raise HTTPException(400, "Персонаж уже является участником этого боя")
 
-    # 7. No existing join request for this character in this battle
-    existing_result = await db.execute(
-        text("""
-            SELECT id, status FROM battle_join_requests
-            WHERE battle_id = :bid AND character_id = :cid
-            LIMIT 1
-        """),
-        {"bid": battle_id, "cid": req.character_id},
-    )
-    existing_row = existing_result.fetchone()
-    if existing_row:
-        raise HTTPException(400, "Заявка на вступление в этот бой уже подана")
+        # 7. No existing join request for this character in this battle
+        existing_result = await db.execute(
+            text("""
+                SELECT id, status FROM battle_join_requests
+                WHERE battle_id = :bid AND character_id = :cid
+                LIMIT 1
+            """),
+            {"bid": battle_id, "cid": req.character_id},
+        )
+        existing_row = existing_result.fetchone()
+        if existing_row:
+            raise HTTPException(400, "Заявка на вступление в этот бой уже подана")
 
-    # 8. Create join request
-    join_request = BattleJoinRequest(
-        battle_id=battle_id,
-        character_id=req.character_id,
-        user_id=current_user.id,
-        team=req.team,
-        status=JoinRequestStatus.pending,
-    )
-    db.add(join_request)
-    await db.commit()
-    await db.refresh(join_request)
+        # 8. Create join request
+        join_request = BattleJoinRequest(
+            battle_id=battle_id,
+            character_id=req.character_id,
+            user_id=current_user.id,
+            team=req.team,
+            status=JoinRequestStatus.pending,
+        )
+        db.add(join_request)
+        await db.commit()
+        await db.refresh(join_request)
 
-    # 9. Pause battle if not already paused
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Ошибка при создании заявки на вступление в бой {battle_id}: {e}")
+        await db.rollback()
+        raise HTTPException(500, "Не удалось создать заявку на вступление в бой. Попробуйте позже.")
+
+    # 9. Pause battle if not already paused (non-fatal: join request already saved)
     is_paused = battle.is_paused
     if not is_paused:
-        await pause_battle(db, battle_id)
+        try:
+            await pause_battle(db, battle_id)
+        except Exception as e:
+            logger.exception(f"Ошибка при паузе боя {battle_id} после заявки: {e}")
 
-        # Notify all participants about pause
-        participants_result = await db.execute(
-            text("""
-                SELECT DISTINCT c.user_id
-                FROM battle_participants bp
-                JOIN characters c ON bp.character_id = c.id
-                WHERE bp.battle_id = :bid AND c.is_npc = 0
-            """),
-            {"bid": battle_id},
-        )
-        for row in participants_result.fetchall():
-            try:
-                await publish_notification(
-                    target_user_id=row[0],
-                    message="Бой приостановлен — рассматривается заявка на присоединение",
-                    ws_type="battle_paused",
-                    ws_data={"battle_id": battle_id},
-                )
-            except Exception as e:
-                logger.error(f"Ошибка уведомления о паузе боя: {e}")
+        # Notify all participants about pause (non-fatal)
+        try:
+            participants_result = await db.execute(
+                text("""
+                    SELECT DISTINCT c.user_id
+                    FROM battle_participants bp
+                    JOIN characters c ON bp.character_id = c.id
+                    WHERE bp.battle_id = :bid AND c.is_npc = 0
+                """),
+                {"bid": battle_id},
+            )
+            for row in participants_result.fetchall():
+                try:
+                    await publish_notification(
+                        target_user_id=row[0],
+                        message="Бой приостановлен — рассматривается заявка на присоединение",
+                        ws_type="battle_paused",
+                        ws_data={"battle_id": battle_id},
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка уведомления о паузе боя: {e}")
+        except Exception as e:
+            logger.exception(f"Ошибка при уведомлении участников о паузе боя {battle_id}: {e}")
 
     return JoinRequestResponse(
         id=join_request.id,
