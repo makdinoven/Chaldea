@@ -45,6 +45,7 @@ import ArchivePage from "../pages/ArchivePage/ArchivePage";
 import ArchiveArticlePage from "../pages/ArchivePage/ArchiveArticlePage";
 import ArchiveAdminPage from "../Admin/ArchiveAdminPage/ArchiveAdminPage";
 import AdminPerksPage from "../Admin/PerksPage/AdminPerksPage";
+import AdminTitlesPage from "../Admin/TitlesPage/AdminTitlesPage";
 
 const App = () => {
   const dispatch = useAppDispatch();
@@ -187,6 +188,11 @@ const App = () => {
             <Route path="admin/perks" element={
               <ProtectedRoute requiredPermission="perks:read">
                 <AdminPerksPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/titles" element={
+              <ProtectedRoute requiredPermission="titles:read">
+                <AdminTitlesPage />
               </ProtectedRoute>
             } />
             <Route path="chat/history" element={<ChatHistoryPage />} />

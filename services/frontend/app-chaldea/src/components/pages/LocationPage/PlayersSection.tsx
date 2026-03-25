@@ -15,8 +15,24 @@ interface PlayersSectionProps {
   locationMarkerType?: string;
 }
 
-const AvatarCard = ({ avatar, name, level, actionsSlot }: { avatar: string | null; name: string; level?: number; actionsSlot?: ReactNode }) => (
+const getRarityColorClass = (rarity?: string): string => {
+  switch (rarity) {
+    case 'common': return 'text-rarity-common';
+    case 'rare': return 'text-rarity-rare';
+    case 'legendary': return 'text-rarity-legendary';
+    default: return 'text-site-blue';
+  }
+};
+
+const AvatarCard = ({ avatar, name, level, title, titleRarity, actionsSlot }: { avatar: string | null; name: string; level?: number; title?: string; titleRarity?: string; actionsSlot?: ReactNode }) => (
   <div className="flex flex-col items-center gap-2 p-2 rounded-card hover:bg-white/5 transition-colors">
+    {title ? (
+      <span className={`text-[10px] sm:text-xs text-center leading-tight break-words w-full ${getRarityColorClass(titleRarity)}`}>
+        {title}
+      </span>
+    ) : (
+      <span className="text-[10px] sm:text-xs text-transparent select-none">&nbsp;</span>
+    )}
     <div className="gold-outline relative w-[4.5rem] h-[4.5rem] sm:w-20 sm:h-20 rounded-full overflow-hidden bg-black/40 shrink-0">
       {avatar ? (
         <img src={avatar} alt={name} className="w-full h-full object-cover" />
@@ -148,6 +164,8 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
                   avatar={player.avatar}
                   name={player.name}
                   level={player.level}
+                  title={player.character_title}
+                  titleRarity={player.character_title_rarity}
                   actionsSlot={
                     currentCharacterId != null &&
                     currentUserId != null &&

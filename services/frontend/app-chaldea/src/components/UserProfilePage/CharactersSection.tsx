@@ -32,6 +32,15 @@ const getRingColor = (raceId: number | null | undefined): string => {
   return RACE_BORDER_COLORS[raceId] ?? DEFAULT_RING_COLOR;
 };
 
+const getRarityColorClass = (rarity?: string | null): string => {
+  switch (rarity) {
+    case 'common': return 'text-rarity-common';
+    case 'rare': return 'text-rarity-rare';
+    case 'legendary': return 'text-rarity-legendary';
+    default: return 'text-site-blue';
+  }
+};
+
 /** Truncate class name if too long for the badge */
 const formatClassName = (name: string): string => {
   if (name.length <= 6) return name;
@@ -96,6 +105,11 @@ const CharacterCard = ({ char }: { char: UserCharacterItem }) => {
         <span className="text-white text-sm font-medium group-hover:text-site-blue transition-colors">
           {char.name}
         </span>
+        {char.active_title && (
+          <span className={`text-[10px] sm:text-xs ${getRarityColorClass(char.active_title_rarity)}`}>
+            {char.active_title}
+          </span>
+        )}
         {char.race_name && (
           <span className="text-white/50 text-xs">
             {char.race_name}

@@ -1,7 +1,7 @@
 import os
 import httpx
 from fastapi import FastAPI, Depends, APIRouter, HTTPException, Query
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import Session
 import asyncio
 import models, schemas, crud
@@ -12,6 +12,7 @@ from producer import (
     publish_character_inventory,
     publish_character_skills,
     publish_character_attributes,
+    send_title_unlocked_notification,
 )
 from typing import List, Dict, Optional
 from fastapi.middleware.cors import CORSMiddleware
@@ -541,6 +542,20 @@ async def admin_update_character(
         except Exception as e:
             logger.warning(f"Error syncing XP for character {character_id} after level change: {e}")
 
+        # Trigger title evaluation after admin level change (non-fatal)
+        try:
+            newly_unlocked = crud.evaluate_titles(db, character_id)
+            if newly_unlocked and character.user_id:
+                for title_info in newly_unlocked:
+                    try:
+                        await send_title_unlocked_notification(
+                            character.user_id, title_info["name"]
+                        )
+                    except Exception as e:
+                        logger.warning(f"Не удалось отправить уведомление о титуле: {e}")
+        except Exception as e:
+            logger.warning(f"Ошибка при оценке титулов после изменения уровня для персонажа {character_id}: {e}")
+
     return {"detail": "Character updated", "character_id": character.id}
 
 
@@ -675,6 +690,205 @@ async def internal_unlink_character(
         "character_id": body.character_id,
         "previous_user_id": previous_user_id,
     }
+
+
+# ============================================================
+# Admin Title endpoints — BEFORE /{character_id} routes (FEAT-080)
+# ============================================================
+
+@router.get("/admin/titles", response_model=schemas.TitleAdminListResponse)
+def admin_list_titles(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    rarity: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("titles:read")),
+):
+    """Paginated list of all titles. Admin only."""
+    try:
+        items, total = crud.get_all_titles_admin(db, page, per_page, search, rarity)
+        return schemas.TitleAdminListResponse(
+            items=items, total=total, page=page, per_page=per_page
+        )
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении списка титулов: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.post("/admin/titles", response_model=schemas.TitleAdminResponse, status_code=201)
+def admin_create_title(
+    data: schemas.TitleCreateFull,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("titles:create")),
+):
+    """Create a new title with full fields. Admin only."""
+    try:
+        title = crud.create_title_full(db, data)
+        return schemas.TitleAdminResponse(
+            id_title=title.id_title,
+            name=title.name,
+            description=title.description,
+            rarity=title.rarity,
+            conditions=title.conditions,
+            icon=title.icon,
+            sort_order=title.sort_order,
+            is_active=title.is_active,
+            reward_passive_exp=title.reward_passive_exp,
+            reward_active_exp=title.reward_active_exp,
+            created_at=title.created_at,
+            updated_at=title.updated_at,
+            holders_count=0,
+        )
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Титул с таким именем уже существует")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при создании титула: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.put("/admin/titles/{title_id}", response_model=schemas.TitleAdminResponse)
+def admin_update_title(
+    title_id: int,
+    data: schemas.TitleUpdateFull,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("titles:update")),
+):
+    """Update an existing title. Admin only."""
+    try:
+        title = crud.update_title_full(db, title_id, data)
+        if not title:
+            raise HTTPException(status_code=404, detail="Титул не найден")
+        holders_count = db.query(models.CharacterTitle).filter(
+            models.CharacterTitle.title_id == title_id
+        ).count()
+        return schemas.TitleAdminResponse(
+            id_title=title.id_title,
+            name=title.name,
+            description=title.description,
+            rarity=title.rarity,
+            conditions=title.conditions,
+            icon=title.icon,
+            sort_order=title.sort_order,
+            is_active=title.is_active,
+            reward_passive_exp=title.reward_passive_exp,
+            reward_active_exp=title.reward_active_exp,
+            created_at=title.created_at,
+            updated_at=title.updated_at,
+            holders_count=holders_count,
+        )
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Титул с таким именем уже существует")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении титула: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.delete("/admin/titles/{title_id}")
+def admin_delete_title(
+    title_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("titles:delete")),
+):
+    """Delete a title. Admin only."""
+    try:
+        result = crud.delete_title_full(db, title_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Титул не найден")
+        return {"detail": "Титул удалён"}
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при удалении титула: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.post("/admin/titles/grant")
+def admin_grant_title(
+    data: schemas.TitleGrantRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("titles:grant")),
+):
+    """Grant a title to a character. Admin only."""
+    try:
+        result, status = crud.grant_title(db, data.character_id, data.title_id)
+        if status == "title_not_found":
+            raise HTTPException(status_code=404, detail="Титул не найден")
+        if status == "character_not_found":
+            raise HTTPException(status_code=404, detail="Персонаж не найден")
+        if status == "already_has":
+            return {"detail": "Персонаж уже имеет этот титул"}
+        return {"detail": "Титул выдан персонажу"}
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при выдаче титула: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.delete("/admin/titles/grant/{character_id}/{title_id}")
+def admin_revoke_title(
+    character_id: int,
+    title_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("titles:grant")),
+):
+    """Revoke a title from a character. Admin only."""
+    try:
+        result = crud.revoke_title(db, character_id, title_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Титул не найден у персонажа")
+        return {"detail": "Титул отозван у персонажа"}
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при отзыве титула: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+# Internal endpoint for title evaluation (FEAT-080)
+
+class InternalEvaluateTitlesRequest(schemas.BaseModel):
+    character_id: int
+
+
+@router.post("/internal/evaluate-titles")
+async def internal_evaluate_titles(
+    body: InternalEvaluateTitlesRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth). Evaluate and auto-grant titles for a character.
+    Called by character-attributes-service after cumulative stats increment.
+    """
+    try:
+        newly_unlocked = crud.evaluate_titles(db, body.character_id)
+
+        # Send notification for each newly unlocked title
+        for title_info in newly_unlocked:
+            # Get user_id for the character
+            character = db.query(models.Character).filter(
+                models.Character.id == body.character_id
+            ).first()
+            if character and character.user_id:
+                try:
+                    await send_title_unlocked_notification(
+                        character.user_id, title_info["name"]
+                    )
+                except Exception as e:
+                    logger.warning(f"Не удалось отправить уведомление о титуле: {e}")
+
+        return {"newly_unlocked_titles": newly_unlocked}
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при оценке титулов для персонажа {body.character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
 # Эндпоинт для удаления персонажа (enhanced with cascade cleanup)
@@ -928,17 +1142,40 @@ async def assign_title(character_id: int, title_id: int, db: Session = Depends(g
 @router.post("/{character_id}/current-title/{title_id}")
 async def set_current_title(character_id: int, title_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user_via_http)):
     """
-    Устанавливает текущий титул для персонажа.
+    Устанавливает текущий титул для персонажа (косметический выбор).
     """
     verify_character_ownership(db, character_id, current_user.id)
     try:
-        character = crud.set_current_title(db, character_id, title_id)
-        if not character:
+        character, status = crud.set_current_title_cosmetic(db, character_id, title_id)
+        if status == "character_not_found":
             raise HTTPException(status_code=404, detail="Персонаж не найден")
-        return {"message": f"Титул с ID {title_id} успешно установлен как текущий для персонажа с ID {character_id}."}
+        if status == "title_not_owned":
+            raise HTTPException(status_code=400, detail="У персонажа нет этого титула")
+        if status == "title_not_found":
+            raise HTTPException(status_code=404, detail="Титул не найден")
+        return {"message": "Титул установлен как текущий"}
+    except HTTPException:
+        raise
     except SQLAlchemyError as e:
         logger.error(f"Ошибка при установке текущего титула: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при установке титула.")
+
+
+@router.delete("/{character_id}/current-title")
+async def unset_current_title_endpoint(character_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user_via_http)):
+    """
+    Снимает активный титул с персонажа.
+    """
+    verify_character_ownership(db, character_id, current_user.id)
+    try:
+        character = crud.unset_current_title(db, character_id)
+        if not character:
+            raise HTTPException(status_code=404, detail="Персонаж не найден")
+        return {"message": "Активный титул снят"}
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при снятии титула: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при снятии титула.")
+
 
 @router.get("/titles/", response_model=List[schemas.Title])
 async def get_titles(db: Session = Depends(get_db)):
@@ -952,15 +1189,33 @@ async def get_titles(db: Session = Depends(get_db)):
         logger.error(f"Ошибка при получении титулов: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при получении титулов.")
 
-@router.get("/{character_id}/titles", response_model=List[schemas.Title])
+@router.get("/{character_id}/titles", response_model=List[schemas.CharacterTitleResponse])
 async def get_titles_for_character(character_id: int, db: Session = Depends(get_db)):
     """
-    Получить все титулы для конкретного персонажа.
+    Получить все титулы для конкретного персонажа с информацией о прогрессе.
+    Перед возвратом данных выполняет evaluate_titles для автоматической выдачи заслуженных титулов.
     """
     try:
-        titles = crud.get_titles_for_character(db, character_id)
-        if not titles:
-            raise HTTPException(status_code=404, detail="Персонаж не имеет титулов")
+        # Evaluate titles first (safety net) to auto-grant any newly earned titles
+        try:
+            newly_unlocked = crud.evaluate_titles(db, character_id)
+            # Send notifications for newly unlocked titles
+            if newly_unlocked:
+                character = db.query(models.Character).filter(
+                    models.Character.id == character_id
+                ).first()
+                if character and character.user_id:
+                    for title_info in newly_unlocked:
+                        try:
+                            await send_title_unlocked_notification(
+                                character.user_id, title_info["name"]
+                            )
+                        except Exception as e:
+                            logger.warning(f"Не удалось отправить уведомление о титуле: {e}")
+        except Exception as e:
+            logger.warning(f"Ошибка при оценке титулов для персонажа {character_id}: {e}")
+
+        titles = crud.get_character_titles_with_progress(db, character_id)
         return titles
     except SQLAlchemyError as e:
         logger.error(f"Ошибка при получении титулов для персонажа {character_id}: {e}")
@@ -1021,9 +1276,25 @@ async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Failed to communicate with attributes-service")
 
     # Проверка и обновление уровня на основе текущего пассивного опыта
+    old_level = character.level
     character = crud.check_and_update_level(db, character_id, passive_experience)
     if not character:
         raise HTTPException(status_code=404, detail="Character not found")
+
+    # Trigger title evaluation if character leveled up
+    if character.level > old_level:
+        try:
+            newly_unlocked = crud.evaluate_titles(db, character_id)
+            if newly_unlocked and character.user_id:
+                for title_info in newly_unlocked:
+                    try:
+                        await send_title_unlocked_notification(
+                            character.user_id, title_info["name"]
+                        )
+                    except Exception as e:
+                        logger.warning(f"Не удалось отправить уведомление о титуле: {e}")
+        except Exception as e:
+            logger.warning(f"Ошибка при оценке титулов после повышения уровня для персонажа {character_id}: {e}")
 
     # Получаем атрибуты персонажа из attributes-service
     try:
@@ -1073,6 +1344,7 @@ async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
 
     # Получаем текущий активный титул (если есть)
     active_title_name = character.current_title.name if character.current_title else None
+    active_title_rarity = character.current_title.rarity if character.current_title else None
 
     # Формируем ответ с нужными данными
     return schemas.FullProfileResponse(
@@ -1104,6 +1376,7 @@ async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
             }
         },
         active_title=active_title_name,
+        active_title_rarity=active_title_rarity,
         avatar=character.avatar
     )
 
@@ -1158,6 +1431,7 @@ def get_characters_by_location(location_id: int, db: Session = Depends(get_db)):
             "class_name": cls.name if cls else None,
             "race_name": race.name if race else None,
             "character_title": ch.current_title.name if ch.current_title else "",
+            "character_title_rarity": ch.current_title.rarity if ch.current_title else None,
             "user_id": ch.user_id,
         })
     return result
@@ -1237,6 +1511,7 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
     return {
         "character_photo": character.avatar,
         "character_title": character.current_title.name if character.current_title else "",
+        "character_title_rarity": character.current_title.rarity if character.current_title else None,
         "character_level": character.level,
         "user_id": user_id,
         "user_nickname": user_nickname,

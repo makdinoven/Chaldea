@@ -44,6 +44,15 @@ const formatRelativeTime = (dateStr: string): string => {
   }
 };
 
+const getRarityColorClass = (rarity?: string | null): string => {
+  switch (rarity) {
+    case 'common': return 'text-rarity-common';
+    case 'rare': return 'text-rarity-rare';
+    case 'legendary': return 'text-rarity-legendary';
+    default: return 'text-rarity-common';
+  }
+};
+
 const NpcPostAttackButton = ({ npcId, npcName, currentCharacterId }: { npcId: number; npcName: string; currentCharacterId: number }) => {
   const { attacking, handleAttack } = useNpcAttack({
     npcId,
@@ -179,7 +188,7 @@ const PostCard = ({
       <div className="flex flex-col items-center gap-1.5 shrink-0 w-[72px] sm:w-[90px]">
         {/* Title above avatar */}
         {post.character_title ? (
-          <span className="text-site-blue text-[10px] sm:text-xs italic text-center leading-tight line-clamp-2 w-full">
+          <span className={`${getRarityColorClass(post.character_title_rarity)} text-[10px] sm:text-xs text-center leading-tight w-full`}>
             {post.character_title}
           </span>
         ) : (

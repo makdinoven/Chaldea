@@ -1,5 +1,5 @@
 from inspect import classify_class_attrs
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from pydantic import BaseModel, validator
 from datetime import datetime
 
@@ -109,6 +109,97 @@ class Title(TitleBase):
     class Config:
         orm_mode = True
 
+
+# ========== Extended Title Schemas (FEAT-080) ==========
+
+class TitleCondition(BaseModel):
+    type: str
+    stat: Optional[str] = None
+    operator: str = ">="
+    value: Any = None
+
+
+class TitleCreateFull(BaseModel):
+    name: str
+    description: Optional[str] = None
+    rarity: str = "common"
+    conditions: Optional[List[TitleCondition]] = None
+    icon: Optional[str] = None
+    sort_order: int = 0
+    reward_passive_exp: int = 0
+    reward_active_exp: int = 0
+
+    @validator("rarity")
+    def validate_rarity(cls, v):
+        if v not in ("common", "rare", "legendary"):
+            raise ValueError("Редкость должна быть common, rare или legendary")
+        return v
+
+
+class TitleUpdateFull(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    rarity: Optional[str] = None
+    conditions: Optional[List[TitleCondition]] = None
+    icon: Optional[str] = None
+    sort_order: Optional[int] = None
+    is_active: Optional[bool] = None
+    reward_passive_exp: Optional[int] = None
+    reward_active_exp: Optional[int] = None
+
+    @validator("rarity")
+    def validate_rarity(cls, v):
+        if v is not None and v not in ("common", "rare", "legendary"):
+            raise ValueError("Редкость должна быть common, rare или legendary")
+        return v
+
+
+class TitleAdminResponse(BaseModel):
+    id_title: int
+    name: str
+    description: Optional[str] = None
+    rarity: str
+    conditions: Optional[List] = None
+    icon: Optional[str] = None
+    sort_order: int
+    is_active: bool
+    reward_passive_exp: int = 0
+    reward_active_exp: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    holders_count: int = 0
+
+    class Config:
+        orm_mode = True
+
+
+class TitleAdminListResponse(BaseModel):
+    items: List[TitleAdminResponse]
+    total: int
+    page: int
+    per_page: int
+
+
+class CharacterTitleResponse(BaseModel):
+    id_title: int
+    name: str
+    description: Optional[str] = None
+    rarity: str = "common"
+    conditions: Optional[List] = None
+    icon: Optional[str] = None
+    reward_passive_exp: int = 0
+    reward_active_exp: int = 0
+    is_unlocked: bool = False
+    unlocked_at: Optional[datetime] = None
+    is_custom: bool = False
+    progress: Optional[Dict] = None
+
+
+class TitleGrantRequest(BaseModel):
+    character_id: int
+    title_id: int
+
+
 class LevelProgress(BaseModel):
     current_exp_in_level: int
     exp_to_next_level: int
@@ -126,6 +217,7 @@ class FullProfileResponse(BaseModel):
     level_progress: LevelProgress
     attributes: Dict[str, Attribute]
     active_title: Optional[str]
+    active_title_rarity: Optional[str] = None
     avatar: Optional[str]
 
 
@@ -147,11 +239,13 @@ class PlayerInLocation(BaseModel):
     class_name: Optional[str] = None
     race_name: Optional[str] = None
     character_title: Optional[str] = ""
+    character_title_rarity: Optional[str] = None
     user_id: Optional[int] = None
 
 class CharacterProfileResponse(BaseModel):
         character_photo: str
         character_title: str
+        character_title_rarity: Optional[str] = None
         character_name: str
         character_level: Optional[int] = None
         user_id: Optional[int] = None

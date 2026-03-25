@@ -14,6 +14,7 @@ import SkillsTab from './SkillsTab/SkillsTab';
 import PerksTab from './PerksTab/PerksTab';
 import QuestLogTab from './QuestLogTab';
 import BattlesTab from './BattlesTab/BattlesTab';
+import TitlesTab from './TitlesTab/TitlesTab';
 
 const ProfilePage = () => {
   const dispatch = useAppDispatch();
@@ -69,7 +70,7 @@ const ProfilePage = () => {
       case 'logs':
         return <PlaceholderTab tabName="Логи персонажа" />;
       case 'titles':
-        return <PlaceholderTab tabName="Титулы" />;
+        return <TitlesTab characterId={characterId} />;
       case 'craft':
         return <PlaceholderTab tabName="Крафт" />;
       default:

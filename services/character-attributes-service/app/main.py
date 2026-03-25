@@ -249,6 +249,16 @@ def admin_grant_perk(
     if already_had:
         return {"detail": "Перк уже выдан", "character_id": character_id, "perk_id": perk_id}
 
+    # Trigger title evaluation after perk grant (non-fatal)
+    try:
+        httpx.post(
+            f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
+            json={"character_id": character_id},
+            timeout=5.0,
+        )
+    except Exception as e:
+        logger.error(f"Title evaluation error after perk grant for character {character_id}: {e}")
+
     return {"detail": "Перк выдан", "character_id": character_id, "perk_id": perk_id}
 
 
@@ -929,6 +939,16 @@ def increment_cumulative_stats(
     except Exception as e:
         logger.error(f"Ошибка при проверке перков для персонажа {payload.character_id}: {e}")
         # Non-fatal: stats are already updated, perks will be checked next time
+
+    # Evaluate titles after stat update (non-fatal)
+    try:
+        resp = httpx.post(
+            f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
+            json={"character_id": payload.character_id},
+            timeout=5.0,
+        )
+    except Exception as e:
+        logger.error(f"Title evaluation error for character {payload.character_id}: {e}")
 
     return {"detail": "Stats updated", "newly_unlocked_perks": newly_unlocked}
 

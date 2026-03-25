@@ -14,6 +14,10 @@ from config import settings
 from rabbitmq_consumer import start_consumer
 from sqlalchemy import text
 from auth_http import get_current_user_via_http, get_admin_user, require_permission
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("inventory-service")
 
 app = FastAPI()
 
@@ -371,6 +375,16 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
     crud.recalc_fast_slots(db, character_id)
     # ---------------------------------------
 
+    # Trigger title evaluation after equip (non-fatal)
+    try:
+        httpx.post(
+            f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
+            json={"character_id": character_id},
+            timeout=5.0,
+        )
+    except Exception as e:
+        logger.warning(f"Title evaluation error after equip for character {character_id}: {e}")
+
     return slot
 
 
@@ -433,6 +447,16 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
 
     # 5) После коммита пересчитываем быстрые слоты
     crud.recalc_fast_slots(db, character_id)
+
+    # Trigger title evaluation after unequip (non-fatal)
+    try:
+        httpx.post(
+            f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
+            json={"character_id": character_id},
+            timeout=5.0,
+        )
+    except Exception as e:
+        logger.warning(f"Title evaluation error after unequip for character {character_id}: {e}")
 
     return slot
 

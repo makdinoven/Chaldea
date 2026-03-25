@@ -726,3 +726,145 @@ class TestPerksPermissions:
         with pytest.raises(HTTPException) as exc_info:
             require_permission(db, mod, "perks:delete")
         assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# 8. FEAT-080: Titles RBAC permissions (migration 0018)
+# ---------------------------------------------------------------------------
+
+TITLES_PERMISSIONS = [
+    ("titles", "read"),
+    ("titles", "create"),
+    ("titles", "update"),
+    ("titles", "delete"),
+    ("titles", "grant"),
+]
+
+# Mirrors ROLE_ACTIONS from migration 0018
+TITLES_ROLE_ACTIONS = {
+    3: ["read", "create", "update", "grant"],  # Moderator
+    2: ["read"],                                # Editor
+}
+
+
+def _seed_titles_permissions(db):
+    """Seed the 5 titles permissions and their role assignments (mirrors migration 0018)."""
+    perm_objects = []
+    for module, action in TITLES_PERMISSIONS:
+        perm = models.Permission(module=module, action=action,
+                                 description=f"Titles: {action}")
+        db.add(perm)
+        perm_objects.append(perm)
+    db.flush()  # assigns IDs
+
+    # Assign to roles
+    for perm in perm_objects:
+        for role_id, actions in TITLES_ROLE_ACTIONS.items():
+            if perm.action in actions:
+                db.add(models.RolePermission(role_id=role_id, permission_id=perm.id))
+    db.commit()
+    return perm_objects
+
+
+@pytest.fixture()
+def rbac_db_with_titles(rbac_db):
+    """DB session with base RBAC seed data + titles permissions from migration 0018."""
+    _seed_titles_permissions(rbac_db)
+    return rbac_db
+
+
+class TestTitlesPermissions:
+    """FEAT-080 Task #13: Verify titles RBAC permissions from migration 0018."""
+
+    def test_titles_permissions_exist(self, rbac_db_with_titles):
+        """All 5 titles permissions must exist in the DB after migration."""
+        db = rbac_db_with_titles
+        for module, action in TITLES_PERMISSIONS:
+            perm = db.query(models.Permission).filter(
+                models.Permission.module == module,
+                models.Permission.action == action,
+            ).first()
+            assert perm is not None, f"Permission {module}:{action} not found in DB"
+
+    def test_titles_permissions_count(self, rbac_db_with_titles):
+        """Exactly 5 titles permissions should exist."""
+        db = rbac_db_with_titles
+        count = db.query(models.Permission).filter(
+            models.Permission.module == "titles"
+        ).count()
+        assert count == 5
+
+    def test_admin_has_all_titles_permissions(self, rbac_db_with_titles):
+        """Admin (role_id=4) should have all 5 titles permissions via auto-permissions."""
+        db = rbac_db_with_titles
+        admin = _make_user(db, id=200, username="titleadmin", email="titleadmin@test.com",
+                           role_id=4, role_str="admin")
+        perms = get_effective_permissions(db, admin)
+        for module, action in TITLES_PERMISSIONS:
+            perm_str = f"{module}:{action}"
+            assert perm_str in perms, f"Admin missing {perm_str}"
+        # 8 base + 5 titles = 13 total
+        assert len(perms) == 13
+
+    def test_moderator_has_correct_titles_permissions(self, rbac_db_with_titles):
+        """Moderator (role_id=3) should have titles:read, titles:create, titles:update, titles:grant."""
+        db = rbac_db_with_titles
+        mod = _make_user(db, id=201, username="titlemod", email="titlemod@test.com",
+                         role_id=3, role_str="moderator")
+        perms = get_effective_permissions(db, mod)
+        assert "titles:read" in perms
+        assert "titles:create" in perms
+        assert "titles:update" in perms
+        assert "titles:grant" in perms
+        assert "titles:delete" not in perms
+        # 4 base items:* + 4 titles = 8 total
+        assert len(perms) == 8
+
+    def test_editor_has_only_titles_read(self, rbac_db_with_titles):
+        """Editor (role_id=2) should have only titles:read."""
+        db = rbac_db_with_titles
+        editor = _make_user(db, id=202, username="titleeditor", email="titleeditor@test.com",
+                            role_id=2, role_str="editor")
+        perms = get_effective_permissions(db, editor)
+        assert "titles:read" in perms
+        assert "titles:create" not in perms
+        assert "titles:update" not in perms
+        assert "titles:delete" not in perms
+        assert "titles:grant" not in perms
+        # 2 base *:read + 1 titles:read = 3 total
+        assert len(perms) == 3
+
+    def test_regular_user_has_no_titles_permissions(self, rbac_db_with_titles):
+        """Regular user (role_id=1) should have no titles permissions."""
+        db = rbac_db_with_titles
+        user = _make_user(db, id=203, username="titleuser", email="titleuser@test.com",
+                          role_id=1, role_str="user")
+        perms = get_effective_permissions(db, user)
+        assert not any(p.startswith("titles:") for p in perms)
+        assert perms == []
+
+    def test_require_permission_titles_admin(self, rbac_db_with_titles):
+        """Admin can pass require_permission for any titles permission."""
+        db = rbac_db_with_titles
+        admin = _make_user(db, id=204, username="titleadmin2", email="titleadmin2@test.com",
+                           role_id=4, role_str="admin")
+        for module, action in TITLES_PERMISSIONS:
+            require_permission(db, admin, f"{module}:{action}")
+
+    def test_require_permission_titles_editor_blocked(self, rbac_db_with_titles):
+        """Editor should be blocked from titles:create via require_permission."""
+        db = rbac_db_with_titles
+        editor = _make_user(db, id=205, username="titleeditor2", email="titleeditor2@test.com",
+                            role_id=2, role_str="editor")
+        with pytest.raises(HTTPException) as exc_info:
+            require_permission(db, editor, "titles:create")
+        assert exc_info.value.status_code == 403
+
+    def test_require_permission_titles_moderator_blocked_delete(self, rbac_db_with_titles):
+        """Moderator should be blocked from titles:delete via require_permission."""
+        db = rbac_db_with_titles
+        mod = _make_user(db, id=206, username="titlemod2", email="titlemod2@test.com",
+                         role_id=3, role_str="moderator")
+        with pytest.raises(HTTPException) as exc_info:
+            require_permission(db, mod, "titles:delete")
+        assert exc_info.value.status_code == 403

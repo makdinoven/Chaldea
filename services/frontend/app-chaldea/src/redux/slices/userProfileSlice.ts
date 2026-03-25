@@ -121,6 +121,8 @@ export interface UserCharacterItem {
   race_name?: string | null;
   class_name?: string | null;
   subrace_name?: string | null;
+  active_title?: string | null;
+  active_title_rarity?: string | null;
 }
 
 interface UserProfileState {

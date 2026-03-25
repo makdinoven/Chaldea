@@ -433,6 +433,7 @@ class PlayerInLocation(BaseModel):
     class_name: Optional[str] = None
     race_name: Optional[str] = None
     character_title: Optional[str] = ""
+    character_title_rarity: Optional[str] = None
     user_id: Optional[int] = None
 
 
@@ -457,6 +458,7 @@ class ClientPost(BaseModel):
     character_id: int
     character_photo: str
     character_title: str
+    character_title_rarity: Optional[str] = None
     character_level: Optional[int] = None
     character_name: Optional[str]
     user_id: Optional[int] = None

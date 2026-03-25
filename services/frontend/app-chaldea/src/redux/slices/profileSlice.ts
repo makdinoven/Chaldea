@@ -71,6 +71,7 @@ export interface CharacterProfile {
   currency_balance: number;
   avatar: string | null;
   active_title: string | null;
+  active_title_rarity: string | null;
   level_progress: {
     current_exp_in_level: number;
     exp_to_next_level: number;

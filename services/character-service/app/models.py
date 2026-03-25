@@ -96,6 +96,20 @@ class Title(Base):
     id_title = Column(Integer, primary_key=True, index=True)
     name = Column(String(50), nullable=False, unique=True)
     description = Column(Text, nullable=True)
+    rarity = Column(String(20), nullable=False, default='common', server_default='common')
+    conditions = Column(JSON, nullable=True)
+    icon = Column(String(255), nullable=True)
+    reward_passive_exp = Column(Integer, nullable=False, default=0, server_default='0')
+    reward_active_exp = Column(Integer, nullable=False, default=0, server_default='0')
+    sort_order = Column(Integer, nullable=False, default=0, server_default='0')
+    is_active = Column(Boolean, nullable=False, default=True, server_default='1')
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index('idx_titles_rarity', 'rarity'),
+        Index('idx_titles_is_active', 'is_active'),
+    )
 
     # Связь с персонажами через промежуточную таблицу
     characters = relationship("CharacterTitle", back_populates="title")
@@ -106,6 +120,7 @@ class CharacterTitle(Base):
 
     character_id = Column(Integer, ForeignKey("characters.id"), primary_key=True)
     title_id = Column(Integer, ForeignKey("titles.id_title"), primary_key=True)
+    is_custom = Column(Boolean, nullable=False, default=False, server_default='0')
 
     # Дата присвоения титула
     assigned_at = Column(TIMESTAMP, server_default=func.now())

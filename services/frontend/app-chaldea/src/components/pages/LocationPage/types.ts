@@ -6,6 +6,8 @@ export interface Player {
   level: number;
   class_name: string | null;
   race_name: string | null;
+  character_title?: string;
+  character_title_rarity?: string;
 }
 
 export interface NeighborLocation {
@@ -21,6 +23,7 @@ export interface Post {
   character_id: number;
   character_photo: string | null;
   character_title: string | null;
+  character_title_rarity: string | null;
   character_name: string;
   character_level: number | null;
   user_id: number | null;

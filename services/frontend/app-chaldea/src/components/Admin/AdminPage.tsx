@@ -29,6 +29,7 @@ const sections: AdminSection[] = [
   { label: 'Бои', path: '/admin/battles', description: 'Мониторинг активных боёв, принудительное завершение', module: 'battles' },
   { label: 'Архив', path: '/admin/archive', description: 'Управление статьями и категориями архива', module: 'archive' },
   { label: 'Перки', path: '/admin/perks', description: 'Управление перками персонажей', module: 'perks' },
+  { label: 'Титулы', path: '/admin/titles', description: 'Управление титулами персонажей', module: 'titles' },
 ];
 
 const AdminPage = () => {

@@ -1187,6 +1187,7 @@ async def get_post_details(post: Post) -> dict:
         "character_id": post.character_id,
         "character_photo": profile_data.get("character_photo", ""),
         "character_title": profile_data.get("character_title", ""),
+        "character_title_rarity": profile_data.get("character_title_rarity"),
         "character_level": profile_data.get("character_level"),
         "user_id": profile_data.get("user_id"),
         "user_nickname": profile_data.get("user_nickname", ""),

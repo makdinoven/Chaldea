@@ -1377,3 +1377,543 @@ def get_bestiary(db: Session, character_id: int = None):
         "total": len(templates),
         "killed_count": len(killed_ids),
     }
+
+
+# ========== Title CRUD + XP Rewards ==========
+
+
+def _grant_title_xp(db: Session, character_id: int, passive_exp: int, active_exp: int):
+    """
+    Grant XP rewards for unlocking a title.
+    Updates passive_experience and active_experience in character_attributes (shared DB).
+    Checks for level-up based on new passive experience.
+    """
+    if passive_exp <= 0 and active_exp <= 0:
+        return
+
+    new_passive_xp = None
+    try:
+        row = db.execute(
+            sa_text("SELECT passive_experience, active_experience FROM character_attributes WHERE character_id = :cid"),
+            {"cid": character_id},
+        ).fetchone()
+        if row:
+            current_passive = row[0] or 0
+            current_active = row[1] or 0
+            new_passive_xp = current_passive + passive_exp
+            new_active_xp = current_active + active_exp
+            db.execute(
+                sa_text(
+                    "UPDATE character_attributes "
+                    "SET passive_experience = :pxp, active_experience = :axp "
+                    "WHERE character_id = :cid"
+                ),
+                {"pxp": new_passive_xp, "axp": new_active_xp, "cid": character_id},
+            )
+            db.flush()
+            logger.info(
+                f"XP за титул начислен персонажу {character_id}: "
+                f"passive +{passive_exp} (={new_passive_xp}), active +{active_exp} (={new_active_xp})"
+            )
+        else:
+            logger.error(f"Атрибуты не найдены для персонажа {character_id} при начислении XP за титул")
+    except Exception as e:
+        logger.error(f"Ошибка при начислении XP за титул для персонажа {character_id}: {e}")
+
+    # Check for level-up
+    if new_passive_xp is not None and passive_exp > 0:
+        check_and_update_level(db, character_id, new_passive_xp)
+
+
+def create_title_full(db: Session, data):
+    """Create title with all fields. Validates rarity enum."""
+    rarity = getattr(data, "rarity", "common") or "common"
+    if rarity not in ("common", "rare", "legendary"):
+        raise ValueError("Редкость должна быть common, rare или legendary")
+
+    conditions = None
+    if data.conditions:
+        conditions = [c.dict() if hasattr(c, "dict") else c for c in data.conditions]
+
+    title = models.Title(
+        name=data.name,
+        description=data.description,
+        rarity=rarity,
+        conditions=conditions,
+        icon=getattr(data, "icon", None),
+        sort_order=getattr(data, "sort_order", 0) or 0,
+        reward_passive_exp=getattr(data, "reward_passive_exp", 0) or 0,
+        reward_active_exp=getattr(data, "reward_active_exp", 0) or 0,
+    )
+    db.add(title)
+    db.commit()
+    db.refresh(title)
+    return title
+
+
+def update_title_full(db: Session, title_id: int, data):
+    """Update title fields. Purely cosmetic — no bonus recomputation needed."""
+    title = db.query(models.Title).filter(models.Title.id_title == title_id).first()
+    if not title:
+        return None
+
+    update_dict = data.dict(exclude_unset=True) if hasattr(data, "dict") else data
+
+    # Apply updates
+    for field, value in update_dict.items():
+        if field == "conditions" and value is not None:
+            value = [c.dict() if hasattr(c, "dict") else c for c in value]
+        setattr(title, field, value)
+
+    db.commit()
+    db.refresh(title)
+    return title
+
+
+def delete_title_full(db: Session, title_id: int):
+    """
+    Delete title. Clear current_title_id for holders. Delete all character_titles
+    records. Delete title. All in transaction.
+    """
+    title = db.query(models.Title).filter(models.Title.id_title == title_id).first()
+    if not title:
+        return False
+
+    # Find all holders who have this as their active title and clear it
+    active_holders = db.query(Character).filter(
+        Character.current_title_id == title_id
+    ).all()
+
+    for holder in active_holders:
+        holder.current_title_id = None
+
+    db.flush()
+
+    # Delete all character_titles records for this title
+    db.query(models.CharacterTitle).filter(
+        models.CharacterTitle.title_id == title_id
+    ).delete(synchronize_session="fetch")
+
+    # Delete the title
+    db.delete(title)
+    db.commit()
+    return True
+
+
+def grant_title(db: Session, character_id: int, title_id: int):
+    """
+    Grant title to character with is_custom=True. Idempotent.
+    Does NOT auto-set as active. Grants XP reward on first grant.
+    """
+    title = db.query(models.Title).filter(models.Title.id_title == title_id).first()
+    if not title:
+        return None, "title_not_found"
+
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        return None, "character_not_found"
+
+    # Check if already has the title
+    existing = db.query(models.CharacterTitle).filter(
+        models.CharacterTitle.character_id == character_id,
+        models.CharacterTitle.title_id == title_id,
+    ).first()
+    if existing:
+        return True, "already_has"
+
+    ct = models.CharacterTitle(
+        character_id=character_id,
+        title_id=title_id,
+        is_custom=True,
+    )
+    db.add(ct)
+    db.flush()
+
+    # Grant XP reward
+    if title.reward_passive_exp > 0 or title.reward_active_exp > 0:
+        _grant_title_xp(db, character_id, title.reward_passive_exp, title.reward_active_exp)
+
+    db.commit()
+    return True, "granted"
+
+
+def revoke_title(db: Session, character_id: int, title_id: int):
+    """
+    Revoke title from character. If active title: clear current_title_id.
+    Delete character_titles record.
+    """
+    ct = db.query(models.CharacterTitle).filter(
+        models.CharacterTitle.character_id == character_id,
+        models.CharacterTitle.title_id == title_id,
+    ).first()
+    if not ct:
+        return False
+
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if character and character.current_title_id == title_id:
+        character.current_title_id = None
+
+    db.delete(ct)
+    db.commit()
+    return True
+
+
+def set_current_title_cosmetic(db: Session, character_id: int, title_id: int):
+    """
+    Set active title (purely cosmetic). Verify character owns the title.
+    """
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        return None, "character_not_found"
+
+    # Verify character owns the title
+    ct = db.query(models.CharacterTitle).filter(
+        models.CharacterTitle.character_id == character_id,
+        models.CharacterTitle.title_id == title_id,
+    ).first()
+    if not ct:
+        return None, "title_not_owned"
+
+    new_title = db.query(models.Title).filter(models.Title.id_title == title_id).first()
+    if not new_title:
+        return None, "title_not_found"
+
+    # Set new current_title_id
+    character.current_title_id = title_id
+
+    db.commit()
+    db.refresh(character)
+    return character, "ok"
+
+
+def unset_current_title(db: Session, character_id: int):
+    """Set current_title_id = NULL (purely cosmetic)."""
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        return None
+
+    character.current_title_id = None
+    db.commit()
+    db.refresh(character)
+    return character
+
+
+def get_all_titles_admin(db: Session, page: int = 1, per_page: int = 20,
+                         search: str = None, rarity: str = None):
+    """Paginated list of titles with filters and holders_count."""
+    from sqlalchemy import func as sa_func
+
+    query = db.query(models.Title)
+
+    if search:
+        query = query.filter(models.Title.name.ilike(f"%{search}%"))
+    if rarity:
+        query = query.filter(models.Title.rarity == rarity)
+
+    total = query.count()
+
+    titles = query.order_by(models.Title.sort_order, models.Title.id_title).offset(
+        (page - 1) * per_page
+    ).limit(per_page).all()
+
+    # Get holders count for each title
+    title_ids = [t.id_title for t in titles]
+    holders_counts = {}
+    if title_ids:
+        counts = db.query(
+            models.CharacterTitle.title_id,
+            sa_func.count(models.CharacterTitle.character_id),
+        ).filter(
+            models.CharacterTitle.title_id.in_(title_ids)
+        ).group_by(models.CharacterTitle.title_id).all()
+        holders_counts = {tid: cnt for tid, cnt in counts}
+
+    items = []
+    for t in titles:
+        items.append({
+            "id_title": t.id_title,
+            "name": t.name,
+            "description": t.description,
+            "rarity": t.rarity,
+            "conditions": t.conditions,
+            "icon": t.icon,
+            "sort_order": t.sort_order,
+            "is_active": t.is_active,
+            "reward_passive_exp": t.reward_passive_exp,
+            "reward_active_exp": t.reward_active_exp,
+            "created_at": t.created_at,
+            "updated_at": t.updated_at,
+            "holders_count": holders_counts.get(t.id_title, 0),
+        })
+
+    return items, total
+
+
+def get_character_titles_with_progress(db: Session, character_id: int):
+    """
+    Return ALL active titles with progress info for the character.
+    Queries character_cumulative_stats and character.level for progress computation.
+    """
+    # 1. Get all active titles
+    all_titles = db.query(models.Title).filter(
+        models.Title.is_active == True
+    ).order_by(models.Title.sort_order, models.Title.id_title).all()
+
+    if not all_titles:
+        return []
+
+    # 2. Get character's earned titles
+    char_titles = db.query(models.CharacterTitle).filter(
+        models.CharacterTitle.character_id == character_id
+    ).all()
+    char_titles_map = {ct.title_id: ct for ct in char_titles}
+
+    # 3. Get cumulative stats for progress
+    cumulative_row = db.execute(
+        sa_text("SELECT * FROM character_cumulative_stats WHERE character_id = :cid"),
+        {"cid": character_id},
+    ).fetchone()
+
+    cumulative_dict = {}
+    if cumulative_row:
+        row_map = dict(cumulative_row._mapping) if hasattr(cumulative_row, '_mapping') else dict(cumulative_row)
+        for col_name, val in row_map.items():
+            if col_name not in ("id", "character_id"):
+                cumulative_dict[col_name] = val or 0
+
+    # 4. Get character level
+    character = db.query(Character).filter(Character.id == character_id).first()
+    character_level = character.level if character else 1
+
+    # 4.5. Fetch character attributes
+    attrs_row = db.execute(
+        sa_text("SELECT * FROM character_attributes WHERE character_id = :cid"),
+        {"cid": character_id},
+    ).fetchone()
+
+    attrs_dict = {}
+    if attrs_row:
+        row_map = dict(attrs_row._mapping) if hasattr(attrs_row, '_mapping') else dict(attrs_row)
+        for col_name, val in row_map.items():
+            if col_name not in ("id", "character_id"):
+                attrs_dict[col_name] = val or 0
+
+    # 5. Merge titles with unlock status and progress
+    result = []
+    for title in all_titles:
+        ct = char_titles_map.get(title.id_title)
+        is_unlocked = ct is not None
+        unlocked_at = ct.assigned_at if ct else None
+        is_custom = ct.is_custom if ct else False
+
+        # Compute progress for each condition
+        progress = {}
+        conditions = title.conditions if isinstance(title.conditions, list) else []
+        for cond in conditions:
+            cond_type = cond.get("type")
+            stat_name = cond.get("stat")
+            required_value = cond.get("value")
+
+            if cond_type == "cumulative_stat" and stat_name:
+                current_value = cumulative_dict.get(stat_name, 0)
+                progress[stat_name] = {
+                    "current": current_value,
+                    "required": required_value,
+                }
+            elif cond_type == "attribute" and stat_name:
+                current_value = attrs_dict.get(stat_name, 0)
+                progress[stat_name] = {
+                    "current": current_value,
+                    "required": required_value,
+                }
+            elif cond_type == "character_level":
+                progress["level"] = {
+                    "current": character_level,
+                    "required": required_value,
+                }
+
+        result.append({
+            "id_title": title.id_title,
+            "name": title.name,
+            "description": title.description,
+            "rarity": title.rarity,
+            "conditions": conditions,
+            "icon": title.icon,
+            "reward_passive_exp": title.reward_passive_exp,
+            "reward_active_exp": title.reward_active_exp,
+            "is_unlocked": is_unlocked,
+            "unlocked_at": unlocked_at,
+            "is_custom": is_custom,
+            "progress": progress,
+        })
+
+    return result
+
+
+def _compare(current_value, operator: str, target_value) -> bool:
+    """Compare values using the given operator."""
+    try:
+        current_value = float(current_value)
+        target_value = float(target_value)
+    except (TypeError, ValueError):
+        return False
+
+    if operator == ">=":
+        return current_value >= target_value
+    elif operator == "<=":
+        return current_value <= target_value
+    elif operator == "==":
+        return current_value == target_value
+    elif operator == ">":
+        return current_value > target_value
+    elif operator == "<":
+        return current_value < target_value
+    return False
+
+
+def evaluate_titles(db: Session, character_id: int):
+    """
+    Check all active titles the character doesn't have.
+    Grant titles whose ALL conditions are met. Return list of newly unlocked titles.
+    """
+    # 1. Query all active titles not yet earned
+    earned_ids_rows = db.query(models.CharacterTitle.title_id).filter(
+        models.CharacterTitle.character_id == character_id
+    ).all()
+    earned_ids = {row[0] for row in earned_ids_rows}
+
+    all_active_titles = db.query(models.Title).filter(
+        models.Title.is_active == True
+    ).all()
+
+    unearned = [t for t in all_active_titles if t.id_title not in earned_ids]
+
+    if not unearned:
+        return []
+
+    # 2. Fetch cumulative stats
+    cumulative_row = db.execute(
+        sa_text("SELECT * FROM character_cumulative_stats WHERE character_id = :cid"),
+        {"cid": character_id},
+    ).fetchone()
+
+    cumulative_dict = {}
+    if cumulative_row:
+        row_map = dict(cumulative_row._mapping) if hasattr(cumulative_row, '_mapping') else dict(cumulative_row)
+        for col_name, val in row_map.items():
+            if col_name not in ("id", "character_id"):
+                cumulative_dict[col_name] = val or 0
+
+    # 3. Get character level
+    character = db.query(Character).filter(Character.id == character_id).first()
+    character_level = character.level if character else None
+
+    # 3.5. Fetch character attributes
+    attrs_row = db.execute(
+        sa_text("SELECT * FROM character_attributes WHERE character_id = :cid"),
+        {"cid": character_id},
+    ).fetchone()
+
+    attrs_dict = {}
+    if attrs_row:
+        row_map = dict(attrs_row._mapping) if hasattr(attrs_row, '_mapping') else dict(attrs_row)
+        for col_name, val in row_map.items():
+            if col_name not in ("id", "character_id"):
+                attrs_dict[col_name] = val or 0
+
+    # 4. Evaluate each title
+    newly_unlocked = []
+
+    for title in unearned:
+        conditions = title.conditions if isinstance(title.conditions, list) else []
+
+        # Titles with no conditions should NOT auto-unlock
+        if not conditions:
+            continue
+
+        # Skip admin_grant-only titles
+        condition_types = {c.get("type") for c in conditions if isinstance(c, dict)}
+        if condition_types == {"admin_grant"}:
+            continue
+
+        # AND logic: all conditions must be true
+        all_met = True
+        for cond in conditions:
+            if not isinstance(cond, dict):
+                all_met = False
+                break
+
+            ctype = cond.get("type")
+            stat = cond.get("stat")
+            operator = cond.get("operator", ">=")
+            value = cond.get("value")
+
+            if ctype == "cumulative_stat":
+                if not stat:
+                    all_met = False
+                    break
+                current = cumulative_dict.get(stat, 0)
+                if not _compare(current, operator, value):
+                    all_met = False
+                    break
+            elif ctype == "character_level":
+                if character_level is None:
+                    all_met = False
+                    break
+                if not _compare(character_level, operator, value):
+                    all_met = False
+                    break
+            elif ctype == "attribute":
+                if not stat:
+                    all_met = False
+                    break
+                current = attrs_dict.get(stat, 0)
+                if not _compare(current, operator, value):
+                    all_met = False
+                    break
+            elif ctype == "admin_grant":
+                all_met = False
+                break
+            else:
+                # Unknown condition type
+                all_met = False
+                break
+
+        if not all_met:
+            continue
+
+        # Check race condition
+        existing = db.query(models.CharacterTitle).filter(
+            models.CharacterTitle.character_id == character_id,
+            models.CharacterTitle.title_id == title.id_title,
+        ).first()
+        if existing:
+            continue
+
+        # Grant the title
+        ct = models.CharacterTitle(
+            character_id=character_id,
+            title_id=title.id_title,
+            is_custom=False,
+        )
+        db.add(ct)
+        db.flush()
+
+        # Grant XP reward
+        if title.reward_passive_exp > 0 or title.reward_active_exp > 0:
+            _grant_title_xp(db, character_id, title.reward_passive_exp, title.reward_active_exp)
+
+        newly_unlocked.append({
+            "id_title": title.id_title,
+            "name": title.name,
+        })
+
+        logger.info(
+            f"Титул '{title.name}' (id={title.id_title}) автоматически разблокирован "
+            f"для персонажа {character_id}"
+        )
+
+    if newly_unlocked:
+        db.commit()
+
+    return newly_unlocked

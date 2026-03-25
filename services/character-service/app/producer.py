@@ -96,6 +96,36 @@ async def publish_character_skills(character_id: int, skill_ids: list):
         logger.warning(f"Failed to publish skills message for character {character_id}: {e}")
 
 
+async def send_title_unlocked_notification(user_id: int, title_name: str):
+    """Publish notification to general_notifications queue when a title is unlocked.
+
+    Uses aio_pika for async publishing. Handles RabbitMQ unavailability
+    gracefully — logs a warning and does not crash the request.
+    """
+    try:
+        connection = await aio_pika.connect_robust(
+            settings.RABBITMQ_URL,
+            timeout=5,
+        )
+        async with connection:
+            channel = await connection.channel()
+            await channel.declare_queue("general_notifications", durable=True)
+            message_body = json.dumps({
+                "target_type": "user",
+                "target_value": user_id,
+                "message": f"Вы получили новый титул: {title_name}!"
+            })
+            await channel.default_exchange.publish(
+                aio_pika.Message(
+                    body=message_body.encode(),
+                    delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                ),
+                routing_key="general_notifications",
+            )
+    except Exception as e:
+        logger.warning(f"Failed to send title unlock notification: {e}")
+
+
 async def publish_character_attributes(character_id: int, attributes: dict):
     """Publish to character_attributes_queue.
 

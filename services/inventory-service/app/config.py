@@ -8,5 +8,6 @@ class Settings(BaseSettings):
     DB_DATABASE: str
     RABBITMQ_URL: str = "amqp://guest:guest@rabbitmq:5672"
     ATTRIBUTES_SERVICE_URL: str = "http://character-attributes-service:8002/attributes/"
+    CHARACTER_SERVICE_URL: str = "http://character-service:8005"
 
 settings = Settings()

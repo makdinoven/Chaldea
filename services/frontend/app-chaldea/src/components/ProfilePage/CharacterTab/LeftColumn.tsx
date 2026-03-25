@@ -7,6 +7,15 @@ import {
   selectEquipment,
 } from '../../../redux/slices/profileSlice';
 import { CLASS_NAMES } from '../constants';
+
+const getRarityColorClass = (rarity?: string | null): string => {
+  switch (rarity) {
+    case 'common': return 'text-rarity-common';
+    case 'rare': return 'text-rarity-rare';
+    case 'legendary': return 'text-rarity-legendary';
+    default: return 'text-rarity-common';
+  }
+};
 import StatsPanel from '../CharacterInfoPanel/StatsPanel';
 import PrimaryStatsSection from '../StatsTab/PrimaryStatsSection';
 import DerivedStatsSection from '../StatsTab/DerivedStatsSection';
@@ -41,7 +50,7 @@ const LeftColumn = ({ characterId }: LeftColumnProps) => {
             {profile.name}
           </h3>
           {profile.active_title && (
-            <span className="text-site-blue text-sm italic">
+            <span className={`${getRarityColorClass(profile.active_title_rarity)} text-sm`}>
               {profile.active_title}
             </span>
           )}

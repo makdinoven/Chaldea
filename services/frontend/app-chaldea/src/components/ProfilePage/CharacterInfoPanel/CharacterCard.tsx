@@ -11,6 +11,15 @@ import {
 import { CLASS_NAMES } from '../constants';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
 
+const getRarityColorClass = (rarity?: string | null): string => {
+  switch (rarity) {
+    case 'common': return 'text-rarity-common';
+    case 'rare': return 'text-rarity-rare';
+    case 'legendary': return 'text-rarity-legendary';
+    default: return 'text-rarity-common';
+  }
+};
+
 const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
 
 export default function CharacterCard() {
@@ -115,7 +124,7 @@ export default function CharacterCard() {
 
       {/* Active Title */}
       {profile.active_title && (
-        <span className="text-site-blue text-sm italic text-center">
+        <span className={`${getRarityColorClass(profile.active_title_rarity)} text-sm text-center`}>
           {profile.active_title}
         </span>
       )}
