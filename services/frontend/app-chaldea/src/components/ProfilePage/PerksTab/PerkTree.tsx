@@ -379,29 +379,6 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
     return `${minX} ${minY} ${maxX - minX} ${maxY - minY}`;
   }, [nodePositions]);
 
-  const categoryLabels = useMemo(() => {
-    const labels: Array<{ cat: string; x: number; y: number }> = [];
-    const catCount = categories.length || 1;
-    const sectorAngle = (2 * Math.PI) / catCount;
-
-    categories.forEach(([cat], catIdx) => {
-      const sectorCenter = catIdx * sectorAngle - Math.PI / 2;
-      let maxDist = FIRST_RING;
-      for (const pos of nodePositions) {
-        if (pos.category !== cat) continue;
-        const d = Math.sqrt((pos.x - CENTER) ** 2 + (pos.y - CENTER) ** 2);
-        if (d > maxDist) maxDist = d;
-      }
-      const labelDist = maxDist + 45;
-      labels.push({
-        cat,
-        x: CENTER + labelDist * Math.cos(sectorCenter),
-        y: CENTER + labelDist * Math.sin(sectorCenter),
-      });
-    });
-    return labels;
-  }, [categories, nodePositions]);
-
   if (perks.length === 0) {
     return (
       <div className="relative rounded-card overflow-hidden p-8 text-center">
@@ -530,27 +507,6 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
                 />
               ))}
 
-              {/* Category labels */}
-              {categoryLabels.map(({ cat, x, y }) => {
-                const config = CATEGORY_CONFIG[cat] ?? { label: cat, color: 'rgba(255,255,255,0.4)' };
-                return (
-                  <text
-                    key={cat}
-                    x={x}
-                    y={y}
-                    textAnchor="middle"
-                    dominantBaseline="central"
-                    fontSize={11}
-                    fontWeight={600}
-                    fill={config.color}
-                    className="select-none uppercase"
-                    letterSpacing="0.08em"
-                    style={{ textShadow: `0 0 10px ${config.color}` }}
-                  >
-                    {config.label}
-                  </text>
-                );
-              })}
             </svg>
           </motion.div>
         </div>
