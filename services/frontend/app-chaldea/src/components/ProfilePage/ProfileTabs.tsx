@@ -6,6 +6,7 @@ interface Tab {
 const TABS: Tab[] = [
   { key: 'character', label: 'Персонаж' },
   { key: 'skills', label: 'Навыки' },
+  { key: 'perks', label: 'Перки' },
   { key: 'quests', label: 'Задания' },
   { key: 'battles', label: 'Бои' },
   { key: 'logs', label: 'Логи персонажа' },

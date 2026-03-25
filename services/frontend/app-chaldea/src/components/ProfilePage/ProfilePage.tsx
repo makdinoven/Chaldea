@@ -11,6 +11,7 @@ import ProfileTabs from './ProfileTabs';
 import PlaceholderTab from './PlaceholderTab';
 import CharacterTab from './CharacterTab/CharacterTab';
 import SkillsTab from './SkillsTab/SkillsTab';
+import PerksTab from './PerksTab/PerksTab';
 import QuestLogTab from './QuestLogTab';
 import BattlesTab from './BattlesTab/BattlesTab';
 
@@ -59,6 +60,8 @@ const ProfilePage = () => {
         return <CharacterTab characterId={characterId} />;
       case 'skills':
         return <SkillsTab characterId={characterId} />;
+      case 'perks':
+        return <PerksTab characterId={characterId} />;
       case 'quests':
         return <QuestLogTab characterId={characterId} />;
       case 'battles':

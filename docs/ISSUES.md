@@ -63,6 +63,11 @@
 ~~**Сервис:** frontend~~
 ~~**Исправлено в FEAT-074:** Polling заменён на WebSocket (`/battles/ws/{battle_id}`). Оба игрока получают обновления мгновенно. Авто-переподключение с exponential backoff, fallback на polling при неудаче. Автобой тоже через WebSocket + управление скоростью (быстрый/медленный режим).~~
 
+~~### 23. Баг: GET /attributes/admin/perks недоступен из-за конфликта роутов~~
+~~**Сервис:** character-attributes-service~~
+~~**Файл:** `services/character-attributes-service/app/main.py`~~
+~~**Исправлено в FEAT-078:** Perks-роуты (GET /{character_id}/perks, GET/POST/PUT/DELETE /admin/perks/*) перенесены выше catch-all роута GET /{character_id}. FastAPI теперь матчит специфичные пути первыми.~~
+
 ---
 
 ## LOW

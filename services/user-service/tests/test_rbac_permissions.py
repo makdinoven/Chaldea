@@ -584,3 +584,145 @@ class TestSecurityEdgeCases:
         with pytest.raises(IntegrityError):
             rbac_db.commit()
         rbac_db.rollback()
+
+
+# ---------------------------------------------------------------------------
+# 7. FEAT-078: Perks RBAC permissions (migration 0017)
+# ---------------------------------------------------------------------------
+
+PERKS_PERMISSIONS = [
+    ("perks", "read"),
+    ("perks", "create"),
+    ("perks", "update"),
+    ("perks", "delete"),
+    ("perks", "grant"),
+]
+
+# Mirrors ROLE_ACTIONS from migration 0017
+PERKS_ROLE_ACTIONS = {
+    3: ["read", "create", "update", "grant"],   # Moderator
+    2: ["read"],                                  # Editor
+}
+
+
+def _seed_perks_permissions(db):
+    """Seed the 5 perks permissions and their role assignments (mirrors migration 0017)."""
+    perm_objects = []
+    for module, action in PERKS_PERMISSIONS:
+        perm = models.Permission(module=module, action=action,
+                                 description=f"Perks: {action}")
+        db.add(perm)
+        perm_objects.append(perm)
+    db.flush()  # assigns IDs
+
+    # Assign to roles
+    for perm in perm_objects:
+        for role_id, actions in PERKS_ROLE_ACTIONS.items():
+            if perm.action in actions:
+                db.add(models.RolePermission(role_id=role_id, permission_id=perm.id))
+    db.commit()
+    return perm_objects
+
+
+@pytest.fixture()
+def rbac_db_with_perks(rbac_db):
+    """DB session with base RBAC seed data + perks permissions from migration 0017."""
+    _seed_perks_permissions(rbac_db)
+    return rbac_db
+
+
+class TestPerksPermissions:
+    """FEAT-078 Task #13: Verify perks RBAC permissions from migration 0017."""
+
+    def test_perks_permissions_exist(self, rbac_db_with_perks):
+        """All 5 perks permissions must exist in the DB after migration."""
+        db = rbac_db_with_perks
+        for module, action in PERKS_PERMISSIONS:
+            perm = db.query(models.Permission).filter(
+                models.Permission.module == module,
+                models.Permission.action == action,
+            ).first()
+            assert perm is not None, f"Permission {module}:{action} not found in DB"
+
+    def test_perks_permissions_count(self, rbac_db_with_perks):
+        """Exactly 5 perks permissions should exist."""
+        db = rbac_db_with_perks
+        count = db.query(models.Permission).filter(
+            models.Permission.module == "perks"
+        ).count()
+        assert count == 5
+
+    def test_admin_has_all_perks_permissions(self, rbac_db_with_perks):
+        """Admin (role_id=4) should have all 5 perks permissions via auto-permissions."""
+        db = rbac_db_with_perks
+        admin = _make_user(db, id=100, username="perkadmin", email="perkadmin@test.com",
+                           role_id=4, role_str="admin")
+        perms = get_effective_permissions(db, admin)
+        for module, action in PERKS_PERMISSIONS:
+            perm_str = f"{module}:{action}"
+            assert perm_str in perms, f"Admin missing {perm_str}"
+        # 8 base + 5 perks = 13 total
+        assert len(perms) == 13
+
+    def test_moderator_has_correct_perks_permissions(self, rbac_db_with_perks):
+        """Moderator (role_id=3) should have perks:read, perks:create, perks:update, perks:grant."""
+        db = rbac_db_with_perks
+        mod = _make_user(db, id=101, username="perkmod", email="perkmod@test.com",
+                         role_id=3, role_str="moderator")
+        perms = get_effective_permissions(db, mod)
+        assert "perks:read" in perms
+        assert "perks:create" in perms
+        assert "perks:update" in perms
+        assert "perks:grant" in perms
+        assert "perks:delete" not in perms
+        # 4 base items:* + 4 perks = 8 total
+        assert len(perms) == 8
+
+    def test_editor_has_only_perks_read(self, rbac_db_with_perks):
+        """Editor (role_id=2) should have only perks:read."""
+        db = rbac_db_with_perks
+        editor = _make_user(db, id=102, username="perkeditor", email="perkeditor@test.com",
+                            role_id=2, role_str="editor")
+        perms = get_effective_permissions(db, editor)
+        assert "perks:read" in perms
+        assert "perks:create" not in perms
+        assert "perks:update" not in perms
+        assert "perks:delete" not in perms
+        assert "perks:grant" not in perms
+        # 2 base *:read + 1 perks:read = 3 total
+        assert len(perms) == 3
+
+    def test_regular_user_has_no_perks_permissions(self, rbac_db_with_perks):
+        """Regular user (role_id=1) should have no perks permissions."""
+        db = rbac_db_with_perks
+        user = _make_user(db, id=103, username="perkuser", email="perkuser@test.com",
+                          role_id=1, role_str="user")
+        perms = get_effective_permissions(db, user)
+        assert not any(p.startswith("perks:") for p in perms)
+        assert perms == []
+
+    def test_require_permission_perks_admin(self, rbac_db_with_perks):
+        """Admin can pass require_permission for any perks permission."""
+        db = rbac_db_with_perks
+        admin = _make_user(db, id=104, username="perkadmin2", email="perkadmin2@test.com",
+                           role_id=4, role_str="admin")
+        for module, action in PERKS_PERMISSIONS:
+            require_permission(db, admin, f"{module}:{action}")
+
+    def test_require_permission_perks_editor_blocked(self, rbac_db_with_perks):
+        """Editor should be blocked from perks:create via require_permission."""
+        db = rbac_db_with_perks
+        editor = _make_user(db, id=105, username="perkeditor2", email="perkeditor2@test.com",
+                            role_id=2, role_str="editor")
+        with pytest.raises(HTTPException) as exc_info:
+            require_permission(db, editor, "perks:create")
+        assert exc_info.value.status_code == 403
+
+    def test_require_permission_perks_moderator_blocked_delete(self, rbac_db_with_perks):
+        """Moderator should be blocked from perks:delete via require_permission."""
+        db = rbac_db_with_perks
+        mod = _make_user(db, id=106, username="perkmod2", email="perkmod2@test.com",
+                         role_id=3, role_str="moderator")
+        with pytest.raises(HTTPException) as exc_info:
+            require_permission(db, mod, "perks:delete")
+        assert exc_info.value.status_code == 403

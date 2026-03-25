@@ -1,4 +1,8 @@
-from sqlalchemy import Column, Integer, Float
+from sqlalchemy import (
+    Column, Integer, Float, String, Text, Boolean, DateTime, JSON, BigInteger,
+    ForeignKey, UniqueConstraint, Index,
+)
+from sqlalchemy.sql import func
 from database import Base
 
 # Определяем модель для хранения характеристик персонажа
@@ -72,5 +76,71 @@ class CharacterAttributes(Base):
     vul_damning = Column(Float, default=0.0)
 
 
+class Perk(Base):
+    __tablename__ = "perks"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    category = Column(String(50), nullable=False)  # 'combat', 'trade', 'exploration', 'progression', 'usage'
+    rarity = Column(String(20), nullable=False, server_default="common")  # 'common', 'rare', 'legendary'
+    icon = Column(String(255), nullable=True)
+    conditions = Column(JSON, nullable=False)  # array of condition objects
+    bonuses = Column(JSON, nullable=False)  # {flat: {}, percent: {}, contextual: {}, passive: {}}
+    sort_order = Column(Integer, server_default="0")
+    is_active = Column(Boolean, server_default="1")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("idx_category", "category"),
+        Index("idx_rarity", "rarity"),
+    )
 
 
+class CharacterPerk(Base):
+    __tablename__ = "character_perks"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False, index=True)
+    perk_id = Column(Integer, ForeignKey("perks.id", ondelete="CASCADE"), nullable=False, index=True)
+    unlocked_at = Column(DateTime, server_default=func.now())
+    is_custom = Column(Boolean, server_default="0")  # TRUE if admin-granted
+
+    __table_args__ = (
+        UniqueConstraint("character_id", "perk_id", name="uq_char_perk"),
+    )
+
+
+class CharacterCumulativeStats(Base):
+    __tablename__ = "character_cumulative_stats"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    character_id = Column(Integer, unique=True, nullable=False, index=True)
+
+    # Battle stats (Phase 1)
+    total_damage_dealt = Column(BigInteger, server_default="0")
+    total_damage_received = Column(BigInteger, server_default="0")
+    pve_kills = Column(Integer, server_default="0")
+    pvp_wins = Column(Integer, server_default="0")
+    pvp_losses = Column(Integer, server_default="0")
+    total_battles = Column(Integer, server_default="0")
+    max_damage_single_battle = Column(BigInteger, server_default="0")
+    max_win_streak = Column(Integer, server_default="0")
+    current_win_streak = Column(Integer, server_default="0")
+    total_rounds_survived = Column(Integer, server_default="0")
+    low_hp_wins = Column(Integer, server_default="0")  # wins with HP < 10%
+
+    # Economic stats (Phase 3)
+    total_gold_earned = Column(BigInteger, server_default="0")
+    total_gold_spent = Column(BigInteger, server_default="0")
+    items_bought = Column(Integer, server_default="0")
+    items_sold = Column(Integer, server_default="0")
+
+    # Exploration stats (Phase 3)
+    locations_visited = Column(Integer, server_default="0")
+    total_transitions = Column(Integer, server_default="0")
+
+    # Skill stats (Phase 3)
+    skills_used = Column(Integer, server_default="0")
+    items_equipped = Column(Integer, server_default="0")

@@ -87,6 +87,8 @@ async def init_battle_state(
             "max_stamina": p["max_stamina"],
             "fast_slots": p["fast_slots"],
             "cooldowns"  : {},
+            "total_damage_dealt": 0,
+            "total_damage_received": 0,
             }
     for p in participants_payload
         },

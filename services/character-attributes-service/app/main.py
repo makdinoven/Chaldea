@@ -85,6 +85,202 @@ def get_passive_experience_endpoint(character_id: int, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="Passive experience not found")
     return {"passive_experience": passive_experience}
 
+# =============================================================
+# 14. Admin Perks CRUD (MUST be above /{character_id}/ routes!)
+# =============================================================
+
+# --- GET list (paginated) ---
+@router.get("/admin/perks")
+def admin_list_perks(
+    page: int = 1,
+    per_page: int = 20,
+    category: str = None,
+    rarity: str = None,
+    search: str = None,
+    db: Session = Depends(get_db),
+    admin: UserRead = Depends(require_permission("perks:read")),
+):
+    items, total = crud.get_perks_paginated(db, page, per_page, category, rarity, search)
+    return {
+        "items": [schemas.PerkResponse.from_orm(p) for p in items],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+    }
+
+
+# --- POST create perk ---
+@router.post("/admin/perks", response_model=schemas.PerkResponse, status_code=201)
+def admin_create_perk(
+    perk_data: schemas.PerkCreate,
+    db: Session = Depends(get_db),
+    admin: UserRead = Depends(require_permission("perks:create")),
+):
+    try:
+        perk = crud.create_perk(db, perk_data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при создании перка: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при создании перка")
+    return perk
+
+
+# --- PUT update perk ---
+@router.put("/admin/perks/{perk_id}", response_model=schemas.PerkResponse)
+def admin_update_perk(
+    perk_id: int,
+    perk_data: schemas.PerkUpdate,
+    db: Session = Depends(get_db),
+    admin: UserRead = Depends(require_permission("perks:update")),
+):
+    try:
+        perk, old_flat = crud.update_perk(db, perk_id, perk_data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении перка: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении перка")
+
+    if perk is None:
+        raise HTTPException(status_code=404, detail="Перк не найден")
+
+    # If flat bonuses changed and perk has holders, reverse old and apply new
+    if old_flat is not None:
+        holders = db.query(models.CharacterPerk).filter(
+            models.CharacterPerk.perk_id == perk_id
+        ).all()
+        new_flat = perk.bonuses.get("flat", {}) if perk.bonuses else {}
+        for holder in holders:
+            # Reverse old bonuses
+            old_modifiers = {}
+            for key, value in old_flat.items():
+                if key in crud.VALID_FLAT_BONUS_KEYS and value != 0:
+                    old_modifiers[key] = -value
+            if old_modifiers:
+                crud._apply_modifiers_internal(db, holder.character_id, old_modifiers)
+            # Apply new bonuses
+            new_modifiers = {}
+            for key, value in new_flat.items():
+                if key in crud.VALID_FLAT_BONUS_KEYS and value != 0:
+                    new_modifiers[key] = value
+            if new_modifiers:
+                crud._apply_modifiers_internal(db, holder.character_id, new_modifiers)
+        db.commit()
+
+    return perk
+
+
+# --- DELETE perk ---
+@router.delete("/admin/perks/{perk_id}")
+def admin_delete_perk(
+    perk_id: int,
+    db: Session = Depends(get_db),
+    admin: UserRead = Depends(require_permission("perks:delete")),
+):
+    perk = crud.get_perk_by_id(db, perk_id)
+    if perk is None:
+        raise HTTPException(status_code=404, detail="Перк не найден")
+
+    flat_bonuses = perk.bonuses.get("flat", {}) if perk.bonuses else {}
+
+    # Get all holders before deletion
+    holders = db.query(models.CharacterPerk).filter(
+        models.CharacterPerk.perk_id == perk_id
+    ).all()
+    affected = len(holders)
+
+    # Reverse flat bonuses for all holders
+    if flat_bonuses:
+        reverse_modifiers = {}
+        for key, value in flat_bonuses.items():
+            if key in crud.VALID_FLAT_BONUS_KEYS and value != 0:
+                reverse_modifiers[key] = -value
+        if reverse_modifiers:
+            for holder in holders:
+                crud._apply_modifiers_internal(db, holder.character_id, reverse_modifiers)
+            db.flush()
+
+    # Delete perk (CASCADE deletes character_perks entries)
+    try:
+        db.delete(perk)
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при удалении перка: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при удалении перка")
+
+    return {"detail": "Перк удалён", "affected_characters": affected}
+
+
+# --- POST grant perk ---
+@router.post("/admin/perks/grant")
+def admin_grant_perk(
+    payload: dict,
+    db: Session = Depends(get_db),
+    admin: UserRead = Depends(require_permission("perks:grant")),
+):
+    character_id = payload.get("character_id")
+    perk_id = payload.get("perk_id")
+
+    if not character_id or not perk_id:
+        raise HTTPException(status_code=400, detail="Необходимо указать character_id и perk_id")
+
+    try:
+        success, already_had, perk = crud.grant_perk(db, character_id, perk_id)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при выдаче перка: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при выдаче перка")
+
+    if success is None:
+        raise HTTPException(status_code=404, detail="Перк не найден")
+
+    if already_had:
+        return {"detail": "Перк уже выдан", "character_id": character_id, "perk_id": perk_id}
+
+    return {"detail": "Перк выдан", "character_id": character_id, "perk_id": perk_id}
+
+
+# --- DELETE revoke perk ---
+@router.delete("/admin/perks/grant/{character_id}/{perk_id}")
+def admin_revoke_perk(
+    character_id: int,
+    perk_id: int,
+    db: Session = Depends(get_db),
+    admin: UserRead = Depends(require_permission("perks:grant")),
+):
+    try:
+        success, perk = crud.revoke_perk(db, character_id, perk_id)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при отзыве перка: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при отзыве перка")
+
+    if success is None:
+        raise HTTPException(status_code=404, detail="У персонажа нет этого перка")
+
+    return {"detail": "Перк отозван"}
+
+
+# -----------------------------
+# 13. Player Perks: GET (public)
+# -----------------------------
+@router.get("/{character_id}/perks")
+def get_character_perks(character_id: int, db: Session = Depends(get_db)):
+    """
+    Returns all active perks merged with character unlock status and progress data.
+    Public endpoint (no auth required — matches existing pattern for /attributes/{id}).
+    """
+    perks_list = crud.get_character_perks(db, character_id)
+    return {
+        "character_id": character_id,
+        "perks": perks_list,
+    }
+
+
 # -----------------------------
 # 3. Получение всех атрибутов
 # -----------------------------
@@ -656,6 +852,77 @@ def admin_recalculate_all(
     logger.info(f"[recalculate_all] Done — {total} characters recalculated")
 
     return {"detail": f"Recalculated {total} characters", "count": total}
+
+
+# -----------------------------
+# 11. Cumulative Stats: GET
+# -----------------------------
+@router.get("/{character_id}/cumulative_stats", response_model=schemas.CumulativeStatsResponse)
+def get_cumulative_stats(character_id: int, db: Session = Depends(get_db)):
+    """
+    Returns all cumulative stat counters for a character.
+    If no row exists, returns all zeros without creating a row.
+    """
+    row = crud.get_cumulative_stats(db, character_id)
+    if row is None:
+        # Return default zeros without persisting
+        return schemas.CumulativeStatsResponse(character_id=character_id)
+    return row
+
+
+# -----------------------------
+# 12. Cumulative Stats: Increment (internal, service-to-service)
+# -----------------------------
+@router.post("/cumulative_stats/increment")
+def increment_cumulative_stats(
+    payload: schemas.CumulativeStatsIncrement,
+    db: Session = Depends(get_db),
+):
+    """
+    Atomically increments cumulative stat counters for a character.
+    Creates the row lazily if it doesn't exist.
+    Internal endpoint (service-to-service), no auth required.
+    """
+    from crud import CUMULATIVE_STATS_COLUMNS
+
+    # Validate field names to prevent SQL injection
+    invalid_fields = []
+    for field in payload.increments:
+        if field not in CUMULATIVE_STATS_COLUMNS:
+            invalid_fields.append(field)
+    if payload.set_max:
+        for field in payload.set_max:
+            if field not in CUMULATIVE_STATS_COLUMNS:
+                invalid_fields.append(field)
+
+    if invalid_fields:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недопустимые поля: {', '.join(invalid_fields)}"
+        )
+
+    try:
+        crud.increment_cumulative_stats(
+            db,
+            character_id=payload.character_id,
+            increments=payload.increments,
+            set_max=payload.set_max or {},
+        )
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении кумулятивной статистики: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении статистики")
+
+    # Evaluate perks after stat update — auto-unlock if conditions met
+    newly_unlocked = []
+    try:
+        from perk_evaluator import evaluate_perks
+        newly_unlocked = evaluate_perks(db, payload.character_id)
+    except Exception as e:
+        logger.error(f"Ошибка при проверке перков для персонажа {payload.character_id}: {e}")
+        # Non-fatal: stats are already updated, perks will be checked next time
+
+    return {"detail": "Stats updated", "newly_unlocked_perks": newly_unlocked}
 
 
 app.include_router(router)

@@ -326,6 +326,153 @@ async def _pay_skill_costs(state: dict, pid: int, ranks: list[dict]) -> dict:
 
     return spend
 
+
+async def _track_cumulative_stats(
+    battle_state: dict,
+    winner_team: int | None,
+    battle_type: str,
+    turn_number: int,
+    db_session: AsyncSession,
+) -> None:
+    """
+    Best-effort POST of cumulative battle stats to character-attributes-service
+    for each player participant after a battle ends (FEAT-078).
+
+    Never raises — all errors are logged and swallowed so the battle end flow
+    is not disrupted.
+    """
+    is_pvp = battle_type in ("pvp_training", "pvp_death")
+
+    # Count defeated NPC/mob participants (for pve_kills)
+    defeated_npc_count = 0
+    if winner_team is not None:
+        for pid_str, pdata in battle_state["participants"].items():
+            if pdata["hp"] <= 0 and pdata["team"] != winner_team:
+                char_id = pdata["character_id"]
+                try:
+                    row = await db_session.execute(
+                        text("SELECT is_npc FROM characters WHERE id = :cid"),
+                        {"cid": char_id},
+                    )
+                    r = row.fetchone()
+                    if r and r[0]:
+                        defeated_npc_count += 1
+                except Exception:
+                    pass
+
+    url = f"{settings.CHAR_ATTRS_SERVICE_URL}/attributes/cumulative_stats/increment"
+
+    for pid_str, pdata in battle_state["participants"].items():
+        char_id = pdata["character_id"]
+
+        # Skip NPC/mob participants — only track stats for player characters
+        try:
+            npc_check = await db_session.execute(
+                text("SELECT is_npc FROM characters WHERE id = :cid"),
+                {"cid": char_id},
+            )
+            npc_row = npc_check.fetchone()
+            if npc_row and npc_row[0]:
+                continue
+        except Exception:
+            pass  # If we can't check, still try to post stats
+
+        is_winner = (
+            winner_team is not None
+            and pdata["team"] == winner_team
+            and pdata["hp"] > 0
+        )
+        is_loser = (
+            winner_team is not None
+            and (pdata["team"] != winner_team or pdata["hp"] <= 0)
+        )
+
+        # --- Build increments dict ---
+        increments: dict[str, int] = {
+            "total_damage_dealt": pdata.get("total_damage_dealt", 0),
+            "total_damage_received": pdata.get("total_damage_received", 0),
+            "total_battles": 1,
+            "total_rounds_survived": turn_number,
+        }
+
+        if is_pvp:
+            if is_winner:
+                increments["pvp_wins"] = 1
+            elif is_loser:
+                increments["pvp_losses"] = 1
+
+        # PvE kills: only for winners
+        if is_winner and defeated_npc_count > 0:
+            increments["pve_kills"] = defeated_npc_count
+
+        # Low HP win: winner's HP was < 10% of max at battle end
+        if is_winner:
+            max_hp = pdata.get("max_hp", 1)
+            if max_hp > 0 and pdata["hp"] < max_hp * 0.10:
+                increments["low_hp_wins"] = 1
+
+        # Win streak: increment on win only
+        # TODO(FEAT-078): On loss, current_win_streak should be reset to 0.
+        #   The increment endpoint only supports atomic `counter + N` and
+        #   `GREATEST(current, N)` — it cannot reset a counter. A small API
+        #   extension (e.g. `resets` dict) is needed. For Phase 1, we only
+        #   track streak increments on wins. Loss-reset is deferred.
+        if is_winner:
+            increments["current_win_streak"] = 1
+
+        # --- Build set_max dict ---
+        set_max: dict[str, int] = {}
+        battle_damage = pdata.get("total_damage_dealt", 0)
+        if battle_damage > 0:
+            set_max["max_damage_single_battle"] = battle_damage
+
+        if is_winner:
+            # We don't know the pre-increment value of current_win_streak,
+            # but we can pass the increment value via set_max for max_win_streak.
+            # The server will do GREATEST(max_win_streak, current_win_streak)
+            # after the increment is applied. Since we increment current_win_streak
+            # by 1 in the same call, max_win_streak will be checked against
+            # the post-increment value.
+            # However, we don't have the current value here, so we skip set_max
+            # for max_win_streak and let the server handle it after increment.
+            # Actually — the server applies increments first, then set_max.
+            # But set_max uses GREATEST(field, value), not the updated field.
+            # We would need the new value. Since we can't know it, we'll let
+            # the increment endpoint handle max_win_streak separately if it
+            # supports post-increment set_max. For now, skip.
+            pass
+
+        # Remove zero-value entries to keep payload clean
+        increments = {k: v for k, v in increments.items() if v != 0}
+
+        if not increments and not set_max:
+            continue
+
+        payload = {
+            "character_id": char_id,
+            "increments": increments,
+            "set_max": set_max if set_max else {},
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(url, json=payload)
+                if resp.status_code == 200:
+                    logger.info(
+                        f"[CUMULATIVE] Статистика обновлена для персонажа {char_id}: "
+                        f"increments={increments}, set_max={set_max}"
+                    )
+                else:
+                    logger.error(
+                        f"[CUMULATIVE] Ошибка обновления статистики для персонажа {char_id}: "
+                        f"status={resp.status_code}, body={resp.text}"
+                    )
+        except Exception as e:
+            logger.error(
+                f"[CUMULATIVE] Не удалось отправить статистику для персонажа {char_id}: {e}"
+            )
+
+
 @router.post("/", response_model=BattleCreated, status_code=201)
 async def create_battle_endpoint(
     battle_in: BattleCreate,
@@ -1095,6 +1242,13 @@ async def _make_action_core(
                 class_id=attacker_class_id,
             )
             battle_state["participants"][str(defender_pid)]["hp"] -= dealt
+            # Accumulate damage stats for cumulative tracking
+            dealt_int = int(round(dealt))
+            attacker_p = battle_state["participants"][str(request.participant_id)]
+            attacker_p["total_damage_dealt"] = attacker_p.get("total_damage_dealt", 0) + dealt_int
+            battle_state["participants"][str(defender_pid)]["total_damage_received"] = (
+                battle_state["participants"][str(defender_pid)].get("total_damage_received", 0) + dealt_int
+            )
             turn_events.append({
                 "event": "damage", "source": request.participant_id,
                 "target": defender_pid, **log
@@ -1419,6 +1573,15 @@ async def _make_action_core(
             logger.info(f"Battle history saved for battle {battle_id}")
         except Exception as e:
             logger.error(f"Failed to save battle history for battle {battle_id}: {e}")
+
+        # --- Cumulative stats tracking (FEAT-078) ---
+        await _track_cumulative_stats(
+            battle_state=battle_state,
+            winner_team=winner_team,
+            battle_type=bh_battle_type,
+            turn_number=new_turn_number,
+            db_session=db_session,
+        )
 
         # Save log via Celery
         save_log.delay(battle_id, new_turn_number, turn_events)

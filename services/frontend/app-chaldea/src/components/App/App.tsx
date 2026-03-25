@@ -44,6 +44,7 @@ import BestiaryPage from "../Bestiary/BestiaryPage";
 import ArchivePage from "../pages/ArchivePage/ArchivePage";
 import ArchiveArticlePage from "../pages/ArchivePage/ArchiveArticlePage";
 import ArchiveAdminPage from "../Admin/ArchiveAdminPage/ArchiveAdminPage";
+import AdminPerksPage from "../Admin/PerksPage/AdminPerksPage";
 
 const App = () => {
   const dispatch = useAppDispatch();
@@ -181,6 +182,11 @@ const App = () => {
             <Route path="admin/archive" element={
               <ProtectedRoute requiredPermission="archive:read">
                 <ArchiveAdminPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/perks" element={
+              <ProtectedRoute requiredPermission="perks:read">
+                <AdminPerksPage />
               </ProtectedRoute>
             } />
             <Route path="chat/history" element={<ChatHistoryPage />} />

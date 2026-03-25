@@ -1,5 +1,6 @@
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Any
 from pydantic import BaseModel, Field
+from datetime import datetime
 
 # Базовая схема для характеристик персонажа
 class CharacterAttributesBase(BaseModel):
@@ -174,3 +175,115 @@ class AdminAttributeUpdate(BaseModel):
     vul_sainting: Optional[float] = None
     vul_wind: Optional[float] = None
     vul_damning: Optional[float] = None
+
+
+# --- Perk Schemas ---
+
+class PerkCondition(BaseModel):
+    type: str  # 'cumulative_stat', 'character_level', 'attribute', 'quest', 'admin_grant'
+    stat: Optional[str] = None
+    operator: str  # '>=', '<=', '==', '>', '<'
+    value: Any
+
+
+class PerkBonuses(BaseModel):
+    flat: Dict[str, Any] = Field(default_factory=dict)  # {"health": 10, "damage": 3}
+    percent: Dict[str, Any] = Field(default_factory=dict)  # {"strength": 5}
+    contextual: Dict[str, Any] = Field(default_factory=dict)  # {"damage_vs_pve": 5}
+    passive: Dict[str, Any] = Field(default_factory=dict)  # {"regen_hp_per_turn": 2}
+
+
+class PerkCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    category: str  # 'combat', 'trade', 'exploration', 'progression', 'usage'
+    rarity: str = "common"  # 'common', 'rare', 'legendary'
+    icon: Optional[str] = None
+    conditions: List[PerkCondition]
+    bonuses: PerkBonuses
+    sort_order: int = 0
+
+
+class PerkUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    rarity: Optional[str] = None
+    icon: Optional[str] = None
+    conditions: Optional[List[PerkCondition]] = None
+    bonuses: Optional[PerkBonuses] = None
+    sort_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class PerkResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    category: str
+    rarity: str
+    icon: Optional[str] = None
+    conditions: List[Any]
+    bonuses: Dict[str, Any]
+    sort_order: int
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+
+class PerkConditionProgress(BaseModel):
+    current: Any
+    required: Any
+
+
+class CharacterPerkResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    category: str
+    rarity: str
+    icon: Optional[str] = None
+    conditions: List[Any]
+    bonuses: Dict[str, Any]
+    is_unlocked: bool
+    unlocked_at: Optional[datetime] = None
+    is_custom: bool = False
+    progress: Dict[str, PerkConditionProgress] = Field(default_factory=dict)
+
+    class Config:
+        orm_mode = True
+
+
+class CumulativeStatsResponse(BaseModel):
+    character_id: int
+    total_damage_dealt: int = 0
+    total_damage_received: int = 0
+    pve_kills: int = 0
+    pvp_wins: int = 0
+    pvp_losses: int = 0
+    total_battles: int = 0
+    max_damage_single_battle: int = 0
+    max_win_streak: int = 0
+    current_win_streak: int = 0
+    total_rounds_survived: int = 0
+    low_hp_wins: int = 0
+    total_gold_earned: int = 0
+    total_gold_spent: int = 0
+    items_bought: int = 0
+    items_sold: int = 0
+    locations_visited: int = 0
+    total_transitions: int = 0
+    skills_used: int = 0
+    items_equipped: int = 0
+
+    class Config:
+        orm_mode = True
+
+
+class CumulativeStatsIncrement(BaseModel):
+    character_id: int
+    increments: Dict[str, int] = Field(default_factory=dict)
+    set_max: Optional[Dict[str, int]] = Field(default_factory=dict)
