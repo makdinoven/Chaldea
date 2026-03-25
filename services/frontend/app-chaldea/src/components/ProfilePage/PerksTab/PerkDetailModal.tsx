@@ -62,31 +62,71 @@ const BONUS_KEY_LABELS: Record<string, string> = {
   res_magic: 'сопр. магии',
 };
 
-const CONDITION_LABELS: Record<string, string> = {
-  pve_kills: 'Мобов убито',
-  pvp_wins: 'PvP побед',
-  pvp_losses: 'PvP поражений',
-  total_battles: 'Всего боёв',
-  total_damage_dealt: 'Урона нанесено',
-  total_damage_received: 'Урона получено',
-  max_damage_single_battle: 'Макс. урон за бой',
-  max_win_streak: 'Макс. серия побед',
-  total_rounds_survived: 'Раундов пережито',
-  low_hp_wins: 'Побед с низким HP',
-  total_gold_earned: 'Золота заработано',
-  total_gold_spent: 'Золота потрачено',
-  items_bought: 'Предметов куплено',
-  items_sold: 'Предметов продано',
-  locations_visited: 'Локаций посещено',
-  total_transitions: 'Переходов совершено',
-  skills_used: 'Навыков использовано',
-  items_equipped: 'Предметов экипировано',
-  strength: 'Сила',
-  agility: 'Ловкость',
-  intelligence: 'Интеллект',
-  endurance: 'Выносливость',
-  charisma: 'Харизма',
-  luck: 'Удача',
+const CONDITION_DESCRIPTIONS: Record<string, (value: number) => string> = {
+  // Кумулятивная статистика — боевая
+  pve_kills: (v) => `Убить ${v} мобов`,
+  pvp_wins: (v) => `Выиграть ${v} PvP-боёв`,
+  pvp_losses: (v) => `Проиграть ${v} PvP-боёв`,
+  total_battles: (v) => `Провести ${v} боёв`,
+  total_damage_dealt: (v) => `Нанести ${v} урона`,
+  total_damage_received: (v) => `Получить ${v} урона`,
+  max_damage_single_battle: (v) => `Нанести ${v} урона за один бой`,
+  max_win_streak: (v) => `Выиграть ${v} боёв подряд`,
+  current_win_streak: (v) => `Текущая серия побед: ${v}`,
+  total_rounds_survived: (v) => `Пережить ${v} раундов`,
+  low_hp_wins: (v) => `Победить ${v} раз с низким HP`,
+  // Кумулятивная статистика — экономика
+  total_gold_earned: (v) => `Заработать ${v} золота`,
+  total_gold_spent: (v) => `Потратить ${v} золота`,
+  items_bought: (v) => `Купить ${v} предметов`,
+  items_sold: (v) => `Продать ${v} предметов`,
+  // Кумулятивная статистика — исследование
+  locations_visited: (v) => `Посетить ${v} локаций`,
+  total_transitions: (v) => `Совершить ${v} переходов`,
+  // Кумулятивная статистика — навыки
+  skills_used: (v) => `Использовать ${v} навыков`,
+  items_equipped: (v) => `Экипировать ${v} предметов`,
+  // Основные характеристики
+  strength: (v) => `Сила ${v}+`,
+  agility: (v) => `Ловкость ${v}+`,
+  intelligence: (v) => `Интеллект ${v}+`,
+  endurance: (v) => `Выносливость ${v}+`,
+  charisma: (v) => `Харизма ${v}+`,
+  luck: (v) => `Удача ${v}+`,
+  // Ресурсы
+  health: (v) => `Здоровье ${v}+`,
+  mana: (v) => `Мана ${v}+`,
+  energy: (v) => `Энергия ${v}+`,
+  stamina: (v) => `Выносливость ${v}+`,
+  // Боевые характеристики
+  damage: (v) => `Урон ${v}+`,
+  dodge: (v) => `Уклонение ${v}%+`,
+  critical_hit_chance: (v) => `Шанс крита ${v}%+`,
+  critical_damage: (v) => `Крит. урон ${v}+`,
+  // Сопротивления
+  res_effects: (v) => `Сопр. эффектам ${v}%+`,
+  res_physical: (v) => `Сопр. физическому ${v}%+`,
+  res_catting: (v) => `Сопр. режущему ${v}%+`,
+  res_crushing: (v) => `Сопр. дробящему ${v}%+`,
+  res_piercing: (v) => `Сопр. колющему ${v}%+`,
+  res_magic: (v) => `Сопр. магии ${v}%+`,
+  res_fire: (v) => `Сопр. огню ${v}%+`,
+  res_ice: (v) => `Сопр. льду ${v}%+`,
+  res_watering: (v) => `Сопр. воде ${v}%+`,
+  res_electricity: (v) => `Сопр. электричеству ${v}%+`,
+  res_sainting: (v) => `Сопр. святому ${v}%+`,
+  res_wind: (v) => `Сопр. ветру ${v}%+`,
+  res_damning: (v) => `Сопр. тьме ${v}%+`,
+  // Уровень персонажа
+  character_level: (v) => `Достичь ${v} уровня`,
+  // Специальные типы
+  admin_grant: () => 'Выдаётся администратором',
+  quest: (v) => `Выполнить квест (${v})`,
+};
+
+const formatConditionText = (statKey: string, value: number): string => {
+  const formatter = CONDITION_DESCRIPTIONS[statKey];
+  return formatter ? formatter(value) : `${statKey} ≥ ${value}`;
 };
 
 const formatBonusValue = (key: string, value: number): string => {
@@ -218,8 +258,7 @@ const PerkDetailModal = ({ perk, onClose }: PerkDetailModalProps) => {
                         <div>
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-white/70 text-sm">
-                              {CONDITION_LABELS[statKey] ?? statKey}{' '}
-                              <span className="text-white/40">{condition.operator} {condition.value}</span>
+                              {formatConditionText(statKey, condition.value)}
                             </span>
                             <span className={`text-xs font-medium ${isMet ? 'text-emerald-400' : 'text-white/40'}`}>
                               {current} / {required}
