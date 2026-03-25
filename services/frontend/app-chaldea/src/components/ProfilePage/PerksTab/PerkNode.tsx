@@ -1,3 +1,4 @@
+import { isPerkActive } from '../../../types/perks';
 import type { CharacterPerk } from '../../../types/perks';
 
 interface PerkNodeProps {
@@ -41,14 +42,14 @@ const RARITY_ACCENT: Record<string, string> = {
 };
 
 const PerkNode = ({ perk, x, y, categoryColor, onSelect }: PerkNodeProps) => {
-  const unlocked = perk.is_unlocked;
-  const isLegendaryLocked = perk.rarity === 'legendary' && !unlocked;
+  const active = isPerkActive(perk);
+  const isLegendaryLocked = perk.rarity === 'legendary' && !active;
 
   const rune = RUNES[(perk.id ?? 0) % RUNES.length];
 
-  // Progress 0..1 for locked perks
+  // Progress 0..1 for inactive perks
   let progressPct = 0;
-  if (!unlocked && perk.conditions.length > 0) {
+  if (!active && perk.conditions.length > 0) {
     const progs = perk.conditions.map((c) => {
       const key = c.stat ?? c.type;
       const entry = perk.progress?.[key];
@@ -64,16 +65,16 @@ const PerkNode = ({ perk, x, y, categoryColor, onSelect }: PerkNodeProps) => {
   const clipId = `perk-fill-${perk.id}`;
   const glowColor = accent || categoryColor;
 
-  const borderColor = unlocked
+  const borderColor = active
     ? categoryColor
     : 'rgba(255,255,255,0.12)';
-  const fillColor = unlocked
+  const fillColor = active
     ? categoryColor.replace(/[\d.]+\)$/, '0.15)')
     : 'rgba(255,255,255,0.03)';
 
   // Rune colors: dim base + bright fill clipped by progress
   const runeDim = 'rgba(255,255,255,0.12)';
-  const runeBright = unlocked
+  const runeBright = active
     ? 'rgba(255,255,255,0.9)'
     : categoryColor.replace(/[\d.]+\)$/, '0.7)');
 
@@ -90,8 +91,8 @@ const PerkNode = ({ perk, x, y, categoryColor, onSelect }: PerkNodeProps) => {
       className="cursor-pointer"
       onClick={() => onSelect(perk)}
     >
-      {/* Glow filter for unlocked */}
-      {unlocked && (
+      {/* Glow filter for active perks */}
+      {active && (
         <defs>
           <filter id={filterId} x="-80%" y="-80%" width="260%" height="260%">
             <feDropShadow
@@ -104,8 +105,8 @@ const PerkNode = ({ perk, x, y, categoryColor, onSelect }: PerkNodeProps) => {
         </defs>
       )}
 
-      {/* Clip path for progress fill (locked only) */}
-      {!unlocked && progressPct > 0 && (
+      {/* Clip path for progress fill (inactive only) */}
+      {!active && progressPct > 0 && (
         <defs>
           <clipPath id={clipId}>
             <rect
@@ -123,13 +124,13 @@ const PerkNode = ({ perk, x, y, categoryColor, onSelect }: PerkNodeProps) => {
         points={hexPoints(x, y, HEX_SIZE)}
         fill={fillColor}
         stroke={borderColor}
-        strokeWidth={unlocked ? 2.5 : 1.5}
-        filter={unlocked ? `url(#${filterId})` : undefined}
-        opacity={unlocked ? 1 : 0.5}
+        strokeWidth={active ? 2.5 : 1.5}
+        filter={active ? `url(#${filterId})` : undefined}
+        opacity={active ? 1 : 0.5}
       />
 
-      {/* Inner decorative hexagon (unlocked only) */}
-      {unlocked && (
+      {/* Inner decorative hexagon (active only) */}
+      {active && (
         <polygon
           points={hexPoints(x, y, HEX_SIZE * 0.65)}
           fill="none"
@@ -147,17 +148,17 @@ const PerkNode = ({ perk, x, y, categoryColor, onSelect }: PerkNodeProps) => {
         dominantBaseline="central"
         fontSize={runeFontSize}
         fontWeight="bold"
-        fill={unlocked ? runeBright : runeDim}
+        fill={active ? runeBright : runeDim}
         className="pointer-events-none select-none"
-        style={unlocked ? {
+        style={active ? {
           textShadow: `0 0 8px ${glowColor}, 0 0 16px ${glowColor}40`,
         } : undefined}
       >
         {runeSymbol}
       </text>
 
-      {/* Rune: bright fill layer clipped by progress (locked + has progress) */}
-      {!unlocked && progressPct > 0 && (
+      {/* Rune: bright fill layer clipped by progress (inactive + has progress) */}
+      {!active && progressPct > 0 && (
         <text
           x={x}
           y={y + 1}

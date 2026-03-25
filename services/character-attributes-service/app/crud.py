@@ -316,7 +316,7 @@ def update_perk(db: Session, perk_id: int, perk_data: schemas.PerkUpdate):
 
     for field, value in update_dict.items():
         if field == "conditions":
-            setattr(perk, field, [c.dict() for c in value])
+            setattr(perk, field, [c if isinstance(c, dict) else c.dict() for c in value])
         elif field == "bonuses":
             new_flat = value.flat if hasattr(value, "flat") else value.get("flat", {})
             if hasattr(new_flat, "copy"):

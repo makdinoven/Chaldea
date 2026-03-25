@@ -1,5 +1,6 @@
 import React, { useMemo, useId } from 'react';
 import { motion } from 'motion/react';
+import { isPerkActive } from '../../../types/perks';
 import type { CharacterPerk } from '../../../types/perks';
 import PerkNode, { HEX_SIZE } from './PerkNode';
 
@@ -224,6 +225,10 @@ function trimLine(
 /**
  * Build constellation edges connecting nodes within each category.
  * Lines are trimmed to hex borders and carry unlock state for styling.
+ *
+ * Unlocked perks draw bright edges to their nearest neighbours regardless
+ * of ring order — so an unlocked node in ring 3 still lights up even when
+ * intermediate rings are locked.
  */
 function computeEdges(
   categories: Array<[string, CharacterPerk[]]>,
@@ -232,6 +237,17 @@ function computeEdges(
 ): EdgeData[] {
   const edges: EdgeData[] = [];
   const avoidR = HEX_SIZE + 2;
+
+  // Track existing edges to avoid duplicates (key = sorted perk ids, 0 = center)
+  const edgeSet = new Set<string>();
+  const eKey = (a: number, b: number) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+
+  const pushEdge = (e: EdgeData, idA: number, idB: number) => {
+    const k = eKey(idA, idB);
+    if (edgeSet.has(k)) return;
+    edgeSet.add(k);
+    edges.push(e);
+  };
 
   for (const [cat] of categories) {
     const catNodes = positions.filter((p) => p.category === cat);
@@ -258,11 +274,11 @@ function computeEdges(
     }
     if (currentRing.length > 0) byRing.push(currentRing);
 
-    // Center → first ring (center always counts as "unlocked")
+    // Center → first ring (center always counts as "active")
     for (const node of (byRing[0] ?? [])) {
       const [tx1, ty1, tx2, ty2] = trimLine(center, center, node.x, node.y, CENTER_HEX_SIZE, HEX_SIZE);
-      const state = node.perk.is_unlocked ? 'both' : 'one';
-      edges.push({ x1: tx1, y1: ty1, x2: tx2, y2: ty2, cat, state });
+      const state = isPerkActive(node.perk) ? 'both' : 'one';
+      pushEdge({ x1: tx1, y1: ty1, x2: tx2, y2: ty2, cat, state }, 0, node.perk.id);
     }
 
     // Ring N → Ring N+1
@@ -273,10 +289,10 @@ function computeEdges(
 
       const addEdge = (a: NodePos, b: NodePos) => {
         const [tx1, ty1, tx2, ty2] = trimLine(a.x, a.y, b.x, b.y, HEX_SIZE, HEX_SIZE);
-        const aUn = a.perk.is_unlocked;
-        const bUn = b.perk.is_unlocked;
-        const state = aUn && bUn ? 'both' : (aUn || bUn ? 'one' : 'none');
-        edges.push({ x1: tx1, y1: ty1, x2: tx2, y2: ty2, cat, state });
+        const aAct = isPerkActive(a.perk);
+        const bAct = isPerkActive(b.perk);
+        const state = aAct && bAct ? 'both' : (aAct || bAct ? 'one' : 'none');
+        pushEdge({ x1: tx1, y1: ty1, x2: tx2, y2: ty2, cat, state }, a.perk.id, b.perk.id);
       };
 
       for (const a of ringA) {
@@ -304,6 +320,30 @@ function computeEdges(
         }
         addEdge(bestA, b);
       });
+    }
+
+    // ── Proximity edges for active perks ──
+    // Each active perk draws bright lines to its 2 nearest neighbours
+    // in the same category, regardless of ring structure.
+    for (const node of catNodes) {
+      if (!isPerkActive(node.perk)) continue;
+
+      const nearest = catNodes
+        .filter((n) => n !== node)
+        .map((n) => ({ n, d: Math.hypot(node.x - n.x, node.y - n.y) }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 2);
+
+      for (const { n: neighbor } of nearest) {
+        const [tx1, ty1, tx2, ty2] = trimLine(
+          node.x, node.y, neighbor.x, neighbor.y, HEX_SIZE, HEX_SIZE,
+        );
+        const state = isPerkActive(neighbor.perk) ? 'both' : 'one';
+        pushEdge(
+          { x1: tx1, y1: ty1, x2: tx2, y2: ty2, cat, state },
+          node.perk.id, neighbor.perk.id,
+        );
+      }
     }
   }
 
@@ -457,14 +497,14 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
 
               {/* Edges (above center hex, behind perk nodes) */}
               {edges.map((e, i) => {
+                // Only render edges connected to at least one active perk
+                if (e.state === 'none') return null;
+
                 const isBright = e.state === 'both';
-                const isDim = e.state === 'one';
                 const stroke = isBright
                   ? `url(#edge-bright-${e.cat})`
-                  : isDim
-                    ? `url(#edge-dim-${e.cat})`
-                    : 'rgba(255,255,255,0.12)';
-                const width = isBright ? 2.5 : isDim ? 1.5 : 1;
+                  : `url(#edge-dim-${e.cat})`;
+                const width = isBright ? 2.5 : 1.5;
 
                 // Nudge perfectly vertical/horizontal lines so SVG gradient
                 // bounding box isn't degenerate (zero width/height kills gradient)
@@ -535,9 +575,10 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
                   </div>
                   <div className="space-y-2">
                     {catPerks.map((perk) => {
-                      const isLL = perk.rarity === 'legendary' && !perk.is_unlocked;
+                      const active = isPerkActive(perk);
+                      const isLL = perk.rarity === 'legendary' && !active;
                       let prog = 0;
-                      if (!perk.is_unlocked && perk.conditions.length > 0) {
+                      if (!active && perk.conditions.length > 0) {
                         const ps = perk.conditions.map((c) => {
                           const entry = perk.progress?.[c.stat ?? c.type];
                           return entry ? Math.min(1, entry.current / entry.required) : 0;
@@ -551,32 +592,32 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
                           className={`w-full p-3 rounded-card border text-left transition-all duration-200 cursor-pointer
                             ${RARITY_BORDER[perk.rarity] ?? 'border-white/10'}
                             ${RARITY_BG[perk.rarity] ?? ''}
-                            ${perk.is_unlocked ? 'opacity-100' : 'opacity-60'} hover:opacity-100`}
+                            ${active ? 'opacity-100' : 'opacity-60'} hover:opacity-100`}
                         >
                           <div className="flex items-center gap-3">
                             <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 border
                               ${perk.rarity === 'legendary' ? 'border-gold/30' : perk.rarity === 'rare' ? 'border-purple-400/30' : 'border-white/15'}
-                              ${perk.is_unlocked ? 'bg-white/10' : 'bg-white/5'}`}>
-                              <span className={`text-sm ${perk.is_unlocked ? 'text-white' : 'text-white/30'}`}>
+                              ${active ? 'bg-white/10' : 'bg-white/5'}`}>
+                              <span className={`text-sm ${active ? 'text-white' : 'text-white/30'}`}>
                                 {isLL ? '?' : perk.name.slice(0, 2).toUpperCase()}
                               </span>
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className={`text-sm font-medium truncate ${perk.is_unlocked ? 'text-white' : 'text-white/50'}`}>
+                              <p className={`text-sm font-medium truncate ${active ? 'text-white' : 'text-white/50'}`}>
                                 {isLL ? '???' : perk.name}
                               </p>
                               <div className="flex items-center gap-2 mt-0.5">
                                 <span className="text-[10px] text-white/30">{RARITY_LABELS[perk.rarity] ?? perk.rarity}</span>
-                                {!perk.is_unlocked && prog > 0 && <span className="text-[10px] text-white/40">{prog}%</span>}
+                                {!active && prog > 0 && <span className="text-[10px] text-white/40">{prog}%</span>}
                               </div>
                             </div>
                             <div className="flex-shrink-0">
-                              {perk.is_unlocked
+                              {active
                                 ? <div className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
                                 : <div className="w-2.5 h-2.5 rounded-full bg-white/15" />}
                             </div>
                           </div>
-                          {!perk.is_unlocked && prog > 0 && (
+                          {!active && prog > 0 && (
                             <div className="mt-2 w-full h-1 rounded-full bg-white/10 overflow-hidden">
                               <div className="h-full rounded-full bg-site-blue/50 transition-all duration-300" style={{ width: `${prog}%` }} />
                             </div>

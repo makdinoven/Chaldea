@@ -51,3 +51,18 @@ export interface PerksResponse {
   character_id: number;
   perks: CharacterPerk[];
 }
+
+/**
+ * A perk is "visually active" when it's either officially unlocked
+ * OR all its conditions are met (progress >= required for every condition).
+ */
+export function isPerkActive(perk: CharacterPerk): boolean {
+  if (perk.is_unlocked) return true;
+  if (perk.conditions.length === 0) return false;
+  return perk.conditions.every((c) => {
+    const key = c.stat ?? c.type;
+    const entry = perk.progress?.[key];
+    if (!entry) return false;
+    return entry.current >= entry.required;
+  });
+}

@@ -149,26 +149,34 @@ def admin_update_perk(
 
     # If flat bonuses changed and perk has holders, reverse old and apply new
     if old_flat is not None:
-        holders = db.query(models.CharacterPerk).filter(
-            models.CharacterPerk.perk_id == perk_id
-        ).all()
-        new_flat = perk.bonuses.get("flat", {}) if perk.bonuses else {}
-        for holder in holders:
-            # Reverse old bonuses
-            old_modifiers = {}
-            for key, value in old_flat.items():
-                if key in crud.VALID_FLAT_BONUS_KEYS and value != 0:
-                    old_modifiers[key] = -value
-            if old_modifiers:
-                crud._apply_modifiers_internal(db, holder.character_id, old_modifiers)
-            # Apply new bonuses
-            new_modifiers = {}
-            for key, value in new_flat.items():
-                if key in crud.VALID_FLAT_BONUS_KEYS and value != 0:
-                    new_modifiers[key] = value
-            if new_modifiers:
-                crud._apply_modifiers_internal(db, holder.character_id, new_modifiers)
-        db.commit()
+        try:
+            holders = db.query(models.CharacterPerk).filter(
+                models.CharacterPerk.perk_id == perk_id
+            ).all()
+            new_flat = perk.bonuses.get("flat", {}) if perk.bonuses else {}
+            for holder in holders:
+                # Reverse old bonuses
+                old_modifiers = {}
+                for key, value in old_flat.items():
+                    if key in crud.VALID_FLAT_BONUS_KEYS and value != 0:
+                        old_modifiers[key] = -value
+                if old_modifiers:
+                    crud._apply_modifiers_internal(db, holder.character_id, old_modifiers)
+                # Apply new bonuses
+                new_modifiers = {}
+                for key, value in new_flat.items():
+                    if key in crud.VALID_FLAT_BONUS_KEYS and value != 0:
+                        new_modifiers[key] = value
+                if new_modifiers:
+                    crud._apply_modifiers_internal(db, holder.character_id, new_modifiers)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Ошибка при пересчёте бонусов перка {perk_id}: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Перк обновлён, но не удалось пересчитать бонусы у персонажей",
+            )
 
     return perk
 
