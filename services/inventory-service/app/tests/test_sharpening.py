@@ -327,8 +327,8 @@ class TestPointCostExistingStat:
 
 class TestPointCostNewStat:
 
-    def test_new_stat_costs_2_points(self, sharpen_env):
-        """Sharpening a zero base stat costs 2 points."""
+    def test_new_stat_costs_1_point(self, sharpen_env):
+        """Sharpening a zero base stat costs 1 point."""
         c = sharpen_env["client"]
         weapon_inv = sharpen_env["weapon_inv"]
         ws_inv = sharpen_env["ws_inv"]
@@ -346,8 +346,8 @@ class TestPointCostNewStat:
         assert resp.status_code == 200
         data = resp.json()
         assert data["success"] is True
-        assert data["point_cost"] == 2
-        assert data["points_spent"] == 2
+        assert data["point_cost"] == 1
+        assert data["points_spent"] == 1
 
 
 # ===========================================================================
@@ -415,18 +415,18 @@ class TestPointsExhausted:
 
 class TestNotEnoughPointsForNewStat:
 
-    def test_14_points_spent_new_stat_costs_2(self, sharpen_env):
-        """14 points spent, trying to add new stat (costs 2). Expect 400."""
+    def test_15_points_spent_new_stat_rejected(self, sharpen_env):
+        """15 points spent, trying to add new stat (costs 1). Expect 400."""
         db = sharpen_env["db"]
         c = sharpen_env["client"]
         weapon_inv = sharpen_env["weapon_inv"]
         ws_inv = sharpen_env["ws_inv"]
 
-        weapon_inv.enhancement_points_spent = 14
-        weapon_inv.enhancement_bonuses = json.dumps({"strength_modifier": 5, "damage_modifier": 5})
+        weapon_inv.enhancement_points_spent = 15
+        weapon_inv.enhancement_bonuses = json.dumps({"strength_modifier": 5, "damage_modifier": 5, "endurance_modifier": 5})
         db.commit()
 
-        # agility_modifier=0 => new stat => costs 2 => 14+2=16 > 15
+        # agility_modifier=0 => new stat => costs 1 => 15+1=16 > 15
         with patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock):
             resp = c.post("/inventory/crafting/1/sharpen", json={
                 "inventory_item_id": weapon_inv.id,
@@ -651,10 +651,10 @@ class TestSharpenInfoEndpoint:
         assert strength_stat["base_value"] == 5.0
         assert strength_stat["can_sharpen"] is True
 
-        # Check that agility_modifier is new with cost 2
+        # Check that agility_modifier is new with cost 1
         agility_stat = next(s for s in data["stats"] if s["field"] == "agility_modifier")
         assert agility_stat["is_existing"] is False
-        assert agility_stat["point_cost"] == 2
+        assert agility_stat["point_cost"] == 1
 
     def test_sharpen_info_whetstones_show_correct_chances(self, sharpen_env):
         """Whetstones section shows correct success chances."""

@@ -568,7 +568,7 @@ class TestBattleLock:
 
         # Create active battle with character as participant
         db.execute(text(
-            "INSERT INTO battles (id, status) VALUES (1, 'active')"
+            "INSERT INTO battles (id, status) VALUES (1, 'in_progress')"
         ))
         db.execute(text(
             "INSERT INTO battle_participants (id, battle_id, character_id) VALUES (1, 1, 1)"
