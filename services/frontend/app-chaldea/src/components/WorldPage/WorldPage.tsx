@@ -297,27 +297,32 @@ const WorldPage = () => {
     }
   }, [viewLevel, areaDetails, countryDetails, regionDetails]);
 
+  // Set of all district IDs that belong inside a city map (recursively).
+  // Extracted as a standalone memo so it can be reused by edge and district filters.
+  const cityMapAllIds: Set<number> = useMemo(() => {
+    if (!regionDetails) return new Set();
+    const cityMapRootIds = new Set(
+      regionDetails.districts.filter((d) => d.map_image_url).map((d) => d.id),
+    );
+    const allIds = new Set(cityMapRootIds);
+    const collectDescendants = (parentId: number) => {
+      for (const d of regionDetails.districts) {
+        if (d.parent_district_id === parentId && !allIds.has(d.id)) {
+          allIds.add(d.id);
+          collectDescendants(d.id);
+        }
+      }
+    };
+    for (const rootId of cityMapRootIds) collectDescendants(rootId);
+    return allIds;
+  }, [regionDetails]);
+
   // Build unified map items from backend map_items or fallback to client-side construction
   const regionMapItems: MapItem[] = useMemo(() => {
     if (!regionDetails) return [];
 
     // Use backend map_items if available, but filter out items that belong to districts with city maps
     if (regionDetails.map_items && regionDetails.map_items.length > 0) {
-      // Collect ALL district IDs that belong inside a city map (recursively)
-      const cityMapRootIds = new Set(
-        regionDetails.districts.filter((d) => d.map_image_url).map((d) => d.id),
-      );
-      const cityMapAllIds = new Set(cityMapRootIds);
-      const collectDescendants = (parentId: number) => {
-        for (const d of regionDetails.districts) {
-          if (d.parent_district_id === parentId && !cityMapAllIds.has(d.id)) {
-            cityMapAllIds.add(d.id);
-            collectDescendants(d.id);
-          }
-        }
-      };
-      for (const rootId of cityMapRootIds) collectDescendants(rootId);
-
       return regionDetails.map_items.filter((item) => {
         if (item.type === 'location' && item.district_id && cityMapAllIds.has(item.district_id)) {
           return false;
@@ -330,26 +335,12 @@ const WorldPage = () => {
     }
 
     // Fallback: build client-side from districts + locations
-    // Also collect city-map district IDs to filter them out
-    const cityMapRootIdsFb = new Set(
-      regionDetails.districts.filter((d) => d.map_image_url).map((d) => d.id),
-    );
-    const cityMapAllIdsFb = new Set(cityMapRootIdsFb);
-    const collectDescFb = (parentId: number) => {
-      for (const d of regionDetails.districts) {
-        if (d.parent_district_id === parentId && !cityMapAllIdsFb.has(d.id)) {
-          cityMapAllIdsFb.add(d.id);
-          collectDescFb(d.id);
-        }
-      }
-    };
-    for (const rootId of cityMapRootIdsFb) collectDescFb(rootId);
-
+    // Uses shared cityMapAllIds memo to filter out city-map districts
     const items: MapItem[] = [];
 
     for (const district of regionDetails.districts) {
       // Skip sub-districts that belong inside a city map
-      if (district.parent_district_id && cityMapAllIdsFb.has(district.parent_district_id)) {
+      if (district.parent_district_id && cityMapAllIds.has(district.parent_district_id)) {
         continue;
       }
 
@@ -368,7 +359,7 @@ const WorldPage = () => {
       }
 
       // Skip locations if this district is a city-map district
-      if (cityMapAllIdsFb.has(district.id)) {
+      if (cityMapAllIds.has(district.id)) {
         continue;
       }
 
@@ -390,7 +381,45 @@ const WorldPage = () => {
     }
 
     return items;
-  }, [regionDetails]);
+  }, [regionDetails, cityMapAllIds]);
+
+  // Set of location IDs visible on the region map (for edge filtering)
+  const regionLocationIds: Set<number> = useMemo(() => {
+    return new Set(regionMapItems.filter((item) => item.type === 'location').map((item) => item.id));
+  }, [regionMapItems]);
+
+  // Filter neighbor edges: keep only edges where both endpoints are region-level locations
+  const regionNeighborEdges = useMemo(() => {
+    if (!regionDetails) return [];
+    const edges = regionDetails.neighbor_edges ?? [];
+    return edges.filter((e) => regionLocationIds.has(e.from_id) && regionLocationIds.has(e.to_id));
+  }, [regionDetails, regionLocationIds]);
+
+  // Filter districts: exclude city-map sub-districts, strip locations from city-map root districts
+  const regionDistricts = useMemo(() => {
+    if (!regionDetails) return [];
+    return regionDetails.districts
+      .filter((d) => {
+        // Exclude sub-districts whose parent is a city-map district
+        if (d.parent_district_id && cityMapAllIds.has(d.parent_district_id)) {
+          return false;
+        }
+        return true;
+      })
+      .map((d) => ({
+        id: d.id,
+        x: d.x,
+        y: d.y,
+        locations: cityMapAllIds.has(d.id)
+          ? [] // City-map root district: don't pass its locations to region map
+          : d.locations.map((l) => ({
+              id: l.id,
+              name: l.name,
+              map_x: l.map_x,
+              map_y: l.map_y,
+            })),
+      }));
+  }, [regionDetails, cityMapAllIds]);
 
   // City map image URL
   const cityMapImageUrl = useMemo(() => {
@@ -647,18 +676,8 @@ const WorldPage = () => {
               <RegionInteractiveMap
                 mapImageUrl={regionDetails.map_image_url}
                 mapItems={regionMapItems}
-                neighborEdges={regionDetails.neighbor_edges ?? []}
-                districts={regionDetails.districts.map((d) => ({
-                  id: d.id,
-                  x: d.x,
-                  y: d.y,
-                  locations: d.locations.map((l) => ({
-                    id: l.id,
-                    name: l.name,
-                    map_x: l.map_x,
-                    map_y: l.map_y,
-                  })),
-                }))}
+                neighborEdges={regionNeighborEdges}
+                districts={regionDistricts}
                 currentLocationId={currentLocationId}
                 onLocationClick={handleLocationClick}
                 onDistrictClick={handleDistrictClick}
