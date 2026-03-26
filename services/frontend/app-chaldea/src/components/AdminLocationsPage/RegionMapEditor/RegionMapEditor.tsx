@@ -1013,7 +1013,7 @@ const RegionMapEditor = ({
         {/* District map content: left panel + map */}
         <div className="flex flex-col md:flex-row">
           {/* Left panel — items belonging to this district */}
-          <div className="w-full md:w-[250px] flex-shrink-0 border-b md:border-b-0 md:border-r border-white/10 p-3 overflow-y-auto max-h-[600px]">
+          <div className="w-full md:w-[250px] flex-shrink-0 border-b md:border-b-0 md:border-r border-white/10 p-3 overflow-y-auto gold-scrollbar max-h-[600px]">
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs text-[#8ab3d5] uppercase tracking-wide">
                 Элементы города
@@ -1556,7 +1556,7 @@ const RegionMapEditor = ({
       {/* Main content: left panel + map */}
       <div className="flex flex-col md:flex-row">
         {/* Left panel — item list */}
-        <div className="w-full md:w-[250px] flex-shrink-0 border-b md:border-b-0 md:border-r border-white/10 p-3 overflow-y-auto max-h-[600px]">
+        <div className="w-full md:w-[250px] flex-shrink-0 border-b md:border-b-0 md:border-r border-white/10 p-3 overflow-y-auto gold-scrollbar max-h-[600px]">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs text-[#8ab3d5] uppercase tracking-wide">
               Элементы

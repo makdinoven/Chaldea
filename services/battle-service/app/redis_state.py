@@ -89,6 +89,7 @@ async def init_battle_state(
             "cooldowns"  : {},
             "total_damage_dealt": 0,
             "total_damage_received": 0,
+            "equipment_durability": p.get("equipment_durability", {}),
             }
     for p in participants_payload
         },

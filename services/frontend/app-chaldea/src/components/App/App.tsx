@@ -46,6 +46,10 @@ import ArchiveArticlePage from "../pages/ArchivePage/ArchiveArticlePage";
 import ArchiveAdminPage from "../Admin/ArchiveAdminPage/ArchiveAdminPage";
 import AdminPerksPage from "../Admin/PerksPage/AdminPerksPage";
 import AdminTitlesPage from "../Admin/TitlesPage/AdminTitlesPage";
+import ProfessionsAdminPage from "../Admin/ProfessionsAdminPage/ProfessionsAdminPage";
+import RecipesAdminPage from "../Admin/RecipesAdminPage/RecipesAdminPage";
+import CraftItemsAdminPage from "../Admin/CraftItemsAdminPage/CraftItemsAdminPage";
+import { CRAFT_ITEM_TYPES } from "../ItemsAdminPage/ItemsAdminPage";
 
 const App = () => {
   const dispatch = useAppDispatch();
@@ -116,7 +120,12 @@ const App = () => {
             } />
             <Route path="admin/items" element={
               <ProtectedRoute requiredPermission="items:read">
-                <ItemsAdminPage />
+                <ItemsAdminPage excludeTypes={[...CRAFT_ITEM_TYPES]} />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/craft-items" element={
+              <ProtectedRoute requiredPermission="items:read">
+                <CraftItemsAdminPage />
               </ProtectedRoute>
             } />
             <Route path="admin/starter-kits" element={
@@ -193,6 +202,16 @@ const App = () => {
             <Route path="admin/titles" element={
               <ProtectedRoute requiredPermission="titles:read">
                 <AdminTitlesPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/professions" element={
+              <ProtectedRoute requiredPermission="professions:read">
+                <ProfessionsAdminPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/recipes" element={
+              <ProtectedRoute requiredPermission="professions:read">
+                <RecipesAdminPage />
               </ProtectedRoute>
             } />
             <Route path="chat/history" element={<ChatHistoryPage />} />

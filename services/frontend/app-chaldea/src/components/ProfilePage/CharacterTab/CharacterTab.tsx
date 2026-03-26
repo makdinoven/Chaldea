@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import InventoryDndProvider from '../InventoryTab/dnd/InventoryDndContext';
 import ItemContextMenu from '../InventoryTab/ItemContextMenu';
+import ItemDetailModal from '../InventoryTab/ItemDetailModal';
 import LeftColumn from './LeftColumn';
 import CenterColumn from './CenterColumn';
 import RightColumn from './RightColumn';
@@ -26,6 +27,7 @@ const CharacterTab = ({ characterId }: CharacterTabProps) => {
         </div>
 
         <ItemContextMenu characterId={characterId} />
+        <ItemDetailModal characterId={characterId} />
       </InventoryDndProvider>
     </motion.div>
   );

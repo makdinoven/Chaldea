@@ -248,6 +248,7 @@
     align-items: center;
     justify-content: center;
     z-index: 1000;
+    overflow: hidden;
   }
 
   /* --- Modal Content --- */
@@ -258,6 +259,7 @@
     padding: 2rem;
     max-width: 700px;
     width: 100%;
+    overflow-x: hidden;
     box-shadow: 0 0 12px rgba(0,0,0,0.2);
     animation: fade-in 0.2s ease-out;
   }

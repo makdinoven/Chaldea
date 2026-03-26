@@ -146,7 +146,7 @@ const PerkList = ({ onSelect, onCreate, onGrant }: PerkListProps) => {
       </div>
 
       {/* Table */}
-      <div className="gray-bg overflow-x-auto">
+      <div className="gray-bg overflow-x-hidden">
         <table className="w-full min-w-[700px]">
           <thead>
             <tr className="border-b border-white/10">

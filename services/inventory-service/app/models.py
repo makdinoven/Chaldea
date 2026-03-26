@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Enum, Boolean, DECIMAL, Text, ForeignKey, Float, DateTime
+from sqlalchemy import Column, Integer, String, Enum, Boolean, DECIMAL, Text, ForeignKey, Float, DateTime, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime
@@ -13,8 +13,10 @@ class Items(Base):
     item_level = Column(Integer, nullable=False,default=0)
     item_type = Column(Enum(
         'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet', 'main_weapon',
-        'consumable','additional_weapons', 'resource', 'scroll', 'misc', 'shield'
+        'consumable','additional_weapons', 'resource', 'scroll', 'misc', 'shield',
+        'blueprint', 'recipe', 'gem', 'rune'
     ), nullable=False)
+    blueprint_recipe_id = Column(Integer, ForeignKey('recipes.id', ondelete='SET NULL'), nullable=True)
     item_rarity = Column(Enum(
         'common', 'rare', 'epic', 'legendary', 'mythical', 'divine', 'demonic'
     ), nullable=False)
@@ -23,7 +25,23 @@ class Items(Base):
     is_unique = Column(Boolean, nullable=False, default=False)
     description = Column(Text)
 
+    whetstone_level = Column(Integer, nullable=True, default=None)  # 1=common(25%), 2=rare(50%), 3=legendary(75%)
+
+    essence_result_item_id = Column(Integer, ForeignKey('items.id', ondelete='SET NULL'), nullable=True)
+
+    socket_count = Column(Integer, default=0)  # Количество слотов для камней/рун
+
+    identify_level = Column(Integer, nullable=True, default=None)  # Scroll identify level: 1=common/rare, 2=epic/mythical, 3=legendary/divine/demonic
+
+    max_durability = Column(Integer, default=0, server_default="0")  # 0 means no durability system
+    repair_power = Column(Integer, nullable=True)  # For repair kits: 25/50/75/100 (% of max_durability restored)
+
     fast_slot_bonus = Column(Integer, default=0)  # Сколько дополнительных быстрых слотов даёт предмет
+
+    # Buff fields (for consumable buff items like XP books)
+    buff_type = Column(String(50), nullable=True)
+    buff_value = Column(Float, nullable=True)
+    buff_duration_minutes = Column(Integer, nullable=True)
 
     armor_subclass = Column(
         Enum('cloth', 'light_armor', 'medium_armor', 'heavy_armor', name="armor_subclass_enum"),
@@ -104,6 +122,8 @@ class Items(Base):
     # Связи
     inventories = relationship("CharacterInventory", back_populates="item")
     equipment_slots = relationship("EquipmentSlot", back_populates="item")
+    blueprint_recipe = relationship("Recipe", foreign_keys=[blueprint_recipe_id], back_populates="blueprint_items")
+    essence_result_item = relationship("Items", foreign_keys=[essence_result_item_id], remote_side=[id])
 
 # Определяем модель для хранения инвентаря персонажа
 class CharacterInventory(Base):
@@ -113,6 +133,11 @@ class CharacterInventory(Base):
     character_id = Column(Integer, nullable=False)
     item_id = Column(Integer, ForeignKey('items.id'), nullable=False)
     quantity = Column(Integer, default=1)
+    is_identified = Column(Boolean, default=True, server_default="1")
+    enhancement_points_spent = Column(Integer, default=0, server_default="0")
+    enhancement_bonuses = Column(Text, nullable=True)  # JSON string: {"strength_modifier": 3, "damage_modifier": 5}
+    socketed_gems = Column(Text, nullable=True)  # JSON string: [42, null, 15] — item IDs of gems in sockets
+    current_durability = Column(Integer, nullable=True)  # NULL = full, 0 = broken
 
     item = relationship("Items", back_populates="inventories")
 
@@ -135,6 +160,10 @@ class EquipmentSlot(Base):
     item = relationship("Items", back_populates="equipment_slots")
 
     is_enabled = Column(Boolean, default=True)
+    enhancement_points_spent = Column(Integer, default=0, server_default="0")
+    enhancement_bonuses = Column(Text, nullable=True)  # JSON string: {"strength_modifier": 3, "damage_modifier": 5}
+    socketed_gems = Column(Text, nullable=True)  # JSON string: [42, null, 15] — item IDs of gems in sockets
+    current_durability = Column(Integer, nullable=True)  # NULL = full, 0 = broken
 
 
 # Trade system models
@@ -171,4 +200,123 @@ class TradeOfferItem(Base):
 
     trade_offer = relationship("TradeOffer", back_populates="items")
     item = relationship("Items")
+
+
+# Profession system models
+class Profession(Base):
+    __tablename__ = "professions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, unique=True)
+    slug = Column(String(50), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    icon = Column(String(255), nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    ranks = relationship("ProfessionRank", back_populates="profession", cascade="all, delete-orphan")
+    recipes = relationship("Recipe", back_populates="profession", cascade="all, delete-orphan")
+    character_professions = relationship("CharacterProfession", back_populates="profession", cascade="all, delete-orphan")
+
+
+class ProfessionRank(Base):
+    __tablename__ = "profession_ranks"
+    __table_args__ = (
+        UniqueConstraint('profession_id', 'rank_number', name='uq_profession_rank'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    profession_id = Column(Integer, ForeignKey('professions.id', ondelete='CASCADE'), nullable=False)
+    rank_number = Column(Integer, nullable=False)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    required_experience = Column(Integer, nullable=False, default=0)
+    icon = Column(String(255), nullable=True)
+
+    profession = relationship("Profession", back_populates="ranks")
+
+
+class Recipe(Base):
+    __tablename__ = "recipes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    profession_id = Column(Integer, ForeignKey('professions.id', ondelete='CASCADE'), nullable=False)
+    required_rank = Column(Integer, nullable=False, default=1)
+    result_item_id = Column(Integer, ForeignKey('items.id', ondelete='CASCADE'), nullable=False)
+    result_quantity = Column(Integer, nullable=False, default=1)
+    rarity = Column(String(20), nullable=False, default='common')
+    xp_reward = Column(Integer, nullable=True)
+    icon = Column(String(255), nullable=True)
+    is_blueprint_recipe = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    auto_learn_rank = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    profession = relationship("Profession", back_populates="recipes")
+    result_item = relationship("Items", foreign_keys=[result_item_id])
+    ingredients = relationship("RecipeIngredient", back_populates="recipe", cascade="all, delete-orphan")
+    blueprint_items = relationship("Items", foreign_keys="[Items.blueprint_recipe_id]", back_populates="blueprint_recipe")
+    character_recipes = relationship("CharacterRecipe", back_populates="recipe", cascade="all, delete-orphan")
+
+
+class RecipeIngredient(Base):
+    __tablename__ = "recipe_ingredients"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    recipe_id = Column(Integer, ForeignKey('recipes.id', ondelete='CASCADE'), nullable=False)
+    item_id = Column(Integer, ForeignKey('items.id', ondelete='CASCADE'), nullable=False)
+    quantity = Column(Integer, nullable=False, default=1)
+
+    recipe = relationship("Recipe", back_populates="ingredients")
+    item = relationship("Items")
+
+
+class CharacterProfession(Base):
+    __tablename__ = "character_professions"
+    __table_args__ = (
+        UniqueConstraint('character_id', name='uq_character_profession'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    profession_id = Column(Integer, ForeignKey('professions.id', ondelete='CASCADE'), nullable=False)
+    current_rank = Column(Integer, nullable=False, default=1)
+    experience = Column(Integer, nullable=False, default=0)
+    chosen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    profession = relationship("Profession", back_populates="character_professions")
+
+
+class CharacterRecipe(Base):
+    __tablename__ = "character_recipes"
+    __table_args__ = (
+        UniqueConstraint('character_id', 'recipe_id', name='uq_character_recipe'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    recipe_id = Column(Integer, ForeignKey('recipes.id', ondelete='CASCADE'), nullable=False)
+    learned_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    recipe = relationship("Recipe", back_populates="character_recipes")
+
+
+class ActiveBuff(Base):
+    __tablename__ = "active_buffs"
+    __table_args__ = (
+        UniqueConstraint('character_id', 'buff_type', name='uq_character_buff_type'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    buff_type = Column(String(50), nullable=False)
+    value = Column(Float, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    source_item_name = Column(String(200), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 

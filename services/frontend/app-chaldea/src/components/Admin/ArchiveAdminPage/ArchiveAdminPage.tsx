@@ -194,7 +194,7 @@ const ArticlesList = ({ onEdit, onCreate }: ArticlesListProps) => {
       </div>
 
       {/* Table */}
-      <div className="gray-bg overflow-hidden overflow-x-auto">
+      <div className="gray-bg overflow-hidden overflow-x-hidden">
         {loading ? (
           <p className="text-center text-white/50 text-sm py-8">Загрузка...</p>
         ) : (

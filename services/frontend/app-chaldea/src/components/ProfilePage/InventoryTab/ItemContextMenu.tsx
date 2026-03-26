@@ -9,13 +9,18 @@ import {
   equipItem,
   unequipItem,
   useItem,
+  useBuffItem,
   dropItem,
+  learnRecipeFromItem,
+  identifyItem,
   fetchInventory,
+  openItemDetailModal,
   InventoryItem,
 } from '../../../redux/slices/profileSlice';
 import { BASE_URL } from '../../../api/api';
 import { EQUIPMENT_TYPES } from '../constants';
 import ConfirmationModal from '../../ui/ConfirmationModal';
+import RepairModal from './RepairModal';
 
 interface ItemContextMenuProps {
   characterId: number;
@@ -38,6 +43,13 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
     message: string;
     onConfirm: () => void;
   }>({ isOpen: false, message: '', onConfirm: () => {} });
+
+  // Repair modal state
+  const [repairModal, setRepairModal] = useState<{
+    isOpen: boolean;
+    inventoryItem: InventoryItem | null;
+    source: string;
+  }>({ isOpen: false, inventoryItem: null, source: 'inventory' });
 
   // Close on click outside
   useEffect(() => {
@@ -82,14 +94,63 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
     const itemType = item.item_type;
     const actions: MenuAction[] = [];
 
-    // Описание — placeholder for future
+    // Описание — open item detail modal
     actions.push({
       label: 'Описание',
       handler: () => {
         dispatch(closeContextMenu());
-        toast('Описание предмета скоро будет доступно');
+        dispatch(openItemDetailModal({
+          inventoryItem,
+          slotType: contextMenu.slotType,
+        }));
       },
     });
+
+    // Опознать — only for unidentified items not in equipment
+    if (!contextMenu.slotType && inventoryItem.is_identified === false) {
+      actions.push({
+        label: 'Опознать',
+        handler: () => {
+          dispatch(closeContextMenu());
+          setConfirmModal({
+            isOpen: true,
+            message: `Опознать "${item.name}"? Будет израсходован подходящий свиток идентификации.`,
+            onConfirm: () => {
+              setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+              handleAction(
+                () =>
+                  dispatch(
+                    identifyItem({
+                      characterId,
+                      inventoryItemId: inventoryItem.id,
+                    }),
+                  ),
+                'Предмет опознан!',
+              );
+            },
+          });
+        },
+      });
+    }
+
+    // Починить — for items with durability that need repair
+    const maxDurability = item.max_durability ?? 0;
+    const currentDurability = inventoryItem.current_durability;
+    const effectiveDurability = currentDurability ?? maxDurability;
+    if (maxDurability > 0 && effectiveDurability < maxDurability) {
+      actions.push({
+        label: 'Починить',
+        handler: () => {
+          dispatch(closeContextMenu());
+          const source = contextMenu.slotType ? 'equipment' : 'inventory';
+          setRepairModal({
+            isOpen: true,
+            inventoryItem,
+            source,
+          });
+        },
+      });
+    }
 
     // Снять — only when opened from an equipment/fast slot
     if (contextMenu.slotType) {
@@ -109,23 +170,67 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
         label: 'Надеть',
         handler: () =>
           handleAction(
-            () => dispatch(equipItem({ characterId, itemId: item.id })),
+            () => dispatch(equipItem({ characterId, itemId: item.id, inventoryItemId: inventoryItem.id })),
             'Предмет экипирован',
           ),
       });
     }
 
-    // Использовать — only for consumables
+    // Использовать — for buff items (books etc.) or regular consumables
     if (itemType === 'consumable') {
+      if (item.buff_type && item.buff_value != null && item.buff_duration_minutes != null) {
+        // Buff item — use dedicated buff endpoint
+        actions.push({
+          label: 'Использовать',
+          handler: () => {
+            dispatch(closeContextMenu());
+            (async () => {
+              try {
+                const result = await dispatch(
+                  useBuffItem({ characterId, inventoryItemId: inventoryItem.id }),
+                );
+                if (result.meta.requestStatus === 'rejected') {
+                  toast.error((result.payload as string) ?? 'Произошла ошибка');
+                } else {
+                  const data = result.payload as { message?: string };
+                  toast.success(data?.message ?? 'Бафф активирован');
+                }
+              } catch {
+                toast.error('Произошла ошибка');
+              }
+            })();
+          },
+        });
+      } else {
+        // Regular consumable
+        actions.push({
+          label: 'Использовать',
+          handler: () =>
+            handleAction(
+              () =>
+                dispatch(
+                  useItem({ characterId, itemId: item.id, quantity: 1 }),
+                ),
+              'Предмет использован',
+            ),
+        });
+      }
+    }
+
+    // Изучить — only for recipe items
+    if (itemType === 'recipe' && item.blueprint_recipe_id) {
       actions.push({
-        label: 'Использовать',
+        label: 'Изучить',
         handler: () =>
           handleAction(
             () =>
               dispatch(
-                useItem({ characterId, itemId: item.id, quantity: 1 }),
+                learnRecipeFromItem({
+                  characterId,
+                  recipeId: item.blueprint_recipe_id!,
+                }),
               ),
-            'Предмет использован',
+            'Рецепт изучен',
           ),
       });
     }
@@ -280,6 +385,16 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
         onConfirm={confirmModal.onConfirm}
         onCancel={closeConfirmModal}
       />
+
+      {repairModal.isOpen && repairModal.inventoryItem && (
+        <RepairModal
+          isOpen={repairModal.isOpen}
+          characterId={characterId}
+          inventoryItem={repairModal.inventoryItem}
+          source={repairModal.source}
+          onClose={() => setRepairModal({ isOpen: false, inventoryItem: null, source: 'inventory' })}
+        />
+      )}
     </>
   );
 };

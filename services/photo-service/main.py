@@ -16,7 +16,7 @@ from crud import (
     update_skill_rank_image, update_skill_image, update_item_image, update_rule_image,
     update_profile_bg_image, get_profile_bg_image, get_character_owner_id,
     update_race_image, update_subrace_image, update_location_icon,
-    update_mob_template_avatar,
+    update_mob_template_avatar, update_recipe_image,
 )
 from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime
 from fastapi.middleware.cors import CORSMiddleware
@@ -520,6 +520,29 @@ async def delete_profile_background(user_id: int, current_user = Depends(get_cur
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/photo/change_recipe_image")
+async def change_recipe_image(recipe_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
+    """
+    Загружает или заменяет иконку рецепта (Recipe.icon).
+    Также обновляет image у авто-созданного предмета-рецепта (item_type='recipe').
+    """
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("recipe_image", recipe_id, extension=result.extension)
+        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="recipes", content_type=result.content_type)
+
+        update_recipe_image(db, recipe_id, image_url)
+
+        return {
+            "message": "Изображение рецепта успешно загружено",
+            "image_url": image_url
+        }
+    except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

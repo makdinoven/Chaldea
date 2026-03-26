@@ -27,7 +27,24 @@ export interface ItemData {
   [key: string]: unknown;
 }
 
-const ItemsAdminPage = () => {
+/* ── Craft / Regular type constants ── */
+
+export const CRAFT_ITEM_TYPES = ["blueprint", "recipe", "gem", "rune", "resource"] as const;
+
+export const REGULAR_ITEM_TYPES = [
+  "head", "body", "cloak", "belt", "ring", "necklace", "bracelet",
+  "main_weapon", "additional_weapons", "shield", "consumable", "scroll", "misc",
+] as const;
+
+/* ── Props ── */
+
+interface ItemsAdminPageProps {
+  title?: string;
+  itemTypes?: string[];
+  excludeTypes?: string[];
+}
+
+const ItemsAdminPage = ({ title, itemTypes, excludeTypes }: ItemsAdminPageProps) => {
   const [editingId, setEditingId] = useState<number | undefined>();
   const [creating, setCreating] = useState(false);
   const [issueItem, setIssueItem] = useState<ItemData | undefined>();
@@ -46,6 +63,9 @@ const ItemsAdminPage = () => {
           onSelect={(id: number) => setEditingId(id)}
           onCreate={() => setCreating(true)}
           onIssue={(item: ItemData) => setIssueItem(item)}
+          title={title}
+          itemTypes={itemTypes}
+          excludeTypes={excludeTypes}
         />
       )}
       {(editingId || creating) && (

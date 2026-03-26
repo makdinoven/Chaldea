@@ -22,6 +22,7 @@ import classTreeAdminReducer from './slices/classTreeAdminSlice';
 import playerTreeReducer from './slices/playerTreeSlice';
 import mobsReducer from './slices/mobsSlice';
 import bestiaryReducer from './slices/bestiarySlice';
+import craftingReducer from './slices/craftingSlice';
 
 export const store = configureStore({
   reducer: {
@@ -47,6 +48,7 @@ export const store = configureStore({
     playerTree: playerTreeReducer,
     mobs: mobsReducer,
     bestiary: bestiaryReducer,
+    crafting: craftingReducer,
   },
 });
 

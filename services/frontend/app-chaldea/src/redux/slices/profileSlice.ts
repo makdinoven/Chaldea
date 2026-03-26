@@ -38,6 +38,16 @@ export interface ItemData {
   mana_recovery: number;
   stamina_recovery: number;
   fast_slot_bonus: number;
+  blueprint_recipe_id: number | null;
+  socket_count: number;
+  identify_level: number | null;
+  // Buff fields
+  buff_type: string | null;
+  buff_value: number | null;
+  buff_duration_minutes: number | null;
+  // Durability
+  max_durability: number;
+  repair_power: number | null;
 }
 
 export interface InventoryItem {
@@ -45,14 +55,29 @@ export interface InventoryItem {
   character_id: number;
   item_id: number;
   quantity: number;
+  is_identified: boolean;
+  enhancement_points_spent?: number;
+  socketed_gems: string | null;
+  current_durability: number | null;
   item: ItemData;
 }
 
+export interface IdentifyResult {
+  success: boolean;
+  item_name: string;
+  scroll_used: string;
+  item_rarity: string;
+}
+
 export interface EquipmentSlotData {
+  id?: number;
   character_id: number;
   slot_type: string;
   item_id: number | null;
   is_enabled: boolean;
+  enhancement_points_spent?: number;
+  socketed_gems: string | null;
+  current_durability: number | null;
   item: ItemData | null;
 }
 
@@ -148,6 +173,57 @@ export interface CharacterRaceInfo {
   level: number;
 }
 
+export interface ActiveBuff {
+  id: number;
+  character_id: number;
+  buff_type: string;
+  value: number;
+  expires_at: string;
+  source_item_name: string | null;
+  remaining_seconds: number;
+}
+
+export interface UseBuffItemResult {
+  success: boolean;
+  buff_type: string;
+  value: number;
+  duration_minutes: number;
+  source_item_name: string;
+  message: string;
+}
+
+export interface RepairItemRequest {
+  item_row_id: number;
+  repair_kit_item_id: number;
+  source?: string;
+}
+
+export interface RepairItemResult {
+  success: boolean;
+  new_durability: number;
+  max_durability: number;
+  repair_kit_consumed: boolean;
+}
+
+export interface ItemDetailResponse {
+  item: ItemData;
+  current_durability: number | null;
+  max_durability: number;
+  enhancement_points_spent: number;
+  enhancement_bonuses: Record<string, number> | null;
+  socketed_gems: (number | null)[] | null;
+  is_identified: boolean;
+  source: string;
+}
+
+export interface ItemDetailModalState {
+  isOpen: boolean;
+  inventoryItem: InventoryItem | null;
+  detail: ItemDetailResponse | null;
+  loading: boolean;
+  slotType?: string;
+}
+
 export interface ContextMenuState {
   isOpen: boolean;
   x: number;
@@ -167,8 +243,13 @@ export interface ProfileState {
   inventory: InventoryItem[];
   equipment: EquipmentSlotData[];
   fastSlots: FastSlotData[];
+  activeBuffs: ActiveBuff[];
   selectedCategory: string;
   contextMenu: ContextMenuState;
+  itemDetailModal: ItemDetailModalState;
+  itemDetail: ItemDetailResponse | null;
+  itemDetailLoading: boolean;
+  repairLoading: boolean;
   loading: boolean;
   error: string | null;
   avatarUploading: boolean;
@@ -184,6 +265,7 @@ const initialState: ProfileState = {
   inventory: [],
   equipment: [],
   fastSlots: [],
+  activeBuffs: [],
   selectedCategory: 'all',
   contextMenu: {
     isOpen: false,
@@ -191,6 +273,15 @@ const initialState: ProfileState = {
     y: 0,
     item: null,
   },
+  itemDetailModal: {
+    isOpen: false,
+    inventoryItem: null,
+    detail: null,
+    loading: false,
+  },
+  itemDetail: null,
+  itemDetailLoading: false,
+  repairLoading: false,
   loading: false,
   error: null,
   avatarUploading: false,
@@ -322,13 +413,15 @@ export const fetchFastSlots = createAsyncThunk<
 
 export const equipItem = createAsyncThunk<
   void,
-  { characterId: number; itemId: number },
+  { characterId: number; itemId: number; inventoryItemId?: number },
   { rejectValue: string; dispatch: AppDispatch }
 >(
   'profile/equipItem',
-  async ({ characterId, itemId }, thunkAPI) => {
+  async ({ characterId, itemId, inventoryItemId }, thunkAPI) => {
     try {
-      await axios.post(`/inventory/${characterId}/equip`, { item_id: itemId });
+      const payload: { item_id: number; inventory_item_id?: number } = { item_id: itemId };
+      if (inventoryItemId) payload.inventory_item_id = inventoryItemId;
+      await axios.post(`/inventory/${characterId}/equip`, payload);
       // Re-fetch inventory, equipment, and attributes after successful equip
       await Promise.all([
         thunkAPI.dispatch(fetchInventory(characterId)),
@@ -425,6 +518,147 @@ export const dropItem = createAsyncThunk<
   },
 );
 
+export const learnRecipeFromItem = createAsyncThunk<
+  void,
+  { characterId: number; recipeId: number },
+  { rejectValue: string; dispatch: AppDispatch }
+>(
+  'profile/learnRecipeFromItem',
+  async ({ characterId, recipeId }, thunkAPI) => {
+    try {
+      await axios.post(`/inventory/crafting/${characterId}/learn-from-item`, {
+        recipe_id: recipeId,
+      });
+      // Re-fetch inventory after consuming the item
+      await thunkAPI.dispatch(fetchInventory(characterId));
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        return thunkAPI.rejectWithValue(error.response.data.detail);
+      }
+      return thunkAPI.rejectWithValue('Не удалось изучить рецепт');
+    }
+  },
+);
+
+export const identifyItem = createAsyncThunk<
+  IdentifyResult,
+  { characterId: number; inventoryItemId: number },
+  { rejectValue: string; dispatch: AppDispatch }
+>(
+  'profile/identifyItem',
+  async ({ characterId, inventoryItemId }, thunkAPI) => {
+    try {
+      const response = await axios.post(`/inventory/${characterId}/identify`, {
+        inventory_item_id: inventoryItemId,
+      });
+      // Re-fetch inventory after identification
+      await thunkAPI.dispatch(fetchInventory(characterId));
+      return response.data;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        return thunkAPI.rejectWithValue(error.response.data.detail);
+      }
+      return thunkAPI.rejectWithValue('Не удалось опознать предмет');
+    }
+  },
+);
+
+export const fetchActiveBuffs = createAsyncThunk<
+  ActiveBuff[],
+  number,
+  { rejectValue: string }
+>(
+  'profile/fetchActiveBuffs',
+  async (characterId, thunkAPI) => {
+    try {
+      const response = await axios.get(`/inventory/${characterId}/active-buffs`);
+      return response.data.buffs;
+    } catch {
+      return thunkAPI.rejectWithValue('Не удалось загрузить активные баффы');
+    }
+  },
+);
+
+export const useBuffItem = createAsyncThunk<
+  UseBuffItemResult,
+  { characterId: number; inventoryItemId: number },
+  { rejectValue: string; dispatch: AppDispatch }
+>(
+  'profile/useBuffItem',
+  async ({ characterId, inventoryItemId }, thunkAPI) => {
+    try {
+      const response = await axios.post(`/inventory/${characterId}/use-buff-item`, {
+        inventory_item_id: inventoryItemId,
+      });
+      // Re-fetch inventory and active buffs on success
+      await Promise.all([
+        thunkAPI.dispatch(fetchInventory(characterId)),
+        thunkAPI.dispatch(fetchActiveBuffs(characterId)),
+      ]);
+      return response.data;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        return thunkAPI.rejectWithValue(error.response.data.detail);
+      }
+      return thunkAPI.rejectWithValue('Не удалось использовать предмет');
+    }
+  },
+);
+
+export const fetchItemDetail = createAsyncThunk<
+  ItemDetailResponse,
+  { characterId: number; inventoryItemId: number; source: string },
+  { rejectValue: string }
+>(
+  'profile/fetchItemDetail',
+  async ({ characterId, inventoryItemId, source }, thunkAPI) => {
+    try {
+      const response = await axios.get(
+        `/inventory/${characterId}/item-detail/${inventoryItemId}`,
+        { params: { source } },
+      );
+      return response.data;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        return thunkAPI.rejectWithValue(error.response.data.detail);
+      }
+      return thunkAPI.rejectWithValue('Не удалось загрузить информацию о предмете');
+    }
+  },
+);
+
+export const repairItem = createAsyncThunk<
+  RepairItemResult,
+  { characterId: number; payload: RepairItemRequest },
+  { rejectValue: string; dispatch: AppDispatch }
+>(
+  'profile/repairItem',
+  async ({ characterId, payload }, thunkAPI) => {
+    try {
+      const response = await axios.post(
+        `/inventory/${characterId}/repair-item`,
+        {
+          inventory_item_id: payload.item_row_id,
+          repair_kit_item_id: payload.repair_kit_item_id,
+          source: payload.source ?? 'inventory',
+        },
+      );
+      // Re-fetch inventory and equipment after repair
+      await Promise.all([
+        thunkAPI.dispatch(fetchInventory(characterId)),
+        thunkAPI.dispatch(fetchEquipment(characterId)),
+        thunkAPI.dispatch(fetchAttributes(characterId)),
+      ]);
+      return response.data;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        return thunkAPI.rejectWithValue(error.response.data.detail);
+      }
+      return thunkAPI.rejectWithValue('Не удалось починить предмет');
+    }
+  },
+);
+
 // --- Composite Thunk ---
 
 export const loadProfileData = createAsyncThunk<
@@ -443,6 +677,7 @@ export const loadProfileData = createAsyncThunk<
         thunkAPI.dispatch(fetchEquipment(characterId)),
         thunkAPI.dispatch(fetchFastSlots(characterId)),
         thunkAPI.dispatch(fetchRaceNames()),
+        thunkAPI.dispatch(fetchActiveBuffs(characterId)),
       ]);
     } catch {
       return thunkAPI.rejectWithValue('Не удалось загрузить данные профиля');
@@ -529,6 +764,27 @@ const profileSlice = createSlice({
         slotType: undefined,
       };
     },
+    openItemDetailModal(state, action: PayloadAction<{ inventoryItem: InventoryItem; slotType?: string }>) {
+      state.itemDetailModal = {
+        isOpen: true,
+        inventoryItem: action.payload.inventoryItem,
+        detail: null,
+        loading: true,
+        slotType: action.payload.slotType,
+      };
+    },
+    closeItemDetailModal(state) {
+      state.itemDetailModal = {
+        isOpen: false,
+        inventoryItem: null,
+        detail: null,
+        loading: false,
+      };
+    },
+    clearItemDetail(state) {
+      state.itemDetail = null;
+      state.itemDetailLoading = false;
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -602,6 +858,52 @@ const profileSlice = createSlice({
       .addCase(dropItem.rejected, (state, action) => {
         state.error = action.payload ?? 'Не удалось удалить предмет';
       })
+      // learnRecipeFromItem
+      .addCase(learnRecipeFromItem.rejected, (state, action) => {
+        state.error = action.payload ?? 'Не удалось изучить рецепт';
+      })
+      // identifyItem
+      .addCase(identifyItem.rejected, (state, action) => {
+        state.error = action.payload ?? 'Не удалось опознать предмет';
+      })
+      // fetchActiveBuffs
+      .addCase(fetchActiveBuffs.fulfilled, (state, action) => {
+        state.activeBuffs = action.payload;
+      })
+      .addCase(fetchActiveBuffs.rejected, (state, action) => {
+        state.error = action.payload ?? 'Не удалось загрузить активные баффы';
+      })
+      // useBuffItem
+      .addCase(useBuffItem.rejected, (state, action) => {
+        state.error = action.payload ?? 'Не удалось использовать предмет';
+      })
+      // fetchItemDetail
+      .addCase(fetchItemDetail.pending, (state) => {
+        state.itemDetailModal.loading = true;
+        state.itemDetailLoading = true;
+      })
+      .addCase(fetchItemDetail.fulfilled, (state, action) => {
+        state.itemDetailModal.loading = false;
+        state.itemDetailModal.detail = action.payload;
+        state.itemDetail = action.payload;
+        state.itemDetailLoading = false;
+      })
+      .addCase(fetchItemDetail.rejected, (state, action) => {
+        state.itemDetailModal.loading = false;
+        state.itemDetailLoading = false;
+        state.error = action.payload ?? 'Не удалось загрузить информацию о предмете';
+      })
+      // repairItem
+      .addCase(repairItem.pending, (state) => {
+        state.repairLoading = true;
+      })
+      .addCase(repairItem.fulfilled, (state) => {
+        state.repairLoading = false;
+      })
+      .addCase(repairItem.rejected, (state, action) => {
+        state.repairLoading = false;
+        state.error = action.payload ?? 'Не удалось починить предмет';
+      })
       // upgradeStats
       .addCase(upgradeStats.rejected, (state, action) => {
         state.error = action.payload ?? 'Не удалось распределить очки характеристик';
@@ -626,7 +928,7 @@ const profileSlice = createSlice({
   },
 });
 
-export const { setSelectedCategory, openContextMenu, closeContextMenu } = profileSlice.actions;
+export const { setSelectedCategory, openContextMenu, closeContextMenu, openItemDetailModal, closeItemDetailModal, clearItemDetail } = profileSlice.actions;
 
 // --- Selectors ---
 
@@ -640,8 +942,13 @@ export const selectSelectedCategory = (state: RootState) => state.profile.select
 export const selectContextMenu = (state: RootState) => state.profile.contextMenu;
 export const selectProfileLoading = (state: RootState) => state.profile.loading;
 export const selectProfileError = (state: RootState) => state.profile.error;
+export const selectActiveBuffs = (state: RootState) => state.profile.activeBuffs;
 export const selectAvatarUploading = (state: RootState) => state.profile.avatarUploading;
 export const selectRaceNamesMap = (state: RootState) => state.profile.raceNamesMap;
+export const selectItemDetailModal = (state: RootState) => state.profile.itemDetailModal;
+export const selectItemDetail = (state: RootState) => state.profile.itemDetail;
+export const selectItemDetailLoading = (state: RootState) => state.profile.itemDetailLoading;
+export const selectRepairLoading = (state: RootState) => state.profile.repairLoading;
 
 export const selectFilteredInventory = createSelector(
   [selectInventory, selectSelectedCategory],

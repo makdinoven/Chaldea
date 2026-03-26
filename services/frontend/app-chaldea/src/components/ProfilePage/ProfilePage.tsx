@@ -15,6 +15,8 @@ import PerksTab from './PerksTab/PerksTab';
 import QuestLogTab from './QuestLogTab';
 import BattlesTab from './BattlesTab/BattlesTab';
 import TitlesTab from './TitlesTab/TitlesTab';
+import CraftTab from './CraftTab/CraftTab';
+import ErrorBoundary from '../ui/ErrorBoundary';
 
 const ProfilePage = () => {
   const dispatch = useAppDispatch();
@@ -72,7 +74,11 @@ const ProfilePage = () => {
       case 'titles':
         return <TitlesTab characterId={characterId} />;
       case 'craft':
-        return <PlaceholderTab tabName="Крафт" />;
+        return (
+          <ErrorBoundary>
+            <CraftTab characterId={characterId} />
+          </ErrorBoundary>
+        );
       default:
         return <PlaceholderTab tabName={activeTab} />;
     }

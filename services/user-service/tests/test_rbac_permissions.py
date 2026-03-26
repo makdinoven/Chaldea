@@ -868,3 +868,145 @@ class TestTitlesPermissions:
         with pytest.raises(HTTPException) as exc_info:
             require_permission(db, mod, "titles:delete")
         assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# 9. FEAT-081: Professions RBAC permissions (migration 0019)
+# ---------------------------------------------------------------------------
+
+PROFESSIONS_PERMISSIONS = [
+    ("professions", "read"),
+    ("professions", "create"),
+    ("professions", "update"),
+    ("professions", "delete"),
+    ("professions", "manage"),
+]
+
+# Mirrors ROLE_ACTIONS from migration 0019
+PROFESSIONS_ROLE_ACTIONS = {
+    3: ["read", "create", "update", "manage"],  # Moderator
+    2: ["read"],                                  # Editor
+}
+
+
+def _seed_professions_permissions(db):
+    """Seed the 5 professions permissions and their role assignments (mirrors migration 0019)."""
+    perm_objects = []
+    for module, action in PROFESSIONS_PERMISSIONS:
+        perm = models.Permission(module=module, action=action,
+                                 description=f"Professions: {action}")
+        db.add(perm)
+        perm_objects.append(perm)
+    db.flush()  # assigns IDs
+
+    # Assign to roles
+    for perm in perm_objects:
+        for role_id, actions in PROFESSIONS_ROLE_ACTIONS.items():
+            if perm.action in actions:
+                db.add(models.RolePermission(role_id=role_id, permission_id=perm.id))
+    db.commit()
+    return perm_objects
+
+
+@pytest.fixture()
+def rbac_db_with_professions(rbac_db):
+    """DB session with base RBAC seed data + professions permissions from migration 0019."""
+    _seed_professions_permissions(rbac_db)
+    return rbac_db
+
+
+class TestProfessionsPermissions:
+    """FEAT-081 Task #9: Verify professions RBAC permissions from migration 0019."""
+
+    def test_professions_permissions_exist(self, rbac_db_with_professions):
+        """All 5 professions permissions must exist in the DB after migration."""
+        db = rbac_db_with_professions
+        for module, action in PROFESSIONS_PERMISSIONS:
+            perm = db.query(models.Permission).filter(
+                models.Permission.module == module,
+                models.Permission.action == action,
+            ).first()
+            assert perm is not None, f"Permission {module}:{action} not found in DB"
+
+    def test_professions_permissions_count(self, rbac_db_with_professions):
+        """Exactly 5 professions permissions should exist."""
+        db = rbac_db_with_professions
+        count = db.query(models.Permission).filter(
+            models.Permission.module == "professions"
+        ).count()
+        assert count == 5
+
+    def test_admin_has_all_professions_permissions(self, rbac_db_with_professions):
+        """Admin (role_id=4) should have all 5 professions permissions via auto-permissions."""
+        db = rbac_db_with_professions
+        admin = _make_user(db, id=300, username="profadmin", email="profadmin@test.com",
+                           role_id=4, role_str="admin")
+        perms = get_effective_permissions(db, admin)
+        for module, action in PROFESSIONS_PERMISSIONS:
+            perm_str = f"{module}:{action}"
+            assert perm_str in perms, f"Admin missing {perm_str}"
+        # 8 base + 5 professions = 13 total
+        assert len(perms) == 13
+
+    def test_moderator_has_correct_professions_permissions(self, rbac_db_with_professions):
+        """Moderator (role_id=3) should have professions:read, create, update, manage."""
+        db = rbac_db_with_professions
+        mod = _make_user(db, id=301, username="profmod", email="profmod@test.com",
+                         role_id=3, role_str="moderator")
+        perms = get_effective_permissions(db, mod)
+        assert "professions:read" in perms
+        assert "professions:create" in perms
+        assert "professions:update" in perms
+        assert "professions:manage" in perms
+        assert "professions:delete" not in perms
+        # 4 base items:* + 4 professions = 8 total
+        assert len(perms) == 8
+
+    def test_editor_has_only_professions_read(self, rbac_db_with_professions):
+        """Editor (role_id=2) should have only professions:read."""
+        db = rbac_db_with_professions
+        editor = _make_user(db, id=302, username="profeditor", email="profeditor@test.com",
+                            role_id=2, role_str="editor")
+        perms = get_effective_permissions(db, editor)
+        assert "professions:read" in perms
+        assert "professions:create" not in perms
+        assert "professions:update" not in perms
+        assert "professions:delete" not in perms
+        assert "professions:manage" not in perms
+        # 2 base *:read + 1 professions:read = 3 total
+        assert len(perms) == 3
+
+    def test_regular_user_has_no_professions_permissions(self, rbac_db_with_professions):
+        """Regular user (role_id=1) should have no professions permissions."""
+        db = rbac_db_with_professions
+        user = _make_user(db, id=303, username="profuser", email="profuser@test.com",
+                          role_id=1, role_str="user")
+        perms = get_effective_permissions(db, user)
+        assert not any(p.startswith("professions:") for p in perms)
+        assert perms == []
+
+    def test_require_permission_professions_admin(self, rbac_db_with_professions):
+        """Admin can pass require_permission for any professions permission."""
+        db = rbac_db_with_professions
+        admin = _make_user(db, id=304, username="profadmin2", email="profadmin2@test.com",
+                           role_id=4, role_str="admin")
+        for module, action in PROFESSIONS_PERMISSIONS:
+            require_permission(db, admin, f"{module}:{action}")
+
+    def test_require_permission_professions_editor_blocked(self, rbac_db_with_professions):
+        """Editor should be blocked from professions:create via require_permission."""
+        db = rbac_db_with_professions
+        editor = _make_user(db, id=305, username="profeditor2", email="profeditor2@test.com",
+                            role_id=2, role_str="editor")
+        with pytest.raises(HTTPException) as exc_info:
+            require_permission(db, editor, "professions:create")
+        assert exc_info.value.status_code == 403
+
+    def test_require_permission_professions_moderator_blocked_delete(self, rbac_db_with_professions):
+        """Moderator should be blocked from professions:delete via require_permission."""
+        db = rbac_db_with_professions
+        mod = _make_user(db, id=306, username="profmod2", email="profmod2@test.com",
+                         role_id=3, role_str="moderator")
+        with pytest.raises(HTTPException) as exc_info:
+            require_permission(db, mod, "professions:delete")
+        assert exc_info.value.status_code == 403

@@ -28,6 +28,10 @@ export const ITEM_TYPE_ICONS: Record<string, string> = {
   scroll: scrollIcon,
   resource: resourceIcon,
   misc: bagIcon,
+  blueprint: scrollIcon,
+  recipe: scrollIcon,
+  gem: resourceIcon,
+  rune: resourceIcon,
 };
 
 export const CATEGORY_LIST = [
@@ -45,6 +49,9 @@ export const CATEGORY_LIST = [
   { key: 'scroll', label: 'Свитки', icon: scrollIcon },
   { key: 'resource', label: 'Ресурсы', icon: resourceIcon },
   { key: 'misc', label: 'Разное', icon: bagIcon },
+  { key: 'recipe', label: 'Рецепты', icon: scrollIcon },
+  { key: 'gem', label: 'Камни', icon: resourceIcon },
+  { key: 'rune', label: 'Руны', icon: resourceIcon },
 ] as const;
 
 export const EQUIPMENT_SLOT_ORDER = [
@@ -137,6 +144,19 @@ export const STAT_LABELS: Record<string, string> = {
   res_wind: 'Сопротивление ветру',
   res_sainting: 'Сопротивление свету',
   res_damning: 'Сопротивление тьме',
+  vul_effects: 'Уязвимость к эффектам',
+  vul_physical: 'Уязвимость к физ. урону',
+  vul_catting: 'Уязвимость к реж. урону',
+  vul_crushing: 'Уязвимость к дроб. урону',
+  vul_piercing: 'Уязвимость к кол. урону',
+  vul_magic: 'Уязвимость к маг. урону',
+  vul_fire: 'Уязвимость к огню',
+  vul_ice: 'Уязвимость к льду',
+  vul_watering: 'Уязвимость к воде',
+  vul_electricity: 'Уязвимость к электричеству',
+  vul_wind: 'Уязвимость к ветру',
+  vul_sainting: 'Уязвимость к свету',
+  vul_damning: 'Уязвимость к тьме',
 };
 
 // --- Stats that display as percentages ---
@@ -158,6 +178,19 @@ export const PERCENTAGE_STATS = new Set([
   'res_wind',
   'res_sainting',
   'res_damning',
+  'vul_effects',
+  'vul_physical',
+  'vul_catting',
+  'vul_crushing',
+  'vul_piercing',
+  'vul_magic',
+  'vul_fire',
+  'vul_ice',
+  'vul_watering',
+  'vul_electricity',
+  'vul_wind',
+  'vul_sainting',
+  'vul_damning',
 ]);
 
 // --- Resource bar config ---

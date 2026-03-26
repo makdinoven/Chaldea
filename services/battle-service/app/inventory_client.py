@@ -33,6 +33,61 @@ async def consume_item(character_id: int, item_id: int) -> dict:
         return r.json()
 
 
+DURABILITY_SLOT_TYPES = {"head", "body", "cloak", "main_weapon", "additional_weapons"}
+
+
+async def get_equipment_durability(character_id: int) -> dict:
+    """
+    Returns {slot_type: {item_id, current_durability, max_durability}}
+    for durability-eligible equipment slots.
+    Slots without items or without durability are omitted.
+    """
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{BASE}/inventory/{character_id}/equipment")
+        r.raise_for_status()
+        slots = r.json()
+
+    result = {}
+    for slot in slots:
+        slot_type = slot.get("slot_type")
+        item_id = slot.get("item_id")
+        if slot_type not in DURABILITY_SLOT_TYPES or not item_id:
+            continue
+        # Fetch item template to get max_durability
+        try:
+            item_data = await get_item(item_id)
+        except Exception:
+            continue
+        max_dur = item_data.get("max_durability", 0)
+        if max_dur <= 0:
+            continue
+        # current_durability: NULL means full (= max_durability)
+        current_dur = slot.get("current_durability")
+        if current_dur is None:
+            current_dur = max_dur
+        result[slot_type] = {
+            "item_id": item_id,
+            "current_durability": current_dur,
+            "max_durability": max_dur,
+        }
+    return result
+
+
+async def update_durability(character_id: int, entries: list[dict]) -> dict:
+    """
+    Call inventory-service to persist durability changes after battle.
+    entries: [{"slot_type": str, "new_durability": int}, ...]
+    Best-effort: caller should catch exceptions.
+    """
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.post(
+            f"{BASE}/inventory/internal/update-durability",
+            json={"character_id": character_id, "entries": entries},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
 async def get_fast_slots(character_id: int) -> list[dict]:
     """
     Возвращает список слотов вида:

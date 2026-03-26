@@ -320,7 +320,7 @@ const PostCard = ({
 
             {/* Tag player dropdown */}
             {tagDropdownOpen && (
-              <div className="absolute bottom-full left-0 mb-2 w-52 sm:w-60 bg-black/90 border border-white/10 rounded-card shadow-card z-20 max-h-48 overflow-y-auto">
+              <div className="absolute bottom-full left-0 mb-2 w-52 sm:w-60 bg-black/90 border border-white/10 rounded-card shadow-card z-20 max-h-48 overflow-y-auto gold-scrollbar">
                 {taggablePlayers.length === 0 ? (
                   <p className="text-white/50 text-xs p-3">
                     Нет игроков для уведомления

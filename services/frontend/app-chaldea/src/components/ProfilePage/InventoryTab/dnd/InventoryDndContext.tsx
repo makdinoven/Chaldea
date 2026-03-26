@@ -139,7 +139,7 @@ const InventoryDndProvider = ({ characterId, children }: InventoryDndProviderPro
         if (overId.startsWith('drop-equipment-')) {
           if (dragData.source === 'inventory' && dragData.inventoryItem) {
             const result = await dispatch(
-              equipItem({ characterId, itemId: dragData.inventoryItem.item.id }),
+              equipItem({ characterId, itemId: dragData.inventoryItem.item.id, inventoryItemId: dragData.inventoryItem.id }),
             );
             if (result.meta.requestStatus === 'fulfilled') {
               toast.success('Предмет экипирован');
@@ -155,7 +155,7 @@ const InventoryDndProvider = ({ characterId, children }: InventoryDndProviderPro
         if (overId.startsWith('drop-fast_slot-')) {
           if (dragData.source === 'inventory' && dragData.inventoryItem) {
             const result = await dispatch(
-              equipItem({ characterId, itemId: dragData.inventoryItem.item.id }),
+              equipItem({ characterId, itemId: dragData.inventoryItem.item.id, inventoryItemId: dragData.inventoryItem.id }),
             );
             if (result.meta.requestStatus === 'fulfilled') {
               toast.success('Предмет экипирован');

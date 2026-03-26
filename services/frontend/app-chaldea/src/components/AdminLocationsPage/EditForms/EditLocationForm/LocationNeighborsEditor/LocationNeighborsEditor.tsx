@@ -125,7 +125,7 @@ const LocationNeighborsEditor = ({
         </button>
       </div>
 
-      <div className="mt-4 border border-white/10 rounded p-2.5 bg-black/20 max-h-[300px] overflow-y-auto">
+      <div className="mt-4 border border-white/10 rounded p-2.5 bg-black/20 max-h-[300px] overflow-y-auto gold-scrollbar">
         {neighbors.length > 0 ? (
           neighbors.map((n) => (
             <div

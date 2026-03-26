@@ -11,23 +11,26 @@ import toast from "react-hot-toast";
 
 const ITEM_TYPES = [
   "head", "body", "cloak", "belt", "ring", "necklace", "bracelet",
-  "main_weapon", "additional_weapons", "consumable", "resource", "scroll", "misc",
+  "main_weapon", "additional_weapons", "shield", "consumable", "resource",
+  "scroll", "misc", "blueprint", "recipe", "gem", "rune",
 ] as const;
 
 const ITEM_TYPE_LABELS: Record<string, string> = {
   head: "Голова", body: "Тело", cloak: "Плащ", belt: "Пояс",
   ring: "Кольцо", necklace: "Ожерелье", bracelet: "Браслет",
-  main_weapon: "Основное оружие", additional_weapons: "Доп. оружие",
+  main_weapon: "Основное оружие", additional_weapons: "Доп. оружие", shield: "Щит",
   consumable: "Расходуемое", resource: "Ресурс", scroll: "Свиток", misc: "Разное",
+  blueprint: "Чертёж", recipe: "Рецепт", gem: "Камень", rune: "Руна",
 };
 
 const ITEM_RARITIES = [
-  "common", "rare", "epic", "mythical", "legendary",
+  "common", "rare", "epic", "mythical", "legendary", "divine", "demonic",
 ] as const;
 
 const ITEM_RARITY_LABELS: Record<string, string> = {
   common: "Обычное", rare: "Редкое", epic: "Эпическое",
   mythical: "Мифическое", legendary: "Легендарное",
+  divine: "Божественное", demonic: "Демоническое",
 };
 
 const ARMOR_SUBCLASSES = ["cloth", "light_armor", "medium_armor", "heavy_armor"] as const;
@@ -130,6 +133,9 @@ interface ItemFormState {
   energy_recovery: number;
   mana_recovery: number;
   stamina_recovery: number;
+  socket_count: number;
+  whetstone_level: string;
+  max_durability: number;
   [key: string]: unknown;
 }
 
@@ -152,6 +158,9 @@ const INITIAL_STATE: ItemFormState = [...ATTR_MODS, ...RES_MODS, ...VUL_MODS].re
     energy_recovery: 0,
     mana_recovery: 0,
     stamina_recovery: 0,
+    socket_count: 0,
+    whetstone_level: "",
+    max_durability: 0,
   },
 );
 
@@ -187,7 +196,17 @@ const ItemForm = ({ selected, onSuccess, onCancel }: ItemFormProps) => {
       target instanceof HTMLInputElement && target.type === "checkbox"
         ? target.checked
         : target.value;
-    setItem((st) => ({ ...st, [name]: value }));
+    setItem((st) => {
+      const updated = { ...st, [name]: value };
+      // Auto-set max_durability when switching to a durability type
+      if (name === "item_type") {
+        const DURABILITY_TYPES = ["head", "body", "cloak", "main_weapon", "additional_weapons"];
+        if (DURABILITY_TYPES.includes(value as string) && (st.max_durability === 0 || st.max_durability === "0")) {
+          updated.max_durability = 100;
+        }
+      }
+      return updated;
+    });
   };
 
   const showArmor = ["head", "body"].includes(item.item_type);
@@ -198,9 +217,15 @@ const ItemForm = ({ selected, onSuccess, onCancel }: ItemFormProps) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const payload = {
+        ...item,
+        socket_count: Number(item.socket_count) || 0,
+        whetstone_level: item.whetstone_level ? Number(item.whetstone_level) : null,
+        max_durability: Number(item.max_durability) || 0,
+      };
       const saved = editMode
-        ? await updateItem(selected!, item)
-        : await createItem(item);
+        ? await updateItem(selected!, payload)
+        : await createItem(payload);
       if (imgFile) await uploadItemImage(saved.id, imgFile);
       toast.success(editMode ? "Предмет сохранён" : "Предмет создан");
       onSuccess();
@@ -362,6 +387,56 @@ const ItemForm = ({ selected, onSuccess, onCancel }: ItemFormProps) => {
             onChange={handleChange}
             className="input-underline"
           />
+        </label>
+
+        {/* Max durability */}
+        <label className="flex flex-col gap-1">
+          <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+            Макс. прочность
+          </span>
+          <input
+            type="number"
+            name="max_durability"
+            value={item.max_durability}
+            onChange={handleChange}
+            min={0}
+            className="input-underline"
+            placeholder="0 = без прочности"
+          />
+        </label>
+
+        {/* Socket count */}
+        <label className="flex flex-col gap-1">
+          <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+            Слоты для камней/рун
+          </span>
+          <input
+            type="number"
+            name="socket_count"
+            value={item.socket_count}
+            onChange={handleChange}
+            min={0}
+            max={10}
+            className="input-underline"
+          />
+        </label>
+
+        {/* Whetstone level */}
+        <label className="flex flex-col gap-1">
+          <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+            Уровень точильного камня
+          </span>
+          <select
+            name="whetstone_level"
+            value={item.whetstone_level}
+            onChange={handleChange}
+            className="input-underline bg-transparent"
+          >
+            <option value="">Не точильный камень</option>
+            <option value="1">1 — Обычный (25%)</option>
+            <option value="2">2 — Редкий (50%)</option>
+            <option value="3">3 — Легендарный (75%)</option>
+          </select>
         </label>
 
         {/* Description (spans full width) */}

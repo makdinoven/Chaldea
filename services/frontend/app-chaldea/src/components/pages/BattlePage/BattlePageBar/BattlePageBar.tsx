@@ -622,7 +622,7 @@ const BattlePageBar = ({
         {turns.length > 0 && (
           <ul
             className={`grid grid-cols-5 gap-x-2.5 gap-y-10 items-center justify-items-center ${
-              isAllTurnsOpen ? "overflow-y-auto overflow-x-hidden" : ""
+              isAllTurnsOpen ? "overflow-y-auto overflow-x-hidden gold-scrollbar" : ""
             }`}
           >
             {turns.map((turnPair, index) => (

@@ -3,6 +3,8 @@ import client from "./client";
 
 interface ItemParams {
   q?: string;
+  item_types?: string;
+  exclude_types?: string;
   page?: number;
   page_size?: number;
 }
@@ -12,10 +14,35 @@ interface IssueItemPayload {
   quantity: number;
 }
 
-export const fetchItems = async (query = "", page = 1, pageSize = 20) => {
-  const { data } = await client.get("/items", {
-    params: { q: query, page, page_size: pageSize } as ItemParams,
-  });
+interface FetchItemsOptions {
+  query?: string;
+  page?: number;
+  pageSize?: number;
+  itemTypes?: string[];
+  excludeTypes?: string[];
+}
+
+export const fetchItems = async (
+  queryOrOptions: string | FetchItemsOptions = "",
+  page = 1,
+  pageSize = 200,
+) => {
+  let params: ItemParams;
+
+  if (typeof queryOrOptions === "string") {
+    params = { q: queryOrOptions, page, page_size: pageSize };
+  } else {
+    const opts = queryOrOptions;
+    params = {
+      q: opts.query || undefined,
+      page: opts.page ?? 1,
+      page_size: opts.pageSize ?? 200,
+    };
+    if (opts.itemTypes?.length) params.item_types = opts.itemTypes.join(",");
+    if (opts.excludeTypes?.length) params.exclude_types = opts.excludeTypes.join(",");
+  }
+
+  const { data } = await client.get("/items", { params });
 
   return Array.isArray(data) ? data : data.items ?? [];
 };

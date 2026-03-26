@@ -2,6 +2,7 @@ import { motion } from 'motion/react';
 import CategorySidebar from './CategorySidebar';
 import ItemGrid from './ItemGrid';
 import ItemContextMenu from './ItemContextMenu';
+import ItemDetailModal from './ItemDetailModal';
 import EquipmentPanel from '../EquipmentPanel/EquipmentPanel';
 import FastSlots from '../EquipmentPanel/FastSlots';
 import CharacterInfoPanel from '../CharacterInfoPanel/CharacterInfoPanel';
@@ -62,6 +63,9 @@ const InventoryTab = ({ characterId }: InventoryTabProps) => {
 
       {/* Context menu rendered at fixed position */}
       <ItemContextMenu characterId={characterId} />
+
+      {/* Item detail modal (opened from context menu "Описание") */}
+      <ItemDetailModal characterId={characterId} />
     </motion.div>
   );
 };

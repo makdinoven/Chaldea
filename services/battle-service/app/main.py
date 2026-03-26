@@ -32,7 +32,7 @@ import ws_manager
 from mongo_client import get_mongo_db
 from database import get_db
 from battle_engine import decrement_cooldowns, set_cooldown
-from inventory_client import get_fast_slots, consume_item
+from inventory_client import get_fast_slots, consume_item, get_equipment_durability, update_durability
 from character_client import get_character_profile
 from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, build_percent_damage_buffs, \
     build_percent_resist_buffs
@@ -154,6 +154,12 @@ async def build_participant_info(char_id: int, participant_id: int) -> dict:
         name = f"Персонаж #{char_id}"
         avatar = ""
 
+    try:
+        equip_durability = await get_equipment_durability(char_id)
+    except Exception as e:
+        logger.warning(f"Не удалось получить прочность экипировки персонажа {char_id}: {e}")
+        equip_durability = {}
+
     return {
         "participant_id": participant_id,
         "character_id"  : char_id,
@@ -162,6 +168,7 @@ async def build_participant_info(char_id: int, participant_id: int) -> dict:
         "attributes"    : attr,
         "skills"        : ranks,
         "fast_slots"    : slots,
+        "equipment_durability": equip_durability,
     }
 
 
@@ -560,6 +567,7 @@ async def create_battle_endpoint(
             "max_energy": snap["attributes"]["max_energy"],
             "max_stamina": snap["attributes"]["max_stamina"],
             "fast_slots": snap["fast_slots"],
+            "equipment_durability": snap.get("equipment_durability", {}),
         })
     await save_snapshot(battle_obj.id, participants_info)
     rds = await get_redis_client()
@@ -1266,6 +1274,36 @@ async def _make_action_core(
                 "effects": [e["effect_name"] for e in enemy_effects],
             })
 
+    # ------------------------------------------------------------------------------
+    # 9.1. Equipment durability loss (10% chance per hit to lose 1 durability)
+    # ------------------------------------------------------------------------------
+    import random as _rng
+    WEAPON_SLOTS = ["main_weapon", "additional_weapons"]
+    ARMOR_SLOTS = ["head", "body", "cloak"]
+    DURABILITY_LOSS_CHANCE = 0.10  # 10% chance per action
+
+    # Attacker's weapons: 10% chance to lose 1 durability per attack
+    if attack_id and attack_id > 0:
+        attacker_equip = participant_info.get("equipment_durability", {})
+        for slot_type in WEAPON_SLOTS:
+            slot_data = attacker_equip.get(slot_type)
+            if slot_data and slot_data["max_durability"] > 0 and slot_data["current_durability"] > 0:
+                if _rng.random() < DURABILITY_LOSS_CHANCE:
+                    slot_data["current_durability"] = max(0, slot_data["current_durability"] - 1)
+                    if slot_data["current_durability"] == 0:
+                        turn_events.append({"event": "item_broken", "who": request.participant_id, "slot": slot_type})
+
+    # Defender's armor: 10% chance to lose 1 durability per damage received
+    if attack_id and attack_id > 0 and any(e.get("event") == "damage" for e in turn_events):
+        defender_equip = defender_info.get("equipment_durability", {})
+        for slot_type in ARMOR_SLOTS:
+            slot_data = defender_equip.get(slot_type)
+            if slot_data and slot_data["max_durability"] > 0 and slot_data["current_durability"] > 0:
+                if _rng.random() < DURABILITY_LOSS_CHANCE:
+                    slot_data["current_durability"] = max(0, slot_data["current_durability"] - 1)
+                    if slot_data["current_durability"] == 0:
+                        turn_events.append({"event": "item_broken", "who": defender_pid, "slot": slot_type})
+
     attack_rank = await get_rank(request.skills.attack_rank_id) if request.skills.attack_rank_id else None
     defense_rank = await get_rank(request.skills.defense_rank_id) if request.skills.defense_rank_id else None
     support_rank = await get_rank(request.skills.support_rank_id) if request.skills.support_rank_id else None
@@ -1364,6 +1402,23 @@ async def _make_action_core(
                 logger.info(f"Ресурсы персонажа {char_id} синхронизированы после боя")
             except Exception as e:
                 logger.error(f"Не удалось синхронизировать ресурсы персонажа {char_id}: {e}")
+
+        # Sync equipment durability back to inventory-service (best-effort)
+        for pid_str, pdata in battle_state["participants"].items():
+            equip_dur = pdata.get("equipment_durability", {})
+            entries = []
+            for slot_type, slot_data in equip_dur.items():
+                if slot_data and slot_data.get("max_durability", 0) > 0:
+                    entries.append({
+                        "slot_type": slot_type,
+                        "new_durability": slot_data["current_durability"],
+                    })
+            if entries:
+                try:
+                    await update_durability(pdata["character_id"], entries)
+                    logger.info(f"Прочность экипировки персонажа {pdata['character_id']} синхронизирована после боя")
+                except Exception as e:
+                    logger.error(f"Failed to sync durability for character {pdata['character_id']}: {e}")
 
         # Update Redis state one last time with final HP values
         battle_state["turn_number"] = new_turn_number
@@ -2011,6 +2066,7 @@ async def respond_to_pvp_invitation(
             "max_energy": snap["attributes"]["max_energy"],
             "max_stamina": snap["attributes"]["max_stamina"],
             "fast_slots": snap["fast_slots"],
+            "equipment_durability": snap.get("equipment_durability", {}),
         })
 
     await save_snapshot(battle_obj.id, participants_info)
@@ -2255,6 +2311,7 @@ async def pvp_attack(
             "max_energy": snap["attributes"]["max_energy"],
             "max_stamina": snap["attributes"]["max_stamina"],
             "fast_slots": snap["fast_slots"],
+            "equipment_durability": snap.get("equipment_durability", {}),
         })
 
     await save_snapshot(battle_obj.id, participants_info)
@@ -2847,6 +2904,9 @@ async def admin_approve_join_request(
             "max_stamina": attr["max_stamina"],
             "fast_slots": participant_info["fast_slots"],
             "cooldowns": {},
+            "total_damage_dealt": 0,
+            "total_damage_received": 0,
+            "equipment_durability": participant_info.get("equipment_durability", {}),
         }
         state["turn_order"].append(participant_id)
         await save_state(battle_id, state)

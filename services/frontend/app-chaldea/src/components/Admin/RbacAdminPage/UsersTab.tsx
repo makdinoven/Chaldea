@@ -223,7 +223,7 @@ const UsersTab = () => {
       )}
 
       {!loading && users.length > 0 && (
-        <div className="overflow-x-auto gold-scrollbar">
+        <div className="overflow-x-hidden">
           <table className="w-full text-sm text-left">
             <thead>
               <tr className="border-b border-white/10">

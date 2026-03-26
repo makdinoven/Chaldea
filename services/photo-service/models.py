@@ -113,3 +113,10 @@ class GameRule(Base):
 
     id = Column(Integer, primary_key=True)
     image_url = Column(Text, nullable=True)
+
+
+class Recipe(Base):
+    __tablename__ = "recipes"
+
+    id = Column(Integer, primary_key=True)
+    icon = Column(String(255), nullable=True)

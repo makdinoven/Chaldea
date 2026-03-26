@@ -85,7 +85,7 @@ const HierarchyTree = ({ currentLocationId }: HierarchyTreeProps) => {
               exit={{ x: '-100%' }}
               transition={{ duration: 0.25, ease: 'easeOut' }}
               className="md:hidden fixed top-0 left-0 bottom-0 w-[85vw] max-w-[320px] z-50
-                         bg-site-dark overflow-y-auto"
+                         bg-site-dark overflow-y-auto gold-scrollbar"
             >
               <div className="p-4">
                 <GameTimeWidget />

@@ -221,7 +221,7 @@ const AdminCharactersPage = () => {
         </div>
 
         {/* Table */}
-        <div className="gray-bg p-4 overflow-x-auto">
+        <div className="gray-bg p-4 overflow-x-hidden">
           {loading ? (
             <div className="flex justify-center items-center py-12">
               <div className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full animate-spin" />

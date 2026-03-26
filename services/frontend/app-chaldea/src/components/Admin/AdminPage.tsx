@@ -13,6 +13,7 @@ interface AdminSection {
 const sections: AdminSection[] = [
   { label: 'Заявки', path: '/requestsPage', description: 'Модерация заявок на создание персонажей', module: 'characters' },
   { label: 'Айтемы', path: '/admin/items', description: 'Управление предметами и экипировкой', module: 'items' },
+  { label: 'Крафтовые предметы', path: '/admin/craft-items', description: 'Чертежи, рецепты, камни, руны, ресурсы', module: 'items' },
   { label: 'Локации', path: '/admin/locations', description: 'Редактирование мира, регионов и локаций', module: 'locations' },
   { label: 'Навыки', path: '/home/admin/skills', description: 'Редактирование деревьев навыков', module: 'skills' },
   { label: 'Деревья классов', path: '/admin/class-trees', description: 'Визуальный редактор деревьев навыков классов и подклассов', module: 'skill_trees' },
@@ -30,6 +31,8 @@ const sections: AdminSection[] = [
   { label: 'Архив', path: '/admin/archive', description: 'Управление статьями и категориями архива', module: 'archive' },
   { label: 'Перки', path: '/admin/perks', description: 'Управление перками персонажей', module: 'perks' },
   { label: 'Титулы', path: '/admin/titles', description: 'Управление титулами персонажей', module: 'titles' },
+  { label: 'Профессии', path: '/admin/professions', description: 'Управление профессиями и рангами', module: 'professions' },
+  { label: 'Рецепты', path: '/admin/recipes', description: 'Управление рецептами крафта', module: 'professions' },
 ];
 
 const AdminPage = () => {

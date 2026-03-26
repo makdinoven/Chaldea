@@ -8,7 +8,7 @@ import sys
 import os
 
 import pytest
-from sqlalchemy import create_engine, event, String
+from sqlalchemy import create_engine, event, String, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -83,7 +83,15 @@ def db_session():
         yield session
     finally:
         session.close()
+        # Disable FK checks before drop_all to avoid circular dependency errors
+        # (items <-> recipes have mutual FKs via blueprint_recipe_id / result_item_id)
+        with _test_engine.connect() as conn:
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            conn.commit()
         database.Base.metadata.drop_all(bind=_test_engine)
+        with _test_engine.connect() as conn:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.commit()
 
 
 @pytest.fixture()

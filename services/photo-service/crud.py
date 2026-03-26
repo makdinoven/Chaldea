@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from models import (
     User, Character, Area, Country, Region, District,
     Location, Skill, SkillRank, Item, GameRule, Race, Subrace,
-    MobTemplate,
+    MobTemplate, Recipe,
 )
 
 
@@ -173,3 +173,18 @@ def update_mob_template_avatar(db: Session, mob_template_id: int, avatar_url: st
     if mob:
         mob.avatar = avatar_url
         db.commit()
+
+
+def update_recipe_image(db: Session, recipe_id: int, image_url: str):
+    """Update recipe icon and sync image to the auto-created recipe item."""
+    recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if recipe:
+        recipe.icon = image_url
+        db.commit()
+    # Also update the auto-created recipe item's image (item_type='recipe', blueprint_recipe_id=recipe_id)
+    from sqlalchemy import text
+    db.execute(
+        text("UPDATE items SET image = :url WHERE blueprint_recipe_id = :rid AND item_type = 'recipe'"),
+        {"url": image_url, "rid": recipe_id},
+    )
+    db.commit()
