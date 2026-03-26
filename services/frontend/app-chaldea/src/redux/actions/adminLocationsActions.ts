@@ -1,6 +1,6 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import axios from 'axios';
-import type { Area, ClickableZone, ZonePoint } from './worldMapActions';
+import type { Area, ClickableZone, ZonePoint, PathWaypoint, NeighborEdge } from './worldMapActions';
 
 // --- Types ---
 
@@ -84,7 +84,7 @@ export interface RegionDetails {
   description: string;
   country_id: number;
   map_image_url: string | null;
-  neighbor_edges: Array<{ from_id: number; to_id: number }>;
+  neighbor_edges: NeighborEdge[];
   map_items: RegionMapItem[];
   districts: District[];
 }
@@ -124,7 +124,7 @@ export interface ClickableZoneUpdateData {
 }
 
 // Re-export for convenience
-export type { Area, ClickableZone, ZonePoint };
+export type { Area, ClickableZone, ZonePoint, PathWaypoint, NeighborEdge };
 
 // --- Existing Thunks (migrated from JS) ---
 
@@ -348,6 +348,62 @@ export const deleteClickableZone = createAsyncThunk<
       return zoneId;
     } catch {
       return rejectWithValue('Ошибка удаления кликабельной зоны');
+    }
+  }
+);
+
+// --- Path Editor Thunks ---
+
+export const createNeighborWithPath = createAsyncThunk<
+  { neighbor_id: number; energy_cost: number; path_data: PathWaypoint[] | null },
+  { locationId: number; neighbor_id: number; energy_cost: number; path_data: PathWaypoint[] | null },
+  { rejectValue: string }
+>(
+  'adminLocations/createNeighborWithPath',
+  async ({ locationId, neighbor_id, energy_cost, path_data }, { rejectWithValue }) => {
+    try {
+      const response = await axios.post(`/locations/${locationId}/neighbors/`, {
+        neighbor_id,
+        energy_cost,
+        path_data,
+      });
+      return response.data;
+    } catch {
+      return rejectWithValue('Ошибка создания связи между локациями');
+    }
+  }
+);
+
+export const updateNeighborPath = createAsyncThunk<
+  NeighborEdge,
+  { fromId: number; toId: number; path_data: PathWaypoint[] },
+  { rejectValue: string }
+>(
+  'adminLocations/updateNeighborPath',
+  async ({ fromId, toId, path_data }, { rejectWithValue }) => {
+    try {
+      const response = await axios.put(`/locations/neighbors/${fromId}/${toId}/path`, {
+        path_data,
+      });
+      return response.data;
+    } catch {
+      return rejectWithValue('Ошибка обновления пути между локациями');
+    }
+  }
+);
+
+export const deleteNeighborEdge = createAsyncThunk<
+  { locationId: number; neighborId: number },
+  { locationId: number; neighborId: number },
+  { rejectValue: string }
+>(
+  'adminLocations/deleteNeighborEdge',
+  async ({ locationId, neighborId }, { rejectWithValue }) => {
+    try {
+      await axios.delete(`/locations/${locationId}/neighbors/${neighborId}`);
+      return { locationId, neighborId };
+    } catch {
+      return rejectWithValue('Ошибка удаления связи между локациями');
     }
   }
 );

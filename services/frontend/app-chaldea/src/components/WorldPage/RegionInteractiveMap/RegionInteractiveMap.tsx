@@ -16,15 +16,30 @@ export interface MapItem {
   recommended_level?: number | null;
 }
 
+interface PathWaypoint {
+  x: number;
+  y: number;
+}
+
 interface NeighborEdge {
   from_id: number;
   to_id: number;
+  energy_cost?: number;
+  path_data?: PathWaypoint[] | null;
+}
+
+interface DistrictPositionData {
+  id: number;
+  x: number | null;
+  y: number | null;
+  locations: { id: number; name: string; map_x: number | null; map_y: number | null }[];
 }
 
 interface RegionInteractiveMapProps {
   mapImageUrl: string;
   mapItems: MapItem[];
   neighborEdges: NeighborEdge[];
+  districts?: DistrictPositionData[];
   currentLocationId?: number | null;
   onLocationClick: (locationId: number) => void;
   onDistrictClick: (districtId: number) => void;
@@ -73,6 +88,7 @@ const RegionInteractiveMap = ({
   mapImageUrl,
   mapItems,
   neighborEdges,
+  districts = [],
   currentLocationId,
   onLocationClick,
   onDistrictClick,
@@ -89,10 +105,18 @@ const RegionInteractiveMap = ({
   );
 
   // Build a set of mapped location IDs for quick lookup (edges only connect locations)
-  const mappedLocationIds = useMemo(
-    () => new Set(mappedItems.filter((i) => i.type === 'location').map((i) => i.id)),
-    [mappedItems],
-  );
+  const mappedLocationIds = useMemo(() => {
+    const ids = new Set(mappedItems.filter((i) => i.type === 'location').map((i) => i.id));
+    // Include district child locations that fall back to district position
+    for (const d of districts) {
+      if (d.x != null && d.y != null) {
+        for (const loc of d.locations) {
+          ids.add(loc.id);
+        }
+      }
+    }
+    return ids;
+  }, [mappedItems, districts]);
 
   // Build a map of location id -> position for SVG lines
   const positionMap = useMemo(() => {
@@ -102,8 +126,29 @@ const RegionInteractiveMap = ({
         map.set(item.id, { x: item.map_x!, y: item.map_y! });
       }
     }
+    // Fallback: district child locations without own coordinates use district position
+    for (const d of districts) {
+      if (d.x != null && d.y != null) {
+        for (const loc of d.locations) {
+          if (!map.has(loc.id)) {
+            map.set(loc.id, { x: d.x, y: d.y });
+          }
+        }
+      }
+    }
     return map;
-  }, [mappedItems]);
+  }, [mappedItems, districts]);
+
+  // Find which district contains the current location (for zone arrow indicator)
+  const currentDistrictId = useMemo(() => {
+    if (currentLocationId == null) return null;
+    for (const d of districts) {
+      for (const loc of d.locations) {
+        if (loc.id === currentLocationId) return d.id;
+      }
+    }
+    return null;
+  }, [currentLocationId, districts]);
 
   // Filter edges: only draw where both endpoints are mapped locations
   const visibleEdges = useMemo(
@@ -151,23 +196,60 @@ const RegionInteractiveMap = ({
             viewBox="0 0 100 100"
             preserveAspectRatio="none"
           >
+            <defs>
+              <filter id="path-glow">
+                <feGaussianBlur stdDeviation="0.4" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
             {visibleEdges.map((edge) => {
               const from = positionMap.get(edge.from_id);
               const to = positionMap.get(edge.to_id);
               if (!from || !to) return null;
 
+              const isActive = currentLocationId != null &&
+                (edge.from_id === currentLocationId || edge.to_id === currentLocationId);
+              const edgeKey = `${edge.from_id}-${edge.to_id}`;
+              const hasPath = edge.path_data && edge.path_data.length > 0;
+
+              // Build points string for polyline or line coordinates
+              const allPoints = hasPath ? [from, ...edge.path_data!, to] : [from, to];
+              const pointsStr = allPoints.map((p) => `${p.x},${p.y}`).join(' ');
+
               return (
-                <line
-                  key={`${edge.from_id}-${edge.to_id}`}
-                  x1={from.x}
-                  y1={from.y}
-                  x2={to.x}
-                  y2={to.y}
-                  stroke="rgba(240, 217, 92, 0.4)"
-                  strokeWidth="0.3"
-                  strokeDasharray="1 0.6"
-                  strokeLinecap="round"
-                />
+                <g key={edgeKey}>
+                  {isActive && (
+                    <polyline
+                      points={pointsStr}
+                      fill="none"
+                      stroke="rgba(240, 217, 92, 0.6)"
+                      strokeWidth="0.8"
+                      strokeDasharray="1 0.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      filter="url(#path-glow)"
+                    >
+                      <animate
+                        attributeName="opacity"
+                        values="0.4;1;0.4"
+                        dur="2s"
+                        repeatCount="indefinite"
+                      />
+                    </polyline>
+                  )}
+                  <polyline
+                    points={pointsStr}
+                    fill="none"
+                    stroke="rgba(240, 217, 92, 0.4)"
+                    strokeWidth="0.3"
+                    strokeDasharray="1 0.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </g>
               );
             })}
           </svg>
@@ -175,7 +257,9 @@ const RegionInteractiveMap = ({
           {/* Map item icons */}
           {mappedItems.map((item) => {
             const key = itemKey(item);
-            const isCurrent = item.type === 'location' && item.id === currentLocationId;
+            const isCurrent =
+              (item.type === 'location' && item.id === currentLocationId) ||
+              (item.type === 'district' && item.id === currentDistrictId);
             const isHovered = key === hoveredId;
 
             return (
@@ -202,9 +286,17 @@ const RegionInteractiveMap = ({
                       relative flex items-center justify-center
                       transition-all duration-300 ease-site
                       ${isHovered ? 'scale-[1.15] drop-shadow-[0_0_12px_rgba(240,217,92,0.6)]' : ''}
-                      ${isCurrent ? 'drop-shadow-[0_0_8px_rgba(240,217,92,0.7)]' : ''}
                     `}
                   >
+                    {/* "You are here" arrow above current location */}
+                    {isCurrent && (
+                      <div className="absolute -top-5 inset-x-0 flex justify-center animate-bounce pointer-events-none">
+                        <svg width="14" height="10" viewBox="0 0 14 10" fill="none">
+                          <path d="M7 10L1 2h12L7 10z" fill="rgba(240,217,92,0.9)" />
+                        </svg>
+                      </div>
+                    )}
+
                     {/* Hover glow ring */}
                     {isHovered && !isCurrent && (
                       <div
@@ -214,17 +306,6 @@ const RegionInteractiveMap = ({
                         }}
                       />
                     )}
-                    {/* Gold glow ring for current location */}
-                    {isCurrent && (
-                      <div
-                        className="absolute -inset-1.5 rounded-full animate-pulse"
-                        style={{
-                          background:
-                            'radial-gradient(circle, rgba(240,217,92,0.35) 0%, transparent 70%)',
-                        }}
-                      />
-                    )}
-
                     {isCityMap ? (
                       /* City map: round icons with image */
                       (() => {
@@ -265,7 +346,6 @@ const RegionInteractiveMap = ({
                         alt={item.name}
                         className={`
                           w-[50px] h-[50px] object-contain
-                          ${isCurrent ? 'ring-2 ring-gold rounded-sm' : ''}
                         `}
                         draggable={false}
                       />
@@ -276,7 +356,7 @@ const RegionInteractiveMap = ({
                           w-[50px] h-[50px] rounded-full
                           flex items-center justify-center
                           border-2 text-sm sm:text-base
-                          ${isCurrent ? 'border-gold shadow-[0_0_10px_rgba(240,217,92,0.6)]' : 'border-white/50'}
+                          border-white/50
                         `}
                         style={{
                           backgroundColor:

@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAppDispatch } from '../../../redux/store';
@@ -40,7 +41,7 @@ interface RegionMapEditorProps {
   regionId: number;
   mapImageUrl: string;
   mapItems: MapItemData[];
-  neighborEdges: Array<{ from_id: number; to_id: number }>;
+  neighborEdges: Array<{ from_id: number; to_id: number; energy_cost?: number; path_data?: Array<{ x: number; y: number }> | null }>;
   districts: DistrictOption[];
   onClose: () => void;
 }
@@ -135,6 +136,7 @@ const RegionMapEditor = ({
   onClose,
 }: RegionMapEditorProps) => {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
 
   const [saving, setSaving] = useState(false);
@@ -157,6 +159,8 @@ const RegionMapEditor = ({
   const [zoneIconPreview, setZoneIconPreview] = useState<string | null>(null);
   const [expandedZones, setExpandedZones] = useState<Set<number>>(new Set());
   const [localSortOverrides, setLocalSortOverrides] = useState<Record<string, number>>({});
+  // Track inline-edit overrides so saved marker_type/name/level reflect immediately
+  const [localEditOverrides, setLocalEditOverrides] = useState<Record<string, Partial<MapItemData>>>({});
 
   // --- District map (city map) view ---
   const [viewingDistrictMap, setViewingDistrictMap] = useState<number | null>(null);
@@ -205,14 +209,16 @@ const RegionMapEditor = ({
         await axios.put(`/locations/${editingItem.id}/update`, payload);
       }
 
-      // Update local state
+      // Update local state (createdItems + edit overrides for backend items)
+      const updatedFields = { name: editForm.name.trim(), marker_type: editForm.marker_type, recommended_level: payload.recommended_level as number | null };
       setCreatedItems((prev) =>
         prev.map((i) =>
           itemKey(i) === editingItem.key
-            ? { ...i, name: editForm.name.trim(), marker_type: editForm.marker_type, recommended_level: payload.recommended_level as number | null }
+            ? { ...i, ...updatedFields }
             : i,
         ),
       );
+      setLocalEditOverrides((prev) => ({ ...prev, [editingItem.key]: updatedFields }));
       toast.success('Сохранено');
       setEditingItem(null);
     } catch {
@@ -306,9 +312,12 @@ const RegionMapEditor = ({
     saveSortOrder(apiItems);
   }, [saveSortOrder]);
 
-  // Build unified items: map_items from backend + locally created
+  // Build unified items: map_items from backend (with edit overrides) + locally created
   const allItems: MapItemData[] = [
-    ...mapItems,
+    ...mapItems.map((item) => {
+      const override = localEditOverrides[`${item.type}-${item.id}`];
+      return override ? { ...item, ...override } : item;
+    }),
     ...createdItems,
   ];
 
@@ -799,12 +808,50 @@ const RegionMapEditor = ({
         posMap[item.id] = { x: pos.map_x, y: pos.map_y };
       }
     }
+    // Fallback: district child locations without own coordinates use district position
+    for (const d of districts) {
+      if (d.x != null && d.y != null) {
+        const dItems = mapItems.filter((i) => i.type === 'location' && i.district_id === d.id);
+        for (const loc of dItems) {
+          if (!posMap[loc.id]) {
+            posMap[loc.id] = { x: d.x!, y: d.y! };
+          }
+        }
+      }
+    }
 
     return neighborEdges
       .filter((edge) => posMap[edge.from_id] && posMap[edge.to_id])
       .map((edge) => {
         const from = posMap[edge.from_id];
         const to = posMap[edge.to_id];
+        const hasPath = edge.path_data && edge.path_data.length > 0;
+
+        if (hasPath) {
+          // Use multiple <line> segments to render the polyline path
+          // (SVG polyline points attr doesn't support % units in non-viewBox SVGs)
+          const allPoints = [from, ...edge.path_data!, to];
+          return (
+            <g key={`${edge.from_id}-${edge.to_id}`}>
+              {allPoints.slice(0, -1).map((p, i) => {
+                const next = allPoints[i + 1];
+                return (
+                  <line
+                    key={`seg-${i}`}
+                    x1={`${p.x}%`}
+                    y1={`${p.y}%`}
+                    x2={`${next.x}%`}
+                    y2={`${next.y}%`}
+                    stroke="rgba(255,255,255,0.3)"
+                    strokeWidth="2"
+                    strokeDasharray="6 4"
+                  />
+                );
+              })}
+            </g>
+          );
+        }
+
         return (
           <line
             key={`${edge.from_id}-${edge.to_id}`}
@@ -1544,6 +1591,12 @@ const RegionMapEditor = ({
           {saving && (
             <span className="text-xs text-site-blue animate-pulse">Сохранение...</span>
           )}
+          <button
+            className="px-3 py-1 bg-amber-600/30 text-amber-300 border border-amber-500/30 rounded cursor-pointer text-xs transition-colors hover:bg-amber-600/50"
+            onClick={() => navigate(`/admin/path-editor/${regionId}`)}
+          >
+            Редактор путей
+          </button>
           <button
             className="px-3 py-1 bg-white/10 text-white border-none rounded cursor-pointer text-xs transition-colors hover:bg-white/20"
             onClick={onClose}

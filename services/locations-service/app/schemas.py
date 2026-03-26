@@ -245,11 +245,31 @@ class RegionRead(BaseModel):
 
 
 # -------------------------------
+#   PATH / WAYPOINT SCHEMAS
+# -------------------------------
+class PathWaypoint(BaseModel):
+    x: float  # 0-100 percentage
+    y: float  # 0-100 percentage
+
+class PathDataUpdate(BaseModel):
+    path_data: List[PathWaypoint]
+
+class NeighborEdgeResponse(BaseModel):
+    from_id: int
+    to_id: int
+    energy_cost: int
+    path_data: Optional[List[PathWaypoint]] = None
+
+    class Config:
+        orm_mode = True
+
+# -------------------------------
 #   NEIGHBOR / POST SCHEMAS
 # -------------------------------
 class LocationNeighborCreate(BaseModel):
     neighbor_id: int
     energy_cost: int = 1
+    path_data: Optional[List[PathWaypoint]] = None
 
 class LocationNeighbor(BaseModel):
     id: int
@@ -418,7 +438,8 @@ class AdminPanelData(BaseModel):
 class LocationNeighborResponse(BaseModel):
     neighbor_id: int
     energy_cost: int
-    
+    path_data: Optional[List[PathWaypoint]] = None
+
     class Config:
         orm_mode = True
 
@@ -447,7 +468,7 @@ class NpcInLocation(BaseModel):
     npc_role: Optional[str] = None
 
 class NeighborClient(BaseModel):
-    neighbor_id: int
+    id: int
     name: str
     recommended_level: int
     image_url: Optional[str] = None
@@ -501,6 +522,7 @@ class LocationClientDetails(BaseModel):
     image_url: Optional[str]
     recommended_level: int
     quick_travel_marker: bool
+    marker_type: Optional[str] = None
     district_id: Optional[int] = None
     region_id: Optional[int] = None
     is_favorited: bool = False

@@ -11,6 +11,8 @@ import {
   AreaWithCountries,
   ClickableZone,
   HierarchyNode,
+  PathWaypoint,
+  NeighborEdge,
 } from '../actions/worldMapActions';
 
 // --- Types ---
@@ -51,7 +53,7 @@ export interface RegionDetailsData {
   name: string;
   map_image_url: string | null;
   recommended_level: number | null;
-  neighbor_edges: { from_id: number; to_id: number }[];
+  neighbor_edges: NeighborEdge[];
   map_items: RegionMapItem[];
   districts: {
     id: number;
@@ -227,5 +229,7 @@ export const selectWorldMapLoading = (state: RootState) => state.worldMap.loadin
 export const selectDetailsLoading = (state: RootState) => state.worldMap.detailsLoading;
 export const selectZonesLoading = (state: RootState) => state.worldMap.zonesLoading;
 export const selectWorldMapError = (state: RootState) => state.worldMap.error;
+
+export type { PathWaypoint, NeighborEdge };
 
 export default worldMapSlice.reducer;

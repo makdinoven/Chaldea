@@ -648,6 +648,17 @@ const WorldPage = () => {
                 mapImageUrl={regionDetails.map_image_url}
                 mapItems={regionMapItems}
                 neighborEdges={regionDetails.neighbor_edges ?? []}
+                districts={regionDetails.districts.map((d) => ({
+                  id: d.id,
+                  x: d.x,
+                  y: d.y,
+                  locations: d.locations.map((l) => ({
+                    id: l.id,
+                    name: l.name,
+                    map_x: l.map_x,
+                    map_y: l.map_y,
+                  })),
+                }))}
                 currentLocationId={currentLocationId}
                 onLocationClick={handleLocationClick}
                 onDistrictClick={handleDistrictClick}

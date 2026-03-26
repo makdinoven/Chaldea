@@ -347,7 +347,17 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
             edge = (min(n.location_id, n.neighbor_id), max(n.location_id, n.neighbor_id))
             if edge not in seen_edges:
                 seen_edges.add(edge)
-                neighbor_edges.append({"from_id": edge[0], "to_id": edge[1]})
+                # If the row is reversed relative to normalized (min,max) direction,
+                # reverse the waypoints so they match from_id→to_id order
+                pd = n.path_data
+                if pd and n.location_id > n.neighbor_id:
+                    pd = list(reversed(pd))
+                neighbor_edges.append({
+                    "from_id": edge[0],
+                    "to_id": edge[1],
+                    "energy_cost": n.energy_cost,
+                    "path_data": pd,
+                })
 
     return {
         "id": region.id,
@@ -526,8 +536,11 @@ async def get_location_by_id(session: AsyncSession, location_id: int) -> Optiona
 # -------------------------------
 #   NEIGHBORS
 # -------------------------------
-async def add_neighbor(session: AsyncSession, location_id: int, neighbor_id: int, energy_cost: int) -> dict:
+async def add_neighbor(session: AsyncSession, location_id: int, neighbor_id: int, energy_cost: int, path_data=None) -> dict:
     """Добавляет соседа к локации"""
+    # Сериализуем path_data в формат для JSON-колонки
+    path_data_json = [{"x": wp["x"], "y": wp["y"]} for wp in path_data] if path_data else None
+
     # Проверяем, существует ли уже такая связь
     forward_result = await session.execute(
         select(LocationNeighbor).where(
@@ -536,16 +549,18 @@ async def add_neighbor(session: AsyncSession, location_id: int, neighbor_id: int
         )
     )
     existing_forward = forward_result.scalars().first()
-    
+
     if existing_forward:
-        # Если связь уже существует, обновляем energy_cost
+        # Если связь уже существует, обновляем energy_cost и path_data
         existing_forward.energy_cost = energy_cost
+        existing_forward.path_data = path_data_json
     else:
         # Иначе создаем новую связь
         forward = LocationNeighbor(
             location_id=location_id,
             neighbor_id=neighbor_id,
-            energy_cost=energy_cost
+            energy_cost=energy_cost,
+            path_data=path_data_json
         )
         session.add(forward)
 
@@ -557,25 +572,71 @@ async def add_neighbor(session: AsyncSession, location_id: int, neighbor_id: int
         )
     )
     existing_reverse = reverse_result.scalars().first()
-    
+
     if existing_reverse:
         existing_reverse.energy_cost = energy_cost
+        existing_reverse.path_data = path_data_json
     else:
         reverse = LocationNeighbor(
             location_id=neighbor_id,
             neighbor_id=location_id,
-            energy_cost=energy_cost
+            energy_cost=energy_cost,
+            path_data=path_data_json
         )
         session.add(reverse)
-    
+
     # Сохраняем изменения
     await session.commit()
-    
+
     # Возвращаем информацию о созданной связи
     return {
         "location_id": location_id,
         "neighbor_id": neighbor_id,
-        "energy_cost": energy_cost
+        "energy_cost": energy_cost,
+        "path_data": path_data_json
+    }
+
+
+async def update_neighbor_path(session: AsyncSession, from_id: int, to_id: int, path_data: list) -> Optional[dict]:
+    """Обновляет path_data на обоих направлениях связи соседей"""
+    path_data_json = [{"x": wp["x"], "y": wp["y"]} for wp in path_data] if path_data is not None else None
+
+    # Ищем прямую связь
+    forward_result = await session.execute(
+        select(LocationNeighbor).where(
+            LocationNeighbor.location_id == from_id,
+            LocationNeighbor.neighbor_id == to_id
+        )
+    )
+    forward = forward_result.scalars().first()
+
+    # Ищем обратную связь
+    reverse_result = await session.execute(
+        select(LocationNeighbor).where(
+            LocationNeighbor.location_id == to_id,
+            LocationNeighbor.neighbor_id == from_id
+        )
+    )
+    reverse = reverse_result.scalars().first()
+
+    # Если нет ни одной связи — соседства не существует
+    if not forward and not reverse:
+        return None
+
+    # Обновляем path_data на обоих направлениях
+    if forward:
+        forward.path_data = path_data_json
+    if reverse:
+        reverse.path_data = path_data_json
+
+    await session.commit()
+
+    energy_cost = forward.energy_cost if forward else reverse.energy_cost
+    return {
+        "from_id": from_id,
+        "to_id": to_id,
+        "energy_cost": energy_cost,
+        "path_data": path_data_json,
     }
 
 
@@ -609,6 +670,8 @@ async def get_location_details(session: AsyncSession, location_id: int) -> Optio
         "quick_travel_marker": loc.quick_travel_marker,
         "district_id": loc.district_id,
         "region_id": loc.region_id,
+        "marker_type": loc.marker_type,
+        "map_icon_url": loc.map_icon_url,
         "neighbors": [
             {"neighbor_id": n.neighbor_id, "energy_cost": n.energy_cost}
             for n in neighbors
@@ -1100,7 +1163,7 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         neighbor_loc = neighbor_res.scalars().first()
         if neighbor_loc:
             detailed_neighbors.append({
-                "neighbor_id": neighbor_loc.id,
+                "id": neighbor_loc.id,
                 "name": neighbor_loc.name,
                 "recommended_level": neighbor_loc.recommended_level,
                 "image_url": neighbor_loc.image_url,
@@ -1145,6 +1208,7 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         "image_url": loc.image_url,
         "recommended_level": loc.recommended_level,
         "quick_travel_marker": loc.quick_travel_marker,
+        "marker_type": loc.marker_type,
         "district_id": loc.district_id,
         "region_id": loc.region_id,
         "is_favorited": favorited,

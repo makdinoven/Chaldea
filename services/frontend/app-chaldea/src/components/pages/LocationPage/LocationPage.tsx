@@ -380,6 +380,11 @@ const LocationPage = () => {
           locationMarkerType={location.marker_type}
         />
 
+        {/* Neighbors */}
+        <div className={inBattle ? 'pointer-events-none opacity-50' : ''}>
+          <NeighborsSection neighbors={location.neighbors} />
+        </div>
+
         {/* Mobs / Enemies */}
         <LocationMobs
           locationId={location.id}
@@ -455,10 +460,6 @@ const LocationPage = () => {
           )}
         </section>
 
-        {/* Neighbors */}
-        <section className={`bg-black/60 rounded-card p-4 sm:p-6 ${inBattle ? 'pointer-events-none opacity-50' : ''}`}>
-          <NeighborsSection neighbors={location.neighbors} />
-        </section>
       </div>
     </div>
   );

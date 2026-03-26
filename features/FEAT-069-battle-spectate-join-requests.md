@@ -1,4 +1,4 @@
-# FEAT-069: Battle Spectate, Mob Lock & Join Requests
+Предложени# FEAT-069: Battle Spectate, Mob Lock & Join Requests
 
 ## Meta
 

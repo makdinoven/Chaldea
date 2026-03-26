@@ -49,6 +49,7 @@ import AdminTitlesPage from "../Admin/TitlesPage/AdminTitlesPage";
 import ProfessionsAdminPage from "../Admin/ProfessionsAdminPage/ProfessionsAdminPage";
 import RecipesAdminPage from "../Admin/RecipesAdminPage/RecipesAdminPage";
 import CraftItemsAdminPage from "../Admin/CraftItemsAdminPage/CraftItemsAdminPage";
+import AdminPathEditorPage from "../AdminPathEditor/AdminPathEditorPage";
 import { CRAFT_ITEM_TYPES } from "../ItemsAdminPage/ItemsAdminPage";
 
 const App = () => {
@@ -212,6 +213,11 @@ const App = () => {
             <Route path="admin/recipes" element={
               <ProtectedRoute requiredPermission="professions:read">
                 <RecipesAdminPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/path-editor/:regionId" element={
+              <ProtectedRoute requiredPermission="locations:update">
+                <AdminPathEditorPage />
               </ProtectedRoute>
             } />
             <Route path="chat/history" element={<ChatHistoryPage />} />

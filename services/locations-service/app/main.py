@@ -399,17 +399,50 @@ async def delete_location_route(
 async def create_neighbor(location_id: int, neighbor_data: schemas.LocationNeighborCreate, session: AsyncSession = Depends(get_db), current_user = Depends(require_permission("locations:update"))):
     loc = await crud.get_location_by_id(session, location_id)
     if not loc:
-        raise HTTPException(status_code=404, detail="Location not found")
+        raise HTTPException(status_code=404, detail="Локация не найдена")
 
     neighbor = await crud.get_location_by_id(session, neighbor_data.neighbor_id)
     if not neighbor:
-        raise HTTPException(status_code=404, detail="Neighbor location not found")
+        raise HTTPException(status_code=404, detail="Соседняя локация не найдена")
 
-    result = await crud.add_neighbor(session, location_id, neighbor_data.neighbor_id, neighbor_data.energy_cost)
+    # Validate path_data waypoints if provided
+    if neighbor_data.path_data is not None:
+        if len(neighbor_data.path_data) > 50:
+            raise HTTPException(status_code=400, detail="Максимум 50 промежуточных точек на путь")
+        for wp in neighbor_data.path_data:
+            if not (0 <= wp.x <= 100) or not (0 <= wp.y <= 100):
+                raise HTTPException(status_code=400, detail="Координаты точек должны быть в диапазоне 0-100")
+
+    path_data_dicts = [{"x": wp.x, "y": wp.y} for wp in neighbor_data.path_data] if neighbor_data.path_data else None
+    result = await crud.add_neighbor(session, location_id, neighbor_data.neighbor_id, neighbor_data.energy_cost, path_data=path_data_dicts)
     return {
         "neighbor_id": result["neighbor_id"],
-        "energy_cost": result["energy_cost"]
+        "energy_cost": result["energy_cost"],
+        "path_data": result["path_data"]
     }
+
+@router.put("/neighbors/{from_id}/{to_id}/path", response_model=schemas.NeighborEdgeResponse)
+async def update_neighbor_path(
+    from_id: int,
+    to_id: int,
+    body: schemas.PathDataUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:update"))
+):
+    """Обновляет waypoints пути между двумя соседними локациями"""
+    # Validate waypoints
+    if len(body.path_data) > 50:
+        raise HTTPException(status_code=400, detail="Максимум 50 промежуточных точек на путь")
+    for wp in body.path_data:
+        if not (0 <= wp.x <= 100) or not (0 <= wp.y <= 100):
+            raise HTTPException(status_code=400, detail="Координаты точек должны быть в диапазоне 0-100")
+
+    path_data_dicts = [{"x": wp.x, "y": wp.y} for wp in body.path_data]
+    result = await crud.update_neighbor_path(session, from_id, to_id, path_data_dicts)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Связь соседей не найдена")
+    return result
+
 
 @router.get("/{location_id}/neighbors/", response_model=List[schemas.LocationNeighborResponse])
 async def get_location_neighbors(location_id: int, session: AsyncSession = Depends(get_db)):
