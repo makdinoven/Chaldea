@@ -67,6 +67,92 @@ def db_session(test_engine, seed_fk_data):
     Base.metadata.create_all(bind=test_engine)
     session = database.SessionLocal()
     seed_fk_data(session)
+
+    # Pre-create shared-DB tables that belong to other services but are
+    # queried via raw SQL by crud.evaluate_titles / get_character_titles_with_progress.
+    session.execute(sa_text("""
+        CREATE TABLE IF NOT EXISTS character_attributes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            character_id INTEGER NOT NULL,
+            strength INTEGER DEFAULT 0,
+            agility INTEGER DEFAULT 0,
+            intelligence INTEGER DEFAULT 0,
+            endurance INTEGER DEFAULT 0,
+            charisma INTEGER DEFAULT 0,
+            luck INTEGER DEFAULT 0,
+            health INTEGER DEFAULT 0,
+            max_health INTEGER DEFAULT 0,
+            current_health INTEGER DEFAULT 0,
+            mana INTEGER DEFAULT 0,
+            max_mana INTEGER DEFAULT 0,
+            current_mana INTEGER DEFAULT 0,
+            energy INTEGER DEFAULT 0,
+            max_energy INTEGER DEFAULT 0,
+            current_energy INTEGER DEFAULT 0,
+            stamina INTEGER DEFAULT 0,
+            max_stamina INTEGER DEFAULT 0,
+            current_stamina INTEGER DEFAULT 0,
+            damage INTEGER DEFAULT 0,
+            dodge INTEGER DEFAULT 0,
+            res_effects INTEGER DEFAULT 0,
+            res_physical INTEGER DEFAULT 0,
+            res_catting INTEGER DEFAULT 0,
+            res_crushing INTEGER DEFAULT 0,
+            res_piercing INTEGER DEFAULT 0,
+            res_magic INTEGER DEFAULT 0,
+            res_fire INTEGER DEFAULT 0,
+            res_ice INTEGER DEFAULT 0,
+            res_watering INTEGER DEFAULT 0,
+            res_electricity INTEGER DEFAULT 0,
+            res_wind INTEGER DEFAULT 0,
+            res_sainting INTEGER DEFAULT 0,
+            res_damning INTEGER DEFAULT 0,
+            critical_hit_chance INTEGER DEFAULT 0,
+            critical_damage INTEGER DEFAULT 0,
+            vul_effects INTEGER DEFAULT 0,
+            vul_physical INTEGER DEFAULT 0,
+            vul_catting INTEGER DEFAULT 0,
+            vul_crushing INTEGER DEFAULT 0,
+            vul_piercing INTEGER DEFAULT 0,
+            vul_magic INTEGER DEFAULT 0,
+            vul_fire INTEGER DEFAULT 0,
+            vul_ice INTEGER DEFAULT 0,
+            vul_watering INTEGER DEFAULT 0,
+            vul_electricity INTEGER DEFAULT 0,
+            vul_sainting INTEGER DEFAULT 0,
+            vul_wind INTEGER DEFAULT 0,
+            vul_damning INTEGER DEFAULT 0,
+            passive_experience INTEGER DEFAULT 0,
+            active_experience INTEGER DEFAULT 0
+        )
+    """))
+    session.execute(sa_text("""
+        CREATE TABLE IF NOT EXISTS character_cumulative_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            character_id INTEGER NOT NULL,
+            pve_kills INTEGER DEFAULT 0,
+            pvp_wins INTEGER DEFAULT 0,
+            pvp_losses INTEGER DEFAULT 0,
+            total_battles INTEGER DEFAULT 0,
+            total_damage_dealt INTEGER DEFAULT 0,
+            total_damage_received INTEGER DEFAULT 0,
+            max_damage_single_battle INTEGER DEFAULT 0,
+            max_win_streak INTEGER DEFAULT 0,
+            current_win_streak INTEGER DEFAULT 0,
+            total_rounds_survived INTEGER DEFAULT 0,
+            low_hp_wins INTEGER DEFAULT 0,
+            total_gold_earned INTEGER DEFAULT 0,
+            total_gold_spent INTEGER DEFAULT 0,
+            items_bought INTEGER DEFAULT 0,
+            items_sold INTEGER DEFAULT 0,
+            locations_visited INTEGER DEFAULT 0,
+            total_transitions INTEGER DEFAULT 0,
+            skills_used INTEGER DEFAULT 0,
+            items_equipped INTEGER DEFAULT 0
+        )
+    """))
+    session.commit()
+
     try:
         yield session
     finally:

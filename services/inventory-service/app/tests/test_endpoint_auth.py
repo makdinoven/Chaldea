@@ -55,6 +55,10 @@ for col in models.EquipmentSlot.__table__.columns:
     if type(col.type).__name__ == "Enum":
         col.type = String(100)
 
+for col in models.TradeOffer.__table__.columns:
+    if type(col.type).__name__ == "Enum":
+        col.type = String(100)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -93,9 +97,15 @@ def auth_db_session():
         yield session
     finally:
         session.close()
+        # Disable FK checks before drop_all to avoid circular dependency errors
+        # (items <-> recipes have mutual FKs via blueprint_recipe_id / result_item_id)
+        with _test_engine.connect() as conn:
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            conn.commit()
         database.Base.metadata.drop_all(bind=_test_engine)
         with _test_engine.connect() as conn:
             conn.execute(text("DROP TABLE IF EXISTS characters"))
+            conn.execute(text("PRAGMA foreign_keys=ON"))
             conn.commit()
 
 

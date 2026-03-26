@@ -180,8 +180,8 @@ class TestSetCurrentTitle:
     @patch("main.verify_character_ownership")
     @patch("main.crud")
     def test_returns_404_when_character_not_found(self, mock_crud, mock_verify, admin_mock_client, mock_db_session):
-        """When crud.set_current_title returns None, expect 404."""
-        mock_crud.set_current_title.return_value = None
+        """When crud.set_current_title_cosmetic returns character_not_found status, expect 404."""
+        mock_crud.set_current_title_cosmetic.return_value = (None, "character_not_found")
 
         response = admin_mock_client.post("/characters/1/current-title/999")
 
@@ -192,7 +192,7 @@ class TestSetCurrentTitle:
     @patch("main.crud")
     def test_returns_200_when_title_set(self, mock_crud, mock_verify, admin_mock_client, mock_db_session):
         """When crud returns a valid character, expect success."""
-        mock_crud.set_current_title.return_value = MagicMock()
+        mock_crud.set_current_title_cosmetic.return_value = (MagicMock(), "ok")
 
         response = admin_mock_client.post("/characters/1/current-title/1")
 
@@ -203,7 +203,7 @@ class TestSetCurrentTitle:
     @patch("main.crud")
     def test_returns_500_on_sqlalchemy_error(self, mock_crud, mock_verify, admin_mock_client, mock_db_session):
         """When a DB error occurs, expect 500."""
-        mock_crud.set_current_title.side_effect = SQLAlchemyError("Connection reset")
+        mock_crud.set_current_title_cosmetic.side_effect = SQLAlchemyError("Connection reset")
 
         response = admin_mock_client.post("/characters/1/current-title/1")
 
@@ -216,44 +216,52 @@ class TestSetCurrentTitle:
 # ---------------------------------------------------------------------------
 
 class TestGetTitlesForCharacter:
-    """Test that get_titles_for_character endpoint returns 404 when no titles."""
+    """Test that get_titles_for_character endpoint returns correct responses."""
 
     @patch("main.crud")
-    def test_returns_404_when_no_titles(self, mock_crud, client):
-        """When crud.get_titles_for_character returns empty list, expect 404."""
-        mock_crud.get_titles_for_character.return_value = []
-
-        response = client.get("/characters/1/titles")
-
-        assert response.status_code == 404
-        assert "титул" in response.json()["detail"].lower()
-
-    @patch("main.crud")
-    def test_returns_404_when_none(self, mock_crud, client):
-        """When crud.get_titles_for_character returns None, expect 404."""
-        mock_crud.get_titles_for_character.return_value = None
-
-        response = client.get("/characters/99999/titles")
-
-        assert response.status_code == 404
-
-    @patch("main.crud")
-    def test_returns_200_with_titles(self, mock_crud, client):
-        """When crud returns titles, expect 200 with title list."""
-        mock_title = MagicMock()
-        mock_title.id_title = 1
-        mock_title.name = "Герой"
-        mock_title.description = "Отважный герой"
-        mock_crud.get_titles_for_character.return_value = [mock_title]
+    def test_returns_empty_list_when_no_titles(self, mock_crud, client):
+        """When crud.get_character_titles_with_progress returns empty list, expect 200 with []."""
+        mock_crud.evaluate_titles.return_value = []
+        mock_crud.get_character_titles_with_progress.return_value = []
 
         response = client.get("/characters/1/titles")
 
         assert response.status_code == 200
+        assert response.json() == []
+
+    @patch("main.crud")
+    def test_returns_200_with_titles(self, mock_crud, client):
+        """When crud returns titles, expect 200 with title list."""
+        mock_crud.evaluate_titles.return_value = []
+        mock_crud.get_character_titles_with_progress.return_value = [
+            {
+                "id_title": 1,
+                "name": "Герой",
+                "description": "Отважный герой",
+                "rarity": "common",
+                "conditions": None,
+                "icon": None,
+                "reward_passive_exp": 0,
+                "reward_active_exp": 0,
+                "is_unlocked": True,
+                "unlocked_at": None,
+                "is_custom": False,
+                "progress": None,
+            }
+        ]
+
+        response = client.get("/characters/1/titles")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["name"] == "Герой"
 
     @patch("main.crud")
     def test_returns_500_on_sqlalchemy_error(self, mock_crud, client):
         """When a DB error occurs, expect 500."""
-        mock_crud.get_titles_for_character.side_effect = SQLAlchemyError(
+        mock_crud.evaluate_titles.return_value = []
+        mock_crud.get_character_titles_with_progress.side_effect = SQLAlchemyError(
             "Query timeout"
         )
 
@@ -265,7 +273,8 @@ class TestGetTitlesForCharacter:
     @patch("main.crud")
     def test_500_does_not_leak_db_details(self, mock_crud, client):
         """Ensure the error response does not expose internal DB error details."""
-        mock_crud.get_titles_for_character.side_effect = SQLAlchemyError(
+        mock_crud.evaluate_titles.return_value = []
+        mock_crud.get_character_titles_with_progress.side_effect = SQLAlchemyError(
             "FATAL: password authentication failed for user 'dbadmin'"
         )
 
