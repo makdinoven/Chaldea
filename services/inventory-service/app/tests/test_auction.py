@@ -37,6 +37,7 @@ def _create_characters_table(db):
             currency_balance INTEGER DEFAULT 0,
             is_npc INTEGER DEFAULT 0,
             npc_role TEXT DEFAULT NULL,
+            npc_status TEXT DEFAULT 'alive',
             is_alive INTEGER DEFAULT 1
         )"""
     ))
@@ -59,8 +60,8 @@ def _create_characters_table(db):
 def _insert_character(db, char_id, user_id, name="TestChar", location=1, gold=0):
     db.execute(text(
         "INSERT OR IGNORE INTO characters "
-        "(id, name, user_id, current_location_id, currency_balance, is_npc, npc_role, is_alive) "
-        "VALUES (:cid, :name, :uid, :loc, :gold, 0, NULL, 1)"
+        "(id, name, user_id, current_location_id, currency_balance, is_npc, npc_role, npc_status, is_alive) "
+        "VALUES (:cid, :name, :uid, :loc, :gold, 0, NULL, 'alive', 1)"
     ), {"cid": char_id, "name": name, "uid": user_id, "loc": location, "gold": gold})
     db.commit()
 
@@ -69,8 +70,8 @@ def _insert_npc_auctioneer(db, npc_id, location):
     """Insert an NPC auctioneer at the given location."""
     db.execute(text(
         "INSERT OR IGNORE INTO characters "
-        "(id, name, user_id, current_location_id, currency_balance, is_npc, npc_role, is_alive) "
-        "VALUES (:cid, 'Аукционист', 0, :loc, 0, 1, 'auctioneer', 1)"
+        "(id, name, user_id, current_location_id, currency_balance, is_npc, npc_role, npc_status, is_alive) "
+        "VALUES (:cid, 'Аукционист', 0, :loc, 0, 1, 'auctioneer', 'alive', 1)"
     ), {"cid": npc_id, "loc": location})
     db.commit()
 
@@ -101,6 +102,21 @@ def _add_inventory(db, char_id, item_id, quantity, enhancement_points=0, enhance
     db.add(inv)
     db.flush()
     return inv
+
+
+def _deposit_to_storage(db, char_id, item_id, quantity, enhancement_data=None):
+    """Create an auction storage entry (simulates deposit)."""
+    storage = models.AuctionStorage(
+        character_id=char_id,
+        item_id=item_id,
+        quantity=quantity,
+        gold_amount=0,
+        enhancement_data=enhancement_data,
+        source='deposit',
+    )
+    db.add(storage)
+    db.flush()
+    return storage
 
 
 # ---------------------------------------------------------------------------
@@ -162,10 +178,12 @@ def test_check_auctioneer_absent(auction_env):
 @patch("crud.publish_auction_notification")
 def test_create_listing_happy_path(mock_notify, auction_env):
     db = auction_env["db"]
+    storage = _deposit_to_storage(db, 1, 201, 1)
+    db.commit()
+
     req = schemas.AuctionCreateListingRequest(
         character_id=1,
-        inventory_item_id=auction_env["inv_sword_id"],
-        quantity=1,
+        storage_id=storage.id,
         start_price=100,
         buyout_price=500,
     )
@@ -178,21 +196,23 @@ def test_create_listing_happy_path(mock_notify, auction_env):
     assert result["buyout_price"] == 500
     assert result["active_listing_count"] == 1
 
-    # Verify item removed from inventory
-    inv = db.query(models.CharacterInventory).filter(
-        models.CharacterInventory.id == auction_env["inv_sword_id"]
+    # Verify storage entry removed
+    remaining = db.query(models.AuctionStorage).filter(
+        models.AuctionStorage.id == storage.id
     ).first()
-    assert inv is None
+    assert remaining is None
 
 
 @patch("crud.publish_auction_notification")
-def test_create_listing_partial_stack(mock_notify, auction_env):
-    """Listing part of a stack preserves remaining quantity."""
+def test_create_listing_from_storage(mock_notify, auction_env):
+    """Listing from storage uses the full storage quantity."""
     db = auction_env["db"]
+    storage = _deposit_to_storage(db, 1, 202, 10)
+    db.commit()
+
     req = schemas.AuctionCreateListingRequest(
         character_id=1,
-        inventory_item_id=auction_env["inv_herb_id"],
-        quantity=10,
+        storage_id=storage.id,
         start_price=50,
     )
     result = crud.create_auction_listing(db, data=req, user_id=1)
@@ -200,27 +220,26 @@ def test_create_listing_partial_stack(mock_notify, auction_env):
 
     assert result["quantity"] == 10
 
-    inv = db.query(models.CharacterInventory).filter(
-        models.CharacterInventory.id == auction_env["inv_herb_id"]
+    # Storage entry should be deleted
+    remaining = db.query(models.AuctionStorage).filter(
+        models.AuctionStorage.id == storage.id
     ).first()
-    assert inv is not None
-    assert inv.quantity == 40
+    assert remaining is None
 
 
 @patch("crud.publish_auction_notification")
-def test_create_listing_insufficient_quantity(mock_notify, auction_env):
+def test_create_listing_storage_not_found(mock_notify, auction_env):
     db = auction_env["db"]
     req = schemas.AuctionCreateListingRequest(
         character_id=1,
-        inventory_item_id=auction_env["inv_sword_id"],
-        quantity=5,  # Only have 1
+        storage_id=99999,  # Non-existent storage entry
         start_price=100,
     )
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc:
         crud.create_auction_listing(db, data=req, user_id=1)
     assert exc.value.status_code == 400
-    assert "Недостаточно предметов" in exc.value.detail
+    assert "склад" in exc.value.detail.lower() or "не найден" in exc.value.detail.lower()
 
 
 @patch("crud.publish_auction_notification")
@@ -228,27 +247,25 @@ def test_create_listing_max_limit(mock_notify, auction_env):
     """Cannot exceed 5 active listings."""
     db = auction_env["db"]
 
-    # Create 5 items + inventory entries and list them
+    # Create 5 items + storage entries and list them
     for i in range(5):
         _create_item(db, 300 + i, f"Item{i}", max_stack=10)
-        inv = _add_inventory(db, 1, 300 + i, 5)
+        storage = _deposit_to_storage(db, 1, 300 + i, 1)
         db.flush()
         req = schemas.AuctionCreateListingRequest(
             character_id=1,
-            inventory_item_id=inv.id,
-            quantity=1,
+            storage_id=storage.id,
             start_price=10,
         )
         crud.create_auction_listing(db, data=req, user_id=1)
 
     # 6th listing should fail
     _create_item(db, 399, "Extra", max_stack=10)
-    inv6 = _add_inventory(db, 1, 399, 5)
+    storage6 = _deposit_to_storage(db, 1, 399, 1)
     db.flush()
     req6 = schemas.AuctionCreateListingRequest(
         character_id=1,
-        inventory_item_id=inv6.id,
-        quantity=1,
+        storage_id=storage6.id,
         start_price=10,
     )
     from fastapi import HTTPException
@@ -261,10 +278,12 @@ def test_create_listing_max_limit(mock_notify, auction_env):
 @patch("crud.publish_auction_notification")
 def test_create_listing_invalid_price_zero(mock_notify, auction_env):
     db = auction_env["db"]
+    storage = _deposit_to_storage(db, 1, 201, 1)
+    db.commit()
+
     req = schemas.AuctionCreateListingRequest(
         character_id=1,
-        inventory_item_id=auction_env["inv_sword_id"],
-        quantity=1,
+        storage_id=storage.id,
         start_price=0,
     )
     from fastapi import HTTPException
@@ -277,10 +296,12 @@ def test_create_listing_invalid_price_zero(mock_notify, auction_env):
 @patch("crud.publish_auction_notification")
 def test_create_listing_buyout_must_exceed_start(mock_notify, auction_env):
     db = auction_env["db"]
+    storage = _deposit_to_storage(db, 1, 201, 1)
+    db.commit()
+
     req = schemas.AuctionCreateListingRequest(
         character_id=1,
-        inventory_item_id=auction_env["inv_sword_id"],
-        quantity=1,
+        storage_id=storage.id,
         start_price=100,
         buyout_price=50,  # lower than start
     )
@@ -292,22 +313,21 @@ def test_create_listing_buyout_must_exceed_start(mock_notify, auction_env):
 
 
 @patch("crud.publish_auction_notification")
-def test_create_listing_no_auctioneer(mock_notify, auction_env):
-    """Without NPC auctioneer at location, listing is forbidden."""
+def test_deposit_no_auctioneer(mock_notify, auction_env):
+    """Without NPC auctioneer at location, deposit is forbidden."""
     db = auction_env["db"]
     # Move player to location 99 (no auctioneer)
     db.execute(text("UPDATE characters SET current_location_id = 99 WHERE id = 1 AND is_npc = 0"))
     db.commit()
 
-    req = schemas.AuctionCreateListingRequest(
+    req = schemas.AuctionDepositRequest(
         character_id=1,
         inventory_item_id=auction_env["inv_sword_id"],
         quantity=1,
-        start_price=100,
     )
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc:
-        crud.create_auction_listing(db, data=req, user_id=1)
+        crud.deposit_to_auction_storage(db, data=req, user_id=1)
     assert exc.value.status_code == 403
     assert "НПС-Аукционист" in exc.value.detail
 
@@ -316,14 +336,14 @@ def test_create_listing_no_auctioneer(mock_notify, auction_env):
 def test_create_listing_in_battle_blocked(mock_notify, auction_env):
     """Characters in battle cannot create listings."""
     db = auction_env["db"]
-    db.execute(text("INSERT INTO battles (id, status) VALUES (1, 'active')"))
+    storage = _deposit_to_storage(db, 1, 201, 1)
+    db.execute(text("INSERT INTO battles (id, status) VALUES (1, 'in_progress')"))
     db.execute(text("INSERT INTO battle_participants (id, battle_id, character_id) VALUES (1, 1, 1)"))
     db.commit()
 
     req = schemas.AuctionCreateListingRequest(
         character_id=1,
-        inventory_item_id=auction_env["inv_sword_id"],
-        quantity=1,
+        storage_id=storage.id,
         start_price=100,
     )
     from fastapi import HTTPException
@@ -335,18 +355,19 @@ def test_create_listing_in_battle_blocked(mock_notify, auction_env):
 
 @patch("crud.publish_auction_notification")
 def test_create_listing_enhancement_data_snapshot(mock_notify, auction_env):
-    """Enhancement data is preserved in the listing."""
+    """Enhancement data is preserved in the listing via storage."""
     db = auction_env["db"]
-    bonus_json = json.dumps({"strength_modifier": 3})
     _create_item(db, 500, "Magic Sword", max_stack=1, item_type="main_weapon")
-    inv = _add_inventory(db, 1, 500, 1, enhancement_points=5, enhancement_bonuses=bonus_json)
-    db.flush()
+    enh_data = json.dumps({
+        "enhancement_points_spent": 5,
+        "enhancement_bonuses": {"strength_modifier": 3},
+    })
+    storage = _deposit_to_storage(db, 1, 500, 1, enhancement_data=enh_data)
     db.commit()
 
     req = schemas.AuctionCreateListingRequest(
         character_id=1,
-        inventory_item_id=inv.id,
-        quantity=1,
+        storage_id=storage.id,
         start_price=100,
     )
     result = crud.create_auction_listing(db, data=req, user_id=1)

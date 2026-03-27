@@ -35,6 +35,7 @@ def _create_characters_table(db):
             currency_balance INTEGER DEFAULT 0,
             is_npc INTEGER DEFAULT 0,
             npc_role TEXT DEFAULT NULL,
+            npc_status TEXT DEFAULT 'alive',
             is_alive INTEGER DEFAULT 1
         )"""
     ))
@@ -57,8 +58,8 @@ def _create_characters_table(db):
 def _insert_character(db, char_id, user_id, name="TestChar", location=1, gold=0):
     db.execute(text(
         "INSERT OR IGNORE INTO characters "
-        "(id, name, user_id, current_location_id, currency_balance, is_npc, npc_role, is_alive) "
-        "VALUES (:cid, :name, :uid, :loc, :gold, 0, NULL, 1)"
+        "(id, name, user_id, current_location_id, currency_balance, is_npc, npc_role, npc_status, is_alive) "
+        "VALUES (:cid, :name, :uid, :loc, :gold, 0, NULL, 'alive', 1)"
     ), {"cid": char_id, "name": name, "uid": user_id, "loc": location, "gold": gold})
     db.commit()
 
@@ -66,8 +67,8 @@ def _insert_character(db, char_id, user_id, name="TestChar", location=1, gold=0)
 def _insert_npc_auctioneer(db, npc_id, location):
     db.execute(text(
         "INSERT OR IGNORE INTO characters "
-        "(id, name, user_id, current_location_id, currency_balance, is_npc, npc_role, is_alive) "
-        "VALUES (:cid, 'Аукционист', 0, :loc, 0, 1, 'auctioneer', 1)"
+        "(id, name, user_id, current_location_id, currency_balance, is_npc, npc_role, npc_status, is_alive) "
+        "VALUES (:cid, 'Аукционист', 0, :loc, 0, 1, 'auctioneer', 'alive', 1)"
     ), {"cid": npc_id, "loc": location})
     db.commit()
 
@@ -92,6 +93,20 @@ def _add_inventory(db, char_id, item_id, quantity):
     db.add(inv)
     db.flush()
     return inv
+
+
+def _deposit_to_storage(db, char_id, item_id, quantity):
+    """Create an auction storage entry (simulates deposit)."""
+    storage = models.AuctionStorage(
+        character_id=char_id,
+        item_id=item_id,
+        quantity=quantity,
+        gold_amount=0,
+        source='deposit',
+    )
+    db.add(storage)
+    db.flush()
+    return storage
 
 
 def _create_listing_in_db(db, seller_id=1, item_id=201, qty=1, start=100, buyout=500, status='active'):
@@ -183,17 +198,13 @@ def test_auth_wrong_user_create_listing(auction_client):
     env = auction_client
     c = env["client"]
 
-    # Add inventory for character 2
-    _add_inventory(env["db"], 2, 201, 1)
+    # Create storage entry for character 2
+    storage = _deposit_to_storage(env["db"], 2, 201, 1)
     env["db"].commit()
-    inv = env["db"].query(models.CharacterInventory).filter(
-        models.CharacterInventory.character_id == 2,
-    ).first()
 
     resp = c.post("/inventory/auction/listings", json={
         "character_id": 2,
-        "inventory_item_id": inv.id,
-        "quantity": 1,
+        "storage_id": storage.id,
         "start_price": 100,
     })
     assert resp.status_code == 403
@@ -322,11 +333,15 @@ def test_get_single_listing_not_found(auction_client):
 # ---------------------------------------------------------------------------
 
 def test_create_listing_success(auction_client):
+    db = auction_client["db"]
     c = auction_client["client"]
+
+    storage = _deposit_to_storage(db, 1, 201, 1)
+    db.commit()
+
     resp = c.post("/inventory/auction/listings", json={
         "character_id": 1,
-        "inventory_item_id": auction_client["inv_sword_id"],
-        "quantity": 1,
+        "storage_id": storage.id,
         "start_price": 100,
         "buyout_price": 500,
     })
@@ -340,46 +355,48 @@ def test_create_listing_limit_exceeded(auction_client):
     db = auction_client["db"]
     c = auction_client["client"]
 
-    # Create 5 items and list them
+    # Create 5 items and list them via storage
     for i in range(5):
         _create_item(db, 400 + i, f"LimitItem{i}", max_stack=10)
-        inv = _add_inventory(db, 1, 400 + i, 5)
+        storage = _deposit_to_storage(db, 1, 400 + i, 1)
         db.flush()
     db.commit()
 
-    invs = db.query(models.CharacterInventory).filter(
-        models.CharacterInventory.character_id == 1,
-        models.CharacterInventory.item_id.in_([400, 401, 402, 403, 404]),
+    storages = db.query(models.AuctionStorage).filter(
+        models.AuctionStorage.character_id == 1,
+        models.AuctionStorage.item_id.in_([400, 401, 402, 403, 404]),
     ).all()
 
-    for inv in invs:
+    for s in storages:
         resp = c.post("/inventory/auction/listings", json={
             "character_id": 1,
-            "inventory_item_id": inv.id,
-            "quantity": 1,
+            "storage_id": s.id,
             "start_price": 10,
         })
         assert resp.status_code == 201
 
     # 6th should fail
     _create_item(db, 499, "OverLimit", max_stack=10)
-    inv6 = _add_inventory(db, 1, 499, 5)
+    storage6 = _deposit_to_storage(db, 1, 499, 1)
     db.commit()
 
     resp = c.post("/inventory/auction/listings", json={
         "character_id": 1,
-        "inventory_item_id": inv6.id,
-        "quantity": 1,
+        "storage_id": storage6.id,
         "start_price": 10,
     })
     assert resp.status_code == 400
     assert "лимит" in resp.json()["detail"].lower()
 
 
-def test_create_listing_npc_gating(auction_client):
-    """Creating listing without auctioneer NPC returns 403."""
+def test_create_listing_from_storage_no_npc_ok(auction_client):
+    """Creating listing from storage works even without NPC (NPC check is at deposit time)."""
     db = auction_client["db"]
     c = auction_client["client"]
+
+    # Create storage entry first (while at NPC location)
+    storage = _deposit_to_storage(db, 1, 201, 1)
+    db.commit()
 
     # Move character away from auctioneer
     db.execute(text("UPDATE characters SET current_location_id = 99 WHERE id = 1 AND is_npc = 0"))
@@ -387,12 +404,11 @@ def test_create_listing_npc_gating(auction_client):
 
     resp = c.post("/inventory/auction/listings", json={
         "character_id": 1,
-        "inventory_item_id": auction_client["inv_sword_id"],
-        "quantity": 1,
+        "storage_id": storage.id,
         "start_price": 100,
     })
-    assert resp.status_code == 403
-    assert "НПС-Аукционист" in resp.json()["detail"]
+    # Listing from storage succeeds regardless of NPC location
+    assert resp.status_code == 201
 
 
 # ---------------------------------------------------------------------------
@@ -541,16 +557,17 @@ def test_my_listings_active_and_completed(auction_client):
 # GET /inventory/auction/storage
 # ---------------------------------------------------------------------------
 
-def test_storage_npc_gating(auction_client):
-    """Storage endpoint requires auctioneer NPC at location."""
+def test_storage_viewable_without_npc(auction_client):
+    """Storage endpoint is viewable from anywhere (no NPC check)."""
     db = auction_client["db"]
     db.execute(text("UPDATE characters SET current_location_id = 99 WHERE id = 1 AND is_npc = 0"))
     db.commit()
 
     c = auction_client["client"]
     resp = c.get("/inventory/auction/storage?character_id=1")
-    assert resp.status_code == 403
-    assert "НПС-Аукционист" in resp.json()["detail"]
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "items" in data
 
 
 def test_storage_with_items(auction_client):
@@ -689,17 +706,18 @@ def test_error_messages_russian_own_listing_bid(auction_client):
 
 
 def test_error_messages_russian_npc_required(auction_client):
+    """Deposit endpoint requires NPC and returns Russian error."""
     db = auction_client["db"]
     db.execute(text("UPDATE characters SET current_location_id = 99 WHERE id = 1 AND is_npc = 0"))
     db.commit()
 
     c = auction_client["client"]
-    resp = c.post("/inventory/auction/listings", json={
+    resp = c.post("/inventory/auction/storage/deposit", json={
         "character_id": 1,
         "inventory_item_id": auction_client["inv_sword_id"],
         "quantity": 1,
-        "start_price": 100,
     })
+    assert resp.status_code == 403
     assert "НПС-Аукционист" in resp.json()["detail"]
 
 
