@@ -16,6 +16,10 @@ import {
   handleAuctionWon,
   handleAuctionExpired,
 } from '../redux/slices/auctionSlice';
+import {
+  receiveTicketReply,
+  receiveTicketNewMessage,
+} from '../redux/slices/ticketSlice';
 import type {
   PrivateMessage,
   WsPrivateMessageData,
@@ -213,6 +217,16 @@ const useWebSocket = (): UseWebSocketReturn => {
               if (expiredData.message) {
                 toast(expiredData.message);
               }
+              break;
+            }
+            case 'ticket_reply': {
+              const ticketReplyData = parsed.data as { ticket_id: number };
+              dispatch(receiveTicketReply(ticketReplyData));
+              break;
+            }
+            case 'ticket_new_message': {
+              const ticketNewMsgData = parsed.data as { ticket_id: number };
+              dispatch(receiveTicketNewMessage(ticketNewMsgData));
               break;
             }
             case 'ping':

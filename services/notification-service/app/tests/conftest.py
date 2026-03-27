@@ -46,6 +46,12 @@ from chat_models import ChatMessage as ChatMessageModel  # noqa: E402
 NotificationModel.__table__.c.status.type = String(10)
 ChatMessageModel.__table__.c.channel.type = String(20)
 
+# Ticket models also use MySQL ENUM columns that need patching for SQLite
+from ticket_models import SupportTicket as TicketModel  # noqa: E402
+
+TicketModel.__table__.c.category.type = String(20)
+TicketModel.__table__.c.status.type = String(20)
+
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -150,6 +156,85 @@ def moderator_client(db_session, moderator_user):
     app.dependency_overrides[get_current_user_via_http] = override_auth
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def ticket_admin_user():
+    """An admin user with ticket permissions."""
+    return _make_user(user_id=99, username="admin", role="admin", permissions=[
+        "notifications:create", "notifications:read", "notifications:update", "notifications:delete",
+        "chat:delete", "chat:ban",
+        "tickets:read", "tickets:reply", "tickets:manage",
+    ])
+
+
+class _TicketTestHelper:
+    """Helper that provides a single TestClient with switchable auth identity.
+
+    Because FastAPI's dependency_overrides is a global dict on the app,
+    using two separate client fixtures in the same test causes the second
+    to overwrite the first.  This helper keeps one TestClient and lets tests
+    switch between user and admin identities on the fly.
+    """
+
+    def __init__(self, app, db_session, user, admin):
+        self._app = app
+        self._db_session = db_session
+        self._user = user
+        self._admin = admin
+        self._current = user
+        self._setup_overrides()
+        self.client = TestClient(app)
+
+    # ---- public API --------------------------------------------------
+    def as_user(self):
+        """Switch auth to regular user."""
+        self._current = self._user
+        self._update_auth()
+        return self.client
+
+    def as_admin(self):
+        """Switch auth to admin with ticket permissions."""
+        self._current = self._admin
+        self._update_auth()
+        return self.client
+
+    # ---- internal ----------------------------------------------------
+    def _setup_overrides(self):
+        from auth_http import get_current_user_via_http
+        def override_get_db():
+            yield self._db_session
+        self._app.dependency_overrides[get_db] = override_get_db
+        self._update_auth()
+
+    def _update_auth(self):
+        from auth_http import get_current_user_via_http
+        current = self._current
+        self._app.dependency_overrides[get_current_user_via_http] = lambda: current
+
+    def cleanup(self):
+        self._app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def ticket_helper(db_session, test_user, ticket_admin_user):
+    """Provides a _TicketTestHelper with switchable user/admin auth."""
+    from main import app
+    helper = _TicketTestHelper(app, db_session, test_user, ticket_admin_user)
+    yield helper
+    helper.cleanup()
+
+
+@pytest.fixture()
+def ticket_client(ticket_helper):
+    """Convenience: TestClient authenticated as regular user (for ticket tests)."""
+    return ticket_helper.as_user()
+
+
+@pytest.fixture()
+def ticket_admin_client(ticket_helper):
+    """Convenience: TestClient authenticated as admin with ticket permissions."""
+    return ticket_helper.as_admin()
 
 
 @pytest.fixture()

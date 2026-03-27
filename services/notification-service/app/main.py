@@ -23,6 +23,7 @@ from consumers.general_notification import start_general_notifications_consumer
 
 from chat_routes import chat_router
 from messenger_routes import messenger_router
+from ticket_routes import ticket_router
 from messenger_ws_handler import (
     handle_messenger_send,
     handle_messenger_edit,
@@ -240,3 +241,4 @@ def mark_all_notifications_as_read(
 app.include_router(router)
 app.include_router(chat_router)
 app.include_router(messenger_router)
+app.include_router(ticket_router)

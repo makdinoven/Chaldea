@@ -25,6 +25,7 @@ import bestiaryReducer from './slices/bestiarySlice';
 import craftingReducer from './slices/craftingSlice';
 import messengerReducer from './slices/messengerSlice';
 import auctionReducer from './slices/auctionSlice';
+import ticketReducer from './slices/ticketSlice';
 
 export const store = configureStore({
   reducer: {
@@ -53,6 +54,7 @@ export const store = configureStore({
     crafting: craftingReducer,
     messenger: messengerReducer,
     auction: auctionReducer,
+    tickets: ticketReducer,
   },
 });
 

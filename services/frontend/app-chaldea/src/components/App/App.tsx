@@ -53,6 +53,10 @@ import AdminPathEditorPage from "../AdminPathEditor/AdminPathEditorPage";
 import MessengerPage from "../Messenger/MessengerPage";
 import PostHistoryPage from "../pages/PostHistoryPage/PostHistoryPage";
 import AuctionPage from "../Auction/AuctionPage";
+import TicketListPage from "../Tickets/TicketListPage";
+import TicketDetailPage from "../Tickets/TicketDetailPage";
+import AdminTicketsPage from "../Tickets/AdminTicketsPage";
+import AdminTicketDetailPage from "../Tickets/AdminTicketDetailPage";
 import { CRAFT_ITEM_TYPES } from "../ItemsAdminPage/ItemsAdminPage";
 
 const App = () => {
@@ -225,6 +229,18 @@ const App = () => {
             } />
             <Route path="post-history/:characterId" element={<PostHistoryPage />} />
             <Route path="auction" element={<AuctionPage />} />
+            <Route path="support" element={<TicketListPage />} />
+            <Route path="support/:ticketId" element={<TicketDetailPage />} />
+            <Route path="admin/tickets" element={
+              <ProtectedRoute requiredPermission="tickets:read">
+                <AdminTicketsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/tickets/:ticketId" element={
+              <ProtectedRoute requiredPermission="tickets:read">
+                <AdminTicketDetailPage />
+              </ProtectedRoute>
+            } />
             <Route path="messages" element={<MessengerPage />} />
             <Route path="chat/history" element={<ChatHistoryPage />} />
             <Route path="players" element={<AllUsersPage />} />

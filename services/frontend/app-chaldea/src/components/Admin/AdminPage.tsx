@@ -1,6 +1,8 @@
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { useAppSelector } from '../../redux/store';
+import { useAppDispatch, useAppSelector } from '../../redux/store';
 import { selectPermissions, selectRole } from '../../redux/slices/userSlice';
+import { fetchAdminOpenCount, selectAdminOpenCount } from '../../redux/slices/ticketSlice';
 import { hasModuleAccess } from '../../utils/permissions';
 
 interface AdminSection {
@@ -11,6 +13,7 @@ interface AdminSection {
 }
 
 const sections: AdminSection[] = [
+  { label: 'Тикеты', path: '/admin/tickets', description: 'Управление тикетами поддержки', module: 'tickets' },
   { label: 'Заявки', path: '/requestsPage', description: 'Модерация заявок на создание персонажей', module: 'characters' },
   { label: 'Айтемы', path: '/admin/items', description: 'Управление предметами и экипировкой', module: 'items' },
   { label: 'Крафтовые предметы', path: '/admin/craft-items', description: 'Чертежи, рецепты, камни, руны, ресурсы', module: 'items' },
@@ -36,8 +39,17 @@ const sections: AdminSection[] = [
 ];
 
 const AdminPage = () => {
+  const dispatch = useAppDispatch();
   const role = useAppSelector(selectRole);
   const permissions = useAppSelector(selectPermissions);
+  const openTicketCount = useAppSelector(selectAdminOpenCount);
+
+  useEffect(() => {
+    // Fetch open ticket count for badge if user has access
+    if (role === 'admin' || hasModuleAccess(permissions, 'tickets')) {
+      dispatch(fetchAdminOpenCount());
+    }
+  }, [dispatch, role, permissions]);
 
   const visibleSections = sections.filter((section) =>
     role === 'admin' || hasModuleAccess(permissions, section.module)
@@ -58,11 +70,18 @@ const AdminPage = () => {
             <Link
               key={section.path}
               to={section.path}
-              className="bg-black/50 backdrop-blur-md rounded-card p-6 hover:bg-white/10 transition-colors duration-200 ease-site"
+              className="bg-black/50 backdrop-blur-md rounded-card p-6 hover:bg-white/10 transition-colors duration-200 ease-site relative"
             >
-              <h2 className="text-white text-lg font-semibold uppercase tracking-[0.06em] mb-2">
-                {section.label}
-              </h2>
+              <div className="flex items-center gap-2 mb-2">
+                <h2 className="text-white text-lg font-semibold uppercase tracking-[0.06em]">
+                  {section.label}
+                </h2>
+                {section.module === 'tickets' && openTicketCount > 0 && (
+                  <span className="bg-site-red text-white text-xs font-medium px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+                    {openTicketCount}
+                  </span>
+                )}
+              </div>
               <p className="text-white/60 text-sm">
                 {section.description}
               </p>
