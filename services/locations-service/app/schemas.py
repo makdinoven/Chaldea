@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Dict
 from datetime import datetime
 
 
@@ -1067,4 +1067,15 @@ class ArchiveArticlePreview(BaseModel):
 class ArchiveSearchResult(BaseModel):
     articles: List[ArchiveArticleListItem]
     total: int
+
+
+# -------------------------------
+#   CHARACTER POST STATS SCHEMAS
+# -------------------------------
+class CharacterPostStats(BaseModel):
+    count: int
+    last_date: Optional[datetime] = None
+
+class CharacterPostStatsResponse(BaseModel):
+    stats: Dict[str, CharacterPostStats]
 

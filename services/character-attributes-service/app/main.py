@@ -259,6 +259,20 @@ def admin_grant_perk(
     except Exception as e:
         logger.error(f"Title evaluation error after perk grant for character {character_id}: {e}")
 
+    # Log perk grant to character logs (fire-and-forget)
+    try:
+        httpx.post(
+            f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/logs",
+            json={
+                "event_type": "perk_granted",
+                "description": f"Получен перк: {perk.name}",
+                "metadata": {"perk_id": perk_id, "perk_name": perk.name},
+            },
+            timeout=5.0,
+        )
+    except Exception as e:
+        logger.error(f"Character log error after perk grant for character {character_id}: {e}")
+
     return {"detail": "Перк выдан", "character_id": character_id, "perk_id": perk_id}
 
 
@@ -726,6 +740,39 @@ def update_active_experience(
     }
 
 
+@router.put("/{character_id}/passive_experience")
+def update_passive_experience(
+    character_id: int,
+    request: schemas.UpdatePassiveExperienceRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Увеличивает или уменьшает passive_experience на указанное значение.
+    request.amount > 0 => добавляем
+    request.amount < 0 => снимаем
+    """
+    attr = db.query(models.CharacterAttributes).filter(
+        models.CharacterAttributes.character_id == character_id
+    ).first()
+
+    if not attr:
+        raise HTTPException(status_code=404, detail="Character attributes not found")
+
+    new_value = attr.passive_experience + request.amount
+    if new_value < 0:
+        raise HTTPException(status_code=400, detail="passive_experience cannot be negative")
+
+    attr.passive_experience = new_value
+
+    db.commit()
+    db.refresh(attr)
+
+    return {
+        "detail": "Passive experience updated",
+        "passive_experience": attr.passive_experience
+    }
+
+
 @router.post("/{character_id}/consume_stamina")
 def consume_stamina(character_id: int, payload: dict, db: Session = Depends(get_db)):
     """
@@ -791,6 +838,31 @@ def admin_update_attributes(
         db.rollback()
         logger.error(f"Ошибка при админском обновлении атрибутов: {e}")
         raise HTTPException(status_code=500, detail="Failed to update attributes")
+
+    # Log experience changes to character-service (fire-and-forget)
+    logged_fields = []
+    if "passive_experience" in update_data:
+        logged_fields.append(f"пассивный опыт → {update_data['passive_experience']}")
+    if "active_experience" in update_data:
+        logged_fields.append(f"активный опыт → {update_data['active_experience']}")
+
+    if logged_fields:
+        try:
+            httpx.post(
+                f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/logs",
+                json={
+                    "event_type": "admin_experience_change",
+                    "description": f"Опыт изменён администратором: {', '.join(logged_fields)}",
+                    "metadata": {
+                        "passive_experience": update_data.get("passive_experience"),
+                        "active_experience": update_data.get("active_experience"),
+                        "admin_action": True,
+                    },
+                },
+                timeout=5.0,
+            )
+        except Exception:
+            pass
 
     return attr
 

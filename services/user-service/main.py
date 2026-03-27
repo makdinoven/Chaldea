@@ -147,6 +147,26 @@ async def _fetch_character_short(char_id: int):
         }
 
 
+async def _fetch_character_post_stats(character_ids: list) -> dict:
+    """Fetch RP post counts and last post dates from locations-service.
+
+    Returns a dict keyed by character_id (str) with {count, last_date} values.
+    On failure returns empty dict (graceful degradation).
+    """
+    if not character_ids:
+        return {}
+    ids_param = ",".join(str(cid) for cid in character_ids)
+    url = f"{LOCATION_SERVICE_URL}/locations/posts/character-stats?character_ids={ids_param}"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("stats", {})
+    except Exception:
+        return {}
+
+
 # ==================== AUTH & REGISTRATION ====================
 
 @router.post("/register")
@@ -1455,17 +1475,24 @@ async def get_user_characters(
 
     characters = []
     if character_ids:
-        tasks = [_fetch_character_short(cid) for cid in character_ids]
-        results = await asyncio.gather(*tasks)
-        for char_data in results:
+        # Fetch character info and post stats in parallel
+        char_tasks = [_fetch_character_short(cid) for cid in character_ids]
+        post_stats_task = _fetch_character_post_stats(character_ids)
+        char_results, post_stats = await asyncio.gather(
+            asyncio.gather(*char_tasks),
+            post_stats_task,
+        )
+        for char_data in char_results:
             if char_data:
+                cid_str = str(char_data["id"])
+                stats = post_stats.get(cid_str, {})
                 characters.append(schemas.UserCharacterItem(
                     id=char_data["id"],
                     name=char_data["name"],
                     avatar=char_data.get("avatar"),
                     level=char_data.get("level"),
-                    rp_posts_count=0,
-                    last_rp_post_date=None,
+                    rp_posts_count=stats.get("count", 0),
+                    last_rp_post_date=stats.get("last_date"),
                     id_race=char_data.get("id_race"),
                     id_class=char_data.get("id_class"),
                     id_subrace=char_data.get("id_subrace"),

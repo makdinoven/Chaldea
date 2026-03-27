@@ -541,7 +541,37 @@ async def create_new_post(
 ):
     await verify_character_ownership(session, post_data.character_id, current_user.id)
     await check_not_in_battle(session, post_data.character_id, "Вы не можете писать посты во время боя")
+
+    # Validate minimum post length (strip HTML before counting)
+    plain_text = crud.strip_html_tags(post_data.content)
+    char_count = len(plain_text)
+    if char_count < crud.MIN_POST_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Минимальная длина поста — {crud.MIN_POST_LENGTH} символов (сейчас: {char_count})",
+        )
+
     result = await crud.create_post(session, post_data)
+
+    # Calculate XP and schedule background award + log
+    char_count, xp = crud.calculate_post_xp(post_data.content)
+
+    # Fetch location name for the log description
+    loc_result = await session.execute(
+        select(models.Location).where(models.Location.id == post_data.location_id)
+    )
+    loc = loc_result.scalars().first()
+    location_name = loc.name if loc else f"локация #{post_data.location_id}"
+
+    background_tasks.add_task(
+        crud.award_post_xp_and_log,
+        post_data.character_id,
+        result.id,
+        post_data.location_id,
+        location_name,
+        char_count,
+        xp,
+    )
 
     # Fire-and-forget: trigger mob spawn check
     background_tasks.add_task(
@@ -553,6 +583,37 @@ async def create_new_post(
 @router.get("/{location_id}/posts/", response_model=List[schemas.PostResponse])
 async def get_posts_in_location(location_id: int, session: AsyncSession = Depends(get_db)):
     return await crud.get_posts_by_location(session, location_id)
+
+
+@router.get("/posts/character-stats", response_model=schemas.CharacterPostStatsResponse)
+async def get_character_post_stats(
+    character_ids: str = "",
+    session: AsyncSession = Depends(get_db),
+):
+    """Internal batch endpoint: return post count and last post date per character."""
+    if not character_ids or not character_ids.strip():
+        return {"stats": {}}
+
+    # Parse comma-separated IDs, skip invalid values
+    parsed_ids: list[int] = []
+    for raw in character_ids.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            parsed_ids.append(int(raw))
+        except ValueError:
+            continue
+
+    if not parsed_ids:
+        return {"stats": {}}
+
+    # Cap at 50 to prevent abuse
+    if len(parsed_ids) > 50:
+        parsed_ids = parsed_ids[:50]
+
+    stats = await crud.get_character_post_stats(session, parsed_ids)
+    return {"stats": stats}
 
 
 @router.post("/posts/{post_id}/like", status_code=201)
@@ -748,7 +809,16 @@ async def move_and_post(
         if current_stamina < movement_cost:
             raise HTTPException(status_code=400, detail="Not enough stamina to move")
 
-    # 4. Создаём пост для новой локации (destination_location_id)
+    # 4. Validate minimum post length (strip HTML before counting)
+    plain_text = crud.strip_html_tags(movement.content)
+    plain_char_count = len(plain_text)
+    if plain_char_count < crud.MIN_POST_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Минимальная длина поста — {crud.MIN_POST_LENGTH} символов (сейчас: {plain_char_count})",
+        )
+
+    # 5. Создаём пост для новой локации (destination_location_id)
     # use the path parameter
     payload = {
         "character_id": movement.character_id,
@@ -762,33 +832,45 @@ async def move_and_post(
     # и передать уже её
     new_post = await crud.create_post(session, post_in)
 
-    # 5. Обновляем текущую локацию персонажа через Character‑service
+    # 6. Обновляем текущую локацию персонажа через Character‑service
     async with httpx.AsyncClient(timeout=5.0) as client:
         update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/update_location"
         update_resp = await client.put(update_url, json={"new_location_id": destination_location_id})
         if update_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Failed to update character location")
 
-    # 6. Списываем выносливость (вызываем эндпоинт consume_stamina в Attributes‑service)
+    # 7. Списываем выносливость (вызываем эндпоинт consume_stamina в Attributes‑service)
     async with httpx.AsyncClient(timeout=5.0) as client:
         consume_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{movement.character_id}/consume_stamina"
         consume_resp = await client.post(consume_url, json={"amount": movement_cost})
         if consume_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Failed to deduct stamina for movement")
 
-    # 7. Уведомляем пользователей, добавивших локацию в избранное
+    # 8. Уведомляем пользователей, добавивших локацию в избранное
     dest_result = await session.execute(
         select(models.Location).where(models.Location.id == destination_location_id)
     )
     dest_loc = dest_result.scalars().first()
+    location_name = dest_loc.name if dest_loc else f"локация #{destination_location_id}"
     if dest_loc:
-        location_name = dest_loc.name
         fav_user_ids = await crud.get_favorite_user_ids(session, destination_location_id)
         author_user_id = current_user.id
         for uid in fav_user_ids:
             if uid != author_user_id:
                 msg = f"Новый пост на локации «{location_name}»"
                 background_tasks.add_task(publish_notification_sync, uid, msg)
+
+    # 9. Calculate XP and schedule background award + log
+    char_count, xp = crud.calculate_post_xp(movement.content)
+    background_tasks.add_task(
+        crud.award_post_xp_and_log,
+        movement.character_id,
+        new_post.id,
+        destination_location_id,
+        location_name,
+        char_count,
+        xp,
+    )
 
     # Fire-and-forget: trigger mob spawn check at destination location
     background_tasks.add_task(

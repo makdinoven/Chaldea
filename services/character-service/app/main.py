@@ -475,6 +475,7 @@ async def admin_update_character(
 
     old_level = character.level
     old_stat_points = character.stat_points
+    old_currency_balance = character.currency_balance
 
     for field, value in update_data.items():
         setattr(character, field, value)
@@ -498,6 +499,23 @@ async def admin_update_character(
         db.rollback()
         logger.error(f"Error updating character {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+    # Log admin changes to character log
+    try:
+        if "level" in update_data and character.level != old_level:
+            crud.create_character_log(db, character_id, "admin_level_change",
+                f"Уровень изменён администратором: {old_level} → {character.level}",
+                {"old_level": old_level, "new_level": character.level, "admin_action": True})
+        if "stat_points" in update_data and character.stat_points != old_stat_points:
+            crud.create_character_log(db, character_id, "admin_stat_change",
+                f"Очки характеристик изменены администратором: {old_stat_points} → {character.stat_points}",
+                {"old_value": old_stat_points, "new_value": character.stat_points, "field": "stat_points", "admin_action": True})
+        if "currency_balance" in update_data and character.currency_balance != old_currency_balance:
+            crud.create_character_log(db, character_id, "admin_currency_change",
+                f"Баланс изменён администратором: {old_currency_balance} → {character.currency_balance}",
+                {"old_value": old_currency_balance, "new_value": character.currency_balance, "admin_action": True})
+    except Exception as e:
+        logger.warning(f"Failed to log admin changes for character {character_id}: {e}")
 
     # Sync passive_experience when level is changed
     if "level" in update_data:
@@ -2611,6 +2629,84 @@ def get_bestiary_endpoint(
     except SQLAlchemyError as e:
         logger.error(f"Ошибка при получении бестиария: {e}")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+# ============================================================
+# Character Logs (FEAT-095)
+# ============================================================
+
+@router.post("/{character_id}/logs", response_model=schemas.CharacterLogResponse, status_code=201)
+def create_character_log_endpoint(
+    character_id: int,
+    data: schemas.CreateCharacterLogRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth) — creates a log entry for the character.
+    Called by other services to record events (battles, rewards, travel, etc.).
+    """
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    log_entry = crud.create_character_log(
+        db,
+        character_id=character_id,
+        event_type=data.event_type,
+        description=data.description,
+        metadata=data.metadata,
+    )
+    return schemas.CharacterLogResponse(
+        id=log_entry.id,
+        character_id=log_entry.character_id,
+        event_type=log_entry.event_type,
+        description=log_entry.description,
+        metadata=log_entry.metadata_,
+        created_at=log_entry.created_at,
+    )
+
+
+@router.get("/{character_id}/logs", response_model=schemas.CharacterLogsListResponse)
+def get_character_logs_endpoint(
+    character_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    event_type: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Public endpoint (no auth) — returns paginated character logs.
+    """
+    logs, total = crud.get_character_logs(db, character_id, limit=limit, offset=offset, event_type=event_type)
+    return schemas.CharacterLogsListResponse(
+        logs=[
+            schemas.CharacterLogResponse(
+                id=log.id,
+                character_id=log.character_id,
+                event_type=log.event_type,
+                description=log.description,
+                metadata=log.metadata_,
+                created_at=log.created_at,
+            )
+            for log in logs
+        ],
+        total=total,
+    )
+
+
+@router.get("/{character_id}/post-history", response_model=schemas.PostHistoryResponse)
+def get_character_post_history_endpoint(
+    character_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Public endpoint (no auth) — returns post history for the character.
+    Queries the shared 'posts' table with location names.
+    """
+    posts = crud.get_character_post_history(db, character_id)
+    return schemas.PostHistoryResponse(
+        posts=[schemas.PostHistoryItem(**p) for p in posts],
+    )
 
 
 app.include_router(router)

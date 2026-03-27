@@ -1,4 +1,6 @@
 import httpx
+import math
+import re
 import models, schemas
 from config import settings
 from sqlalchemy import text as sa_text
@@ -8,7 +10,7 @@ from sqlalchemy.orm import Session
 from models import (
     CharacterRequest, Race, Subrace, Class, Character, LevelThreshold,
     MobTemplate, MobTemplateSkill, MobLootTable, LocationMobSpawn, ActiveMob,
-    MobKill,
+    MobKill, CharacterLog,
 )
 import logging
 
@@ -369,6 +371,19 @@ def assign_title_to_character(db: Session, character_id: int, title_id: int):
         db.add(new_assignment)
         db.commit()
         db.refresh(new_assignment)
+
+        # Log title grant
+        try:
+            create_character_log(
+                db=db,
+                character_id=character_id,
+                event_type="title_granted",
+                description=f"Получен титул: {db_title.name}",
+                metadata={"title_id": title_id, "title_name": db_title.name},
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log title assignment for character {character_id}: {e}")
+
         return new_assignment
     return None
 
@@ -1534,6 +1549,19 @@ def grant_title(db: Session, character_id: int, title_id: int):
         _grant_title_xp(db, character_id, title.reward_passive_exp, title.reward_active_exp)
 
     db.commit()
+
+    # Log title grant
+    try:
+        create_character_log(
+            db=db,
+            character_id=character_id,
+            event_type="title_granted",
+            description=f"Получен титул: {title.name}",
+            metadata={"title_id": title_id, "title_name": title.name},
+        )
+    except Exception as e:
+        logger.warning(f"Failed to log title grant for character {character_id}: {e}")
+
     return True, "granted"
 
 
@@ -1916,4 +1944,89 @@ def evaluate_titles(db: Session, character_id: int):
     if newly_unlocked:
         db.commit()
 
+        # Log each auto-granted title
+        for unlocked in newly_unlocked:
+            try:
+                create_character_log(
+                    db=db,
+                    character_id=character_id,
+                    event_type="title_granted",
+                    description=f"Получен титул: {unlocked['name']}",
+                    metadata={"title_id": unlocked["id_title"], "title_name": unlocked["name"]},
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log auto-granted title for character {character_id}: {e}")
+
     return newly_unlocked
+
+
+# ============================================================
+# Character Logs & Post History (FEAT-095)
+# ============================================================
+
+def create_character_log(db: Session, character_id: int, event_type: str, description: str, metadata=None):
+    """
+    Creates a CharacterLog entry for the given character.
+    Returns the created log ORM object.
+    """
+    log_entry = CharacterLog(
+        character_id=character_id,
+        event_type=event_type,
+        description=description,
+        metadata_=metadata,
+    )
+    db.add(log_entry)
+    db.commit()
+    db.refresh(log_entry)
+    return log_entry
+
+
+def get_character_logs(db: Session, character_id: int, limit: int = 50, offset: int = 0, event_type: str = None):
+    """
+    Returns paginated character logs ordered by created_at DESC.
+    If event_type is provided, filters by it.
+    Returns (logs_list, total_count).
+    """
+    query = db.query(CharacterLog).filter(CharacterLog.character_id == character_id)
+    if event_type:
+        query = query.filter(CharacterLog.event_type == event_type)
+
+    total = query.count()
+    logs = query.order_by(CharacterLog.created_at.desc()).offset(offset).limit(limit).all()
+    return logs, total
+
+
+def get_character_post_history(db: Session, character_id: int):
+    """
+    Raw SQL query on the shared 'posts' table with JOIN on 'Locations' to get location names.
+    Returns list of dicts with post data including computed char_count and xp_earned.
+    """
+    sql = sa_text("""
+        SELECT p.id, p.character_id, p.location_id, L.name AS location_name,
+               p.content, p.created_at
+        FROM posts p
+        JOIN Locations L ON L.id = p.location_id
+        WHERE p.character_id = :cid
+        ORDER BY p.created_at DESC
+    """)
+    rows = db.execute(sql, {"cid": character_id}).fetchall()
+
+    result = []
+    for row in rows:
+        content = row[4] or ""
+        plain_text = re.sub(r'<[^>]*>', '', content).strip()
+        char_count = len(plain_text)
+        xp_earned = math.floor(char_count / 100 + 0.5) if char_count >= 300 else 0
+
+        result.append({
+            "id": row[0],
+            "character_id": row[1],
+            "location_id": row[2],
+            "location_name": row[3] or "",
+            "content": content,
+            "char_count": char_count,
+            "xp_earned": xp_earned,
+            "created_at": row[5],
+        })
+
+    return result

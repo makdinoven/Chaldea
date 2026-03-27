@@ -116,6 +116,9 @@ class PassiveExperienceResponse(BaseModel):
 class UpdateActiveExperienceRequest(BaseModel):
     amount: int  # Положительное число означает "добавить", отрицательное — "снять".
 
+class UpdatePassiveExperienceRequest(BaseModel):
+    amount: int  # Положительное число означает "добавить", отрицательное — "снять".
+
 
 # Схема для админского обновления атрибутов (все поля Optional — partial update)
 class AdminAttributeUpdate(BaseModel):

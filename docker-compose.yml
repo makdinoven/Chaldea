@@ -224,6 +224,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      CHARACTER_SERVICE_URL: http://character-service:8005
+      LOCATION_SERVICE_URL: http://locations-service:8006
     ports:
       - "8000:8000"
     depends_on:

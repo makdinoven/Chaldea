@@ -1,8 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Edit3 } from 'react-feather';
+import toast from 'react-hot-toast';
 import WysiwygEditor from '../../CommonComponents/WysiwygEditor/WysiwygEditor';
 import { NpcInLocation } from './types';
+
+const MIN_POST_LENGTH = 300;
 
 interface PostCreateFormProps {
   onSubmit: (content: string) => Promise<void>;
@@ -12,10 +15,9 @@ interface PostCreateFormProps {
   npcs?: NpcInLocation[];
 }
 
-const isContentEmpty = (html: string) => {
-  const stripped = html.replace(/<[^>]*>/g, '').trim();
-  return stripped.length === 0;
-};
+const stripHtmlTags = (html: string) => html.replace(/<[^>]*>/g, '').trim();
+
+const isContentEmpty = (html: string) => stripHtmlTags(html).length === 0;
 
 const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] }: PostCreateFormProps) => {
   const [content, setContent] = useState('');
@@ -25,6 +27,10 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
   const [npcMode, setNpcMode] = useState(false);
   const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
   const formRef = useRef<HTMLDivElement>(null);
+
+  const charCount = useMemo(() => stripHtmlTags(content).length, [content]);
+  const meetsMinLength = charCount >= MIN_POST_LENGTH;
+  const xpPreview = meetsMinLength ? Math.round(charCount / 100) : 0;
 
   useEffect(() => {
     if (!isEditorOpen) return;
@@ -60,6 +66,11 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
       return;
     }
 
+    if (!meetsMinLength) {
+      toast.error(`Минимальная длина поста — ${MIN_POST_LENGTH} символов (сейчас: ${charCount})`);
+      return;
+    }
+
     setSubmitting(true);
     try {
       await onSubmit(content);
@@ -80,6 +91,10 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
   };
 
   const selectedNpc = npcs.find((n) => n.id === selectedNpcId);
+
+  const isSubmitDisabled = npcMode
+    ? submitting || isContentEmpty(content) || !selectedNpcId
+    : submitting || isContentEmpty(content) || !meetsMinLength;
 
   return (
     <div ref={formRef}>
@@ -159,20 +174,44 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
               onChange={setContent}
               enableArchiveLinks
             />
-            <div className="flex justify-end gap-3">
-              <button
-                className="btn-line !py-2 !px-6 !text-sm"
-                onClick={resetForm}
-              >
-                Отмена
-              </button>
-              <button
-                className="btn-blue !py-2 !px-6 !text-sm"
-                onClick={handleSubmit}
-                disabled={submitting || isContentEmpty(content) || (npcMode && !selectedNpcId)}
-              >
-                {submitting ? 'Отправка...' : npcMode ? 'Опубликовать от НПС' : 'Опубликовать'}
-              </button>
+
+            {/* Character counter + XP preview (only in non-NPC mode) */}
+            {!npcMode && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs sm:text-sm">
+                <span className={meetsMinLength ? 'text-stat-energy' : 'text-site-red'}>
+                  {charCount} / {MIN_POST_LENGTH} символов
+                </span>
+                <span className="text-white/50">
+                  {meetsMinLength
+                    ? `~${xpPreview} XP`
+                    : `Минимум ${MIN_POST_LENGTH} символов`}
+                </span>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              {/* Min length hint on mobile when submit is blocked */}
+              {!npcMode && !meetsMinLength && charCount > 0 && (
+                <span className="text-xs text-site-red sm:hidden">
+                  Ещё {MIN_POST_LENGTH - charCount} символов до минимума
+                </span>
+              )}
+              <div className="flex justify-end gap-3 sm:ml-auto">
+                <button
+                  className="btn-line !py-2 !px-6 !text-sm"
+                  onClick={resetForm}
+                >
+                  Отмена
+                </button>
+                <button
+                  className="btn-blue !py-2 !px-6 !text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={handleSubmit}
+                  disabled={isSubmitDisabled}
+                  title={!npcMode && !meetsMinLength ? `Минимум ${MIN_POST_LENGTH} символов` : undefined}
+                >
+                  {submitting ? 'Отправка...' : npcMode ? 'Опубликовать от НПС' : 'Опубликовать'}
+                </button>
+              </div>
             </div>
           </motion.div>
         )}

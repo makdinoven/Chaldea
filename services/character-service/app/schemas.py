@@ -915,3 +915,43 @@ class BestiaryResponse(BaseModel):
     entries: List[BestiaryEntry]
     total: int
     killed_count: int
+
+
+# ========== Character Log Schemas (FEAT-095) ==========
+
+class CreateCharacterLogRequest(BaseModel):
+    event_type: str
+    description: str
+    metadata: Optional[dict] = None
+
+
+class CharacterLogResponse(BaseModel):
+    id: int
+    character_id: int
+    event_type: str
+    description: str
+    metadata: Optional[dict] = None
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class CharacterLogsListResponse(BaseModel):
+    logs: List[CharacterLogResponse]
+    total: int
+
+
+class PostHistoryItem(BaseModel):
+    id: int
+    character_id: int
+    location_id: int
+    location_name: str
+    content: str
+    char_count: int
+    xp_earned: int
+    created_at: datetime
+
+
+class PostHistoryResponse(BaseModel):
+    posts: List[PostHistoryItem]

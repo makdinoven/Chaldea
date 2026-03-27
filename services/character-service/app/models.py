@@ -260,3 +260,19 @@ class MobKill(Base):
     mob_template = relationship("MobTemplate")
 
 
+class CharacterLog(Base):
+    __tablename__ = "character_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    event_type = Column(String(50), nullable=False)
+    description = Column(Text, nullable=False)
+    metadata_ = Column("metadata", JSON, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index('idx_character_logs_char_created', 'character_id', created_at.desc()),
+        Index('idx_character_logs_event_type', 'event_type'),
+    )
+
+

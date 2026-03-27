@@ -2,7 +2,7 @@
 
 from sqlalchemy import (
     Column, Integer, String, ForeignKey, Text, Boolean, Enum, BigInteger, TIMESTAMP,
-    func, Float, JSON, text, UniqueConstraint
+    func, Float, JSON, text, UniqueConstraint, Index
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
@@ -154,6 +154,10 @@ class Post(Base):
     location_id = Column(BigInteger, ForeignKey("Locations.id", ondelete="CASCADE"), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index('idx_posts_character_id', 'character_id'),
+    )
 
 
 class PostLike(Base):

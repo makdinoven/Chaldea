@@ -14,6 +14,7 @@ import SkillsTab from './SkillsTab/SkillsTab';
 import PerksTab from './PerksTab/PerksTab';
 import QuestLogTab from './QuestLogTab';
 import BattlesTab from './BattlesTab/BattlesTab';
+import LogsTab from './LogsTab/LogsTab';
 import TitlesTab from './TitlesTab/TitlesTab';
 import CraftTab from './CraftTab/CraftTab';
 import ErrorBoundary from '../ui/ErrorBoundary';
@@ -70,7 +71,7 @@ const ProfilePage = () => {
       case 'battles':
         return <BattlesTab characterId={characterId} />;
       case 'logs':
-        return <PlaceholderTab tabName="Логи персонажа" />;
+        return <LogsTab characterId={characterId} />;
       case 'titles':
         return <TitlesTab characterId={characterId} />;
       case 'craft':
@@ -91,7 +92,7 @@ const ProfilePage = () => {
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="-mt-12"
     >
-      <ProfileTabs activeTab={activeTab} onTabChange={setActiveTab} />
+      <ProfileTabs activeTab={activeTab} onTabChange={setActiveTab} characterId={characterId} />
       {renderTabContent()}
     </motion.div>
   );

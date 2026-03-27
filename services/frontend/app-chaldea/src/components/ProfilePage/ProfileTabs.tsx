@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom';
+
 interface Tab {
   key: string;
   label: string;
@@ -17,9 +19,10 @@ const TABS: Tab[] = [
 interface ProfileTabsProps {
   activeTab: string;
   onTabChange: (tabKey: string) => void;
+  characterId?: number | null;
 }
 
-const ProfileTabs = ({ activeTab, onTabChange }: ProfileTabsProps) => {
+const ProfileTabs = ({ activeTab, onTabChange, characterId }: ProfileTabsProps) => {
   return (
     <nav className="flex items-center gap-4 sm:gap-8 mb-8 overflow-x-auto pb-1 gold-scrollbar">
       {TABS.map((tab) => {
@@ -41,6 +44,14 @@ const ProfileTabs = ({ activeTab, onTabChange }: ProfileTabsProps) => {
           </button>
         );
       })}
+      {characterId && (
+        <Link
+          to={`/post-history/${characterId}`}
+          className="pb-2 text-sm font-medium uppercase tracking-[0.06em] gold-text opacity-70 hover:opacity-100 transition-all duration-200 ease-site whitespace-nowrap shrink-0 ml-2"
+        >
+          История постов
+        </Link>
+      )}
     </nav>
   );
 };

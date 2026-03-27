@@ -51,6 +51,7 @@ import RecipesAdminPage from "../Admin/RecipesAdminPage/RecipesAdminPage";
 import CraftItemsAdminPage from "../Admin/CraftItemsAdminPage/CraftItemsAdminPage";
 import AdminPathEditorPage from "../AdminPathEditor/AdminPathEditorPage";
 import MessengerPage from "../Messenger/MessengerPage";
+import PostHistoryPage from "../pages/PostHistoryPage/PostHistoryPage";
 import { CRAFT_ITEM_TYPES } from "../ItemsAdminPage/ItemsAdminPage";
 
 const App = () => {
@@ -221,6 +222,7 @@ const App = () => {
                 <AdminPathEditorPage />
               </ProtectedRoute>
             } />
+            <Route path="post-history/:characterId" element={<PostHistoryPage />} />
             <Route path="messages" element={<MessengerPage />} />
             <Route path="chat/history" element={<ChatHistoryPage />} />
             <Route path="players" element={<AllUsersPage />} />

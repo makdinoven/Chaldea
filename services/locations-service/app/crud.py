@@ -1,13 +1,74 @@
 import logging
+import re
+import math
 import httpx
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from sqlalchemy.orm import selectinload
 from sqlalchemy import text, delete, func as sa_func
 from sqlalchemy.exc import IntegrityError
 from config import settings
+
+logger = logging.getLogger(__name__)
+
+MIN_POST_LENGTH = 300  # characters after stripping HTML
+
+
+def strip_html_tags(html: str) -> str:
+    """Remove HTML tags, returning plain text."""
+    return re.sub(r'<[^>]*>', '', html).strip()
+
+
+def calculate_post_xp(content: str) -> Tuple[int, int]:
+    """
+    Calculate XP from post content.
+    Returns (char_count, xp_earned).
+    char_count is the number of characters after HTML stripping.
+    xp_earned = round(char_count / 100) using standard math rounding.
+    """
+    plain_text = strip_html_tags(content)
+    char_count = len(plain_text)
+    if char_count < MIN_POST_LENGTH:
+        return (char_count, 0)
+    # Standard rounding: 340/100=3.4 -> 3, 350/100=3.5 -> 4
+    xp = math.floor(char_count / 100 + 0.5)
+    return (char_count, xp)
+
+
+async def award_post_xp_and_log(
+    character_id: int,
+    post_id: int,
+    location_id: int,
+    location_name: str,
+    char_count: int,
+    xp: int,
+):
+    """Fire-and-forget: award passive XP and create a character log entry."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if xp > 0:
+                await client.put(
+                    f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{character_id}/passive_experience",
+                    json={"amount": xp},
+                )
+            description = f"Написал пост в {location_name}, получил {xp} XP"
+            await client.post(
+                f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/logs",
+                json={
+                    "event_type": "rp_post",
+                    "description": description,
+                    "metadata": {
+                        "post_id": post_id,
+                        "location_id": location_id,
+                        "xp_earned": xp,
+                        "char_count": char_count,
+                    },
+                },
+            )
+    except Exception as e:
+        logger.error(f"Failed to award XP/log for post {post_id}: {e}")
 import models
 from models import (
     Country, Region, District, Location, LocationNeighbor, Post, PostLike, GameRule,
@@ -704,6 +765,29 @@ async def create_post(session: AsyncSession, post_data: PostCreate) -> Post:
 async def get_posts_by_location(session: AsyncSession, location_id: int) -> list:
     result = await session.execute(select(Post).where(Post.location_id == location_id).order_by(Post.id.desc()))
     return result.scalars().all()
+
+
+async def get_character_post_stats(session: AsyncSession, character_ids: List[int]) -> Dict[str, dict]:
+    """Batch-fetch post count and last post date per character_id."""
+    if not character_ids:
+        return {}
+    result = await session.execute(
+        select(
+            Post.character_id,
+            sa_func.count().label("count"),
+            sa_func.max(Post.created_at).label("last_date"),
+        )
+        .where(Post.character_id.in_(character_ids))
+        .group_by(Post.character_id)
+    )
+    rows = result.all()
+    stats: Dict[str, dict] = {}
+    for row in rows:
+        stats[str(row.character_id)] = {
+            "count": row.count,
+            "last_date": row.last_date,
+        }
+    return stats
 
 
 async def like_post(session: AsyncSession, post_id: int, character_id: int) -> PostLike:
