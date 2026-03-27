@@ -142,7 +142,7 @@ class TestCreatePostNoBattle:
         mock_post.id = 1
         mock_post.character_id = 1
         mock_post.location_id = 100
-        mock_post.content = "Привет"
+        mock_post.content = "А" * 350
         mock_post.created_at = datetime(2026, 3, 23, 12, 0, 0)
         mock_post.updated_at = datetime(2026, 3, 23, 12, 0, 0)
         mock_post.character_name = "Воин"
@@ -159,7 +159,7 @@ class TestCreatePostNoBattle:
                 json={
                     "character_id": 1,
                     "location_id": 100,
-                    "content": "Привет",
+                    "content": "А" * 350,
                 },
             )
         finally:

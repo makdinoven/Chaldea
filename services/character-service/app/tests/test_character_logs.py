@@ -160,17 +160,18 @@ def test_create_log_nonexistent_character(client):
 def test_get_logs_ordered_desc(client, db_session):
     char = _create_character(db_session, char_id=1)
 
-    # Insert logs with slight time gaps to ensure ordering
+    # Use explicit created_at values to ensure deterministic ordering
+    # (SQLite CURRENT_TIMESTAMP has second resolution, so time.sleep is unreliable)
+    from datetime import datetime, timedelta
+    base_time = datetime(2026, 1, 1, 12, 0, 0)
     for i in range(3):
         db_session.add(models.CharacterLog(
             character_id=1,
             event_type="rp_post",
             description=f"Log entry {i}",
+            created_at=base_time + timedelta(minutes=i),
         ))
-        db_session.commit()
-        # SQLite CURRENT_TIMESTAMP has second resolution;
-        # ensure distinct timestamps
-        time.sleep(0.05)
+    db_session.commit()
 
     response = client.get("/characters/1/logs")
     assert response.status_code == 200
