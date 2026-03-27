@@ -1,9 +1,11 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import axios from 'axios';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import { selectPermissions, selectRole } from '../../redux/slices/userSlice';
 import { fetchAdminOpenCount, selectAdminOpenCount } from '../../redux/slices/ticketSlice';
 import { hasModuleAccess } from '../../utils/permissions';
+import { BASE_URL_DEFAULT } from '../../api/api';
 
 interface AdminSection {
   label: string;
@@ -43,11 +45,31 @@ const AdminPage = () => {
   const role = useAppSelector(selectRole);
   const permissions = useAppSelector(selectPermissions);
   const openTicketCount = useAppSelector(selectAdminOpenCount);
+  const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
+  const [pendingBattleJoinCount, setPendingBattleJoinCount] = useState(0);
 
   useEffect(() => {
-    // Fetch open ticket count for badge if user has access
     if (role === 'admin' || hasModuleAccess(permissions, 'tickets')) {
       dispatch(fetchAdminOpenCount());
+    }
+    if (role === 'admin' || hasModuleAccess(permissions, 'characters')) {
+      const token = localStorage.getItem('accessToken');
+      axios.get(`${BASE_URL_DEFAULT}/characters/moderation-requests`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((res) => {
+        const data = res.data as Record<string, { status: string }>;
+        const pending = Object.values(data).filter((r) => r.status === 'pending').length;
+        setPendingRequestsCount(pending);
+      }).catch(() => { /* ignore */ });
+    }
+    if (role === 'admin' || hasModuleAccess(permissions, 'battles')) {
+      const token = localStorage.getItem('accessToken');
+      axios.get<{ total: number }>(`${BASE_URL_DEFAULT}/battles/admin/join-requests`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { status: 'pending', per_page: 1 },
+      }).then((res) => {
+        setPendingBattleJoinCount(res.data.total);
+      }).catch(() => { /* ignore */ });
     }
   }, [dispatch, role, permissions]);
 
@@ -79,6 +101,16 @@ const AdminPage = () => {
                 {section.module === 'tickets' && openTicketCount > 0 && (
                   <span className="bg-site-red text-white text-xs font-medium px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
                     {openTicketCount}
+                  </span>
+                )}
+                {section.path === '/requestsPage' && pendingRequestsCount > 0 && (
+                  <span className="bg-site-red text-white text-xs font-medium px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+                    {pendingRequestsCount}
+                  </span>
+                )}
+                {section.module === 'battles' && pendingBattleJoinCount > 0 && (
+                  <span className="bg-site-red text-white text-xs font-medium px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+                    {pendingBattleJoinCount}
                   </span>
                 )}
               </div>

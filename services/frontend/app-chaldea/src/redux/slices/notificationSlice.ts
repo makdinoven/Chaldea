@@ -10,6 +10,7 @@ export interface NotificationItem {
   message: string;
   status: 'unread' | 'read';
   created_at: string;
+  link?: string;
 }
 
 export interface PaginatedResponse<T> {

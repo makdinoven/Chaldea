@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Bell } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import {
@@ -13,6 +14,7 @@ import toast from 'react-hot-toast';
 
 const NotificationBell = () => {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const unreadCount = useAppSelector(selectUnreadCount);
   const notifications = useAppSelector(selectNotifications);
   const dropdownOpen = useAppSelector(selectDropdownOpen);
@@ -104,9 +106,22 @@ const NotificationBell = () => {
                   <p className="text-white text-sm font-montserrat">
                     {notification.message}
                   </p>
-                  <span className="text-white/40 text-xs font-montserrat mt-1 block">
-                    {formatTime(notification.created_at)}
-                  </span>
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-white/40 text-xs font-montserrat">
+                      {formatTime(notification.created_at)}
+                    </span>
+                    {notification.link && (
+                      <button
+                        onClick={() => {
+                          navigate(notification.link!);
+                          dispatch(closeDropdown());
+                        }}
+                        className="text-xs text-site-blue hover:text-gold-light font-montserrat transition-colors duration-200 ease-site cursor-pointer"
+                      >
+                        Открыть бой
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))
             )}

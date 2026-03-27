@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import type { TicketMessageItem } from '../../types/ticket';
 
 interface TicketMessageProps {
@@ -20,7 +21,7 @@ const formatTime = (dateStr: string): string => {
 
 const TicketMessage = ({ message, isOwn }: TicketMessageProps) => {
   return (
-    <div className={`flex gap-3 px-3 py-2 ${isOwn ? 'flex-row-reverse' : ''}`}>
+    <div className="flex gap-3 px-3 py-2">
       {/* Avatar */}
       <div className="w-9 h-9 rounded-full overflow-hidden bg-white/10 flex-shrink-0">
         {message.sender_avatar ? (
@@ -37,12 +38,15 @@ const TicketMessage = ({ message, isOwn }: TicketMessageProps) => {
       </div>
 
       {/* Message content */}
-      <div className={`flex flex-col max-w-[75%] ${isOwn ? 'items-end' : 'items-start'}`}>
+      <div className="flex flex-col max-w-[75%] items-start">
         {/* Sender name + admin badge + time */}
-        <div className={`flex items-baseline gap-2 mb-1 ${isOwn ? 'flex-row-reverse' : ''}`}>
-          <span className={`text-xs font-medium truncate ${message.is_admin ? 'text-site-blue' : 'gold-text'}`}>
+        <div className="flex items-baseline gap-2 mb-1">
+          <Link
+            to={`/user-profile/${message.sender_id}`}
+            className={`text-xs font-medium truncate hover:underline ${message.is_admin ? 'text-site-blue' : 'gold-text'}`}
+          >
             {message.sender_username}
-          </span>
+          </Link>
           {message.is_admin && (
             <span className="text-[10px] font-medium uppercase tracking-wider bg-site-blue/20 text-site-blue px-1.5 py-0.5 rounded">
               Поддержка
@@ -55,12 +59,10 @@ const TicketMessage = ({ message, isOwn }: TicketMessageProps) => {
 
         {/* Bubble */}
         <div
-          className={`px-3 py-2 inline-block max-w-full ${
-            isOwn
-              ? 'rounded-lg rounded-tr-none bg-site-blue/10 border border-site-blue/15'
-              : message.is_admin
-                ? 'rounded-lg rounded-tl-none bg-site-blue/[0.06] border border-site-blue/10'
-                : 'rounded-lg rounded-tl-none bg-white/[0.06] border border-white/[0.08]'
+          className={`px-3 py-2 inline-block max-w-full rounded-lg rounded-tl-none ${
+            message.is_admin
+              ? 'bg-site-blue/[0.06] border border-site-blue/10'
+              : 'bg-white/[0.06] border border-white/[0.08]'
           }`}
         >
           <p className="text-white text-sm break-words whitespace-pre-wrap">

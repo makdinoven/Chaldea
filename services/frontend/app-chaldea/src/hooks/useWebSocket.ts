@@ -138,19 +138,25 @@ const useWebSocket = (): UseWebSocketReturn => {
                 battle_id: number;
                 attacker_name?: string;
                 battle_type?: string;
+                notification_id?: number;
               };
               const battleType = pvpData.battle_type;
+              const pvpMessage = battleType === 'pvp_attack'
+                ? `${pvpData.attacker_name ?? 'Кто-то'} напал на вас! Бой #${pvpData.battle_id} начинается.`
+                : `Бой #${pvpData.battle_id} начинается!`;
               if (battleType === 'pvp_attack') {
-                toast.error(
-                  `${pvpData.attacker_name ?? 'Кто-то'} напал на вас! Бой #${pvpData.battle_id} начинается.`,
-                  { duration: 8000 },
-                );
+                toast.error(pvpMessage, { duration: 8000 });
               } else {
-                toast.success(
-                  `Бой #${pvpData.battle_id} начинается!`,
-                  { duration: 6000 },
-                );
+                toast.success(pvpMessage, { duration: 6000 });
               }
+              dispatch(addNotification({
+                id: pvpData.notification_id ?? Date.now(),
+                user_id: 0,
+                message: pvpMessage,
+                status: 'unread',
+                created_at: new Date().toISOString(),
+                link: `/battle/${pvpData.battle_id}`,
+              } as NotificationItem));
               break;
             }
             case 'private_message': {
@@ -192,6 +198,13 @@ const useWebSocket = (): UseWebSocketReturn => {
               dispatch(handleAuctionOutbid(outbidData));
               if (outbidData.message) {
                 toast(outbidData.message);
+                dispatch(addNotification({
+                  id: outbidData.notification_id,
+                  user_id: 0,
+                  message: outbidData.message,
+                  status: 'unread',
+                  created_at: new Date().toISOString(),
+                } as NotificationItem));
               }
               break;
             }
@@ -200,6 +213,13 @@ const useWebSocket = (): UseWebSocketReturn => {
               dispatch(handleAuctionSold(soldData));
               if (soldData.message) {
                 toast(soldData.message);
+                dispatch(addNotification({
+                  id: soldData.notification_id,
+                  user_id: 0,
+                  message: soldData.message,
+                  status: 'unread',
+                  created_at: new Date().toISOString(),
+                } as NotificationItem));
               }
               break;
             }
@@ -208,6 +228,13 @@ const useWebSocket = (): UseWebSocketReturn => {
               dispatch(handleAuctionWon(wonData));
               if (wonData.message) {
                 toast(wonData.message);
+                dispatch(addNotification({
+                  id: wonData.notification_id,
+                  user_id: 0,
+                  message: wonData.message,
+                  status: 'unread',
+                  created_at: new Date().toISOString(),
+                } as NotificationItem));
               }
               break;
             }
@@ -216,12 +243,33 @@ const useWebSocket = (): UseWebSocketReturn => {
               dispatch(handleAuctionExpired(expiredData));
               if (expiredData.message) {
                 toast(expiredData.message);
+                dispatch(addNotification({
+                  id: expiredData.notification_id,
+                  user_id: 0,
+                  message: expiredData.message,
+                  status: 'unread',
+                  created_at: new Date().toISOString(),
+                } as NotificationItem));
               }
               break;
             }
             case 'ticket_reply': {
-              const ticketReplyData = parsed.data as { ticket_id: number };
+              const ticketReplyData = parsed.data as {
+                ticket_id: number;
+                notification_id?: number;
+                message?: string;
+              };
               dispatch(receiveTicketReply(ticketReplyData));
+              if (ticketReplyData.notification_id && ticketReplyData.message) {
+                dispatch(addNotification({
+                  id: ticketReplyData.notification_id,
+                  user_id: 0,
+                  message: ticketReplyData.message,
+                  status: 'unread',
+                  created_at: new Date().toISOString(),
+                } as NotificationItem));
+                toast(ticketReplyData.message);
+              }
               break;
             }
             case 'ticket_new_message': {

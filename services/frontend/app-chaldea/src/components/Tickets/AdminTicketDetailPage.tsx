@@ -138,7 +138,7 @@ const AdminTicketDetailPage = () => {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="w-full max-w-[900px] mx-auto flex flex-col"
+      className="w-full max-w-[900px] mx-auto flex flex-col rounded-card border border-white/10 bg-black/50 p-4 sm:p-6"
       style={{ height: 'calc(100vh - 120px)' }}
     >
       {/* Header */}

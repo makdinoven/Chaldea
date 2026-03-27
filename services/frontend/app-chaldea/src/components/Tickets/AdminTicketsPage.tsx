@@ -96,7 +96,7 @@ const AdminTicketsPage = () => {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="w-full max-w-[1240px] mx-auto"
+      className="w-full max-w-[1240px] mx-auto rounded-card border border-white/10 bg-black/50 p-4 sm:p-6"
     >
       <h1 className="gold-text text-3xl font-medium uppercase mb-8">
         Тикеты поддержки
