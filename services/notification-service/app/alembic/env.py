@@ -14,6 +14,7 @@ from alembic import context
 
 from models import Base
 import chat_models  # noqa: F401 — register chat models for autogenerate
+import messenger_models  # noqa: F401 — register messenger models for autogenerate
 from database import SQLALCHEMY_DATABASE_URL
 
 

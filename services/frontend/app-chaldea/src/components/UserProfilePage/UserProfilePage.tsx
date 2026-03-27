@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { User, Calendar, FileText, UserPlus, UserCheck, UserX, Settings, Activity } from 'react-feather';
+import { User, Calendar, FileText, UserPlus, UserCheck, UserX, Settings, Activity, MessageSquare } from 'react-feather';
+import { createConversation } from '../../redux/slices/messengerSlice';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
   loadUserProfile,
@@ -40,6 +41,7 @@ const AVATAR_SIZE_MOBILE = 120;
 const UserProfilePage = () => {
   const { userId: paramUserId } = useParams<{ userId: string }>();
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const profile = useAppSelector(selectUserProfile);
   const loading = useAppSelector(selectProfileLoading);
   const avatarUploading = useAppSelector(selectAvatarUploading);
@@ -50,6 +52,7 @@ const UserProfilePage = () => {
 
   const [activeTab, setActiveTab] = useState<Tab>('wall');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [messageSending, setMessageSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Responsive avatar size
@@ -128,6 +131,21 @@ const UserProfilePage = () => {
       }
     } catch {
       toast.error('Не удалось выполнить действие');
+    }
+  };
+
+  const handleMessage = async () => {
+    if (!profileUserId || messageSending) return;
+    setMessageSending(true);
+    try {
+      await dispatch(
+        createConversation({ type: 'direct', participant_ids: [profileUserId], title: null }),
+      ).unwrap();
+      navigate('/messages');
+    } catch {
+      toast.error('Не удалось открыть диалог');
+    } finally {
+      setMessageSending(false);
     }
   };
 
@@ -222,6 +240,19 @@ const UserProfilePage = () => {
             title="Настройки профиля"
           >
             <Settings size={20} />
+          </button>
+        )}
+
+        {/* Message button (other profiles only) */}
+        {!isOwnProfile && currentUserId && (
+          <button
+            onClick={handleMessage}
+            disabled={messageSending}
+            className="btn-blue absolute bottom-4 right-4 z-10 flex items-center gap-2 !px-3 !py-1.5 !text-sm disabled:opacity-50"
+            title="Написать сообщение"
+          >
+            <MessageSquare size={16} />
+            <span className="hidden sm:inline">Написать</span>
           </button>
         )}
 

@@ -22,6 +22,7 @@ from consumers.user_registration import start_user_registration_consumer
 from consumers.general_notification import start_general_notifications_consumer
 
 from chat_routes import chat_router
+from messenger_routes import messenger_router
 
 import pika
 
@@ -204,3 +205,4 @@ def mark_all_notifications_as_read(
 
 app.include_router(router)
 app.include_router(chat_router)
+app.include_router(messenger_router)

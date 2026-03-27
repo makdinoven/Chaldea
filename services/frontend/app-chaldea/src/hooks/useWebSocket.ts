@@ -2,6 +2,20 @@ import { useEffect, useRef, useState } from 'react';
 import { useAppDispatch } from '../redux/store';
 import { addNotification, NotificationItem } from '../redux/slices/notificationSlice';
 import { addMessage, removeMessage } from '../redux/slices/chatSlice';
+import {
+  receivePrivateMessage,
+  receiveMessageDeleted,
+  receiveMessageEdited,
+  receiveConversationCreated,
+  receiveConversationRead,
+} from '../redux/slices/messengerSlice';
+import type {
+  WsPrivateMessageData,
+  WsPrivateMessageDeletedData,
+  WsMessageEditedData,
+  WsConversationCreatedData,
+  WsConversationReadData,
+} from '../types/messenger';
 import type { ChatMessage, ChatChannel } from '../types/chat';
 import toast from 'react-hot-toast';
 
@@ -102,6 +116,26 @@ const useWebSocket = (): UseWebSocketReturn => {
                   { duration: 6000 },
                 );
               }
+              break;
+            }
+            case 'private_message': {
+              dispatch(receivePrivateMessage(parsed.data as WsPrivateMessageData));
+              break;
+            }
+            case 'private_message_deleted': {
+              dispatch(receiveMessageDeleted(parsed.data as WsPrivateMessageDeletedData));
+              break;
+            }
+            case 'private_message_edited': {
+              dispatch(receiveMessageEdited(parsed.data as WsMessageEditedData));
+              break;
+            }
+            case 'conversation_created': {
+              dispatch(receiveConversationCreated(parsed.data as WsConversationCreatedData));
+              break;
+            }
+            case 'conversation_read': {
+              dispatch(receiveConversationRead(parsed.data as WsConversationReadData));
               break;
             }
             case 'ping':

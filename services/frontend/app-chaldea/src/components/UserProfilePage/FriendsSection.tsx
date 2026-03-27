@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { User, UserPlus, UserX, X, MessageSquare } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
+import { createConversation } from '../../redux/slices/messengerSlice';
 import {
   selectFriends,
   selectFriendsLoading,
@@ -33,6 +34,8 @@ const FriendCard = ({
   profileUserId: number;
 }) => {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
+  const [messageSending, setMessageSending] = useState(false);
 
   const handleRemove = async () => {
     try {
@@ -46,8 +49,19 @@ const FriendCard = ({
   const online = isOnline(friend.last_active_at ?? null);
   const statusText = formatLastActive(friend.last_active_at ?? null);
 
-  const handleMessage = () => {
-    toast('Скоро будет доступно', { icon: '✉️' });
+  const handleMessage = async () => {
+    if (messageSending) return;
+    setMessageSending(true);
+    try {
+      await dispatch(
+        createConversation({ type: 'direct', participant_ids: [friend.id], title: null }),
+      ).unwrap();
+      navigate('/messages');
+    } catch {
+      toast.error('Не удалось открыть диалог');
+    } finally {
+      setMessageSending(false);
+    }
   };
 
   return (

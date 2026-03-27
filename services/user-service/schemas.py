@@ -332,3 +332,52 @@ class RolePermissionsResponse(BaseModel):
     role_id: int
     role_name: str
     permissions: List[str]
+
+
+# ==================== BLOCKING & PRIVACY ====================
+
+class UserBlockResponse(BaseModel):
+    id: int
+    user_id: int
+    blocked_user_id: int
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class UserBlockListItem(BaseModel):
+    id: int
+    user_id: int
+    blocked_user_id: int
+    blocked_username: str
+    created_at: datetime
+
+
+class UserBlockListResponse(BaseModel):
+    items: List[UserBlockListItem]
+
+
+class BlockCheckResponse(BaseModel):
+    is_blocked: bool
+    blocked_by_me: bool
+    blocked_by_them: bool
+
+
+class MessagePrivacyUpdate(BaseModel):
+    message_privacy: str
+
+    @validator("message_privacy")
+    def validate_message_privacy(cls, v):
+        allowed = {"all", "friends", "nobody"}
+        if v not in allowed:
+            raise ValueError(f"Допустимые значения: {', '.join(sorted(allowed))}")
+        return v
+
+
+class MessagePrivacyResponse(BaseModel):
+    message_privacy: str
+
+
+class FriendCheckResponse(BaseModel):
+    is_friend: bool

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, UniqueConstraint, Enum as SAEnum
 from datetime import datetime
 from database import Base
 
@@ -70,6 +70,12 @@ class User(Base):
     post_color = Column(String(7), nullable=True)
     profile_style_settings = Column(Text, nullable=True)
     activity_points = Column(Integer, nullable=False, default=0, server_default="0")
+    message_privacy = Column(
+        SAEnum("all", "friends", "nobody", name="message_privacy_enum"),
+        nullable=False,
+        default="all",
+        server_default="all",
+    )
 
 class UserCharacter(Base):
     __tablename__ = "users_character"
@@ -96,3 +102,16 @@ class Friendship(Base):
     friend_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     status = Column(String(20), default="pending")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class UserBlock(Base):
+    __tablename__ = "user_blocks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    blocked_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "blocked_user_id", name="uq_user_block"),
+    )

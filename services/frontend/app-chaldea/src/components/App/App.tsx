@@ -50,6 +50,7 @@ import ProfessionsAdminPage from "../Admin/ProfessionsAdminPage/ProfessionsAdmin
 import RecipesAdminPage from "../Admin/RecipesAdminPage/RecipesAdminPage";
 import CraftItemsAdminPage from "../Admin/CraftItemsAdminPage/CraftItemsAdminPage";
 import AdminPathEditorPage from "../AdminPathEditor/AdminPathEditorPage";
+import MessengerPage from "../Messenger/MessengerPage";
 import { CRAFT_ITEM_TYPES } from "../ItemsAdminPage/ItemsAdminPage";
 
 const App = () => {
@@ -220,6 +221,7 @@ const App = () => {
                 <AdminPathEditorPage />
               </ProtectedRoute>
             } />
+            <Route path="messages" element={<MessengerPage />} />
             <Route path="chat/history" element={<ChatHistoryPage />} />
             <Route path="players" element={<AllUsersPage />} />
             <Route path="players/online" element={<OnlineUsersPage />} />

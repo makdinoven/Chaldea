@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { MessageSquare, User } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import { getMe, logout } from '../../../redux/slices/userSlice';
+import { fetchUnreadCount, selectTotalUnread } from '../../../redux/slices/messengerSlice';
 import NavLinks from './NavLinks';
 import SearchInput from './SearchInput';
 import AvatarDropdown from './AvatarDropdown';
@@ -19,6 +20,7 @@ const Header = () => {
   const { username, avatar, character, role } = useAppSelector(
     (state) => state.user,
   );
+  const totalUnread = useAppSelector(selectTotalUnread);
 
   const isInitialMount = useRef(true);
 
@@ -29,6 +31,10 @@ const Header = () => {
     }
     dispatch(getMe());
   }, [location.pathname, dispatch]);
+
+  useEffect(() => {
+    dispatch(fetchUnreadCount());
+  }, [dispatch]);
 
   const handleLogout = () => {
     localStorage.removeItem('accessToken');
@@ -100,12 +106,18 @@ const Header = () => {
 
         <NotificationBell />
 
-        <button
-          className="p-1 text-white hover:text-site-blue transition-colors duration-200 ease-site"
+        <Link
+          to="/messages"
+          className="relative p-1 text-white hover:text-site-blue transition-colors duration-200 ease-site"
           aria-label="Сообщения"
         >
           <MessageSquare size={32} strokeWidth={2} />
-        </button>
+          {totalUnread > 0 && (
+            <span className="absolute -top-1 -right-1 bg-site-red text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+              {totalUnread > 99 ? '99+' : totalUnread}
+            </span>
+          )}
+        </Link>
 
         <AdminMenu role={role} />
       </div>

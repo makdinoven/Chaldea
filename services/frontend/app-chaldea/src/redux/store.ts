@@ -23,6 +23,7 @@ import playerTreeReducer from './slices/playerTreeSlice';
 import mobsReducer from './slices/mobsSlice';
 import bestiaryReducer from './slices/bestiarySlice';
 import craftingReducer from './slices/craftingSlice';
+import messengerReducer from './slices/messengerSlice';
 
 export const store = configureStore({
   reducer: {
@@ -49,6 +50,7 @@ export const store = configureStore({
     mobs: mobsReducer,
     bestiary: bestiaryReducer,
     crafting: craftingReducer,
+    messenger: messengerReducer,
   },
 });
 

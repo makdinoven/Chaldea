@@ -1598,6 +1598,158 @@ def increment_activity_points(
     return ActivityIncrementResponse(activity_points=new_value)
 
 
+# ==================== BLOCKING ====================
+
+@router.post("/blocks/{blocked_user_id}", response_model=schemas.UserBlockResponse, status_code=201)
+def block_user(
+    blocked_user_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Заблокировать пользователя."""
+    if blocked_user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Нельзя заблокировать самого себя")
+
+    # Check that target user exists
+    target = db.query(models.User).filter(models.User.id == blocked_user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    # Check for duplicate
+    existing = db.query(models.UserBlock).filter(
+        models.UserBlock.user_id == current_user.id,
+        models.UserBlock.blocked_user_id == blocked_user_id,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Пользователь уже заблокирован")
+
+    block = models.UserBlock(
+        user_id=current_user.id,
+        blocked_user_id=blocked_user_id,
+    )
+    db.add(block)
+    db.commit()
+    db.refresh(block)
+    return block
+
+
+@router.delete("/blocks/{blocked_user_id}")
+def unblock_user(
+    blocked_user_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Разблокировать пользователя."""
+    block = db.query(models.UserBlock).filter(
+        models.UserBlock.user_id == current_user.id,
+        models.UserBlock.blocked_user_id == blocked_user_id,
+    ).first()
+    if not block:
+        raise HTTPException(status_code=404, detail="Блокировка не найдена")
+
+    db.delete(block)
+    db.commit()
+    return {"detail": "Пользователь разблокирован"}
+
+
+@router.get("/blocks", response_model=schemas.UserBlockListResponse)
+def list_blocks(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Список заблокированных пользователей."""
+    blocks = (
+        db.query(models.UserBlock, models.User)
+        .join(models.User, models.User.id == models.UserBlock.blocked_user_id)
+        .filter(models.UserBlock.user_id == current_user.id)
+        .order_by(models.UserBlock.created_at.desc())
+        .all()
+    )
+    items = [
+        schemas.UserBlockListItem(
+            id=block.id,
+            user_id=block.user_id,
+            blocked_user_id=block.blocked_user_id,
+            blocked_username=user.username,
+            created_at=block.created_at,
+        )
+        for block, user in blocks
+    ]
+    return schemas.UserBlockListResponse(items=items)
+
+
+@router.get("/blocks/check/{other_user_id}", response_model=schemas.BlockCheckResponse)
+def check_block(
+    other_user_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Проверить блокировку между текущим пользователем и другим (в обе стороны)."""
+    blocked_by_me = db.query(models.UserBlock).filter(
+        models.UserBlock.user_id == current_user.id,
+        models.UserBlock.blocked_user_id == other_user_id,
+    ).first() is not None
+
+    blocked_by_them = db.query(models.UserBlock).filter(
+        models.UserBlock.user_id == other_user_id,
+        models.UserBlock.blocked_user_id == current_user.id,
+    ).first() is not None
+
+    return schemas.BlockCheckResponse(
+        is_blocked=blocked_by_me or blocked_by_them,
+        blocked_by_me=blocked_by_me,
+        blocked_by_them=blocked_by_them,
+    )
+
+
+# ==================== MESSAGE PRIVACY ====================
+
+@router.put("/me/message-privacy", response_model=schemas.MessagePrivacyResponse)
+def update_message_privacy(
+    data: schemas.MessagePrivacyUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Обновить настройку приватности сообщений."""
+    user = db.query(models.User).filter(models.User.id == current_user.id).first()
+    user.message_privacy = data.message_privacy
+    db.commit()
+    db.refresh(user)
+    return schemas.MessagePrivacyResponse(message_privacy=user.message_privacy)
+
+
+@router.get("/friends/check/{friend_id}", response_model=schemas.FriendCheckResponse)
+def check_friendship(
+    friend_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Быстрая проверка — являются ли два пользователя друзьями."""
+    friendship = db.query(models.Friendship).filter(
+        models.Friendship.status == "accepted",
+        (
+            (models.Friendship.user_id == current_user.id) &
+            (models.Friendship.friend_id == friend_id)
+        ) | (
+            (models.Friendship.user_id == friend_id) &
+            (models.Friendship.friend_id == current_user.id)
+        )
+    ).first()
+    return schemas.FriendCheckResponse(is_friend=friendship is not None)
+
+
+@router.get("/{user_id}/message-privacy", response_model=schemas.MessagePrivacyResponse)
+def get_user_message_privacy(
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    """Получить настройку приватности сообщений пользователя. Используется notification-service."""
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    return schemas.MessagePrivacyResponse(message_privacy=user.message_privacy or "all")
+
+
 # ==================== GET USER BY ID (catch-all, must be last) ====================
 
 @router.get("/{user_id}", response_model=UserRead)
