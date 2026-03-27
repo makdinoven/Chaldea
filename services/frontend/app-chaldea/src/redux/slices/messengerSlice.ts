@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
+import { sendWsMessage } from '../../hooks/useWebSocket';
 import * as messengerApi from '../../api/messengerApi';
 import type {
   ConversationListItem,
@@ -102,83 +103,51 @@ export const fetchMessages = createAsyncThunk<
 );
 
 export const sendMessage = createAsyncThunk<
-  PrivateMessage,
+  void,
   { conversationId: number; content: string; reply_to_id?: number },
   { rejectValue: string }
 >(
   'messenger/sendMessage',
   async ({ conversationId, content, reply_to_id }, thunkAPI) => {
-    try {
-      const response = await messengerApi.sendMessage(conversationId, { content, reply_to_id });
-      return response.data;
-    } catch (error: unknown) {
-      if (axios.isAxiosError(error)) {
-        if (error.response?.status === 429) {
-          return thunkAPI.rejectWithValue('Подождите перед отправкой следующего сообщения');
-        }
-        if (error.response?.status === 403) {
-          return thunkAPI.rejectWithValue('Вы не можете отправлять сообщения в эту беседу');
-        }
-        if (error.response?.data?.detail) {
-          return thunkAPI.rejectWithValue(error.response.data.detail);
-        }
-      }
-      return thunkAPI.rejectWithValue('Не удалось отправить сообщение');
+    const sent = sendWsMessage('messenger_send', {
+      conversation_id: conversationId,
+      content,
+      ...(reply_to_id != null ? { reply_to_id } : {}),
+    });
+    if (!sent) {
+      return thunkAPI.rejectWithValue('WebSocket не подключён. Попробуйте позже.');
     }
+    // Fire-and-forget: state update happens via messenger_send_ok / private_message WS events
   },
 );
 
 export const deleteMessage = createAsyncThunk<
-  { messageId: number },
+  void,
   number,
   { rejectValue: string }
 >(
   'messenger/deleteMessage',
   async (messageId, thunkAPI) => {
-    try {
-      await messengerApi.deleteMessage(messageId);
-      return { messageId };
-    } catch (error: unknown) {
-      if (axios.isAxiosError(error)) {
-        if (error.response?.status === 403) {
-          return thunkAPI.rejectWithValue('Нет прав для удаления сообщения');
-        }
-        if (error.response?.status === 404) {
-          return thunkAPI.rejectWithValue('Сообщение не найдено');
-        }
-        if (error.response?.data?.detail) {
-          return thunkAPI.rejectWithValue(error.response.data.detail);
-        }
-      }
-      return thunkAPI.rejectWithValue('Не удалось удалить сообщение');
+    const sent = sendWsMessage('messenger_delete', { message_id: messageId });
+    if (!sent) {
+      return thunkAPI.rejectWithValue('WebSocket не подключён. Попробуйте позже.');
     }
+    // Fire-and-forget: state update happens via private_message_deleted WS event
   },
 );
 
 export const editMessage = createAsyncThunk<
-  PrivateMessage,
+  void,
   { messageId: number; content: string },
   { rejectValue: string }
 >(
   'messenger/editMessage',
   async ({ messageId, content }, thunkAPI) => {
-    try {
-      const response = await messengerApi.editMessage(messageId, { content });
-      return response.data;
-    } catch (error: unknown) {
-      if (axios.isAxiosError(error)) {
-        if (error.response?.status === 403) {
-          return thunkAPI.rejectWithValue('Нет прав для редактирования сообщения');
-        }
-        if (error.response?.status === 404) {
-          return thunkAPI.rejectWithValue('Сообщение не найдено');
-        }
-        if (error.response?.data?.detail) {
-          return thunkAPI.rejectWithValue(error.response.data.detail);
-        }
-      }
-      return thunkAPI.rejectWithValue('Не удалось отредактировать сообщение');
+    const sent = sendWsMessage('messenger_edit', { message_id: messageId, content });
+    if (!sent) {
+      return thunkAPI.rejectWithValue('WebSocket не подключён. Попробуйте позже.');
     }
+    // Fire-and-forget: state update happens via private_message_edited WS event
   },
 );
 
@@ -214,21 +183,17 @@ export const createConversation = createAsyncThunk<
 );
 
 export const markConversationRead = createAsyncThunk<
-  { conversationId: number },
+  void,
   number,
   { rejectValue: string }
 >(
   'messenger/markConversationRead',
   async (conversationId, thunkAPI) => {
-    try {
-      await messengerApi.markConversationRead(conversationId);
-      return { conversationId };
-    } catch (error: unknown) {
-      if (axios.isAxiosError(error) && error.response?.data?.detail) {
-        return thunkAPI.rejectWithValue(error.response.data.detail);
-      }
+    const sent = sendWsMessage('messenger_mark_read', { conversation_id: conversationId });
+    if (!sent) {
       return thunkAPI.rejectWithValue('Не удалось отметить как прочитанное');
     }
+    // Fire-and-forget: state update happens via conversation_read WS event
   },
 );
 
@@ -503,6 +468,35 @@ const messengerSlice = createSlice({
       }
     },
 
+    /** Handle messenger_send_ok — adds the sender's own message to state */
+    receiveOwnSentMessage(state, action: PayloadAction<PrivateMessage>) {
+      const msg = action.payload;
+      const convId = msg.conversation_id;
+
+      if (!state.messages[convId]) {
+        state.messages[convId] = [];
+      }
+      const exists = state.messages[convId].some((m) => m.id === msg.id);
+      if (!exists) {
+        state.messages[convId].unshift(msg);
+      }
+
+      // Update last_message in conversation list
+      const conv = state.conversations.find((c) => c.id === convId);
+      if (conv) {
+        conv.last_message = {
+          id: msg.id,
+          sender_id: msg.sender_id,
+          sender_username: msg.sender_username,
+          content: msg.content,
+          created_at: msg.created_at,
+        };
+      }
+
+      // Clear editing state on successful edit confirmation (if applicable)
+      state.editingMessage = null;
+    },
+
     setActiveConversation(state, action: PayloadAction<number>) {
       state.activeConversationId = action.payload;
     },
@@ -551,32 +545,9 @@ const messengerSlice = createSlice({
         state.error = action.payload ?? 'Произошла ошибка';
       })
 
-      // sendMessage
+      // sendMessage (fire-and-forget via WebSocket; state updated by messenger_send_ok)
       .addCase(sendMessage.pending, (state) => {
         state.error = null;
-      })
-      .addCase(sendMessage.fulfilled, (state, action) => {
-        const msg = action.payload;
-        const convId = msg.conversation_id;
-        if (!state.messages[convId]) {
-          state.messages[convId] = [];
-        }
-        // Avoid duplicates (WebSocket may deliver the same message)
-        const exists = state.messages[convId].some((m) => m.id === msg.id);
-        if (!exists) {
-          state.messages[convId].unshift(msg);
-        }
-        // Update last_message in conversation list
-        const conv = state.conversations.find((c) => c.id === convId);
-        if (conv) {
-          conv.last_message = {
-            id: msg.id,
-            sender_id: msg.sender_id,
-            sender_username: msg.sender_username,
-            content: msg.content,
-            created_at: msg.created_at,
-          };
-        }
       })
       .addCase(sendMessage.rejected, (state, action) => {
         state.error = action.payload ?? 'Произошла ошибка';
@@ -587,17 +558,8 @@ const messengerSlice = createSlice({
         state.error = action.payload ?? 'Произошла ошибка';
       })
 
-      // editMessage
-      .addCase(editMessage.fulfilled, (state, action) => {
-        const msg = action.payload;
-        const convId = msg.conversation_id;
-        const msgs = state.messages[convId];
-        if (msgs) {
-          const idx = msgs.findIndex((m) => m.id === msg.id);
-          if (idx !== -1) {
-            msgs[idx] = msg;
-          }
-        }
+      // editMessage (fire-and-forget via WebSocket; state updated by private_message_edited)
+      .addCase(editMessage.fulfilled, (state) => {
         state.editingMessage = null;
       })
       .addCase(editMessage.rejected, (state, action) => {
@@ -633,16 +595,7 @@ const messengerSlice = createSlice({
         state.error = action.payload ?? 'Произошла ошибка';
       })
 
-      // markConversationRead
-      .addCase(markConversationRead.fulfilled, (state, action) => {
-        const { conversationId } = action.payload;
-        const conv = state.conversations.find((c) => c.id === conversationId);
-        if (conv) {
-          state.totalUnread -= conv.unread_count;
-          if (state.totalUnread < 0) state.totalUnread = 0;
-          conv.unread_count = 0;
-        }
-      })
+      // markConversationRead (fire-and-forget via WebSocket; state updated by conversation_read)
       .addCase(markConversationRead.rejected, (state, action) => {
         state.error = action.payload ?? 'Произошла ошибка';
       })
@@ -718,6 +671,7 @@ export const {
   receiveMessageEdited,
   receiveConversationCreated,
   receiveConversationRead,
+  receiveOwnSentMessage,
   setActiveConversation,
   clearActiveConversation,
   setEditingMessage,

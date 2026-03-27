@@ -23,6 +23,12 @@ from consumers.general_notification import start_general_notifications_consumer
 
 from chat_routes import chat_router
 from messenger_routes import messenger_router
+from messenger_ws_handler import (
+    handle_messenger_send,
+    handle_messenger_edit,
+    handle_messenger_delete,
+    handle_messenger_mark_read,
+)
 
 import pika
 
@@ -65,7 +71,35 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
         while True:
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                # Client messages are ignored (read-only push channel)
+                # Parse and route messenger actions
+                try:
+                    msg = json.loads(data)
+                    action = msg.get("action")
+                    payload = msg.get("data", {})
+
+                    if action == "messenger_send":
+                        result = await asyncio.to_thread(
+                            handle_messenger_send, user_id, token, payload
+                        )
+                        await websocket.send_json(result)
+                    elif action == "messenger_edit":
+                        result = await asyncio.to_thread(
+                            handle_messenger_edit, user_id, payload
+                        )
+                        await websocket.send_json(result)
+                    elif action == "messenger_delete":
+                        result = await asyncio.to_thread(
+                            handle_messenger_delete, user_id, payload
+                        )
+                        await websocket.send_json(result)
+                    elif action == "messenger_mark_read":
+                        result = await asyncio.to_thread(
+                            handle_messenger_mark_read, user_id, payload
+                        )
+                        await websocket.send_json(result)
+                    # else: ignore unknown actions (backward compat)
+                except json.JSONDecodeError:
+                    pass  # Ignore non-JSON messages (backward compat)
             except asyncio.TimeoutError:
                 # Send application-level ping on timeout
                 await websocket.send_json({"type": "ping", "data": {}})

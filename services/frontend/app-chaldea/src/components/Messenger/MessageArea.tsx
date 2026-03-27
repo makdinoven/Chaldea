@@ -53,25 +53,23 @@ const MessageArea = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const prevMessageCountRef = useRef(0);
 
-  // Auto-scroll when new messages arrive (only if user is near bottom)
+  // Scroll chat container to bottom when conversation changes
   useEffect(() => {
-    if (messages.length > prevMessageCountRef.current && scrollContainerRef.current) {
-      const container = scrollContainerRef.current;
-      const isNearBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+    if (conversation?.id != null) {
+      prevMessageCountRef.current = 0;
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView();
+      }, 50);
+    }
+  }, [conversation?.id]);
 
-      if (isNearBottom || messages.length === 1) {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }
+  // Scroll chat container to bottom when new messages arrive
+  useEffect(() => {
+    if (messages.length > prevMessageCountRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
     prevMessageCountRef.current = messages.length;
   }, [messages.length]);
-
-  // Scroll to bottom when conversation changes
-  useEffect(() => {
-    prevMessageCountRef.current = 0;
-    messagesEndRef.current?.scrollIntoView();
-  }, [conversation?.id]);
 
   // Load more on scroll up
   const handleScroll = useCallback(() => {
