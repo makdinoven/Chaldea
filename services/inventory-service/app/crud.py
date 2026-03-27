@@ -1,12 +1,17 @@
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 import json
+import logging
+import math
 import random
 
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text, and_, or_, func
 import models
 import schemas
+from rabbitmq_publisher import publish_auction_notification
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -1782,3 +1787,1221 @@ def get_xp_multiplier(db: Session, character_id: int) -> float:
     if buff:
         return 1.0 + buff.value
     return 1.0
+
+
+# ---------------------------------------------------------------------------
+# Auction constants
+# ---------------------------------------------------------------------------
+
+AUCTION_DURATION_HOURS = 24
+AUCTION_MAX_LISTINGS = 5
+AUCTION_COMMISSION_RATE = 0.05  # 5%
+
+
+# ---------------------------------------------------------------------------
+# Auction helper: NPC auctioneer check
+# ---------------------------------------------------------------------------
+
+def check_auctioneer_at_character_location(db: Session, character_id: int):
+    """
+    Check if there's an auctioneer NPC at the character's current location.
+
+    Returns a dict {"id": npc_id, "name": npc_name} if found, or None.
+    """
+    row = db.execute(text("""
+        SELECT npc.id, npc.name FROM characters AS npc
+        JOIN characters AS pc ON pc.current_location_id = npc.current_location_id
+        WHERE pc.id = :character_id
+          AND npc.is_npc = 1
+          AND npc.npc_role = 'auctioneer'
+          AND npc.npc_status = 'alive'
+        LIMIT 1
+    """), {"character_id": character_id}).fetchone()
+    if row:
+        return {"id": row[0], "name": row[1]}
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Auction helper: build listing response dict
+# ---------------------------------------------------------------------------
+
+def _build_listing_response(db: Session, listing: models.AuctionListing) -> dict:
+    """Build an AuctionListingResponse-compatible dict from a listing ORM object."""
+    now = datetime.utcnow()
+    remaining = max(0, int((listing.expires_at - now).total_seconds())) if listing.status == 'active' else 0
+
+    seller_name = get_character_name(db, listing.seller_character_id)
+    bidder_name = get_character_name(db, listing.current_bidder_id) if listing.current_bidder_id else None
+
+    bid_count = db.query(func.count(models.AuctionBid.id)).filter(
+        models.AuctionBid.listing_id == listing.id
+    ).scalar() or 0
+
+    item_obj = listing.item
+    if not item_obj:
+        item_obj = db.query(models.Items).get(listing.item_id)
+
+    enhancement_data = None
+    if listing.enhancement_data:
+        try:
+            enhancement_data = json.loads(listing.enhancement_data)
+        except (json.JSONDecodeError, TypeError):
+            enhancement_data = None
+
+    item_info = None
+    if item_obj:
+        item_info = {
+            "id": item_obj.id,
+            "name": item_obj.name,
+            "image": item_obj.image,
+            "item_type": item_obj.item_type,
+            "item_rarity": item_obj.item_rarity,
+            "item_level": item_obj.item_level,
+        }
+
+    return {
+        "id": listing.id,
+        "seller_character_id": listing.seller_character_id,
+        "seller_name": seller_name,
+        "item": item_info,
+        "quantity": listing.quantity,
+        "enhancement_data": enhancement_data,
+        "start_price": listing.start_price,
+        "buyout_price": listing.buyout_price,
+        "current_bid": listing.current_bid,
+        "current_bidder_id": listing.current_bidder_id,
+        "current_bidder_name": bidder_name,
+        "status": listing.status,
+        "created_at": listing.created_at.isoformat() if listing.created_at else "",
+        "expires_at": listing.expires_at.isoformat() if listing.expires_at else "",
+        "time_remaining_seconds": remaining,
+        "bid_count": bid_count,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auction helper: get user_id for a character (for notifications)
+# ---------------------------------------------------------------------------
+
+def _get_user_id_for_character(db: Session, character_id: int) -> Optional[int]:
+    """Get user_id who owns the character."""
+    row = db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": character_id}
+    ).fetchone()
+    return row[0] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Auction: Lazy expiration
+# ---------------------------------------------------------------------------
+
+def expire_stale_listings(db: Session) -> int:
+    """
+    Mark expired listings and move items/gold to storage.
+    Returns count of expired listings processed.
+    """
+    now = datetime.utcnow()
+
+    expired_listings = db.query(models.AuctionListing).filter(
+        models.AuctionListing.status == 'active',
+        models.AuctionListing.expires_at <= now,
+    ).with_for_update().all()
+
+    if not expired_listings:
+        return 0
+
+    for listing in expired_listings:
+        item_obj = db.query(models.Items).get(listing.item_id)
+        item_name = item_obj.name if item_obj else "Неизвестный предмет"
+
+        if listing.current_bidder_id:
+            # Listing sold to highest bidder
+            listing.status = 'sold'
+            listing.completed_at = now
+
+            # Mark active bid as 'won'
+            db.query(models.AuctionBid).filter(
+                models.AuctionBid.listing_id == listing.id,
+                models.AuctionBid.status == 'active',
+            ).update({"status": "won"}, synchronize_session="fetch")
+
+            # Create storage entry for buyer (item)
+            buyer_storage = models.AuctionStorage(
+                character_id=listing.current_bidder_id,
+                item_id=listing.item_id,
+                quantity=listing.quantity,
+                enhancement_data=listing.enhancement_data,
+                gold_amount=0,
+                source='purchase',
+                listing_id=listing.id,
+            )
+            db.add(buyer_storage)
+
+            # Calculate commission: seller gets floor(price * 0.95)
+            sale_gold = math.floor(listing.current_bid * (1 - AUCTION_COMMISSION_RATE))
+
+            # Create storage entry for seller (gold)
+            seller_storage = models.AuctionStorage(
+                character_id=listing.seller_character_id,
+                item_id=None,
+                quantity=0,
+                enhancement_data=None,
+                gold_amount=sale_gold,
+                source='sale_proceeds',
+                listing_id=listing.id,
+            )
+            db.add(seller_storage)
+
+            # Notify seller
+            seller_user_id = _get_user_id_for_character(db, listing.seller_character_id)
+            if seller_user_id:
+                commission = listing.current_bid - sale_gold
+                try:
+                    publish_auction_notification(
+                        target_user_id=seller_user_id,
+                        message=f"Ваш предмет {item_name} продан за {listing.current_bid} зол.! После комиссии 5% вы получите {sale_gold} зол.",
+                        ws_type="auction_sold",
+                        ws_data={
+                            "listing_id": listing.id,
+                            "item_name": item_name,
+                            "sold_price": listing.current_bid,
+                            "commission": commission,
+                            "net_gold": sale_gold,
+                            "buyer_name": get_character_name(db, listing.current_bidder_id),
+                            "message": f"Ваш предмет {item_name} продан за {listing.current_bid} зол.! После комиссии 5% вы получите {sale_gold} зол.",
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to notify seller for listing {listing.id}: {e}")
+
+            # Notify buyer
+            buyer_user_id = _get_user_id_for_character(db, listing.current_bidder_id)
+            if buyer_user_id:
+                try:
+                    publish_auction_notification(
+                        target_user_id=buyer_user_id,
+                        message=f"Вы выиграли аукцион! {item_name} за {listing.current_bid} зол. Заберите предмет у НПС-Аукциониста.",
+                        ws_type="auction_won",
+                        ws_data={
+                            "listing_id": listing.id,
+                            "item_name": item_name,
+                            "winning_bid": listing.current_bid,
+                            "message": f"Вы выиграли аукцион! {item_name} за {listing.current_bid} зол. Заберите предмет у НПС-Аукциониста.",
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to notify buyer for listing {listing.id}: {e}")
+        else:
+            # No bids — return item to seller
+            listing.status = 'expired'
+            listing.completed_at = now
+
+            seller_storage = models.AuctionStorage(
+                character_id=listing.seller_character_id,
+                item_id=listing.item_id,
+                quantity=listing.quantity,
+                enhancement_data=listing.enhancement_data,
+                gold_amount=0,
+                source='expired',
+                listing_id=listing.id,
+            )
+            db.add(seller_storage)
+
+            # Notify seller
+            seller_user_id = _get_user_id_for_character(db, listing.seller_character_id)
+            if seller_user_id:
+                try:
+                    publish_auction_notification(
+                        target_user_id=seller_user_id,
+                        message=f"Лот истёк: {item_name} не продан. Предмет перемещён на склад аукциона.",
+                        ws_type="auction_expired",
+                        ws_data={
+                            "listing_id": listing.id,
+                            "item_name": item_name,
+                            "message": f"Лот истёк: {item_name} не продан. Предмет перемещён на склад аукциона.",
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to notify seller for expired listing {listing.id}: {e}")
+
+    db.commit()
+    return len(expired_listings)
+
+
+# ---------------------------------------------------------------------------
+# Auction: Deposit item to auction storage
+# ---------------------------------------------------------------------------
+
+def deposit_to_auction_storage(
+    db: Session,
+    data: schemas.AuctionDepositRequest,
+    user_id: int,
+) -> dict:
+    """
+    Deposit an item from character inventory to auction storage.
+    Requires NPC auctioneer at location. No pricing — just moves the item.
+    """
+    from fastapi import HTTPException
+
+    # 1. Verify ownership
+    char_row = db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": data.character_id}
+    ).fetchone()
+    if not char_row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if char_row[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+    # 2. Check battle status
+    if is_character_in_battle(db, data.character_id):
+        raise HTTPException(status_code=400, detail="Действие заблокировано во время боя")
+
+    # 3. Check NPC auctioneer at location
+    auctioneer = check_auctioneer_at_character_location(db, data.character_id)
+    if not auctioneer:
+        raise HTTPException(status_code=403, detail="Для сдачи предметов нужен НПС-Аукционист")
+
+    # 4. Find the inventory row
+    inv_row = db.query(models.CharacterInventory).filter(
+        models.CharacterInventory.id == data.inventory_item_id,
+        models.CharacterInventory.character_id == data.character_id,
+    ).first()
+    if not inv_row:
+        raise HTTPException(status_code=400, detail="Предмет не найден в инвентаре")
+
+    # 5. Validate quantity
+    item_obj = db.query(models.Items).get(inv_row.item_id)
+    if not item_obj:
+        raise HTTPException(status_code=400, detail="Предмет не найден")
+    if data.quantity < 1:
+        raise HTTPException(status_code=400, detail="Количество должно быть не менее 1")
+    if data.quantity > inv_row.quantity:
+        raise HTTPException(status_code=400, detail="Недостаточно предметов в инвентаре")
+
+    # 6. Check item is not equipped
+    equipped = db.query(models.EquipmentSlot).filter(
+        models.EquipmentSlot.character_id == data.character_id,
+        models.EquipmentSlot.item_id == inv_row.item_id,
+        models.EquipmentSlot.item_id.isnot(None),
+    ).first()
+    if equipped:
+        raise HTTPException(status_code=400, detail="Нельзя сдать экипированный предмет")
+
+    # 7. Snapshot enhancement data from the inventory row
+    enhancement_data = None
+    has_enhancements = (
+        (inv_row.enhancement_points_spent and inv_row.enhancement_points_spent > 0)
+        or inv_row.enhancement_bonuses
+        or inv_row.socketed_gems
+        or (inv_row.current_durability is not None)
+        or (inv_row.is_identified is not None and not inv_row.is_identified)
+    )
+    if has_enhancements:
+        try:
+            enhancement_data = json.dumps({
+                "enhancement_points_spent": inv_row.enhancement_points_spent or 0,
+                "enhancement_bonuses": json.loads(inv_row.enhancement_bonuses) if inv_row.enhancement_bonuses else None,
+                "socketed_gems": json.loads(inv_row.socketed_gems) if inv_row.socketed_gems else None,
+                "current_durability": inv_row.current_durability,
+                "is_identified": inv_row.is_identified if inv_row.is_identified is not None else True,
+            })
+        except (json.JSONDecodeError, TypeError):
+            enhancement_data = None
+
+    # 8. Remove item from inventory
+    if inv_row.quantity <= data.quantity:
+        db.delete(inv_row)
+    else:
+        inv_row.quantity -= data.quantity
+    db.flush()
+
+    # 9. Create auction storage entry
+    storage_entry = models.AuctionStorage(
+        character_id=data.character_id,
+        item_id=item_obj.id,
+        quantity=data.quantity,
+        enhancement_data=enhancement_data,
+        gold_amount=0,
+        source='deposit',
+        listing_id=None,
+        created_at=datetime.utcnow(),
+    )
+    db.add(storage_entry)
+    db.commit()
+    db.refresh(storage_entry)
+
+    return {
+        "storage_id": storage_entry.id,
+        "item_name": item_obj.name,
+        "quantity": data.quantity,
+        "message": "Предмет помещён на склад аукциона",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auction: Create listing (from storage)
+# ---------------------------------------------------------------------------
+
+def create_auction_listing(
+    db: Session,
+    data: schemas.AuctionCreateListingRequest,
+    user_id: int,
+) -> dict:
+    """
+    Create a new auction listing from an auction storage entry.
+    Validates ownership, listing limit, prices.
+    Reads item data from storage, deletes the storage entry, creates listing.
+    """
+    from fastapi import HTTPException
+
+    # 1. Verify ownership
+    char_row = db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": data.character_id}
+    ).fetchone()
+    if not char_row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if char_row[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+    # 2. Check battle status
+    if is_character_in_battle(db, data.character_id):
+        raise HTTPException(status_code=400, detail="Действие заблокировано во время боя")
+
+    # 3. Check listing limit (max 5)
+    active_count = db.query(func.count(models.AuctionListing.id)).filter(
+        models.AuctionListing.seller_character_id == data.character_id,
+        models.AuctionListing.status == 'active',
+    ).scalar() or 0
+    if active_count >= AUCTION_MAX_LISTINGS:
+        raise HTTPException(status_code=400, detail="Достигнут лимит в 5 лотов")
+
+    # 4. Validate prices
+    if data.start_price <= 0:
+        raise HTTPException(status_code=400, detail="Начальная цена должна быть больше 0")
+    if data.buyout_price is not None and data.buyout_price <= data.start_price:
+        raise HTTPException(status_code=400, detail="Цена выкупа должна быть больше начальной цены")
+
+    # 5. Find the storage entry
+    storage_entry = db.query(models.AuctionStorage).filter(
+        models.AuctionStorage.id == data.storage_id,
+        models.AuctionStorage.character_id == data.character_id,
+    ).first()
+    if not storage_entry:
+        raise HTTPException(status_code=400, detail="Запись не найдена на складе аукциона")
+    if not storage_entry.item_id:
+        raise HTTPException(status_code=400, detail="Эта запись склада не содержит предмета")
+
+    # 6. Get item info
+    item_obj = db.query(models.Items).get(storage_entry.item_id)
+    if not item_obj:
+        raise HTTPException(status_code=400, detail="Предмет не найден")
+
+    quantity = storage_entry.quantity
+    enhancement_data = storage_entry.enhancement_data
+
+    # 7. Delete the storage entry
+    db.delete(storage_entry)
+    db.flush()
+
+    # 8. Create listing
+    now = datetime.utcnow()
+    listing = models.AuctionListing(
+        seller_character_id=data.character_id,
+        item_id=item_obj.id,
+        quantity=quantity,
+        enhancement_data=enhancement_data,
+        start_price=data.start_price,
+        buyout_price=data.buyout_price,
+        current_bid=0,
+        current_bidder_id=None,
+        status='active',
+        created_at=now,
+        expires_at=now + timedelta(hours=AUCTION_DURATION_HOURS),
+    )
+    db.add(listing)
+    db.commit()
+    db.refresh(listing)
+
+    return {
+        "listing_id": listing.id,
+        "item_name": item_obj.name,
+        "quantity": quantity,
+        "start_price": data.start_price,
+        "buyout_price": data.buyout_price,
+        "expires_at": listing.expires_at.isoformat(),
+        "active_listing_count": active_count + 1,
+        "message": "Предмет выставлен на аукцион",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auction: Place bid
+# ---------------------------------------------------------------------------
+
+def place_bid(
+    db: Session,
+    listing_id: int,
+    data: schemas.AuctionBidRequest,
+    user_id: int,
+) -> dict:
+    """
+    Place a bid on an auction listing.
+    Uses SELECT FOR UPDATE to prevent race conditions.
+    """
+    from fastapi import HTTPException
+
+    # 1. Verify ownership
+    char_row = db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": data.character_id}
+    ).fetchone()
+    if not char_row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if char_row[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+    # 2. Check battle status
+    if is_character_in_battle(db, data.character_id):
+        raise HTTPException(status_code=400, detail="Действие заблокировано во время боя")
+
+    # 3. Lock and fetch listing
+    listing = db.query(models.AuctionListing).filter(
+        models.AuctionListing.id == listing_id,
+    ).with_for_update().first()
+    if not listing:
+        raise HTTPException(status_code=404, detail="Лот не найден")
+
+    # 4. Check listing is active and not expired
+    now = datetime.utcnow()
+    if listing.status != 'active':
+        raise HTTPException(status_code=400, detail="Лот не активен")
+    if listing.expires_at <= now:
+        raise HTTPException(status_code=400, detail="Лот истёк")
+
+    # 5. Cannot bid on own listing
+    if listing.seller_character_id == data.character_id:
+        raise HTTPException(status_code=400, detail="Нельзя делать ставку на свой лот")
+
+    # 6. Amount checks
+    if data.amount < listing.start_price:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ставка должна быть не менее начальной цены ({listing.start_price} зол.)"
+        )
+    if listing.current_bid > 0 and data.amount <= listing.current_bid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ставка должна быть выше текущей ({listing.current_bid} зол.)"
+        )
+    if listing.buyout_price and data.amount >= listing.buyout_price:
+        raise HTTPException(
+            status_code=400,
+            detail="Ставка не может быть равна или выше цены выкупа. Используйте выкуп."
+        )
+
+    # 7. Refund previous bidder (if any)
+    old_bidder_id = listing.current_bidder_id
+    old_bid_amount = listing.current_bid
+    if old_bidder_id:
+        # Refund gold to previous bidder
+        db.execute(
+            text("UPDATE characters SET currency_balance = currency_balance + :amount WHERE id = :cid"),
+            {"amount": old_bid_amount, "cid": old_bidder_id}
+        )
+        # Mark previous active bid as outbid
+        db.query(models.AuctionBid).filter(
+            models.AuctionBid.listing_id == listing_id,
+            models.AuctionBid.status == 'active',
+        ).update({"status": "outbid"}, synchronize_session="fetch")
+
+        # Notify previous bidder
+        item_obj = db.query(models.Items).get(listing.item_id)
+        item_name = item_obj.name if item_obj else "Неизвестный предмет"
+        old_bidder_user_id = _get_user_id_for_character(db, old_bidder_id)
+        if old_bidder_user_id:
+            try:
+                publish_auction_notification(
+                    target_user_id=old_bidder_user_id,
+                    message=(
+                        f"Вас перебили на аукционе! Лот: {item_name}. "
+                        f"Новая ставка: {data.amount} зол. "
+                        f"Ваши {old_bid_amount} зол. возвращены."
+                    ),
+                    ws_type="auction_outbid",
+                    ws_data={
+                        "listing_id": listing.id,
+                        "item_name": item_name,
+                        "new_bid_amount": data.amount,
+                        "refunded_amount": old_bid_amount,
+                        "message": (
+                            f"Вас перебили на аукционе! Лот: {item_name}. "
+                            f"Новая ставка: {data.amount} зол. "
+                            f"Ваши {old_bid_amount} зол. возвращены."
+                        ),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"Failed to notify outbid for listing {listing.id}: {e}")
+
+    # 8. Deduct gold from bidder (atomic)
+    result = db.execute(
+        text(
+            "UPDATE characters SET currency_balance = currency_balance - :amount "
+            "WHERE id = :cid AND currency_balance >= :amount"
+        ),
+        {"amount": data.amount, "cid": data.character_id}
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=400, detail="Недостаточно золота")
+
+    # 9. Create bid row
+    bid = models.AuctionBid(
+        listing_id=listing.id,
+        bidder_character_id=data.character_id,
+        amount=data.amount,
+        status='active',
+    )
+    db.add(bid)
+
+    # 10. Update listing
+    listing.current_bid = data.amount
+    listing.current_bidder_id = data.character_id
+    db.commit()
+    db.refresh(bid)
+
+    # Get new gold balance
+    new_balance = get_character_gold(db, data.character_id)
+
+    return {
+        "listing_id": listing.id,
+        "bid_id": bid.id,
+        "amount": data.amount,
+        "new_gold_balance": new_balance,
+        "message": "Ставка принята",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auction: Execute buyout
+# ---------------------------------------------------------------------------
+
+def execute_buyout(
+    db: Session,
+    listing_id: int,
+    data: schemas.AuctionBuyoutRequest,
+    user_id: int,
+) -> dict:
+    """
+    Instantly buy out an auction listing at the buyout price.
+    Uses SELECT FOR UPDATE to prevent race conditions.
+    """
+    from fastapi import HTTPException
+
+    # 1. Verify ownership
+    char_row = db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": data.character_id}
+    ).fetchone()
+    if not char_row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if char_row[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+    # 2. Check battle status
+    if is_character_in_battle(db, data.character_id):
+        raise HTTPException(status_code=400, detail="Действие заблокировано во время боя")
+
+    # 3. Lock and fetch listing
+    listing = db.query(models.AuctionListing).filter(
+        models.AuctionListing.id == listing_id,
+    ).with_for_update().first()
+    if not listing:
+        raise HTTPException(status_code=404, detail="Лот не найден")
+
+    # 4. Check listing active and not expired
+    now = datetime.utcnow()
+    if listing.status != 'active':
+        raise HTTPException(status_code=400, detail="Лот не активен")
+    if listing.expires_at <= now:
+        raise HTTPException(status_code=400, detail="Лот истёк")
+
+    # 5. Check buyout price exists
+    if not listing.buyout_price:
+        raise HTTPException(status_code=400, detail="У этого лота нет цены выкупа")
+
+    # 6. Cannot buy own listing
+    if listing.seller_character_id == data.character_id:
+        raise HTTPException(status_code=400, detail="Нельзя выкупить свой лот")
+
+    buyout_price = listing.buyout_price
+
+    # 7. Refund previous bidder (if any)
+    old_bidder_id = listing.current_bidder_id
+    old_bid_amount = listing.current_bid
+    if old_bidder_id:
+        db.execute(
+            text("UPDATE characters SET currency_balance = currency_balance + :amount WHERE id = :cid"),
+            {"amount": old_bid_amount, "cid": old_bidder_id}
+        )
+        db.query(models.AuctionBid).filter(
+            models.AuctionBid.listing_id == listing_id,
+            models.AuctionBid.status == 'active',
+        ).update({"status": "outbid"}, synchronize_session="fetch")
+
+        # Notify previous bidder
+        item_obj = db.query(models.Items).get(listing.item_id)
+        item_name = item_obj.name if item_obj else "Неизвестный предмет"
+        old_bidder_user_id = _get_user_id_for_character(db, old_bidder_id)
+        if old_bidder_user_id:
+            try:
+                publish_auction_notification(
+                    target_user_id=old_bidder_user_id,
+                    message=(
+                        f"Лот {item_name} был выкуплен. "
+                        f"Ваши {old_bid_amount} зол. возвращены."
+                    ),
+                    ws_type="auction_outbid",
+                    ws_data={
+                        "listing_id": listing.id,
+                        "item_name": item_name,
+                        "new_bid_amount": buyout_price,
+                        "refunded_amount": old_bid_amount,
+                        "message": (
+                            f"Лот {item_name} был выкуплен. "
+                            f"Ваши {old_bid_amount} зол. возвращены."
+                        ),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"Failed to notify outbid for buyout on listing {listing.id}: {e}")
+
+    # 8. Deduct buyout price from buyer (atomic)
+    result = db.execute(
+        text(
+            "UPDATE characters SET currency_balance = currency_balance - :amount "
+            "WHERE id = :cid AND currency_balance >= :amount"
+        ),
+        {"amount": buyout_price, "cid": data.character_id}
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=400, detail="Недостаточно золота")
+
+    # 9. Update listing
+    listing.status = 'sold'
+    listing.current_bid = buyout_price
+    listing.current_bidder_id = data.character_id
+    listing.completed_at = now
+
+    # 10. Create winning bid row
+    bid = models.AuctionBid(
+        listing_id=listing.id,
+        bidder_character_id=data.character_id,
+        amount=buyout_price,
+        status='won',
+    )
+    db.add(bid)
+
+    # 11. Create storage entry for buyer (item)
+    buyer_storage = models.AuctionStorage(
+        character_id=data.character_id,
+        item_id=listing.item_id,
+        quantity=listing.quantity,
+        enhancement_data=listing.enhancement_data,
+        gold_amount=0,
+        source='purchase',
+        listing_id=listing.id,
+    )
+    db.add(buyer_storage)
+
+    # 12. Calculate commission and create storage for seller (gold)
+    sale_gold = math.floor(buyout_price * (1 - AUCTION_COMMISSION_RATE))
+    commission = buyout_price - sale_gold
+
+    seller_storage = models.AuctionStorage(
+        character_id=listing.seller_character_id,
+        item_id=None,
+        quantity=0,
+        enhancement_data=None,
+        gold_amount=sale_gold,
+        source='sale_proceeds',
+        listing_id=listing.id,
+    )
+    db.add(seller_storage)
+    db.commit()
+
+    # 13. Notify seller
+    item_obj = db.query(models.Items).get(listing.item_id)
+    item_name = item_obj.name if item_obj else "Неизвестный предмет"
+    seller_user_id = _get_user_id_for_character(db, listing.seller_character_id)
+    if seller_user_id:
+        try:
+            publish_auction_notification(
+                target_user_id=seller_user_id,
+                message=f"Ваш предмет {item_name} выкуплен за {buyout_price} зол.! После комиссии 5% вы получите {sale_gold} зол.",
+                ws_type="auction_sold",
+                ws_data={
+                    "listing_id": listing.id,
+                    "item_name": item_name,
+                    "sold_price": buyout_price,
+                    "commission": commission,
+                    "net_gold": sale_gold,
+                    "buyer_name": get_character_name(db, data.character_id),
+                    "message": f"Ваш предмет {item_name} выкуплен за {buyout_price} зол.! После комиссии 5% вы получите {sale_gold} зол.",
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to notify seller for buyout on listing {listing.id}: {e}")
+
+    new_balance = get_character_gold(db, data.character_id)
+
+    return {
+        "listing_id": listing.id,
+        "amount": buyout_price,
+        "new_gold_balance": new_balance,
+        "message": "Предмет выкуплен",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auction: Cancel listing
+# ---------------------------------------------------------------------------
+
+def cancel_listing(
+    db: Session,
+    listing_id: int,
+    data: schemas.AuctionCancelRequest,
+    user_id: int,
+) -> dict:
+    """
+    Cancel an active auction listing.
+    Requires seller to be at a location with an auctioneer NPC.
+    """
+    from fastapi import HTTPException
+
+    # 1. Verify ownership
+    char_row = db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": data.character_id}
+    ).fetchone()
+    if not char_row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if char_row[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+    # 2. Fetch listing
+    listing = db.query(models.AuctionListing).filter(
+        models.AuctionListing.id == listing_id,
+    ).with_for_update().first()
+    if not listing:
+        raise HTTPException(status_code=404, detail="Лот не найден")
+
+    # 4. Check seller
+    if listing.seller_character_id != data.character_id:
+        raise HTTPException(status_code=403, detail="Вы можете отменять только свои лоты")
+
+    # 5. Check status
+    if listing.status != 'active':
+        raise HTTPException(status_code=400, detail="Лот не активен")
+
+    now = datetime.utcnow()
+
+    # 6. Refund current bidder (if any)
+    if listing.current_bidder_id:
+        db.execute(
+            text("UPDATE characters SET currency_balance = currency_balance + :amount WHERE id = :cid"),
+            {"amount": listing.current_bid, "cid": listing.current_bidder_id}
+        )
+        db.query(models.AuctionBid).filter(
+            models.AuctionBid.listing_id == listing_id,
+            models.AuctionBid.status == 'active',
+        ).update({"status": "refunded"}, synchronize_session="fetch")
+
+        # Notify bidder
+        item_obj = db.query(models.Items).get(listing.item_id)
+        item_name = item_obj.name if item_obj else "Неизвестный предмет"
+        bidder_user_id = _get_user_id_for_character(db, listing.current_bidder_id)
+        if bidder_user_id:
+            try:
+                publish_auction_notification(
+                    target_user_id=bidder_user_id,
+                    message=f"Лот отменён продавцом: {item_name}. Ваши {listing.current_bid} зол. возвращены.",
+                    ws_type="auction_outbid",
+                    ws_data={
+                        "listing_id": listing.id,
+                        "item_name": item_name,
+                        "new_bid_amount": 0,
+                        "refunded_amount": listing.current_bid,
+                        "message": f"Лот отменён продавцом: {item_name}. Ваши {listing.current_bid} зол. возвращены.",
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"Failed to notify bidder for cancel on listing {listing.id}: {e}")
+
+    # 7. Update listing
+    listing.status = 'cancelled'
+    listing.completed_at = now
+
+    # 8. Create storage entry for seller (item returned)
+    seller_storage = models.AuctionStorage(
+        character_id=listing.seller_character_id,
+        item_id=listing.item_id,
+        quantity=listing.quantity,
+        enhancement_data=listing.enhancement_data,
+        gold_amount=0,
+        source='cancelled',
+        listing_id=listing.id,
+    )
+    db.add(seller_storage)
+    db.commit()
+
+    return {
+        "listing_id": listing.id,
+        "message": "Лот отменён, предмет перемещён на склад аукциона",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auction: Get storage
+# ---------------------------------------------------------------------------
+
+def get_auction_storage(
+    db: Session,
+    character_id: int,
+    user_id: int,
+) -> dict:
+    """
+    Get auction storage items for a character.
+    Viewable from anywhere (no NPC check required).
+    """
+    from fastapi import HTTPException
+
+    # 1. Verify ownership
+    char_row = db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": character_id}
+    ).fetchone()
+    if not char_row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if char_row[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+    # 2. Fetch storage entries
+    storage_entries = db.query(models.AuctionStorage).filter(
+        models.AuctionStorage.character_id == character_id,
+    ).order_by(models.AuctionStorage.created_at.desc()).all()
+
+    items = []
+    total_gold = 0
+    for entry in storage_entries:
+        item_info = None
+        if entry.item_id:
+            item_obj = db.query(models.Items).get(entry.item_id)
+            if item_obj:
+                item_info = {
+                    "id": item_obj.id,
+                    "name": item_obj.name,
+                    "image": item_obj.image,
+                    "item_type": item_obj.item_type,
+                    "item_rarity": item_obj.item_rarity,
+                    "item_level": item_obj.item_level,
+                }
+
+        enhancement_data = None
+        if entry.enhancement_data:
+            try:
+                enhancement_data = json.loads(entry.enhancement_data)
+            except (json.JSONDecodeError, TypeError):
+                enhancement_data = None
+
+        total_gold += entry.gold_amount
+
+        items.append({
+            "id": entry.id,
+            "item": item_info,
+            "quantity": entry.quantity,
+            "enhancement_data": enhancement_data,
+            "gold_amount": entry.gold_amount,
+            "source": entry.source,
+            "created_at": entry.created_at.isoformat() if entry.created_at else "",
+        })
+
+    return {
+        "items": items,
+        "total_gold": total_gold,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auction: Claim from storage
+# ---------------------------------------------------------------------------
+
+def claim_from_storage(
+    db: Session,
+    data: schemas.AuctionClaimRequest,
+    user_id: int,
+) -> dict:
+    """
+    Claim items and/or gold from auction storage.
+    Requires character to be at a location with auctioneer NPC.
+    """
+    from fastapi import HTTPException
+
+    # 1. Verify ownership
+    char_row = db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": data.character_id}
+    ).fetchone()
+    if not char_row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if char_row[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+    # 2. Check NPC auctioneer at location
+    auctioneer = check_auctioneer_at_character_location(db, data.character_id)
+    if not auctioneer:
+        raise HTTPException(status_code=403, detail="Для получения предметов нужен НПС-Аукционист")
+
+    # 3. Fetch storage entries
+    storage_entries = db.query(models.AuctionStorage).filter(
+        models.AuctionStorage.id.in_(data.storage_ids),
+        models.AuctionStorage.character_id == data.character_id,
+    ).all()
+    if not storage_entries:
+        raise HTTPException(status_code=404, detail="Предметы на складе не найдены")
+
+    claimed_items = 0
+    claimed_gold = 0
+
+    for entry in storage_entries:
+        if entry.item_id and entry.quantity > 0:
+            # Add item to inventory
+            # Check if enhancement_data needs to be restored
+            enhancement_snapshot = None
+            if entry.enhancement_data:
+                try:
+                    enhancement_snapshot = json.loads(entry.enhancement_data)
+                except (json.JSONDecodeError, TypeError):
+                    enhancement_snapshot = None
+
+            if enhancement_snapshot:
+                # Create inventory row directly with enhancement data preserved
+                inv_row = models.CharacterInventory(
+                    character_id=data.character_id,
+                    item_id=entry.item_id,
+                    quantity=entry.quantity,
+                    is_identified=enhancement_snapshot.get("is_identified", True),
+                    enhancement_points_spent=enhancement_snapshot.get("enhancement_points_spent", 0),
+                    enhancement_bonuses=(
+                        json.dumps(enhancement_snapshot["enhancement_bonuses"])
+                        if enhancement_snapshot.get("enhancement_bonuses") else None
+                    ),
+                    socketed_gems=(
+                        json.dumps(enhancement_snapshot["socketed_gems"])
+                        if enhancement_snapshot.get("socketed_gems") else None
+                    ),
+                    current_durability=enhancement_snapshot.get("current_durability"),
+                )
+                db.add(inv_row)
+            else:
+                # Plain item, use standard add function
+                _add_items_to_inventory(db, data.character_id, entry.item_id, entry.quantity)
+
+            claimed_items += 1
+
+        if entry.gold_amount > 0:
+            # Add gold to character balance
+            db.execute(
+                text(
+                    "UPDATE characters SET currency_balance = currency_balance + :amount "
+                    "WHERE id = :cid"
+                ),
+                {"amount": entry.gold_amount, "cid": data.character_id}
+            )
+            claimed_gold += entry.gold_amount
+
+        # Delete storage entry
+        db.delete(entry)
+
+    db.commit()
+
+    new_balance = get_character_gold(db, data.character_id)
+
+    return {
+        "claimed_items": claimed_items,
+        "claimed_gold": claimed_gold,
+        "new_gold_balance": new_balance,
+        "message": f"Получено предметов: {claimed_items}, золота: {claimed_gold}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auction: Get my listings
+# ---------------------------------------------------------------------------
+
+def get_my_listings(
+    db: Session,
+    character_id: int,
+    user_id: int,
+) -> dict:
+    """
+    Get active and completed listings for a character.
+    Returns active listings and last 20 completed (sold/expired/cancelled).
+    """
+    from fastapi import HTTPException
+
+    # 1. Verify ownership
+    char_row = db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": character_id}
+    ).fetchone()
+    if not char_row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if char_row[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+    # Run lazy expiration first
+    expire_stale_listings(db)
+
+    # Active listings
+    active_listings = db.query(models.AuctionListing).filter(
+        models.AuctionListing.seller_character_id == character_id,
+        models.AuctionListing.status == 'active',
+    ).order_by(models.AuctionListing.created_at.desc()).all()
+
+    # Completed listings (last 20)
+    completed_listings = db.query(models.AuctionListing).filter(
+        models.AuctionListing.seller_character_id == character_id,
+        models.AuctionListing.status.in_(['sold', 'expired', 'cancelled']),
+    ).order_by(models.AuctionListing.completed_at.desc()).limit(20).all()
+
+    return {
+        "active": [_build_listing_response(db, l) for l in active_listings],
+        "completed": [_build_listing_response(db, l) for l in completed_listings],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auction: Get listings page (browse)
+# ---------------------------------------------------------------------------
+
+def get_listings_page(
+    db: Session,
+    page: int = 1,
+    per_page: int = 20,
+    item_type: Optional[str] = None,
+    rarity: Optional[str] = None,
+    sort: str = "time_asc",
+    search: Optional[str] = None,
+) -> dict:
+    """
+    Browse auction listings with filtering, sorting, and pagination.
+    Runs lazy expiration first.
+    """
+    # Run lazy expiration
+    expire_stale_listings(db)
+
+    # Base query: only active listings
+    query = db.query(models.AuctionListing).filter(
+        models.AuctionListing.status == 'active',
+    )
+
+    # Determine if we need a join with Items table
+    needs_join = bool(item_type or rarity or search or sort in ("name_asc", "name_desc"))
+    if needs_join:
+        query = query.join(models.Items, models.AuctionListing.item_id == models.Items.id)
+
+    if item_type:
+        query = query.filter(models.Items.item_type == item_type)
+
+    if rarity:
+        query = query.filter(models.Items.item_rarity == rarity)
+
+    if search:
+        query = query.filter(models.Items.name.ilike(f"%{search}%"))
+
+    # Total count
+    total = query.count()
+
+    # Sorting
+    if sort == "price_asc":
+        query = query.order_by(models.AuctionListing.current_bid.asc(), models.AuctionListing.start_price.asc())
+    elif sort == "price_desc":
+        query = query.order_by(models.AuctionListing.current_bid.desc(), models.AuctionListing.start_price.desc())
+    elif sort == "time_asc":
+        query = query.order_by(models.AuctionListing.expires_at.asc())
+    elif sort == "time_desc":
+        query = query.order_by(models.AuctionListing.expires_at.desc())
+    elif sort == "name_asc":
+        query = query.order_by(models.Items.name.asc())
+    elif sort == "name_desc":
+        query = query.order_by(models.Items.name.desc())
+    else:
+        query = query.order_by(models.AuctionListing.expires_at.asc())
+
+    # Pagination
+    per_page = max(1, min(per_page, 50))
+    page = max(1, page)
+    offset = (page - 1) * per_page
+    listings = query.offset(offset).limit(per_page).all()
+
+    return {
+        "listings": [_build_listing_response(db, l) for l in listings],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Auction: Get single listing
+# ---------------------------------------------------------------------------
+
+def get_single_listing(db: Session, listing_id: int) -> Optional[dict]:
+    """Get a single listing by ID. Returns None if not found."""
+    # Run lazy expiration for this listing
+    expire_stale_listings(db)
+
+    listing = db.query(models.AuctionListing).filter(
+        models.AuctionListing.id == listing_id,
+    ).first()
+    if not listing:
+        return None
+
+    return _build_listing_response(db, listing)
+
+
+# ---------------------------------------------------------------------------
+# Auction: Check auctioneer endpoint
+# ---------------------------------------------------------------------------
+
+def check_auctioneer_endpoint(
+    db: Session,
+    character_id: int,
+    user_id: int,
+) -> dict:
+    """
+    Check if there's an auctioneer NPC at the character's location.
+    For the check-auctioneer endpoint.
+    """
+    from fastapi import HTTPException
+
+    # Verify ownership
+    char_row = db.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": character_id}
+    ).fetchone()
+    if not char_row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    if char_row[0] != user_id:
+        raise HTTPException(status_code=403, detail="Вы можете управлять только своими персонажами")
+
+    auctioneer = check_auctioneer_at_character_location(db, character_id)
+
+    return {
+        "has_auctioneer": auctioneer is not None,
+        "auctioneer_name": auctioneer["name"] if auctioneer else None,
+    }

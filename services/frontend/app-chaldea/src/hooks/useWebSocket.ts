@@ -8,14 +8,28 @@ import {
   receiveMessageEdited,
   receiveConversationCreated,
   receiveConversationRead,
+  receiveOwnSentMessage,
 } from '../redux/slices/messengerSlice';
+import {
+  handleAuctionOutbid,
+  handleAuctionSold,
+  handleAuctionWon,
+  handleAuctionExpired,
+} from '../redux/slices/auctionSlice';
 import type {
+  PrivateMessage,
   WsPrivateMessageData,
   WsPrivateMessageDeletedData,
   WsMessageEditedData,
   WsConversationCreatedData,
   WsConversationReadData,
 } from '../types/messenger';
+import type {
+  WsAuctionOutbidData,
+  WsAuctionSoldData,
+  WsAuctionWonData,
+  WsAuctionExpiredData,
+} from '../types/auction';
 import type { ChatMessage, ChatChannel } from '../types/chat';
 import toast from 'react-hot-toast';
 
@@ -33,6 +47,21 @@ interface WebSocketMessage {
 interface UseWebSocketReturn {
   connected: boolean;
 }
+
+// Module-level WebSocket reference for sendWsMessage
+let activeWs: WebSocket | null = null;
+
+/**
+ * Send a message through the shared WebSocket connection.
+ * Returns true if the message was sent, false if the socket is not connected.
+ */
+export const sendWsMessage = (action: string, data: Record<string, unknown>): boolean => {
+  if (!activeWs || activeWs.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  activeWs.send(JSON.stringify({ action, data }));
+  return true;
+};
 
 const useWebSocket = (): UseWebSocketReturn => {
   const [connected, setConnected] = useState(false);
@@ -59,6 +88,7 @@ const useWebSocket = (): UseWebSocketReturn => {
         wsRef.current.onmessage = null;
         wsRef.current.close(WS_CLOSE_NORMAL);
         wsRef.current = null;
+        activeWs = null;
       }
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -66,6 +96,7 @@ const useWebSocket = (): UseWebSocketReturn => {
 
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
+      activeWs = ws;
 
       ws.onopen = () => {
         if (!mountedRef.current) return;
@@ -138,6 +169,52 @@ const useWebSocket = (): UseWebSocketReturn => {
               dispatch(receiveConversationRead(parsed.data as WsConversationReadData));
               break;
             }
+            case 'messenger_send_ok': {
+              dispatch(receiveOwnSentMessage(parsed.data as PrivateMessage));
+              break;
+            }
+            case 'messenger_edit_ok':
+            case 'messenger_delete_ok':
+            case 'messenger_mark_read_ok':
+              // Success confirmations — state already updated via WS broadcast events
+              break;
+            case 'messenger_error': {
+              const errData = parsed.data as { detail?: string };
+              toast.error(errData.detail ?? 'Ошибка мессенджера');
+              break;
+            }
+            case 'auction_outbid': {
+              const outbidData = parsed.data as WsAuctionOutbidData;
+              dispatch(handleAuctionOutbid(outbidData));
+              if (outbidData.message) {
+                toast(outbidData.message);
+              }
+              break;
+            }
+            case 'auction_sold': {
+              const soldData = parsed.data as WsAuctionSoldData;
+              dispatch(handleAuctionSold(soldData));
+              if (soldData.message) {
+                toast(soldData.message);
+              }
+              break;
+            }
+            case 'auction_won': {
+              const wonData = parsed.data as WsAuctionWonData;
+              dispatch(handleAuctionWon(wonData));
+              if (wonData.message) {
+                toast(wonData.message);
+              }
+              break;
+            }
+            case 'auction_expired': {
+              const expiredData = parsed.data as WsAuctionExpiredData;
+              dispatch(handleAuctionExpired(expiredData));
+              if (expiredData.message) {
+                toast(expiredData.message);
+              }
+              break;
+            }
             case 'ping':
               // Keepalive — ignore
               break;
@@ -195,6 +272,7 @@ const useWebSocket = (): UseWebSocketReturn => {
         wsRef.current.onmessage = null;
         wsRef.current.close(WS_CLOSE_NORMAL);
         wsRef.current = null;
+        activeWs = null;
       }
 
       setConnected(false);

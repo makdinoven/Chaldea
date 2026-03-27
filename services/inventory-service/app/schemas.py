@@ -979,3 +979,162 @@ class ItemDetailResponse(BaseModel):
     socketed_items: List[SocketedItemDetail] = []
     is_identified: bool = True
     source: str
+
+
+# -----------------------------------------------------------------------------
+# 17. Auction schemas
+# -----------------------------------------------------------------------------
+
+class AuctionListingStatus(str, Enum):
+    active = "active"
+    sold = "sold"
+    expired = "expired"
+    cancelled = "cancelled"
+
+
+class AuctionStorageSource(str, Enum):
+    purchase = "purchase"
+    expired = "expired"
+    cancelled = "cancelled"
+    sale_proceeds = "sale_proceeds"
+    deposit = "deposit"
+
+
+# --- Request schemas ---
+
+class AuctionCreateListingRequest(BaseModel):
+    character_id: int
+    storage_id: int           # auction_storage.id — item from auction storage
+    start_price: int          # minimum bid (> 0)
+    buyout_price: Optional[int] = None  # optional instant buy price (> start_price)
+
+
+class AuctionBidRequest(BaseModel):
+    character_id: int
+    amount: int               # bid amount (> current_bid)
+
+
+class AuctionBuyoutRequest(BaseModel):
+    character_id: int
+
+
+class AuctionCancelRequest(BaseModel):
+    character_id: int
+
+
+class AuctionClaimRequest(BaseModel):
+    character_id: int
+    storage_ids: List[int]    # auction_storage.id(s) to claim
+
+
+# --- Response schemas ---
+
+class AuctionItemInfo(BaseModel):
+    id: int
+    name: str
+    image: Optional[str] = None
+    item_type: str
+    item_rarity: str
+    item_level: int
+
+    class Config:
+        orm_mode = True
+
+
+class AuctionListingResponse(BaseModel):
+    id: int
+    seller_character_id: int
+    seller_name: str
+    item: AuctionItemInfo
+    quantity: int
+    enhancement_data: Optional[dict] = None
+    start_price: int
+    buyout_price: Optional[int] = None
+    current_bid: int
+    current_bidder_id: Optional[int] = None
+    current_bidder_name: Optional[str] = None
+    status: str
+    created_at: str
+    expires_at: str
+    time_remaining_seconds: int
+    bid_count: int
+
+
+class AuctionListingsPageResponse(BaseModel):
+    listings: List[AuctionListingResponse]
+    total: int
+    page: int
+    per_page: int
+
+
+class AuctionBidResponse(BaseModel):
+    listing_id: int
+    bid_id: int
+    amount: int
+    new_gold_balance: int
+    message: str
+
+
+class AuctionBuyoutResponse(BaseModel):
+    listing_id: int
+    amount: int
+    new_gold_balance: int
+    message: str
+
+
+class AuctionCreateListingResponse(BaseModel):
+    listing_id: int
+    item_name: str
+    quantity: int
+    start_price: int
+    buyout_price: Optional[int] = None
+    expires_at: str
+    active_listing_count: int
+    message: str
+
+
+class AuctionCancelResponse(BaseModel):
+    listing_id: int
+    message: str
+
+
+class AuctionStorageItemResponse(BaseModel):
+    id: int
+    item: Optional[AuctionItemInfo] = None
+    quantity: int
+    enhancement_data: Optional[dict] = None
+    gold_amount: int
+    source: str
+    created_at: str
+
+
+class AuctionStorageResponse(BaseModel):
+    items: List[AuctionStorageItemResponse]
+    total_gold: int
+
+
+class AuctionClaimResponse(BaseModel):
+    claimed_items: int
+    claimed_gold: int
+    new_gold_balance: int
+    message: str
+
+
+class AuctionMyListingsResponse(BaseModel):
+    active: List[AuctionListingResponse]
+    completed: List[AuctionListingResponse]
+
+
+# --- Deposit schemas ---
+
+class AuctionDepositRequest(BaseModel):
+    character_id: int
+    inventory_item_id: int    # character_inventory.id
+    quantity: int = 1
+
+
+class AuctionDepositResponse(BaseModel):
+    storage_id: int
+    item_name: str
+    quantity: int
+    message: str

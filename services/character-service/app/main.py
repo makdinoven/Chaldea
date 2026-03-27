@@ -1559,6 +1559,12 @@ def get_short_info(character_id: int, db: Session = Depends(get_db)):
         "race_name": race.name if race else None,
         "class_name": char_class.name if char_class else None,
         "subrace_name": subrace.name if subrace else None,
+        "is_npc": ch.is_npc,
+        "npc_role": ch.npc_role,
+        "biography": ch.biography,
+        "personality": ch.personality,
+        "sex": ch.sex,
+        "age": ch.age,
     }
 
 @router.get("/list")

@@ -8,6 +8,7 @@ import useNpcAttack from '../../../hooks/useNpcAttack';
 import NpcDialogueModal from './NpcDialogueModal';
 import NpcShopModal from './NpcShopModal';
 import NpcQuestsModal from './NpcQuestsModal';
+import NpcAuctionModal from './NpcAuctionModal';
 
 interface NpcDetail {
   id: number;
@@ -37,6 +38,7 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
   const [shopOpen, setShopOpen] = useState(false);
   const [hasQuests, setHasQuests] = useState(false);
   const [questsOpen, setQuestsOpen] = useState(false);
+  const [auctionOpen, setAuctionOpen] = useState(false);
   const characterId = useAppSelector((state) => state.user.character?.id) as number | null;
   const [npcNameForAttack, setNpcNameForAttack] = useState('');
   const { attacking, handleAttack } = useNpcAttack({
@@ -48,7 +50,7 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
   useEffect(() => {
     const fetchNpc = async () => {
       try {
-        const res = await axios.get<NpcDetail>(`${BASE_URL}/characters/admin/npcs/${npcId}`);
+        const res = await axios.get<NpcDetail>(`${BASE_URL}/characters/${npcId}/short_info`);
         setNpc(res.data);
         setNpcNameForAttack(res.data.name);
       } catch {
@@ -112,6 +114,17 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
   };
 
   const roleLabel = npc?.npc_role ? (NPC_ROLE_LABELS[npc.npc_role] || npc.npc_role) : null;
+
+  if (auctionOpen && npc) {
+    return (
+      <NpcAuctionModal
+        npcId={npc.id}
+        npcName={npc.name}
+        npcAvatar={npc.avatar}
+        onClose={() => setAuctionOpen(false)}
+      />
+    );
+  }
 
   if (questsOpen && npc) {
     return (
@@ -278,6 +291,26 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z" />
                 </svg>
                 Торговля
+              </button>
+            )}
+
+            {/* Auction button */}
+            {npc.npc_role === 'auctioneer' && (
+              <button
+                onClick={() => setAuctionOpen(true)}
+                className="
+                  mt-2 w-full px-6 py-3 rounded-card
+                  border border-gold/50 bg-gold/10
+                  text-gold text-sm sm:text-base font-medium uppercase tracking-wide
+                  hover:bg-gold/20 hover:border-gold/80
+                  transition-all duration-200
+                  flex items-center justify-center gap-2
+                "
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l3 9a5.002 5.002 0 01-6.001 0M18 7l-3 9m-3-6v10" />
+                </svg>
+                Аукцион
               </button>
             )}
 

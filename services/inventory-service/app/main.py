@@ -3413,4 +3413,146 @@ async def update_durability_internal(
     }
 
 
+# ---------------------------------------------------------------------------
+# Auction endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/auction/listings", response_model=schemas.AuctionListingsPageResponse)
+def auction_browse_listings(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=50),
+    item_type: Optional[str] = Query(None, description="Фильтр по типу предмета"),
+    rarity: Optional[str] = Query(None, description="Фильтр по редкости"),
+    sort: str = Query("time_asc", description="Сортировка: price_asc, price_desc, time_asc, time_desc, name_asc, name_desc"),
+    search: Optional[str] = Query(None, description="Поиск по названию предмета"),
+    db: Session = Depends(get_db),
+):
+    """Просмотр лотов аукциона с фильтрацией, сортировкой и пагинацией."""
+    return crud.get_listings_page(
+        db,
+        page=page,
+        per_page=per_page,
+        item_type=item_type,
+        rarity=rarity,
+        sort=sort,
+        search=search,
+    )
+
+
+@router.get("/auction/my-listings", response_model=schemas.AuctionMyListingsResponse)
+def auction_my_listings(
+    character_id: int = Query(..., description="ID персонажа"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Мои лоты на аукционе (активные и завершённые)."""
+    return crud.get_my_listings(db, character_id=character_id, user_id=current_user.id)
+
+
+@router.get("/auction/storage", response_model=schemas.AuctionStorageResponse)
+def auction_storage(
+    character_id: int = Query(..., description="ID персонажа"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Склад аукциона — купленные и непроданные предметы."""
+    return crud.get_auction_storage(db, character_id=character_id, user_id=current_user.id)
+
+
+@router.get("/auction/check-auctioneer")
+def auction_check_auctioneer(
+    character_id: int = Query(..., description="ID персонажа"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Проверка наличия НПС-Аукциониста в локации персонажа."""
+    return crud.check_auctioneer_endpoint(db, character_id=character_id, user_id=current_user.id)
+
+
+@router.get("/auction/listings/{listing_id}", response_model=schemas.AuctionListingResponse)
+def auction_get_listing(
+    listing_id: int,
+    db: Session = Depends(get_db),
+):
+    """Получить один лот по ID."""
+    result = crud.get_single_listing(db, listing_id=listing_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Лот не найден")
+    return result
+
+
+@router.post("/auction/listings", response_model=schemas.AuctionCreateListingResponse, status_code=201)
+def auction_create_listing(
+    req: schemas.AuctionCreateListingRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Выставить предмет на аукцион."""
+    return crud.create_auction_listing(db, data=req, user_id=current_user.id)
+
+
+@router.post("/auction/listings/{listing_id}/bid", response_model=schemas.AuctionBidResponse)
+def auction_place_bid(
+    listing_id: int,
+    req: schemas.AuctionBidRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Сделать ставку на лот."""
+    return crud.place_bid(db, listing_id=listing_id, data=req, user_id=current_user.id)
+
+
+@router.post("/auction/listings/{listing_id}/buyout", response_model=schemas.AuctionBuyoutResponse)
+def auction_buyout(
+    listing_id: int,
+    req: schemas.AuctionBuyoutRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Мгновенный выкуп лота."""
+    return crud.execute_buyout(db, listing_id=listing_id, data=req, user_id=current_user.id)
+
+
+@router.post("/auction/listings/{listing_id}/cancel", response_model=schemas.AuctionCancelResponse)
+def auction_cancel_listing(
+    listing_id: int,
+    req: schemas.AuctionCancelRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Отменить лот на аукционе."""
+    return crud.cancel_listing(db, listing_id=listing_id, data=req, user_id=current_user.id)
+
+
+@router.post("/auction/storage/deposit", status_code=201)
+def auction_deposit_to_storage(
+    req: schemas.AuctionDepositRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Сдать предмет из инвентаря на склад аукциона (требуется НПС-Аукционист)."""
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        result = crud.deposit_to_auction_storage(db, data=req, user_id=current_user.id)
+        logger.info(f"Auction deposit success: {result}")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Auction deposit error: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {str(e)}")
+
+
+@router.post("/auction/storage/claim", response_model=schemas.AuctionClaimResponse)
+def auction_claim_storage(
+    req: schemas.AuctionClaimRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Забрать предметы/золото со склада аукциона."""
+    return crud.claim_from_storage(db, data=req, user_id=current_user.id)
+
+
 app.include_router(router)

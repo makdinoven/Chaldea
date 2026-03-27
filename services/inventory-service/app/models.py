@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Enum, Boolean, DECIMAL, Text, ForeignKey, Float, DateTime, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Enum, Boolean, DECIMAL, Text, ForeignKey, Float, DateTime, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime
@@ -319,4 +319,58 @@ class ActiveBuff(Base):
     expires_at = Column(DateTime, nullable=False)
     source_item_name = Column(String(200), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+# Auction system models
+class AuctionListing(Base):
+    __tablename__ = "auction_listings"
+    __table_args__ = (
+        Index('ix_auction_listings_status_expires', 'status', 'expires_at'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    seller_character_id = Column(Integer, nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey('items.id'), nullable=False, index=True)
+    quantity = Column(Integer, nullable=False, default=1)
+    enhancement_data = Column(Text, nullable=True)  # JSON string
+    start_price = Column(Integer, nullable=False)
+    buyout_price = Column(Integer, nullable=True)
+    current_bid = Column(Integer, nullable=False, default=0)
+    current_bidder_id = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=False, default='active', index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    item = relationship("Items")
+    bids = relationship("AuctionBid", back_populates="listing", cascade="all, delete-orphan")
+
+
+class AuctionBid(Base):
+    __tablename__ = "auction_bids"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    listing_id = Column(Integer, ForeignKey('auction_listings.id', ondelete='CASCADE'), nullable=False, index=True)
+    bidder_character_id = Column(Integer, nullable=False, index=True)
+    amount = Column(Integer, nullable=False)
+    status = Column(String(20), nullable=False, default='active')
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    listing = relationship("AuctionListing", back_populates="bids")
+
+
+class AuctionStorage(Base):
+    __tablename__ = "auction_storage"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey('items.id'), nullable=True)
+    quantity = Column(Integer, nullable=False, default=0)
+    enhancement_data = Column(Text, nullable=True)  # JSON string
+    gold_amount = Column(Integer, nullable=False, default=0)
+    source = Column(String(20), nullable=False)
+    listing_id = Column(Integer, ForeignKey('auction_listings.id', ondelete='SET NULL'), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    item = relationship("Items")
 

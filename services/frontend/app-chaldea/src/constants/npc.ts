@@ -14,6 +14,7 @@ export const NPC_ROLES = [
   { value: 'healer', label: 'Целитель' },
   { value: 'bard', label: 'Бард' },
   { value: 'hunter', label: 'Охотник' },
+  { value: 'auctioneer', label: 'Аукционист' },
 ] as const;
 
 export const NPC_ROLE_LABELS: Record<string, string> = Object.fromEntries(
@@ -36,6 +37,7 @@ export const NPC_ROLE_ICONS: Record<string, string> = {
   healer: '💚',
   bard: '🎵',
   hunter: '🏹',
+  auctioneer: '⚖️',
 };
 
 export const NPC_SEXES = [
