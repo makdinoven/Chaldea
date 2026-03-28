@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
@@ -40,6 +40,7 @@ interface RouteParams {
 const WorldPage = () => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const params = useParams<RouteParams>();
 
   const areas = useAppSelector(selectAreas);
@@ -64,7 +65,11 @@ const WorldPage = () => {
   const [selectedDistrictId, setSelectedDistrictId] = useState<number | null>(null);
 
   // City map view state: when a district has map_image_url, show its map instead of modal
-  const [cityMapDistrictId, setCityMapDistrictId] = useState<number | null>(null);
+  // Initialized from ?district= query param so browser back navigates correctly
+  const districtParam = searchParams.get('district');
+  const [cityMapDistrictId, setCityMapDistrictId] = useState<number | null>(
+    districtParam ? Number(districtParam) : null,
+  );
 
   // Determine view level from route params
   const viewLevel: ViewLevel = useMemo(() => {
@@ -94,9 +99,14 @@ const WorldPage = () => {
     dispatch(fetchHierarchyTree());
   }, [dispatch]);
 
-  // Reset city map view when changing route
+  // Sync cityMapDistrictId from URL query param (handles browser back/forward)
   useEffect(() => {
-    setCityMapDistrictId(null);
+    const paramValue = districtParam ? Number(districtParam) : null;
+    setCityMapDistrictId(paramValue);
+  }, [districtParam]);
+
+  // Reset district modal when changing route (but not city map — that's driven by query param)
+  useEffect(() => {
     setSelectedDistrictId(null);
   }, [viewLevel, entityId]);
 
@@ -177,16 +187,21 @@ const WorldPage = () => {
     animatedNavigate(`/location/${locationId}`);
   };
 
+  // Handle arrow click from region map — navigate to target region
+  const handleArrowClick = (targetRegionId: number) => {
+    animatedNavigate(`/world/region/${targetRegionId}`);
+  };
+
   // Handle district click from region map
   const handleDistrictClick = (districtId: number) => {
     const district = regionDetails?.districts.find((d) => d.id === districtId);
     const mapItem = regionDetails?.map_items?.find((i) => i.type === 'district' && i.id === districtId);
     const hasMapImage = district?.map_image_url || mapItem?.map_image_url;
     if (hasMapImage) {
-      // Animate transition to city map
+      // Animate transition to city map — persist in URL query param
       setMapTransition('zoom-out');
       setTimeout(() => {
-        setCityMapDistrictId(districtId);
+        setSearchParams({ district: String(districtId) }, { replace: false });
         setMapTransition('fade-in');
         setTimeout(() => setMapTransition('idle'), 400);
       }, 350);
@@ -195,9 +210,9 @@ const WorldPage = () => {
     }
   };
 
-  // Handle back from city map to region map
+  // Handle back from city map to region map — remove query param
   const handleCityMapBack = () => {
-    setCityMapDistrictId(null);
+    setSearchParams({}, { replace: false });
   };
 
   // Handle district click inside city map (sub-districts open modal)
@@ -428,6 +443,12 @@ const WorldPage = () => {
     }
     return remapped;
   }, [regionDetails, regionLocationIds, regionDistrictIds, cityLocToDistrict]);
+
+  // Arrow edges for the region map
+  const regionArrowEdges = useMemo(() => {
+    if (!regionDetails) return [];
+    return regionDetails.arrow_edges ?? [];
+  }, [regionDetails]);
 
   // Filter districts: exclude city-map sub-districts, strip locations from city-map root districts
   const regionDistricts = useMemo(() => {
@@ -711,10 +732,12 @@ const WorldPage = () => {
                 mapImageUrl={regionDetails.map_image_url}
                 mapItems={regionMapItems}
                 neighborEdges={regionNeighborEdges}
+                arrowEdges={regionArrowEdges}
                 districts={regionDistricts}
                 currentLocationId={currentLocationId}
                 onLocationClick={handleLocationClick}
                 onDistrictClick={handleDistrictClick}
+                onArrowClick={handleArrowClick}
               />
             </div>
           ) : (

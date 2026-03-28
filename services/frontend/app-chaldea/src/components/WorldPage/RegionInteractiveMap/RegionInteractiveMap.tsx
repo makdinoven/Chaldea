@@ -4,7 +4,7 @@ import { motion } from 'motion/react';
 export interface MapItem {
   id: number;
   name: string;
-  type: 'location' | 'district';
+  type: 'location' | 'district' | 'arrow';
   map_icon_url: string | null;
   map_x: number | null;
   map_y: number | null;
@@ -14,6 +14,16 @@ export interface MapItem {
   district_id?: number | null;
   parent_district_id?: number | null;
   recommended_level?: number | null;
+  target_region_id?: number | null;
+  target_region_name?: string | null;
+  paired_arrow_id?: number | null;
+}
+
+interface ArrowEdge {
+  location_id: number;
+  arrow_id: number;
+  energy_cost?: number;
+  path_data?: PathWaypoint[] | null;
 }
 
 interface PathWaypoint {
@@ -39,10 +49,12 @@ interface RegionInteractiveMapProps {
   mapImageUrl: string;
   mapItems: MapItem[];
   neighborEdges: NeighborEdge[];
+  arrowEdges?: ArrowEdge[];
   districts?: DistrictPositionData[];
   currentLocationId?: number | null;
   onLocationClick: (locationId: number) => void;
   onDistrictClick: (districtId: number) => void;
+  onArrowClick?: (targetRegionId: number) => void;
   isCityMap?: boolean;
 }
 
@@ -91,10 +103,12 @@ const RegionInteractiveMap = ({
   mapImageUrl,
   mapItems,
   neighborEdges,
+  arrowEdges = [],
   districts = [],
   currentLocationId,
   onLocationClick,
   onDistrictClick,
+  onArrowClick,
   isCityMap = false,
 }: RegionInteractiveMapProps) => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -122,11 +136,16 @@ const RegionInteractiveMap = ({
   }, [mappedItems, districts]);
 
   // Build a map of item id -> position for SVG lines (locations + districts)
+  // Uses numeric keys for locations/districts, string keys like "arrow-{id}" for arrows
   const positionMap = useMemo(() => {
-    const map = new Map<number, { x: number; y: number }>();
+    const map = new Map<number | string, { x: number; y: number }>();
     for (const item of mappedItems) {
       if (item.map_x != null && item.map_y != null) {
-        map.set(item.id, { x: item.map_x, y: item.map_y });
+        if (item.type === 'arrow') {
+          map.set(`arrow-${item.id}`, { x: item.map_x, y: item.map_y });
+        } else {
+          map.set(item.id, { x: item.map_x, y: item.map_y });
+        }
       }
     }
     // Fallback: district child locations without own coordinates use district position
@@ -159,6 +178,12 @@ const RegionInteractiveMap = ({
     [neighborEdges, mappedLocationIds],
   );
 
+  // Filter arrow edges: only draw where both endpoints exist in positionMap
+  const visibleArrowEdges = useMemo(
+    () => arrowEdges.filter((e) => positionMap.has(e.location_id) && positionMap.has(`arrow-${e.arrow_id}`)),
+    [arrowEdges, positionMap],
+  );
+
   // Reset mapLoaded on image URL change
   useEffect(() => {
     setMapLoaded(false);
@@ -169,6 +194,10 @@ const RegionInteractiveMap = ({
   const handleItemClick = (item: MapItem) => {
     if (item.type === 'location') {
       onLocationClick(item.id);
+    } else if (item.type === 'arrow') {
+      if (onArrowClick && item.target_region_id != null) {
+        onArrowClick(item.target_region_id);
+      }
     } else {
       onDistrictClick(item.id);
     }
@@ -246,6 +275,27 @@ const RegionInteractiveMap = ({
                     key={`motion-${edgeKey}`}
                     id={`path-motion-${edgeKey}`}
                     d={pointsToPathD(orientedPoints)}
+                    fill="none"
+                  />
+                );
+              })}
+              {/* Motion paths for active arrow edges */}
+              {visibleArrowEdges.map((edge) => {
+                const from = positionMap.get(edge.location_id);
+                const to = positionMap.get(`arrow-${edge.arrow_id}`);
+                if (!from || !to) return null;
+                const isActive = currentLocationId != null && edge.location_id === currentLocationId;
+                if (!isActive) return null;
+
+                const edgeKey = `arrow-${edge.location_id}-${edge.arrow_id}`;
+                const hasPath = edge.path_data && edge.path_data.length > 0;
+                const allPoints = hasPath ? [from, ...edge.path_data!, to] : [from, to];
+
+                return (
+                  <path
+                    key={`motion-${edgeKey}`}
+                    id={`path-motion-${edgeKey}`}
+                    d={pointsToPathD(allPoints)}
                     fill="none"
                   />
                 );
@@ -342,6 +392,89 @@ const RegionInteractiveMap = ({
                 </g>
               );
             })}
+            {/* Arrow edges — same visual style as neighbor edges */}
+            {visibleArrowEdges.map((edge) => {
+              const from = positionMap.get(edge.location_id);
+              const to = positionMap.get(`arrow-${edge.arrow_id}`);
+              if (!from || !to) return null;
+
+              const isActive = currentLocationId != null && edge.location_id === currentLocationId;
+              const edgeKey = `arrow-${edge.location_id}-${edge.arrow_id}`;
+              const hasPath = edge.path_data && edge.path_data.length > 0;
+
+              const allPoints = hasPath ? [from, ...edge.path_data!, to] : [from, to];
+              const pointsStr = allPoints.map((p) => `${p.x},${p.y}`).join(' ');
+
+              return (
+                <g key={edgeKey}>
+                  <polyline
+                    points={pointsStr}
+                    fill="none"
+                    stroke="rgba(0, 0, 0, 0.55)"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  {isActive ? (
+                    <polyline
+                      points={pointsStr}
+                      fill="none"
+                      stroke="rgba(240, 217, 92, 0.5)"
+                      strokeWidth="1.0"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      filter="url(#path-glow-active)"
+                    >
+                      <animate
+                        attributeName="opacity"
+                        values="0.3;0.7;0.3"
+                        dur="2s"
+                        repeatCount="indefinite"
+                      />
+                    </polyline>
+                  ) : (
+                    <polyline
+                      points={pointsStr}
+                      fill="none"
+                      stroke="rgba(240, 217, 92, 0.35)"
+                      strokeWidth="0.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      filter="url(#path-glow-inactive)"
+                    />
+                  )}
+                  <polyline
+                    points={pointsStr}
+                    fill="none"
+                    stroke={isActive ? 'rgba(240, 217, 92, 0.5)' : 'rgba(240, 217, 92, 0.3)'}
+                    strokeWidth={isActive ? '0.4' : '0.3'}
+                    strokeDasharray="1 0.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  {isActive && (
+                    <>
+                      {[0, 1, 2].map((i) => (
+                        <circle
+                          key={i}
+                          r="0.4"
+                          fill="rgba(240, 217, 92, 0.6)"
+                          filter="url(#particle-glow)"
+                        >
+                          <animateMotion
+                            dur="6s"
+                            repeatCount="indefinite"
+                            begin={`${i * 2}s`}
+                          >
+                            <mpath href={`#path-motion-${edgeKey}`} />
+                          </animateMotion>
+                        </circle>
+                      ))}
+                    </>
+                  )}
+                </g>
+              );
+            })}
           </svg>
 
           {/* Map item icons */}
@@ -396,7 +529,16 @@ const RegionInteractiveMap = ({
                         }}
                       />
                     )}
-                    {isCityMap ? (
+                    {item.type === 'arrow' ? (
+                      /* Arrow marker: directional arrow icon */
+                      <div
+                        className="w-[44px] h-[44px] sm:w-[50px] sm:h-[50px] rounded-full flex items-center justify-center border-2 border-cyan-400/60 bg-cyan-900/60"
+                      >
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="sm:w-[28px] sm:h-[28px]">
+                          <path d="M5 12h14M13 6l6 6-6 6" stroke="rgba(100,220,255,0.9)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </div>
+                    ) : isCityMap ? (
                       /* City map: round icons with image */
                       (() => {
                         const imgUrl = item.map_icon_url || item.image_url;

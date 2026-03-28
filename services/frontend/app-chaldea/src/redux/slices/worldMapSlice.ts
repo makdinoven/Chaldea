@@ -13,6 +13,7 @@ import {
   HierarchyNode,
   PathWaypoint,
   NeighborEdge,
+  ArrowEdge,
 } from '../actions/worldMapActions';
 
 // --- Types ---
@@ -35,7 +36,7 @@ export interface CountryDetailsData {
 export interface RegionMapItem {
   id: number;
   name: string;
-  type: 'location' | 'district';
+  type: 'location' | 'district' | 'arrow';
   map_icon_url: string | null;
   map_x: number | null;
   map_y: number | null;
@@ -46,6 +47,9 @@ export interface RegionMapItem {
   parent_district_id?: number | null;
   sort_order?: number;
   recommended_level?: number | null;
+  target_region_id?: number | null;
+  target_region_name?: string | null;
+  paired_arrow_id?: number | null;
 }
 
 export interface RegionDetailsData {
@@ -54,6 +58,7 @@ export interface RegionDetailsData {
   map_image_url: string | null;
   recommended_level: number | null;
   neighbor_edges: NeighborEdge[];
+  arrow_edges?: ArrowEdge[];
   map_items: RegionMapItem[];
   districts: {
     id: number;
@@ -230,6 +235,6 @@ export const selectDetailsLoading = (state: RootState) => state.worldMap.details
 export const selectZonesLoading = (state: RootState) => state.worldMap.zonesLoading;
 export const selectWorldMapError = (state: RootState) => state.worldMap.error;
 
-export type { PathWaypoint, NeighborEdge };
+export type { PathWaypoint, NeighborEdge, ArrowEdge };
 
 export default worldMapSlice.reducer;

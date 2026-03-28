@@ -1,6 +1,6 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import axios from 'axios';
-import type { Area, ClickableZone, ZonePoint, PathWaypoint, NeighborEdge } from './worldMapActions';
+import type { Area, ClickableZone, ZonePoint, PathWaypoint, NeighborEdge, ArrowEdge } from './worldMapActions';
 
 // --- Types ---
 
@@ -65,7 +65,7 @@ export interface CountryDetails {
 export interface RegionMapItem {
   id: number;
   name: string;
-  type: 'location' | 'district';
+  type: 'location' | 'district' | 'arrow';
   map_icon_url: string | null;
   map_x: number | null;
   map_y: number | null;
@@ -76,6 +76,9 @@ export interface RegionMapItem {
   parent_district_id?: number | null;
   sort_order?: number;
   recommended_level?: number | null;
+  target_region_id?: number | null;
+  target_region_name?: string | null;
+  paired_arrow_id?: number | null;
 }
 
 export interface RegionDetails {
@@ -85,6 +88,7 @@ export interface RegionDetails {
   country_id: number;
   map_image_url: string | null;
   neighbor_edges: NeighborEdge[];
+  arrow_edges?: ArrowEdge[];
   map_items: RegionMapItem[];
   districts: District[];
 }
@@ -124,7 +128,33 @@ export interface ClickableZoneUpdateData {
 }
 
 // Re-export for convenience
-export type { Area, ClickableZone, ZonePoint, PathWaypoint, NeighborEdge };
+export type { Area, ClickableZone, ZonePoint, PathWaypoint, NeighborEdge, ArrowEdge };
+
+// --- Arrow Types ---
+
+export interface TransitionArrowRead {
+  id: number;
+  region_id: number;
+  target_region_id: number;
+  target_region_name: string | null;
+  paired_arrow_id: number | null;
+  x: number | null;
+  y: number | null;
+  label: string | null;
+}
+
+export interface TransitionArrowCreateResponse {
+  arrow: TransitionArrowRead;
+  paired_arrow: TransitionArrowRead;
+}
+
+export interface ArrowNeighborRead {
+  id: number;
+  location_id: number;
+  arrow_id: number;
+  energy_cost: number;
+  path_data: PathWaypoint[] | null;
+}
 
 // --- Existing Thunks (migrated from JS) ---
 
@@ -404,6 +434,110 @@ export const deleteNeighborEdge = createAsyncThunk<
       return { locationId, neighborId };
     } catch {
       return rejectWithValue('Ошибка удаления связи между локациями');
+    }
+  }
+);
+
+// --- Transition Arrow Thunks ---
+
+export const createTransitionArrow = createAsyncThunk<
+  TransitionArrowCreateResponse,
+  { region_id: number; target_region_id: number; x: number | null; y: number | null; label: string | null },
+  { rejectValue: string }
+>(
+  'adminLocations/createTransitionArrow',
+  async (data, { rejectWithValue }) => {
+    try {
+      const response = await axios.post('/locations/arrows/create', data);
+      return response.data;
+    } catch {
+      return rejectWithValue('Ошибка создания стрелки перехода');
+    }
+  }
+);
+
+export const updateTransitionArrow = createAsyncThunk<
+  TransitionArrowRead,
+  { arrowId: number; x?: number | null; y?: number | null; label?: string | null },
+  { rejectValue: string }
+>(
+  'adminLocations/updateTransitionArrow',
+  async ({ arrowId, ...data }, { rejectWithValue }) => {
+    try {
+      const response = await axios.put(`/locations/arrows/${arrowId}/update`, data);
+      return response.data;
+    } catch {
+      return rejectWithValue('Ошибка обновления стрелки перехода');
+    }
+  }
+);
+
+export const deleteTransitionArrow = createAsyncThunk<
+  { deleted_ids: number[] },
+  number,
+  { rejectValue: string }
+>(
+  'adminLocations/deleteTransitionArrow',
+  async (arrowId, { rejectWithValue }) => {
+    try {
+      const response = await axios.delete(`/locations/arrows/${arrowId}/delete`);
+      return response.data;
+    } catch {
+      return rejectWithValue('Ошибка удаления стрелки перехода');
+    }
+  }
+);
+
+export const createArrowNeighbor = createAsyncThunk<
+  ArrowNeighborRead,
+  { arrowId: number; location_id: number; energy_cost: number; path_data: PathWaypoint[] | null },
+  { rejectValue: string }
+>(
+  'adminLocations/createArrowNeighbor',
+  async ({ arrowId, location_id, energy_cost, path_data }, { rejectWithValue }) => {
+    try {
+      const response = await axios.post(`/locations/arrows/${arrowId}/neighbors/`, {
+        location_id,
+        energy_cost,
+        path_data,
+      });
+      return response.data;
+    } catch {
+      return rejectWithValue('Ошибка создания пути к стрелке');
+    }
+  }
+);
+
+export const updateArrowNeighborPath = createAsyncThunk<
+  ArrowNeighborRead,
+  { locationId: number; arrowId: number; path_data: PathWaypoint[] },
+  { rejectValue: string }
+>(
+  'adminLocations/updateArrowNeighborPath',
+  async ({ locationId, arrowId, path_data }, { rejectWithValue }) => {
+    try {
+      const response = await axios.put(`/locations/arrows/neighbors/${locationId}/${arrowId}/path`, {
+        path_data,
+      });
+      return response.data;
+    } catch {
+      return rejectWithValue('Ошибка обновления пути к стрелке');
+    }
+  }
+);
+
+export const deleteArrowNeighbor = createAsyncThunk<
+  { locationId: number; arrowId: number },
+  { locationId: number; arrowId: number },
+  { rejectValue: string }
+>(
+  'adminLocations/deleteArrowNeighbor',
+  async ({ locationId, arrowId }, { rejectWithValue }) => {
+    try {
+      await axios.delete(`/locations/arrows/neighbors/${locationId}/${arrowId}`);
+      return { locationId, arrowId };
+    } catch {
+      return rejectWithValue('Ошибка удаления пути к стрелке');
     }
   }
 );

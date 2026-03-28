@@ -6,13 +6,18 @@ import {
   createNeighborWithPath,
   updateNeighborPath,
   deleteNeighborEdge,
+  createTransitionArrow,
+  deleteTransitionArrow,
+  createArrowNeighbor,
+  deleteArrowNeighbor,
 } from '../../redux/actions/adminLocationsActions';
-import type { NeighborEdge, PathWaypoint } from '../../redux/actions/worldMapActions';
+import { fetchHierarchyTree } from '../../redux/actions/worldMapActions';
+import type { NeighborEdge, PathWaypoint, ArrowEdge } from '../../redux/actions/worldMapActions';
 import toast from 'react-hot-toast';
 import PathEditorCanvas from './PathEditorCanvas';
 import PathEditorToolbar from './PathEditorToolbar';
 
-type EditorMode = 'draw' | 'edit' | 'delete';
+type EditorMode = 'draw' | 'edit' | 'delete' | 'arrow';
 
 const AdminPathEditorPage = () => {
   const { regionId } = useParams<{ regionId: string }>();
@@ -34,16 +39,49 @@ const AdminPathEditorPage = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch region details on mount
+  // Arrow-related state
+  const [arrowPlacementPos, setArrowPlacementPos] = useState<{ x: number; y: number } | null>(null);
+  const [arrowTargetRegionId, setArrowTargetRegionId] = useState<number | ''>('');
+  const [arrowLabel, setArrowLabel] = useState('');
+  const [showArrowForm, setShowArrowForm] = useState(false);
+
+  // Hierarchy tree for region selection (used in arrow creation)
+  const hierarchyTree = useAppSelector((state) => state.worldMap.hierarchyTree);
+
+  // Fetch region details and hierarchy tree on mount
   useEffect(() => {
     if (regionIdNum) {
       dispatch(fetchRegionDetails(regionIdNum));
     }
+    dispatch(fetchHierarchyTree());
   }, [dispatch, regionIdNum]);
+
+  // Build list of all regions from hierarchy tree for arrow target selection
+  const allRegions = useMemo(() => {
+    const regions: { id: number; name: string }[] = [];
+    const collectRegions = (nodes: typeof hierarchyTree) => {
+      for (const node of nodes) {
+        if (node.type === 'region' && node.id !== regionIdNum) {
+          regions.push({ id: node.id, name: node.name });
+        }
+        if (node.children) {
+          collectRegions(node.children);
+        }
+      }
+    };
+    collectRegions(hierarchyTree);
+    return regions;
+  }, [hierarchyTree, regionIdNum]);
 
   // Build edges list
   const edges: NeighborEdge[] = useMemo(
     () => regionDetails?.neighbor_edges ?? [],
+    [regionDetails]
+  );
+
+  // Build arrow edges list
+  const arrowEdges: ArrowEdge[] = useMemo(
+    () => regionDetails?.arrow_edges ?? [],
     [regionDetails]
   );
 
@@ -60,6 +98,12 @@ const AdminPathEditorPage = () => {
     for (const d of regionDetails.districts) {
       for (const loc of d.locations) {
         map[loc.id] = loc.name;
+      }
+    }
+    // Also include arrow items
+    for (const item of regionDetails.map_items) {
+      if (item.type === 'arrow') {
+        map[item.id] = item.name;
       }
     }
     return map;
@@ -169,11 +213,13 @@ const AdminPathEditorPage = () => {
     setDrawWaypoints([]);
     setSelectedEdgeKey(null);
     setEditWaypoints([]);
+    setShowArrowForm(false);
+    setArrowPlacementPos(null);
   }, [mode]);
 
   // Handle draw click on a location
   const handleDrawClick = useCallback((locId: number) => {
-    if (mode !== 'draw' || saving) return;
+    if ((mode !== 'draw' && mode !== 'arrow') || saving) return;
 
     if (drawStartId === null) {
       // Start drawing
@@ -274,8 +320,12 @@ const AdminPathEditorPage = () => {
       .finally(() => setSaving(false));
   }, [selectedEdgeKey, edges, locationNames, dispatch, regionIdNum]);
 
-  // Handle delete from canvas click
+  // Handle delete from canvas click — supports both location and arrow edges
   const handleDeleteFromCanvas = useCallback((fromId: number, toId: number) => {
+    // Check if this is an arrow edge key (format: "arrow-{locationId}-{arrowId}" split gives 3 parts)
+    // But this callback gets numeric fromId/toId from edge key splitting.
+    // Regular edges: fromId-toId
+    // Arrow edges are handled separately through selectedEdgeKey
     const fromName = locationNames[fromId] || `#${fromId}`;
     const toName = locationNames[toId] || `#${toId}`;
 
@@ -303,6 +353,198 @@ const AdminPathEditorPage = () => {
   const handleZoneLocationSelect = useCallback((_districtId: number, _locationId: number) => {
     // The actual draw click is handled by onDrawClick in the canvas after zone select
   }, []);
+
+  // Handle arrow draw click — when user clicks an arrow marker in draw mode
+  const handleArrowDrawClick = useCallback((arrowId: number) => {
+    if ((mode !== 'draw' && mode !== 'arrow') || saving) return;
+
+    if (drawStartId === null) {
+      // Cannot start drawing from an arrow — arrows are endpoints only
+      // Use arrowId as the startId but mark it as arrow
+      // Actually, we can allow starting from arrow too
+      setDrawStartId(arrowId);
+      setDrawWaypoints([]);
+      return;
+    }
+
+    // End drawing: one end is a location, other is an arrow
+    // Determine which is which
+    const startIsLocation = regionDetails?.map_items.some(
+      (item) => item.type === 'location' && item.id === drawStartId
+    ) || regionDetails?.districts.some(
+      (d) => d.locations.some((l: { id: number }) => l.id === drawStartId)
+    );
+    const endIsArrow = regionDetails?.map_items.some(
+      (item) => item.type === 'arrow' && item.id === arrowId
+    );
+
+    if (startIsLocation && endIsArrow) {
+      // Location -> Arrow path
+      setSaving(true);
+      setError(null);
+      dispatch(
+        createArrowNeighbor({
+          arrowId,
+          location_id: drawStartId,
+          energy_cost: energyCost,
+          path_data: drawWaypoints.length > 0 ? drawWaypoints : null,
+        })
+      )
+        .unwrap()
+        .then(async () => {
+          toast.success('Путь к стрелке создан');
+          setDrawStartId(null);
+          setDrawWaypoints([]);
+          if (regionIdNum) await dispatch(fetchRegionDetails(regionIdNum));
+        })
+        .catch((err) => {
+          const msg = typeof err === 'string' ? err : 'Ошибка создания пути к стрелке';
+          toast.error(msg);
+          setError(msg);
+        })
+        .finally(() => setSaving(false));
+    } else {
+      // Invalid combination
+      toast.error('Путь можно создать только между локацией и стрелкой');
+      setDrawStartId(null);
+      setDrawWaypoints([]);
+    }
+  }, [mode, saving, drawStartId, drawWaypoints, energyCost, dispatch, regionIdNum, regionDetails]);
+
+  // Also handle when draw starts from an arrow and ends on a location
+  const handleDrawClickWithArrowSupport = useCallback((locId: number) => {
+    if ((mode !== 'draw' && mode !== 'arrow') || saving) return;
+
+    // Check if drawStartId is an arrow
+    const startIsArrow = drawStartId !== null && regionDetails?.map_items.some(
+      (item) => item.type === 'arrow' && item.id === drawStartId
+    );
+
+    if (startIsArrow && drawStartId !== null) {
+      // Arrow -> Location path
+      setSaving(true);
+      setError(null);
+      dispatch(
+        createArrowNeighbor({
+          arrowId: drawStartId,
+          location_id: locId,
+          energy_cost: energyCost,
+          path_data: drawWaypoints.length > 0 ? [...drawWaypoints].reverse() : null,
+        })
+      )
+        .unwrap()
+        .then(async () => {
+          toast.success('Путь к стрелке создан');
+          setDrawStartId(null);
+          setDrawWaypoints([]);
+          if (regionIdNum) await dispatch(fetchRegionDetails(regionIdNum));
+        })
+        .catch((err) => {
+          const msg = typeof err === 'string' ? err : 'Ошибка создания пути к стрелке';
+          toast.error(msg);
+          setError(msg);
+        })
+        .finally(() => setSaving(false));
+      return;
+    }
+
+    // Normal location-to-location draw
+    handleDrawClick(locId);
+  }, [mode, saving, drawStartId, drawWaypoints, energyCost, dispatch, regionIdNum, regionDetails, handleDrawClick]);
+
+  // Handle arrow creation — first set position, then show form for target region
+  const handleArrowPlacement = useCallback((x: number, y: number) => {
+    setArrowPlacementPos({ x, y });
+    setShowArrowForm(true);
+    setArrowTargetRegionId('');
+    setArrowLabel('');
+  }, []);
+
+  // Confirm arrow creation
+  const handleArrowCreate = useCallback(() => {
+    if (!arrowPlacementPos || !arrowTargetRegionId || !regionIdNum) return;
+
+    setSaving(true);
+    setError(null);
+    dispatch(
+      createTransitionArrow({
+        region_id: regionIdNum,
+        target_region_id: Number(arrowTargetRegionId),
+        x: arrowPlacementPos.x,
+        y: arrowPlacementPos.y,
+        label: arrowLabel || null,
+      })
+    )
+      .unwrap()
+      .then(async () => {
+        toast.success('Стрелка перехода создана');
+        setShowArrowForm(false);
+        setArrowPlacementPos(null);
+        setMode('draw');
+        if (regionIdNum) await dispatch(fetchRegionDetails(regionIdNum));
+      })
+      .catch((err) => {
+        const msg = typeof err === 'string' ? err : 'Ошибка создания стрелки';
+        toast.error(msg);
+        setError(msg);
+      })
+      .finally(() => setSaving(false));
+  }, [arrowPlacementPos, arrowTargetRegionId, arrowLabel, regionIdNum, dispatch]);
+
+  // Handle arrow deletion from canvas
+  const handleDeleteArrow = useCallback((arrowId: number) => {
+    const arrowItem = regionDetails?.map_items.find(
+      (item) => item.type === 'arrow' && item.id === arrowId
+    );
+    const arrowName = arrowItem?.name || `#${arrowId}`;
+
+    if (!window.confirm(`Удалить стрелку "${arrowName}" и парную стрелку в целевом регионе?`)) {
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    dispatch(deleteTransitionArrow(arrowId))
+      .unwrap()
+      .then(async () => {
+        toast.success('Стрелка удалена');
+        if (regionIdNum) await dispatch(fetchRegionDetails(regionIdNum));
+      })
+      .catch((err) => {
+        const msg = typeof err === 'string' ? err : 'Ошибка удаления стрелки';
+        toast.error(msg);
+        setError(msg);
+      })
+      .finally(() => setSaving(false));
+  }, [regionDetails, dispatch, regionIdNum]);
+
+  // Handle arrow edge deletion
+  const handleDeleteArrowEdge = useCallback((locationId: number, arrowId: number) => {
+    const locName = locationNames[locationId] || `#${locationId}`;
+    const arrowItem = regionDetails?.map_items.find(
+      (item) => item.type === 'arrow' && item.id === arrowId
+    );
+    const arrowName = arrowItem?.name || `#${arrowId}`;
+
+    if (!window.confirm(`Удалить путь ${locName} \u2194 ${arrowName}?`)) {
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    dispatch(deleteArrowNeighbor({ locationId, arrowId }))
+      .unwrap()
+      .then(async () => {
+        toast.success('Путь к стрелке удалён');
+        if (regionIdNum) await dispatch(fetchRegionDetails(regionIdNum));
+      })
+      .catch((err) => {
+        const msg = typeof err === 'string' ? err : 'Ошибка удаления пути к стрелке';
+        toast.error(msg);
+        setError(msg);
+      })
+      .finally(() => setSaving(false));
+  }, [locationNames, regionDetails, dispatch, regionIdNum]);
 
   if (!regionIdNum) {
     return (
@@ -378,6 +620,7 @@ const AdminPathEditorPage = () => {
             mode={mode}
             onModeChange={setMode}
             edges={edges}
+            arrowEdges={arrowEdges}
             selectedEdgeKey={selectedEdgeKey}
             onSelectEdge={setSelectedEdgeKey}
             locationNames={locationNames}
@@ -387,6 +630,8 @@ const AdminPathEditorPage = () => {
             energyCost={energyCost}
             onEnergyCostChange={setEnergyCost}
             drawingActive={drawStartId !== null}
+            arrowItems={regionDetails.map_items.filter((i) => i.type === 'arrow')}
+            onDeleteArrow={handleDeleteArrow}
           />
 
           {/* Canvas */}
@@ -395,20 +640,95 @@ const AdminPathEditorPage = () => {
             mapItems={filteredMapItems}
             districts={districtsData}
             edges={edges}
-            mode={mode}
+            arrowEdges={arrowEdges}
+            mode={mode === 'arrow' ? 'draw' : mode}
             selectedEdgeKey={selectedEdgeKey}
             onSelectEdge={setSelectedEdgeKey}
             editWaypoints={editWaypoints}
             onEditWaypointsChange={setEditWaypoints}
             drawStartId={drawStartId}
             drawWaypoints={drawWaypoints}
-            onDrawClick={handleDrawClick}
+            onDrawClick={handleDrawClickWithArrowSupport}
             onDrawWaypointAdd={(pt) => setDrawWaypoints((prev) => [...prev, pt])}
             onDeleteEdge={handleDeleteFromCanvas}
+            onDeleteArrowEdge={handleDeleteArrowEdge}
             onZoneLocationSelect={handleZoneLocationSelect}
+            onArrowDrawClick={mode === 'delete' ? handleDeleteArrow : handleArrowDrawClick}
+            onEmptyMapClick={mode === 'arrow' ? (x, y) => handleArrowPlacement(x, y) : undefined}
           />
         </div>
       </div>
+      {/* Arrow creation form */}
+      {showArrowForm && arrowPlacementPos && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowArrowForm(false);
+              setArrowPlacementPos(null);
+            }
+          }}
+        >
+          <div className="modal-content max-w-sm w-full mx-4">
+            <h3 className="gold-text text-lg font-medium uppercase mb-4">
+              Создать стрелку перехода
+            </h3>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-white/50 uppercase tracking-wide block mb-1">
+                  Целевой регион
+                </label>
+                <select
+                  value={arrowTargetRegionId}
+                  onChange={(e) => setArrowTargetRegionId(e.target.value ? Number(e.target.value) : '')}
+                  className="w-full bg-black/40 border border-white/20 rounded px-3 py-2 text-white text-sm focus:border-gold/50 focus:outline-none"
+                >
+                  <option value="">Выберите регион...</option>
+                  {allRegions.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-white/50 uppercase tracking-wide block mb-1">
+                  Метка (необязательно)
+                </label>
+                <input
+                  type="text"
+                  value={arrowLabel}
+                  onChange={(e) => setArrowLabel(e.target.value)}
+                  placeholder="Например: К региону..."
+                  className="input-underline w-full text-sm"
+                  maxLength={255}
+                />
+              </div>
+              <div className="text-xs text-white/40">
+                Позиция: ({arrowPlacementPos.x.toFixed(1)}, {arrowPlacementPos.y.toFixed(1)})
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="btn-blue text-sm py-1.5 flex-1"
+                  onClick={handleArrowCreate}
+                  disabled={saving || !arrowTargetRegionId}
+                >
+                  {saving ? 'Создание...' : 'Создать'}
+                </button>
+                <button
+                  className="btn-line text-sm py-1.5 flex-1"
+                  onClick={() => {
+                    setShowArrowForm(false);
+                    setArrowPlacementPos(null);
+                  }}
+                >
+                  Отмена
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

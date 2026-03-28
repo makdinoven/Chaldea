@@ -2270,6 +2270,93 @@ async def reorder_categories(
 
 
 # --------------------------------------------------------------------
+# TRANSITION ARROWS (Admin)
+# --------------------------------------------------------------------
+@router.post("/arrows/create", response_model=schemas.TransitionArrowCreateResponse, status_code=201)
+async def create_transition_arrow(
+    body: schemas.TransitionArrowCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:create")),
+):
+    """Create a transition arrow between two regions. Auto-creates paired arrow."""
+    # Validate label length
+    if body.label and len(body.label) > 255:
+        raise HTTPException(status_code=400, detail="label must be at most 255 characters")
+    result = await crud.create_transition_arrow(session, body)
+    return result
+
+
+@router.put("/arrows/{arrow_id}/update", response_model=schemas.TransitionArrowRead)
+async def update_transition_arrow(
+    arrow_id: int,
+    body: schemas.TransitionArrowUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:update")),
+):
+    """Update arrow position and/or label."""
+    if body.label and len(body.label) > 255:
+        raise HTTPException(status_code=400, detail="label must be at most 255 characters")
+    result = await crud.update_transition_arrow(session, arrow_id, body)
+    return result
+
+
+@router.delete("/arrows/{arrow_id}/delete")
+async def delete_transition_arrow(
+    arrow_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:delete")),
+):
+    """Delete a transition arrow and its paired arrow."""
+    result = await crud.delete_transition_arrow(session, arrow_id)
+    return result
+
+
+@router.post("/arrows/{arrow_id}/neighbors/", response_model=schemas.ArrowNeighborRead, status_code=201)
+async def create_arrow_neighbor(
+    arrow_id: int,
+    body: schemas.ArrowNeighborCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:update")),
+):
+    """Create or update a path between a location and an arrow."""
+    # Validate path_data waypoints
+    if body.path_data:
+        if len(body.path_data) > 50:
+            raise HTTPException(status_code=400, detail="path_data exceeds maximum of 50 waypoints")
+        for wp in body.path_data:
+            if not (0 <= wp.x <= 100) or not (0 <= wp.y <= 100):
+                raise HTTPException(status_code=400, detail="path_data waypoint x and y must be between 0 and 100")
+    result = await crud.create_arrow_neighbor(session, arrow_id, body)
+    return result
+
+
+@router.put("/arrows/neighbors/{location_id}/{arrow_id}/path")
+async def update_arrow_neighbor_path(
+    location_id: int,
+    arrow_id: int,
+    body: schemas.PathDataUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:update")),
+):
+    """Update path_data on an existing arrow neighbor."""
+    path_data_raw = [{"x": p.x, "y": p.y} for p in body.path_data] if body.path_data else None
+    result = await crud.update_arrow_neighbor_path(session, location_id, arrow_id, path_data_raw)
+    return result
+
+
+@router.delete("/arrows/neighbors/{location_id}/{arrow_id}")
+async def delete_arrow_neighbor(
+    location_id: int,
+    arrow_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:delete")),
+):
+    """Delete an arrow neighbor path."""
+    result = await crud.delete_arrow_neighbor(session, location_id, arrow_id)
+    return result
+
+
+# --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------
 app.include_router(router)

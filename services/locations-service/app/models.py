@@ -420,6 +420,28 @@ class ArchiveArticle(Base):
     )
 
 
+class RegionTransitionArrow(Base):
+    __tablename__ = 'region_transition_arrows'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    region_id = Column(BigInteger, ForeignKey('Regions.id', ondelete='CASCADE'), nullable=False, index=True)
+    target_region_id = Column(BigInteger, ForeignKey('Regions.id', ondelete='CASCADE'), nullable=False, index=True)
+    paired_arrow_id = Column(BigInteger, ForeignKey('region_transition_arrows.id', ondelete='SET NULL'), nullable=True)
+    x = Column(Float, nullable=True)
+    y = Column(Float, nullable=True)
+    label = Column(String(255), nullable=True)
+
+
+class ArrowNeighbor(Base):
+    __tablename__ = 'arrow_neighbors'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    location_id = Column(BigInteger, ForeignKey('Locations.id', ondelete='CASCADE'), nullable=False, index=True)
+    arrow_id = Column(BigInteger, ForeignKey('region_transition_arrows.id', ondelete='CASCADE'), nullable=False, index=True)
+    energy_cost = Column(Integer, nullable=False, default=0)
+    path_data = Column(JSON, nullable=True)
+
+
 class ArchiveArticleCategory(Base):
     __tablename__ = 'archive_article_categories'
 

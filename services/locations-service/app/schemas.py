@@ -1079,3 +1079,60 @@ class CharacterPostStats(BaseModel):
 class CharacterPostStatsResponse(BaseModel):
     stats: Dict[str, CharacterPostStats]
 
+
+# -------------------------------
+#   TRANSITION ARROW SCHEMAS
+# -------------------------------
+class TransitionArrowCreate(BaseModel):
+    region_id: int
+    target_region_id: int
+    x: Optional[float] = None
+    y: Optional[float] = None
+    label: Optional[str] = None
+
+class TransitionArrowUpdate(BaseModel):
+    x: Optional[float] = None
+    y: Optional[float] = None
+    label: Optional[str] = None
+
+class TransitionArrowRead(BaseModel):
+    id: int
+    region_id: int
+    target_region_id: int
+    target_region_name: Optional[str] = None
+    paired_arrow_id: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+    label: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+class TransitionArrowCreateResponse(BaseModel):
+    arrow: TransitionArrowRead
+    paired_arrow: TransitionArrowRead
+
+class ArrowNeighborCreate(BaseModel):
+    location_id: int
+    energy_cost: int = 0
+    path_data: Optional[List[PathWaypoint]] = None
+
+class ArrowNeighborRead(BaseModel):
+    id: int
+    location_id: int
+    arrow_id: int
+    energy_cost: int
+    path_data: Optional[List[PathWaypoint]] = None
+
+    class Config:
+        orm_mode = True
+
+class ArrowEdgeResponse(BaseModel):
+    location_id: int
+    arrow_id: int
+    energy_cost: int
+    path_data: Optional[List[PathWaypoint]] = None
+
+    class Config:
+        orm_mode = True
+

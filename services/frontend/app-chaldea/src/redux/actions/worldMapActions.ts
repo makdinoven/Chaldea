@@ -15,6 +15,13 @@ export interface NeighborEdge {
   path_data: PathWaypoint[] | null;
 }
 
+export interface ArrowEdge {
+  location_id: number;
+  arrow_id: number;
+  energy_cost: number;
+  path_data: PathWaypoint[] | null;
+}
+
 export interface ZonePoint {
   x: number;
   y: number;
@@ -159,7 +166,7 @@ export const updateDistrictPosition = createAsyncThunk<
 );
 
 export const fetchRegionDetails = createAsyncThunk<
-  { id: number; name: string; map_image_url: string | null; recommended_level: number | null; neighbor_edges: NeighborEdge[]; map_items: { id: number; name: string; type: 'location' | 'district'; map_icon_url: string | null; map_x: number | null; map_y: number | null; marker_type: string | null; image_url: string | null; map_image_url?: string | null }[]; districts: { id: number; name: string; image_url: string | null; map_icon_url: string | null; map_image_url?: string | null; parent_district_id: number | null; x: number | null; y: number | null; sort_order: number; locations: { id: number; name: string; marker_type: string; image_url: string | null; map_icon_url: string | null; map_x: number | null; map_y: number | null; sort_order: number }[] }[] },
+  { id: number; name: string; map_image_url: string | null; recommended_level: number | null; neighbor_edges: NeighborEdge[]; arrow_edges?: ArrowEdge[]; map_items: { id: number; name: string; type: 'location' | 'district' | 'arrow'; map_icon_url: string | null; map_x: number | null; map_y: number | null; marker_type: string | null; image_url: string | null; map_image_url?: string | null; target_region_id?: number | null; target_region_name?: string | null; paired_arrow_id?: number | null }[]; districts: { id: number; name: string; image_url: string | null; map_icon_url: string | null; map_image_url?: string | null; parent_district_id: number | null; x: number | null; y: number | null; sort_order: number; locations: { id: number; name: string; marker_type: string; image_url: string | null; map_icon_url: string | null; map_x: number | null; map_y: number | null; sort_order: number }[] }[] },
   number,
   { rejectValue: string }
 >(

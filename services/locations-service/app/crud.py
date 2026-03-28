@@ -75,14 +75,16 @@ from models import (
     Area, ClickableZone, GameTimeConfig, LocationLoot, LocationFavorite,
     PostDeletionRequest, PostReport, DialogueTree, DialogueNode, DialogueOption,
     NpcShopItem, Quest, QuestObjective, CharacterQuest, CharacterQuestProgress,
-    ArchiveCategory, ArchiveArticle, ArchiveArticleCategory
+    ArchiveCategory, ArchiveArticle, ArchiveArticleCategory,
+    RegionTransitionArrow, ArrowNeighbor
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
     GameRuleCreate, GameRuleUpdate, GameRuleReorderItem,
     AreaCreate, AreaUpdate, ClickableZoneCreate, ClickableZoneUpdate,
     ArchiveCategoryCreate, ArchiveCategoryUpdate,
-    ArchiveArticleCreate, ArchiveArticleUpdate
+    ArchiveArticleCreate, ArchiveArticleUpdate,
+    TransitionArrowCreate, TransitionArrowUpdate, ArrowNeighborCreate
 )
 
 # -------------------------------
@@ -420,6 +422,56 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
                     "path_data": pd,
                 })
 
+    # Получаем стрелки переходов для региона
+    arrows_result = await session.execute(
+        select(RegionTransitionArrow).where(RegionTransitionArrow.region_id == region_id)
+    )
+    arrows = arrows_result.scalars().all()
+
+    # Получаем имена целевых регионов для стрелок
+    target_region_ids = [a.target_region_id for a in arrows]
+    target_region_names = {}
+    if target_region_ids:
+        target_regions_result = await session.execute(
+            select(Region.id, Region.name).where(Region.id.in_(target_region_ids))
+        )
+        for row in target_regions_result:
+            target_region_names[row[0]] = row[1]
+
+    # Добавляем стрелки в map_items
+    arrow_ids = []
+    for arrow in arrows:
+        target_name = target_region_names.get(arrow.target_region_id, "")
+        display_name = arrow.label if arrow.label else f"\u2192 {target_name}"
+        map_items.append({
+            "id": arrow.id,
+            "name": display_name,
+            "type": "arrow",
+            "map_icon_url": None,
+            "map_x": arrow.x,
+            "map_y": arrow.y,
+            "marker_type": None,
+            "image_url": None,
+            "target_region_id": arrow.target_region_id,
+            "target_region_name": target_name,
+            "paired_arrow_id": arrow.paired_arrow_id,
+        })
+        arrow_ids.append(arrow.id)
+
+    # Получаем arrow_edges
+    arrow_edges = []
+    if arrow_ids:
+        arrow_neighbors_result = await session.execute(
+            select(ArrowNeighbor).where(ArrowNeighbor.arrow_id.in_(arrow_ids))
+        )
+        for an in arrow_neighbors_result.scalars().all():
+            arrow_edges.append({
+                "location_id": an.location_id,
+                "arrow_id": an.arrow_id,
+                "energy_cost": an.energy_cost,
+                "path_data": an.path_data,
+            })
+
     return {
         "id": region.id,
         "country_id": region.country_id,
@@ -435,6 +487,7 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         "districts": districts_data,
         "map_items": map_items,
         "neighbor_edges": neighbor_edges,
+        "arrow_edges": arrow_edges,
     }
 
 
@@ -3370,3 +3423,304 @@ async def get_featured_articles(session: AsyncSession):
         article.content = None
 
     return articles
+
+
+# -------------------------------
+#   TRANSITION ARROWS
+# -------------------------------
+async def create_transition_arrow(
+    session: AsyncSession,
+    data: TransitionArrowCreate,
+) -> dict:
+    """
+    Create a transition arrow from region_id to target_region_id.
+    Auto-creates a paired arrow in the target region pointing back.
+    Returns both arrows with target_region_name populated.
+    """
+    # Validate regions exist and are different
+    if data.region_id == data.target_region_id:
+        raise HTTPException(status_code=400, detail="region_id and target_region_id must be different")
+
+    region_result = await session.execute(
+        select(Region).where(Region.id == data.region_id)
+    )
+    region = region_result.scalars().first()
+    if not region:
+        raise HTTPException(status_code=404, detail=f"Region {data.region_id} not found")
+
+    target_result = await session.execute(
+        select(Region).where(Region.id == data.target_region_id)
+    )
+    target_region = target_result.scalars().first()
+    if not target_region:
+        raise HTTPException(status_code=404, detail=f"Target region {data.target_region_id} not found")
+
+    # Validate coordinates if provided
+    if data.x is not None and not (0 <= data.x <= 100):
+        raise HTTPException(status_code=400, detail="x must be between 0 and 100")
+    if data.y is not None and not (0 <= data.y <= 100):
+        raise HTTPException(status_code=400, detail="y must be between 0 and 100")
+
+    # Create the primary arrow
+    arrow = RegionTransitionArrow(
+        region_id=data.region_id,
+        target_region_id=data.target_region_id,
+        x=data.x,
+        y=data.y,
+        label=data.label,
+    )
+    session.add(arrow)
+    await session.flush()
+
+    # Create the paired arrow (in the target region, pointing back)
+    paired_arrow = RegionTransitionArrow(
+        region_id=data.target_region_id,
+        target_region_id=data.region_id,
+        x=None,
+        y=None,
+        label=None,
+    )
+    session.add(paired_arrow)
+    await session.flush()
+
+    # Link them together
+    arrow.paired_arrow_id = paired_arrow.id
+    paired_arrow.paired_arrow_id = arrow.id
+    await session.commit()
+    await session.refresh(arrow)
+    await session.refresh(paired_arrow)
+
+    return {
+        "arrow": {
+            "id": arrow.id,
+            "region_id": arrow.region_id,
+            "target_region_id": arrow.target_region_id,
+            "target_region_name": target_region.name,
+            "paired_arrow_id": arrow.paired_arrow_id,
+            "x": arrow.x,
+            "y": arrow.y,
+            "label": arrow.label,
+        },
+        "paired_arrow": {
+            "id": paired_arrow.id,
+            "region_id": paired_arrow.region_id,
+            "target_region_id": paired_arrow.target_region_id,
+            "target_region_name": region.name,
+            "paired_arrow_id": paired_arrow.paired_arrow_id,
+            "x": paired_arrow.x,
+            "y": paired_arrow.y,
+            "label": paired_arrow.label,
+        },
+    }
+
+
+async def update_transition_arrow(
+    session: AsyncSession,
+    arrow_id: int,
+    data: TransitionArrowUpdate,
+) -> dict:
+    """Update arrow position and/or label."""
+    result = await session.execute(
+        select(RegionTransitionArrow).where(RegionTransitionArrow.id == arrow_id)
+    )
+    arrow = result.scalars().first()
+    if not arrow:
+        raise HTTPException(status_code=404, detail="Arrow not found")
+
+    update_data = data.dict(exclude_unset=True)
+
+    # Validate coordinates if provided
+    if "x" in update_data and update_data["x"] is not None:
+        if not (0 <= update_data["x"] <= 100):
+            raise HTTPException(status_code=400, detail="x must be between 0 and 100")
+    if "y" in update_data and update_data["y"] is not None:
+        if not (0 <= update_data["y"] <= 100):
+            raise HTTPException(status_code=400, detail="y must be between 0 and 100")
+
+    for key, value in update_data.items():
+        setattr(arrow, key, value)
+
+    await session.commit()
+    await session.refresh(arrow)
+
+    # Get target region name
+    target_result = await session.execute(
+        select(Region.name).where(Region.id == arrow.target_region_id)
+    )
+    target_name = target_result.scalar()
+
+    return {
+        "id": arrow.id,
+        "region_id": arrow.region_id,
+        "target_region_id": arrow.target_region_id,
+        "target_region_name": target_name,
+        "paired_arrow_id": arrow.paired_arrow_id,
+        "x": arrow.x,
+        "y": arrow.y,
+        "label": arrow.label,
+    }
+
+
+async def delete_transition_arrow(
+    session: AsyncSession,
+    arrow_id: int,
+) -> dict:
+    """
+    Delete an arrow and its paired arrow (if exists).
+    Nullifies paired_arrow_id references first to avoid FK constraint issues.
+    """
+    result = await session.execute(
+        select(RegionTransitionArrow).where(RegionTransitionArrow.id == arrow_id)
+    )
+    arrow = result.scalars().first()
+    if not arrow:
+        raise HTTPException(status_code=404, detail="Arrow not found")
+
+    deleted_ids = [arrow.id]
+    paired_arrow = None
+
+    if arrow.paired_arrow_id:
+        paired_result = await session.execute(
+            select(RegionTransitionArrow).where(RegionTransitionArrow.id == arrow.paired_arrow_id)
+        )
+        paired_arrow = paired_result.scalars().first()
+
+    # Nullify paired_arrow_id references to avoid FK issues during deletion
+    if paired_arrow:
+        deleted_ids.append(paired_arrow.id)
+        paired_arrow.paired_arrow_id = None
+    arrow.paired_arrow_id = None
+    await session.flush()
+
+    # Delete both arrows (ArrowNeighbor rows cascade-deleted by FK)
+    if paired_arrow:
+        await session.delete(paired_arrow)
+    await session.delete(arrow)
+    await session.commit()
+
+    return {"status": "deleted", "deleted_ids": deleted_ids}
+
+
+async def create_arrow_neighbor(
+    session: AsyncSession,
+    arrow_id: int,
+    data: ArrowNeighborCreate,
+) -> dict:
+    """
+    Create or update a path between a location and an arrow.
+    If a row with the same location_id + arrow_id exists, update it.
+    """
+    # Validate arrow exists
+    arrow_result = await session.execute(
+        select(RegionTransitionArrow).where(RegionTransitionArrow.id == arrow_id)
+    )
+    arrow = arrow_result.scalars().first()
+    if not arrow:
+        raise HTTPException(status_code=404, detail="Arrow not found")
+
+    # Validate location exists
+    loc_result = await session.execute(
+        select(Location).where(Location.id == data.location_id)
+    )
+    if not loc_result.scalars().first():
+        raise HTTPException(status_code=404, detail=f"Location {data.location_id} not found")
+
+    # Validate path_data limits
+    if data.path_data and len(data.path_data) > 50:
+        raise HTTPException(status_code=400, detail="path_data exceeds maximum of 50 waypoints")
+
+    # Check for existing row (upsert)
+    existing_result = await session.execute(
+        select(ArrowNeighbor).where(
+            ArrowNeighbor.location_id == data.location_id,
+            ArrowNeighbor.arrow_id == arrow_id,
+        )
+    )
+    existing = existing_result.scalars().first()
+
+    path_data_raw = [{"x": p.x, "y": p.y} for p in data.path_data] if data.path_data else None
+
+    if existing:
+        existing.energy_cost = data.energy_cost
+        existing.path_data = path_data_raw
+        await session.commit()
+        await session.refresh(existing)
+        return {
+            "id": existing.id,
+            "location_id": existing.location_id,
+            "arrow_id": existing.arrow_id,
+            "energy_cost": existing.energy_cost,
+            "path_data": existing.path_data,
+        }
+
+    neighbor = ArrowNeighbor(
+        location_id=data.location_id,
+        arrow_id=arrow_id,
+        energy_cost=data.energy_cost,
+        path_data=path_data_raw,
+    )
+    session.add(neighbor)
+    await session.commit()
+    await session.refresh(neighbor)
+
+    return {
+        "id": neighbor.id,
+        "location_id": neighbor.location_id,
+        "arrow_id": neighbor.arrow_id,
+        "energy_cost": neighbor.energy_cost,
+        "path_data": neighbor.path_data,
+    }
+
+
+async def update_arrow_neighbor_path(
+    session: AsyncSession,
+    location_id: int,
+    arrow_id: int,
+    path_data: list,
+) -> dict:
+    """Update the path_data on an existing arrow neighbor."""
+    result = await session.execute(
+        select(ArrowNeighbor).where(
+            ArrowNeighbor.location_id == location_id,
+            ArrowNeighbor.arrow_id == arrow_id,
+        )
+    )
+    neighbor = result.scalars().first()
+    if not neighbor:
+        raise HTTPException(status_code=404, detail="Arrow neighbor not found")
+
+    if path_data and len(path_data) > 50:
+        raise HTTPException(status_code=400, detail="path_data exceeds maximum of 50 waypoints")
+
+    neighbor.path_data = path_data
+    await session.commit()
+    await session.refresh(neighbor)
+
+    return {
+        "location_id": neighbor.location_id,
+        "arrow_id": neighbor.arrow_id,
+        "energy_cost": neighbor.energy_cost,
+        "path_data": neighbor.path_data,
+    }
+
+
+async def delete_arrow_neighbor(
+    session: AsyncSession,
+    location_id: int,
+    arrow_id: int,
+) -> dict:
+    """Delete an arrow neighbor path."""
+    result = await session.execute(
+        select(ArrowNeighbor).where(
+            ArrowNeighbor.location_id == location_id,
+            ArrowNeighbor.arrow_id == arrow_id,
+        )
+    )
+    neighbor = result.scalars().first()
+    if not neighbor:
+        raise HTTPException(status_code=404, detail="Arrow neighbor not found")
+
+    await session.delete(neighbor)
+    await session.commit()
+
+    return {"status": "deleted"}

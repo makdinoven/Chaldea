@@ -908,7 +908,7 @@ const AdminLocationsPage = () => {
                       <RegionMapEditor
                         regionId={region.id}
                         mapImageUrl={regionDetails[region.id].map_image_url!}
-                        mapItems={regionDetails[region.id].map_items ?? []}
+                        mapItems={(regionDetails[region.id].map_items ?? []).filter((i) => i.type !== 'arrow') as any[]}
                         districts={
                           regionDetails[region.id].districts?.map((d: District) => ({
                             id: d.id,
