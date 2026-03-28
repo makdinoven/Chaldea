@@ -17,6 +17,7 @@ export interface MapItem {
   target_region_id?: number | null;
   target_region_name?: string | null;
   paired_arrow_id?: number | null;
+  paired_location_ids?: number[];
 }
 
 interface ArrowEdge {
@@ -178,6 +179,17 @@ const RegionInteractiveMap = ({
     [neighborEdges, mappedLocationIds],
   );
 
+  // Build lookup: arrow_id -> paired_location_ids (locations connected to the paired arrow on the other side)
+  const arrowPairedLocations = useMemo(() => {
+    const map = new Map<number, number[]>();
+    for (const item of mapItems) {
+      if (item.type === 'arrow' && item.paired_location_ids && item.paired_location_ids.length > 0) {
+        map.set(item.id, item.paired_location_ids);
+      }
+    }
+    return map;
+  }, [mapItems]);
+
   // Filter arrow edges: only draw where both endpoints exist in positionMap
   const visibleArrowEdges = useMemo(
     () => arrowEdges.filter((e) => positionMap.has(e.location_id) && positionMap.has(`arrow-${e.arrow_id}`)),
@@ -284,7 +296,11 @@ const RegionInteractiveMap = ({
                 const from = positionMap.get(edge.location_id);
                 const to = positionMap.get(`arrow-${edge.arrow_id}`);
                 if (!from || !to) return null;
-                const isActive = currentLocationId != null && edge.location_id === currentLocationId;
+                const pairedLocIds = arrowPairedLocations.get(edge.arrow_id) ?? [];
+                const isActive = currentLocationId != null && (
+                  edge.location_id === currentLocationId ||
+                  pairedLocIds.includes(currentLocationId)
+                );
                 if (!isActive) return null;
 
                 const edgeKey = `arrow-${edge.location_id}-${edge.arrow_id}`;
@@ -398,7 +414,11 @@ const RegionInteractiveMap = ({
               const to = positionMap.get(`arrow-${edge.arrow_id}`);
               if (!from || !to) return null;
 
-              const isActive = currentLocationId != null && edge.location_id === currentLocationId;
+              const pairedLocIds = arrowPairedLocations.get(edge.arrow_id) ?? [];
+              const isActive = currentLocationId != null && (
+                edge.location_id === currentLocationId ||
+                pairedLocIds.includes(currentLocationId)
+              );
               const edgeKey = `arrow-${edge.location_id}-${edge.arrow_id}`;
               const hasPath = edge.path_data && edge.path_data.length > 0;
 

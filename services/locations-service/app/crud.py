@@ -438,11 +438,22 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         for row in target_regions_result:
             target_region_names[row[0]] = row[1]
 
+    # Batch-query paired arrow neighbors for cross-region highlighting
+    paired_arrow_ids = [a.paired_arrow_id for a in arrows if a.paired_arrow_id]
+    paired_arrow_location_map: Dict[int, list] = {}  # paired_arrow_id -> [location_id, ...]
+    if paired_arrow_ids:
+        paired_an_result = await session.execute(
+            select(ArrowNeighbor).where(ArrowNeighbor.arrow_id.in_(paired_arrow_ids))
+        )
+        for pan in paired_an_result.scalars().all():
+            paired_arrow_location_map.setdefault(pan.arrow_id, []).append(pan.location_id)
+
     # Добавляем стрелки в map_items
     arrow_ids = []
     for arrow in arrows:
         target_name = target_region_names.get(arrow.target_region_id, "")
         display_name = arrow.label if arrow.label else f"\u2192 {target_name}"
+        paired_location_ids = paired_arrow_location_map.get(arrow.paired_arrow_id, []) if arrow.paired_arrow_id else []
         map_items.append({
             "id": arrow.id,
             "name": display_name,
@@ -455,6 +466,7 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
             "target_region_id": arrow.target_region_id,
             "target_region_name": target_name,
             "paired_arrow_id": arrow.paired_arrow_id,
+            "paired_location_ids": paired_location_ids,
         })
         arrow_ids.append(arrow.id)
 
@@ -1051,11 +1063,13 @@ async def update_location_neighbors(
     Удаляет все существующие связи (X->N, N->X), и создаёт новые пары в обе стороны.
     """
     try:
-        # 1) Удаляем любые связи, где X — одна из сторон
+        # 1) Удаляем только ручные связи, где X — одна из сторон
+        #    (сохраняем is_auto_arrow=True, созданные системой стрелок)
         await db.execute(
             delete(LocationNeighbor).where(
-                (LocationNeighbor.location_id == location_id)
-                | (LocationNeighbor.neighbor_id == location_id)
+                ((LocationNeighbor.location_id == location_id)
+                 | (LocationNeighbor.neighbor_id == location_id))
+                & (LocationNeighbor.is_auto_arrow == False)
             )
         )
         await db.commit()
@@ -3585,6 +3599,10 @@ async def delete_transition_arrow(
         )
         paired_arrow = paired_result.scalars().first()
 
+    # Clean up cross-region auto-neighbors BEFORE deleting arrows
+    # (ArrowNeighbors cascade-delete with arrows, so we must read them first)
+    await cleanup_cross_region_neighbors_for_arrow(session, arrow_id)
+
     # Nullify paired_arrow_id references to avoid FK issues during deletion
     if paired_arrow:
         deleted_ids.append(paired_arrow.id)
@@ -3599,6 +3617,140 @@ async def delete_transition_arrow(
     await session.commit()
 
     return {"status": "deleted", "deleted_ids": deleted_ids}
+
+
+async def sync_cross_region_neighbors(session: AsyncSession, arrow_id: int) -> None:
+    """
+    Recalculate all cross-region LocationNeighbors for a given arrow pair.
+    Creates bidirectional is_auto_arrow=True LocationNeighbor rows
+    for each (locA, locB) pair where locA connects to this arrow
+    and locB connects to the paired arrow.
+    """
+    from sqlalchemy import or_, and_
+
+    # Load arrow
+    arrow_result = await session.execute(
+        select(RegionTransitionArrow).where(RegionTransitionArrow.id == arrow_id)
+    )
+    arrow = arrow_result.scalars().first()
+    if not arrow or not arrow.paired_arrow_id:
+        return
+
+    paired_arrow_id = arrow.paired_arrow_id
+
+    # Get ArrowNeighbors for this arrow
+    local_result = await session.execute(
+        select(ArrowNeighbor).where(ArrowNeighbor.arrow_id == arrow_id)
+    )
+    local_ans = local_result.scalars().all()
+
+    # Get ArrowNeighbors for paired arrow
+    remote_result = await session.execute(
+        select(ArrowNeighbor).where(ArrowNeighbor.arrow_id == paired_arrow_id)
+    )
+    remote_ans = remote_result.scalars().all()
+
+    if not local_ans or not remote_ans:
+        return
+
+    local_location_ids = [an.location_id for an in local_ans]
+    remote_location_ids = [an.location_id for an in remote_ans]
+
+    # Delete existing auto-arrow LocationNeighbors between these location sets
+    await session.execute(
+        delete(LocationNeighbor).where(
+            and_(
+                LocationNeighbor.is_auto_arrow == True,
+                or_(
+                    and_(
+                        LocationNeighbor.location_id.in_(local_location_ids),
+                        LocationNeighbor.neighbor_id.in_(remote_location_ids),
+                    ),
+                    and_(
+                        LocationNeighbor.location_id.in_(remote_location_ids),
+                        LocationNeighbor.neighbor_id.in_(local_location_ids),
+                    ),
+                )
+            )
+        )
+    )
+
+    # Create N x M bidirectional LocationNeighbors
+    for local_an in local_ans:
+        for remote_an in remote_ans:
+            total_cost = local_an.energy_cost + remote_an.energy_cost
+            # Forward: local -> remote
+            session.add(LocationNeighbor(
+                location_id=local_an.location_id,
+                neighbor_id=remote_an.location_id,
+                energy_cost=total_cost,
+                path_data=None,
+                is_auto_arrow=True,
+            ))
+            # Reverse: remote -> local
+            session.add(LocationNeighbor(
+                location_id=remote_an.location_id,
+                neighbor_id=local_an.location_id,
+                energy_cost=total_cost,
+                path_data=None,
+                is_auto_arrow=True,
+            ))
+
+    await session.flush()
+
+
+async def cleanup_cross_region_neighbors_for_arrow(session: AsyncSession, arrow_id: int) -> None:
+    """
+    Delete all auto-arrow LocationNeighbors linked to a specific arrow pair.
+    Must be called BEFORE deleting arrows/ArrowNeighbors (since we need to read them).
+    """
+    from sqlalchemy import or_, and_
+
+    # Load arrow
+    arrow_result = await session.execute(
+        select(RegionTransitionArrow).where(RegionTransitionArrow.id == arrow_id)
+    )
+    arrow = arrow_result.scalars().first()
+    if not arrow or not arrow.paired_arrow_id:
+        return
+
+    paired_arrow_id = arrow.paired_arrow_id
+
+    # Get location_ids from ArrowNeighbors of this arrow
+    local_result = await session.execute(
+        select(ArrowNeighbor.location_id).where(ArrowNeighbor.arrow_id == arrow_id)
+    )
+    local_ids = [row[0] for row in local_result.all()]
+
+    # Get location_ids from ArrowNeighbors of paired arrow
+    remote_result = await session.execute(
+        select(ArrowNeighbor.location_id).where(ArrowNeighbor.arrow_id == paired_arrow_id)
+    )
+    remote_ids = [row[0] for row in remote_result.all()]
+
+    if not local_ids or not remote_ids:
+        return
+
+    # Delete auto-arrow LocationNeighbors between these location sets
+    await session.execute(
+        delete(LocationNeighbor).where(
+            and_(
+                LocationNeighbor.is_auto_arrow == True,
+                or_(
+                    and_(
+                        LocationNeighbor.location_id.in_(local_ids),
+                        LocationNeighbor.neighbor_id.in_(remote_ids),
+                    ),
+                    and_(
+                        LocationNeighbor.location_id.in_(remote_ids),
+                        LocationNeighbor.neighbor_id.in_(local_ids),
+                    ),
+                )
+            )
+        )
+    )
+
+    await session.flush()
 
 
 async def create_arrow_neighbor(
@@ -3643,6 +3795,8 @@ async def create_arrow_neighbor(
     if existing:
         existing.energy_cost = data.energy_cost
         existing.path_data = path_data_raw
+        await session.flush()
+        await sync_cross_region_neighbors(session, arrow_id)
         await session.commit()
         await session.refresh(existing)
         return {
@@ -3660,6 +3814,8 @@ async def create_arrow_neighbor(
         path_data=path_data_raw,
     )
     session.add(neighbor)
+    await session.flush()
+    await sync_cross_region_neighbors(session, arrow_id)
     await session.commit()
     await session.refresh(neighbor)
 
@@ -3709,7 +3865,9 @@ async def delete_arrow_neighbor(
     location_id: int,
     arrow_id: int,
 ) -> dict:
-    """Delete an arrow neighbor path."""
+    """Delete an arrow neighbor path and clean up cross-region auto-neighbors."""
+    from sqlalchemy import or_, and_
+
     result = await session.execute(
         select(ArrowNeighbor).where(
             ArrowNeighbor.location_id == location_id,
@@ -3719,6 +3877,37 @@ async def delete_arrow_neighbor(
     neighbor = result.scalars().first()
     if not neighbor:
         raise HTTPException(status_code=404, detail="Arrow neighbor not found")
+
+    # Clean up cross-region neighbors for this specific location before deleting
+    arrow_result = await session.execute(
+        select(RegionTransitionArrow).where(RegionTransitionArrow.id == arrow_id)
+    )
+    arrow = arrow_result.scalars().first()
+    if arrow and arrow.paired_arrow_id:
+        remote_result = await session.execute(
+            select(ArrowNeighbor.location_id).where(
+                ArrowNeighbor.arrow_id == arrow.paired_arrow_id
+            )
+        )
+        remote_ids = [row[0] for row in remote_result.all()]
+        if remote_ids:
+            await session.execute(
+                delete(LocationNeighbor).where(
+                    and_(
+                        LocationNeighbor.is_auto_arrow == True,
+                        or_(
+                            and_(
+                                LocationNeighbor.location_id == location_id,
+                                LocationNeighbor.neighbor_id.in_(remote_ids),
+                            ),
+                            and_(
+                                LocationNeighbor.location_id.in_(remote_ids),
+                                LocationNeighbor.neighbor_id == location_id,
+                            ),
+                        )
+                    )
+                )
+            )
 
     await session.delete(neighbor)
     await session.commit()

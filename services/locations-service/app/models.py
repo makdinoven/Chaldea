@@ -144,6 +144,7 @@ class LocationNeighbor(Base):
     neighbor_id = Column(BigInteger, ForeignKey("Locations.id", ondelete="CASCADE"), nullable=False)
     energy_cost = Column(Integer, nullable=False)
     path_data = Column(JSON, nullable=True)
+    is_auto_arrow = Column(Boolean, nullable=False, default=False, server_default="0")
 
 
 class Post(Base):
