@@ -467,6 +467,7 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
             "target_region_name": target_name,
             "paired_arrow_id": arrow.paired_arrow_id,
             "paired_location_ids": paired_location_ids,
+            "rotation": arrow.rotation,
         })
         arrow_ids.append(arrow.id)
 
@@ -3338,6 +3339,7 @@ async def create_article(session: AsyncSession, data: ArchiveArticleCreate, user
         content=data.content,
         summary=data.summary,
         cover_image_url=data.cover_image_url,
+        cover_text_color=data.cover_text_color,
         is_featured=data.is_featured,
         featured_sort_order=data.featured_sort_order,
         created_by_user_id=user_id,
@@ -3482,6 +3484,7 @@ async def create_transition_arrow(
         x=data.x,
         y=data.y,
         label=data.label,
+        rotation=data.rotation or 0,
     )
     session.add(arrow)
     await session.flush()
@@ -3493,6 +3496,7 @@ async def create_transition_arrow(
         x=None,
         y=None,
         label=None,
+        rotation=0,
     )
     session.add(paired_arrow)
     await session.flush()
@@ -3514,6 +3518,7 @@ async def create_transition_arrow(
             "x": arrow.x,
             "y": arrow.y,
             "label": arrow.label,
+            "rotation": arrow.rotation,
         },
         "paired_arrow": {
             "id": paired_arrow.id,
@@ -3524,6 +3529,7 @@ async def create_transition_arrow(
             "x": paired_arrow.x,
             "y": paired_arrow.y,
             "label": paired_arrow.label,
+            "rotation": paired_arrow.rotation,
         },
     }
 
@@ -3572,6 +3578,7 @@ async def update_transition_arrow(
         "x": arrow.x,
         "y": arrow.y,
         "label": arrow.label,
+        "rotation": arrow.rotation,
     }
 
 

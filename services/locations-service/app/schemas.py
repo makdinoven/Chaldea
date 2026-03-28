@@ -1006,6 +1006,7 @@ class ArchiveArticleCreate(BaseModel):
     content: Optional[str] = None
     summary: Optional[str] = None
     cover_image_url: Optional[str] = None
+    cover_text_color: Optional[str] = None
     is_featured: bool = False
     featured_sort_order: int = 0
     category_ids: List[int] = []
@@ -1016,6 +1017,7 @@ class ArchiveArticleUpdate(BaseModel):
     content: Optional[str] = None
     summary: Optional[str] = None
     cover_image_url: Optional[str] = None
+    cover_text_color: Optional[str] = None
     is_featured: Optional[bool] = None
     featured_sort_order: Optional[int] = None
     category_ids: Optional[List[int]] = None
@@ -1027,6 +1029,7 @@ class ArchiveArticleRead(BaseModel):
     content: Optional[str] = None
     summary: Optional[str] = None
     cover_image_url: Optional[str] = None
+    cover_text_color: Optional[str] = None
     is_featured: bool
     featured_sort_order: int
     created_by_user_id: Optional[int] = None
@@ -1044,6 +1047,7 @@ class ArchiveArticleListItem(BaseModel):
     slug: str
     summary: Optional[str] = None
     cover_image_url: Optional[str] = None
+    cover_text_color: Optional[str] = None
     is_featured: bool
     featured_sort_order: int
     created_at: datetime
@@ -1089,11 +1093,13 @@ class TransitionArrowCreate(BaseModel):
     x: Optional[float] = None
     y: Optional[float] = None
     label: Optional[str] = None
+    rotation: Optional[float] = 0
 
 class TransitionArrowUpdate(BaseModel):
     x: Optional[float] = None
     y: Optional[float] = None
     label: Optional[str] = None
+    rotation: Optional[float] = None
 
 class TransitionArrowRead(BaseModel):
     id: int
@@ -1104,6 +1110,7 @@ class TransitionArrowRead(BaseModel):
     x: Optional[float] = None
     y: Optional[float] = None
     label: Optional[str] = None
+    rotation: Optional[float] = None
 
     class Config:
         orm_mode = True

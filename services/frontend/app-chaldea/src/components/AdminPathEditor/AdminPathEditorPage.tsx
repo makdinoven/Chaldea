@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
@@ -7,6 +7,7 @@ import {
   updateNeighborPath,
   deleteNeighborEdge,
   createTransitionArrow,
+  updateTransitionArrow,
   deleteTransitionArrow,
   createArrowNeighbor,
   deleteArrowNeighbor,
@@ -44,6 +45,9 @@ const AdminPathEditorPage = () => {
   const [arrowTargetRegionId, setArrowTargetRegionId] = useState<number | ''>('');
   const [arrowLabel, setArrowLabel] = useState('');
   const [showArrowForm, setShowArrowForm] = useState(false);
+
+  // Placement mode for existing unpositioned arrows
+  const [placingArrowId, setPlacingArrowId] = useState<number | null>(null);
 
   // Hierarchy tree for region selection (used in arrow creation)
   const hierarchyTree = useAppSelector((state) => state.worldMap.hierarchyTree);
@@ -215,6 +219,7 @@ const AdminPathEditorPage = () => {
     setEditWaypoints([]);
     setShowArrowForm(false);
     setArrowPlacementPos(null);
+    setPlacingArrowId(null);
   }, [mode]);
 
   // Handle draw click on a location
@@ -546,6 +551,61 @@ const AdminPathEditorPage = () => {
       .finally(() => setSaving(false));
   }, [locationNames, regionDetails, dispatch, regionIdNum]);
 
+  // Handle arrow rotation update (debounced to avoid spamming API on slider drag)
+  const rotationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleUpdateArrowRotation = useCallback((arrowId: number, rotation: number) => {
+    if (!regionIdNum) return;
+    if (rotationTimerRef.current) clearTimeout(rotationTimerRef.current);
+    rotationTimerRef.current = setTimeout(() => {
+      dispatch(
+        updateTransitionArrow({
+          arrowId,
+          rotation,
+        })
+      )
+        .unwrap()
+        .then(async () => {
+          if (regionIdNum) await dispatch(fetchRegionDetails(regionIdNum));
+        })
+        .catch((err) => {
+          const msg = typeof err === 'string' ? err : 'Ошибка обновления поворота стрелки';
+          toast.error(msg);
+        });
+    }, 300);
+  }, [dispatch, regionIdNum]);
+
+  // Handle "Place" button click for an unpositioned arrow — toggles placement mode
+  const handlePlaceArrow = useCallback((arrowId: number) => {
+    setPlacingArrowId((prev) => (prev === arrowId ? null : arrowId));
+  }, []);
+
+  // Handle map click while in arrow placement mode — position the existing arrow
+  const handlePlaceArrowOnMap = useCallback((x: number, y: number) => {
+    if (!placingArrowId || !regionIdNum) return;
+
+    setSaving(true);
+    setError(null);
+    dispatch(
+      updateTransitionArrow({
+        arrowId: placingArrowId,
+        x,
+        y,
+      })
+    )
+      .unwrap()
+      .then(async () => {
+        toast.success('Стрелка размещена на карте');
+        setPlacingArrowId(null);
+        if (regionIdNum) await dispatch(fetchRegionDetails(regionIdNum));
+      })
+      .catch((err) => {
+        const msg = typeof err === 'string' ? err : 'Ошибка размещения стрелки';
+        toast.error(msg);
+        setError(msg);
+      })
+      .finally(() => setSaving(false));
+  }, [placingArrowId, regionIdNum, dispatch]);
+
   if (!regionIdNum) {
     return (
       <div className="p-6">
@@ -632,6 +692,9 @@ const AdminPathEditorPage = () => {
             drawingActive={drawStartId !== null}
             arrowItems={regionDetails.map_items.filter((i) => i.type === 'arrow')}
             onDeleteArrow={handleDeleteArrow}
+            placingArrowId={placingArrowId}
+            onPlaceArrow={handlePlaceArrow}
+            onUpdateArrowRotation={handleUpdateArrowRotation}
           />
 
           {/* Canvas */}
@@ -654,7 +717,13 @@ const AdminPathEditorPage = () => {
             onDeleteArrowEdge={handleDeleteArrowEdge}
             onZoneLocationSelect={handleZoneLocationSelect}
             onArrowDrawClick={mode === 'delete' ? handleDeleteArrow : handleArrowDrawClick}
-            onEmptyMapClick={mode === 'arrow' ? (x, y) => handleArrowPlacement(x, y) : undefined}
+            onEmptyMapClick={
+              placingArrowId
+                ? (x, y) => handlePlaceArrowOnMap(x, y)
+                : mode === 'arrow'
+                  ? (x, y) => handleArrowPlacement(x, y)
+                  : undefined
+            }
           />
         </div>
       </div>

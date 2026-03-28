@@ -23,6 +23,9 @@ interface ArrowMapItem {
   type: string;
   target_region_id?: number | null;
   target_region_name?: string | null;
+  map_x?: number | null;
+  map_y?: number | null;
+  rotation?: number | null;
 }
 
 type EditorMode = 'draw' | 'edit' | 'delete' | 'arrow';
@@ -43,6 +46,9 @@ interface PathEditorToolbarProps {
   drawingActive: boolean;
   arrowItems?: ArrowMapItem[];
   onDeleteArrow?: (arrowId: number) => void;
+  placingArrowId?: number | null;
+  onPlaceArrow?: (arrowId: number) => void;
+  onUpdateArrowRotation?: (arrowId: number, rotation: number) => void;
 }
 
 const PathEditorToolbar = ({
@@ -61,6 +67,9 @@ const PathEditorToolbar = ({
   drawingActive,
   arrowItems = [],
   onDeleteArrow,
+  placingArrowId = null,
+  onPlaceArrow,
+  onUpdateArrowRotation,
 }: PathEditorToolbarProps) => {
   const modeButtons: { key: EditorMode; label: string; icon: string }[] = [
     { key: 'draw', label: 'Рисовать', icon: '\u270F\uFE0F' },
@@ -131,9 +140,16 @@ const PathEditorToolbar = ({
       )}
 
       {/* Arrow mode hint */}
-      {mode === 'arrow' && (
+      {mode === 'arrow' && !placingArrowId && (
         <div className="text-xs text-white/40 leading-relaxed">
           Кликните на пустое место на карте, чтобы разместить стрелку перехода в другой регион.
+        </div>
+      )}
+
+      {/* Arrow placement mode hint */}
+      {placingArrowId && (
+        <div className="text-xs text-amber-400/80 leading-relaxed bg-amber-900/20 border border-amber-500/20 rounded px-2 py-1.5">
+          Кликните на пустое место на карте, чтобы разместить стрелку.
         </div>
       )}
 
@@ -144,30 +160,84 @@ const PathEditorToolbar = ({
             Стрелки ({arrowItems.length})
           </p>
           <div className="flex flex-col gap-1 max-h-[150px] overflow-y-auto gold-scrollbar">
-            {arrowItems.map((arrow) => (
-              <div
-                key={`arrow-${arrow.id}`}
-                className="flex items-center justify-between px-2 py-1.5 rounded text-xs bg-cyan-900/20 text-cyan-200 border border-cyan-500/20"
-              >
-                <div className="min-w-0">
-                  <span className="block truncate">{arrow.name}</span>
-                  {arrow.target_region_name && (
-                    <span className="text-[10px] text-white/40">
-                      {'\u27A4'} {arrow.target_region_name}
-                    </span>
+            {arrowItems.map((arrow) => {
+              const isUnpositioned = arrow.map_x == null || arrow.map_y == null;
+              const isPlacing = placingArrowId === arrow.id;
+
+              return (
+                <div
+                  key={`arrow-${arrow.id}`}
+                  className={`px-2 py-1.5 rounded text-xs border ${
+                    isPlacing
+                      ? 'bg-amber-900/30 text-amber-200 border-amber-500/40'
+                      : isUnpositioned
+                        ? 'bg-yellow-900/20 text-yellow-200 border-yellow-500/20'
+                        : 'bg-cyan-900/20 text-cyan-200 border-cyan-500/20'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="min-w-0">
+                      <span className="block truncate">{arrow.name}</span>
+                      {arrow.target_region_name && (
+                        <span className="text-[10px] text-white/40">
+                          {'\u27A4'} {arrow.target_region_name}
+                        </span>
+                      )}
+                      {isUnpositioned && !isPlacing && (
+                        <span className="text-[10px] text-yellow-400/70 block">
+                          Не размещена на карте
+                        </span>
+                      )}
+                      {isPlacing && (
+                        <span className="text-[10px] text-amber-400/80 block">
+                          Кликните на карту...
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0 ml-2">
+                      {isUnpositioned && onPlaceArrow && (
+                        <button
+                          className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
+                            isPlacing
+                              ? 'bg-amber-600/40 text-amber-200 border border-amber-500/50'
+                              : 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-600/50'
+                          }`}
+                          onClick={() => onPlaceArrow(arrow.id)}
+                          title={isPlacing ? 'Отменить размещение' : 'Разместить на карте'}
+                        >
+                          {isPlacing ? 'Отмена' : 'Разместить'}
+                        </button>
+                      )}
+                      {onDeleteArrow && (
+                        <button
+                          className="text-red-400 hover:text-red-300 transition-colors"
+                          onClick={() => onDeleteArrow(arrow.id)}
+                          title="Удалить стрелку"
+                        >
+                          {'\u2715'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {/* Rotation slider for positioned arrows */}
+                  {!isUnpositioned && onUpdateArrowRotation && (
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="text-[10px] text-white/40 shrink-0">{'\u21BB'}</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={360}
+                        step={1}
+                        value={arrow.rotation ?? 0}
+                        onChange={(e) => onUpdateArrowRotation(arrow.id, Number(e.target.value))}
+                        className="flex-1 h-1 accent-cyan-400"
+                      />
+                      <span className="text-[10px] text-white/50 w-7 text-right">{arrow.rotation ?? 0}&deg;</span>
+                    </div>
                   )}
                 </div>
-                {onDeleteArrow && (
-                  <button
-                    className="shrink-0 ml-2 text-red-400 hover:text-red-300 transition-colors"
-                    onClick={() => onDeleteArrow(arrow.id)}
-                    title="Удалить стрелку"
-                  >
-                    {'\u2715'}
-                  </button>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

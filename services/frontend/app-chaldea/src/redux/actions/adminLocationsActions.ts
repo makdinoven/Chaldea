@@ -79,6 +79,7 @@ export interface RegionMapItem {
   target_region_id?: number | null;
   target_region_name?: string | null;
   paired_arrow_id?: number | null;
+  rotation?: number | null;
 }
 
 export interface RegionDetails {
@@ -141,6 +142,7 @@ export interface TransitionArrowRead {
   x: number | null;
   y: number | null;
   label: string | null;
+  rotation: number | null;
 }
 
 export interface TransitionArrowCreateResponse {
@@ -458,7 +460,7 @@ export const createTransitionArrow = createAsyncThunk<
 
 export const updateTransitionArrow = createAsyncThunk<
   TransitionArrowRead,
-  { arrowId: number; x?: number | null; y?: number | null; label?: string | null },
+  { arrowId: number; x?: number | null; y?: number | null; label?: string | null; rotation?: number | null },
   { rejectValue: string }
 >(
   'adminLocations/updateTransitionArrow',

@@ -18,6 +18,7 @@ export interface MapItem {
   target_region_name?: string | null;
   paired_arrow_id?: number | null;
   paired_location_ids?: number[];
+  rotation?: number | null;
 }
 
 interface ArrowEdge {
@@ -307,11 +308,15 @@ const RegionInteractiveMap = ({
                 const hasPath = edge.path_data && edge.path_data.length > 0;
                 const allPoints = hasPath ? [from, ...edge.path_data!, to] : [from, to];
 
+                // If player is on the other region (via paired arrow), reverse direction: arrow → location
+                const isFromPaired = pairedLocIds.includes(currentLocationId!);
+                const orientedPoints = isFromPaired ? [...allPoints].reverse() : allPoints;
+
                 return (
                   <path
                     key={`motion-${edgeKey}`}
                     id={`path-motion-${edgeKey}`}
-                    d={pointsToPathD(allPoints)}
+                    d={pointsToPathD(orientedPoints)}
                     fill="none"
                   />
                 );
@@ -552,10 +557,16 @@ const RegionInteractiveMap = ({
                     {item.type === 'arrow' ? (
                       /* Arrow marker: directional arrow icon */
                       <div
-                        className="w-[44px] h-[44px] sm:w-[50px] sm:h-[50px] rounded-full flex items-center justify-center border-2 border-cyan-400/60 bg-cyan-900/60"
+                        className="w-[44px] h-[44px] sm:w-[50px] sm:h-[50px] rounded-full flex items-center justify-center"
+                        style={{
+                          background: 'rgba(180, 150, 40, 0.5)',
+                          border: '2px solid rgba(240, 217, 92, 0.5)',
+                          ...(item.rotation ? { transform: `rotate(${item.rotation}deg)` } : {}),
+                        }}
                       >
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="sm:w-[28px] sm:h-[28px]">
-                          <path d="M5 12h14M13 6l6 6-6 6" stroke="rgba(100,220,255,0.9)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M5 12h14M13 6l6 6-6 6" stroke="rgba(0,0,0,0.55)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M5 12h14M13 6l6 6-6 6" stroke="rgba(240,217,92,0.9)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                       </div>
                     ) : isCityMap ? (

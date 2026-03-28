@@ -32,6 +32,7 @@ interface MapItemData {
   parent_district_id?: number | null;
   target_region_id?: number | null;
   target_region_name?: string | null;
+  rotation?: number | null;
 }
 
 interface DistrictData {
@@ -265,6 +266,16 @@ const PathEditorCanvas = ({
   const handleSvgClick = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     const pt = clientToPercent(e.clientX, e.clientY);
     if (!pt) return;
+
+    // If onEmptyMapClick is set and click is on empty space (no marker), prioritize it.
+    // This supports placing existing unpositioned arrows from any mode.
+    if (onEmptyMapClick && mode !== 'draw') {
+      const marker = findClickedMarker(pt.x, pt.y);
+      if (!marker) {
+        onEmptyMapClick(Math.round(pt.x * 10) / 10, Math.round(pt.y * 10) / 10);
+        return;
+      }
+    }
 
     if (mode === 'draw') {
       const marker = findClickedMarker(pt.x, pt.y);
@@ -559,29 +570,32 @@ const PathEditorCanvas = ({
       const y = item.map_y!;
 
       if (item.type === 'arrow') {
+        const rot = item.rotation ?? 0;
         return (
           <g key={`marker-arrow-${item.id}`}>
-            {/* Arrow marker — cyan diamond */}
-            <polygon
-              points={`${x},${y - 1.8} ${x + 1.5},${y} ${x},${y + 1.8} ${x - 1.5},${y}`}
-              fill="#0ea5e9"
-              fillOpacity="0.7"
-              stroke="#67e8f9"
-              strokeWidth="0.15"
-              className="cursor-pointer"
-              style={{ pointerEvents: 'all' }}
-            />
-            {/* Small arrow indicator inside */}
-            <text
-              x={x}
-              y={y + 0.5}
-              textAnchor="middle"
-              fill="white"
-              fontSize="1.6"
-              style={{ pointerEvents: 'none' }}
-            >
-              {'\u27A4'}
-            </text>
+            {/* Arrow marker — cyan diamond with rotation */}
+            <g transform={rot ? `rotate(${rot}, ${x}, ${y})` : undefined}>
+              <polygon
+                points={`${x},${y - 1.8} ${x + 1.5},${y} ${x},${y + 1.8} ${x - 1.5},${y}`}
+                fill="#0ea5e9"
+                fillOpacity="0.7"
+                stroke="#67e8f9"
+                strokeWidth="0.15"
+                className="cursor-pointer"
+                style={{ pointerEvents: 'all' }}
+              />
+              {/* Small arrow indicator inside */}
+              <text
+                x={x}
+                y={y + 0.5}
+                textAnchor="middle"
+                fill="white"
+                fontSize="1.6"
+                style={{ pointerEvents: 'none' }}
+              >
+                {'\u27A4'}
+              </text>
+            </g>
             <text
               x={x}
               y={y - 2.5}
@@ -687,7 +701,7 @@ const PathEditorCanvas = ({
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
-            style={{ cursor: mode === 'draw' ? (drawStartId ? 'crosshair' : 'pointer') : 'default' }}
+            style={{ cursor: onEmptyMapClick ? 'crosshair' : mode === 'draw' ? (drawStartId ? 'crosshair' : 'pointer') : 'default' }}
           >
             {renderEdges()}
             {renderArrowEdges()}

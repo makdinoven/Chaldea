@@ -63,6 +63,7 @@ export interface ArchiveArticle {
   content: string | null;
   summary: string | null;
   cover_image_url: string | null;
+  cover_text_color: string | null;
   is_featured: boolean;
   featured_sort_order: number;
   created_by_user_id: number | null;
@@ -77,6 +78,7 @@ export interface ArchiveArticleListItem {
   slug: string;
   summary: string | null;
   cover_image_url: string | null;
+  cover_text_color: string | null;
   is_featured: boolean;
   featured_sort_order: number;
   created_at: string;
@@ -103,6 +105,7 @@ export interface ArchiveArticleCreate {
   content?: string;
   summary?: string;
   cover_image_url?: string;
+  cover_text_color?: string;
   is_featured?: boolean;
   featured_sort_order?: number;
   category_ids?: number[];
@@ -114,6 +117,7 @@ export interface ArchiveArticleUpdate {
   content?: string;
   summary?: string;
   cover_image_url?: string;
+  cover_text_color?: string;
   is_featured?: boolean;
   featured_sort_order?: number;
   category_ids?: number[];

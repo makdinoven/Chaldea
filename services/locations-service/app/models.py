@@ -408,6 +408,7 @@ class ArchiveArticle(Base):
     content = Column(Text, nullable=True)
     summary = Column(String(500), nullable=True)
     cover_image_url = Column(String(512), nullable=True)
+    cover_text_color = Column(String(20), nullable=True, server_default="'#FFFFFF'")
     is_featured = Column(Boolean, nullable=False, default=False)
     featured_sort_order = Column(Integer, nullable=False, default=0)
     created_by_user_id = Column(Integer, nullable=True)
@@ -431,6 +432,7 @@ class RegionTransitionArrow(Base):
     x = Column(Float, nullable=True)
     y = Column(Float, nullable=True)
     label = Column(String(255), nullable=True)
+    rotation = Column(Float, nullable=True, server_default="0")
 
 
 class ArrowNeighbor(Base):

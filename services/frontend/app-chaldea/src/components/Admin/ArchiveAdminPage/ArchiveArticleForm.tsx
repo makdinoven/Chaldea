@@ -48,6 +48,7 @@ const ArchiveArticleForm = ({ article, onSuccess, onCancel }: ArchiveArticleForm
   const [summary, setSummary] = useState(article?.summary ?? "");
   const [content, setContent] = useState(article?.content ?? "");
   const [coverImageUrl, setCoverImageUrl] = useState(article?.cover_image_url ?? "");
+  const [coverTextColor, setCoverTextColor] = useState(article?.cover_text_color ?? "#FFFFFF");
   const [isFeatured, setIsFeatured] = useState(article?.is_featured ?? false);
   const [featuredSortOrder, setFeaturedSortOrder] = useState(article?.featured_sort_order ?? 0);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<number[]>(
@@ -115,6 +116,7 @@ const ArchiveArticleForm = ({ article, onSuccess, onCancel }: ArchiveArticleForm
         content,
         summary: summary.trim() || undefined,
         cover_image_url: coverImageUrl || undefined,
+        cover_text_color: coverTextColor,
         is_featured: isFeatured,
         featured_sort_order: featuredSortOrder,
         category_ids: selectedCategoryIds,
@@ -225,6 +227,22 @@ const ArchiveArticleForm = ({ article, onSuccess, onCancel }: ArchiveArticleForm
           className="text-white text-sm file:mr-4 file:py-2 file:px-4 file:rounded-card file:border-0 file:text-sm file:font-medium file:bg-white/[0.07] file:text-white hover:file:bg-white/[0.12] file:cursor-pointer file:transition-colors"
         />
         {uploading && <span className="text-xs text-white/50">Загрузка...</span>}
+      </div>
+
+      {/* Cover text color */}
+      <div className="flex flex-col gap-1">
+        <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+          Цвет текста обложки
+        </span>
+        <div className="flex items-center gap-3">
+          <input
+            type="color"
+            value={coverTextColor}
+            onChange={(e) => setCoverTextColor(e.target.value)}
+            className="w-10 h-10 rounded cursor-pointer border border-white/20 bg-transparent p-0.5"
+          />
+          <span className="text-sm text-white/70">{coverTextColor}</span>
+        </div>
       </div>
 
       {/* Categories */}

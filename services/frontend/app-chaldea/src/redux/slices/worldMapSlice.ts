@@ -51,6 +51,7 @@ export interface RegionMapItem {
   target_region_name?: string | null;
   paired_arrow_id?: number | null;
   paired_location_ids?: number[];
+  rotation?: number | null;
 }
 
 export interface RegionDetailsData {

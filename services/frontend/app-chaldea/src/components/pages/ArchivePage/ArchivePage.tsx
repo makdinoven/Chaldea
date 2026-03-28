@@ -14,6 +14,15 @@ const bodyFont = "'Cormorant Garamond', 'Georgia', serif";
 
 const PER_PAGE = 12;
 
+/* ---------- Hex to RGBA helper ---------- */
+
+const hexToRgba = (hex: string, alpha: number): string => {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
 /* ---------- Greek letter decorative effects (inspired by Bestiary runes) ---------- */
 
 const GREEK_LETTERS = 'ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψω';
@@ -433,15 +442,15 @@ const ArchivePage = () => {
 
                       <div className="relative z-[1] h-full flex flex-col justify-end p-4 sm:p-5">
                         <h3
-                          className="text-lg sm:text-xl font-medium text-white mb-1 line-clamp-2"
-                          style={{ fontFamily: titleFont }}
+                          className="text-lg sm:text-xl font-medium mb-1 line-clamp-2"
+                          style={{ fontFamily: titleFont, color: article.cover_text_color || '#FFFFFF' }}
                         >
                           {article.title}
                         </h3>
                         {article.summary && (
                           <p
-                            className="text-white/70 text-xs sm:text-sm line-clamp-2"
-                            style={{ fontFamily: bodyFont }}
+                            className="text-xs sm:text-sm line-clamp-2"
+                            style={{ fontFamily: bodyFont, color: hexToRgba(article.cover_text_color || '#FFFFFF', 0.7) }}
                           >
                             {article.summary}
                           </p>
@@ -451,7 +460,8 @@ const ArchivePage = () => {
                             {article.categories.map((cat) => (
                               <span
                                 key={cat.id}
-                                className="text-[10px] sm:text-xs px-2 py-0.5 rounded-full bg-white/10 text-white/60"
+                                className="text-[10px] sm:text-xs px-2 py-0.5 rounded-full bg-white/10"
+                                style={{ color: hexToRgba(article.cover_text_color || '#FFFFFF', 0.6) }}
                               >
                                 {cat.name}
                               </span>
