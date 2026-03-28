@@ -330,9 +330,9 @@ const PathEditorCanvas = ({
       const pointsStr = allPoints.map((p) => `${p.x},${p.y}`).join(' ');
 
       const strokeColor = isSelected
-        ? 'rgba(240, 217, 92, 0.8)'
-        : 'rgba(255, 255, 255, 0.3)';
-      const strokeWidth = isSelected ? '0.6' : '0.3';
+        ? 'rgba(240, 217, 92, 0.95)'
+        : 'rgba(255, 255, 255, 0.7)';
+      const strokeWidth = isSelected ? '0.9' : '0.5';
 
       return (
         <g key={key}>
@@ -351,7 +351,7 @@ const PathEditorCanvas = ({
             fill="none"
             stroke={strokeColor}
             strokeWidth={strokeWidth}
-            strokeDasharray={isSelected ? '1.2 0.4' : '1 0.6'}
+            strokeDasharray={isSelected ? '1.5 0.5' : '1.2 0.5'}
             strokeLinecap="round"
             strokeLinejoin="round"
             style={{ pointerEvents: 'none' }}

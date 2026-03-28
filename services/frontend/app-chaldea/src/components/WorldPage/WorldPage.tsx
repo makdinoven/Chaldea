@@ -388,12 +388,46 @@ const WorldPage = () => {
     return new Set(regionMapItems.filter((item) => item.type === 'location').map((item) => item.id));
   }, [regionMapItems]);
 
-  // Filter neighbor edges: keep only edges where both endpoints are region-level locations
+  // Set of district IDs visible on the region map (for edge remapping)
+  const regionDistrictIds: Set<number> = useMemo(() => {
+    return new Set(regionMapItems.filter((item) => item.type === 'district').map((item) => item.id));
+  }, [regionMapItems]);
+
+  // Map from city-map-internal location IDs to their parent district ID.
+  // Used to remap edge endpoints so paths to city-map locations draw to the district marker instead.
+  const cityLocToDistrict: Map<number, number> = useMemo(() => {
+    if (!regionDetails) return new Map();
+    const m = new Map<number, number>();
+    for (const d of regionDetails.districts) {
+      if (cityMapAllIds.has(d.id)) {
+        for (const loc of d.locations) {
+          m.set(loc.id, d.id);
+        }
+      }
+    }
+    return m;
+  }, [regionDetails, cityMapAllIds]);
+
+  // Filter/remap neighbor edges: remap city-map-internal endpoints to their parent district,
+  // then keep only edges where both endpoints are visible on the region map.
   const regionNeighborEdges = useMemo(() => {
     if (!regionDetails) return [];
     const edges = regionDetails.neighbor_edges ?? [];
-    return edges.filter((e) => regionLocationIds.has(e.from_id) && regionLocationIds.has(e.to_id));
-  }, [regionDetails, regionLocationIds]);
+    const remapped: typeof edges = [];
+    const seen = new Set<string>();
+    for (const e of edges) {
+      const fromId = cityLocToDistrict.get(e.from_id) ?? e.from_id;
+      const toId = cityLocToDistrict.get(e.to_id) ?? e.to_id;
+      if (fromId === toId) continue; // skip self-loops
+      if (!regionLocationIds.has(fromId) && !regionDistrictIds.has(fromId)) continue;
+      if (!regionLocationIds.has(toId) && !regionDistrictIds.has(toId)) continue;
+      const key = `${Math.min(fromId, toId)}-${Math.max(fromId, toId)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      remapped.push({ ...e, from_id: fromId, to_id: toId });
+    }
+    return remapped;
+  }, [regionDetails, regionLocationIds, regionDistrictIds, cityLocToDistrict]);
 
   // Filter districts: exclude city-map sub-districts, strip locations from city-map root districts
   const regionDistricts = useMemo(() => {

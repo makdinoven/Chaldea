@@ -84,6 +84,9 @@ const renderMapBadge = (markerType?: string | null, recommendedLevel?: number | 
   );
 };
 
+const pointsToPathD = (points: Array<{ x: number; y: number }>): string =>
+  points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x},${p.y}`).join(' ');
+
 const RegionInteractiveMap = ({
   mapImageUrl,
   mapItems,
@@ -104,9 +107,9 @@ const RegionInteractiveMap = ({
     [mapItems],
   );
 
-  // Build a set of mapped location IDs for quick lookup (edges only connect locations)
+  // Build a set of mapped item IDs for quick lookup (edges can connect locations or districts)
   const mappedLocationIds = useMemo(() => {
-    const ids = new Set(mappedItems.filter((i) => i.type === 'location').map((i) => i.id));
+    const ids = new Set(mappedItems.filter((i) => i.type === 'location' || i.type === 'district').map((i) => i.id));
     // Include district child locations that fall back to district position
     for (const d of districts) {
       if (d.x != null && d.y != null) {
@@ -118,12 +121,12 @@ const RegionInteractiveMap = ({
     return ids;
   }, [mappedItems, districts]);
 
-  // Build a map of location id -> position for SVG lines
+  // Build a map of item id -> position for SVG lines (locations + districts)
   const positionMap = useMemo(() => {
     const map = new Map<number, { x: number; y: number }>();
     for (const item of mappedItems) {
-      if (item.type === 'location') {
-        map.set(item.id, { x: item.map_x!, y: item.map_y! });
+      if (item.map_x != null && item.map_y != null) {
+        map.set(item.id, { x: item.map_x, y: item.map_y });
       }
     }
     // Fallback: district child locations without own coordinates use district position
@@ -197,13 +200,56 @@ const RegionInteractiveMap = ({
             preserveAspectRatio="none"
           >
             <defs>
-              <filter id="path-glow">
-                <feGaussianBlur stdDeviation="0.4" result="blur" />
+              <filter id="path-glow-active" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="0.8" in="SourceGraphic" result="blur1" />
+                <feGaussianBlur stdDeviation="0.3" in="SourceGraphic" result="blur2" />
+                <feMerge>
+                  <feMergeNode in="blur1" />
+                  <feMergeNode in="blur2" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+              <filter id="path-glow-inactive" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="0.4" in="SourceGraphic" result="blur" />
                 <feMerge>
                   <feMergeNode in="blur" />
                   <feMergeNode in="SourceGraphic" />
                 </feMerge>
               </filter>
+              <filter id="particle-glow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="0.3" in="SourceGraphic" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+              {/* Motion paths for active edges */}
+              {visibleEdges.map((edge) => {
+                const from = positionMap.get(edge.from_id);
+                const to = positionMap.get(edge.to_id);
+                if (!from || !to) return null;
+                const isActive = currentLocationId != null &&
+                  (edge.from_id === currentLocationId || edge.to_id === currentLocationId);
+                if (!isActive) return null;
+
+                const edgeKey = `${edge.from_id}-${edge.to_id}`;
+                const hasPath = edge.path_data && edge.path_data.length > 0;
+                const allPoints = hasPath ? [from, ...edge.path_data!, to] : [from, to];
+
+                // Particles travel outward from currentLocationId
+                const orientedPoints = edge.to_id === currentLocationId
+                  ? [...allPoints].reverse()
+                  : allPoints;
+
+                return (
+                  <path
+                    key={`motion-${edgeKey}`}
+                    id={`path-motion-${edgeKey}`}
+                    d={pointsToPathD(orientedPoints)}
+                    fill="none"
+                  />
+                );
+              })}
             </defs>
             {visibleEdges.map((edge) => {
               const from = positionMap.get(edge.from_id);
@@ -215,40 +261,84 @@ const RegionInteractiveMap = ({
               const edgeKey = `${edge.from_id}-${edge.to_id}`;
               const hasPath = edge.path_data && edge.path_data.length > 0;
 
-              // Build points string for polyline or line coordinates
+              // Build points string for polyline
               const allPoints = hasPath ? [from, ...edge.path_data!, to] : [from, to];
               const pointsStr = allPoints.map((p) => `${p.x},${p.y}`).join(' ');
 
               return (
                 <g key={edgeKey}>
-                  {isActive && (
+                  {/* Layer 1: Dark underlay (always) */}
+                  <polyline
+                    points={pointsStr}
+                    fill="none"
+                    stroke="rgba(0, 0, 0, 0.55)"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+
+                  {/* Layer 2: Glow (active with pulse, inactive subtle) */}
+                  {isActive ? (
                     <polyline
                       points={pointsStr}
                       fill="none"
-                      stroke="rgba(240, 217, 92, 0.6)"
-                      strokeWidth="0.8"
-                      strokeDasharray="1 0.6"
+                      stroke="rgba(240, 217, 92, 0.5)"
+                      strokeWidth="1.0"
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      filter="url(#path-glow)"
+                      filter="url(#path-glow-active)"
                     >
                       <animate
                         attributeName="opacity"
-                        values="0.4;1;0.4"
+                        values="0.3;0.7;0.3"
                         dur="2s"
                         repeatCount="indefinite"
                       />
                     </polyline>
+                  ) : (
+                    <polyline
+                      points={pointsStr}
+                      fill="none"
+                      stroke="rgba(240, 217, 92, 0.35)"
+                      strokeWidth="0.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      filter="url(#path-glow-inactive)"
+                    />
                   )}
+
+                  {/* Layer 3: Base gold dashes (always) */}
                   <polyline
                     points={pointsStr}
                     fill="none"
-                    stroke="rgba(240, 217, 92, 0.4)"
-                    strokeWidth="0.3"
+                    stroke={isActive ? 'rgba(240, 217, 92, 0.5)' : 'rgba(240, 217, 92, 0.3)'}
+                    strokeWidth={isActive ? '0.4' : '0.3'}
                     strokeDasharray="1 0.6"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
+
+                  {/* Layer 4: Running particles (active only) */}
+                  {isActive && (
+                    <>
+                      {[0, 1, 2].map((i) => (
+                        <circle
+                          key={i}
+                          r="0.4"
+                          fill="rgba(240, 217, 92, 0.6)"
+                          filter="url(#particle-glow)"
+                        >
+                          <animateMotion
+                            dur="6s"
+                            repeatCount="indefinite"
+                            begin={`${i * 2}s`}
+                          >
+                            <mpath href={`#path-motion-${edgeKey}`} />
+                          </animateMotion>
+                        </circle>
+                      ))}
+                    </>
+                  )}
                 </g>
               );
             })}
@@ -291,8 +381,8 @@ const RegionInteractiveMap = ({
                     {/* "You are here" arrow above current location */}
                     {isCurrent && (
                       <div className="absolute -top-5 inset-x-0 flex justify-center animate-bounce pointer-events-none">
-                        <svg width="14" height="10" viewBox="0 0 14 10" fill="none">
-                          <path d="M7 10L1 2h12L7 10z" fill="rgba(240,217,92,0.9)" />
+                        <svg width="20" height="14" viewBox="0 0 14 10" fill="none">
+                          <path d="M7 10L1 2h12L7 10z" fill="rgba(240,217,92,0.9)" stroke="rgba(0,0,0,0.55)" strokeWidth="1" />
                         </svg>
                       </div>
                     )}
