@@ -59,7 +59,8 @@ def _make_category(cat_id=1, name="Lore", slug="lore", description="Lore desc",
 
 def _make_article(article_id=1, title="Test Article", slug="test-article",
                   content="<p>Content</p>", summary="Summary text",
-                  cover_image_url=None, is_featured=False,
+                  cover_image_url=None, cover_text_color="#FFFFFF",
+                  is_featured=False,
                   featured_sort_order=0, created_by_user_id=1,
                   categories=None):
     """Create a mock ArchiveArticle ORM object."""
@@ -70,6 +71,7 @@ def _make_article(article_id=1, title="Test Article", slug="test-article",
     article.content = content
     article.summary = summary
     article.cover_image_url = cover_image_url
+    article.cover_text_color = cover_text_color
     article.is_featured = is_featured
     article.featured_sort_order = featured_sort_order
     article.created_by_user_id = created_by_user_id
