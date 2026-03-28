@@ -3339,7 +3339,7 @@ async def create_article(session: AsyncSession, data: ArchiveArticleCreate, user
         content=data.content,
         summary=data.summary,
         cover_image_url=data.cover_image_url,
-        cover_text_color=data.cover_text_color,
+        cover_text_color=data.cover_text_color or "#FFFFFF",
         is_featured=data.is_featured,
         featured_sort_order=data.featured_sort_order,
         created_by_user_id=user_id,

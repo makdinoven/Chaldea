@@ -408,7 +408,7 @@ class ArchiveArticle(Base):
     content = Column(Text, nullable=True)
     summary = Column(String(500), nullable=True)
     cover_image_url = Column(String(512), nullable=True)
-    cover_text_color = Column(String(20), nullable=True, server_default="'#FFFFFF'")
+    cover_text_color = Column(String(20), nullable=True, default="#FFFFFF", server_default="'#FFFFFF'")
     is_featured = Column(Boolean, nullable=False, default=False)
     featured_sort_order = Column(Integer, nullable=False, default=0)
     created_by_user_id = Column(Integer, nullable=True)
