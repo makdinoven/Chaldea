@@ -3,6 +3,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Edit3 } from 'react-feather';
 import toast from 'react-hot-toast';
 import WysiwygEditor from '../../CommonComponents/WysiwygEditor/WysiwygEditor';
+import SpellCheckPanel from '../../CommonComponents/SpellCheckPanel/SpellCheckPanel';
+import { useSpellCheck } from '../../../hooks/useSpellCheck';
+import { replaceWordInHtml } from '../../../api/spellcheck';
 import { NpcInLocation } from './types';
 
 const MIN_POST_LENGTH = 300;
@@ -27,6 +30,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
   const [npcMode, setNpcMode] = useState(false);
   const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
   const formRef = useRef<HTMLDivElement>(null);
+  const spellCheck = useSpellCheck();
 
   const charCount = useMemo(() => stripHtmlTags(content).length, [content]);
   const meetsMinLength = charCount >= MIN_POST_LENGTH;
@@ -82,12 +86,32 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
     }
   };
 
+  const handleSpellCheck = async () => {
+    const plainText = stripHtmlTags(content);
+    if (!plainText) return;
+    try {
+      await spellCheck.runCheck(plainText);
+    } catch {
+      toast.error('Сервис проверки правописания недоступен');
+    }
+  };
+
+  const handleApplySuggestion = (errorIndex: number, suggestion: string) => {
+    const error = spellCheck.errors[errorIndex];
+    if (!error) return;
+    const updated = replaceWordInHtml(content, error.pos, error.len, suggestion);
+    setContent(updated);
+    setEditorKey((k) => k + 1);
+    spellCheck.dismissError(errorIndex);
+  };
+
   const resetForm = () => {
     setIsEditorOpen(false);
     setContent('');
     setEditorKey((k) => k + 1);
     setNpcMode(false);
     setSelectedNpcId(null);
+    spellCheck.reset();
   };
 
   const selectedNpc = npcs.find((n) => n.id === selectedNpcId);
@@ -175,6 +199,15 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
               enableArchiveLinks
             />
 
+            {/* Spell-check panel */}
+            <SpellCheckPanel
+              errors={spellCheck.errors}
+              loading={spellCheck.loading}
+              checked={spellCheck.checked}
+              onApplySuggestion={handleApplySuggestion}
+              onDismissError={spellCheck.dismissError}
+            />
+
             {/* Character counter + XP preview (only in non-NPC mode) */}
             {!npcMode && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs sm:text-sm">
@@ -196,7 +229,15 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
                   Ещё {MIN_POST_LENGTH - charCount} символов до минимума
                 </span>
               )}
-              <div className="flex justify-end gap-3 sm:ml-auto">
+              <div className="flex flex-wrap justify-end gap-3 sm:ml-auto">
+                <button
+                  type="button"
+                  className="btn-line !py-2 !px-6 !text-sm disabled:opacity-30 disabled:cursor-not-allowed"
+                  onClick={handleSpellCheck}
+                  disabled={isContentEmpty(content) || spellCheck.loading}
+                >
+                  {spellCheck.loading ? 'Проверяю...' : 'Проверить правописание'}
+                </button>
                 <button
                   className="btn-line !py-2 !px-6 !text-sm"
                   onClick={resetForm}
