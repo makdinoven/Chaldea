@@ -42,6 +42,7 @@ class ChatMessageResponse(BaseModel):
     username: str
     avatar: Optional[str] = None
     avatar_frame: Optional[str] = None
+    chat_background: Optional[str] = None
     content: str
     reply_to_id: Optional[int] = None
     reply_to: Optional[ChatMessageReplyInfo] = None

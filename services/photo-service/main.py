@@ -573,6 +573,60 @@ async def upload_archive_image(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/admin/cosmetics/frames/upload")
+async def upload_cosmetic_frame_image(
+    file: UploadFile = File(...),
+    current_user=Depends(require_permission("cosmetics:create")),
+):
+    """
+    Загружает изображение рамки аватара (PNG/GIF → WebP/GIF) в S3.
+    Возвращает URL загруженного файла.
+    Только для администраторов с правом cosmetics:create.
+    """
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        timestamp = int(time.time())
+        unique_filename = f"frame_{uuid4().hex}_{timestamp}{result.extension}"
+        image_url = upload_file_to_s3(
+            result.data, unique_filename, subdirectory="cosmetic_frames", content_type=result.content_type
+        )
+
+        return {"url": image_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/cosmetics/backgrounds/upload")
+async def upload_cosmetic_background_image(
+    file: UploadFile = File(...),
+    current_user=Depends(require_permission("cosmetics:create")),
+):
+    """
+    Загружает изображение подложки сообщений (PNG/GIF → WebP/GIF) в S3.
+    Возвращает URL загруженного файла.
+    Только для администраторов с правом cosmetics:create.
+    """
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        timestamp = int(time.time())
+        unique_filename = f"background_{uuid4().hex}_{timestamp}{result.extension}"
+        image_url = upload_file_to_s3(
+            result.data, unique_filename, subdirectory="cosmetic_backgrounds", content_type=result.content_type
+        )
+
+        return {"url": image_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/photo/upload_ticket_attachment")
 async def upload_ticket_attachment(
     file: UploadFile = File(...),

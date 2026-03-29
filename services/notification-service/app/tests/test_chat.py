@@ -28,7 +28,7 @@ def _send_message(client, content="Hello!", channel="general", reply_to_id=None)
 
 class TestSendMessage:
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None, "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_send_message_success(self, mock_broadcast, mock_profile, client):
         """Valid message returns 201 with correct data."""
@@ -46,7 +46,7 @@ class TestSendMessage:
         assert "id" in data
         assert "created_at" in data
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None, "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_send_message_empty_content(self, mock_broadcast, mock_profile, client):
         """Empty content should fail validation."""
@@ -56,7 +56,7 @@ class TestSendMessage:
         resp = _send_message(client, content="   ")
         assert resp.status_code == 422
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None, "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_send_message_too_long(self, mock_broadcast, mock_profile, client):
         """Content over 500 chars should fail validation."""
@@ -102,7 +102,7 @@ class TestSendMessage:
         assert resp.status_code == 401
         app.dependency_overrides.clear()
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None, "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_send_message_banned_user(self, mock_broadcast, mock_profile, client, db_session):
         """Banned user gets 403 when sending a message."""
@@ -118,7 +118,7 @@ class TestSendMessage:
         assert resp.status_code == 403
         assert "заблокированы" in resp.json()["detail"]
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": "https://s3.example.com/avatar.webp", "avatar_frame": "gold"})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": "https://s3.example.com/avatar.webp", "avatar_frame": "gold", "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_send_message_with_avatar(self, mock_broadcast, mock_profile, client):
         """Message includes avatar and avatar_frame from user profile."""
@@ -131,7 +131,7 @@ class TestSendMessage:
         assert data["avatar"] == "https://s3.example.com/avatar.webp"
         assert data["avatar_frame"] == "gold"
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None, "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_send_message_broadcasts(self, mock_broadcast, mock_profile, client):
         """Sending a message triggers broadcast_to_channel."""
@@ -152,7 +152,7 @@ class TestSendMessage:
 
 class TestGetMessages:
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None, "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_get_messages_pagination(self, mock_broadcast, mock_profile, client):
         """Pagination returns correct page and page_size."""
@@ -187,7 +187,7 @@ class TestGetMessages:
         assert data["items"] == []
         assert data["total"] == 0
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None, "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_get_messages_reply_to_included(self, mock_broadcast, mock_profile, client):
         """reply_to nested object included when reply_to_id is set."""
@@ -374,7 +374,7 @@ class TestCheckBanStatus:
 
 class TestRateLimiting:
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None, "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_rate_limit_second_message_within_2_seconds(self, mock_broadcast, mock_profile, client):
         """Second message within 2 seconds returns 429."""
@@ -389,7 +389,7 @@ class TestRateLimiting:
         assert resp2.status_code == 429
         assert "Подождите" in resp2.json()["detail"]
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None, "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_rate_limit_after_cooldown(self, mock_broadcast, mock_profile, client):
         """Message after rate limit cooldown succeeds."""
@@ -412,7 +412,7 @@ class TestRateLimiting:
 
 class TestMessageRetention:
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None, "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_cleanup_old_messages(self, mock_broadcast, mock_profile, client, db_session):
         """Oldest messages are deleted when exceeding limit per channel."""
@@ -483,7 +483,7 @@ class TestMessageRetention:
 
 class TestSecurity:
 
-    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None})
+    @patch("chat_routes._fetch_user_profile_data", return_value={"avatar": None, "avatar_frame": None, "chat_background": None})
     @patch("chat_routes.broadcast_to_channel")
     def test_sql_injection_in_message_content(self, mock_broadcast, mock_profile, client):
         """SQL injection attempt in message content should not crash."""

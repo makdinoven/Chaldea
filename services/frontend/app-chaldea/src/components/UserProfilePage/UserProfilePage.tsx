@@ -23,7 +23,7 @@ import WallSection from './WallSection';
 import FriendsSection from './FriendsSection';
 import CharactersSection from './CharactersSection';
 import ProfileSettingsModal, { buildColorEffectStyle, buildNicknameTextShadow } from './ProfileSettingsModal';
-import { AVATAR_FRAMES } from '../../utils/avatarFrames';
+import AvatarWithFrame from '../common/AvatarWithFrame';
 
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
 
@@ -183,27 +183,6 @@ const UserProfilePage = () => {
 
   const friendshipStatus = profile.friendship_status;
 
-  // Compute avatar frame styles
-  const activeFrame = AVATAR_FRAMES.find((f) => f.id === profile?.avatar_frame);
-  const avatarFrameStyle: React.CSSProperties = activeFrame
-    ? { border: activeFrame.borderStyle, boxShadow: activeFrame.shadow }
-    : {};
-  const avatarEffectStyle: React.CSSProperties = profile?.avatar_effect_color
-    ? { boxShadow: `0 0 16px ${profile.avatar_effect_color}` }
-    : {};
-  const combinedAvatarStyle: React.CSSProperties = {
-    width: avatarSize,
-    height: avatarSize,
-    ...avatarFrameStyle,
-    ...(avatarEffectStyle.boxShadow
-      ? {
-          boxShadow: [avatarFrameStyle.boxShadow, avatarEffectStyle.boxShadow]
-            .filter(Boolean)
-            .join(', ') || undefined,
-        }
-      : {}),
-  };
-
   // Compute header background styles
   const headerBgStyle: React.CSSProperties = {};
   if (profile?.profile_bg_image) {
@@ -268,26 +247,20 @@ const UserProfilePage = () => {
           />
           <div className="relative mb-8" style={{ width: avatarSize, minWidth: avatarSize }}>
             <div
-              className={`gold-outline relative rounded-[12px] overflow-hidden bg-black/30 flex items-center justify-center ${
-                isOwnProfile ? 'cursor-pointer group' : ''
-              }`}
-              style={combinedAvatarStyle}
+              className={`relative ${isOwnProfile ? 'cursor-pointer group' : ''}`}
               onClick={handleAvatarClick}
             >
-              {profile.avatar ? (
-                <img
-                  src={profile.avatar}
-                  alt={profile.username}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-white/20">
-                  <User size={48} />
-                </div>
-              )}
+              <AvatarWithFrame
+                avatarUrl={profile.avatar}
+                frameSlug={profile.avatar_frame ?? null}
+                username={profile.username}
+                rounded="rounded"
+                className={profile.avatar_frame ? '' : 'gold-outline'}
+                pixelSize={avatarSize}
+              />
 
               {isOwnProfile && !avatarUploading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-[12px]">
                   <span className="text-white text-xs font-medium text-center px-2">
                     Изменить фото
                   </span>
@@ -295,7 +268,7 @@ const UserProfilePage = () => {
               )}
 
               {avatarUploading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-[12px]">
                   <div className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 </div>
               )}

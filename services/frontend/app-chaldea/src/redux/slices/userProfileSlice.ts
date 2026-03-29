@@ -33,10 +33,6 @@ export interface ProfileStyleSettings {
   bg_color_blur?: number;
   bg_color_glow?: number;
   bg_color_saturation?: number;
-  avatar_effect_opacity?: number;
-  avatar_effect_blur?: number;
-  avatar_effect_glow?: number;
-  avatar_effect_saturation?: number;
   nickname_color_2?: string;
   nickname_gradient_angle?: number;
   nickname_brightness?: number;
@@ -99,6 +95,7 @@ export interface UserProfile {
   profile_bg_image?: string | null;
   nickname_color?: string | null;
   avatar_frame?: string | null;
+  chat_background?: string | null;
   avatar_effect_color?: string | null;
   status_text?: string | null;
   profile_bg_position?: string | null;
@@ -283,7 +280,6 @@ export const updateProfileSettings = createAsyncThunk(
         profile_bg_color?: string | null;
         nickname_color?: string | null;
         avatar_frame?: string | null;
-        avatar_effect_color?: string | null;
         status_text?: string | null;
         profile_bg_position?: string | null;
         post_color?: string | null;
@@ -558,7 +554,25 @@ const userProfileSlice = createSlice({
       })
       .addCase(deleteProfileBackground.rejected, (state) => {
         state.settingsUpdating = false;
-      });
+      })
+
+      // Cosmetics: sync avatar_frame / chat_background when equipped
+      .addMatcher(
+        (action) => action.type === 'cosmetics/equipFrame/fulfilled',
+        (state, action) => {
+          if (state.profile) {
+            state.profile.avatar_frame = action.payload;
+          }
+        },
+      )
+      .addMatcher(
+        (action) => action.type === 'cosmetics/equipBackground/fulfilled',
+        (state, action) => {
+          if (state.profile) {
+            state.profile.chat_background = action.payload;
+          }
+        },
+      );
   },
 });
 

@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ChatMessage as ChatMessageType } from '../../types/chat';
-import { AVATAR_FRAMES } from '../../utils/avatarFrames';
 import { hasPermission } from '../../utils/permissions';
+import AvatarWithFrame from '../common/AvatarWithFrame';
+import MessageBackground from '../common/MessageBackground';
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -32,10 +33,6 @@ const ChatMessage = ({
 }: ChatMessageProps) => {
   const [showActions, setShowActions] = useState(false);
 
-  const frame = message.avatar_frame
-    ? AVATAR_FRAMES.find((f) => f.id === message.avatar_frame)
-    : null;
-
   const canDelete = hasPermission(permissions, 'chat:delete');
 
   return (
@@ -46,25 +43,13 @@ const ChatMessage = ({
     >
       {/* Avatar — square with frame, clickable to profile */}
       <Link to={`/user-profile/${message.user_id}`} className="cursor-pointer flex-shrink-0">
-        <div
-          className="w-[66px] h-[66px] rounded-[10px] overflow-hidden bg-white/10"
-          style={{
-            border: frame?.borderStyle ?? '2px solid rgba(255,255,255,0.15)',
-            boxShadow: frame?.shadow ?? 'none',
-          }}
-        >
-          {message.avatar ? (
-            <img
-              src={message.avatar}
-              alt={message.username}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-white/40 text-2xl font-medium">
-              {message.username.charAt(0).toUpperCase()}
-            </div>
-          )}
-        </div>
+        <AvatarWithFrame
+          avatarUrl={message.avatar}
+          frameSlug={message.avatar_frame}
+          pixelSize={66}
+          username={message.username}
+          rounded="rounded"
+        />
       </Link>
 
       {/* Message bubble */}
@@ -80,7 +65,10 @@ const ChatMessage = ({
         </div>
 
         {/* Content block — dark bubble that wraps the message */}
-        <div className="bg-white/[0.06] border border-white/[0.08] rounded-lg rounded-tl-none px-3 py-2 inline-block max-w-full">
+        <MessageBackground
+          backgroundSlug={message.chat_background}
+          className="bg-white/[0.06] border border-white/[0.08] rounded-lg rounded-tl-none px-3 py-2 inline-block max-w-full"
+        >
           {/* Reply block */}
           {message.reply_to && (
             <div className="mb-1.5 pl-2 border-l-2 border-site-blue/40 bg-white/[0.06] rounded-r py-1 px-2">
@@ -102,7 +90,7 @@ const ChatMessage = ({
           <p className="text-white text-sm break-words whitespace-pre-wrap">
             {message.content}
           </p>
-        </div>
+        </MessageBackground>
       </div>
 
       {/* Hover actions */}

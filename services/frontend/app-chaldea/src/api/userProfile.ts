@@ -55,7 +55,6 @@ export interface ProfileSettingsPayload {
   profile_bg_color?: string | null;
   nickname_color?: string | null;
   avatar_frame?: string | null;
-  avatar_effect_color?: string | null;
   status_text?: string | null;
   profile_bg_position?: string | null;
   post_color?: string | null;
@@ -68,10 +67,6 @@ export interface ProfileSettingsPayload {
     bg_color_blur?: number;
     bg_color_glow?: number;
     bg_color_saturation?: number;
-    avatar_effect_opacity?: number;
-    avatar_effect_blur?: number;
-    avatar_effect_glow?: number;
-    avatar_effect_saturation?: number;
     nickname_color_2?: string;
     nickname_gradient_angle?: number;
     nickname_brightness?: number;

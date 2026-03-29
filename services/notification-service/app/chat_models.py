@@ -13,6 +13,7 @@ class ChatMessage(Base):
     username = Column(String(100), nullable=False)
     avatar = Column(String(500), nullable=True)
     avatar_frame = Column(String(50), nullable=True)
+    chat_background = Column(String(50), nullable=True)
     content = Column(Text, nullable=False)
     reply_to_id = Column(Integer, ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())

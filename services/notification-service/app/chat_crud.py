@@ -24,6 +24,7 @@ def create_message(
     username: str,
     avatar: Optional[str],
     avatar_frame: Optional[str],
+    chat_background: Optional[str],
     message_data,
 ) -> ChatMessage:
     """Insert a new chat message and return it with reply_to loaded."""
@@ -33,6 +34,7 @@ def create_message(
         username=username,
         avatar=avatar,
         avatar_frame=avatar_frame,
+        chat_background=chat_background,
         content=message_data.content,
         reply_to_id=message_data.reply_to_id,
     )

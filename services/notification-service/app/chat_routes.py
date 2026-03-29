@@ -45,8 +45,8 @@ _RATE_LIMIT_SECONDS = 2.0
 
 def _fetch_user_profile_data(user_id: int) -> dict:
     """
-    Fetch avatar and avatar_frame from user-service profile endpoint.
-    Returns dict with 'avatar' and 'avatar_frame' keys (may be None).
+    Fetch avatar, avatar_frame and chat_background from user-service profile endpoint.
+    Returns dict with 'avatar', 'avatar_frame' and 'chat_background' keys (may be None).
     """
     try:
         url = f"{AUTH_SERVICE_URL}/users/{user_id}/profile"
@@ -56,11 +56,12 @@ def _fetch_user_profile_data(user_id: int) -> dict:
             return {
                 "avatar": data.get("avatar"),
                 "avatar_frame": data.get("avatar_frame"),
+                "chat_background": data.get("chat_background"),
             }
     except Exception as e:
         logger.warning("Failed to fetch user profile data for user %d: %s", user_id, e)
 
-    return {"avatar": None, "avatar_frame": None}
+    return {"avatar": None, "avatar_frame": None, "chat_background": None}
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +114,7 @@ def send_message(
         username=current_user.username,
         avatar=profile_data["avatar"],
         avatar_frame=profile_data["avatar_frame"],
+        chat_background=profile_data["chat_background"],
         message_data=data,
     )
 

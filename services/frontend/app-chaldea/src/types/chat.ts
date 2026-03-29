@@ -13,6 +13,7 @@ export interface ChatMessage {
   username: string;
   avatar: string | null;
   avatar_frame: string | null;
+  chat_background: string | null;
   content: string;
   reply_to_id: number | null;
   reply_to: ChatMessageReply | null;

@@ -1,0 +1,181 @@
+/* ============================================
+   COSMETIC BACKGROUNDS — Chat Message Backgrounds
+   See docs/DESIGN-SYSTEM.md for documentation
+
+   Each class is applied to the message bubble div.
+   All backgrounds are semi-transparent so text
+   remains readable.
+   ============================================ */
+
+/* -----------------------------------------------
+   @keyframes — MUST be outside @layer for browser support
+   ----------------------------------------------- */
+
+@keyframes bg-twinkle {
+    0%, 100% {
+      box-shadow:
+        inset 8px 6px 0 0.5px rgba(255, 255, 255, 0.4),
+        inset -10px 12px 0 0.5px rgba(255, 255, 255, 0),
+        inset 20px -8px 0 0.5px rgba(255, 255, 255, 0.3),
+        inset -5px -15px 0 0.5px rgba(255, 255, 255, 0),
+        inset 30px 18px 0 0.5px rgba(255, 255, 255, 0.2),
+        inset -25px -5px 0 0.5px rgba(255, 255, 255, 0);
+    }
+    33% {
+      box-shadow:
+        inset 8px 6px 0 0.5px rgba(255, 255, 255, 0),
+        inset -10px 12px 0 0.5px rgba(255, 255, 255, 0.35),
+        inset 20px -8px 0 0.5px rgba(255, 255, 255, 0),
+        inset -5px -15px 0 0.5px rgba(255, 255, 255, 0.3),
+        inset 30px 18px 0 0.5px rgba(255, 255, 255, 0),
+        inset -25px -5px 0 0.5px rgba(255, 255, 255, 0.25);
+    }
+    66% {
+      box-shadow:
+        inset 8px 6px 0 0.5px rgba(255, 255, 255, 0.2),
+        inset -10px 12px 0 0.5px rgba(255, 255, 255, 0),
+        inset 20px -8px 0 0.5px rgba(255, 255, 255, 0.4),
+        inset -5px -15px 0 0.5px rgba(255, 255, 255, 0),
+        inset 30px 18px 0 0.5px rgba(255, 255, 255, 0.3),
+        inset -25px -5px 0 0.5px rgba(255, 255, 255, 0);
+    }
+  }
+
+  @keyframes bg-aurora-shift {
+    0% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+
+  @keyframes bg-cosmic-sparkle {
+    0%, 100% {
+      box-shadow:
+        inset 12px 8px 0 0.5px rgba(200, 180, 255, 0.3),
+        inset -15px 20px 0 0.5px rgba(200, 180, 255, 0),
+        inset 25px -12px 0 0.5px rgba(255, 220, 200, 0.25),
+        inset -8px -18px 0 0.5px rgba(200, 180, 255, 0),
+        inset 35px 25px 0 0.5px rgba(255, 220, 200, 0.2),
+        inset -30px -8px 0 0.5px rgba(200, 180, 255, 0);
+    }
+    50% {
+      box-shadow:
+        inset 12px 8px 0 0.5px rgba(200, 180, 255, 0),
+        inset -15px 20px 0 0.5px rgba(200, 180, 255, 0.3),
+        inset 25px -12px 0 0.5px rgba(255, 220, 200, 0),
+        inset -8px -18px 0 0.5px rgba(255, 220, 200, 0.25),
+        inset 35px 25px 0 0.5px rgba(200, 180, 255, 0),
+        inset -30px -8px 0 0.5px rgba(200, 180, 255, 0.2);
+    }
+  }
+
+/* -----------------------------------------------
+   BACKGROUND CLASSES
+   ----------------------------------------------- */
+
+/* --- bg-msg-dark-blue: Dark navy to blue gradient, 70% opacity --- */
+  .bg-msg-dark-blue {
+    background: linear-gradient(135deg, rgba(10, 15, 40, 0.7) 0%, rgba(25, 50, 100, 0.7) 100%);
+    border-radius: inherit;
+  }
+
+  /* --- bg-msg-purple-mist: Purple to indigo misty gradient --- */
+  .bg-msg-purple-mist {
+    background: linear-gradient(135deg, rgba(50, 20, 80, 0.65) 0%, rgba(30, 15, 60, 0.65) 50%, rgba(60, 25, 90, 0.65) 100%);
+    border-radius: inherit;
+  }
+
+  /* --- bg-msg-golden-gleam: Gold to amber subtle gradient with slight glow --- */
+  .bg-msg-golden-gleam {
+    background: linear-gradient(135deg, rgba(80, 60, 20, 0.55) 0%, rgba(120, 90, 20, 0.55) 50%, rgba(90, 70, 15, 0.55) 100%);
+    border-radius: inherit;
+    box-shadow: inset 0 0 20px rgba(240, 217, 92, 0.08);
+  }
+
+  /* --- bg-msg-fire-gradient: Red-orange to dark gradient, warm tones --- */
+  .bg-msg-fire-gradient {
+    background: linear-gradient(135deg, rgba(100, 30, 10, 0.65) 0%, rgba(60, 15, 5, 0.65) 50%, rgba(80, 25, 8, 0.65) 100%);
+    border-radius: inherit;
+  }
+
+  /* --- bg-msg-ice-gradient: Cyan to white frost gradient --- */
+  .bg-msg-ice-gradient {
+    background: linear-gradient(135deg, rgba(20, 50, 70, 0.6) 0%, rgba(40, 80, 110, 0.6) 50%, rgba(50, 90, 120, 0.6) 100%);
+    border-radius: inherit;
+  }
+
+  /* --- bg-msg-forest-green: Deep green to emerald gradient --- */
+  .bg-msg-forest-green {
+    background: linear-gradient(135deg, rgba(10, 40, 20, 0.65) 0%, rgba(20, 60, 35, 0.65) 50%, rgba(15, 50, 25, 0.65) 100%);
+    border-radius: inherit;
+  }
+
+  /* --- bg-msg-blood-red: Dark red to black gradient --- */
+  .bg-msg-blood-red {
+    background: linear-gradient(135deg, rgba(60, 5, 5, 0.7) 0%, rgba(30, 0, 0, 0.7) 50%, rgba(50, 3, 3, 0.7) 100%);
+    border-radius: inherit;
+  }
+
+  /* --- bg-msg-night-sky: Dark blue with subtle star-like sparkle (animated) --- */
+  .bg-msg-night-sky {
+    background: linear-gradient(180deg, rgba(5, 10, 30, 0.7) 0%, rgba(15, 20, 50, 0.7) 100%);
+    border-radius: inherit;
+    animation: bg-twinkle 4s ease-in-out infinite;
+  }
+
+  /* --- bg-msg-mystic-purple: Deep purple to pink gradient --- */
+  .bg-msg-mystic-purple {
+    background: linear-gradient(135deg, rgba(50, 15, 70, 0.65) 0%, rgba(70, 20, 60, 0.65) 50%, rgba(40, 10, 55, 0.65) 100%);
+    border-radius: inherit;
+  }
+
+  /* --- bg-msg-steel-gray: Gray metallic gradient --- */
+  .bg-msg-steel-gray {
+    background: linear-gradient(135deg, rgba(40, 42, 48, 0.7) 0%, rgba(55, 58, 65, 0.7) 50%, rgba(45, 48, 55, 0.7) 100%);
+    border-radius: inherit;
+  }
+
+  /* --- bg-msg-sandstorm: Sandy yellow-brown gradient --- */
+  .bg-msg-sandstorm {
+    background: linear-gradient(135deg, rgba(80, 60, 30, 0.6) 0%, rgba(60, 45, 20, 0.6) 50%, rgba(70, 55, 25, 0.6) 100%);
+    border-radius: inherit;
+  }
+
+  /* --- bg-msg-ocean-deep: Deep ocean blue-teal gradient --- */
+  .bg-msg-ocean-deep {
+    background: linear-gradient(135deg, rgba(5, 25, 45, 0.7) 0%, rgba(10, 40, 55, 0.7) 50%, rgba(8, 30, 50, 0.7) 100%);
+    border-radius: inherit;
+  }
+
+  /* --- bg-msg-aurora: Aurora borealis animated gradient (legendary) --- */
+  .bg-msg-aurora {
+    background: linear-gradient(
+      270deg,
+      rgba(20, 80, 60, 0.6),
+      rgba(15, 50, 80, 0.6),
+      rgba(50, 20, 70, 0.6),
+      rgba(20, 80, 60, 0.6)
+    );
+    background-size: 300% 100%;
+    border-radius: inherit;
+    animation: bg-aurora-shift 8s ease-in-out infinite;
+  }
+
+  /* --- bg-msg-cosmic: Dark with animated subtle star twinkle (legendary) --- */
+  .bg-msg-cosmic {
+    background: linear-gradient(180deg, rgba(8, 5, 20, 0.75) 0%, rgba(15, 10, 35, 0.75) 100%);
+    border-radius: inherit;
+    animation: bg-cosmic-sparkle 5s ease-in-out infinite;
+  }
+
+  /* --- bg-msg-void-dark: Near-black with slight purple edge glow --- */
+  .bg-msg-void-dark {
+    background: linear-gradient(135deg, rgba(8, 2, 15, 0.75) 0%, rgba(5, 0, 10, 0.8) 50%, rgba(10, 3, 18, 0.75) 100%);
+    border-radius: inherit;
+    box-shadow: inset 0 0 15px rgba(80, 20, 120, 0.12);
+  }

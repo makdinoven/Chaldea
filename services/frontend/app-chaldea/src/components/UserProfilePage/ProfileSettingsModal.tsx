@@ -13,14 +13,9 @@ import {
   type ProfileStyleSettings,
 } from '../../redux/slices/userProfileSlice';
 import ColorPicker from '../common/ColorPicker';
-import AvatarFramePreview from './AvatarFramePreview';
-import { AVATAR_FRAMES } from '../../utils/avatarFrames';
-import type { AvatarFrame } from '../../utils/avatarFrames';
 import BackgroundPositionPicker from './BackgroundPositionPicker';
-
-export { AVATAR_FRAMES };
-
-const NO_FRAME: AvatarFrame = { id: 'none', label: 'Нет рамки', borderStyle: 'none', shadow: 'none' };
+import FramePicker from './FramePicker';
+import BackgroundPicker from './BackgroundPicker';
 
 const NICKNAME_FONT_OPTIONS = [
   { value: '', label: 'По умолчанию' },
@@ -67,10 +62,6 @@ const SLIDER_DEFAULTS: Record<string, number> = {
   bg_color_blur: 0,
   bg_color_glow: 0,
   bg_color_saturation: 1,
-  avatar_effect_opacity: 1,
-  avatar_effect_blur: 0,
-  avatar_effect_glow: 0,
-  avatar_effect_saturation: 1,
 };
 
 interface SliderConfig {
@@ -82,7 +73,7 @@ interface SliderConfig {
   format: (v: number) => string;
 }
 
-const makeSliders = (prefix: 'post_color' | 'bg_color' | 'avatar_effect'): SliderConfig[] => [
+const makeSliders = (prefix: 'post_color' | 'bg_color'): SliderConfig[] => [
   { key: `${prefix}_opacity`, label: 'Прозрачность', min: 0, max: 1, step: 0.05, format: (v) => `${Math.round(v * 100)}%` },
   { key: `${prefix}_blur`, label: 'Размытие', min: 0, max: 20, step: 1, format: (v) => `${v}px` },
   { key: `${prefix}_glow`, label: 'Свечение', min: 0, max: 20, step: 1, format: (v) => `${v}px` },
@@ -91,7 +82,6 @@ const makeSliders = (prefix: 'post_color' | 'bg_color' | 'avatar_effect'): Slide
 
 const POST_COLOR_SLIDERS = makeSliders('post_color');
 const BG_COLOR_SLIDERS = makeSliders('bg_color');
-const AVATAR_EFFECT_SLIDERS = makeSliders('avatar_effect');
 
 /** Convert a hex color string to an rgba() string with the given alpha. */
 export const hexToRgba = (hex: string, alpha: number): string => {
@@ -109,14 +99,13 @@ export const hexToRgba = (hex: string, alpha: number): string => {
  */
 export const buildColorEffectStyle = (
   color: string,
-  prefix: 'post_color' | 'bg_color' | 'avatar_effect',
+  prefix: 'post_color' | 'bg_color',
   ss: ProfileStyleSettings | null | undefined,
 ): React.CSSProperties => {
   const settings = ss ?? {};
   const opacity = (settings[`${prefix}_opacity` as keyof ProfileStyleSettings] as number | undefined) ?? SLIDER_DEFAULTS[`${prefix}_opacity`];
   const blur = (settings[`${prefix}_blur` as keyof ProfileStyleSettings] as number | undefined) ?? SLIDER_DEFAULTS[`${prefix}_blur`];
   const glow = (settings[`${prefix}_glow` as keyof ProfileStyleSettings] as number | undefined) ?? SLIDER_DEFAULTS[`${prefix}_glow`];
-  const saturation = (settings[`${prefix}_saturation` as keyof ProfileStyleSettings] as number | undefined) ?? SLIDER_DEFAULTS[`${prefix}_saturation`];
 
   const style: React.CSSProperties = {};
   // Use rgba with alpha channel for opacity instead of CSS opacity (which affects children)
@@ -133,12 +122,6 @@ export const buildColorEffectStyle = (
   }
   if (glow > 0 && color) {
     style.boxShadow = `0 0 ${glow}px ${color}`;
-  }
-  // Note: saturation is intentionally NOT applied via filter:saturate() on containers
-  // as it would affect all child elements (text, images). It is only used for preview swatches.
-  // For avatar_effect prefix, saturate is safe since it's applied on a decorative element.
-  if (saturation !== 1 && prefix === 'avatar_effect') {
-    style.filter = `saturate(${saturation})`;
   }
   return style;
 };
@@ -183,7 +166,7 @@ const SliderGroup = ({
 }: {
   sliders: SliderConfig[];
   color: string;
-  prefix: 'post_color' | 'bg_color' | 'avatar_effect';
+  prefix: 'post_color' | 'bg_color';
   styleSettings: ProfileStyleSettings;
   onSliderChange: (key: keyof ProfileStyleSettings, val: number) => void;
 }) => {
@@ -230,8 +213,6 @@ const ProfileSettingsModal = ({ isOpen, onClose, profile }: ProfileSettingsModal
 
   const [bgColor, setBgColor] = useState(profile.profile_bg_color ?? '');
   const [nicknameColor, setNicknameColor] = useState(profile.nickname_color ?? '');
-  const [avatarFrame, setAvatarFrame] = useState(profile.avatar_frame ?? 'none');
-  const [effectColor, setEffectColor] = useState(profile.avatar_effect_color ?? '');
   const [statusText, setStatusText] = useState(profile.status_text ?? '');
   const [bgPosition, setBgPosition] = useState(profile.profile_bg_position ?? '50% 50%');
   const [newUsername, setNewUsername] = useState(profile.username);
@@ -266,8 +247,6 @@ const ProfileSettingsModal = ({ isOpen, onClose, profile }: ProfileSettingsModal
     if (isOpen) {
       setBgColor(profile.profile_bg_color ?? '');
       setNicknameColor(profile.nickname_color ?? '');
-      setAvatarFrame(profile.avatar_frame ?? 'none');
-      setEffectColor(profile.avatar_effect_color ?? '');
       setStatusText(profile.status_text ?? '');
       setBgPosition(profile.profile_bg_position ?? '50% 50%');
       setNewUsername(profile.username);
@@ -311,8 +290,6 @@ const ProfileSettingsModal = ({ isOpen, onClose, profile }: ProfileSettingsModal
           settings: {
             profile_bg_color: bgColor || null,
             nickname_color: nicknameColor || null,
-            avatar_frame: avatarFrame === 'none' ? null : avatarFrame,
-            avatar_effect_color: effectColor || null,
             status_text: statusText || null,
             profile_bg_position: profile.profile_bg_image ? bgPosition : null,
             post_color: postColor || null,
@@ -384,9 +361,6 @@ const ProfileSettingsModal = ({ isOpen, onClose, profile }: ProfileSettingsModal
       toast.error(typeof err === 'string' ? err : 'Не удалось удалить фон');
     }
   };
-
-  const selectedFrame: AvatarFrame =
-    AVATAR_FRAMES.find((f) => f.id === avatarFrame) ?? NO_FRAME;
 
   return (
     <AnimatePresence>
@@ -717,64 +691,11 @@ const ProfileSettingsModal = ({ isOpen, onClose, profile }: ProfileSettingsModal
                 />
               </div>
 
-              {/* Section: Avatar frame */}
-              <div>
-                <h3 className="text-white text-sm font-medium uppercase tracking-wider mb-3">
-                  Рамка аватарки
-                </h3>
-                <div className="flex flex-wrap gap-4">
-                  {/* No frame option */}
-                  <button
-                    type="button"
-                    onClick={() => setAvatarFrame('none')}
-                    className={`flex flex-col items-center gap-2 p-2 rounded-lg border border-transparent transition-all ${
-                      avatarFrame === 'none'
-                        ? 'bg-white/10 border-white/20'
-                        : 'hover:bg-white/5'
-                    }`}
-                  >
-                    <AvatarFramePreview avatarUrl={profile.avatar} frame={NO_FRAME} />
-                    <span className="text-white text-xs">Нет рамки</span>
-                  </button>
-                  {AVATAR_FRAMES.map((frame) => (
-                    <button
-                      key={frame.id}
-                      type="button"
-                      onClick={() => setAvatarFrame(frame.id)}
-                      className={`flex flex-col items-center gap-2 p-2 rounded-lg border border-transparent transition-all ${
-                        avatarFrame === frame.id
-                          ? 'bg-white/10 border-white/20'
-                          : 'hover:bg-white/5'
-                      }`}
-                    >
-                      <AvatarFramePreview avatarUrl={profile.avatar} frame={frame} />
-                      <span className="text-white text-xs">{frame.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
+              {/* Section: Avatar frame (DB-backed cosmetics) */}
+              <FramePicker avatarUrl={profile.avatar} />
 
-              {/* Section: Avatar effect color + sliders */}
-              <div>
-                <h3 className="text-white text-sm font-medium uppercase tracking-wider mb-3">
-                  Эффект аватарки
-                </h3>
-                <ColorPicker color={effectColor || '#f0d95c'} onChange={setEffectColor} />
-                <button
-                  type="button"
-                  onClick={() => setEffectColor('')}
-                  className="mt-2 text-white/40 text-xs hover:text-site-blue transition-colors"
-                >
-                  Сбросить
-                </button>
-                <SliderGroup
-                  sliders={AVATAR_EFFECT_SLIDERS}
-                  color={effectColor}
-                  prefix="avatar_effect"
-                  styleSettings={styleSettings}
-                  onSliderChange={handleSliderChange}
-                />
-              </div>
+              {/* Section: Chat message background (DB-backed cosmetics) */}
+              <BackgroundPicker />
 
               {/* Section: Site background URL */}
               <div>

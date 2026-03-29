@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import type { PrivateMessage } from '../../types/messenger';
-import { AVATAR_FRAMES } from '../../utils/avatarFrames';
+import AvatarWithFrame from '../common/AvatarWithFrame';
 
 interface MessageBubbleProps {
   message: PrivateMessage;
@@ -31,10 +31,6 @@ const MessageBubble = ({ message, isOwn, onDelete, onReply, onEdit }: MessageBub
   const [showActions, setShowActions] = useState(false);
   const actionBarRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
-
-  const frame = message.sender_avatar_frame
-    ? AVATAR_FRAMES.find((f) => f.id === message.sender_avatar_frame)
-    : null;
 
   // Close action bar on outside click
   useEffect(() => {
@@ -78,25 +74,13 @@ const MessageBubble = ({ message, isOwn, onDelete, onReply, onEdit }: MessageBub
         to={`/user-profile/${message.sender_id}`}
         className="cursor-pointer flex-shrink-0"
       >
-        <div
-          className="w-9 h-9 rounded-full overflow-hidden bg-white/10"
-          style={{
-            border: frame?.borderStyle ?? '2px solid rgba(255,255,255,0.15)',
-            boxShadow: frame?.shadow ?? 'none',
-          }}
-        >
-          {message.sender_avatar ? (
-            <img
-              src={message.sender_avatar}
-              alt={message.sender_username}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-white/40 text-sm font-medium">
-              {message.sender_username.charAt(0).toUpperCase()}
-            </div>
-          )}
-        </div>
+        <AvatarWithFrame
+          avatarUrl={message.sender_avatar}
+          frameSlug={message.sender_avatar_frame}
+          pixelSize={36}
+          username={message.sender_username}
+          rounded="full"
+        />
       </Link>
 
       {/* Message content */}

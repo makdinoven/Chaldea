@@ -104,7 +104,7 @@ def _check_friendship(token: str, friend_id: int) -> bool:
 
 
 def _fetch_user_profile(user_id: int) -> dict:
-    """Fetch user profile data (username, avatar, avatar_frame) from user-service."""
+    """Fetch user profile data (username, avatar, avatar_frame, chat_background) from user-service."""
     try:
         url = f"{AUTH_SERVICE_URL}/users/{user_id}/profile"
         resp = requests.get(url, timeout=5)
@@ -114,10 +114,11 @@ def _fetch_user_profile(user_id: int) -> dict:
                 "username": data.get("username"),
                 "avatar": data.get("avatar"),
                 "avatar_frame": data.get("avatar_frame"),
+                "chat_background": data.get("chat_background"),
             }
     except Exception as e:
         logger.warning("Failed to fetch profile for user %d: %s", user_id, e)
-    return {"username": None, "avatar": None, "avatar_frame": None}
+    return {"username": None, "avatar": None, "avatar_frame": None, "chat_background": None}
 
 
 def _get_blocked_user_ids(token: str) -> Set[int]:

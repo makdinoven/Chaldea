@@ -44,6 +44,13 @@ class TestUpdateProfileSettings:
         user = _make_user(db_session)
         headers = _auth_header(user)
 
+        # Seed a default frame so validation passes
+        db_session.add(models.CosmeticFrame(
+            name="Золотое свечение", slug="gold", type="css",
+            css_class="frame-gold", rarity="common", is_default=True,
+        ))
+        db_session.commit()
+
         payload = {
             "profile_bg_color": "#1a1a2e",
             "nickname_color": "#fff",

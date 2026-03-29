@@ -1,6 +1,6 @@
 import type { ConversationListItem } from '../../types/messenger';
-import { AVATAR_FRAMES } from '../../utils/avatarFrames';
 import { useAppSelector } from '../../redux/store';
+import AvatarWithFrame from '../common/AvatarWithFrame';
 
 interface ConversationItemProps {
   conversation: ConversationListItem;
@@ -43,9 +43,7 @@ const ConversationItem = ({ conversation, isActive, onClick }: ConversationItemP
       : participant?.username ?? 'Неизвестный';
 
   const avatarUrl = participant?.avatar ?? null;
-  const avatarFrame = participant?.avatar_frame
-    ? AVATAR_FRAMES.find((f) => f.id === participant.avatar_frame)
-    : null;
+  const frameSlug = participant?.avatar_frame ?? null;
 
   const lastMessageTime = conversation.last_message?.created_at;
   const lastMessagePreview = conversation.last_message?.content ?? '';
@@ -60,34 +58,13 @@ const ConversationItem = ({ conversation, isActive, onClick }: ConversationItemP
       }`}
     >
       {/* Avatar */}
-      <div
-        className="w-11 h-11 rounded-full overflow-hidden bg-white/10 flex-shrink-0"
-        style={{
-          border: avatarFrame?.borderStyle ?? '2px solid rgba(255,255,255,0.15)',
-          boxShadow: avatarFrame?.shadow ?? 'none',
-        }}
-      >
-        {avatarUrl ? (
-          <img
-            src={avatarUrl}
-            alt={displayName}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-white/40 text-base font-medium">
-            {conversation.type === 'group' ? (
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-              </svg>
-            ) : (
-              displayName.charAt(0).toUpperCase()
-            )}
-          </div>
-        )}
-      </div>
+      <AvatarWithFrame
+        avatarUrl={avatarUrl}
+        frameSlug={frameSlug}
+        pixelSize={44}
+        rounded="full"
+        username={displayName}
+      />
 
       {/* Info */}
       <div className="flex-1 min-w-0">
