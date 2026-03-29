@@ -49,7 +49,7 @@ class Character(Base):
 
 
 class CharacterAttribute(Base):
-    __tablename__ = "character_attributes"
+    __tablename__ = "character_cumulative_stats"
     id = Column(Integer, primary_key=True, autoincrement=True)
     character_id = Column(Integer, nullable=False)
     pve_kills = Column(Integer, nullable=False, default=0)
