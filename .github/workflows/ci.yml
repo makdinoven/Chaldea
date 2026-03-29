@@ -53,6 +53,10 @@ jobs:
             working-dir: services/autobattle-service/app
             requirements: services/autobattle-service/app/requirements.txt
             pytest-args: ''
+          - service: battle-pass-service
+            working-dir: services/battle-pass-service/app
+            requirements: services/battle-pass-service/app/requirements.txt
+            pytest-args: '--asyncio-mode=auto'
 
     steps:
       - name: Checkout code

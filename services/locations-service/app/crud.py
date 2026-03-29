@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import math
@@ -2535,10 +2536,53 @@ async def get_shop_item_by_id(session: AsyncSession, shop_item_id: int) -> Optio
     return result.scalars().first()
 
 
-async def deduct_currency(session: AsyncSession, character_id: int, amount: int) -> Optional[int]:
+async def _log_gold_transaction(
+    session: AsyncSession,
+    character_id: int,
+    amount: int,
+    balance_after: int,
+    transaction_type: str,
+    source: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> None:
+    """
+    Insert a row into gold_transactions for audit/tracking.
+    Wrapped in try/except so logging never breaks existing functionality.
+    """
+    try:
+        await session.execute(
+            text("""
+                INSERT INTO gold_transactions
+                    (character_id, amount, balance_after, transaction_type, source, metadata)
+                VALUES
+                    (:character_id, :amount, :balance_after, :transaction_type, :source, :metadata)
+            """),
+            {
+                "character_id": character_id,
+                "amount": amount,
+                "balance_after": balance_after,
+                "transaction_type": transaction_type,
+                "source": source,
+                "metadata": json.dumps(metadata) if metadata else None,
+            },
+        )
+        await session.commit()
+    except Exception:
+        logger.exception("Failed to log gold transaction for character %s", character_id)
+
+
+async def deduct_currency(
+    session: AsyncSession,
+    character_id: int,
+    amount: int,
+    transaction_type: str = "shop_purchase",
+    source: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> Optional[int]:
     """
     Atomically deduct currency from character. Returns new balance or None if insufficient.
     Uses direct SQL UPDATE with WHERE check for atomicity in the shared DB.
+    Logs the transaction into gold_transactions.
     """
     result = await session.execute(
         text("""
@@ -2558,11 +2602,32 @@ async def deduct_currency(session: AsyncSession, character_id: int, amount: int)
         {"cid": character_id},
     )
     row = bal_result.fetchone()
-    return row[0] if row else None
+    new_balance = row[0] if row else None
+
+    # Log gold transaction (negative amount = spend)
+    if new_balance is not None:
+        await _log_gold_transaction(
+            session,
+            character_id=character_id,
+            amount=-amount,
+            balance_after=new_balance,
+            transaction_type=transaction_type,
+            source=source,
+            metadata=metadata,
+        )
+
+    return new_balance
 
 
-async def add_currency(session: AsyncSession, character_id: int, amount: int) -> Optional[int]:
-    """Add currency to character. Returns new balance."""
+async def add_currency(
+    session: AsyncSession,
+    character_id: int,
+    amount: int,
+    transaction_type: str = "shop_sell",
+    source: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> Optional[int]:
+    """Add currency to character. Returns new balance. Logs the transaction."""
     await session.execute(
         text("""
             UPDATE characters
@@ -2578,7 +2643,21 @@ async def add_currency(session: AsyncSession, character_id: int, amount: int) ->
         {"cid": character_id},
     )
     row = bal_result.fetchone()
-    return row[0] if row else None
+    new_balance = row[0] if row else None
+
+    # Log gold transaction (positive amount = earn)
+    if new_balance is not None:
+        await _log_gold_transaction(
+            session,
+            character_id=character_id,
+            amount=amount,
+            balance_after=new_balance,
+            transaction_type=transaction_type,
+            source=source,
+            metadata=metadata,
+        )
+
+    return new_balance
 
 
 async def get_character_location(session: AsyncSession, character_id: int) -> Optional[int]:

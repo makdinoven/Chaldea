@@ -10,5 +10,6 @@ class Settings(BaseSettings):
     CHARACTER_SERVICE_URL: str = "http://character-service:8005"
     ATTRIBUTES_SERVICE_URL: str = "http://character-attributes-service:8002"
     INVENTORY_SERVICE_URL: str = "http://inventory-service:8004"
+    BATTLEPASS_SERVICE_URL: str = ""
 
 settings = Settings()

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON, Boolean, Float, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON, Boolean, Float, Index, UniqueConstraint, DateTime
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -276,3 +276,19 @@ class CharacterLog(Base):
     )
 
 
+class GoldTransaction(Base):
+    __tablename__ = "gold_transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    character_id = Column(Integer, nullable=False, index=True)
+    amount = Column(Integer, nullable=False)  # positive = earn, negative = spend
+    balance_after = Column(Integer, nullable=False)
+    transaction_type = Column(String(50), nullable=False)
+    source = Column(String(100), nullable=True)
+    metadata_ = Column("metadata", JSON, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index('idx_gold_tx_character_created', 'character_id', 'created_at'),
+        Index('idx_gold_tx_type', 'transaction_type'),
+    )

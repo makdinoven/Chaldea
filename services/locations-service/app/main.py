@@ -846,6 +846,22 @@ async def move_and_post(
         if consume_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Failed to deduct stamina for movement")
 
+    # 7.5. Fire-and-forget: track location visit for battle pass
+    if settings.BATTLEPASS_SERVICE_URL:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    f"{settings.BATTLEPASS_SERVICE_URL}/battle-pass/internal/track-event",
+                    json={
+                        "user_id": current_user.id,
+                        "event_type": "location_visit",
+                        "character_id": movement.character_id,
+                        "metadata": {"location_id": destination_location_id}
+                    }
+                )
+        except Exception:
+            pass  # fire-and-forget, must not block movement
+
     # 8. Уведомляем пользователей, добавивших локацию в избранное
     dest_result = await session.execute(
         select(models.Location).where(models.Location.id == destination_location_id)
@@ -1821,7 +1837,14 @@ async def buy_from_npc(
     total_price = discounted_unit_price * body.quantity
 
     # 5. Atomically deduct currency
-    new_balance = await crud.deduct_currency(session, body.character_id, total_price)
+    new_balance = await crud.deduct_currency(
+        session, body.character_id, total_price,
+        transaction_type="charisma_shop_buy",
+        source=f"NPC shop buy (npc_id={npc_id})",
+        metadata={"npc_id": npc_id, "shop_item_id": body.shop_item_id,
+                  "item_id": shop_item.item_id, "quantity": body.quantity,
+                  "unit_price": discounted_unit_price, "discount_pct": discount_pct},
+    )
     if new_balance is None:
         raise HTTPException(status_code=400, detail="Недостаточно валюты")
 
@@ -1837,7 +1860,13 @@ async def buy_from_npc(
             )
             if add_resp.status_code != 200:
                 # Compensate: refund currency
-                await crud.add_currency(session, body.character_id, total_price)
+                await crud.add_currency(
+                    session, body.character_id, total_price,
+                    transaction_type="shop_buy_refund",
+                    source=f"Refund: inventory add failed (npc_id={npc_id})",
+                    metadata={"npc_id": npc_id, "item_id": shop_item.item_id,
+                              "quantity": body.quantity},
+                )
                 detail = "Не удалось добавить предмет в инвентарь"
                 try:
                     detail = add_resp.json().get("detail", detail)
@@ -1846,7 +1875,13 @@ async def buy_from_npc(
                 raise HTTPException(status_code=500, detail=detail)
     except httpx.HTTPError:
         # Compensate: refund currency
-        await crud.add_currency(session, body.character_id, total_price)
+        await crud.add_currency(
+            session, body.character_id, total_price,
+            transaction_type="shop_buy_refund",
+            source=f"Refund: inventory service unavailable (npc_id={npc_id})",
+            metadata={"npc_id": npc_id, "item_id": shop_item.item_id,
+                      "quantity": body.quantity},
+        )
         raise HTTPException(status_code=503, detail="Сервис инвентаря недоступен")
 
     # 7. Decrement stock if limited
@@ -1927,7 +1962,13 @@ async def sell_to_npc(
         raise HTTPException(status_code=503, detail="Сервис инвентаря недоступен")
 
     # 5. Add currency to character
-    new_balance = await crud.add_currency(session, body.character_id, total_price)
+    new_balance = await crud.add_currency(
+        session, body.character_id, total_price,
+        transaction_type="charisma_shop_sell",
+        source=f"NPC shop sell (npc_id={npc_id})",
+        metadata={"npc_id": npc_id, "item_id": body.item_id,
+                  "quantity": body.quantity, "sell_price": sell_price},
+    )
 
     item_name = await crud.get_item_name(session, body.item_id)
 
@@ -2076,7 +2117,12 @@ async def complete_quest(
     # Award currency
     new_balance = None
     if quest.reward_currency > 0:
-        new_balance = await crud.add_currency(session, body.character_id, quest.reward_currency)
+        new_balance = await crud.add_currency(
+            session, body.character_id, quest.reward_currency,
+            transaction_type="quest_reward",
+            source=f"Quest completion (quest_id={quest_id})",
+            metadata={"quest_id": quest_id},
+        )
 
     # Award experience
     if quest.reward_exp > 0:

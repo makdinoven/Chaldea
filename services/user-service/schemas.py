@@ -76,6 +76,7 @@ class MeResponse(BaseModel):
     username: str
     avatar: Optional[str] = None
     balance: Optional[int] = 0
+    diamonds: int = 0
     role: Optional[str] = "user"
 
     # RBAC fields
@@ -159,6 +160,7 @@ class UserProfileResponse(BaseModel):
     profile_bg_position: Optional[str] = None
     post_color: Optional[str] = None
     profile_style_settings: Optional[dict] = None
+    chat_background: Optional[str] = None
     last_active_at: Optional[datetime] = None
     activity_points: int = 0
 
@@ -195,6 +197,7 @@ class ProfileSettingsUpdate(BaseModel):
     profile_bg_position: Optional[str] = None
     post_color: Optional[str] = None
     profile_style_settings: Optional[dict] = None
+    chat_background: Optional[str] = None
 
 
 class ProfileSettingsResponse(BaseModel):
@@ -206,6 +209,7 @@ class ProfileSettingsResponse(BaseModel):
     profile_bg_position: Optional[str] = None
     post_color: Optional[str] = None
     profile_style_settings: Optional[dict] = None
+    chat_background: Optional[str] = None
 
 
 class UsernameUpdate(BaseModel):
@@ -381,3 +385,265 @@ class MessagePrivacyResponse(BaseModel):
 
 class FriendCheckResponse(BaseModel):
     is_friend: bool
+
+
+# ==================== COSMETICS ====================
+
+class CosmeticFrameResponse(BaseModel):
+    id: int
+    name: str
+    slug: str
+    type: str
+    css_class: Optional[str] = None
+    image_url: Optional[str] = None
+    rarity: str
+    is_default: bool
+    is_seasonal: bool
+
+    class Config:
+        orm_mode = True
+
+
+class CosmeticBackgroundResponse(BaseModel):
+    id: int
+    name: str
+    slug: str
+    type: str
+    css_class: Optional[str] = None
+    image_url: Optional[str] = None
+    rarity: str
+    is_default: bool
+
+    class Config:
+        orm_mode = True
+
+
+class CosmeticFrameListResponse(BaseModel):
+    items: List[CosmeticFrameResponse]
+
+
+class CosmeticBackgroundListResponse(BaseModel):
+    items: List[CosmeticBackgroundResponse]
+
+
+class UserCosmeticFrameItem(BaseModel):
+    id: int
+    name: str
+    slug: str
+    type: str
+    css_class: Optional[str] = None
+    image_url: Optional[str] = None
+    rarity: str
+    is_default: bool
+    source: str
+    unlocked_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+
+class UserCosmeticBackgroundItem(BaseModel):
+    id: int
+    name: str
+    slug: str
+    type: str
+    css_class: Optional[str] = None
+    image_url: Optional[str] = None
+    rarity: str
+    is_default: bool
+    source: str
+    unlocked_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+
+class UserFramesResponse(BaseModel):
+    items: List[UserCosmeticFrameItem]
+    active_slug: Optional[str] = None
+
+
+class UserBackgroundsResponse(BaseModel):
+    items: List[UserCosmeticBackgroundItem]
+    active_slug: Optional[str] = None
+
+
+class EquipFrameRequest(BaseModel):
+    slug: Optional[str] = None
+
+
+class EquipBackgroundRequest(BaseModel):
+    slug: Optional[str] = None
+
+
+class EquipFrameResponse(BaseModel):
+    active_frame: Optional[str] = None
+
+
+class EquipBackgroundResponse(BaseModel):
+    active_background: Optional[str] = None
+
+
+class CosmeticFrameCreate(BaseModel):
+    name: str
+    slug: str
+    type: str = "css"
+    css_class: Optional[str] = None
+    image_url: Optional[str] = None
+    rarity: str = "common"
+    is_default: bool = False
+    is_seasonal: bool = False
+
+    @validator("type")
+    def validate_type(cls, v):
+        allowed = {"css", "image", "combo"}
+        if v not in allowed:
+            raise ValueError(f"Допустимые типы: {', '.join(sorted(allowed))}")
+        return v
+
+    @validator("rarity")
+    def validate_rarity(cls, v):
+        allowed = {"common", "rare", "epic", "legendary"}
+        if v not in allowed:
+            raise ValueError(f"Допустимые раритетности: {', '.join(sorted(allowed))}")
+        return v
+
+    @validator("css_class", always=True)
+    def validate_css_class(cls, v, values):
+        frame_type = values.get("type", "css")
+        if frame_type in ("css", "combo") and not v:
+            raise ValueError("css_class обязателен для типов css и combo")
+        return v
+
+    @validator("image_url", always=True)
+    def validate_image_url(cls, v, values):
+        frame_type = values.get("type", "css")
+        if frame_type in ("image", "combo") and not v:
+            raise ValueError("image_url обязателен для типов image и combo")
+        return v
+
+
+class CosmeticFrameUpdate(BaseModel):
+    name: Optional[str] = None
+    slug: Optional[str] = None
+    type: Optional[str] = None
+    css_class: Optional[str] = None
+    image_url: Optional[str] = None
+    rarity: Optional[str] = None
+    is_default: Optional[bool] = None
+    is_seasonal: Optional[bool] = None
+
+    @validator("type")
+    def validate_type(cls, v):
+        if v is not None:
+            allowed = {"css", "image", "combo"}
+            if v not in allowed:
+                raise ValueError(f"Допустимые типы: {', '.join(sorted(allowed))}")
+        return v
+
+    @validator("rarity")
+    def validate_rarity(cls, v):
+        if v is not None:
+            allowed = {"common", "rare", "epic", "legendary"}
+            if v not in allowed:
+                raise ValueError(f"Допустимые раритетности: {', '.join(sorted(allowed))}")
+        return v
+
+
+class CosmeticBackgroundCreate(BaseModel):
+    name: str
+    slug: str
+    type: str = "css"
+    css_class: Optional[str] = None
+    image_url: Optional[str] = None
+    rarity: str = "common"
+    is_default: bool = False
+
+    @validator("type")
+    def validate_type(cls, v):
+        allowed = {"css", "image"}
+        if v not in allowed:
+            raise ValueError(f"Допустимые типы: {', '.join(sorted(allowed))}")
+        return v
+
+    @validator("rarity")
+    def validate_rarity(cls, v):
+        allowed = {"common", "rare", "epic", "legendary"}
+        if v not in allowed:
+            raise ValueError(f"Допустимые раритетности: {', '.join(sorted(allowed))}")
+        return v
+
+    @validator("css_class", always=True)
+    def validate_css_class(cls, v, values):
+        bg_type = values.get("type", "css")
+        if bg_type == "css" and not v:
+            raise ValueError("css_class обязателен для типа css")
+        return v
+
+    @validator("image_url", always=True)
+    def validate_image_url(cls, v, values):
+        bg_type = values.get("type", "css")
+        if bg_type == "image" and not v:
+            raise ValueError("image_url обязателен для типа image")
+        return v
+
+
+class CosmeticBackgroundUpdate(BaseModel):
+    name: Optional[str] = None
+    slug: Optional[str] = None
+    type: Optional[str] = None
+    css_class: Optional[str] = None
+    image_url: Optional[str] = None
+    rarity: Optional[str] = None
+    is_default: Optional[bool] = None
+
+    @validator("type")
+    def validate_type(cls, v):
+        if v is not None:
+            allowed = {"css", "image"}
+            if v not in allowed:
+                raise ValueError(f"Допустимые типы: {', '.join(sorted(allowed))}")
+        return v
+
+    @validator("rarity")
+    def validate_rarity(cls, v):
+        if v is not None:
+            allowed = {"common", "rare", "epic", "legendary"}
+            if v not in allowed:
+                raise ValueError(f"Допустимые раритетности: {', '.join(sorted(allowed))}")
+        return v
+
+
+class CosmeticGrantRequest(BaseModel):
+    user_id: int
+    cosmetic_type: str
+    cosmetic_slug: str
+
+    @validator("cosmetic_type")
+    def validate_cosmetic_type(cls, v):
+        allowed = {"frame", "background"}
+        if v not in allowed:
+            raise ValueError(f"Допустимые типы: {', '.join(sorted(allowed))}")
+        return v
+
+
+class CosmeticGrantResponse(BaseModel):
+    granted: bool
+
+
+class CosmeticUnlockRequest(BaseModel):
+    cosmetic_type: str
+    cosmetic_slug: str
+    source: str = "battlepass"
+
+    @validator("cosmetic_type")
+    def validate_cosmetic_type(cls, v):
+        allowed = {"frame", "background"}
+        if v not in allowed:
+            raise ValueError(f"Допустимые типы: {', '.join(sorted(allowed))}")
+        return v
+
+
+class CosmeticUnlockResponse(BaseModel):
+    unlocked: bool
+    reason: Optional[str] = None

@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { useAppDispatch } from "../../redux/store";
 import { getMe, setAuthInitialized } from "../../redux/slices/userSlice";
+import { fetchFrames, fetchBackgrounds } from "../../redux/slices/cosmeticsSlice";
 
 import StartPage from "../StartPage/StartPage";
 import HomePage from "../HomePage/HomePage";
@@ -36,6 +37,8 @@ import AdminNpcsPage from "../AdminNpcsPage/AdminNpcsPage";
 import AdminMobTemplates from "../Admin/MobsPage/AdminMobTemplates";
 import AdminActiveMobs from "../Admin/MobsPage/AdminActiveMobs";
 import AdminBattlesPage from "../Admin/BattlesPage/AdminBattlesPage";
+import AdminBattlePassPage from "../Admin/AdminBattlePass/AdminBattlePassPage";
+import AdminCosmeticsPage from "../Admin/AdminCosmetics/AdminCosmeticsPage";
 import SkillTreePage from "../SkillTreeView/SkillTreePage";
 import CharactersHubPage from "../pages/CharactersPage/CharactersHubPage";
 import CharactersListPage from "../pages/CharactersPage/CharactersListPage";
@@ -58,6 +61,8 @@ import TicketDetailPage from "../Tickets/TicketDetailPage";
 import AdminTicketsPage from "../Tickets/AdminTicketsPage";
 import AdminTicketDetailPage from "../Tickets/AdminTicketDetailPage";
 import { CRAFT_ITEM_TYPES } from "../ItemsAdminPage/ItemsAdminPage";
+import EventsPage from "../Events/EventsPage";
+import BattlePassPage from "../Events/BattlePass/BattlePassPage";
 
 const App = () => {
   const dispatch = useAppDispatch();
@@ -69,6 +74,11 @@ const App = () => {
     } else {
       dispatch(setAuthInitialized());
     }
+
+    // Load cosmetics catalogs so AvatarWithFrame / MessageBackground can
+    // resolve frame/background slugs everywhere in the app.
+    dispatch(fetchFrames());
+    dispatch(fetchBackgrounds());
   }, [dispatch]);
 
   return (
@@ -227,7 +237,19 @@ const App = () => {
                 <AdminPathEditorPage />
               </ProtectedRoute>
             } />
+            <Route path="admin/battle-pass" element={
+              <ProtectedRoute requiredPermission="battlepass:read">
+                <AdminBattlePassPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/cosmetics" element={
+              <ProtectedRoute requiredPermission="cosmetics:read">
+                <AdminCosmeticsPage />
+              </ProtectedRoute>
+            } />
             <Route path="post-history/:characterId" element={<PostHistoryPage />} />
+            <Route path="events" element={<EventsPage />} />
+            <Route path="events/battle-pass" element={<BattlePassPage />} />
             <Route path="auction" element={<AuctionPage />} />
             <Route path="support" element={<TicketListPage />} />
             <Route path="support/:ticketId" element={<TicketDetailPage />} />

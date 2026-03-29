@@ -98,6 +98,29 @@ services:
     command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8006 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      DB_HOST: ${DB_HOST}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
+      INVENTORY_SERVICE_URL: http://inventory-service:8004
+      BATTLEPASS_SERVICE_URL: http://battle-pass-service:8012
+
+  battle-pass-service:
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8012 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
+      CHARACTER_SERVICE_URL: http://character-service:8005
+      INVENTORY_SERVICE_URL: http://inventory-service:8004
+      USER_SERVICE_URL: http://user-service:8000
 
   notification-service:
     command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8007 --proxy-headers --forwarded-allow-ips='*'"

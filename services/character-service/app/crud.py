@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from models import (
     CharacterRequest, Race, Subrace, Class, Character, LevelThreshold,
     MobTemplate, MobTemplateSkill, MobLootTable, LocationMobSpawn, ActiveMob,
-    MobKill, CharacterLog,
+    MobKill, CharacterLog, GoldTransaction,
 )
 import logging
 
@@ -1065,6 +1065,39 @@ def get_mobs_at_location(db: Session, location_id: int):
 
 
 # ============================================================
+# Gold Transaction Logging (FEAT-102)
+# ============================================================
+
+def log_gold_transaction(
+    db: Session,
+    character_id: int,
+    amount: int,
+    balance_after: int,
+    transaction_type: str,
+    source: str = None,
+    metadata: dict = None,
+):
+    """
+    Insert a record into gold_transactions.
+    Called after every currency_balance modification so that
+    battle-pass earn_gold / spend_gold missions can query totals.
+    """
+    try:
+        tx = GoldTransaction(
+            character_id=character_id,
+            amount=amount,
+            balance_after=balance_after,
+            transaction_type=transaction_type,
+            source=source,
+            metadata_=metadata,
+        )
+        db.add(tx)
+        db.flush()
+    except Exception as e:
+        logger.warning(f"Failed to log gold transaction for character {character_id}: {e}")
+
+
+# ============================================================
 # Rewards (Phase 4)
 # ============================================================
 
@@ -1082,6 +1115,13 @@ def add_rewards_to_character(db: Session, character_id: int, xp: int, gold: int)
     # Add gold directly
     character.currency_balance = (character.currency_balance or 0) + gold
     db.flush()
+
+    # Log gold transaction
+    if gold != 0:
+        log_gold_transaction(
+            db, character_id, gold, character.currency_balance,
+            "battle_reward", source="battle-service",
+        )
 
     # Add XP via shared DB — directly update character_attributes table
     new_xp = None

@@ -611,6 +611,42 @@ def get_character_gold(db: Session, character_id: int) -> int:
     return int(row[0]) if row and row[0] is not None else 0
 
 
+def log_gold_transaction(
+    db: Session,
+    character_id: int,
+    amount: int,
+    balance_after: int,
+    transaction_type: str,
+    source: str = None,
+    metadata: dict = None,
+):
+    """
+    Insert a record into gold_transactions (shared DB table, owned by character-service).
+    Called after every currency_balance modification so that
+    battle-pass earn_gold / spend_gold missions can query totals.
+    Wrapped in try/except — logging must never break existing functionality.
+    """
+    try:
+        meta_json = json.dumps(metadata) if metadata else None
+        db.execute(
+            text(
+                "INSERT INTO gold_transactions "
+                "(character_id, amount, balance_after, transaction_type, source, metadata) "
+                "VALUES (:character_id, :amount, :balance_after, :transaction_type, :source, :metadata)"
+            ),
+            {
+                "character_id": character_id,
+                "amount": amount,
+                "balance_after": balance_after,
+                "transaction_type": transaction_type,
+                "source": source,
+                "metadata": meta_json,
+            },
+        )
+    except Exception as e:
+        logger.warning(f"Failed to log gold transaction for character {character_id}: {e}")
+
+
 def is_character_in_battle(db: Session, character_id: int) -> bool:
     """Check if character is in an active battle via shared DB."""
     row = db.execute(
@@ -782,6 +818,20 @@ def execute_trade(db: Session, trade: models.TradeOffer) -> None:
             text("UPDATE characters SET currency_balance = currency_balance + :gold WHERE id = :cid"),
             {"gold": trade.initiator_gold, "cid": target_id}
         )
+        # Log gold transactions for trade
+        trade_meta = {"trade_id": trade.id}
+        log_gold_transaction(
+            db, initiator_id, -trade.initiator_gold,
+            get_character_gold(db, initiator_id),
+            "trade", source=f"trade #{trade.id} to char #{target_id}",
+            metadata=trade_meta,
+        )
+        log_gold_transaction(
+            db, target_id, trade.initiator_gold,
+            get_character_gold(db, target_id),
+            "trade", source=f"trade #{trade.id} from char #{initiator_id}",
+            metadata=trade_meta,
+        )
 
     if trade.target_gold > 0:
         db.execute(
@@ -791,6 +841,20 @@ def execute_trade(db: Session, trade: models.TradeOffer) -> None:
         db.execute(
             text("UPDATE characters SET currency_balance = currency_balance + :gold WHERE id = :cid"),
             {"gold": trade.target_gold, "cid": initiator_id}
+        )
+        # Log gold transactions for trade
+        trade_meta = {"trade_id": trade.id}
+        log_gold_transaction(
+            db, target_id, -trade.target_gold,
+            get_character_gold(db, target_id),
+            "trade", source=f"trade #{trade.id} to char #{initiator_id}",
+            metadata=trade_meta,
+        )
+        log_gold_transaction(
+            db, initiator_id, trade.target_gold,
+            get_character_gold(db, initiator_id),
+            "trade", source=f"trade #{trade.id} from char #{target_id}",
+            metadata=trade_meta,
         )
 
     # 5. Mark trade as completed
@@ -2312,6 +2376,14 @@ def place_bid(
             text("UPDATE characters SET currency_balance = currency_balance + :amount WHERE id = :cid"),
             {"amount": old_bid_amount, "cid": old_bidder_id}
         )
+        # Log auction refund for previous bidder
+        log_gold_transaction(
+            db, old_bidder_id, old_bid_amount,
+            get_character_gold(db, old_bidder_id),
+            "auction_refund",
+            source=f"outbid on listing #{listing.id}",
+            metadata={"listing_id": listing.id, "item_id": listing.item_id},
+        )
         # Mark previous active bid as outbid
         db.query(models.AuctionBid).filter(
             models.AuctionBid.listing_id == listing_id,
@@ -2357,6 +2429,15 @@ def place_bid(
     )
     if result.rowcount == 0:
         raise HTTPException(status_code=400, detail="Недостаточно золота")
+
+    # Log auction bid deduction
+    log_gold_transaction(
+        db, data.character_id, -data.amount,
+        get_character_gold(db, data.character_id),
+        "auction_buy",
+        source=f"bid on listing #{listing.id}",
+        metadata={"listing_id": listing.id, "item_id": listing.item_id, "bid_amount": data.amount},
+    )
 
     # 9. Create bid row
     bid = models.AuctionBid(
@@ -2447,6 +2528,14 @@ def execute_buyout(
             text("UPDATE characters SET currency_balance = currency_balance + :amount WHERE id = :cid"),
             {"amount": old_bid_amount, "cid": old_bidder_id}
         )
+        # Log auction refund for previous bidder
+        log_gold_transaction(
+            db, old_bidder_id, old_bid_amount,
+            get_character_gold(db, old_bidder_id),
+            "auction_refund",
+            source=f"buyout on listing #{listing.id}",
+            metadata={"listing_id": listing.id, "item_id": listing.item_id},
+        )
         db.query(models.AuctionBid).filter(
             models.AuctionBid.listing_id == listing_id,
             models.AuctionBid.status == 'active',
@@ -2489,6 +2578,15 @@ def execute_buyout(
     )
     if result.rowcount == 0:
         raise HTTPException(status_code=400, detail="Недостаточно золота")
+
+    # Log auction buyout deduction
+    log_gold_transaction(
+        db, data.character_id, -buyout_price,
+        get_character_gold(db, data.character_id),
+        "auction_buy",
+        source=f"buyout listing #{listing.id}",
+        metadata={"listing_id": listing.id, "item_id": listing.item_id, "buyout_price": buyout_price},
+    )
 
     # 9. Update listing
     listing.status = 'sold'
@@ -2614,6 +2712,14 @@ def cancel_listing(
         db.execute(
             text("UPDATE characters SET currency_balance = currency_balance + :amount WHERE id = :cid"),
             {"amount": listing.current_bid, "cid": listing.current_bidder_id}
+        )
+        # Log auction refund for bidder on cancel
+        log_gold_transaction(
+            db, listing.current_bidder_id, listing.current_bid,
+            get_character_gold(db, listing.current_bidder_id),
+            "auction_refund",
+            source=f"listing #{listing.id} cancelled by seller",
+            metadata={"listing_id": listing.id, "item_id": listing.item_id},
         )
         db.query(models.AuctionBid).filter(
             models.AuctionBid.listing_id == listing_id,
@@ -2820,6 +2926,20 @@ def claim_from_storage(
                     "WHERE id = :cid"
                 ),
                 {"amount": entry.gold_amount, "cid": data.character_id}
+            )
+            # Log auction sell income
+            log_gold_transaction(
+                db, data.character_id, entry.gold_amount,
+                get_character_gold(db, data.character_id),
+                "auction_sell",
+                source=f"claimed from storage #{entry.id}" + (
+                    f", listing #{entry.listing_id}" if entry.listing_id else ""
+                ),
+                metadata={
+                    "storage_id": entry.id,
+                    "listing_id": entry.listing_id,
+                    "gold_amount": entry.gold_amount,
+                },
             )
             claimed_gold += entry.gold_amount
 

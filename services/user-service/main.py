@@ -5,7 +5,14 @@ from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 import models
 import schemas
-from crud import create_user, get_user_by_email, get_user_by_username, authenticate_user, get_effective_permissions, require_permission, require_admin, is_admin, is_admin_or_moderator
+from crud import (
+    create_user, get_user_by_email, get_user_by_username, authenticate_user,
+    get_effective_permissions, require_permission, require_admin, is_admin, is_admin_or_moderator,
+    get_all_frames, get_all_backgrounds, get_user_unlocked_frames, get_user_unlocked_backgrounds,
+    user_can_equip_frame, user_can_equip_background, get_frame_by_slug, get_background_by_slug,
+    get_frame_by_id, get_background_by_id, create_frame, update_frame, delete_frame,
+    create_background, update_background, delete_background, grant_cosmetic_to_user,
+)
 from auth import *
 from auth import SECRET_KEY, ALGORITHM
 from database import SessionLocal, engine, get_db
@@ -280,7 +287,6 @@ async def read_users_me(current_user: models.User = Depends(get_current_user), d
 
 HEX_COLOR_REGEX = re.compile(r'^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$')
 BG_POSITION_REGEX = re.compile(r'^\d{1,3}%\s\d{1,3}%$')
-ALLOWED_FRAMES = {"gold", "silver", "fire"}
 USERNAME_REGEX = re.compile(r'^[a-zA-Zа-яА-ЯёЁ0-9_-]+$')
 
 # Maximum size (in chars) for serialized profile_style_settings JSON
@@ -415,12 +421,33 @@ def update_profile_settings(
                 detail=f"Некорректный формат цвета для {field_name}. Ожидается HEX (например, #fff или #1a1a2e)"
             )
 
-    # Validate avatar_frame
-    if data.avatar_frame is not None and data.avatar_frame not in ALLOWED_FRAMES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Недопустимая рамка. Допустимые значения: {', '.join(ALLOWED_FRAMES)}"
-        )
+    # Validate avatar_frame against DB
+    if data.avatar_frame is not None:
+        frame = get_frame_by_slug(db, data.avatar_frame)
+        if not frame:
+            raise HTTPException(
+                status_code=422,
+                detail="Указанная рамка не найдена"
+            )
+        if not user_can_equip_frame(db, current_user.id, data.avatar_frame):
+            raise HTTPException(
+                status_code=403,
+                detail="У вас нет доступа к этой рамке"
+            )
+
+    # Validate chat_background against DB
+    if data.chat_background is not None:
+        bg = get_background_by_slug(db, data.chat_background)
+        if not bg:
+            raise HTTPException(
+                status_code=422,
+                detail="Указанная подложка не найдена"
+            )
+        if not user_can_equip_background(db, current_user.id, data.chat_background):
+            raise HTTPException(
+                status_code=403,
+                detail="У вас нет доступа к этой подложке"
+            )
 
     # Validate status_text
     if data.status_text is not None and len(data.status_text) > 100:
@@ -479,6 +506,7 @@ def update_profile_settings(
         profile_bg_position=user.profile_bg_position,
         post_color=user.post_color,
         profile_style_settings=style_settings,
+        chat_background=user.chat_background,
     )
 
 
@@ -1594,6 +1622,7 @@ async def get_user_profile(
         profile_bg_position=user.profile_bg_position,
         post_color=user.post_color,
         profile_style_settings=style_settings,
+        chat_background=user.chat_background,
         last_active_at=user.last_active_at,
         activity_points=user.activity_points or 0,
     )
@@ -1623,6 +1652,77 @@ def increment_activity_points(
     db.commit()
 
     return ActivityIncrementResponse(activity_points=new_value)
+
+
+# ==================== DIAMONDS (internal) ====================
+
+
+class DiamondOperationRequest(BaseModel):
+    amount: int
+    reason: str
+
+
+class DiamondResponse(BaseModel):
+    user_id: int
+    diamonds: int
+
+
+@router.get("/internal/{user_id}/diamonds", response_model=DiamondResponse)
+def get_user_diamonds(
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    """Получить баланс алмазов пользователя. Внутренний эндпоинт (service-to-service)."""
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    return DiamondResponse(user_id=user.id, diamonds=user.diamonds or 0)
+
+
+@router.post("/internal/{user_id}/diamonds/add", response_model=DiamondResponse)
+def add_user_diamonds(
+    user_id: int,
+    body: DiamondOperationRequest,
+    db: Session = Depends(get_db),
+):
+    """Начислить алмазы пользователю. Внутренний эндпоинт (service-to-service)."""
+    if body.amount <= 0:
+        raise HTTPException(status_code=400, detail="Сумма должна быть положительной")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    user.diamonds = (user.diamonds or 0) + body.amount
+    db.commit()
+    db.refresh(user)
+
+    return DiamondResponse(user_id=user.id, diamonds=user.diamonds)
+
+
+@router.post("/internal/{user_id}/diamonds/spend", response_model=DiamondResponse)
+def spend_user_diamonds(
+    user_id: int,
+    body: DiamondOperationRequest,
+    db: Session = Depends(get_db),
+):
+    """Списать алмазы у пользователя. Внутренний эндпоинт (service-to-service)."""
+    if body.amount <= 0:
+        raise HTTPException(status_code=400, detail="Сумма должна быть положительной")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    current_diamonds = user.diamonds or 0
+    if current_diamonds < body.amount:
+        raise HTTPException(status_code=400, detail="Недостаточно алмазов")
+
+    user.diamonds = current_diamonds - body.amount
+    db.commit()
+    db.refresh(user)
+
+    return DiamondResponse(user_id=user.id, diamonds=user.diamonds)
 
 
 # ==================== BLOCKING ====================
@@ -1775,6 +1875,269 @@ def get_user_message_privacy(
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     return schemas.MessagePrivacyResponse(message_privacy=user.message_privacy or "all")
+
+
+# ==================== COSMETICS — PUBLIC CATALOG ====================
+
+@router.get("/cosmetics/frames", response_model=schemas.CosmeticFrameListResponse)
+def list_cosmetic_frames(
+    db: Session = Depends(get_db),
+):
+    """Получить каталог всех рамок (публичный)."""
+    frames = get_all_frames(db)
+    return schemas.CosmeticFrameListResponse(
+        items=[schemas.CosmeticFrameResponse.from_orm(f) for f in frames]
+    )
+
+
+@router.get("/cosmetics/backgrounds", response_model=schemas.CosmeticBackgroundListResponse)
+def list_cosmetic_backgrounds(
+    db: Session = Depends(get_db),
+):
+    """Получить каталог всех подложек."""
+    backgrounds = get_all_backgrounds(db)
+    return schemas.CosmeticBackgroundListResponse(
+        items=[schemas.CosmeticBackgroundResponse.from_orm(bg) for bg in backgrounds]
+    )
+
+
+# ==================== COSMETICS — USER COLLECTION ====================
+
+@router.get("/cosmetics/my/frames", response_model=schemas.UserFramesResponse)
+def get_my_frames(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Получить разблокированные рамки текущего пользователя."""
+    items = get_user_unlocked_frames(db, current_user.id)
+    return schemas.UserFramesResponse(
+        items=[schemas.UserCosmeticFrameItem(**item) for item in items],
+        active_slug=current_user.avatar_frame,
+    )
+
+
+@router.get("/cosmetics/my/backgrounds", response_model=schemas.UserBackgroundsResponse)
+def get_my_backgrounds(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Получить разблокированные подложки текущего пользователя."""
+    items = get_user_unlocked_backgrounds(db, current_user.id)
+    return schemas.UserBackgroundsResponse(
+        items=[schemas.UserCosmeticBackgroundItem(**item) for item in items],
+        active_slug=current_user.chat_background,
+    )
+
+
+@router.put("/cosmetics/my/frame", response_model=schemas.EquipFrameResponse)
+def equip_frame(
+    data: schemas.EquipFrameRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Экипировать или снять рамку."""
+    if data.slug is None:
+        # Unequip
+        user = db.query(models.User).filter(models.User.id == current_user.id).first()
+        user.avatar_frame = None
+        db.commit()
+        return schemas.EquipFrameResponse(active_frame=None)
+
+    # Validate slug exists
+    frame = get_frame_by_slug(db, data.slug)
+    if not frame:
+        raise HTTPException(status_code=404, detail="Рамка не найдена")
+
+    # Validate ownership
+    if not user_can_equip_frame(db, current_user.id, data.slug):
+        raise HTTPException(status_code=403, detail="У вас нет доступа к этой рамке")
+
+    user = db.query(models.User).filter(models.User.id == current_user.id).first()
+    user.avatar_frame = data.slug
+    db.commit()
+    return schemas.EquipFrameResponse(active_frame=data.slug)
+
+
+@router.put("/cosmetics/my/background", response_model=schemas.EquipBackgroundResponse)
+def equip_background(
+    data: schemas.EquipBackgroundRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Экипировать или снять подложку."""
+    if data.slug is None:
+        user = db.query(models.User).filter(models.User.id == current_user.id).first()
+        user.chat_background = None
+        db.commit()
+        return schemas.EquipBackgroundResponse(active_background=None)
+
+    bg = get_background_by_slug(db, data.slug)
+    if not bg:
+        raise HTTPException(status_code=404, detail="Подложка не найдена")
+
+    if not user_can_equip_background(db, current_user.id, data.slug):
+        raise HTTPException(status_code=403, detail="У вас нет доступа к этой подложке")
+
+    user = db.query(models.User).filter(models.User.id == current_user.id).first()
+    user.chat_background = data.slug
+    db.commit()
+    return schemas.EquipBackgroundResponse(active_background=data.slug)
+
+
+# ==================== COSMETICS — ADMIN CRUD ====================
+
+@router.post("/admin/cosmetics/frames", response_model=schemas.CosmeticFrameResponse, status_code=201)
+def admin_create_frame(
+    data: schemas.CosmeticFrameCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Создать новую рамку. Требуется разрешение cosmetics:create."""
+    require_permission(db, current_user, "cosmetics:create")
+
+    # Check slug uniqueness
+    existing = get_frame_by_slug(db, data.slug)
+    if existing:
+        raise HTTPException(status_code=409, detail="Рамка с таким slug уже существует")
+
+    frame = create_frame(db, data.dict())
+    return schemas.CosmeticFrameResponse.from_orm(frame)
+
+
+@router.put("/admin/cosmetics/frames/{frame_id}", response_model=schemas.CosmeticFrameResponse)
+def admin_update_frame(
+    frame_id: int,
+    data: schemas.CosmeticFrameUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Обновить рамку. Требуется разрешение cosmetics:update."""
+    require_permission(db, current_user, "cosmetics:update")
+
+    frame = get_frame_by_id(db, frame_id)
+    if not frame:
+        raise HTTPException(status_code=404, detail="Рамка не найдена")
+
+    # Check slug uniqueness if changing
+    update_data = data.dict(exclude_unset=True)
+    if "slug" in update_data and update_data["slug"] != frame.slug:
+        existing = get_frame_by_slug(db, update_data["slug"])
+        if existing:
+            raise HTTPException(status_code=409, detail="Рамка с таким slug уже существует")
+
+    frame = update_frame(db, frame, update_data)
+    return schemas.CosmeticFrameResponse.from_orm(frame)
+
+
+@router.delete("/admin/cosmetics/frames/{frame_id}")
+def admin_delete_frame(
+    frame_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Удалить рамку. Требуется разрешение cosmetics:delete."""
+    require_permission(db, current_user, "cosmetics:delete")
+
+    frame = get_frame_by_id(db, frame_id)
+    if not frame:
+        raise HTTPException(status_code=404, detail="Рамка не найдена")
+
+    delete_frame(db, frame)
+    return {"deleted": True}
+
+
+@router.post("/admin/cosmetics/backgrounds", response_model=schemas.CosmeticBackgroundResponse, status_code=201)
+def admin_create_background(
+    data: schemas.CosmeticBackgroundCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Создать новую подложку. Требуется разрешение cosmetics:create."""
+    require_permission(db, current_user, "cosmetics:create")
+
+    existing = get_background_by_slug(db, data.slug)
+    if existing:
+        raise HTTPException(status_code=409, detail="Подложка с таким slug уже существует")
+
+    bg = create_background(db, data.dict())
+    return schemas.CosmeticBackgroundResponse.from_orm(bg)
+
+
+@router.put("/admin/cosmetics/backgrounds/{bg_id}", response_model=schemas.CosmeticBackgroundResponse)
+def admin_update_background(
+    bg_id: int,
+    data: schemas.CosmeticBackgroundUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Обновить подложку. Требуется разрешение cosmetics:update."""
+    require_permission(db, current_user, "cosmetics:update")
+
+    bg = get_background_by_id(db, bg_id)
+    if not bg:
+        raise HTTPException(status_code=404, detail="Подложка не найдена")
+
+    update_data = data.dict(exclude_unset=True)
+    if "slug" in update_data and update_data["slug"] != bg.slug:
+        existing = get_background_by_slug(db, update_data["slug"])
+        if existing:
+            raise HTTPException(status_code=409, detail="Подложка с таким slug уже существует")
+
+    bg = update_background(db, bg, update_data)
+    return schemas.CosmeticBackgroundResponse.from_orm(bg)
+
+
+@router.delete("/admin/cosmetics/backgrounds/{bg_id}")
+def admin_delete_background(
+    bg_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Удалить подложку. Требуется разрешение cosmetics:delete."""
+    require_permission(db, current_user, "cosmetics:delete")
+
+    bg = get_background_by_id(db, bg_id)
+    if not bg:
+        raise HTTPException(status_code=404, detail="Подложка не найдена")
+
+    delete_background(db, bg)
+    return {"deleted": True}
+
+
+@router.post("/admin/cosmetics/grant", response_model=schemas.CosmeticGrantResponse)
+def admin_grant_cosmetic(
+    data: schemas.CosmeticGrantRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Выдать косметику пользователю. Требуется разрешение cosmetics:create."""
+    require_permission(db, current_user, "cosmetics:create")
+
+    # Check user exists
+    target_user = db.query(models.User).filter(models.User.id == data.user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    unlocked, reason = grant_cosmetic_to_user(db, data.user_id, data.cosmetic_type, data.cosmetic_slug, source="admin")
+    return schemas.CosmeticGrantResponse(granted=True)
+
+
+# ==================== COSMETICS — INTERNAL (service-to-service) ====================
+
+@router.post("/internal/{user_id}/cosmetics/unlock", response_model=schemas.CosmeticUnlockResponse)
+def internal_unlock_cosmetic(
+    user_id: int,
+    data: schemas.CosmeticUnlockRequest,
+    db: Session = Depends(get_db),
+):
+    """Разблокировать косметику для пользователя. Внутренний эндпоинт (service-to-service)."""
+    # Check user exists
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    unlocked, reason = grant_cosmetic_to_user(db, user_id, data.cosmetic_type, data.cosmetic_slug, source=data.source)
+    return schemas.CosmeticUnlockResponse(unlocked=unlocked, reason=reason)
 
 
 # ==================== GET USER BY ID (catch-all, must be last) ====================

@@ -275,6 +275,17 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
         new_character = crud.create_preliminary_character(db, db_request, currency_balance=currency_amount, auto_commit=False)
         logger.info(f"Создан персонаж с ID {new_character.id}, currency_balance={currency_amount}")
 
+        # Log starter kit gold transaction
+        if currency_amount > 0:
+            crud.log_gold_transaction(
+                db, new_character.id,
+                amount=currency_amount,
+                balance_after=currency_amount,
+                transaction_type="starter_kit",
+                source="character_creation",
+                metadata={"class_id": class_id},
+            )
+
         # 4) Генерируем атрибуты по подрасе (из БД)
         attributes = crud.generate_attributes_for_subrace(db, db_request.id_subrace)
         logger.info(f"Сгенерированы атрибуты для подрасы {db_request.id_subrace}")
@@ -514,6 +525,14 @@ async def admin_update_character(
             crud.create_character_log(db, character_id, "admin_currency_change",
                 f"Баланс изменён администратором: {old_currency_balance} → {character.currency_balance}",
                 {"old_value": old_currency_balance, "new_value": character.currency_balance, "admin_action": True})
+            crud.log_gold_transaction(
+                db, character_id,
+                amount=character.currency_balance - old_currency_balance,
+                balance_after=character.currency_balance,
+                transaction_type="admin_adjust",
+                source="admin_panel",
+                metadata={"old_balance": old_currency_balance, "admin_action": True},
+            )
     except Exception as e:
         logger.warning(f"Failed to log admin changes for character {character_id}: {e}")
 

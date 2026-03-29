@@ -69,16 +69,6 @@ const navItems: NavItem[] = [
   {
     label: 'СОБЫТИЯ',
     path: '/events',
-    megaMenu: [
-      {
-        title: 'СОБЫТИЯ',
-        links: [
-          { label: 'Текущие ивенты', path: '/events/current' },
-          { label: 'Архив', path: '/events/archive' },
-          { label: 'Календарь', path: '/events/calendar' },
-        ],
-      },
-    ],
   },
   {
     label: 'ТИКЕТ',

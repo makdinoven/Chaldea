@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, UniqueConstraint, Enum as SAEnum
+from sqlalchemy.sql import func
 from datetime import datetime
 from database import Base
 
@@ -70,12 +71,72 @@ class User(Base):
     post_color = Column(String(7), nullable=True)
     profile_style_settings = Column(Text, nullable=True)
     activity_points = Column(Integer, nullable=False, default=0, server_default="0")
+    diamonds = Column(Integer, nullable=False, default=0, server_default="0")
     message_privacy = Column(
         SAEnum("all", "friends", "nobody", name="message_privacy_enum"),
         nullable=False,
         default="all",
         server_default="all",
     )
+    chat_background = Column(String(50), nullable=True)
+
+
+class CosmeticFrame(Base):
+    __tablename__ = "cosmetic_frames"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    slug = Column(String(50), nullable=False, unique=True, index=True)
+    type = Column(String(10), nullable=False, server_default="css")  # css, image, combo
+    css_class = Column(String(100), nullable=True)
+    image_url = Column(String(500), nullable=True)
+    rarity = Column(String(20), nullable=False, server_default="common")  # common, rare, epic, legendary
+    is_default = Column(Boolean, nullable=False, server_default="0")
+    is_seasonal = Column(Boolean, nullable=False, server_default="0")
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class CosmeticBackground(Base):
+    __tablename__ = "cosmetic_backgrounds"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    slug = Column(String(50), nullable=False, unique=True, index=True)
+    type = Column(String(10), nullable=False, server_default="css")  # css, image
+    css_class = Column(String(100), nullable=True)
+    image_url = Column(String(500), nullable=True)
+    rarity = Column(String(20), nullable=False, server_default="common")  # common, rare, epic, legendary
+    is_default = Column(Boolean, nullable=False, server_default="0")
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class UserUnlockedFrame(Base):
+    __tablename__ = "user_unlocked_frames"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    frame_id = Column(Integer, ForeignKey("cosmetic_frames.id", ondelete="CASCADE"), nullable=False)
+    source = Column(String(20), nullable=False, server_default="default")  # default, battlepass, admin
+    unlocked_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'frame_id', name='uq_user_frame'),
+    )
+
+
+class UserUnlockedBackground(Base):
+    __tablename__ = "user_unlocked_backgrounds"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    background_id = Column(Integer, ForeignKey("cosmetic_backgrounds.id", ondelete="CASCADE"), nullable=False)
+    source = Column(String(20), nullable=False, server_default="default")  # default, battlepass, admin
+    unlocked_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'background_id', name='uq_user_background'),
+    )
+
 
 class UserCharacter(Base):
     __tablename__ = "users_character"

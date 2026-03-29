@@ -390,6 +390,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       INVENTORY_SERVICE_URL: http://inventory-service:8004
+      BATTLEPASS_SERVICE_URL: http://battle-pass-service:8012
     depends_on:
       mysql:
         condition: service_healthy
@@ -485,6 +486,34 @@ services:
       - mongo
     ports:
       - "8011:8011"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  battle-pass-service:
+    container_name: battle-pass-service
+    build:
+      context: .
+      dockerfile: ./docker/battle-pass-service/Dockerfile
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8012 --app-dir /app --reload"
+    volumes:
+      - ./services/battle-pass-service/app:/app
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      CHARACTER_SERVICE_URL: http://character-service:8005
+      INVENTORY_SERVICE_URL: http://inventory-service:8004
+      USER_SERVICE_URL: http://user-service:8000
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8012:8012"
     logging:
       driver: "json-file"
       options:

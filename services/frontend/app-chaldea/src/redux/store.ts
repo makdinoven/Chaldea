@@ -26,6 +26,8 @@ import craftingReducer from './slices/craftingSlice';
 import messengerReducer from './slices/messengerSlice';
 import auctionReducer from './slices/auctionSlice';
 import ticketReducer from './slices/ticketSlice';
+import battlePassReducer from './slices/battlePassSlice';
+import cosmeticsReducer from './slices/cosmeticsSlice';
 
 export const store = configureStore({
   reducer: {
@@ -55,6 +57,8 @@ export const store = configureStore({
     messenger: messengerReducer,
     auction: auctionReducer,
     tickets: ticketReducer,
+    battlePass: battlePassReducer,
+    cosmetics: cosmeticsReducer,
   },
 });
 
