@@ -60,7 +60,7 @@ jobs:
           - service: dungeon-service
             working-dir: services/dungeon-service/app
             requirements: services/dungeon-service/app/requirements.txt
-            pytest-args: '--asyncio-mode=auto --timeout=30'
+            pytest-args: '--asyncio-mode=auto --timeout=30 --timeout-method=signal -x'
 
     steps:
       - name: Checkout code
@@ -80,7 +80,13 @@ jobs:
         run: pip install -r ${{ matrix.requirements }}
 
       - name: Run tests
-        run: cd ${{ matrix.working-dir }} && python -m pytest tests/ ${{ matrix.pytest-args }} -v
+        timeout-minutes: 5
+        run: |
+          cd ${{ matrix.working-dir }}
+          echo "=== Collecting tests ==="
+          python -m pytest tests/ --collect-only ${{ matrix.pytest-args }} -q 2>&1 | tail -20
+          echo "=== Running tests ==="
+          python -m pytest tests/ ${{ matrix.pytest-args }} -v
 
   deploy:
     name: Deploy to Production
