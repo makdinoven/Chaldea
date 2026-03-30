@@ -3,6 +3,7 @@
 
 import sys
 import os
+import atexit
 
 # Add the app directory to sys.path so bare imports work
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -56,6 +57,12 @@ database.engine.sync_engine.dispose()
 
 database.engine = _test_engine
 database.async_session = _TestAsyncSession
+
+
+# Force-kill the process after pytest finishes to prevent async cleanup hang.
+# Without this, leftover asyncio resources (aioredis, aiomysql pools from
+# module-level imports) block Python's interpreter shutdown indefinitely.
+atexit.register(lambda: os._exit(0))
 
 # Import models and patch Enum columns to String for SQLite compat
 import models  # noqa: E402

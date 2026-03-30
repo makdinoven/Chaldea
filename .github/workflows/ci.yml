@@ -80,13 +80,8 @@ jobs:
         run: pip install -r ${{ matrix.requirements }}
 
       - name: Run tests
-        timeout-minutes: 5
-        run: |
-          cd ${{ matrix.working-dir }}
-          echo "=== Collecting tests ==="
-          python -m pytest tests/ --collect-only ${{ matrix.pytest-args }} -q 2>&1 | tail -20
-          echo "=== Running tests ==="
-          python -m pytest tests/ ${{ matrix.pytest-args }} -v
+        timeout-minutes: 3
+        run: cd ${{ matrix.working-dir }} && python -m pytest tests/ ${{ matrix.pytest-args }} -v
 
   deploy:
     name: Deploy to Production
