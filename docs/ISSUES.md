@@ -100,6 +100,12 @@
 ~~**Описание:** `get_rank()` и `character_ranks()` вызывали `/skills/admin/skill_ranks/{id}` (требует JWT), battle-service не отправлял токен → навыки не загружались в бою.~~
 ~~**Исправлено:** `character_ranks()` использует данные из публичного ответа `/skills/characters/{id}/skills`. `get_rank()` использует новый публичный endpoint `/skills/skill_ranks/{id}`.~~
 
+### 25. Баг: dungeon-service тесты не запускаются (from conftest import)
+**Сервис:** dungeon-service
+**Файлы:** `services/dungeon-service/app/tests/test_admin_crud.py`, `services/dungeon-service/app/tests/test_room_positions.py`
+**Описание:** Тесты используют `from conftest import _dungeon_payload, _room_payload` — это не работает, т.к. `tests/__init__.py` существует и conftest не доступен как обычный модуль. pytest обрабатывает conftest.py автоматически, но прямой import невозможен при наличии `__init__.py`. Затрагивает 2 из 5 тестовых файлов.
+**Решение:** Удалить `__init__.py` из `tests/`, либо переименовать helper-функции в фикстуры, либо вынести `_dungeon_payload`/`_room_payload` в отдельный модуль `tests/helpers.py`.
+
 ### 19. Несогласованность типов participant_id в battle-service
 **Сервис:** battle-service
 **Описание:** participant_id хранится как string ключ в Redis dict, но используется как int в разных местах кода. Потенциальный `KeyError`.

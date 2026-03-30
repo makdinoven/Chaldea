@@ -69,6 +69,8 @@ class DungeonRoom(Base):
     is_boss_room = Column(Boolean, nullable=False, default=False)
     is_mana_core_room = Column(Boolean, nullable=False, default=False)
     room_config = Column(JSON, nullable=True)
+    position_x = Column(Float, nullable=True, default=None)
+    position_y = Column(Float, nullable=True, default=None)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     dungeon = relationship("Dungeon", back_populates="rooms")
@@ -104,6 +106,11 @@ class DungeonCorridor(Base):
     trap_chance = Column(Float, nullable=False, default=0.0)
     trap_config = Column(JSON, nullable=True)
     description = Column(String(512), nullable=True)
+
+    # Visual editor handle positions (which side of the room the corridor connects to)
+    source_handle = Column(String(16), nullable=True)
+    target_handle = Column(String(16), nullable=True)
+
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     dungeon = relationship("Dungeon", back_populates="corridors")

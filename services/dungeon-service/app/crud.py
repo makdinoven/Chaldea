@@ -14,6 +14,7 @@ from schemas import (
     DungeonRoomCreate, DungeonRoomUpdate,
     DungeonCorridorCreate, DungeonCorridorUpdate,
     DungeonValidationResponse,
+    RoomPositionItem,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,47 @@ async def delete_room(session: AsyncSession, room_id: int) -> None:
     room = await get_room(session, room_id)
     await session.delete(room)
     await session.commit()
+
+
+# ===========================
+#  Bulk Room Position Update
+# ===========================
+
+async def bulk_update_room_positions(
+    session: AsyncSession, dungeon_id: int, positions: List[RoomPositionItem]
+) -> int:
+    """Update position_x and position_y for multiple rooms at once."""
+    # Validate dungeon exists
+    await get_dungeon(session, dungeon_id)
+
+    room_ids = [p.room_id for p in positions]
+
+    # Fetch all requested rooms in one query
+    stmt = select(DungeonRoom).where(DungeonRoom.id.in_(room_ids))
+    result = await session.execute(stmt)
+    rooms = {r.id: r for r in result.scalars().all()}
+
+    # Verify all room_ids exist and belong to this dungeon
+    for rid in room_ids:
+        if rid not in rooms:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Комната {rid} не найдена",
+            )
+        if rooms[rid].dungeon_id != dungeon_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Комната {rid} не принадлежит подземелью {dungeon_id}",
+            )
+
+    # Apply updates
+    for p in positions:
+        room = rooms[p.room_id]
+        room.position_x = p.position_x
+        room.position_y = p.position_y
+
+    await session.commit()
+    return len(positions)
 
 
 # ===========================

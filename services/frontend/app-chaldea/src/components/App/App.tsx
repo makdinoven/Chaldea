@@ -66,7 +66,8 @@ import BattlePassPage from "../Events/BattlePass/BattlePassPage";
 import AdminDungeonList from "../Admin/DungeonsPage/AdminDungeonList";
 import AdminDungeonForm from "../Admin/DungeonsPage/AdminDungeonForm";
 import AdminDungeonDetail from "../Admin/DungeonsPage/AdminDungeonDetail";
-import AdminDungeonRoomForm from "../Admin/DungeonsPage/AdminDungeonRoomForm";
+
+import AdminDungeonSessions from "../Admin/DungeonsPage/AdminDungeonSessions";
 import DungeonSessionPage from "../DungeonPage/DungeonSessionPage";
 
 const App = () => {
@@ -272,14 +273,10 @@ const App = () => {
                 <AdminDungeonDetail />
               </ProtectedRoute>
             } />
-            <Route path="admin/dungeons/:id/rooms/create" element={
-              <ProtectedRoute requiredPermission="dungeons:edit">
-                <AdminDungeonRoomForm />
-              </ProtectedRoute>
-            } />
-            <Route path="admin/dungeons/:id/rooms/:roomId/edit" element={
-              <ProtectedRoute requiredPermission="dungeons:edit">
-                <AdminDungeonRoomForm />
+
+            <Route path="admin/dungeons/sessions" element={
+              <ProtectedRoute requiredPermission="dungeons:view">
+                <AdminDungeonSessions />
               </ProtectedRoute>
             } />
             <Route path="dungeon-session/:sessionId" element={<DungeonSessionPage />} />

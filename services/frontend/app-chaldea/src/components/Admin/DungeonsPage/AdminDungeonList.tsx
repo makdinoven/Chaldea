@@ -59,8 +59,14 @@ const AdminDungeonList = () => {
         Управление подземельями
       </h1>
 
-      {/* Create button */}
+      {/* Actions */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
+        <button
+          className="btn-line !text-base !px-6 !py-2"
+          onClick={() => navigate('/admin/dungeons/sessions')}
+        >
+          Активные сессии
+        </button>
         <button
           className="btn-blue !text-base !px-6 !py-2 sm:ml-auto"
           onClick={() => navigate('/admin/dungeons/create')}

@@ -2,18 +2,8 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import toast from 'react-hot-toast';
-import AdminDungeonRooms from './AdminDungeonRooms';
-import AdminDungeonCorridors from './AdminDungeonCorridors';
-import AdminDungeonGraph from './AdminDungeonGraph';
+import DungeonVisualEditor from './DungeonVisualEditor';
 import type { Dungeon, DungeonRoom, DungeonCorridor } from '../../../api/dungeons';
-
-const TABS = [
-  { key: 'rooms', label: 'Комнаты' },
-  { key: 'corridors', label: 'Коридоры' },
-  { key: 'graph', label: 'Граф' },
-] as const;
-
-type TabKey = (typeof TABS)[number]['key'];
 
 const STABILITY_LABELS: Record<string, string> = {
   static: 'Статичный',
@@ -29,7 +19,6 @@ const AdminDungeonDetail = () => {
   const [corridors, setCorridors] = useState<DungeonCorridor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<TabKey>('rooms');
 
   const dungeonId = Number(id);
 
@@ -78,7 +67,7 @@ const AdminDungeonDetail = () => {
   }
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+    <div className="w-full flex flex-col gap-4 px-2">
       {/* Back button */}
       <button
         onClick={() => navigate('/admin/dungeons')}
@@ -106,55 +95,33 @@ const AdminDungeonDetail = () => {
         <p className="text-white/70 text-sm">{dungeon.description}</p>
       )}
 
-      <div className="flex flex-wrap gap-4 text-sm text-white/70">
+      <div className="flex flex-wrap items-center gap-4 text-sm text-white/70">
         <span>Комнат: <span className="text-white">{rooms.length}</span></span>
         <span>Коридоров: <span className="text-white">{corridors.length}</span></span>
         <span>Рек. уровень: <span className="text-white">{dungeon.recommended_level ?? '—'}</span></span>
         <span>Рек. группа: <span className="text-white">{dungeon.recommended_party_size ?? '—'}</span></span>
+        <button
+          onClick={async () => {
+            try {
+              await axios.delete(`/dungeons/admin/dungeons/${dungeonId}/cooldown`);
+              toast.success('Кулдаун снят');
+            } catch {
+              toast.error('Не удалось снять кулдаун');
+            }
+          }}
+          className="text-xs text-site-red hover:text-white transition-colors"
+        >
+          Снять кулдаун
+        </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 border-b border-white/10 overflow-x-auto">
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`px-4 py-2 text-sm font-medium transition-colors duration-200 border-b-2 whitespace-nowrap ${
-              activeTab === tab.key
-                ? 'text-gold border-gold'
-                : 'text-white/50 border-transparent hover:text-white hover:border-white/30'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab content */}
-      <div>
-        {activeTab === 'rooms' && (
-          <AdminDungeonRooms
-            dungeonId={dungeonId}
-            rooms={rooms}
-            onUpdate={loadDungeon}
-          />
-        )}
-        {activeTab === 'corridors' && (
-          <AdminDungeonCorridors
-            dungeonId={dungeonId}
-            rooms={rooms}
-            corridors={corridors}
-            onUpdate={loadDungeon}
-          />
-        )}
-        {activeTab === 'graph' && (
-          <AdminDungeonGraph
-            dungeonId={dungeonId}
-            rooms={rooms}
-            corridors={corridors}
-          />
-        )}
-      </div>
+      {/* Visual Editor */}
+      <DungeonVisualEditor
+        dungeonId={dungeonId}
+        rooms={rooms}
+        corridors={corridors}
+        onUpdate={loadDungeon}
+      />
     </div>
   );
 };
