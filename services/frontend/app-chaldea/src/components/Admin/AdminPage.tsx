@@ -40,6 +40,7 @@ const sections: AdminSection[] = [
   { label: 'Рецепты', path: '/admin/recipes', description: 'Управление рецептами крафта', module: 'professions' },
   { label: 'Батл Пасс', path: '/admin/battle-pass', description: 'Управление сезонами, наградами и заданиями', module: 'battlepass' },
   { label: 'Косметика', path: '/admin/cosmetics', description: 'Управление рамками и подложками', module: 'cosmetics' },
+  { label: 'Подземелья', path: '/admin/dungeons', description: 'Управление подземельями: создание, комнаты, коридоры', module: 'dungeons' },
 ];
 
 const AdminPage = () => {

@@ -1553,6 +1553,7 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
         "user_id": user_id,
         "user_nickname": user_nickname,
         "character_name": character.name,
+        "current_location_id": character.current_location_id,
     }
 
 @router.get("/{character_id}/short_info")
@@ -2634,6 +2635,110 @@ def record_mob_kill_endpoint(
     if result is None:
         raise HTTPException(status_code=404, detail="Моб не найден по указанному character_id")
     return result
+
+
+# ============================================================
+# Internal: Spawn dungeon mobs (used by dungeon-service)
+# ============================================================
+
+@router.post(
+    "/internal/spawn-dungeon-mobs",
+    response_model=schemas.SpawnDungeonMobsResponse,
+    status_code=201,
+)
+def spawn_dungeon_mobs_endpoint(
+    req: schemas.SpawnDungeonMobsRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth) — spawns ActiveMob entries from given mob templates.
+    Called by dungeon-service when party enters a battle/boss room or triggers corridor battle.
+    Creates a Character (is_npc=True) + ActiveMob record for each template.
+    Returns list of character_ids for the spawned mobs.
+    """
+    character_ids = []
+    for template_id in req.mob_template_ids:
+        template = db.query(models.MobTemplate).filter(
+            models.MobTemplate.id == template_id
+        ).first()
+        if not template:
+            logger.warning(
+                f"Шаблон моба {template_id} не найден при спавне для подземелья"
+            )
+            continue
+        try:
+            active_mob, character = crud.spawn_mob_from_template(
+                db, template_id, req.location_id, "dungeon"
+            )
+            character_ids.append(character.id)
+        except Exception as e:
+            db.rollback()
+            logger.error(
+                f"Ошибка при спавне моба из шаблона {template_id} для подземелья: {e}"
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Ошибка при создании моба из шаблона {template_id}",
+            )
+
+    if not character_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Не удалось создать ни одного моба — шаблоны не найдены",
+        )
+
+    return schemas.SpawnDungeonMobsResponse(character_ids=character_ids)
+
+
+# ============================================================
+# Internal: Deduct gold (used by dungeon-service)
+# ============================================================
+
+@router.post(
+    "/internal/deduct-gold",
+    response_model=schemas.DeductGoldResponse,
+)
+def deduct_gold_endpoint(
+    req: schemas.DeductGoldRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth) — deducts gold from a character's currency_balance.
+    Called by dungeon-service for merchant purchases, rest costs, revive costs.
+    Returns 400 if insufficient gold.
+    """
+    character = db.query(models.Character).filter(
+        models.Character.id == req.character_id
+    ).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    current_balance = character.currency_balance or 0
+    if current_balance < req.amount:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недостаточно золота (имеется {current_balance}, нужно {req.amount})",
+        )
+
+    character.currency_balance = current_balance - req.amount
+    db.flush()
+
+    # Log the gold transaction
+    crud.log_gold_transaction(
+        db,
+        character_id=req.character_id,
+        amount=-req.amount,
+        balance_after=character.currency_balance,
+        transaction_type="dungeon_expense",
+        source="dungeon-service",
+    )
+
+    db.commit()
+
+    return schemas.DeductGoldResponse(
+        ok=True,
+        new_balance=character.currency_balance,
+    )
 
 
 # ============================================================

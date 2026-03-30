@@ -63,6 +63,11 @@ import AdminTicketDetailPage from "../Tickets/AdminTicketDetailPage";
 import { CRAFT_ITEM_TYPES } from "../ItemsAdminPage/ItemsAdminPage";
 import EventsPage from "../Events/EventsPage";
 import BattlePassPage from "../Events/BattlePass/BattlePassPage";
+import AdminDungeonList from "../Admin/DungeonsPage/AdminDungeonList";
+import AdminDungeonForm from "../Admin/DungeonsPage/AdminDungeonForm";
+import AdminDungeonDetail from "../Admin/DungeonsPage/AdminDungeonDetail";
+import AdminDungeonRoomForm from "../Admin/DungeonsPage/AdminDungeonRoomForm";
+import DungeonSessionPage from "../DungeonPage/DungeonSessionPage";
 
 const App = () => {
   const dispatch = useAppDispatch();
@@ -247,6 +252,37 @@ const App = () => {
                 <AdminCosmeticsPage />
               </ProtectedRoute>
             } />
+            <Route path="admin/dungeons" element={
+              <ProtectedRoute requiredPermission="dungeons:view">
+                <AdminDungeonList />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/dungeons/create" element={
+              <ProtectedRoute requiredPermission="dungeons:create">
+                <AdminDungeonForm />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/dungeons/:id/edit" element={
+              <ProtectedRoute requiredPermission="dungeons:edit">
+                <AdminDungeonForm />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/dungeons/:id" element={
+              <ProtectedRoute requiredPermission="dungeons:view">
+                <AdminDungeonDetail />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/dungeons/:id/rooms/create" element={
+              <ProtectedRoute requiredPermission="dungeons:edit">
+                <AdminDungeonRoomForm />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/dungeons/:id/rooms/:roomId/edit" element={
+              <ProtectedRoute requiredPermission="dungeons:edit">
+                <AdminDungeonRoomForm />
+              </ProtectedRoute>
+            } />
+            <Route path="dungeon-session/:sessionId" element={<DungeonSessionPage />} />
             <Route path="post-history/:characterId" element={<PostHistoryPage />} />
             <Route path="events" element={<EventsPage />} />
             <Route path="events/battle-pass" element={<BattlePassPage />} />

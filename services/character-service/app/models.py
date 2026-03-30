@@ -232,7 +232,7 @@ class ActiveMob(Base):
     location_id = Column(BigInteger, nullable=False)
     status = Column(Enum('alive', 'in_battle', 'dead'), nullable=False, default='alive')
     battle_id = Column(Integer, nullable=True)
-    spawn_type = Column(Enum('random', 'manual'), nullable=False, default='random')
+    spawn_type = Column(Enum('random', 'manual', 'dungeon'), nullable=False, default='random')
     spawned_at = Column(TIMESTAMP, server_default=func.now())
     killed_at = Column(TIMESTAMP, nullable=True)
     respawn_at = Column(TIMESTAMP, nullable=True)

@@ -57,6 +57,10 @@ jobs:
             working-dir: services/battle-pass-service/app
             requirements: services/battle-pass-service/app/requirements.txt
             pytest-args: '--asyncio-mode=auto'
+          - service: dungeon-service
+            working-dir: services/dungeon-service/app
+            requirements: services/dungeon-service/app/requirements.txt
+            pytest-args: '--asyncio-mode=auto'
 
     steps:
       - name: Checkout code

@@ -18,6 +18,7 @@ import LocationMobs from '../../LocationMobs';
 import BattlesSection from './BattlesSection';
 import useBattleLock from '../../../hooks/useBattleLock';
 import BattleLockBanner from '../../CommonComponents/BattleLockBanner';
+import DungeonEntrance from '../../DungeonPage/DungeonEntrance';
 
 const LocationPage = () => {
   const navigate = useNavigate();
@@ -397,6 +398,15 @@ const LocationPage = () => {
           characterId={character?.id ?? null}
           inBattle={inBattle}
         />
+
+        {/* Dungeon entrance — shown when dungeons exist at this location */}
+        {isCharacterHere && !inBattle && (
+          <DungeonEntrance
+            locationId={location.id}
+            players={location.players}
+            currentCharacterId={character?.id ?? null}
+          />
+        )}
 
         {/* PvP Invitations & Trade requests — hidden when empty */}
         {isCharacterHere && character?.id && (

@@ -28,6 +28,8 @@ import auctionReducer from './slices/auctionSlice';
 import ticketReducer from './slices/ticketSlice';
 import battlePassReducer from './slices/battlePassSlice';
 import cosmeticsReducer from './slices/cosmeticsSlice';
+import dungeonAdminReducer from './slices/dungeonAdminSlice';
+import dungeonReducer from './slices/dungeonSlice';
 
 export const store = configureStore({
   reducer: {
@@ -59,6 +61,8 @@ export const store = configureStore({
     tickets: ticketReducer,
     battlePass: battlePassReducer,
     cosmetics: cosmeticsReducer,
+    dungeonAdmin: dungeonAdminReducer,
+    dungeon: dungeonReducer,
   },
 });
 

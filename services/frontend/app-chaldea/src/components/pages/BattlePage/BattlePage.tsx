@@ -16,6 +16,7 @@ import BlueGradientButton from "../../CommonComponents/BlueGradientButton/BlueGr
 import BattleRewardsModal from "./BattleRewardsModal";
 import type { BattleRewards } from "../../../api/mobs";
 import { fetchBattleSpectateState } from "../../../api/battles";
+import { checkActiveSession } from "../../../api/dungeons";
 import useBattleWebSocket from "../../../hooks/useBattleWebSocket";
 
 // --- Types ---
@@ -156,6 +157,26 @@ const BattlePage = () => {
   // PvE rewards state
   const [pveRewards, setPveRewards] = useState<BattleRewards | null>(null);
   const [showRewardsModal, setShowRewardsModal] = useState(false);
+
+  // Navigate back: to dungeon session if in dungeon, otherwise to location
+  const navigateAfterBattle = useCallback(() => {
+    const charId = character?.id;
+    if (!charId) {
+      navigateAfterBattle();
+      return;
+    }
+    checkActiveSession(charId)
+      .then((result) => {
+        if (result.in_dungeon && result.session_id) {
+          navigate(`/dungeon-session/${result.session_id}`);
+        } else {
+          navigateAfterBattle();
+        }
+      })
+      .catch(() => {
+        navigateAfterBattle();
+      });
+  }, [character?.id, locationId, navigate]);
   const battleResultSetRef = useRef(false);
 
   // Pause state
@@ -589,7 +610,7 @@ const BattlePage = () => {
       <div className="flex flex-col items-center justify-center gap-6 py-20">
         <p className="text-site-red text-xl">{error}</p>
         <BlueGradientButton
-          onClick={() => navigate(`/location/${locationId}`)}
+          onClick={() => navigateAfterBattle()}
           text="Вернуться на страницу локации"
         />
       </div>
@@ -693,7 +714,7 @@ const BattlePage = () => {
                   Победитель: <span className="gold-text text-xl sm:text-2xl">{battleResult.winner}</span>
                 </p>
                 <BlueGradientButton
-                  onClick={() => navigate(`/location/${locationId}`)}
+                  onClick={() => navigateAfterBattle()}
                   text={"Вернуться на страницу локации"}
                 />
               </div>
@@ -715,7 +736,7 @@ const BattlePage = () => {
                     Бой завершён
                   </h2>
                   <BlueGradientButton
-                    onClick={() => navigate(`/location/${locationId}`)}
+                    onClick={() => navigateAfterBattle()}
                     text="Вернуться на страницу локации"
                   />
                 </div>
@@ -730,7 +751,7 @@ const BattlePage = () => {
               visible={showRewardsModal}
               onClose={() => {
                 setShowRewardsModal(false);
-                navigate(`/location/${locationId}`);
+                navigateAfterBattle();
               }}
             />
           )}

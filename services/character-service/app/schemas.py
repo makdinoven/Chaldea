@@ -250,6 +250,7 @@ class CharacterProfileResponse(BaseModel):
         character_level: Optional[int] = None
         user_id: Optional[int] = None
         user_nickname: Optional[str] = None
+        current_location_id: Optional[int] = None
 
         class Config:
             orm_mode = True
@@ -790,6 +791,31 @@ class TrySpawnRequest(BaseModel):
 class TrySpawnResponse(BaseModel):
     spawned: bool
     mob: Optional[Dict] = None
+
+
+class SpawnDungeonMobsRequest(BaseModel):
+    mob_template_ids: List[int]
+    location_id: int
+
+
+class SpawnDungeonMobsResponse(BaseModel):
+    character_ids: List[int]
+
+
+class DeductGoldRequest(BaseModel):
+    character_id: int
+    amount: int
+
+    @validator("amount")
+    def validate_positive(cls, v):
+        if v <= 0:
+            raise ValueError("amount должен быть положительным числом")
+        return v
+
+
+class DeductGoldResponse(BaseModel):
+    ok: bool
+    new_balance: int
 
 
 class MobInLocation(BaseModel):

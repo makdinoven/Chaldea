@@ -164,6 +164,23 @@ services:
       MONGODB_URL: mongodb://mongo:27017/${DB_DATABASE}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
 
+  dungeon-service:
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8013 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
+    volumes: !reset []
+    ports: !reset []
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
+      CHARACTER_SERVICE_URL: http://character-service:8005
+      BATTLE_SERVICE_URL: http://battle-service:8010
+      CHAR_ATTRS_SERVICE_URL: http://character-attributes-service:8002
+      INVENTORY_SERVICE_URL: http://inventory-service:8004
+      USER_SERVICE_URL: http://user-service:8000
+
   # --- Celery: no watchfiles wrapper ---
   celery-worker:
     command: celery -A tasks:celery_app worker --loglevel=info

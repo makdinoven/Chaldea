@@ -1,0 +1,16 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sqlalchemy==1.4.50
+aiomysql==0.2.0
+pymysql==1.1.1
+alembic==1.13.1
+pydantic==1.10.13
+aioredis==2.0.1
+redis
+httpx==0.25.2
+requests
+PyJWT==2.8.0
+cryptography==41.0.7
+pytest
+pytest-asyncio
+aiosqlite

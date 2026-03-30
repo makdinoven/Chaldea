@@ -520,6 +520,39 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  dungeon-service:
+    container_name: dungeon-service
+    build:
+      context: .
+      dockerfile: ./docker/dungeon-service/Dockerfile
+    command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8013 --app-dir /app --reload"
+    volumes:
+      - ./services/dungeon-service/app:/app
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      CHARACTER_SERVICE_URL: http://character-service:8005
+      BATTLE_SERVICE_URL: http://battle-service:8010
+      CHAR_ATTRS_SERVICE_URL: http://character-attributes-service:8002
+      INVENTORY_SERVICE_URL: http://inventory-service:8004
+      USER_SERVICE_URL: http://user-service:8000
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8013:8013"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   api-gateway:
     container_name: api-gateway
     build:
