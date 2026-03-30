@@ -20,7 +20,7 @@ import pytest_asyncio  # noqa: E402
 from typing import AsyncGenerator  # noqa: E402
 from unittest.mock import AsyncMock, MagicMock  # noqa: E402
 
-from sqlalchemy import event, String  # noqa: E402
+from sqlalchemy import event, String, Integer  # noqa: E402
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
@@ -50,6 +50,10 @@ def _set_sqlite_pragma(dbapi_conn, connection_record):
 # Patch database module BEFORE importing models/main
 import database  # noqa: E402
 
+# Dispose the original MySQL engine immediately to prevent hang on exit
+# (aiomysql pool cleanup blocks when no MySQL server is reachable)
+database.engine.sync_engine.dispose()
+
 database.engine = _test_engine
 database.async_session = _TestAsyncSession
 
@@ -69,6 +73,9 @@ for _model_cls in (
     for col in _model_cls.__table__.columns:
         if type(col.type).__name__ == "Enum":
             col.type = String(100)
+        # SQLite needs INTEGER (not BIGINT) for autoincrement PKs
+        if col.primary_key and type(col.type).__name__ == "BigInteger":
+            col.type = Integer()
 
 from auth_http import get_admin_user, get_current_user_via_http, UserRead  # noqa: E402
 from main import app  # noqa: E402

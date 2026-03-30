@@ -60,7 +60,7 @@ jobs:
           - service: dungeon-service
             working-dir: services/dungeon-service/app
             requirements: services/dungeon-service/app/requirements.txt
-            pytest-args: '--asyncio-mode=auto --timeout=30 --timeout-method=signal -x'
+            pytest-args: '--asyncio-mode=auto --timeout=30 --timeout-method=signal'
 
     steps:
       - name: Checkout code
