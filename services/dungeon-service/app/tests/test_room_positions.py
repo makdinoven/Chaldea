@@ -1,6 +1,6 @@
 # test_room_positions.py - Tests for room position fields and bulk position update endpoint.
 import pytest
-from conftest import _dungeon_payload, _room_payload
+from helpers import _dungeon_payload, _room_payload
 
 pytestmark = pytest.mark.asyncio
 

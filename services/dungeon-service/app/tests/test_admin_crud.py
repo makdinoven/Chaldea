@@ -1,6 +1,6 @@
 # test_admin_crud.py - Tests for dungeon-service admin CRUD endpoints.
 import pytest
-from conftest import _dungeon_payload, _room_payload, _corridor_payload
+from helpers import _dungeon_payload, _room_payload, _corridor_payload
 
 pytestmark = pytest.mark.asyncio
 

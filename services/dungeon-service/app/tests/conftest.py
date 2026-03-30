@@ -18,6 +18,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from typing import AsyncGenerator  # noqa: E402
+from unittest.mock import AsyncMock, MagicMock  # noqa: E402
 
 from sqlalchemy import event, String  # noqa: E402
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession  # noqa: E402
@@ -143,65 +144,8 @@ async def no_auth_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient
     app.dependency_overrides.clear()
 
 
-# Data factory helpers
-
-def _dungeon_payload(**overrides) -> dict:
-    """Return a valid DungeonCreate payload."""
-    base = {
-        "name": "Test Dungeon",
-        "description": "A dark test dungeon",
-        "lore_text": "Ancient halls of testing",
-        "stability_type": "static",
-        "danger_level": "safe",
-        "location_id": 1,
-        "recommended_level": 5,
-        "recommended_party_size": 2,
-        "cooldown_hours": 24,
-        "mob_multiplier": 1.0,
-        "loot_multiplier": 1.0,
-        "stamina_multiplier": 1.0,
-        "difficulty_modifier": 1.0,
-        "disable_rest_rooms": False,
-        "disable_merchants": False,
-        "mana_core_chance": 0.1,
-        "mana_core_item_id": None,
-        "image_url": None,
-    }
-    base.update(overrides)
-    return base
-
-
-def _room_payload(room_type="battle", **overrides) -> dict:
-    """Return a valid DungeonRoomCreate payload."""
-    base = {
-        "room_type": room_type,
-        "name": "Room (" + room_type + ")",
-        "description": "A " + room_type + " room",
-        "sort_order": 0,
-        "is_entrance": False,
-        "is_boss_room": False,
-        "is_mana_core_room": False,
-        "room_config": None,
-    }
-    base.update(overrides)
-    return base
-
-
-def _corridor_payload(from_room_id, to_room_id, **overrides) -> dict:
-    """Return a valid DungeonCorridorCreate payload."""
-    base = {
-        "from_room_id": from_room_id,
-        "to_room_id": to_room_id,
-        "stamina_cost": 5,
-        "is_bidirectional": True,
-        "random_battle_chance": 0.0,
-        "random_battle_mob_ids": None,
-        "trap_chance": 0.0,
-        "trap_config": None,
-        "description": None,
-    }
-    base.update(overrides)
-    return base
+# Data factory helpers — imported from helpers.py to avoid `from conftest import` anti-pattern
+from helpers import _dungeon_payload, _room_payload, _corridor_payload  # noqa: F401
 
 
 @pytest_asyncio.fixture()
@@ -262,4 +206,150 @@ async def dungeon_with_rooms(admin_client, created_dungeon):
         "boss_room": boss_room,
         "corridor1": corridor1,
         "corridor2": corridor2,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Mock-based fixtures for unit tests (test_gameplay.py)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_db():
+    """Async mock for SQLAlchemy AsyncSession."""
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.delete = AsyncMock()
+    db.commit = AsyncMock()
+    db.flush = AsyncMock()
+    db.refresh = AsyncMock()
+    return db
+
+
+@pytest.fixture
+def sample_dungeon():
+    """Mock Dungeon ORM object with sensible defaults."""
+    d = MagicMock(spec=models.Dungeon)
+    d.id = 1
+    d.location_id = 100
+    d.is_active = True
+    d.cooldown_hours = 24
+    d.stability_type = "static"
+    d.name = "Test Dungeon"
+    d.description = "A test dungeon"
+    d.danger_level = "safe"
+    d.recommended_level = 1
+    d.recommended_party_size = 1
+    d.mob_multiplier = 1.0
+    d.loot_multiplier = 1.0
+    d.stamina_multiplier = 1.0
+    d.difficulty_modifier = 1.0
+    d.disable_rest_rooms = False
+    d.disable_merchants = False
+    d.mana_core_chance = 0.0
+    d.mana_core_item_id = None
+    d.image_url = None
+    return d
+
+
+@pytest.fixture
+def sample_session():
+    """Mock DungeonSession ORM object — active session with two members."""
+    m1 = MagicMock(spec=models.DungeonSessionMember)
+    m1.id = 1
+    m1.session_id = 100
+    m1.character_id = 200
+    m1.user_id = 1
+    m1.status = "alive"
+
+    m2 = MagicMock(spec=models.DungeonSessionMember)
+    m2.id = 2
+    m2.session_id = 100
+    m2.character_id = 201
+    m2.user_id = 2
+    m2.status = "alive"
+
+    s = MagicMock(spec=models.DungeonSession)
+    s.id = 100
+    s.dungeon_id = 1
+    s.leader_character_id = 200
+    s.status = "active"
+    s.current_room_id = 10
+    s.members = [m1, m2]
+    s.started_at = None
+    s.finished_at = None
+    s.cooldown_until = None
+    return s
+
+
+@pytest.fixture
+def sample_corridor():
+    """Mock DungeonCorridor ORM object — from room 10 to room 11."""
+    c = MagicMock(spec=models.DungeonCorridor)
+    c.id = 50
+    c.dungeon_id = 1
+    c.from_room_id = 10
+    c.to_room_id = 11
+    c.stamina_cost = 5
+    c.is_bidirectional = True
+    c.random_battle_chance = 0.0
+    c.random_battle_mob_ids = None
+    c.trap_chance = 0.0
+    c.trap_config = None
+    c.description = None
+    c.source_handle = None
+    c.target_handle = None
+    return c
+
+
+@pytest.fixture
+def sample_room():
+    """Mock DungeonRoom ORM object — fork room (current room)."""
+    r = MagicMock(spec=models.DungeonRoom)
+    r.id = 10
+    r.dungeon_id = 1
+    r.room_type = "fork"
+    r.name = "Первая комната"
+    r.description = "Начальная комната"
+    r.image_url = None
+    r.is_entrance = True
+    r.is_boss_room = False
+    r.is_mana_core_room = False
+    r.sort_order = 0
+    r.room_config = None
+    r.position_x = 0.0
+    r.position_y = 0.0
+    return r
+
+
+@pytest.fixture
+def sample_room_state():
+    """Mock DungeonRoomState ORM object — not cleared, no loot collected."""
+    rs = MagicMock(spec=models.DungeonRoomState)
+    rs.id = 1
+    rs.session_id = 100
+    rs.room_id = 10
+    rs.is_cleared = False
+    rs.loot_collected = False
+    rs.event_choice_index = None
+    rs.extra_data = {}
+    return rs
+
+
+@pytest.fixture
+def sample_redis_state():
+    """Dict representing a Redis session state — active session, two alive members."""
+    return {
+        "session_id": 100,
+        "dungeon_id": 1,
+        "current_room_id": 10,
+        "status": "active",
+        "leader_character_id": 200,
+        "members": {
+            "200": {"user_id": 1, "status": "alive"},
+            "201": {"user_id": 2, "status": "alive"},
+        },
+        "active_battle_id": None,
+        "dead_count": 0,
+        "phase": "exploring",
     }
