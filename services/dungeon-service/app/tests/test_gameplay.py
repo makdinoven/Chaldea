@@ -1494,7 +1494,7 @@ async def test_initiate_room_battle(
     )
 
     assert battle_id == 555
-    mock_http.spawn_dungeon_mobs.assert_called_once_with([1, 2, 3], 10)
+    mock_http.spawn_dungeon_mobs.assert_called_once_with([1, 2, 3], 100)
     mock_ss.set_active_battle.assert_called_once_with(100, 555)
 
     # Verify battle was created with correct players

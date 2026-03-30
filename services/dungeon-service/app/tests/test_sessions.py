@@ -378,7 +378,11 @@ class TestInviteMember:
         )
         dungeon = _make_dungeon(id=1, location_id=100)
 
-        # _get_session (with selectinload) and _get_dungeon_for_session
+        invitee_member = _make_member(
+            id=2, character_id=20, user_id=200, session_id=1,
+        )
+
+        # _get_session, _get_dungeon_for_session, _build_session_response members query
         call_count = 0
 
         async def execute_side_effect(stmt, *args, **kwargs):
@@ -390,6 +394,11 @@ class TestInviteMember:
             elif call_count == 2:
                 # _get_dungeon_for_session
                 return _mock_db_execute_chain(dungeon)
+            elif call_count == 3:
+                # _build_session_response: select DungeonSessionMember
+                mock_result = MagicMock()
+                mock_result.scalars.return_value.all.return_value = [leader, invitee_member]
+                return mock_result
             return _mock_db_execute_chain(None)
 
         mock_db.execute = AsyncMock(side_effect=execute_side_effect)
@@ -408,10 +417,6 @@ class TestInviteMember:
         mock_ss.get_character_active_session = AsyncMock(return_value=None)
 
         # After commit + refresh, session now has 2 members
-        invitee_member = _make_member(
-            id=2, character_id=20, user_id=200, session_id=1,
-        )
-
         async def refresh_side_effect(obj, attrs=None):
             if hasattr(obj, 'members'):
                 obj.members = [leader, invitee_member]
@@ -607,9 +612,23 @@ class TestLeaveSession:
             status="forming", members=[leader, member],
         )
 
-        mock_db.execute = AsyncMock(
-            return_value=_mock_db_execute_chain(session)
-        )
+        # Call 1: _get_session, Call 2: _build_session_response members query
+        call_count = 0
+
+        async def execute_side_effect(stmt, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # _get_session
+                return _mock_db_execute_chain(session)
+            elif call_count == 2:
+                # _build_session_response: select DungeonSessionMember
+                mock_result = MagicMock()
+                mock_result.scalars.return_value.all.return_value = [leader]
+                return mock_result
+            return _mock_db_execute_chain(None)
+
+        mock_db.execute = AsyncMock(side_effect=execute_side_effect)
 
         # After removing member, refresh returns session with leader only
         async def refresh_side_effect(obj, attrs=None):
@@ -647,9 +666,23 @@ class TestLeaveSession:
             status="forming", members=[leader, member2],
         )
 
-        mock_db.execute = AsyncMock(
-            return_value=_mock_db_execute_chain(session)
-        )
+        # Call 1: _get_session, Call 2: _build_session_response members query
+        call_count = 0
+
+        async def execute_side_effect(stmt, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # _get_session
+                return _mock_db_execute_chain(session)
+            elif call_count == 2:
+                # _build_session_response: select DungeonSessionMember
+                mock_result = MagicMock()
+                mock_result.scalars.return_value.all.return_value = [member2]
+                return mock_result
+            return _mock_db_execute_chain(None)
+
+        mock_db.execute = AsyncMock(side_effect=execute_side_effect)
 
         # After leader leaves, refresh returns session with member2
         async def refresh_side_effect(obj, attrs=None):
@@ -722,6 +755,13 @@ class TestEnterDungeon:
         )
         entrance_room = _make_entrance_room(id=50, dungeon_id=1)
 
+        # enter_dungeon flow:
+        # 1: _get_session
+        # 2: member count query (select DungeonSessionMember)
+        # 3: entrance room query (select DungeonRoom where is_entrance)
+        # 4: members query (for Redis init)
+        # 5: existing_visit check for member 1
+        # Then db.add, db.commit, db.refresh, get_session_state (patched)
         call_count = 0
 
         async def execute_side_effect(stmt, *args, **kwargs):
@@ -731,8 +771,21 @@ class TestEnterDungeon:
                 # _get_session
                 return _mock_db_execute_chain(session)
             elif call_count == 2:
+                # member count: scalars().all() must return non-empty
+                mock_result = MagicMock()
+                mock_result.scalars.return_value.all.return_value = [leader]
+                return mock_result
+            elif call_count == 3:
                 # find entrance room
                 return _mock_db_execute_chain(entrance_room)
+            elif call_count == 4:
+                # members query for Redis init
+                mock_result = MagicMock()
+                mock_result.scalars.return_value.all.return_value = [leader]
+                return mock_result
+            elif call_count == 5:
+                # existing_visit check (no existing visit)
+                return _mock_db_execute_chain(None)
             return _mock_db_execute_chain(None)
 
         mock_db.execute = AsyncMock(side_effect=execute_side_effect)

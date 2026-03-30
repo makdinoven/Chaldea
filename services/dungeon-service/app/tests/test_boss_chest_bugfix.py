@@ -33,13 +33,16 @@ def _scalar_result(value):
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = value
     mock_result.scalars.return_value.all.return_value = [value] if value else []
+    mock_result.scalars.return_value.first.return_value = value
+    mock_result.all.return_value = [value] if value else []
     return mock_result
 
 
 def _scalars_result(values):
-    """Mock db.execute result that returns scalars().all()."""
+    """Mock db.execute result that returns scalars().all() and .all()."""
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = values
+    mock_result.all.return_value = values
     return mock_result
 
 
@@ -81,12 +84,17 @@ def _make_dungeon(
     loot_multiplier=1.0,
     mana_core_chance=0.0,
     stamina_multiplier=1.0,
+    name="Test Dungeon",
+    location_id=100,
 ) -> MagicMock:
     d = MagicMock(spec=Dungeon)
     d.id = dungeon_id
     d.loot_multiplier = loot_multiplier
     d.mana_core_chance = mana_core_chance
     d.stamina_multiplier = stamina_multiplier
+    d.name = name
+    d.location_id = location_id
+    d.stability_type = "static"
     return d
 
 
@@ -109,6 +117,9 @@ def _make_room(
     r.image_url = None
     r.room_config = room_config or {}
     r.dungeon_id = 1
+    r.position_x = None
+    r.position_y = None
+    r.sort_order = 0
     return r
 
 
@@ -340,6 +351,7 @@ class TestBossLootKeyFix:
         # DB execute for inventory queries
         db.execute = AsyncMock(return_value=_scalars_result([]))
         mock_ss.set_session_inventory = AsyncMock()
+        mock_ss.update_session_state = AsyncMock()
         mock_ws.broadcast_to_session = AsyncMock()
 
         result = await _handle_open_chest(
@@ -434,6 +446,7 @@ class TestBossLootKeyFix:
         mock_random.random.return_value = 0.0
         db.execute = AsyncMock(return_value=_scalars_result([]))
         mock_ss.set_session_inventory = AsyncMock()
+        mock_ss.update_session_state = AsyncMock()
         mock_ws.broadcast_to_session = AsyncMock()
 
         result = await _handle_open_chest(
@@ -512,6 +525,10 @@ class TestItemNamePopulation:
         mock_http.get_item_info = AsyncMock(side_effect=item_info_side_effect)
 
         # DB execute side effects
+        # get_session_state flow:
+        # 1: _get_session, 2: _get_dungeon_for_session, 3: current_room,
+        # 4: room_state, 5-7: _get_room_exits (corridors_from, corridors_to, visits),
+        # 8: inventory, 9: explored_rooms JOIN
         call_count = [0]
 
         async def execute_se(stmt, *a, **kw):
@@ -525,10 +542,12 @@ class TestItemNamePopulation:
                 return _scalar_result(current_room)
             elif idx == 4:  # room_state query
                 return _scalar_result(room_state_obj)
-            elif idx == 5:  # _get_room_exits (corridors)
+            elif idx <= 7:  # _get_room_exits (corridors_from, corridors_to, visits)
                 return _scalars_result([])
-            elif idx == 6:  # inventory query
+            elif idx == 8:  # inventory query
                 return _scalars_result([inv_item_1, inv_item_2])
+            elif idx == 9:  # explored_rooms JOIN query
+                return _scalars_result([])
             else:
                 return _scalar_result(None)
 
@@ -581,6 +600,10 @@ class TestItemNamePopulation:
         # get_item_info raises an exception
         mock_http.get_item_info = AsyncMock(side_effect=Exception("Service unavailable"))
 
+        # get_session_state flow:
+        # 1: _get_session, 2: _get_dungeon_for_session, 3: current_room,
+        # 4: room_state, 5-7: _get_room_exits (corridors_from, corridors_to, visits),
+        # 8: inventory, 9: explored_rooms JOIN
         call_count = [0]
 
         async def execute_se(stmt, *a, **kw):
@@ -594,10 +617,12 @@ class TestItemNamePopulation:
                 return _scalar_result(current_room)
             elif idx == 4:
                 return _scalar_result(room_state_obj)
-            elif idx == 5:
+            elif idx <= 7:  # _get_room_exits (3 calls)
                 return _scalars_result([])
-            elif idx == 6:
+            elif idx == 8:  # inventory
                 return _scalars_result([inv_item])
+            elif idx == 9:  # explored_rooms JOIN
+                return _scalars_result([])
             else:
                 return _scalar_result(None)
 
@@ -799,6 +824,10 @@ class TestTerminalStateGuard:
         # get_battle_state should NOT be called
         mock_http.get_battle_state = AsyncMock()
 
+        # get_session_state flow:
+        # 1: _get_session, 2: _get_dungeon_for_session, 3: current_room,
+        # 4: room_state, 5-7: _get_room_exits (corridors_from, corridors_to, visits),
+        # 8: inventory, (battle check — terminal, no DB), 9: explored_rooms JOIN
         call_count = [0]
 
         async def execute_se(stmt, *a, **kw):
@@ -812,9 +841,11 @@ class TestTerminalStateGuard:
                 return _scalar_result(current_room)
             elif idx == 4:  # room_state query
                 return _scalar_result(room_state_obj)
-            elif idx == 5:  # _get_room_exits
+            elif idx <= 7:  # _get_room_exits (3 calls)
                 return _scalars_result([])
-            elif idx == 6:  # inventory query
+            elif idx == 8:  # inventory query
+                return _scalars_result([])
+            elif idx == 9:  # explored_rooms JOIN
                 return _scalars_result([])
             else:
                 return _scalar_result(None)
@@ -863,15 +894,20 @@ class TestTerminalStateGuard:
         mock_http.get_character_profile = AsyncMock(
             return_value={"name": "Hero", "user_id": 1},
         )
-        # Battle is still ongoing — return valid battle state
+        # Battle is still ongoing — return valid battle state (both teams alive)
         mock_http.get_battle_state = AsyncMock(return_value={
             "runtime": {
                 "participants": {
                     "p1": {"team": 1, "hp": 50, "character_id": 200},
+                    "p2": {"team": 2, "hp": 30, "character_id": 999},
                 },
             },
         })
 
+        # get_session_state flow:
+        # 1: _get_session, 2: _get_dungeon_for_session, 3: current_room,
+        # 4: room_state, 5-7: _get_room_exits (corridors_from, corridors_to, visits),
+        # 8: inventory, (battle check — active, ongoing battle), 9: explored_rooms JOIN
         call_count = [0]
 
         async def execute_se(stmt, *a, **kw):
@@ -885,9 +921,11 @@ class TestTerminalStateGuard:
                 return _scalar_result(current_room)
             elif idx == 4:  # room_state query
                 return _scalar_result(room_state_obj)
-            elif idx == 5:  # _get_room_exits
+            elif idx <= 7:  # _get_room_exits (3 calls)
                 return _scalars_result([])
-            elif idx == 6:  # inventory query
+            elif idx == 8:  # inventory query
+                return _scalars_result([])
+            elif idx == 9:  # explored_rooms JOIN
                 return _scalars_result([])
             else:
                 return _scalar_result(None)

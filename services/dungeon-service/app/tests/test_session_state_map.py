@@ -561,13 +561,13 @@ class TestSessionStateExploredRooms:
             elif idx == 4:
                 # select DungeonRoomState (current room cleared)
                 return _mock_db_result(room_state)
-            elif idx <= 8:
-                # _get_room_exits queries (corridors_from, corridors_to, visits, etc.)
+            elif idx <= 7:
+                # _get_room_exits queries (corridors_from, corridors_to, visits)
                 return _mock_db_rows_result([])
-            elif idx == 9:
+            elif idx == 8:
                 # select inventory
                 return _mock_db_rows_result([])
-            elif idx == 10:
+            elif idx == 9:
                 # explored_rooms JOIN query
                 return _mock_db_rows_result([visited_row])
             return _mock_db_rows_result([])
@@ -613,11 +613,12 @@ class TestSessionStateExploredRooms:
                 return _mock_db_result(current_room)
             elif idx == 4:
                 return _mock_db_result(None)  # room state
-            elif idx <= 8:
+            elif idx <= 7:
+                # _get_room_exits (corridors_from, corridors_to, visits)
                 return _mock_db_rows_result([])
-            elif idx == 9:
+            elif idx == 8:
                 return _mock_db_rows_result([])  # inventory
-            elif idx == 10:
+            elif idx == 9:
                 # explored_rooms returns empty (current room excluded by query)
                 return _mock_db_rows_result([])
             return _mock_db_rows_result([])
@@ -656,11 +657,12 @@ class TestSessionStateExploredRooms:
                 return _mock_db_result(current_room)
             elif idx == 4:
                 return _mock_db_result(None)
-            elif idx <= 8:
+            elif idx <= 7:
+                # _get_room_exits (corridors_from, corridors_to, visits)
                 return _mock_db_rows_result([])
+            elif idx == 8:
+                return _mock_db_rows_result([])  # inventory
             elif idx == 9:
-                return _mock_db_rows_result([])
-            elif idx == 10:
                 # explored_rooms query: no visited rooms (only current, which is excluded)
                 return _mock_db_rows_result([])
             return _mock_db_rows_result([])
@@ -703,12 +705,13 @@ class TestSessionStateExploredRooms:
                 return _mock_db_result(current_room)
             elif idx == 4:
                 return _mock_db_result(None)
-            elif idx <= 8:
+            elif idx <= 7:
+                # _get_room_exits (corridors_from, corridors_to, visits)
                 return _mock_db_rows_result([])
+            elif idx == 8:
+                return _mock_db_rows_result([])  # inventory
             elif idx == 9:
-                return _mock_db_rows_result([])
-            elif idx == 10:
-                return _mock_db_rows_result(visited_rows)
+                return _mock_db_rows_result(visited_rows)  # explored_rooms JOIN
             return _mock_db_rows_result([])
 
         mock_db.execute = AsyncMock(side_effect=execute_side_effect)
@@ -757,12 +760,13 @@ class TestSessionStateExploredRooms:
                 return _mock_db_result(current_room)
             elif idx == 4:
                 return _mock_db_result(None)
-            elif idx <= 8:
+            elif idx <= 7:
+                # _get_room_exits (corridors_from, corridors_to, visits)
                 return _mock_db_rows_result([])
+            elif idx == 8:
+                return _mock_db_rows_result([])  # inventory
             elif idx == 9:
-                return _mock_db_rows_result([])
-            elif idx == 10:
-                return _mock_db_rows_result([visited_row])
+                return _mock_db_rows_result([visited_row])  # explored_rooms JOIN
             return _mock_db_rows_result([])
 
         mock_db.execute = AsyncMock(side_effect=execute_side_effect)
