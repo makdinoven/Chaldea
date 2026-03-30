@@ -271,9 +271,13 @@ function getErrorMessage(err: unknown, fallback: string): string {
     err !== null &&
     'response' in err
   ) {
-    const response = (err as { response?: { data?: { detail?: string } } }).response;
-    if (response?.data?.detail) {
-      return response.data.detail;
+    const response = (err as { response?: { data?: { detail?: unknown } } }).response;
+    const detail = response?.data?.detail;
+    if (typeof detail === 'string') {
+      return detail;
+    }
+    if (Array.isArray(detail)) {
+      return detail.map((e: { msg?: string }) => e.msg ?? '').filter(Boolean).join('; ') || fallback;
     }
   }
   return fallback;

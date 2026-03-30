@@ -26,6 +26,10 @@ import DungeonPartyPanel from './DungeonPartyPanel';
 import DungeonInventory from './DungeonInventory';
 import DungeonLootDistribution from './DungeonLootDistribution';
 
+// --- Mobile Tab ---
+
+type MobileTab = 'map' | 'room' | 'party';
+
 // --- Constants ---
 
 const PHASE_LABELS: Record<string, string> = {
@@ -45,10 +49,6 @@ const STABILITY_LABELS: Record<string, string> = {
   chaotic: 'Смертельный',
 };
 
-// --- Mobile Tab ---
-
-type MobileTab = 'room' | 'map' | 'party';
-
 // --- Component ---
 
 const DungeonSessionPage = () => {
@@ -66,7 +66,9 @@ const DungeonSessionPage = () => {
 
   const [showFleeModal, setShowFleeModal] = useState(false);
   const [showMoveEvent, setShowMoveEvent] = useState(false);
-  const [mobileTab, setMobileTab] = useState<MobileTab>('room');
+  const [mobileTab, setMobileTab] = useState<MobileTab>('map');
+  const [isMoving, setIsMoving] = useState(false);
+  const [movingToRoomId, setMovingToRoomId] = useState<number | null>(null);
 
   // WebSocket
   const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
@@ -108,6 +110,14 @@ const DungeonSessionPage = () => {
 
     switch (msg.type) {
       case 'room_entered':
+        setIsMoving(false);
+        setMovingToRoomId(null);
+        // Refetch full state
+        if (sessionId) {
+          dispatch(fetchSessionState({ sessionId: Number(sessionId), characterId: currentCharacterId! }));
+        }
+        break;
+
       case 'session_update':
         // Refetch full state
         if (sessionId) {
@@ -200,6 +210,10 @@ const DungeonSessionPage = () => {
   useEffect(() => {
     if (!lastMoveResponse) return;
 
+    // Reset moving state when move response arrives
+    setIsMoving(false);
+    setMovingToRoomId(null);
+
     if (lastMoveResponse.corridor_event) {
       setShowMoveEvent(true);
       // Auto-hide after 5 seconds
@@ -214,16 +228,32 @@ const DungeonSessionPage = () => {
   }, [lastMoveResponse, dispatch]);
 
   // Handlers
-  const handleMove = useCallback(
+  const handleMapMove = useCallback(
     (corridorId: number) => {
-      if (!sessionId || !currentCharacterId) return;
-      dispatch(moveDungeon({
-        sessionId: Number(sessionId),
-        characterId: currentCharacterId,
-        corridorId,
-      }));
+      if (!currentCharacterId || isMoving) return;
+
+      // Find target room ID from the corridor
+      const exit = sessionState?.current_room?.exits.find(
+        (e) => e.corridor_id === corridorId,
+      );
+      if (exit) {
+        setMovingToRoomId(exit.to_room_id);
+      }
+
+      setIsMoving(true);
+
+      // Delay the actual move API call slightly to let animation start
+      setTimeout(() => {
+        dispatch(
+          moveDungeon({
+            sessionId: Number(sessionId),
+            characterId: currentCharacterId,
+            corridorId,
+          }),
+        );
+      }, 100);
     },
-    [dispatch, sessionId, currentCharacterId],
+    [currentCharacterId, isMoving, sessionState, dispatch, sessionId],
   );
 
   const handleFlee = useCallback(() => {
@@ -290,7 +320,7 @@ const DungeonSessionPage = () => {
         currentCharacterId={currentCharacterId}
         isLeader={isLeader}
         sessionId={Number(sessionId)}
-        onBack={() => navigate(-1)}
+        onBack={() => navigate(`/location/${sessionState.location_id}`)}
       />
     );
   }
@@ -354,7 +384,7 @@ const DungeonSessionPage = () => {
           groupInventory={sessionState.group_inventory}
           members={sessionState.members}
           isLeader={isLeader}
-          onFinalized={() => navigate(-1)}
+          onFinalized={() => navigate(`/location/${sessionState.location_id}`)}
         />
 
         {/* Party panel */}
@@ -394,7 +424,7 @@ const DungeonSessionPage = () => {
 
       {/* Mobile tab bar */}
       <div className="flex lg:hidden bg-black/40 rounded-card p-1 backdrop-blur-sm">
-        {(['room', 'map', 'party'] as MobileTab[]).map((tab) => (
+        {(['map', 'room', 'party'] as MobileTab[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setMobileTab(tab)}
@@ -404,38 +434,43 @@ const DungeonSessionPage = () => {
                 : 'text-white/40 hover:text-white/60'
             }`}
           >
-            {tab === 'room' && 'Комната'}
             {tab === 'map' && 'Карта'}
+            {tab === 'room' && 'Комната'}
             {tab === 'party' && 'Группа'}
           </button>
         ))}
       </div>
 
-      {/* Desktop: 3-column layout */}
-      <div className="hidden lg:grid lg:grid-cols-[280px_1fr_280px] gap-4">
-        {/* Left: Map */}
-        <DungeonMap
-          sessionState={sessionState}
-          stabilityType="static"
-        />
-
-        {/* Center: Current room */}
-        {sessionState.current_room && (
-          <DungeonRoom
-            room={sessionState.current_room}
-            sessionId={Number(sessionId)}
-            characterId={currentCharacterId ?? 0}
-            isLeader={isLeader}
-            moveLoading={moveLoading}
-            deadMemberCount={deadMemberCount}
-            members={sessionState.members}
-            dungeonManaCoreCh={0}
-            onMove={handleMove}
+      {/* Desktop: 2-column layout — map primary (~70%), sidebar (320px) */}
+      <div className="hidden lg:flex lg:gap-4">
+        {/* Map — takes remaining space */}
+        <div className="flex-1 min-w-0">
+          <DungeonMap
+            sessionState={sessionState}
+            stabilityType="static"
+            onMoveToRoom={handleMapMove}
+            isMoving={isMoving}
+            movingToRoomId={movingToRoomId}
           />
-        )}
+        </div>
 
-        {/* Right: Party + Inventory */}
-        <div className="flex flex-col gap-4">
+        {/* Sidebar — room info, party, inventory, flee */}
+        <div className="w-80 shrink-0 flex flex-col gap-4">
+          {/* Current Room Info */}
+          {sessionState.current_room && (
+            <DungeonRoom
+              room={sessionState.current_room}
+              sessionId={Number(sessionId)}
+              characterId={currentCharacterId ?? 0}
+              isLeader={isLeader}
+              moveLoading={moveLoading}
+              deadMemberCount={deadMemberCount}
+              members={sessionState.members}
+              dungeonManaCoreCh={0}
+            />
+          )}
+
+          {/* Party panel */}
           <DungeonPartyPanel
             members={sessionState.members}
             maxSize={4}
@@ -461,6 +496,16 @@ const DungeonSessionPage = () => {
 
       {/* Mobile: single column with tabs */}
       <div className="lg:hidden">
+        {mobileTab === 'map' && (
+          <DungeonMap
+            sessionState={sessionState}
+            stabilityType="static"
+            onMoveToRoom={handleMapMove}
+            isMoving={isMoving}
+            movingToRoomId={movingToRoomId}
+          />
+        )}
+
         {mobileTab === 'room' && sessionState.current_room && (
           <DungeonRoom
             room={sessionState.current_room}
@@ -471,14 +516,6 @@ const DungeonSessionPage = () => {
             deadMemberCount={deadMemberCount}
             members={sessionState.members}
             dungeonManaCoreCh={0}
-            onMove={handleMove}
-          />
-        )}
-
-        {mobileTab === 'map' && (
-          <DungeonMap
-            sessionState={sessionState}
-            stabilityType="static"
           />
         )}
 

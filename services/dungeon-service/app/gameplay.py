@@ -30,6 +30,8 @@ from schemas import (
     CorridorEventResponse,
     DistributeLootRequest,
     DistributeLootResponse,
+    ExploredCorridorInfo,
+    ExploredRoomInfo,
     FinalizeRequest,
     FinalizeResponse,
     FleeItemInfo,
@@ -54,6 +56,55 @@ logger = logging.getLogger("dungeon-service.gameplay")
 # =====================================================================
 # Helpers
 # =====================================================================
+
+def _build_room_config_visible(
+    room: DungeonRoom,
+    room_state: Optional[DungeonRoomState] = None,
+) -> dict:
+    """Build a safe subset of room_config visible to players."""
+    cfg = room.room_config or {}
+    visible: dict = {}
+
+    if room.room_type == "event":
+        if cfg.get("text"):
+            visible["text"] = cfg["text"]
+        choices = cfg.get("choices", [])
+        # Only show choice text, not outcome data
+        visible["choices"] = [
+            c.get("text", c) if isinstance(c, dict) else str(c)
+            for c in choices
+        ]
+        if room_state and room_state.event_choice_index is not None:
+            visible["choice_made"] = room_state.event_choice_index
+
+    elif room.room_type == "treasure":
+        if room_state:
+            visible["loot_collected"] = room_state.loot_collected
+
+    elif room.room_type == "boss":
+        if room_state:
+            visible["loot_collected"] = room_state.loot_collected
+
+    elif room.room_type == "rest":
+        if cfg.get("heal_percent") is not None:
+            visible["heal_percent"] = cfg["heal_percent"]
+        if cfg.get("wait_seconds") is not None:
+            visible["wait_seconds"] = cfg["wait_seconds"]
+        if cfg.get("gold_cost") is not None:
+            visible["gold_cost"] = cfg["gold_cost"]
+
+    elif room.room_type == "merchant":
+        visible["items"] = cfg.get("items", [])
+
+    elif room.room_type == "trap":
+        # Don't reveal stat_check or difficulty — just show description
+        pass
+
+    elif room.room_type == "teleport":
+        visible["target_room_id"] = cfg.get("target_room_id")
+
+    return visible
+
 
 async def _get_session(db: AsyncSession, session_id: int) -> DungeonSession:
     """Load a dungeon session by id, raising 404 if not found."""
@@ -149,13 +200,28 @@ async def _get_room_exits(
         target_room_id = c.to_room_id
         explored = target_room_id in visited_room_ids
 
-        # Get target room name (or "???" if not explored)
+        # Get target room name and position (or "???" if not explored)
+        target_position_x = None
+        target_position_y = None
         if explored:
-            room_stmt = select(DungeonRoom.name).where(DungeonRoom.id == target_room_id)
+            room_stmt = select(DungeonRoom).where(DungeonRoom.id == target_room_id)
             room_result = await db.execute(room_stmt)
-            room_name = room_result.scalar_one_or_none() or "???"
+            target_room_obj = room_result.scalar_one_or_none()
+            room_name = target_room_obj.name if target_room_obj else "???"
+            if target_room_obj:
+                target_position_x = target_room_obj.position_x
+                target_position_y = target_room_obj.position_y
         else:
             room_name = "???"
+            # Still fetch position for map rendering (fog of war shows location)
+            pos_stmt = select(DungeonRoom.position_x, DungeonRoom.position_y).where(
+                DungeonRoom.id == target_room_id
+            )
+            pos_result = await db.execute(pos_stmt)
+            pos_row = pos_result.one_or_none()
+            if pos_row:
+                target_position_x = pos_row[0]
+                target_position_y = pos_row[1]
 
         # Determine reliability based on dungeon stability type
         reliability = None
@@ -173,20 +239,38 @@ async def _get_room_exits(
                 stamina_cost=c.stamina_cost,
                 explored=explored,
                 reliability=reliability,
+                position_x=target_position_x,
+                position_y=target_position_y,
+                source_handle=c.source_handle,
+                target_handle=c.target_handle,
             )
         )
 
-    # Reverse corridors (bidirectional)
+    # Reverse corridors (bidirectional) — swap source_handle/target_handle
     for c in corridors_to:
         target_room_id = c.from_room_id
         explored = target_room_id in visited_room_ids
 
+        target_position_x = None
+        target_position_y = None
         if explored:
-            room_stmt = select(DungeonRoom.name).where(DungeonRoom.id == target_room_id)
+            room_stmt = select(DungeonRoom).where(DungeonRoom.id == target_room_id)
             room_result = await db.execute(room_stmt)
-            room_name = room_result.scalar_one_or_none() or "???"
+            target_room_obj = room_result.scalar_one_or_none()
+            room_name = target_room_obj.name if target_room_obj else "???"
+            if target_room_obj:
+                target_position_x = target_room_obj.position_x
+                target_position_y = target_room_obj.position_y
         else:
             room_name = "???"
+            pos_stmt = select(DungeonRoom.position_x, DungeonRoom.position_y).where(
+                DungeonRoom.id == target_room_id
+            )
+            pos_result = await db.execute(pos_stmt)
+            pos_row = pos_result.one_or_none()
+            if pos_row:
+                target_position_x = pos_row[0]
+                target_position_y = pos_row[1]
 
         reliability = None
         if dungeon:
@@ -203,6 +287,10 @@ async def _get_room_exits(
                 stamina_cost=c.stamina_cost,
                 explored=explored,
                 reliability=reliability,
+                position_x=target_position_x,
+                position_y=target_position_y,
+                source_handle=c.target_handle,  # SWAPPED for reverse
+                target_handle=c.source_handle,  # SWAPPED for reverse
             )
         )
 
@@ -718,7 +806,10 @@ async def get_session_state(
                 is_entrance=current_room.is_entrance,
                 is_boss_room=current_room.is_boss_room,
                 is_cleared=is_cleared,
+                room_config_visible=_build_room_config_visible(current_room, room_state_obj),
                 exits=exits,
+                position_x=current_room.position_x,
+                position_y=current_room.position_y,
             )
 
     # 6. Build members list
@@ -746,9 +837,20 @@ async def get_session_state(
     )
     inv_result = await db.execute(inv_stmt)
     inv_items = inv_result.scalars().all()
+    # Fetch item names for all unique item_ids (cache within request)
+    unique_item_ids = {item.item_id for item in inv_items}
+    item_name_cache: Dict[int, Optional[str]] = {}
+    for uid in unique_item_ids:
+        try:
+            info = await http_clients.get_item_info(uid)
+            item_name_cache[uid] = info.get("name") or info.get("item_name")
+        except Exception:
+            item_name_cache[uid] = None
+
     group_inventory = [
         GroupInventoryItemResponse(
             item_id=item.item_id,
+            item_name=item_name_cache.get(item.item_id),
             quantity=item.quantity,
             source_description=item.source_description,
         )
@@ -757,95 +859,172 @@ async def get_session_state(
 
     # 8. If active_battle_id: check battle status via http_clients
     if active_battle_id:
-        try:
-            battle_state_data = await http_clients.get_battle_state(active_battle_id)
+        # Skip battle re-processing for terminal sessions
+        session_status = redis_state.get("status", "active") if redis_state else session_obj.status
+        if session_status in ("completed", "escaped", "wiped"):
+            # Session is terminal — just clear stale battle ID
+            await session_state.update_session_state(session_id, active_battle_id=None)
+            active_battle_id = None
+        else:
+            try:
+                battle_state_data = await http_clients.get_battle_state(active_battle_id)
 
-            if battle_state_data is None:
-                # Battle state not found (404 / Redis expired) — battle finished.
-                # Clean up dungeon session state.
-                logger.info(
-                    "Бой %d не найден (Redis expired), очищаем состояние сессии %d",
-                    active_battle_id, session_id,
-                )
-                # Mark room as cleared
-                current_room_id_val = redis_state.get("current_room_id") if redis_state else None
-                if current_room_id_val:
-                    room_state_stmt = select(DungeonRoomState).where(
-                        DungeonRoomState.session_id == session_id,
-                        DungeonRoomState.room_id == int(current_room_id_val),
+                if battle_state_data is None:
+                    # Battle state not found (404 / Redis expired) — battle finished.
+                    # Clean up dungeon session state.
+                    logger.info(
+                        "Бой %d не найден (Redis expired), очищаем состояние сессии %d",
+                        active_battle_id, session_id,
                     )
-                    rs_result = await db.execute(room_state_stmt)
-                    rs_obj = rs_result.scalar_one_or_none()
-                    if rs_obj and not rs_obj.is_cleared:
-                        rs_obj.is_cleared = True
-                        await db.commit()
-
-                    # Check if this was a boss room — handle completion
-                    room_stmt = select(DungeonRoom).where(
-                        DungeonRoom.id == int(current_room_id_val)
-                    )
-                    room_result = await db.execute(room_stmt)
-                    cleared_room = room_result.scalar_one_or_none()
-                    if cleared_room and cleared_room.is_boss_room:
-                        dungeon_stmt = select(Dungeon).where(
-                            Dungeon.id == session_obj.dungeon_id
+                    # Mark room as cleared
+                    current_room_id_val = redis_state.get("current_room_id") if redis_state else None
+                    if current_room_id_val:
+                        room_state_stmt = select(DungeonRoomState).where(
+                            DungeonRoomState.session_id == session_id,
+                            DungeonRoomState.room_id == int(current_room_id_val),
                         )
-                        dungeon_result = await db.execute(dungeon_stmt)
-                        dungeon_for_boss = dungeon_result.scalar_one_or_none()
-                        if dungeon_for_boss:
-                            await _handle_boss_room_cleared(
-                                db, session_id, session_obj,
-                                dungeon_for_boss, cleared_room,
-                            )
+                        rs_result = await db.execute(room_state_stmt)
+                        rs_obj = rs_result.scalar_one_or_none()
+                        if rs_obj and not rs_obj.is_cleared:
+                            rs_obj.is_cleared = True
                             await db.commit()
-                            refreshed = await session_state.get_session_state(session_id)
-                            if refreshed:
-                                phase = refreshed.get("phase", "exploring")
 
-                await session_state.clear_active_battle(session_id)
-                if phase == "exploring":
-                    await session_state.set_phase(session_id, "exploring")
-                active_battle_id = None
-            else:
-                # Battle state exists — check if it's finished
-                runtime = battle_state_data.get("runtime", {})
-                participants = runtime.get("participants", {})
-
-                team1_all_dead = True
-                team2_all_dead = True
-                has_participants = bool(participants)
-                for pid, pdata in participants.items():
-                    team = pdata.get("team")
-                    hp = pdata.get("hp", 0)
-                    if team == 1 and hp > 0:
-                        team1_all_dead = False
-                    elif team == 2 and hp > 0:
-                        team2_all_dead = False
-
-                battle_finished = has_participants and (team1_all_dead or team2_all_dead)
-
-                if battle_finished:
-                    try:
-                        await process_battle_completion(
-                            db, session_id, active_battle_id, battle_state_data,
+                        # Check if this was a boss room — handle completion
+                        room_stmt = select(DungeonRoom).where(
+                            DungeonRoom.id == int(current_room_id_val)
                         )
-                        refreshed_state = await session_state.get_session_state(session_id)
-                        if refreshed_state:
-                            phase = refreshed_state.get("phase", phase)
-                            active_battle_id = refreshed_state.get("active_battle_id")
-                    except Exception as proc_err:
-                        logger.error(
-                            "Ошибка при обработке завершения боя %d: %s",
-                            active_battle_id, proc_err,
-                        )
-        except Exception:
-            logger.warning(
-                "Не удалось проверить статус боя %d для сессии %d",
-                active_battle_id, session_id,
-                exc_info=True,
+                        room_result = await db.execute(room_stmt)
+                        cleared_room = room_result.scalar_one_or_none()
+                        if cleared_room and cleared_room.is_boss_room:
+                            dungeon_stmt = select(Dungeon).where(
+                                Dungeon.id == session_obj.dungeon_id
+                            )
+                            dungeon_result = await db.execute(dungeon_stmt)
+                            dungeon_for_boss = dungeon_result.scalar_one_or_none()
+                            if dungeon_for_boss:
+                                await _handle_boss_room_cleared(
+                                    db, session_id, session_obj,
+                                    dungeon_for_boss, cleared_room,
+                                )
+                                await db.commit()
+                                refreshed = await session_state.get_session_state(session_id)
+                                if refreshed:
+                                    phase = refreshed.get("phase", "exploring")
+
+                    await session_state.clear_active_battle(session_id)
+                    if phase == "exploring":
+                        await session_state.set_phase(session_id, "exploring")
+                    active_battle_id = None
+                else:
+                    # Battle state exists — check if it's finished
+                    runtime = battle_state_data.get("runtime", {})
+                    participants = runtime.get("participants", {})
+
+                    team1_all_dead = True
+                    team2_all_dead = True
+                    has_participants = bool(participants)
+                    for pid, pdata in participants.items():
+                        team = pdata.get("team")
+                        hp = pdata.get("hp", 0)
+                        if team == 1 and hp > 0:
+                            team1_all_dead = False
+                        elif team == 2 and hp > 0:
+                            team2_all_dead = False
+
+                    battle_finished = has_participants and (team1_all_dead or team2_all_dead)
+
+                    if battle_finished:
+                        try:
+                            await process_battle_completion(
+                                db, session_id, active_battle_id, battle_state_data,
+                            )
+                            refreshed_state = await session_state.get_session_state(session_id)
+                            if refreshed_state:
+                                phase = refreshed_state.get("phase", phase)
+                                active_battle_id = refreshed_state.get("active_battle_id")
+                        except Exception as proc_err:
+                            logger.error(
+                                "Ошибка при обработке завершения боя %d: %s",
+                                active_battle_id, proc_err,
+                            )
+            except Exception:
+                logger.warning(
+                    "Не удалось проверить статус боя %d для сессии %d",
+                    active_battle_id, session_id,
+                    exc_info=True,
+                )
+
+    # 9. Build explored_rooms list (all rooms visited by this character, excluding current)
+    explored_rooms: List[ExploredRoomInfo] = []
+    if session_obj.current_room_id:
+        visits_stmt = (
+            select(
+                DungeonRoom.id,
+                DungeonRoom.name,
+                DungeonRoom.room_type,
+                DungeonRoom.position_x,
+                DungeonRoom.position_y,
+                DungeonRoomState.is_cleared,
+            )
+            .join(
+                DungeonRoomVisit,
+                DungeonRoomVisit.room_id == DungeonRoom.id,
+            )
+            .outerjoin(
+                DungeonRoomState,
+                (DungeonRoomState.room_id == DungeonRoom.id)
+                & (DungeonRoomState.session_id == session_id),
+            )
+            .where(
+                DungeonRoomVisit.dungeon_id == session_obj.dungeon_id,
+                DungeonRoomVisit.character_id == character_id,
+                DungeonRoom.id != session_obj.current_room_id,
+            )
+        )
+        visits_result = await db.execute(visits_stmt)
+        visited_rows = visits_result.all()
+
+        for row in visited_rows:
+            explored_rooms.append(
+                ExploredRoomInfo(
+                    id=row[0],
+                    name=row[1],
+                    room_type=row[2],
+                    position_x=row[3],
+                    position_y=row[4],
+                    is_cleared=row[5] if row[5] is not None else False,
+                )
             )
 
-    # 9. Return full SessionStateResponse
+    # 10. Build explored_corridors — corridors between any visited rooms (including current)
+    explored_corridors: List[ExploredCorridorInfo] = []
+    if session_obj.current_room_id:
+        # Collect all visited room IDs (including current room)
+        visited_ids = {r.id for r in explored_rooms}
+        visited_ids.add(session_obj.current_room_id)
+
+        if len(visited_ids) >= 2:
+            corridors_stmt = (
+                select(DungeonCorridor)
+                .where(
+                    DungeonCorridor.dungeon_id == session_obj.dungeon_id,
+                    DungeonCorridor.from_room_id.in_(visited_ids),
+                    DungeonCorridor.to_room_id.in_(visited_ids),
+                )
+            )
+            corridors_result = await db.execute(corridors_stmt)
+            for c in corridors_result.scalars().all():
+                explored_corridors.append(
+                    ExploredCorridorInfo(
+                        corridor_id=c.id,
+                        from_room_id=c.from_room_id,
+                        to_room_id=c.to_room_id,
+                        source_handle=c.source_handle,
+                        target_handle=c.target_handle,
+                    )
+                )
+
+    # 11. Return full SessionStateResponse
     return SessionStateResponse(
         session_id=session_obj.id,
         dungeon_id=session_obj.dungeon_id,
@@ -857,6 +1036,8 @@ async def get_session_state(
         members=members_resp,
         group_inventory=group_inventory,
         active_battle_id=active_battle_id,
+        explored_rooms=explored_rooms,
+        explored_corridors=explored_corridors,
     )
 
 
@@ -1325,8 +1506,10 @@ async def process_battle_completion(
         )
         session_obj.current_room_id = pending_target_room_id
     else:
-        # Room battle completed
-        await session_state.clear_active_battle(session_id)
+        # Room battle completed — but if dungeon just completed,
+        # boss handler already set the correct phase
+        if not results.get("dungeon_completed"):
+            await session_state.clear_active_battle(session_id)
 
     await db.commit()
 
@@ -1425,51 +1608,26 @@ async def _handle_boss_room_cleared(
             # Don't complete dungeon yet — player can choose to go to mana core
             return result
 
-    # No mana core (or chance failed) — dungeon completed
+    # No mana core (or chance failed) — boss defeated, but session stays
+    # active so the player can open the boss chest first.
+    # Transition to "completed" happens later in _handle_open_chest (Task 7).
     result["dungeon_completed"] = True
-    session_obj.status = "completed"
-    session_obj.finished_at = datetime.utcnow()
 
     await session_state.update_session_state(
         session_id,
-        phase="distributing_loot",
-        status="completed",
+        phase="exploring",
+        status="active",
+        active_battle_id=None,
     )
 
-    # Add boss loot to group inventory if configured
-    room_config = boss_room.room_config if isinstance(boss_room.room_config, dict) else {}
-    boss_loot = room_config.get("boss_loot", [])
-    loot_added = []
-    for loot_entry in boss_loot:
-        item_id = loot_entry.get("item_id")
-        quantity = loot_entry.get("quantity", 1)
-        chance = loot_entry.get("chance", 1.0)
-        if item_id and random.random() < chance:
-            inv_item = DungeonSessionInventory(
-                session_id=session_id,
-                item_id=item_id,
-                quantity=quantity,
-                source_description=f"Босс: {boss_room.name}",
-            )
-            db.add(inv_item)
-            loot_added.append({"item_id": item_id, "quantity": quantity})
-
-    if loot_added:
-        result["boss_loot"] = loot_added
-        await ws_manager.broadcast_to_session(session_id, {
-            "type": "loot_added",
-            "data": {
-                "source": f"Босс: {boss_room.name}",
-                "items": loot_added,
-                "message": "Из сундука босса выпал лут!",
-            },
-        })
+    # Boss loot is NOT auto-added here — player must open the chest
+    # (loot comes from _handle_open_chest using "boss_loot" key)
 
     await ws_manager.broadcast_to_session(session_id, {
         "type": "session_status",
         "data": {
-            "status": "completed",
-            "message": "Подземелье пройдено! Распределите добычу.",
+            "status": "active",
+            "message": "Босс повержен! Заберите добычу из сундука.",
         },
     })
 
@@ -1783,7 +1941,10 @@ async def move_to_room(
             is_entrance=target_room.is_entrance,
             is_boss_room=target_room.is_boss_room,
             is_cleared=is_cleared,
+            room_config_visible=_build_room_config_visible(target_room, room_state_obj),
             exits=exits,
+            position_x=target_room.position_x,
+            position_y=target_room.position_y,
         )
 
     # 14. Broadcast via WebSocket
@@ -1834,6 +1995,109 @@ async def move_to_room(
                     "type": "battle_error",
                     "message": "Ошибка при создании боя",
                 }
+
+    # 15b. Handle teleport room — automatically move party to target room
+    if target_room and target_room.room_type == "teleport" and not room_state_obj.is_cleared:
+        room_config = target_room.room_config or {}
+        teleport_target_id = room_config.get("target_room_id")
+        if teleport_target_id:
+            # Mark teleport room as cleared
+            room_state_obj.is_cleared = True
+            await db.commit()
+
+            # Load target room
+            tp_stmt = select(DungeonRoom).where(DungeonRoom.id == int(teleport_target_id))
+            tp_result = await db.execute(tp_stmt)
+            tp_room = tp_result.scalar_one_or_none()
+
+            if tp_room:
+                # Move party to teleport target (no stamina cost)
+                await session_state.set_current_room(session_id, tp_room.id)
+                session_obj.current_room_id = tp_room.id
+                await db.commit()
+
+                # Record visit for all party members
+                members_data = redis_state.get("members", {})
+                for mid_str in members_data.keys():
+                    mid = int(mid_str)
+                    v_stmt = select(DungeonRoomVisit).where(
+                        DungeonRoomVisit.dungeon_id == session_obj.dungeon_id,
+                        DungeonRoomVisit.character_id == mid,
+                        DungeonRoomVisit.room_id == tp_room.id,
+                    )
+                    v_res = await db.execute(v_stmt)
+                    v_existing = v_res.scalar_one_or_none()
+                    if v_existing:
+                        v_existing.visit_count += 1
+                    else:
+                        db.add(DungeonRoomVisit(
+                            dungeon_id=session_obj.dungeon_id,
+                            character_id=mid,
+                            room_id=tp_room.id,
+                        ))
+                await db.commit()
+
+                # Create/load room state for target
+                tp_room_state = await _get_room_state(db, session_id, tp_room.id)
+
+                # Build new room view
+                tp_exits = await _get_room_exits(
+                    db, session_id, tp_room, session_obj.dungeon_id, character_id,
+                )
+                tp_room_view = RoomViewResponse(
+                    id=tp_room.id,
+                    room_type=tp_room.room_type,
+                    name=tp_room.name,
+                    description=tp_room.description,
+                    image_url=tp_room.image_url,
+                    is_entrance=tp_room.is_entrance,
+                    is_boss_room=tp_room.is_boss_room,
+                    is_cleared=tp_room_state.is_cleared,
+                    room_config_visible=_build_room_config_visible(tp_room, tp_room_state),
+                    exits=tp_exits,
+                    position_x=tp_room.position_x,
+                    position_y=tp_room.position_y,
+                )
+
+                new_room_view = tp_room_view
+
+                room_event = {
+                    "type": "teleported",
+                    "target_room_id": tp_room.id,
+                    "target_room_name": tp_room.name,
+                }
+
+                # Broadcast teleport
+                await ws_manager.broadcast_to_session(session_id, {
+                    "type": "room_entered",
+                    "data": {
+                        "room": tp_room_view.dict(),
+                        "teleported": True,
+                        "message": f"Телепорт! Группа перенесена в «{tp_room.name}»",
+                    },
+                })
+
+                logger.info(
+                    "Телепорт: сессия %d перенесена из комнаты %d в %d",
+                    session_id, target_room.id, tp_room.id,
+                )
+
+                # Check if teleport target is a battle room
+                if not tp_room_state.is_cleared and tp_room.room_type in ("battle", "boss"):
+                    try:
+                        battle_id = await initiate_room_battle(
+                            db=db, session_id=session_id, room=tp_room,
+                            dungeon=dungeon, session_state_data=redis_state,
+                            auth_token=auth_token,
+                        )
+                        room_event = {
+                            "type": "battle_started",
+                            "battle_id": battle_id,
+                            "room_type": tp_room.room_type,
+                            "teleported_from": target_room.id,
+                        }
+                    except Exception as e:
+                        logger.error("Ошибка боя после телепорта: %s", e)
 
     # 16. Return MoveResponse
     return MoveResponse(
@@ -2036,9 +2300,12 @@ async def _handle_open_chest(
             detail="Сначала нужно победить босса",
         )
 
-    # Get loot table from room_config
+    # Get loot table from room_config (boss rooms use "boss_loot" key)
     room_config = room.room_config if isinstance(room.room_config, dict) else {}
-    loot_table = room_config.get("loot_table", [])
+    if room.room_type == "boss":
+        loot_table = room_config.get("boss_loot", [])
+    else:
+        loot_table = room_config.get("loot_table", [])
 
     loot_gained = []
     for entry in loot_table:
@@ -2054,14 +2321,33 @@ async def _handle_open_chest(
                 db, session_id, entry_item_id, entry_quantity,
                 f"Сундук: {room.name}",
             )
+            # Fetch item_name for the loot response
+            loot_item_name = None
+            try:
+                item_info = await http_clients.get_item_info(entry_item_id)
+                loot_item_name = item_info.get("name") or item_info.get("item_name")
+            except Exception:
+                pass
             loot_gained.append({
                 "item_id": entry_item_id,
+                "item_name": loot_item_name,
                 "quantity": entry_quantity,
             })
 
     # Mark loot as collected
     room_state.loot_collected = True
     await db.commit()
+
+    # For boss rooms, transition to distributing_loot phase and completed status
+    if room.room_type == "boss":
+        await session_state.update_session_state(
+            session_id,
+            phase="distributing_loot",
+            status="completed",
+        )
+        session_obj.status = "completed"
+        session_obj.finished_at = datetime.utcnow()
+        await db.commit()
 
     # Update Redis inventory cache
     inv_stmt = select(DungeonSessionInventory).where(
@@ -2084,6 +2370,17 @@ async def _handle_open_chest(
             "message": "Сундук открыт!" if loot_gained else "Сундук оказался пустым...",
         },
     })
+
+    # For boss rooms, broadcast dungeon completion after loot
+    if room.room_type == "boss":
+        await ws_manager.broadcast_to_session(session_id, {
+            "type": "session_status",
+            "data": {
+                "status": "completed",
+                "phase": "distributing_loot",
+                "message": "Подземелье пройдено! Распределите добычу.",
+            },
+        })
 
     return InteractResponse(
         action="open_chest",
@@ -2137,7 +2434,16 @@ async def _handle_event_choice(
 
     chosen = choices[choice_index]
     outcome_type = chosen.get("outcome_type", "nothing")
-    outcome_data = chosen.get("outcome_data", {})
+    raw_outcome_data = chosen.get("outcome_data", {})
+    # outcome_data may be stored as JSON string from admin editor — parse it
+    if isinstance(raw_outcome_data, str):
+        try:
+            import json
+            outcome_data = json.loads(raw_outcome_data)
+        except (json.JSONDecodeError, TypeError):
+            outcome_data = {}
+    else:
+        outcome_data = raw_outcome_data if isinstance(raw_outcome_data, dict) else {}
     outcome_text = chosen.get("outcome_text", "")
 
     result_message = outcome_text or "Выбор сделан."
@@ -3151,7 +3457,7 @@ async def distribute_loot(
             if not remaining_resp
             else f"Добыча частично распределена. Осталось предметов: {len(remaining_resp)}."
         ),
-        remaining_items=remaining_resp,
+        remaining_inventory=remaining_resp,
     )
 
 
@@ -3240,3 +3546,52 @@ async def finalize_session(
         message=f"Подземелье пройдено! Кулдаун: {cooldown_hours} часов.",
         cooldown_until=cooldown_until,
     )
+
+
+async def admin_force_cleanup_session(
+    db: AsyncSession,
+    session_id: int,
+) -> dict:
+    """
+    Admin-only: force cleanup any dungeon session regardless of state.
+    Sets status to 'escaped', cleans up Redis, closes WebSockets.
+    No leader check, no inventory check, no cooldown.
+    """
+    session_obj = await _get_session(db, session_id)
+
+    member_char_ids = [m.character_id for m in session_obj.members]
+
+    # Delete remaining inventory
+    inv_stmt = select(DungeonSessionInventory).where(
+        DungeonSessionInventory.session_id == session_id
+    )
+    inv_result = await db.execute(inv_stmt)
+    for item in inv_result.scalars().all():
+        await db.delete(item)
+
+    # Update DB status
+    old_status = session_obj.status
+    if session_obj.status not in ("completed", "escaped", "wiped"):
+        session_obj.status = "escaped"
+    if not session_obj.finished_at:
+        session_obj.finished_at = datetime.utcnow()
+
+    await db.commit()
+
+    # Cleanup Redis
+    await session_state.cleanup_session(session_id, member_char_ids)
+
+    # Close WebSocket connections
+    await ws_manager.cleanup_session(session_id)
+
+    logger.info(
+        "Admin force-cleanup: сессия %d (было: %s), освобождены персонажи: %s",
+        session_id, old_status, member_char_ids,
+    )
+
+    return {
+        "message": f"Сессия {session_id} принудительно завершена",
+        "session_id": session_id,
+        "previous_status": old_status,
+        "freed_characters": member_char_ids,
+    }

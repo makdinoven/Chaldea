@@ -39,6 +39,8 @@ export interface DungeonRoom {
   is_boss_room: boolean;
   is_mana_core_room: boolean;
   room_config: Record<string, unknown>;
+  position_x: number | null;
+  position_y: number | null;
 }
 
 export interface DungeonCorridor {
@@ -53,6 +55,8 @@ export interface DungeonCorridor {
   trap_chance: number;
   trap_config: Record<string, unknown> | null;
   description: string | null;
+  source_handle: string | null;
+  target_handle: string | null;
 }
 
 export interface DungeonCreate {
@@ -174,6 +178,55 @@ export const validateDungeon = async (dungeonId: number): Promise<DungeonValidat
   return data;
 };
 
+export const bulkUpdateRoomPositions = async (
+  dungeonId: number,
+  positions: { room_id: number; position_x: number; position_y: number }[],
+): Promise<{ updated: number }> => {
+  const { data } = await axios.put<{ updated: number }>(
+    `/dungeons/admin/dungeons/${dungeonId}/rooms/positions`,
+    { positions },
+  );
+  return data;
+};
+
+// --- Admin Sessions ---
+
+export interface AdminSessionMember {
+  character_id: number;
+  user_id: number;
+  status: string;
+}
+
+export interface AdminSession {
+  id: number;
+  dungeon_id: number;
+  dungeon_name: string | null;
+  leader_character_id: number;
+  status: string;
+  current_room_id: number | null;
+  started_at: string | null;
+  created_at: string | null;
+  members: AdminSessionMember[];
+}
+
+export interface ForceCleanupResponse {
+  message: string;
+  session_id: number;
+  previous_status: string;
+  freed_characters: number[];
+}
+
+export const fetchAdminSessions = async (status?: string): Promise<AdminSession[]> => {
+  const params = status ? { status } : {};
+  const { data } = await axios.get<AdminSession[]>('/dungeons/admin/sessions', { params });
+  return data;
+};
+
+export const forceCleanupSession = async (sessionId: number): Promise<ForceCleanupResponse> => {
+  const { data } = await axios.delete<ForceCleanupResponse>(`/dungeons/admin/sessions/${sessionId}`);
+  return data;
+};
+
 // --- Player Gameplay Types ---
 
 export interface DungeonAtLocation {
@@ -213,6 +266,10 @@ export interface RoomExit {
   stamina_cost: number;
   explored: boolean;
   reliability: 'reliable' | 'uncertain' | 'memory_only';
+  position_x: number | null;
+  position_y: number | null;
+  source_handle: string | null;
+  target_handle: string | null;
 }
 
 export interface RoomView {
@@ -224,6 +281,25 @@ export interface RoomView {
   is_cleared: boolean;
   room_config_visible: Record<string, unknown>;
   exits: RoomExit[];
+  position_x: number | null;
+  position_y: number | null;
+}
+
+export interface ExploredRoomInfo {
+  id: number;
+  name: string;
+  room_type: string;
+  is_cleared: boolean;
+  position_x: number | null;
+  position_y: number | null;
+}
+
+export interface ExploredCorridorInfo {
+  corridor_id: number;
+  from_room_id: number;
+  to_room_id: number;
+  source_handle: string | null;
+  target_handle: string | null;
 }
 
 export interface GroupInventoryItem {
@@ -243,6 +319,8 @@ export interface SessionState {
   members: SessionMember[];
   group_inventory: GroupInventoryItem[];
   active_battle_id: number | null;
+  explored_rooms: ExploredRoomInfo[];
+  explored_corridors: ExploredCorridorInfo[];
 }
 
 // --- Player Gameplay API calls ---
@@ -382,7 +460,7 @@ export const fleeDungeon = async (
 
 export interface LootDistribution {
   item_id: number;
-  character_id: number;
+  to_character_id: number;
   quantity: number;
 }
 

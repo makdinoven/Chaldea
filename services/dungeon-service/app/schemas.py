@@ -174,6 +174,8 @@ class DungeonRoomCreate(BaseModel):
     is_boss_room: bool = False
     is_mana_core_room: bool = False
     room_config: Optional[Any] = None
+    position_x: Optional[float] = None
+    position_y: Optional[float] = None
 
     @validator("room_type")
     def validate_room_type(cls, v):
@@ -220,6 +222,8 @@ class DungeonRoomUpdate(BaseModel):
     is_boss_room: Optional[bool] = None
     is_mana_core_room: Optional[bool] = None
     room_config: Optional[Any] = None
+    position_x: Optional[float] = None
+    position_y: Optional[float] = None
 
     @validator("room_type")
     def validate_room_type(cls, v):
@@ -242,10 +246,32 @@ class DungeonRoomResponse(BaseModel):
     is_boss_room: bool
     is_mana_core_room: bool
     room_config: Optional[Any] = None
+    position_x: Optional[float] = None
+    position_y: Optional[float] = None
     created_at: Optional[datetime] = None
 
     class Config:
         orm_mode = True
+
+
+# ---------- Bulk Room Position Update ----------
+
+class RoomPositionItem(BaseModel):
+    room_id: int
+    position_x: float
+    position_y: float
+
+class BulkRoomPositionUpdate(BaseModel):
+    positions: List[RoomPositionItem]
+
+    @validator("positions")
+    def validate_not_empty(cls, v):
+        if not v:
+            raise ValueError("positions list must not be empty")
+        return v
+
+class BulkPositionUpdateResponse(BaseModel):
+    updated: int
 
 
 # ---------- DungeonCorridor ----------
@@ -260,6 +286,8 @@ class DungeonCorridorCreate(BaseModel):
     trap_chance: float = 0.0
     trap_config: Optional[Any] = None
     description: Optional[str] = None
+    source_handle: Optional[str] = None
+    target_handle: Optional[str] = None
 
     @validator("random_battle_chance", "trap_chance")
     def validate_chance(cls, v):
@@ -287,6 +315,8 @@ class DungeonCorridorUpdate(BaseModel):
     trap_chance: Optional[float] = None
     trap_config: Optional[Any] = None
     description: Optional[str] = None
+    source_handle: Optional[str] = None
+    target_handle: Optional[str] = None
 
     @validator("random_battle_chance", "trap_chance")
     def validate_chance(cls, v):
@@ -309,6 +339,8 @@ class DungeonCorridorResponse(BaseModel):
     trap_chance: float
     trap_config: Optional[Any] = None
     description: Optional[str] = None
+    source_handle: Optional[str] = None
+    target_handle: Optional[str] = None
     created_at: Optional[datetime] = None
 
     class Config:
@@ -402,6 +434,10 @@ class RoomExitResponse(BaseModel):
     stamina_cost: int
     explored: bool
     reliability: Optional[str] = None
+    position_x: Optional[float] = None
+    position_y: Optional[float] = None
+    source_handle: Optional[str] = None
+    target_handle: Optional[str] = None
 
 
 class RoomViewResponse(BaseModel):
@@ -413,14 +449,35 @@ class RoomViewResponse(BaseModel):
     is_entrance: bool
     is_boss_room: bool
     is_cleared: bool = False
+    room_config_visible: Optional[Any] = None
     exits: List[RoomExitResponse] = []
+    position_x: Optional[float] = None
+    position_y: Optional[float] = None
 
     class Config:
         orm_mode = True
 
 
+class ExploredRoomInfo(BaseModel):
+    id: int
+    name: str
+    room_type: str
+    is_cleared: bool
+    position_x: Optional[float] = None
+    position_y: Optional[float] = None
+
+
+class ExploredCorridorInfo(BaseModel):
+    corridor_id: int
+    from_room_id: int
+    to_room_id: int
+    source_handle: Optional[str] = None
+    target_handle: Optional[str] = None
+
+
 class GroupInventoryItemResponse(BaseModel):
     item_id: int
+    item_name: Optional[str] = None
     quantity: int
     source_description: Optional[str] = None
 
@@ -439,6 +496,8 @@ class SessionStateResponse(BaseModel):
     members: List[SessionMemberResponse] = []
     group_inventory: List[GroupInventoryItemResponse] = []
     active_battle_id: Optional[int] = None
+    explored_rooms: List[ExploredRoomInfo] = []
+    explored_corridors: List[ExploredCorridorInfo] = []
 
     class Config:
         orm_mode = True
@@ -531,7 +590,7 @@ class DistributeLootRequest(BaseModel):
 class DistributeLootResponse(BaseModel):
     success: bool
     message: str
-    remaining_items: List[GroupInventoryItemResponse] = []
+    remaining_inventory: List[GroupInventoryItemResponse] = []
 
 
 # ---------- Finalize ----------
@@ -544,3 +603,29 @@ class FinalizeRequest(BaseModel):
 class FinalizeResponse(BaseModel):
     message: str
     cooldown_until: Optional[datetime] = None
+
+
+# ---------- Admin: Sessions ----------
+
+class AdminSessionMemberResponse(BaseModel):
+    character_id: int
+    user_id: int
+    status: str
+
+    class Config:
+        orm_mode = True
+
+
+class AdminSessionResponse(BaseModel):
+    id: int
+    dungeon_id: int
+    dungeon_name: Optional[str] = None
+    leader_character_id: int
+    status: str
+    current_room_id: Optional[int] = None
+    started_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    members: List[AdminSessionMemberResponse] = []
+
+    class Config:
+        orm_mode = True

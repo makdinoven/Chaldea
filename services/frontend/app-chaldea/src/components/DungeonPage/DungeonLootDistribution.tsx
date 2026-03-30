@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
@@ -123,7 +123,9 @@ const DungeonLootDistribution = ({
 
   // Build distributions for API
   const buildDistributions = useCallback((): LootDistribution[] => {
-    return allocations.filter((a) => a.quantity > 0);
+    return allocations
+      .filter((a) => a.quantity > 0)
+      .map((a) => ({ item_id: a.item_id, to_character_id: a.character_id, quantity: a.quantity }));
   }, [allocations]);
 
   // Total allocated items count
@@ -159,33 +161,13 @@ const DungeonLootDistribution = ({
     dispatch(finalizeSessionThunk({ sessionId, characterId }));
   }, [dispatch, sessionId, characterId]);
 
-  // After finalize success
-  if (lastFinalizeResponse) {
-    return (
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: 'easeOut' }}
-        className="bg-black/60 rounded-card p-6 sm:p-8 backdrop-blur-sm flex flex-col items-center gap-6 text-center"
-      >
-        <div className="w-16 h-16 flex items-center justify-center text-4xl">
-          {'\u2728'}
-        </div>
-        <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase">
-          Подземелье завершено!
-        </h2>
-        <p className="text-white/60 text-sm">
-          Кулдаун: {lastFinalizeResponse.cooldown_hours} ч.
-        </p>
-        <button
-          onClick={onFinalized}
-          className="btn-blue text-sm sm:text-base px-8 py-3"
-        >
-          Вернуться к локации
-        </button>
-      </motion.div>
-    );
-  }
+  // After finalize success — redirect to location
+  useEffect(() => {
+    if (lastFinalizeResponse) {
+      onFinalized();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastFinalizeResponse]);
 
   // After distribution: show summary
   if (lastDistributeResponse) {
@@ -430,7 +412,7 @@ const DistributionSummary = ({
       Добыча распределена
     </h2>
 
-    {response.distributed.length > 0 && (
+    {(response.distributed ?? []).length > 0 && (
       <div className="w-full max-w-lg">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {response.distributed.map((entry) => (
@@ -452,7 +434,7 @@ const DistributionSummary = ({
       </div>
     )}
 
-    {response.remaining_inventory.length > 0 && (
+    {(response.remaining_inventory ?? []).length > 0 && (
       <div className="w-full max-w-lg bg-white/5 rounded-card p-3">
         <p className="text-white/40 text-xs font-medium uppercase mb-1">
           Выброшено

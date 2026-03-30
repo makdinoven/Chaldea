@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from database import get_db, async_session
 from auth_http import get_admin_user, get_current_user_via_http, UserRead, authenticate_websocket
-from models import Dungeon, DungeonSessionMember
+from models import Dungeon, DungeonSession, DungeonSessionMember
 import crud
 import gameplay
 import http_clients
@@ -21,6 +21,7 @@ from schemas import (
     DungeonRoomCreate, DungeonRoomUpdate, DungeonRoomResponse,
     DungeonCorridorCreate, DungeonCorridorUpdate, DungeonCorridorResponse,
     DungeonValidationResponse,
+    BulkRoomPositionUpdate, BulkPositionUpdateResponse,
     SessionCreateRequest, SessionInviteRequest, SessionLeaveRequest,
     SessionEnterRequest, SessionResponse, SessionStateResponse,
     MoveRequest, MoveResponse,
@@ -29,6 +30,7 @@ from schemas import (
     FleeRequest, FleeResponse,
     DistributeLootRequest, DistributeLootResponse,
     FinalizeRequest, FinalizeResponse,
+    AdminSessionResponse,
 )
 import session_state
 
@@ -163,6 +165,24 @@ async def admin_delete_room(
 
 
 # ===========================
+#  Admin: Bulk Room Position Update
+# ===========================
+
+@app.put(
+    "/dungeons/admin/dungeons/{dungeon_id}/rooms/positions",
+    response_model=BulkPositionUpdateResponse,
+)
+async def admin_bulk_update_room_positions(
+    dungeon_id: int,
+    data: BulkRoomPositionUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: UserRead = Depends(get_admin_user),
+):
+    updated = await crud.bulk_update_room_positions(db, dungeon_id, data.positions)
+    return BulkPositionUpdateResponse(updated=updated)
+
+
+# ===========================
 #  Admin: Corridors
 # ===========================
 
@@ -219,6 +239,89 @@ async def admin_validate_dungeon(
     user: UserRead = Depends(get_admin_user),
 ):
     return await crud.validate_dungeon(db, dungeon_id)
+
+
+# ===========================
+#  Admin: Session Management
+# ===========================
+
+@app.get(
+    "/dungeons/admin/sessions",
+    response_model=List[AdminSessionResponse],
+)
+async def admin_list_sessions(
+    status: str = Query(None, description="Filter by status: forming, active, completed, escaped, wiped"),
+    db: AsyncSession = Depends(get_db),
+    user: UserRead = Depends(get_admin_user),
+):
+    """List dungeon sessions. Without filter returns only forming+active sessions."""
+    from sqlalchemy.orm import selectinload
+
+    stmt = select(DungeonSession).options(
+        selectinload(DungeonSession.members),
+        selectinload(DungeonSession.dungeon),
+    ).order_by(DungeonSession.created_at.desc())
+
+    if status:
+        stmt = stmt.where(DungeonSession.status == status)
+    else:
+        stmt = stmt.where(DungeonSession.status.in_(("forming", "active")))
+
+    result = await db.execute(stmt)
+    sessions = result.scalars().all()
+
+    return [
+        AdminSessionResponse(
+            id=s.id,
+            dungeon_id=s.dungeon_id,
+            dungeon_name=s.dungeon.name if s.dungeon else None,
+            leader_character_id=s.leader_character_id,
+            status=s.status,
+            current_room_id=s.current_room_id,
+            started_at=s.started_at,
+            created_at=s.created_at,
+            members=[
+                {"character_id": m.character_id, "user_id": m.user_id, "status": m.status}
+                for m in s.members
+            ],
+        )
+        for s in sessions
+    ]
+
+
+@app.delete(
+    "/dungeons/admin/sessions/{session_id}",
+)
+async def admin_force_cleanup_session(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: UserRead = Depends(get_admin_user),
+):
+    """Admin force-cleanup: end any session regardless of state. Frees all characters."""
+    return await gameplay.admin_force_cleanup_session(db, session_id)
+
+
+@app.delete(
+    "/dungeons/admin/dungeons/{dungeon_id}/cooldown",
+)
+async def admin_clear_dungeon_cooldown(
+    dungeon_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: UserRead = Depends(get_admin_user),
+):
+    """Admin: remove cooldown from a dungeon so it can be entered immediately."""
+    await session_state.clear_dungeon_cooldown(dungeon_id)
+
+    stmt = select(DungeonSession).where(
+        DungeonSession.dungeon_id == dungeon_id,
+        DungeonSession.cooldown_until != None,
+    )
+    result = await db.execute(stmt)
+    for s in result.scalars().all():
+        s.cooldown_until = None
+    await db.commit()
+
+    return {"message": f"Кулдаун подземелья #{dungeon_id} снят"}
 
 
 # ===========================

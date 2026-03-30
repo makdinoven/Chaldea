@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
   interactRoom,
@@ -10,7 +10,7 @@ import {
   clearInteractResponse,
 } from '../../redux/slices/dungeonSlice';
 import useCountdown from '../../hooks/useCountdown';
-import type { RoomView, RoomExit, InteractResponse, SessionMember } from '../../api/dungeons';
+import type { RoomView, InteractResponse, SessionMember } from '../../api/dungeons';
 
 // --- Types ---
 
@@ -23,7 +23,6 @@ interface DungeonRoomProps {
   deadMemberCount: number;
   members: SessionMember[];
   dungeonManaCoreCh: number;
-  onMove: (corridorId: number) => void;
 }
 
 // --- Constants ---
@@ -42,12 +41,6 @@ const ROOM_TYPE_BADGES: Record<string, { label: string; color: string }> = {
   mana_core: { label: 'Ядро маны', color: 'bg-yellow-500/80 text-yellow-900' },
 };
 
-const RELIABILITY_LABELS: Record<string, { text: string; color: string }> = {
-  reliable: { text: '', color: '' },
-  uncertain: { text: 'Может измениться', color: 'text-yellow-400' },
-  memory_only: { text: 'Воспоминание', color: 'text-white/40' },
-};
-
 // --- Component ---
 
 const DungeonRoom = ({
@@ -59,25 +52,12 @@ const DungeonRoom = ({
   deadMemberCount,
   members,
   dungeonManaCoreCh,
-  onMove,
 }: DungeonRoomProps) => {
-  const [confirmExit, setConfirmExit] = useState<RoomExit | null>(null);
   const dispatch = useAppDispatch();
   const interactLoading = useAppSelector(selectInteractLoading);
   const lastInteractResponse = useAppSelector(selectLastInteractResponse);
 
   const badge = ROOM_TYPE_BADGES[room.room_type] ?? { label: room.room_type, color: 'bg-white/10 text-white/70' };
-
-  const handleMoveClick = useCallback((exit: RoomExit) => {
-    setConfirmExit(exit);
-  }, []);
-
-  const handleConfirmMove = useCallback(() => {
-    if (confirmExit) {
-      onMove(confirmExit.corridor_id);
-      setConfirmExit(null);
-    }
-  }, [confirmExit, onMove]);
 
   const handleInteract = useCallback(
     (action: string, extraData?: Record<string, unknown>) => {
@@ -88,15 +68,6 @@ const DungeonRoom = ({
     },
     [dispatch, sessionId, characterId],
   );
-
-  const calculateStaminaCost = (baseCost: number): string => {
-    if (deadMemberCount > 0) {
-      const penalty = 1 + 0.25 * deadMemberCount;
-      const actual = Math.ceil(baseCost * penalty);
-      return `${actual} (${baseCost} + ${deadMemberCount} ${deadMemberCount === 1 ? 'павший' : 'павших'})`;
-    }
-    return String(baseCost);
-  };
 
   return (
     <motion.div
@@ -149,79 +120,10 @@ const DungeonRoom = ({
         onInteract={handleInteract}
       />
 
-      {/* Available exits */}
-      {room.exits.length > 0 && (
-        <div className="flex flex-col gap-3">
-          <h3 className="text-white/50 text-xs font-medium uppercase tracking-wide">
-            Доступные выходы
-          </h3>
-          <div className="flex flex-col gap-2">
-            {room.exits.map((exit) => (
-              <ExitRow
-                key={exit.corridor_id}
-                exit={exit}
-                isLeader={isLeader}
-                moveLoading={moveLoading}
-                deadMemberCount={deadMemberCount}
-                calculateStaminaCost={calculateStaminaCost}
-                onMoveClick={handleMoveClick}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
+      {/* Exits info (navigation is via the interactive map) */}
       {room.exits.length === 0 && (
         <p className="text-white/40 text-sm italic">Нет доступных выходов</p>
       )}
-
-      {/* Move confirmation modal */}
-      <AnimatePresence>
-        {confirmExit && (
-          <div className="modal-overlay" onClick={() => setConfirmExit(null)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick max-w-sm w-full mx-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="gold-text text-lg font-medium uppercase mb-3">
-                Перейти?
-              </h3>
-              <p className="text-white/70 text-sm mb-2">
-                Направление: <span className="text-white">{confirmExit.explored ? confirmExit.to_room_name : '???'}</span>
-              </p>
-              <p className="text-white/70 text-sm mb-4">
-                Стоимость стамины: <span className="text-stat-stamina">{calculateStaminaCost(confirmExit.stamina_cost)}</span>
-              </p>
-
-              {deadMemberCount > 0 && (
-                <p className="text-yellow-400 text-xs mb-4">
-                  Увеличенная стоимость: отряд несёт {deadMemberCount} {deadMemberCount === 1 ? 'павшего' : 'павших'}
-                </p>
-              )}
-
-              <div className="flex gap-3">
-                <button
-                  onClick={handleConfirmMove}
-                  disabled={moveLoading}
-                  className="btn-blue text-sm px-5 py-2 flex-1 disabled:opacity-50"
-                >
-                  {moveLoading ? 'Переход...' : 'Перейти'}
-                </button>
-                <button
-                  onClick={() => setConfirmExit(null)}
-                  className="btn-line text-sm px-5 py-2 flex-1"
-                >
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </motion.div>
   );
 };
@@ -498,7 +400,8 @@ const TreasureRoomContent = ({
   onInteract: (action: string) => void;
 }) => {
   const [chestOpened, setChestOpened] = useState(false);
-  const lootCollected = room.room_config_visible.loot_collected === true;
+  const cfg = room.room_config_visible ?? {};
+  const lootCollected = cfg.loot_collected === true;
 
   if (room.is_cleared || lootCollected) {
     return (
@@ -1060,8 +963,9 @@ const ManaCoreRoomContent = ({
   dungeonManaCoreCh: number;
   onInteract: (action: string) => void;
 }) => {
-  const destroyed = room.room_config_visible.destroyed === true;
-  const failed = room.room_config_visible.failed === true;
+  const mcCfg = room.room_config_visible ?? {};
+  const destroyed = mcCfg.destroyed === true;
+  const failed = mcCfg.failed === true;
 
   if (destroyed) {
     return (
@@ -1177,60 +1081,5 @@ const ChestIcon = ({ opened = false }: { opened?: boolean }) => (
 );
 
 // --- Exit Row sub-component ---
-
-interface ExitRowProps {
-  exit: RoomExit;
-  isLeader: boolean;
-  moveLoading: boolean;
-  deadMemberCount: number;
-  calculateStaminaCost: (baseCost: number) => string;
-  onMoveClick: (exit: RoomExit) => void;
-}
-
-const ExitRow = ({
-  exit,
-  isLeader,
-  moveLoading,
-  deadMemberCount,
-  calculateStaminaCost,
-  onMoveClick,
-}: ExitRowProps) => {
-  const reliability = RELIABILITY_LABELS[exit.reliability];
-
-  return (
-    <div className="flex flex-col sm:flex-row sm:items-center gap-2 bg-white/5 rounded-card px-3 py-2.5">
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-white text-sm font-medium truncate">
-            {exit.explored ? exit.to_room_name : '???'}
-          </span>
-          {!exit.explored && (
-            <span className="text-white/30 text-[10px]">Неизвестно</span>
-          )}
-          {reliability?.text && (
-            <span className={`text-[10px] ${reliability.color}`}>
-              {reliability.text}
-            </span>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
-          <span className="text-white/40 text-xs">
-            Стамина: <span className="text-stat-stamina text-xs">{calculateStaminaCost(exit.stamina_cost)}</span>
-          </span>
-        </div>
-      </div>
-
-      {isLeader && (
-        <button
-          onClick={() => onMoveClick(exit)}
-          disabled={moveLoading}
-          className="btn-blue text-xs sm:text-sm px-4 py-1.5 shrink-0 disabled:opacity-50"
-        >
-          {moveLoading ? '...' : 'Перейти'}
-        </button>
-      )}
-    </div>
-  );
-};
 
 export default DungeonRoom;

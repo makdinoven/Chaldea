@@ -202,6 +202,13 @@ async def check_dungeon_cooldown(dungeon_id: int) -> Tuple[bool, int]:
     return (True, remaining)
 
 
+async def clear_dungeon_cooldown(dungeon_id: int) -> bool:
+    """Remove cooldown for a dungeon. Returns True if key existed."""
+    rds = await get_redis()
+    deleted = await rds.delete(_cooldown_key(dungeon_id))
+    return deleted > 0
+
+
 # ---------- character active session -----------------------------------------
 
 async def set_character_active_session(
