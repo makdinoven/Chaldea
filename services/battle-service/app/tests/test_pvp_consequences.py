@@ -214,8 +214,9 @@ class TestPvpTrainingConsequences:
     @patch("main.character_has_rank", new_callable=AsyncMock, return_value=True)
     @patch("main.get_rank", new_callable=AsyncMock)
     @patch("main.compute_damage_with_rolls", new_callable=AsyncMock, return_value=(999, {}))
+    @patch("main.fetch_weapons", new_callable=AsyncMock, return_value={"main_weapon": None, "additional_weapons": None})
     def test_pvp_training_sets_loser_hp_to_1(
-        self, mock_compute, mock_get_rank, mock_has_rank,
+        self, mock_fetch_weapons, mock_compute, mock_get_rank, mock_has_rank,
         mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
     ):
         """After pvp_training finishes, loser's HP in character_attributes is set to 1."""
@@ -299,8 +300,9 @@ class TestPvpTrainingConsequences:
     @patch("main.character_has_rank", new_callable=AsyncMock, return_value=True)
     @patch("main.get_rank", new_callable=AsyncMock)
     @patch("main.compute_damage_with_rolls", new_callable=AsyncMock, return_value=(999, {}))
+    @patch("main.fetch_weapons", new_callable=AsyncMock, return_value={"main_weapon": None, "additional_weapons": None})
     def test_pvp_attack_no_hp_override(
-        self, mock_compute, mock_get_rank, mock_has_rank,
+        self, mock_fetch_weapons, mock_compute, mock_get_rank, mock_has_rank,
         mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
     ):
         """After pvp_attack finishes, no special HP override happens."""
@@ -374,8 +376,9 @@ class TestPvpTrainingConsequences:
     @patch("main.character_has_rank", new_callable=AsyncMock, return_value=True)
     @patch("main.get_rank", new_callable=AsyncMock)
     @patch("main.compute_damage_with_rolls", new_callable=AsyncMock, return_value=(999, {}))
+    @patch("main.fetch_weapons", new_callable=AsyncMock, return_value={"main_weapon": None, "additional_weapons": None})
     def test_pve_no_hp_override(
-        self, mock_compute, mock_get_rank, mock_has_rank,
+        self, mock_fetch_weapons, mock_compute, mock_get_rank, mock_has_rank,
         mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
     ):
         """After PvE battle finishes, no HP=1 override happens."""
