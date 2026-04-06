@@ -3351,12 +3351,12 @@ async def abandon_quest(session: AsyncSession, character_id: int, quest_id: int)
 
 
 async def add_experience(session: AsyncSession, character_id: int, amount: int) -> None:
-    """Add experience to a character via direct SQL on shared DB."""
+    """Add passive experience to a character via direct SQL on shared DB."""
     await session.execute(
         text("""
-            UPDATE characters
-            SET experience = experience + :amount
-            WHERE id = :cid
+            UPDATE character_attributes
+            SET passive_experience = passive_experience + :amount
+            WHERE character_id = :cid
         """),
         {"cid": character_id, "amount": amount},
     )
