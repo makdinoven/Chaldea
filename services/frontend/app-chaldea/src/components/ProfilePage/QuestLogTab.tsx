@@ -81,7 +81,7 @@ const QuestLogTab = ({ characterId }: QuestLogTabProps) => {
         character_id: characterId,
       });
       toast.success('Задание выполнено! Награда получена');
-      setQuests((prev) => prev.filter((q) => q.id !== questId));
+      setQuests((prev) => prev.filter((q) => q.quest_id !== questId));
     } catch (err) {
       const message =
         axios.isAxiosError(err) && err.response?.data?.detail
@@ -101,7 +101,7 @@ const QuestLogTab = ({ characterId }: QuestLogTabProps) => {
         character_id: characterId,
       });
       toast.success('Вы отказались от задания');
-      setQuests((prev) => prev.filter((q) => q.id !== questId));
+      setQuests((prev) => prev.filter((q) => q.quest_id !== questId));
     } catch (err) {
       const message =
         axios.isAxiosError(err) && err.response?.data?.detail
@@ -248,7 +248,7 @@ const QuestLogTab = ({ characterId }: QuestLogTabProps) => {
             <div className="flex flex-col sm:flex-row gap-2">
               {complete && (
                 <button
-                  onClick={() => handleComplete(quest.id)}
+                  onClick={() => handleComplete(quest.quest_id)}
                   disabled={completing === quest.id}
                   className="
                     flex-1 px-4 py-2.5 rounded-card
@@ -271,7 +271,7 @@ const QuestLogTab = ({ characterId }: QuestLogTabProps) => {
                 </button>
               )}
               <button
-                onClick={() => handleAbandon(quest.id)}
+                onClick={() => handleAbandon(quest.quest_id)}
                 disabled={abandoning === quest.id}
                 className="
                   px-4 py-2.5 rounded-card
