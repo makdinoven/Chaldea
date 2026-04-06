@@ -73,9 +73,19 @@ const QUEST_TYPES = [
 
 const OBJECTIVE_TYPES = [
   { value: 'kill', label: 'Убить' },
+  { value: 'kill_mob', label: 'Убить моба (конкретного)' },
+  { value: 'kill_mob_any', label: 'Убить любого моба' },
+  { value: 'kill_mob_tier', label: 'Убить моба тира' },
+  { value: 'defeat_npc', label: 'Победить НПС' },
+  { value: 'defeat_any', label: 'Победить любого противника' },
   { value: 'collect', label: 'Собрать' },
   { value: 'talk_to', label: 'Поговорить' },
   { value: 'visit_location', label: 'Посетить локацию' },
+  { value: 'write_posts', label: 'Написать посты' },
+  { value: 'write_post_in_location', label: 'Написать пост в локации' },
+  { value: 'write_chars', label: 'Написать символов (суммарно)' },
+  { value: 'write_chars_in_location', label: 'Написать символов в локации' },
+  { value: 'complete_quest', label: 'Завершить квест' },
   { value: 'deliver', label: 'Доставить' },
   { value: 'custom', label: 'Особое' },
 ];
