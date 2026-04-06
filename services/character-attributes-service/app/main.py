@@ -934,9 +934,11 @@ def admin_recalculate_all(
     char_ids = [attr.character_id for attr in all_attrs]
     class_lookup = {}
     if char_ids:
+        placeholders = ",".join([f":id_{i}" for i in range(len(char_ids))])
+        params = {f"id_{i}": cid for i, cid in enumerate(char_ids)}
         rows = db.execute(
-            text("SELECT id, id_class FROM characters WHERE id IN :ids"),
-            {"ids": tuple(char_ids)},
+            text(f"SELECT id, id_class FROM characters WHERE id IN ({placeholders})"),
+            params,
         ).fetchall()
         class_lookup = {row[0]: row[1] for row in rows}
 
