@@ -31,23 +31,38 @@ async def fetch_full_attributes(character_id: int) -> Dict:
         return response.json()
 
 
-async def fetch_main_weapon(character_id: int) -> Dict | None:
-    """Возвращает JSON-описание оружия из слота main_weapon или None."""
+async def fetch_weapons(character_id: int) -> Dict[str, Dict | None]:
+    """
+    Возвращает оружие из обоих слотов: main_weapon и additional_weapons.
+    Один HTTP-вызов к equipment + до 2 вызовов item details.
+    Результат: {"main_weapon": <item_dict or None>, "additional_weapons": <item_dict or None>}
+    """
+    result: Dict[str, Dict | None] = {"main_weapon": None, "additional_weapons": None}
+    weapon_slots = ("main_weapon", "additional_weapons")
+
     async with httpx.AsyncClient() as client:
-        # 1) все слоты экипировки
         equip_resp = await client.get(
             f"{INVENTORY_SERVICE_URL}/inventory/{character_id}/equipment"
         )
         equip_resp.raise_for_status()
+
         for slot in equip_resp.json():
-            if slot["slot_type"] == "main_weapon" and slot["item_id"]:
-                # 2) сведения о самом предмете
+            slot_type = slot["slot_type"]
+            if slot_type in weapon_slots and slot["item_id"]:
                 item_resp = await client.get(
                     f"{INVENTORY_SERVICE_URL}/inventory/items/{slot['item_id']}"
                 )
                 item_resp.raise_for_status()
-                return item_resp.json()
-    return None
+                result[slot_type] = item_resp.json()
+
+    return result
+
+
+async def fetch_main_weapon(character_id: int) -> Dict | None:
+    """Возвращает JSON-описание оружия из слота main_weapon или None.
+    Обёртка над fetch_weapons() для обратной совместимости."""
+    weapons = await fetch_weapons(character_id)
+    return weapons.get("main_weapon")
 
 
 # ---------- class → main attribute mapping ----------------------------------

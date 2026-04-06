@@ -2,20 +2,34 @@ import React from "react";
 import { DAMAGE_TYPES, WEAPON_SLOTS } from "../skillConstants";
 import styles from "../AdminSkillsPage.module.scss";
 
-const DamageSection = ({ title, damageArray, onChange }) => {
+interface DamageEntry {
+  damage_type: string;
+  amount: number;
+  chance: number;
+  weapon_slot: string;
+  description: string;
+}
+
+interface DamageSectionProps {
+  title: string;
+  damageArray: DamageEntry[];
+  onChange: (arr: DamageEntry[]) => void;
+}
+
+const DamageSection = ({ title, damageArray, onChange }: DamageSectionProps) => {
   const handleAdd = () =>
     onChange([
       ...(damageArray || []),
       { damage_type: "all", amount: 0, chance: 100, weapon_slot: "main_weapon", description: "" },
     ]);
 
-  const handleUpdate = (idx, field, value) => {
+  const handleUpdate = (idx: number, field: keyof DamageEntry, value: string | number) => {
     const arr = [...damageArray];
     arr[idx] = { ...arr[idx], [field]: value };
     onChange(arr);
   };
 
-  const handleDelete = (idx) => onChange(damageArray.filter((_, i) => i !== idx));
+  const handleDelete = (idx: number) => onChange(damageArray.filter((_, i) => i !== idx));
 
   return (
     <div className={styles.section}>
@@ -34,18 +48,16 @@ const DamageSection = ({ title, damageArray, onChange }) => {
             </select>
           </div>
 
-          {item.damage_type === "all" && (
-            <div className={styles.inputGroup}>
-              <label>Оружие:</label>
-              <select value={item.weapon_slot} onChange={(e) => handleUpdate(idx, "weapon_slot", e.target.value)}>
-                {WEAPON_SLOTS.map((ws) => (
-                  <option key={ws.value} value={ws.value}>
-                    {ws.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          <div className={styles.inputGroup}>
+            <label>Оружие:</label>
+            <select value={item.weapon_slot} onChange={(e) => handleUpdate(idx, "weapon_slot", e.target.value)}>
+              {WEAPON_SLOTS.map((ws) => (
+                <option key={ws.value} value={ws.value}>
+                  {ws.label}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div className={styles.inputGroup}>
             <label>Значение:</label>

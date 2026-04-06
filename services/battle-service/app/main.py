@@ -36,7 +36,7 @@ from inventory_client import get_fast_slots, consume_item, get_equipment_durabil
 from character_client import get_character_profile
 from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, build_percent_damage_buffs, \
     build_percent_resist_buffs
-from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, compute_damage_with_rolls, roll_chance
+from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, fetch_weapons, compute_damage_with_rolls, roll_chance
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
     get_cached_snapshot, KEY_BATTLE_TURNS, state_key
 from config import settings
@@ -1069,7 +1069,7 @@ async def _make_action_core(
         return attr_cache[cid]
 
     base_attacker_attributes = await attrs(attacker_character_id)
-    attacker_weapon = await fetch_main_weapon(attacker_character_id)
+    attacker_weapons = await fetch_weapons(attacker_character_id)
 
     # Fetch attacker's class for class-aware damage formula
     attacker_class_id = await fetch_character_class_id(db_session, attacker_character_id)
@@ -1243,7 +1243,7 @@ async def _make_action_core(
             dealt, log = await compute_damage_with_rolls(
                 damage_entry=dmg,
                 attacker_attr=attacker_attributes,
-                weapon=attacker_weapon,
+                weapon=attacker_weapons.get(dmg.get("weapon_slot", "main_weapon")),
                 percent_buffs=percent_damage_buffs,
                 defender_attr=defender_attributes,
                 percent_resists=defender_percent_resists,
