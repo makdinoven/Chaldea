@@ -56,8 +56,11 @@ from constants import CLASS_MAIN_ATTRIBUTE  # noqa: E402
 class _Character(database.Base):
     __tablename__ = "characters"
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=True)
+    name = Column(String(100), nullable=True)
     id_class = Column(Integer, nullable=True)
-    # Minimal columns; only id and id_class are needed by the queries.
+    # Minimal columns needed by queries across test files (id_class for
+    # damage-from-class tests, user_id + name for ownership checks in auth tests).
 
 
 # ---------------------------------------------------------------------------
