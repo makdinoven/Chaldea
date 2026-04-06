@@ -47,3 +47,7 @@ ALL_RESISTANCE_FIELDS = (
     + MAGICAL_RESISTANCE_FIELDS
     + ["res_effects"]
 )
+
+# Mapping of class_id to main attribute name for damage calculation.
+# Must stay in sync with battle-service/app/battle_engine.py CLASS_MAIN_ATTRIBUTE.
+CLASS_MAIN_ATTRIBUTE = {1: "strength", 2: "agility", 3: "intelligence"}

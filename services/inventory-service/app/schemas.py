@@ -1138,3 +1138,13 @@ class AuctionDepositResponse(BaseModel):
     item_name: str
     quantity: int
     message: str
+
+
+# -----------------------------------------------------------------------------
+# 18. NPC Equipment schemas
+# -----------------------------------------------------------------------------
+
+class AdminNpcEquipRequest(BaseModel):
+    """Запрос на экипировку предмета NPC (admin-only)."""
+    slot_type: str
+    item_id: int

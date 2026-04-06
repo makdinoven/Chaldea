@@ -534,6 +534,62 @@ async def send_attributes_request(character_id: int, attributes: dict):
         return None
 
 
+async def send_attributes_update_request(character_id: int, attributes: dict, token: str):
+    """
+    Отправляет PUT-запрос на обновление атрибутов персонажа в микросервис атрибутов.
+
+    :param character_id: ID персонажа
+    :param attributes: Словарь с атрибутами для обновления
+    :param token: JWT-токен для авторизации
+    :return: Ответ от микросервиса атрибутов или None при ошибке
+    """
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            logger.info(f"Отправка PUT-запроса на обновление атрибутов для персонажа {character_id}")
+            response = await client.put(
+                f"{settings.ATTRIBUTES_SERVICE_URL}admin/{character_id}",
+                json=attributes,
+                headers=headers,
+            )
+            if response.status_code == 200:
+                logger.info(f"Атрибуты персонажа {character_id} успешно обновлены")
+                return response.json()
+            else:
+                logger.error(f"Ошибка при обновлении атрибутов: {response.status_code} - {response.text}")
+                return None
+    except httpx.RequestError as e:
+        logger.error(f"Ошибка при отправке PUT-запроса на атрибуты: {e}")
+        return None
+
+
+async def send_recalculate_request(character_id: int, token: str):
+    """
+    Отправляет POST-запрос на пересчёт производных статов персонажа.
+
+    :param character_id: ID персонажа
+    :param token: JWT-токен для авторизации
+    :return: Ответ от микросервиса атрибутов или None при ошибке
+    """
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            logger.info(f"Отправка запроса на пересчёт атрибутов для персонажа {character_id}")
+            response = await client.post(
+                f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}/recalculate",
+                headers=headers,
+            )
+            if response.status_code == 200:
+                logger.info(f"Атрибуты персонажа {character_id} успешно пересчитаны")
+                return response.json()
+            else:
+                logger.error(f"Ошибка при пересчёте атрибутов: {response.status_code} - {response.text}")
+                return None
+    except httpx.RequestError as e:
+        logger.error(f"Ошибка при отправке запроса на пересчёт атрибутов: {e}")
+        return None
+
+
 async def assign_character_to_user(user_id: int, character_id: int, token: str = None):
     """
     Отправляет запрос в микросервис пользователей для присвоения персонажа пользователю.

@@ -3555,4 +3555,83 @@ def auction_claim_storage(
     return crud.claim_from_storage(db, data=req, user_id=current_user.id)
 
 
+# -----------------------------------------------------------------------------
+# NPC Equipment (admin-only)
+# -----------------------------------------------------------------------------
+@router.post("/admin/npc/{character_id}/equip", response_model=schemas.EquipmentSlot)
+async def admin_npc_equip(
+    character_id: int,
+    req: schemas.AdminNpcEquipRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("npcs:update")),
+):
+    """
+    Экипировка предмета из каталога на NPC (admin).
+    Создаёт слоты экипировки при первом вызове.
+    """
+    try:
+        slot, old_mods, new_mods = crud.admin_equip_npc_item(
+            db, character_id, req.slot_type, req.item_id,
+        )
+
+        # Применяем модификаторы через character-attributes-service
+        if old_mods:
+            await apply_modifiers_in_attributes_service(character_id, old_mods)
+        if new_mods:
+            await apply_modifiers_in_attributes_service(character_id, new_mods)
+
+        db.commit()
+        db.refresh(slot)
+        return slot
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except httpx.HTTPError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Ошибка обращения к сервису атрибутов: {e}",
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {e}")
+
+
+@router.delete("/admin/npc/{character_id}/unequip/{slot_type}", response_model=schemas.EquipmentSlot)
+async def admin_npc_unequip(
+    character_id: int,
+    slot_type: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("npcs:update")),
+):
+    """
+    Снятие предмета со слота NPC (admin).
+    """
+    try:
+        slot, minus_mods = crud.admin_unequip_npc_item(
+            db, character_id, slot_type,
+        )
+
+        if minus_mods:
+            await apply_modifiers_in_attributes_service(character_id, minus_mods)
+
+        db.commit()
+        db.refresh(slot)
+        return slot
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except httpx.HTTPError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Ошибка обращения к сервису атрибутов: {e}",
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {e}")
+
+
 app.include_router(router)

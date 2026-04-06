@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 # XP reward defaults by recipe rarity
 # ---------------------------------------------------------------------------
 
+NPC_EQUIPMENT_SLOTS = [
+    'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet',
+    'main_weapon', 'additional_weapons', 'shield',
+]
+
+
 RARITY_XP_MAP = {
     "common": 10,
     "rare": 25,
@@ -253,6 +259,131 @@ def create_default_equipment_slots(db: Session, character_id: int):
 
     db.commit()
     return equipment_slots
+
+
+def create_npc_equipment_slots(db: Session, character_id: int):
+    """
+    Создаёт 10 слотов экипировки для NPC (без быстрых слотов).
+    Если слоты уже существуют — ничего не делает.
+    """
+    existing = db.query(models.EquipmentSlot).filter(
+        models.EquipmentSlot.character_id == character_id
+    ).first()
+    if existing:
+        return
+
+    for slot_type in NPC_EQUIPMENT_SLOTS:
+        new_slot = models.EquipmentSlot(
+            character_id=character_id,
+            slot_type=slot_type,
+            item_id=None,
+            is_enabled=True,
+        )
+        db.add(new_slot)
+    db.flush()
+
+
+def admin_equip_npc_item(db: Session, character_id: int, slot_type: str, item_id: int):
+    """
+    Экипирует предмет из каталога на NPC (admin-only, без инвентаря).
+    Возвращает обновлённый слот.
+    """
+    from fastapi import HTTPException
+
+    # 1) Валидация slot_type
+    if slot_type not in NPC_EQUIPMENT_SLOTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недопустимый тип слота для NPC: {slot_type}",
+        )
+
+    # 2) Проверяем предмет
+    db_item = db.query(models.Items).filter(models.Items.id == item_id).first()
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+
+    # 3) Проверяем совместимость
+    if not is_item_compatible_with_slot(db_item.item_type, slot_type):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Предмет типа '{db_item.item_type}' не совместим со слотом '{slot_type}'",
+        )
+
+    # 4) Ленивое создание слотов экипировки
+    create_npc_equipment_slots(db, character_id)
+
+    # 5) Находим нужный слот
+    slot = db.query(models.EquipmentSlot).filter_by(
+        character_id=character_id,
+        slot_type=slot_type,
+    ).first()
+    if not slot:
+        raise HTTPException(status_code=404, detail="Слот экипировки не найден")
+
+    # 6) Если слот занят — формируем отрицательные модификаторы для старого предмета
+    old_mods = {}
+    if slot.item_id:
+        old_item = db.query(models.Items).filter(models.Items.id == slot.item_id).first()
+        if old_item:
+            old_mods = build_modifiers_dict(old_item, negative=True)
+
+    # 7) Обновляем слот
+    slot.item_id = db_item.id
+    slot.enhancement_points_spent = 0
+    slot.enhancement_bonuses = None
+    slot.socketed_gems = None
+    slot.current_durability = None
+    db.add(slot)
+    db.flush()
+
+    # 8) Формируем положительные модификаторы для нового предмета
+    new_mods = build_modifiers_dict(db_item, negative=False)
+
+    return slot, old_mods, new_mods
+
+
+def admin_unequip_npc_item(db: Session, character_id: int, slot_type: str):
+    """
+    Снимает предмет со слота NPC (admin-only).
+    Возвращает обновлённый слот и отрицательные модификаторы.
+    """
+    from fastapi import HTTPException
+
+    # 1) Валидация slot_type
+    if slot_type not in NPC_EQUIPMENT_SLOTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недопустимый тип слота для NPC: {slot_type}",
+        )
+
+    # 2) Находим слот
+    slot = db.query(models.EquipmentSlot).filter_by(
+        character_id=character_id,
+        slot_type=slot_type,
+    ).first()
+    if not slot:
+        raise HTTPException(status_code=404, detail="Слоты экипировки не найдены для этого персонажа")
+
+    # 3) Проверяем, что слот не пуст
+    if not slot.item_id:
+        raise HTTPException(status_code=400, detail="Слот уже пуст")
+
+    # 4) Формируем отрицательные модификаторы
+    old_item = db.query(models.Items).filter(models.Items.id == slot.item_id).first()
+    minus_mods = {}
+    if old_item:
+        minus_mods = build_modifiers_dict(old_item, negative=True)
+
+    # 5) Очищаем слот
+    slot.item_id = None
+    slot.enhancement_points_spent = 0
+    slot.enhancement_bonuses = None
+    slot.socketed_gems = None
+    slot.current_durability = None
+    db.add(slot)
+    db.flush()
+
+    return slot, minus_mods
 
 
 def get_inventory_items(db: Session, character_id: int):

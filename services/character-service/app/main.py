@@ -1909,7 +1909,10 @@ def admin_list_npcs(
 ):
     """Paginated list of all NPCs with search and filters. Admin only."""
     try:
-        query = db.query(models.Character).filter(models.Character.is_npc == True)
+        query = db.query(models.Character).filter(
+            models.Character.is_npc == True,
+            models.Character.npc_role != 'mob'
+        )
 
         if q:
             query = query.filter(models.Character.name.ilike(f"%{q}%"))
@@ -2042,11 +2045,12 @@ def admin_get_npc(
 
 
 @router.put("/admin/npcs/{npc_id}")
-def admin_update_npc(
+async def admin_update_npc(
     npc_id: int,
     data: schemas.NpcUpdate,
     db: Session = Depends(get_db),
     current_user=Depends(require_permission("npcs:update")),
+    token: str = Depends(OAUTH2_SCHEME),
 ):
     """Update NPC fields."""
     npc = db.query(models.Character).filter(
@@ -2060,6 +2064,8 @@ def admin_update_npc(
     if not update_data:
         raise HTTPException(status_code=400, detail="Нет данных для обновления")
 
+    old_subrace_id = npc.id_subrace
+
     for field, value in update_data.items():
         setattr(npc, field, value)
 
@@ -2070,6 +2076,17 @@ def admin_update_npc(
         db.rollback()
         logger.error(f"Error updating NPC {npc_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при обновлении NPC")
+
+    # Apply subrace stat preset if id_subrace changed
+    new_subrace_id = update_data.get("id_subrace")
+    if new_subrace_id is not None and new_subrace_id != old_subrace_id:
+        attributes = crud.generate_attributes_for_subrace(db, new_subrace_id)
+        if attributes:
+            try:
+                await crud.send_attributes_update_request(npc.id, attributes, token)
+                await crud.send_recalculate_request(npc.id, token)
+            except Exception as e:
+                logger.warning(f"Failed to update attributes for NPC {npc_id} after subrace change: {e}")
 
     return {"detail": "NPC обновлен", "id": npc.id}
 

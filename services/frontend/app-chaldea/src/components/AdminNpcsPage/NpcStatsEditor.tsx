@@ -4,14 +4,47 @@ import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
 import useDebounce from '../../hooks/useDebounce';
 
+interface SubraceOptionWithPreset {
+  id_subrace: number;
+  name: string;
+  stat_preset: Record<string, number> | null;
+}
+
+interface RaceWithSubracesData {
+  id_race: number;
+  name: string;
+  subraces: SubraceOptionWithPreset[];
+}
+
 interface NpcStatsEditorProps {
   npcId: number;
   npcName: string;
+  npcLevel: number;
+  racesData: RaceWithSubracesData[];
   onClose: () => void;
 }
 
 interface Attributes {
   [key: string]: number | string | null;
+}
+
+interface EquipmentItem {
+  strength_modifier?: number | null;
+  agility_modifier?: number | null;
+  intelligence_modifier?: number | null;
+  endurance_modifier?: number | null;
+  charisma_modifier?: number | null;
+  luck_modifier?: number | null;
+  health_modifier?: number | null;
+  mana_modifier?: number | null;
+  energy_modifier?: number | null;
+  stamina_modifier?: number | null;
+  [key: string]: unknown;
+}
+
+interface EquipmentSlotData {
+  item: EquipmentItem | null;
+  [key: string]: unknown;
 }
 
 interface SkillAssignment {
@@ -81,19 +114,31 @@ const STAT_LABELS: Record<string, string> = {
   res_crushing: 'Защ. дроб.',
   res_piercing: 'Защ. кол.',
   res_effects: 'Сопр. эффектам',
+  health: 'Здоровье (база)',
+  mana: 'Мана (база)',
+  energy: 'Энергия (база)',
+  stamina: 'Выносливость (ресурс)',
 };
 
 const PRIMARY_STATS = ['strength', 'agility', 'intelligence', 'endurance', 'charisma', 'luck'];
+const BASE_RESOURCE_STATS = ['health', 'mana', 'energy', 'stamina'];
 const RESOURCE_STATS = ['max_health', 'current_health', 'max_mana', 'current_mana', 'max_energy', 'current_energy', 'max_stamina', 'current_stamina'];
 const COMBAT_STATS = ['damage', 'dodge', 'critical_hit_chance', 'critical_damage'];
 const RESISTANCE_STATS = ['res_physical', 'res_magic', 'res_fire', 'res_ice', 'res_watering', 'res_electricity', 'res_wind', 'res_sainting', 'res_damning', 'res_catting', 'res_crushing', 'res_piercing', 'res_effects'];
 
-const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
+const READONLY_STATS = ['max_health', 'max_mana', 'max_energy', 'max_stamina'];
+
+const POINT_STATS = [...PRIMARY_STATS, ...BASE_RESOURCE_STATS];
+const POINTS_PER_LEVEL = 10;
+
+const NpcStatsEditor = ({ npcId, npcName, npcLevel, racesData, onClose }: NpcStatsEditorProps) => {
   const [attributes, setAttributes] = useState<Attributes | null>(null);
   const [skills, setSkills] = useState<SkillAssignment[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'stats' | 'skills'>('stats');
+  const [npcSubraceId, setNpcSubraceId] = useState<number | null>(null);
+  const [equipmentModifiers, setEquipmentModifiers] = useState<Record<string, number>>({});
 
   // Skills editor state
   const [currentSkills, setCurrentSkills] = useState<SelectedSkill[]>([]);
@@ -109,9 +154,11 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [attrRes, skillsRes] = await Promise.allSettled([
+      const [attrRes, skillsRes, npcDetailRes, equipRes] = await Promise.allSettled([
         axios.get(`${BASE_URL}/attributes/${npcId}`),
         axios.get(`${BASE_URL}/skills/characters/${npcId}/skills`),
+        axios.get(`${BASE_URL}/characters/admin/npcs/${npcId}`),
+        axios.get<EquipmentSlotData[]>(`${BASE_URL}/inventory/${npcId}/equipment`),
       ]);
       if (attrRes.status === 'fulfilled') {
         setAttributes(attrRes.value.data);
@@ -128,6 +175,27 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
         }));
         setCurrentSkills(selected);
         setOriginalSkills(selected);
+      }
+      if (npcDetailRes.status === 'fulfilled') {
+        setNpcSubraceId(npcDetailRes.value.data.id_subrace ?? null);
+      }
+      // Sum equipment modifiers from all equipped items
+      if (equipRes.status === 'fulfilled') {
+        const slots: EquipmentSlotData[] = Array.isArray(equipRes.value.data) ? equipRes.value.data : [];
+        const modSums: Record<string, number> = {};
+        for (const slot of slots) {
+          if (!slot.item) continue;
+          for (const statKey of POINT_STATS) {
+            const modField = `${statKey}_modifier` as keyof EquipmentItem;
+            const modValue = Number(slot.item[modField] ?? 0);
+            if (modValue !== 0) {
+              modSums[statKey] = (modSums[statKey] ?? 0) + modValue;
+            }
+          }
+        }
+        setEquipmentModifiers(modSums);
+      } else {
+        setEquipmentModifiers({});
       }
     } catch {
       toast.error('Не удалось загрузить данные');
@@ -240,12 +308,12 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
     setAttributes((prev) => prev ? { ...prev, [key]: value === '' ? 0 : Number(value) } : prev);
   };
 
-  const handleSaveStats = async () => {
-    if (!attributes) return;
-    setSaving(true);
+  /** Saves current attributes state to the backend. Returns true on success. */
+  const saveStats = async (): Promise<boolean> => {
+    if (!attributes) return false;
     try {
       await axios.put(`${BASE_URL}/attributes/admin/${npcId}`, attributes);
-      toast.success('Статы НПС обновлены');
+      return true;
     } catch (err) {
       let message = 'Не удалось сохранить статы';
       if (axios.isAxiosError(err) && err.response?.data?.detail) {
@@ -253,23 +321,65 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
         message = typeof detail === 'string' ? detail : message;
       }
       toast.error(message);
+      return false;
+    }
+  };
+
+  const handleSaveStats = async () => {
+    if (!attributes) return;
+    setSaving(true);
+    try {
+      const saved = await saveStats();
+      if (saved) {
+        toast.success('Статы НПС обновлены');
+      }
     } finally {
       setSaving(false);
     }
   };
 
   const handleRecalculate = async () => {
+    if (!attributes) return;
     setSaving(true);
     try {
-      await axios.post(`${BASE_URL}/attributes/${npcId}/recalculate`);
-      toast.success('Статы пересчитаны');
-      fetchData();
-    } catch {
-      toast.error('Не удалось пересчитать статы');
+      const saved = await saveStats();
+      if (!saved) return;
+
+      try {
+        await axios.post(`${BASE_URL}/attributes/${npcId}/recalculate`);
+      } catch {
+        toast.error('Статы сохранены, но не удалось пересчитать. Попробуйте ещё раз.');
+        return;
+      }
+
+      toast.success('Статы сохранены и пересчитаны');
+      await fetchData();
     } finally {
       setSaving(false);
     }
   };
+
+  // Derive subrace preset from racesData + npcSubraceId
+  const subracePreset: Record<string, number> = (() => {
+    if (npcSubraceId == null || racesData.length === 0) return {};
+    for (const race of racesData) {
+      const subrace = race.subraces.find((s) => s.id_subrace === npcSubraceId);
+      if (subrace?.stat_preset) return subrace.stat_preset;
+    }
+    return {};
+  })();
+
+  // Compute stat points
+  const totalPoints = npcLevel * POINTS_PER_LEVEL;
+  const spentPoints = attributes
+    ? POINT_STATS.reduce((sum, key) => {
+        const current = Number(attributes[key] ?? 0);
+        const base = subracePreset[key] ?? 0;
+        const equipBonus = equipmentModifiers[key] ?? 0;
+        return sum + Math.max(0, current - base - equipBonus);
+      }, 0)
+    : 0;
+  const remainingPoints = totalPoints - spentPoints;
 
   const renderStatGroup = (title: string, keys: string[]) => (
     <div className="flex flex-col gap-3">
@@ -278,6 +388,7 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
         {keys.map((key) => {
           const val = attributes?.[key];
           if (val === undefined) return null;
+          const isReadOnly = READONLY_STATS.includes(key);
           return (
             <label key={key} className="flex flex-col gap-1">
               <span className="text-white/50 text-[10px] uppercase truncate" title={STAT_LABELS[key] || key}>
@@ -288,7 +399,9 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
                 value={val ?? 0}
                 onChange={(e) => handleStatChange(key, e.target.value)}
                 step="any"
-                className="input-underline !text-sm !py-1"
+                readOnly={isReadOnly}
+                tabIndex={isReadOnly ? -1 : undefined}
+                className={`input-underline !text-sm !py-1${isReadOnly ? ' opacity-60 cursor-not-allowed' : ''}`}
               />
             </label>
           );
@@ -424,7 +537,7 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
   );
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="gray-bg p-4 sm:p-6 flex flex-col gap-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -468,7 +581,32 @@ const NpcStatsEditor = ({ npcId, npcName, onClose }: NpcStatsEditorProps) => {
             <p className="text-white/50 text-sm">Атрибуты не найдены. Попробуйте пересоздать НПС.</p>
           ) : (
             <>
+              {/* Stat points counter */}
+              <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-card px-4 py-3 text-sm ${
+                remainingPoints < 0 ? 'bg-yellow-500/10 border border-yellow-500/30' : 'bg-white/[0.05]'
+              }`}>
+                <span className="text-white font-medium">
+                  Очки статов: {spentPoints} / {totalPoints}
+                </span>
+                {remainingPoints >= 0 ? (
+                  <span className="text-white/50">
+                    (осталось: {remainingPoints})
+                  </span>
+                ) : (
+                  <span className="text-yellow-400 font-medium">
+                    Превышен лимит на {Math.abs(remainingPoints)}!
+                  </span>
+                )}
+                {npcSubraceId == null && !loading && (
+                  <span className="text-white/40 text-xs">
+                    (подраса не определена, пресет = 0)
+                  </span>
+                )}
+              </div>
+
               {renderStatGroup('Основные', PRIMARY_STATS)}
+              <div className="gradient-divider-h relative pb-1" />
+              {renderStatGroup('Базовые ресурсы', BASE_RESOURCE_STATS)}
               <div className="gradient-divider-h relative pb-1" />
               {renderStatGroup('Ресурсы', RESOURCE_STATS)}
               <div className="gradient-divider-h relative pb-1" />

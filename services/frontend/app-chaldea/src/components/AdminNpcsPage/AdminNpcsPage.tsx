@@ -8,6 +8,7 @@ import DialogueEditor from './DialogueEditor';
 import NpcShopEditor from './NpcShopEditor';
 import QuestEditor from './QuestEditor';
 import NpcStatsEditor from './NpcStatsEditor';
+import NpcEquipmentEditor from './NpcEquipmentEditor';
 
 /* ── Types ── */
 
@@ -49,6 +50,7 @@ interface LocationOption {
 interface SubraceOption {
   id_subrace: number;
   name: string;
+  stat_preset: Record<string, number> | null;
 }
 
 interface RaceWithSubraces {
@@ -85,6 +87,9 @@ const AdminNpcsPage = () => {
   const [roleFilter, setRoleFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const debouncedQuery = useDebounce(query);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(20);
+  const [total, setTotal] = useState(0);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -94,7 +99,8 @@ const AdminNpcsPage = () => {
   const [dialogueNpc, setDialogueNpc] = useState<{ id: number; name: string } | null>(null);
   const [shopNpc, setShopNpc] = useState<{ id: number; name: string } | null>(null);
   const [questNpc, setQuestNpc] = useState<{ id: number; name: string } | null>(null);
-  const [statsNpc, setStatsNpc] = useState<{ id: number; name: string } | null>(null);
+  const [statsNpc, setStatsNpc] = useState<{ id: number; name: string; level: number } | null>(null);
+  const [equipmentNpc, setEquipmentNpc] = useState<{ id: number; name: string } | null>(null);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [racesData, setRacesData] = useState<RaceWithSubraces[]>([]);
@@ -107,15 +113,18 @@ const AdminNpcsPage = () => {
       if (debouncedQuery) params.q = debouncedQuery;
       if (roleFilter) params.npc_role = roleFilter;
       if (statusFilter) params.npc_status = statusFilter;
+      params.page = String(page);
+      params.page_size = String(pageSize);
       const res = await axios.get(`${BASE_URL}/characters/admin/npcs`, { params });
       const data = res.data;
       setNpcs(Array.isArray(data) ? data : (data.items ?? []));
+      setTotal(data.total ?? 0);
     } catch {
       toast.error('Не удалось загрузить список НПС');
     } finally {
       setLoading(false);
     }
-  }, [debouncedQuery, roleFilter, statusFilter]);
+  }, [debouncedQuery, roleFilter, statusFilter, page, pageSize]);
 
   useEffect(() => {
     fetchNpcs();
@@ -328,7 +337,21 @@ const AdminNpcsPage = () => {
         <NpcStatsEditor
           npcId={statsNpc.id}
           npcName={statsNpc.name}
+          npcLevel={statsNpc.level}
+          racesData={racesData}
           onClose={() => setStatsNpc(null)}
+        />
+      </div>
+    );
+  }
+
+  if (equipmentNpc) {
+    return (
+      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+        <NpcEquipmentEditor
+          npcId={equipmentNpc.id}
+          npcName={equipmentNpc.name}
+          onClose={() => setEquipmentNpc(null)}
         />
       </div>
     );
@@ -382,12 +405,12 @@ const AdminNpcsPage = () => {
           className="input-underline flex-1 max-w-[320px]"
           placeholder="Поиск по имени..."
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => { setQuery(e.target.value); setPage(1); }}
         />
         <select
           className="input-underline max-w-[200px]"
           value={roleFilter}
-          onChange={(e) => setRoleFilter(e.target.value)}
+          onChange={(e) => { setRoleFilter(e.target.value); setPage(1); }}
         >
           <option value="" className="bg-site-dark text-white">Все роли</option>
           {NPC_ROLES.map((r) => (
@@ -399,7 +422,7 @@ const AdminNpcsPage = () => {
         <select
           className="input-underline max-w-[200px]"
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
         >
           <option value="" className="bg-site-dark text-white">Все статусы</option>
           <option value="alive" className="bg-site-dark text-white">Жив</option>
@@ -653,10 +676,16 @@ const AdminNpcsPage = () => {
                             Редактировать
                           </button>
                           <button
-                            onClick={() => setStatsNpc({ id: npc.id, name: npc.name })}
+                            onClick={() => setStatsNpc({ id: npc.id, name: npc.name, level: npc.level })}
                             className="text-sm text-green-400 hover:text-green-300 transition-colors duration-200"
                           >
                             Статы и навыки
+                          </button>
+                          <button
+                            onClick={() => setEquipmentNpc({ id: npc.id, name: npc.name })}
+                            className="text-sm text-site-blue hover:text-white transition-colors duration-200"
+                          >
+                            Экипировка
                           </button>
                           <button
                             onClick={() => setDialogueNpc({ id: npc.id, name: npc.name })}
@@ -743,10 +772,16 @@ const AdminNpcsPage = () => {
                       Редактировать
                     </button>
                     <button
-                      onClick={() => setStatsNpc({ id: npc.id, name: npc.name })}
+                      onClick={() => setStatsNpc({ id: npc.id, name: npc.name, level: npc.level })}
                       className="text-sm text-green-400 hover:text-green-300 transition-colors"
                     >
                       Статы
+                    </button>
+                    <button
+                      onClick={() => setEquipmentNpc({ id: npc.id, name: npc.name })}
+                      className="text-sm text-site-blue hover:text-white transition-colors"
+                    >
+                      Экипировка
                     </button>
                     <button
                       onClick={() => setDialogueNpc({ id: npc.id, name: npc.name })}
@@ -789,6 +824,34 @@ const AdminNpcsPage = () => {
 
             {filteredNpcs.length === 0 && (
               <p className="text-center text-white/50 text-sm py-8">НПС не найдены</p>
+            )}
+
+            {/* Pagination */}
+            {total > 0 && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-white/10">
+                <span className="text-white/50 text-sm">
+                  Показано {Math.min((page - 1) * pageSize + 1, total)}–{Math.min(page * pageSize, total)} из {total}
+                </span>
+                <div className="flex items-center gap-3">
+                  <button
+                    className="btn-line !w-auto !px-4 !py-1.5 !text-sm disabled:opacity-30 disabled:pointer-events-none"
+                    disabled={page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    Назад
+                  </button>
+                  <span className="text-white/50 text-sm">
+                    Страница {page} из {Math.max(1, Math.ceil(total / pageSize))}
+                  </span>
+                  <button
+                    className="btn-line !w-auto !px-4 !py-1.5 !text-sm disabled:opacity-30 disabled:pointer-events-none"
+                    disabled={page >= Math.ceil(total / pageSize)}
+                    onClick={() => setPage((p) => p + 1)}
+                  >
+                    Вперёд
+                  </button>
+                </div>
+              </div>
             )}
           </>
         )}

@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 import models, schemas
 import traceback
+from sqlalchemy import text as sa_text
 from constants import (
     BASE_HEALTH, BASE_MANA, BASE_ENERGY, BASE_STAMINA,
     BASE_DODGE, BASE_CRIT, BASE_CRIT_DMG,
@@ -8,14 +9,19 @@ from constants import (
     STAT_BONUS_PER_POINT, ALL_RESISTANCE_FIELDS,
     PHYSICAL_RESISTANCE_FIELDS, MAGICAL_RESISTANCE_FIELDS,
     ENDURANCE_RES_EFFECTS_MULTIPLIER,
+    CLASS_MAIN_ATTRIBUTE,
 )
 
 
-def compute_derived_stats(attr):
+def compute_derived_stats(attr, class_id=None):
     """
     Compute all derived stats on a CharacterAttributes ORM object
     from its base (upgradeable) stats. Sets resource maximums,
-    combat stats, and resistances in-place.
+    combat stats, resistances, and damage in-place.
+
+    :param class_id: Optional character class id. When provided,
+        damage is set to the value of the class's main attribute
+        (see CLASS_MAIN_ATTRIBUTE). When None or unknown, damage is 0.
     """
     b = STAT_BONUS_PER_POINT
 
@@ -49,6 +55,13 @@ def compute_derived_stats(attr):
         attr.endurance * ENDURANCE_RES_EFFECTS_MULTIPLIER + attr.luck * b, 2
     )
 
+    # Damage from class main attribute
+    if class_id and class_id in CLASS_MAIN_ATTRIBUTE:
+        main_stat_name = CLASS_MAIN_ATTRIBUTE[class_id]
+        attr.damage = getattr(attr, main_stat_name, 0)
+    else:
+        attr.damage = 0
+
 
 # Функция для создания атрибутов персонажа
 
@@ -79,8 +92,15 @@ def create_character_attributes(db: Session, attributes: schemas.CharacterAttrib
     db_attributes.current_energy = int(BASE_ENERGY + attributes.energy * ENERGY_MULTIPLIER)
     db_attributes.current_stamina = int(BASE_STAMINA + attributes.stamina * STAMINA_MULTIPLIER)
 
-    # Compute all derived stats (resources, combat, resistances)
-    compute_derived_stats(db_attributes)
+    # Query character's class for damage computation
+    row = db.execute(
+        sa_text("SELECT id_class FROM characters WHERE id = :cid"),
+        {"cid": attributes.character_id},
+    ).fetchone()
+    class_id = row[0] if row else None
+
+    # Compute all derived stats (resources, combat, resistances, damage)
+    compute_derived_stats(db_attributes, class_id=class_id)
 
     db.add(db_attributes)
     db.commit()
@@ -121,7 +141,14 @@ def recalculate_attributes(db: Session, character_id: int):
     if not attr:
         return None
 
-    compute_derived_stats(attr)
+    # Query character's class for damage computation
+    row = db.execute(
+        sa_text("SELECT id_class FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    ).fetchone()
+    class_id = row[0] if row else None
+
+    compute_derived_stats(attr, class_id=class_id)
 
     db.commit()
     db.refresh(attr)

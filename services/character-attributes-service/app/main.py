@@ -930,8 +930,18 @@ def admin_recalculate_all(
     total = len(all_attrs)
     logger.info(f"[recalculate_all] Starting batch recalculation for {total} characters")
 
+    # Bulk-fetch class_id for all characters to avoid N+1 queries
+    char_ids = [attr.character_id for attr in all_attrs]
+    class_lookup = {}
+    if char_ids:
+        rows = db.execute(
+            text("SELECT id, id_class FROM characters WHERE id IN :ids"),
+            {"ids": tuple(char_ids)},
+        ).fetchall()
+        class_lookup = {row[0]: row[1] for row in rows}
+
     for i, attr in enumerate(all_attrs, start=1):
-        crud.compute_derived_stats(attr)
+        crud.compute_derived_stats(attr, class_id=class_lookup.get(attr.character_id))
 
         if i % BATCH_SIZE == 0:
             db.commit()
