@@ -10,6 +10,7 @@ interface QuestObjectiveForm {
   description: string;
   objective_type: string;
   target_count: number;
+  target_id: number | null;
 }
 
 interface QuestRewardItemForm {
@@ -45,6 +46,12 @@ interface GameItem {
   image: string | null;
   item_rarity: string;
   item_type: string;
+}
+
+interface LookupOption {
+  id: number;
+  name: string;
+  extra?: string;
 }
 
 interface QuestEditorProps {
@@ -108,6 +115,13 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
   const [searchingItems, setSearchingItems] = useState(false);
   const debouncedItemQuery = useDebounce(itemSearchQuery);
 
+  // Lookups for target_id dropdowns
+  const [mobTemplates, setMobTemplates] = useState<LookupOption[]>([]);
+  const [locations, setLocations] = useState<LookupOption[]>([]);
+  const [allQuests, setAllQuests] = useState<LookupOption[]>([]);
+  const [npcs, setNpcs] = useState<LookupOption[]>([]);
+  const [allItems, setAllItems] = useState<LookupOption[]>([]);
+
   const fetchQuests = useCallback(async () => {
     setLoadingQuests(true);
     try {
@@ -126,6 +140,54 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
   useEffect(() => {
     fetchQuests();
   }, [fetchQuests]);
+
+  // Load lookups for target_id dropdowns
+  useEffect(() => {
+    // Mob templates
+    axios.get(`${BASE_URL}/characters/admin/mob-templates`, { params: { page: 1, page_size: 500 } })
+      .then((res) => {
+        const items = res.data?.items ?? res.data ?? [];
+        setMobTemplates(items.map((m: { id: number; name: string; tier: string }) => ({
+          id: m.id, name: m.name, extra: m.tier,
+        })));
+      }).catch(() => {});
+
+    // Locations
+    axios.get(`${BASE_URL}/locations/locations/lookup`)
+      .then((res) => {
+        const items = Array.isArray(res.data) ? res.data : [];
+        setLocations(items.map((l: { id: number; name: string }) => ({
+          id: l.id, name: l.name,
+        })));
+      }).catch(() => {});
+
+    // All quests (for complete_quest objective)
+    axios.get(`${BASE_URL}/locations/admin/quests`)
+      .then((res) => {
+        const items = Array.isArray(res.data) ? res.data : (res.data?.items ?? []);
+        setAllQuests(items.map((q: { id: number; title: string }) => ({
+          id: q.id, name: q.title,
+        })));
+      }).catch(() => {});
+
+    // Items (for collect objective)
+    axios.get(`${BASE_URL}/inventory/admin/items`, { params: { limit: 1000 } })
+      .then((res) => {
+        const items = Array.isArray(res.data) ? res.data : (res.data?.items ?? []);
+        setAllItems(items.map((i: { id: number; name: string }) => ({
+          id: i.id, name: i.name,
+        })));
+      }).catch(() => {});
+
+    // NPCs (for defeat_npc / talk_to)
+    axios.get(`${BASE_URL}/characters/admin/npcs`, { params: { page: 1, per_page: 500 } })
+      .then((res) => {
+        const items = res.data?.items ?? res.data ?? [];
+        setNpcs(items.map((n: { id: number; name: string }) => ({
+          id: n.id, name: n.name,
+        })));
+      }).catch(() => {});
+  }, []);
 
   // Item search
   useEffect(() => {
@@ -172,10 +234,11 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
           item_name: ri.item_name || `Предмет #${ri.item_id}`,
           quantity: ri.quantity || 1,
         })),
-        objectives: (q.objectives || []).map((obj: { description: string; objective_type: string; target_count: number }) => ({
+        objectives: (q.objectives || []).map((obj: { description: string; objective_type: string; target_count: number; target_id?: number | null }) => ({
           description: obj.description || '',
           objective_type: obj.objective_type || 'custom',
           target_count: obj.target_count || 1,
+          target_id: obj.target_id ?? null,
         })),
         is_active: q.is_active !== false,
       });
@@ -225,7 +288,7 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
   const addObjective = () => {
     setForm((prev) => ({
       ...prev,
-      objectives: [...prev.objectives, { description: '', objective_type: 'kill', target_count: 1 }],
+      objectives: [...prev.objectives, { description: '', objective_type: 'kill', target_count: 1, target_id: null }],
     }));
   };
 
@@ -299,6 +362,7 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
         description: obj.description,
         objective_type: obj.objective_type,
         target_count: obj.target_count,
+        target_id: obj.target_id,
       })),
       is_active: form.is_active,
     };
@@ -507,6 +571,95 @@ const QuestEditor = ({ npcId, npcName, onClose }: QuestEditorProps) => {
                     <option key={t.value} value={t.value} className="bg-site-dark text-white">{t.label}</option>
                   ))}
                 </select>
+
+                {/* Target ID dropdown (contextual by type) */}
+                {obj.objective_type === 'kill_mob' && (
+                  <select
+                    value={obj.target_id ?? ''}
+                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
+                    className="input-underline !text-sm max-w-[200px]"
+                  >
+                    <option value="" className="bg-site-dark text-white">— Моб —</option>
+                    {mobTemplates.map((m) => (
+                      <option key={m.id} value={m.id} className="bg-site-dark text-white">
+                        {m.name}{m.extra ? ` (${m.extra})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {obj.objective_type === 'kill_mob_tier' && (
+                  <select
+                    value={obj.target_id ?? ''}
+                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
+                    className="input-underline !text-sm max-w-[160px]"
+                  >
+                    <option value="" className="bg-site-dark text-white">— Тир —</option>
+                    <option value={1} className="bg-site-dark text-white">Обычный (normal)</option>
+                    <option value={2} className="bg-site-dark text-white">Элитный (elite)</option>
+                    <option value={3} className="bg-site-dark text-white">Босс (boss)</option>
+                  </select>
+                )}
+
+                {(obj.objective_type === 'defeat_npc' || obj.objective_type === 'talk_to') && (
+                  <select
+                    value={obj.target_id ?? ''}
+                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
+                    className="input-underline !text-sm max-w-[200px]"
+                  >
+                    <option value="" className="bg-site-dark text-white">— НПС —</option>
+                    {npcs.map((n) => (
+                      <option key={n.id} value={n.id} className="bg-site-dark text-white">
+                        {n.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {(obj.objective_type === 'visit_location' || obj.objective_type === 'write_post_in_location' || obj.objective_type === 'write_chars_in_location') && (
+                  <select
+                    value={obj.target_id ?? ''}
+                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
+                    className="input-underline !text-sm max-w-[200px]"
+                  >
+                    <option value="" className="bg-site-dark text-white">— Локация —</option>
+                    {locations.map((l) => (
+                      <option key={l.id} value={l.id} className="bg-site-dark text-white">
+                        {l.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {obj.objective_type === 'complete_quest' && (
+                  <select
+                    value={obj.target_id ?? ''}
+                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
+                    className="input-underline !text-sm max-w-[200px]"
+                  >
+                    <option value="" className="bg-site-dark text-white">— Квест —</option>
+                    {allQuests.map((q) => (
+                      <option key={q.id} value={q.id} className="bg-site-dark text-white">
+                        {q.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {obj.objective_type === 'collect' && (
+                  <select
+                    value={obj.target_id ?? ''}
+                    onChange={(e) => updateObjective(idx, 'target_id', e.target.value ? Number(e.target.value) : null as unknown as number)}
+                    className="input-underline !text-sm max-w-[200px]"
+                  >
+                    <option value="" className="bg-site-dark text-white">— Предмет —</option>
+                    {allItems.map((item) => (
+                      <option key={item.id} value={item.id} className="bg-site-dark text-white">
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
 
                 {/* Target count */}
                 <input
