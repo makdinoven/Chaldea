@@ -186,9 +186,11 @@ def increment_cumulative_stats(
     character_id: int,
     increments: dict,
     set_max: dict,
+    resets: dict = None,
 ):
     """
-    Atomically increments cumulative stat counters and applies set_max (GREATEST).
+    Atomically increments cumulative stat counters, applies set_max (GREATEST),
+    and resets fields to fixed values.
     Creates the row lazily if it doesn't exist.
     Returns the updated row.
     """
@@ -199,6 +201,15 @@ def increment_cumulative_stats(
     # Build atomic UPDATE SET clauses
     set_clauses = []
     params = {"cid": character_id}
+
+    # Resets are applied first (before increments) so that
+    # e.g. reset current_win_streak=0 then increment it by 1 is not possible
+    # in a single call. Resets simply set the field to the given value.
+    if resets:
+        for field, value in resets.items():
+            param_name = f"rst_{field}"
+            set_clauses.append(f"`{field}` = :{param_name}")
+            params[param_name] = value
 
     for field, delta in increments.items():
         if delta == 0:
@@ -219,12 +230,36 @@ def increment_cumulative_stats(
         )
         db.execute(sql, params)
 
+    # Auto-sync max_win_streak with current_win_streak after increment
+    if "current_win_streak" in increments:
+        db.execute(sa_text(
+            "UPDATE character_cumulative_stats "
+            "SET max_win_streak = GREATEST(max_win_streak, current_win_streak) "
+            "WHERE character_id = :cid"
+        ), {"cid": character_id})
+
     db.commit()
     db.refresh(row)
     return row
 
 
 # --- Perks CRUD ---
+
+
+def _resolve_quest_name(quest_id: int) -> str | None:
+    """Resolve quest title directly from the shared DB (quests table)."""
+    from database import SessionLocal
+    try:
+        db = SessionLocal()
+        row = db.execute(
+            sa_text("SELECT title FROM quests WHERE id = :qid"),
+            {"qid": quest_id},
+        ).fetchone()
+        db.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
 
 # Valid attribute keys for flat bonuses (same as simple_keys in apply_modifiers + resource keys)
 VALID_FLAT_BONUS_KEYS = {
@@ -242,7 +277,10 @@ VALID_FLAT_BONUS_KEYS = {
 
 VALID_CATEGORIES = {"combat", "trade", "exploration", "progression", "usage"}
 VALID_RARITIES = {"common", "rare", "legendary"}
-VALID_CONDITION_TYPES = {"cumulative_stat", "character_level", "attribute", "quest", "admin_grant"}
+VALID_CONDITION_TYPES = {
+    "cumulative_stat", "character_level", "attribute", "quest", "admin_grant",
+    "perk_count", "has_perk", "skill_level", "gold_balance",
+}
 VALID_OPERATORS = {">=", "<=", "==", ">", "<"}
 
 
@@ -574,7 +612,48 @@ def get_character_perks(db: Session, character_id: int):
                     "current": current_value,
                     "required": required_value,
                 }
-            # character_level, quest, admin_grant — no progress data
+            elif cond_type == "quest" and stat_name == "completed_count":
+                current_value = cumulative_dict.get("quests_completed", 0)
+                progress["completed_count"] = {
+                    "current": current_value,
+                    "required": required_value,
+                }
+            elif cond_type == "quest" and stat_name == "quest_id":
+                # Check if this specific quest is completed
+                quest_done = 0
+                if required_value:
+                    from perk_evaluator import _fetch_quest_completed
+                    if _fetch_quest_completed(character_id, int(required_value)):
+                        quest_done = 1
+                progress["quest_id"] = {
+                    "current": quest_done,
+                    "required": 1,
+                    "label": _resolve_quest_name(int(required_value)) if required_value else None,
+                }
+            elif cond_type == "has_perk":
+                target_perk_id = int(required_value) if required_value else None
+                target_perk_name = None
+                has_it = 0
+                if target_perk_id:
+                    for p in all_perks:
+                        if p.id == target_perk_id:
+                            target_perk_name = p.name
+                            break
+                    if target_perk_id in char_perks_map:
+                        has_it = 1
+                progress["has_perk"] = {
+                    "current": has_it,
+                    "required": 1,
+                    "label": target_perk_name,
+                }
+            elif cond_type == "perk_count":
+                perk_count = len(char_perks_map)
+                progress["perk_count"] = {
+                    "current": perk_count,
+                    "required": required_value,
+                }
+            # character_level, quest/quest_id, has_perk, skill_level,
+            # gold_balance, admin_grant — no progress bar
 
         result.append({
             "id": perk.id,

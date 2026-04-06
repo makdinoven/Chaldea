@@ -996,6 +996,10 @@ def increment_cumulative_stats(
         for field in payload.set_max:
             if field not in CUMULATIVE_STATS_COLUMNS:
                 invalid_fields.append(field)
+    if payload.resets:
+        for field in payload.resets:
+            if field not in CUMULATIVE_STATS_COLUMNS:
+                invalid_fields.append(field)
 
     if invalid_fields:
         raise HTTPException(
@@ -1009,6 +1013,7 @@ def increment_cumulative_stats(
             character_id=payload.character_id,
             increments=payload.increments,
             set_max=payload.set_max or {},
+            resets=payload.resets or {},
         )
     except SQLAlchemyError as e:
         db.rollback()

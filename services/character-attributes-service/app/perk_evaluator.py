@@ -60,11 +60,63 @@ def _fetch_character_level(character_id: int) -> int | None:
     return None
 
 
+def _fetch_gold_balance(character_id: int) -> int | None:
+    """Fetch current gold balance from character-service."""
+    from config import settings
+    import httpx
+
+    try:
+        url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/full_profile"
+        resp = httpx.get(url, timeout=5.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("currency_balance")
+    except Exception as e:
+        logger.warning(f"Failed to fetch gold balance for character {character_id}: {e}")
+    return None
+
+
+def _fetch_quest_completed(character_id: int, quest_id: int) -> bool:
+    """Check if character completed a specific quest via locations-service."""
+    from config import settings
+    import httpx
+
+    try:
+        url = f"{settings.LOCATIONS_SERVICE_URL}/locations/quests/internal/check-completed"
+        resp = httpx.get(url, params={"character_id": character_id, "quest_id": quest_id}, timeout=5.0)
+        if resp.status_code == 200:
+            return resp.json().get("completed", False)
+    except Exception as e:
+        logger.warning(f"Failed to check quest completion for character {character_id}, quest {quest_id}: {e}")
+    return False
+
+
+def _fetch_skill_rank(character_id: int, skill_id: int) -> int | None:
+    """Fetch current skill rank number for a character from skills-service."""
+    from config import settings
+    import httpx
+
+    try:
+        url = f"{settings.SKILLS_SERVICE_URL}characters/{character_id}/skills"
+        resp = httpx.get(url, timeout=5.0)
+        if resp.status_code == 200:
+            skills = resp.json()
+            for skill in skills:
+                sr = skill.get("skill_rank", {})
+                if sr.get("skill_id") == skill_id:
+                    return sr.get("rank_number", 0)
+    except Exception as e:
+        logger.warning(f"Failed to fetch skill data for character {character_id}: {e}")
+    return None
+
+
 def check_condition(
     condition: dict,
     cumulative_stats: models.CharacterCumulativeStats | None,
     attributes: models.CharacterAttributes | None,
     character_level: int | None,
+    character_id: int = None,
+    db: Session = None,
 ) -> bool:
     """
     Check a single perk condition against character state.
@@ -73,7 +125,11 @@ def check_condition(
       - cumulative_stat: compare cumulative_stats.<stat> with value
       - attribute: compare attributes.<stat> with value
       - character_level: compare character level with value
-      - quest: always False (not implemented)
+      - quest: check quest completion (stat=quest_id for specific, stat=completed_count for total)
+      - perk_count: compare number of unlocked perks with value
+      - has_perk: check if character has a specific perk (value = perk_id)
+      - skill_level: compare skill rank level with value (stat = skill_id)
+      - gold_balance: compare current gold balance with value
       - admin_grant: always False (only manually granted)
       - unknown: always False (extensible)
     """
@@ -104,8 +160,61 @@ def check_condition(
         return compare(character_level, operator, value)
 
     elif ctype == "quest":
-        # Quest system not implemented yet
+        if not stat or character_id is None:
+            return False
+        if stat == "completed_count":
+            # Use cumulative stat (quests_completed) — no HTTP needed
+            if cumulative_stats is None:
+                return False
+            current = getattr(cumulative_stats, "quests_completed", 0) or 0
+            return compare(current, operator, value)
+        elif stat == "quest_id":
+            # Check if specific quest is completed
+            return _fetch_quest_completed(character_id, int(value))
         return False
+
+    elif ctype == "perk_count":
+        if db is None or character_id is None:
+            return False
+        count = (
+            db.query(models.CharacterPerk)
+            .filter(models.CharacterPerk.character_id == character_id)
+            .count()
+        )
+        return compare(count, operator, value)
+
+    elif ctype == "has_perk":
+        if db is None or character_id is None:
+            return False
+        perk_id = int(value) if value is not None else None
+        if perk_id is None:
+            return False
+        exists = (
+            db.query(models.CharacterPerk)
+            .filter(
+                models.CharacterPerk.character_id == character_id,
+                models.CharacterPerk.perk_id == perk_id,
+            )
+            .first()
+        )
+        return exists is not None
+
+    elif ctype == "skill_level":
+        if character_id is None or not stat:
+            return False
+        skill_id = int(stat)
+        rank_level = _fetch_skill_rank(character_id, skill_id)
+        if rank_level is None:
+            return False
+        return compare(rank_level, operator, value)
+
+    elif ctype == "gold_balance":
+        if character_id is None:
+            return False
+        balance = _fetch_gold_balance(character_id)
+        if balance is None:
+            return False
+        return compare(balance, operator, value)
 
     elif ctype == "admin_grant":
         # Only manually granted by admin
@@ -186,6 +295,8 @@ def evaluate_perks(db: Session, character_id: int) -> list[dict]:
                 cumulative_stats,
                 attributes,
                 character_level,
+                character_id=character_id,
+                db=db,
             )
             for c in conditions
         )

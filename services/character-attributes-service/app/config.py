@@ -12,5 +12,6 @@ class Settings(BaseSettings):
     ATTRIBUTES_SERVICE_URL: str = "http://character-attributes-service:8002/attributes/"
     USER_SERVICE_URL: str = "http://user-service:8000"
     CHARACTER_SERVICE_URL: str = "http://character-service:8005"
+    LOCATIONS_SERVICE_URL: str = "http://locations-service:8006"
 
 settings = Settings()

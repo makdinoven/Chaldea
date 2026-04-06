@@ -84,8 +84,11 @@ const CONDITION_DESCRIPTIONS: Record<string, (value: number) => string> = {
   locations_visited: (v) => `Посетить ${v} локаций`,
   total_transitions: (v) => `Совершить ${v} переходов`,
   // Кумулятивная статистика — навыки
-  skills_used: (v) => `Использовать ${v} навыков`,
+  skills_used: (v) => `Прокачать ${v} навыков`,
   items_equipped: (v) => `Экипировать ${v} предметов`,
+  // Кумулятивная статистика — социальные / квесты
+  total_posts: (v) => `Написать ${v} постов`,
+  quests_completed: (v) => `Завершить ${v} квестов`,
   // Основные характеристики
   strength: (v) => `Сила ${v}+`,
   agility: (v) => `Ловкость ${v}+`,
@@ -121,10 +124,52 @@ const CONDITION_DESCRIPTIONS: Record<string, (value: number) => string> = {
   character_level: (v) => `Достичь ${v} уровня`,
   // Специальные типы
   admin_grant: () => 'Выдаётся администратором',
-  quest: (v) => `Выполнить квест (${v})`,
+  // Новые типы условий
+  perk_count: (v) => `Открыть ${v} перков`,
+  gold_balance: (v) => `Иметь ${v} золота`,
+  has_perk: () => 'Открыть определённый перк',
+  skill_level: (v) => `Прокачать навык до ранга ${v}`,
 };
 
-const formatConditionText = (statKey: string, value: number): string => {
+/**
+ * Format a human-readable condition description from condition data.
+ * Handles both simple stat-key lookups and complex condition types
+ * (quest with sub-types, has_perk, skill_level, etc.).
+ */
+const formatConditionText = (
+  statKey: string,
+  value: number,
+  condition?: { type?: string; stat?: string; label?: string },
+): string => {
+  const condType = condition?.type;
+  const condStat = condition?.stat;
+
+  // Quest conditions — route by stat sub-type
+  if (condType === 'quest') {
+    if (condStat === 'completed_count') return `Завершить ${value} квестов`;
+    if (condStat === 'quest_id') {
+      const label = condition?.label;
+      return label ? `Завершить квест «${label}»` : 'Завершить определённый квест';
+    }
+    return `Квестовое условие`;
+  }
+
+  // has_perk — value is the perk ID
+  if (condType === 'has_perk') {
+    const label = condition?.label;
+    return label ? `Открыть перк «${label}»` : 'Открыть определённый перк';
+  }
+
+  // skill_level — stat is skill_id, value is required rank
+  if (condType === 'skill_level') return `Прокачать навык до ранга ${value}`;
+
+  // gold_balance
+  if (condType === 'gold_balance') return `Иметь ${value} золота`;
+
+  // perk_count
+  if (condType === 'perk_count') return `Открыть ${value} перков`;
+
+  // Standard lookup by stat key
   const formatter = CONDITION_DESCRIPTIONS[statKey];
   return formatter ? formatter(value) : `${statKey} ≥ ${value}`;
 };
@@ -258,7 +303,10 @@ const PerkDetailModal = ({ perk, onClose }: PerkDetailModalProps) => {
                         <div>
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-white/70 text-sm">
-                              {formatConditionText(statKey, condition.value)}
+                              {formatConditionText(statKey, condition.value, {
+                                ...condition,
+                                label: (progressEntry as Record<string, unknown>)?.label as string | undefined,
+                              })}
                             </span>
                             <span className={`text-xs font-medium ${isMet ? 'text-emerald-400' : 'text-white/40'}`}>
                               {current} / {required}

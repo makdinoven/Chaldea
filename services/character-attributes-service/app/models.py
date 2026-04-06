@@ -144,3 +144,7 @@ class CharacterCumulativeStats(Base):
     # Skill stats (Phase 3)
     skills_used = Column(Integer, server_default="0")
     items_equipped = Column(Integer, server_default="0")
+
+    # Social / quest stats
+    total_posts = Column(Integer, server_default="0")
+    quests_completed = Column(Integer, server_default="0")

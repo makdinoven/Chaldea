@@ -350,22 +350,41 @@ async def _track_cumulative_stats(
     """
     is_pvp = battle_type in ("pvp_training", "pvp_death")
 
-    # Count defeated NPC/mob participants (for pve_kills)
+    # Collect defeated enemy info (for pve_kills + quest auto-progress)
     defeated_npc_count = 0
+    defeated_enemies: list[dict] = []  # [{character_id, is_npc, mob_template_id, tier}, ...]
     if winner_team is not None:
         for pid_str, pdata in battle_state["participants"].items():
             if pdata["hp"] <= 0 and pdata["team"] != winner_team:
-                char_id = pdata["character_id"]
+                enemy_char_id = pdata["character_id"]
+                enemy_info = {"character_id": enemy_char_id, "is_npc": False, "mob_template_id": None, "tier": None}
                 try:
                     row = await db_session.execute(
                         text("SELECT is_npc FROM characters WHERE id = :cid"),
-                        {"cid": char_id},
+                        {"cid": enemy_char_id},
                     )
                     r = row.fetchone()
                     if r and r[0]:
+                        enemy_info["is_npc"] = True
                         defeated_npc_count += 1
+                        # Check if this NPC is a mob (has active_mobs entry)
+                        mob_row = await db_session.execute(
+                            text("""
+                                SELECT am.mob_template_id, mt.tier
+                                FROM active_mobs am
+                                JOIN mob_templates mt ON mt.id = am.mob_template_id
+                                WHERE am.character_id = :cid
+                                LIMIT 1
+                            """),
+                            {"cid": enemy_char_id},
+                        )
+                        mr = mob_row.fetchone()
+                        if mr:
+                            enemy_info["mob_template_id"] = mr[0]
+                            enemy_info["tier"] = mr[1]
                 except Exception:
                     pass
+                defeated_enemies.append(enemy_info)
 
     url = f"{settings.CHAR_ATTRS_SERVICE_URL}/attributes/cumulative_stats/increment"
 
@@ -402,11 +421,10 @@ async def _track_cumulative_stats(
             "total_rounds_survived": turn_number,
         }
 
-        if is_pvp:
-            if is_winner:
-                increments["pvp_wins"] = 1
-            elif is_loser:
-                increments["pvp_losses"] = 1
+        if is_winner:
+            increments["pvp_wins"] = 1
+        elif is_loser:
+            increments["pvp_losses"] = 1
 
         # PvE kills: only for winners
         if is_winner and defeated_npc_count > 0:
@@ -418,14 +436,12 @@ async def _track_cumulative_stats(
             if max_hp > 0 and pdata["hp"] < max_hp * 0.10:
                 increments["low_hp_wins"] = 1
 
-        # Win streak: increment on win only
-        # TODO(FEAT-078): On loss, current_win_streak should be reset to 0.
-        #   The increment endpoint only supports atomic `counter + N` and
-        #   `GREATEST(current, N)` — it cannot reset a counter. A small API
-        #   extension (e.g. `resets` dict) is needed. For Phase 1, we only
-        #   track streak increments on wins. Loss-reset is deferred.
+        # Win streak tracking (all battles)
+        resets: dict[str, int] = {}
         if is_winner:
             increments["current_win_streak"] = 1
+        elif is_loser:
+            resets["current_win_streak"] = 0
 
         # --- Build set_max dict ---
         set_max: dict[str, int] = {}
@@ -433,32 +449,17 @@ async def _track_cumulative_stats(
         if battle_damage > 0:
             set_max["max_damage_single_battle"] = battle_damage
 
-        if is_winner:
-            # We don't know the pre-increment value of current_win_streak,
-            # but we can pass the increment value via set_max for max_win_streak.
-            # The server will do GREATEST(max_win_streak, current_win_streak)
-            # after the increment is applied. Since we increment current_win_streak
-            # by 1 in the same call, max_win_streak will be checked against
-            # the post-increment value.
-            # However, we don't have the current value here, so we skip set_max
-            # for max_win_streak and let the server handle it after increment.
-            # Actually — the server applies increments first, then set_max.
-            # But set_max uses GREATEST(field, value), not the updated field.
-            # We would need the new value. Since we can't know it, we'll let
-            # the increment endpoint handle max_win_streak separately if it
-            # supports post-increment set_max. For now, skip.
-            pass
-
         # Remove zero-value entries to keep payload clean
         increments = {k: v for k, v in increments.items() if v != 0}
 
-        if not increments and not set_max:
+        if not increments and not set_max and not resets:
             continue
 
         payload = {
             "character_id": char_id,
             "increments": increments,
             "set_max": set_max if set_max else {},
+            "resets": resets if resets else {},
         }
 
         try:
@@ -478,6 +479,42 @@ async def _track_cumulative_stats(
             logger.error(
                 f"[CUMULATIVE] Не удалось отправить статистику для персонажа {char_id}: {e}"
             )
+
+        # --- Quest auto-progress for winners ---
+        if is_winner and defeated_enemies:
+            quest_url = f"{settings.LOCATIONS_SERVICE_URL}/locations/quests/internal/auto-progress"
+            for enemy in defeated_enemies:
+                events: list[dict] = []
+
+                # defeat_any — always
+                events.append({"event_type": "defeat_any", "character_id": char_id})
+
+                if enemy["mob_template_id"] is not None:
+                    # It's a mob
+                    events.append({
+                        "event_type": "kill_mob",
+                        "character_id": char_id,
+                        "target_id": enemy["mob_template_id"],
+                        "meta": {"tier": enemy["tier"]},
+                    })
+                    events.append({
+                        "event_type": "kill_mob_any",
+                        "character_id": char_id,
+                    })
+                elif enemy["is_npc"]:
+                    # It's an NPC (not a mob)
+                    events.append({
+                        "event_type": "defeat_npc",
+                        "character_id": char_id,
+                        "target_id": enemy["character_id"],
+                    })
+
+                for evt in events:
+                    try:
+                        async with httpx.AsyncClient(timeout=5.0) as client:
+                            await client.post(quest_url, json=evt)
+                    except Exception as e:
+                        logger.warning(f"[QUEST] Auto-progress error for char {char_id}: {e}")
 
 
 @router.post("/", response_model=BattleCreated, status_code=201)

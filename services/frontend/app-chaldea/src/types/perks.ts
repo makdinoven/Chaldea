@@ -1,7 +1,16 @@
 export interface PerkCondition {
-  type: 'cumulative_stat' | 'character_level' | 'attribute' | 'quest' | 'admin_grant';
+  type:
+    | 'cumulative_stat'
+    | 'character_level'
+    | 'attribute'
+    | 'quest'
+    | 'perk_count'
+    | 'has_perk'
+    | 'skill_level'
+    | 'gold_balance'
+    | 'admin_grant';
   stat?: string;
-  operator: '>=' | '<=' | '==' | '>';
+  operator: '>=' | '<=' | '==' | '>' | '<';
   value: number;
 }
 
@@ -45,6 +54,16 @@ export interface CumulativeStats {
   current_win_streak: number;
   total_rounds_survived: number;
   low_hp_wins: number;
+  total_gold_earned: number;
+  total_gold_spent: number;
+  items_bought: number;
+  items_sold: number;
+  locations_visited: number;
+  total_transitions: number;
+  skills_used: number;
+  items_equipped: number;
+  total_posts: number;
+  quests_completed: number;
 }
 
 export interface PerksResponse {

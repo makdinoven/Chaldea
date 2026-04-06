@@ -183,10 +183,10 @@ class AdminAttributeUpdate(BaseModel):
 # --- Perk Schemas ---
 
 class PerkCondition(BaseModel):
-    type: str  # 'cumulative_stat', 'character_level', 'attribute', 'quest', 'admin_grant'
+    type: str  # 'cumulative_stat', 'character_level', 'attribute', 'quest', 'perk_count', 'has_perk', 'skill_level', 'gold_balance', 'admin_grant'
     stat: Optional[str] = None
-    operator: str  # '>=', '<=', '==', '>', '<'
-    value: Any
+    operator: str = ">="  # '>=', '<=', '==', '>', '<'
+    value: Any = None
 
 
 class PerkBonuses(BaseModel):
@@ -281,6 +281,8 @@ class CumulativeStatsResponse(BaseModel):
     total_transitions: int = 0
     skills_used: int = 0
     items_equipped: int = 0
+    total_posts: int = 0
+    quests_completed: int = 0
 
     class Config:
         orm_mode = True
@@ -290,3 +292,4 @@ class CumulativeStatsIncrement(BaseModel):
     character_id: int
     increments: Dict[str, int] = Field(default_factory=dict)
     set_max: Optional[Dict[str, int]] = Field(default_factory=dict)
+    resets: Optional[Dict[str, int]] = Field(default_factory=dict)

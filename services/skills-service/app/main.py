@@ -414,14 +414,27 @@ async def upgrade_skill(
     existing_cs = await crud.get_character_skill_by_skill_id(db, character_id, skill_id)
     if existing_cs:
         updated_cs = await crud.update_character_skill_rank(db, existing_cs.id, next_rank_id)
-        return {"detail": "Skill rank upgraded", "character_skill_id": updated_cs.id}
+        result = {"detail": "Skill rank upgraded", "character_skill_id": updated_cs.id}
     else:
         new_cs_data = schemas.CharacterSkillCreate(
             character_id=character_id,
             skill_rank_id=next_rank_id
         )
         new_cs = await crud.create_character_skill(db, new_cs_data)
-        return {"detail": "Skill learned", "character_skill_id": new_cs.id}
+        result = {"detail": "Skill learned", "character_skill_id": new_cs.id}
+
+    # Track cumulative stats: skills_used (non-fatal)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{ATTRIBUTES_SERVICE_URL}/cumulative_stats/increment",
+                json={"character_id": character_id, "increments": {"skills_used": 1}},
+            )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Cumulative stats tracking error: {e}")
+
+    return result
 
 # -----------------------------------------------------------
 # 8) Получить полное дерево навыка

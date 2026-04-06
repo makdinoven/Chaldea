@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     AUTOBATTLE_SERVICE_URL: str = os.getenv("AUTOBATTLE_SERVICE_URL", "http://autobattle-service:8011")
     CHAR_ATTRS_SERVICE_URL: str = os.getenv("CHAR_ATTRS_SERVICE_URL", "http://character-attributes-service:8002")
     RABBITMQ_URL: str = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
+    LOCATIONS_SERVICE_URL: str = os.getenv("LOCATIONS_SERVICE_URL", "http://locations-service:8006")
 
     class Config:
         env_file = ".env"

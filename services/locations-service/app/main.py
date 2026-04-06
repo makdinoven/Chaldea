@@ -25,6 +25,50 @@ logger = logging.getLogger(__name__)
 OAUTH2_SCHEME_OPTIONAL = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
 
+async def _track_cumulative_stats(character_id: int, increments: dict, set_max: dict = None):
+    """
+    Fire-and-forget: increment cumulative stats for perk tracking.
+    Non-fatal — errors are logged but do not affect the main operation.
+    """
+    payload = {"character_id": character_id, "increments": increments}
+    if set_max:
+        payload["set_max"] = set_max
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/cumulative_stats/increment"
+            resp = await client.post(url, json=payload)
+            if resp.status_code != 200:
+                logger.warning(f"Cumulative stats tracking failed for char {character_id}: {resp.text}")
+    except Exception as e:
+        logger.warning(f"Cumulative stats tracking error for char {character_id}: {e}")
+
+
+async def _auto_progress_quest(
+    session: AsyncSession,
+    character_id: int,
+    event_type: str,
+    increment: int = 1,
+    target_id: int | None = None,
+    meta: dict | None = None,
+):
+    """Fire-and-forget: update quest objectives matching the event."""
+    try:
+        await crud.auto_progress_quests(
+            session, character_id, event_type, increment, target_id, meta,
+        )
+    except Exception as e:
+        logger.warning(f"Quest auto-progress error for char {character_id}, event {event_type}: {e}")
+
+
+async def _count_unique_locations(session: AsyncSession, character_id: int) -> int:
+    """Count distinct locations where a character has posted."""
+    result = await session.execute(
+        text("SELECT COUNT(DISTINCT location_id) FROM posts WHERE character_id = :cid"),
+        {"cid": character_id},
+    )
+    return result.scalar() or 0
+
+
 async def _try_spawn_mob(location_id: int, character_id: int):
     """
     Fire-and-forget: call character-service to try spawning a mob at the location.
@@ -578,6 +622,28 @@ async def create_new_post(
         _try_spawn_mob, post_data.location_id, post_data.character_id
     )
 
+    # Track cumulative stats: total_posts
+    background_tasks.add_task(
+        _track_cumulative_stats, post_data.character_id, {"total_posts": 1}
+    )
+
+    # Quest auto-progress: write_posts, write_post_in_location, write_chars, write_chars_in_location
+    background_tasks.add_task(
+        _auto_progress_quest, session, post_data.character_id, "write_posts"
+    )
+    background_tasks.add_task(
+        _auto_progress_quest, session, post_data.character_id,
+        "write_post_in_location", 1, post_data.location_id,
+    )
+    background_tasks.add_task(
+        _auto_progress_quest, session, post_data.character_id,
+        "write_chars", char_count,
+    )
+    background_tasks.add_task(
+        _auto_progress_quest, session, post_data.character_id,
+        "write_chars_in_location", char_count, post_data.location_id,
+    )
+
     return result
 
 @router.get("/{location_id}/posts/", response_model=List[schemas.PostResponse])
@@ -891,6 +957,45 @@ async def move_and_post(
     # Fire-and-forget: trigger mob spawn check at destination location
     background_tasks.add_task(
         _try_spawn_mob, destination_location_id, movement.character_id
+    )
+
+    # Track cumulative stats: total_posts + transition (if actually moved)
+    move_increments = {"total_posts": 1}
+    move_set_max = {}
+    if current_location is not None and int(current_location) != destination_location_id:
+        move_increments["total_transitions"] = 1
+        # Count unique locations visited (by posts) and use set_max
+        unique_count = await _count_unique_locations(session, movement.character_id)
+        if unique_count > 0:
+            move_set_max["locations_visited"] = unique_count
+    background_tasks.add_task(
+        _track_cumulative_stats, movement.character_id, move_increments,
+        move_set_max if move_set_max else None,
+    )
+
+    # Quest auto-progress: visit_location, write_posts, write_chars, etc.
+    if current_location is not None and int(current_location) != destination_location_id:
+        background_tasks.add_task(
+            _auto_progress_quest, session, movement.character_id,
+            "visit_location", 1, destination_location_id,
+        )
+    # Post-related quest progress
+    plain_text = crud.strip_html_tags(movement.content)
+    move_char_count = len(plain_text)
+    background_tasks.add_task(
+        _auto_progress_quest, session, movement.character_id, "write_posts"
+    )
+    background_tasks.add_task(
+        _auto_progress_quest, session, movement.character_id,
+        "write_post_in_location", 1, destination_location_id,
+    )
+    background_tasks.add_task(
+        _auto_progress_quest, session, movement.character_id,
+        "write_chars", move_char_count,
+    )
+    background_tasks.add_task(
+        _auto_progress_quest, session, movement.character_id,
+        "write_chars_in_location", move_char_count, destination_location_id,
     )
 
     return new_post
@@ -1890,6 +1995,12 @@ async def buy_from_npc(
 
     item_name = await crud.get_item_name(session, shop_item.item_id)
 
+    # Track cumulative stats: items_bought + gold_spent
+    await _track_cumulative_stats(body.character_id, {
+        "items_bought": body.quantity,
+        "total_gold_spent": total_price,
+    })
+
     return {
         "success": True,
         "message": "Покупка совершена",
@@ -1971,6 +2082,12 @@ async def sell_to_npc(
     )
 
     item_name = await crud.get_item_name(session, body.item_id)
+
+    # Track cumulative stats: items_sold + gold_earned
+    await _track_cumulative_stats(body.character_id, {
+        "items_sold": body.quantity,
+        "total_gold_earned": total_price,
+    })
 
     return {
         "success": True,
@@ -2155,6 +2272,15 @@ async def complete_quest(
     # Mark quest as completed
     await crud.complete_quest_record(session, check["character_quest_id"])
 
+    # Track cumulative stats: quests_completed + gold earned from quest
+    quest_increments = {"quests_completed": 1}
+    if quest.reward_currency > 0:
+        quest_increments["total_gold_earned"] = quest.reward_currency
+    await _track_cumulative_stats(body.character_id, quest_increments)
+
+    # Quest auto-progress: complete_quest (for quest chain objectives)
+    await _auto_progress_quest(session, body.character_id, "complete_quest", 1, quest_id)
+
     return {
         "success": True,
         "message": "Квест выполнен! Награды получены.",
@@ -2195,6 +2321,74 @@ async def update_quest_progress(
     if not result:
         raise HTTPException(status_code=404, detail="Прогресс квеста не найден")
     return result
+
+
+# --------------------------------------------------------------------
+# Internal: quest completion check (for perk evaluator)
+# --------------------------------------------------------------------
+@router.get("/quests/internal/check-completed")
+async def check_quest_completed_internal(
+    character_id: int,
+    quest_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Internal endpoint (service-to-service, no auth).
+    Returns whether a character has completed a specific quest.
+    """
+    result = await session.execute(
+        text(
+            "SELECT id FROM character_quests "
+            "WHERE character_id = :cid AND quest_id = :qid AND status = 'completed' "
+            "LIMIT 1"
+        ),
+        {"cid": character_id, "qid": quest_id},
+    )
+    row = result.fetchone()
+    return {"completed": row is not None}
+
+
+@router.get("/quests/internal/completed-count")
+async def get_completed_quest_count_internal(
+    character_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Internal endpoint (service-to-service, no auth).
+    Returns the count of completed quests for a character.
+    """
+    result = await session.execute(
+        text(
+            "SELECT COUNT(*) FROM character_quests "
+            "WHERE character_id = :cid AND status = 'completed'"
+        ),
+        {"cid": character_id},
+    )
+    count = result.scalar() or 0
+    return {"count": count}
+
+
+# --------------------------------------------------------------------
+# Internal: auto-progress quest objectives (service-to-service)
+# --------------------------------------------------------------------
+@router.post("/quests/internal/auto-progress")
+async def auto_progress_quests_internal(
+    body: schemas.QuestAutoProgressRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Internal endpoint (no auth). Called by other services when game events happen.
+    Automatically finds and updates matching quest objectives for the character.
+    """
+    updated = await crud.auto_progress_quests(
+        session,
+        character_id=body.character_id,
+        event_type=body.event_type,
+        increment=body.increment,
+        target_id=body.target_id,
+        meta=body.meta,
+    )
+    return {"updated_objectives": updated}
 
 
 # --------------------------------------------------------------------

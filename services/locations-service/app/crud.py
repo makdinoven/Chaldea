@@ -3189,6 +3189,153 @@ async def complete_quest_record(session: AsyncSession, character_quest_id: int) 
     await session.commit()
 
 
+async def auto_progress_quests(
+    session: AsyncSession,
+    character_id: int,
+    event_type: str,
+    increment: int = 1,
+    target_id: int | None = None,
+    meta: dict | None = None,
+) -> list[dict]:
+    """
+    Automatically update quest progress for a character based on a game event.
+
+    Finds all active quest objectives matching the event_type (as objective_type)
+    and optionally target_id, then increments their progress.
+
+    Event types map directly to objective_type values:
+      - kill_mob          (target_id = mob_template_id)
+      - kill_mob_any      (no target_id)
+      - kill_mob_tier     (meta.tier = 'normal'/'elite'/'boss')
+      - defeat_npc        (target_id = character_id of NPC)
+      - defeat_any        (no target_id)
+      - visit_location    (target_id = location_id)
+      - write_posts       (no target_id)
+      - write_post_in_location (target_id = location_id)
+      - write_chars       (increment = char_count)
+      - write_chars_in_location (target_id = location_id, increment = char_count)
+      - talk_to           (target_id = npc_id)
+      - collect           (target_id = item_id)
+      - complete_quest    (target_id = quest_id)
+
+    Returns list of updated objectives.
+    """
+    meta = meta or {}
+
+    # Build query to find matching active objectives
+    # Join: character_quests (active) -> quest_objectives (by type) -> character_quest_progress (not completed)
+    base_query = """
+        SELECT cqp.id AS progress_id,
+               cqp.character_quest_id,
+               qo.id AS objective_id,
+               qo.objective_type,
+               qo.target_id,
+               qo.target_count,
+               cqp.current_count
+        FROM character_quest_progress cqp
+        JOIN character_quests cq ON cq.id = cqp.character_quest_id
+        JOIN quest_objectives qo ON qo.id = cqp.objective_id
+        WHERE cq.character_id = :cid
+          AND cq.status = 'active'
+          AND cqp.is_completed = 0
+    """
+    params: dict = {"cid": character_id}
+
+    # Determine which objective_types to match
+    # Some events can match multiple objective_types
+    matching_types: list[str] = []
+
+    if event_type == "kill_mob":
+        matching_types = ["kill_mob", "kill_mob_any", "defeat_any"]
+        # Also check kill_mob_tier if we have tier info
+        if meta.get("tier"):
+            matching_types.append("kill_mob_tier")
+    elif event_type == "defeat_npc":
+        matching_types = ["defeat_npc", "defeat_any"]
+    elif event_type in (
+        "visit_location", "write_posts", "write_post_in_location",
+        "write_chars", "write_chars_in_location", "talk_to",
+        "collect", "complete_quest", "kill_mob_any", "defeat_any",
+    ):
+        matching_types = [event_type]
+    else:
+        return []
+
+    # Filter by objective_type
+    type_placeholders = ", ".join(f":ot{i}" for i in range(len(matching_types)))
+    base_query += f" AND qo.objective_type IN ({type_placeholders})"
+    for i, t in enumerate(matching_types):
+        params[f"ot{i}"] = t
+
+    rows = (await session.execute(text(base_query), params)).fetchall()
+
+    if not rows:
+        return []
+
+    updated = []
+
+    for row in rows:
+        progress_id = row[0]
+        objective_type = row[3]
+        obj_target_id = row[4]
+        obj_target_count = row[5]
+        current_count = row[6]
+        objective_id = row[2]
+
+        # Check target_id matching for types that require it
+        if objective_type == "kill_mob":
+            if obj_target_id is not None and target_id != obj_target_id:
+                continue
+        elif objective_type == "kill_mob_tier":
+            # target_id in DB stores tier as int mapping or string;
+            # we compare meta.tier with target_id
+            tier = meta.get("tier")
+            tier_map = {"normal": 1, "elite": 2, "boss": 3}
+            if obj_target_id is not None and tier_map.get(tier) != obj_target_id:
+                continue
+        elif objective_type == "defeat_npc":
+            if obj_target_id is not None and target_id != obj_target_id:
+                continue
+        elif objective_type in ("visit_location", "write_post_in_location", "write_chars_in_location"):
+            if obj_target_id is not None and target_id != obj_target_id:
+                continue
+        elif objective_type == "talk_to":
+            if obj_target_id is not None and target_id != obj_target_id:
+                continue
+        elif objective_type == "collect":
+            if obj_target_id is not None and target_id != obj_target_id:
+                continue
+        elif objective_type == "complete_quest":
+            if obj_target_id is not None and target_id != obj_target_id:
+                continue
+        # kill_mob_any, defeat_any, write_posts, write_chars — no target check
+
+        # Update progress
+        await session.execute(
+            text("""
+                UPDATE character_quest_progress
+                SET current_count = LEAST(current_count + :inc, :target),
+                    is_completed = CASE WHEN current_count + :inc >= :target THEN 1 ELSE 0 END
+                WHERE id = :pid
+            """),
+            {"inc": increment, "target": obj_target_count, "pid": progress_id},
+        )
+
+        new_count = min(current_count + increment, obj_target_count)
+        updated.append({
+            "objective_id": objective_id,
+            "objective_type": objective_type,
+            "current_count": new_count,
+            "target_count": obj_target_count,
+            "is_completed": new_count >= obj_target_count,
+        })
+
+    if updated:
+        await session.commit()
+
+    return updated
+
+
 async def abandon_quest(session: AsyncSession, character_id: int, quest_id: int) -> bool:
     """Abandon a quest. Returns True if found and abandoned."""
     result = await session.execute(

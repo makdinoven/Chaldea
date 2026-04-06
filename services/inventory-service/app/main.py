@@ -228,6 +228,18 @@ def add_item_to_inventory(character_id: int, item_data: schemas.InventoryItem, d
     for item in inventory_items:
         db.refresh(item)
 
+    # Quest auto-progress: collect (non-fatal)
+    try:
+        url = f"{settings.LOCATIONS_SERVICE_URL}/locations/quests/internal/auto-progress"
+        httpx.post(url, json={
+            "character_id": character_id,
+            "event_type": "collect",
+            "increment": item_data.quantity,
+            "target_id": item_data.item_id,
+        }, timeout=5.0)
+    except Exception as e:
+        logger.warning(f"Quest auto-progress (collect) error for char {character_id}: {e}")
+
     return inventory_items
 
 
@@ -281,6 +293,23 @@ async def apply_modifiers_in_attributes_service(character_id: int, modifiers: di
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=modifiers)
         resp.raise_for_status()
+
+
+def _track_cumulative_stats(character_id: int, increments: dict, set_max: dict = None):
+    """
+    Fire-and-forget: increment cumulative stats for perk tracking.
+    Non-fatal — errors are logged but do not affect the main operation.
+    """
+    payload = {"character_id": character_id, "increments": increments}
+    if set_max:
+        payload["set_max"] = set_max
+    try:
+        url = f"{settings.ATTRIBUTES_SERVICE_URL}cumulative_stats/increment"
+        resp = httpx.post(url, json=payload, timeout=5.0)
+        if resp.status_code != 200:
+            logger.warning(f"Cumulative stats tracking failed for char {character_id}: {resp.text}")
+    except Exception as e:
+        logger.warning(f"Cumulative stats tracking error for char {character_id}: {e}")
 
 
 async def recover_in_attributes_service(character_id: int, recovery: dict):
@@ -432,6 +461,9 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
     # Если recalc_fast_slots тоже должно быть атомарным, можно вызвать его ДО коммита.
     crud.recalc_fast_slots(db, character_id)
     # ---------------------------------------
+
+    # Track cumulative stats for equip (non-fatal)
+    _track_cumulative_stats(character_id, {"items_equipped": 1})
 
     # Trigger title evaluation after equip (non-fatal)
     try:
@@ -830,6 +862,39 @@ def trade_confirm(
                 publish_notification_sync(target_user, f"Обмен с {init_name} завершён успешно!")
         except Exception:
             pass
+
+        # Track cumulative stats for both participants
+        trade_items = db.query(models.TradeOfferItem).filter(
+            models.TradeOfferItem.trade_offer_id == trade.id
+        ).all()
+        init_items_given = sum(ti.quantity for ti in trade_items if ti.character_id == trade.initiator_character_id)
+        target_items_given = sum(ti.quantity for ti in trade_items if ti.character_id == trade.target_character_id)
+
+        # Initiator: sold init_items_given, bought target_items_given
+        init_increments = {}
+        if init_items_given > 0:
+            init_increments["items_sold"] = init_items_given
+        if target_items_given > 0:
+            init_increments["items_bought"] = target_items_given
+        if trade.initiator_gold > 0:
+            init_increments["total_gold_spent"] = trade.initiator_gold
+        if trade.target_gold > 0:
+            init_increments["total_gold_earned"] = trade.target_gold
+        if init_increments:
+            _track_cumulative_stats(trade.initiator_character_id, init_increments)
+
+        # Target: sold target_items_given, bought init_items_given
+        target_increments = {}
+        if target_items_given > 0:
+            target_increments["items_sold"] = target_items_given
+        if init_items_given > 0:
+            target_increments["items_bought"] = init_items_given
+        if trade.target_gold > 0:
+            target_increments["total_gold_spent"] = trade.target_gold
+        if trade.initiator_gold > 0:
+            target_increments["total_gold_earned"] = trade.initiator_gold
+        if target_increments:
+            _track_cumulative_stats(trade.target_character_id, target_increments)
 
         return schemas.TradeConfirmResponse(
             trade_id=trade.id,
@@ -3510,7 +3575,17 @@ def auction_buyout(
     current_user=Depends(get_current_user_via_http),
 ):
     """Мгновенный выкуп лота."""
-    return crud.execute_buyout(db, listing_id=listing_id, data=req, user_id=current_user.id)
+    result = crud.execute_buyout(db, listing_id=listing_id, data=req, user_id=current_user.id)
+
+    # Track cumulative stats for buyer
+    amount = result.get("amount", 0) if isinstance(result, dict) else 0
+    if amount > 0:
+        _track_cumulative_stats(req.character_id, {
+            "total_gold_spent": amount,
+            "items_bought": 1,
+        })
+
+    return result
 
 
 @router.post("/auction/listings/{listing_id}/cancel", response_model=schemas.AuctionCancelResponse)
@@ -3552,7 +3627,14 @@ def auction_claim_storage(
     current_user=Depends(get_current_user_via_http),
 ):
     """Забрать предметы/золото со склада аукциона."""
-    return crud.claim_from_storage(db, data=req, user_id=current_user.id)
+    result = crud.claim_from_storage(db, data=req, user_id=current_user.id)
+
+    # Track cumulative stats for seller (gold earned from auction sale)
+    claimed_gold = result.get("claimed_gold", 0) if isinstance(result, dict) else 0
+    if claimed_gold > 0:
+        _track_cumulative_stats(req.character_id, {"total_gold_earned": claimed_gold})
+
+    return result
 
 
 # -----------------------------------------------------------------------------

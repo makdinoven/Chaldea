@@ -919,6 +919,14 @@ class QuestProgressUpdateRequest(BaseModel):
     objective_id: int
     increment: int = 1
 
+
+class QuestAutoProgressRequest(BaseModel):
+    character_id: int
+    event_type: str  # kill_mob, kill_mob_any, visit_location, write_posts, collect, etc.
+    increment: int = 1
+    target_id: Optional[int] = None  # mob_template_id, location_id, item_id, npc_id, etc.
+    meta: Optional[dict] = None  # additional data (e.g. {"tier": "boss"})
+
 class ObjectiveProgressRead(BaseModel):
     objective_id: int
     description: str

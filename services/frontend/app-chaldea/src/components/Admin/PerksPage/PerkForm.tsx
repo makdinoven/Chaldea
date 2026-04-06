@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createPerk, updatePerk, fetchPerk } from "../../../api/perks";
 import toast from "react-hot-toast";
 import type { PerkCondition, PerkBonuses } from "../../../types/perks";
+import axios from "axios";
 
 /* ── Dictionaries ── */
 
@@ -34,6 +35,10 @@ const CONDITION_TYPES = [
   "character_level",
   "attribute",
   "quest",
+  "perk_count",
+  "has_perk",
+  "skill_level",
+  "gold_balance",
   "admin_grant",
 ] as const;
 
@@ -42,10 +47,19 @@ const CONDITION_TYPE_LABELS: Record<string, string> = {
   character_level: "Уровень персонажа",
   attribute: "Атрибут",
   quest: "Квест",
+  perk_count: "Кол-во перков",
+  has_perk: "Имеет перк (ID)",
+  skill_level: "Уровень навыка",
+  gold_balance: "Баланс золота",
   admin_grant: "Ручная выдача",
 };
 
-const OPERATORS = [">=", "<=", "==", ">"] as const;
+const QUEST_STAT_OPTIONS = [
+  { value: "completed_count", label: "Квестов завершено (всего)" },
+  { value: "quest_id", label: "Конкретный квест (по ID)" },
+] as const;
+
+const OPERATORS = [">=", "<=", "==", ">", "<"] as const;
 
 const CUMULATIVE_STAT_OPTIONS: { value: string; label: string }[] = [
   { value: "total_damage_dealt", label: "Урон нанесён (всего)" },
@@ -67,6 +81,8 @@ const CUMULATIVE_STAT_OPTIONS: { value: string; label: string }[] = [
   { value: "total_transitions", label: "Переходов между локациями" },
   { value: "skills_used", label: "Навыков использовано" },
   { value: "items_equipped", label: "Предметов экипировано" },
+  { value: "total_posts", label: "Постов написано" },
+  { value: "quests_completed", label: "Квестов завершено" },
 ];
 
 const ATTRIBUTE_STAT_OPTIONS: { value: string; label: string }[] = [
@@ -219,9 +235,58 @@ interface PerkFormProps {
 
 /* ── Component ── */
 
+interface QuestOption {
+  id: number;
+  title: string;
+  npc_id: number;
+  npc_name?: string;
+}
+
+interface PerkOption {
+  id: number;
+  name: string;
+}
+
 const PerkForm = ({ selected, onSuccess, onCancel }: PerkFormProps) => {
   const [form, setForm] = useState<PerkFormState>(INITIAL_STATE);
+  const [quests, setQuests] = useState<QuestOption[]>([]);
+  const [allPerks, setAllPerks] = useState<PerkOption[]>([]);
   const editMode = Boolean(selected);
+
+  // Load quests for quest condition dropdown
+  useEffect(() => {
+    const token = localStorage.getItem("accessToken");
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    axios
+      .get("/locations/admin/quests", { headers })
+      .then((res) => {
+        const items = Array.isArray(res.data) ? res.data : (res.data?.items ?? []);
+        setQuests(items.map((q: { id: number; title: string; npc_id: number }) => ({
+          id: q.id,
+          title: q.title,
+          npc_id: q.npc_id,
+        })));
+      })
+      .catch(() => {});
+
+    // Load perks for has_perk condition dropdown
+    fetchPerksForDropdown();
+  }, []);
+
+  const fetchPerksForDropdown = async () => {
+    try {
+      const res = await axios.get("/attributes/admin/perks", {
+        params: { page: 1, per_page: 500 },
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("accessToken") ?? ""}`,
+        },
+      });
+      const items = res.data?.items ?? [];
+      setAllPerks(items.map((p: { id: number; name: string }) => ({ id: p.id, name: p.name })));
+    } catch {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     if (selected) {
@@ -461,26 +526,108 @@ const PerkForm = ({ selected, onSuccess, onCancel }: PerkFormProps) => {
               </select>
             )}
 
-            <select
-              value={cond.operator}
-              onChange={(e) => updateCondition(idx, "operator", e.target.value)}
-              className="input-underline text-sm w-20"
-            >
-              {OPERATORS.map((op) => (
-                <option key={op} value={op} className="bg-site-dark text-white">
-                  {op}
+            {cond.type === "quest" && (
+              <select
+                value={cond.stat ?? ""}
+                onChange={(e) => updateCondition(idx, "stat", e.target.value)}
+                className="input-underline text-sm flex-1 min-w-0"
+              >
+                <option value="" disabled className="bg-site-dark text-white">
+                  — Тип условия —
                 </option>
-              ))}
-            </select>
+                {QUEST_STAT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value} className="bg-site-dark text-white">
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            )}
 
-            <input
-              type="number"
-              value={cond.value}
-              onChange={(e) =>
-                updateCondition(idx, "value", Number(e.target.value))
-              }
-              className="input-underline text-sm w-24"
-            />
+            {cond.type === "quest" && cond.stat === "quest_id" && (
+              <select
+                value={cond.value ?? ""}
+                onChange={(e) => updateCondition(idx, "value", Number(e.target.value))}
+                className="input-underline text-sm flex-1 min-w-0"
+              >
+                <option value="" disabled className="bg-site-dark text-white">
+                  — Выберите квест —
+                </option>
+                {(() => {
+                  const grouped = new Map<number, QuestOption[]>();
+                  quests.forEach((q) => {
+                    const arr = grouped.get(q.npc_id) ?? [];
+                    arr.push(q);
+                    grouped.set(q.npc_id, arr);
+                  });
+                  const result: React.ReactNode[] = [];
+                  grouped.forEach((qList, npcId) => {
+                    result.push(
+                      <optgroup key={npcId} label={`NPC #${npcId}`}>
+                        {qList.map((q) => (
+                          <option key={q.id} value={q.id} className="bg-site-dark text-white">
+                            [id:{q.id}] {q.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    );
+                  });
+                  return result;
+                })()}
+              </select>
+            )}
+
+            {cond.type === "has_perk" && (
+              <select
+                value={cond.value ?? ""}
+                onChange={(e) => updateCondition(idx, "value", Number(e.target.value))}
+                className="input-underline text-sm flex-1 min-w-0"
+              >
+                <option value="" disabled className="bg-site-dark text-white">
+                  — Выберите перк —
+                </option>
+                {allPerks.map((p) => (
+                  <option key={p.id} value={p.id} className="bg-site-dark text-white">
+                    [id:{p.id}] {p.name}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {cond.type === "skill_level" && (
+              <input
+                type="number"
+                value={cond.stat ?? ""}
+                onChange={(e) => updateCondition(idx, "stat", e.target.value)}
+                placeholder="ID навыка"
+                className="input-underline text-sm w-28"
+              />
+            )}
+
+            {/* Operator + value (hidden for has_perk and quest/quest_id which use dropdown for value) */}
+            {cond.type !== "has_perk" && !(cond.type === "quest" && cond.stat === "quest_id") && (
+              <>
+                <select
+                  value={cond.operator}
+                  onChange={(e) => updateCondition(idx, "operator", e.target.value)}
+                  className="input-underline text-sm w-20"
+                >
+                  {OPERATORS.map((op) => (
+                    <option key={op} value={op} className="bg-site-dark text-white">
+                      {op}
+                    </option>
+                  ))}
+                </select>
+
+                <input
+                  type="number"
+                  value={cond.value}
+                  onChange={(e) =>
+                    updateCondition(idx, "value", Number(e.target.value))
+                  }
+                  className="input-underline text-sm w-24"
+                />
+              </>
+            )}
 
             <button
               type="button"
