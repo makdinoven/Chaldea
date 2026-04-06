@@ -183,7 +183,7 @@ class AdminAttributeUpdate(BaseModel):
 # --- Perk Schemas ---
 
 class PerkCondition(BaseModel):
-    type: str  # 'cumulative_stat', 'character_level', 'attribute', 'quest', 'perk_count', 'has_perk', 'skill_level', 'gold_balance', 'admin_grant'
+    type: str  # 'cumulative_stat', 'character_level', 'attribute', 'quest', 'perk_count', 'has_perk', 'gold_balance', 'admin_grant'
     stat: Optional[str] = None
     operator: str = ">="  # '>=', '<=', '==', '>', '<'
     value: Any = None

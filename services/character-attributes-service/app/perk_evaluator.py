@@ -91,24 +91,6 @@ def _fetch_quest_completed(character_id: int, quest_id: int) -> bool:
     return False
 
 
-def _fetch_skill_rank(character_id: int, skill_id: int) -> int | None:
-    """Fetch current skill rank number for a character from skills-service."""
-    from config import settings
-    import httpx
-
-    try:
-        url = f"{settings.SKILLS_SERVICE_URL}characters/{character_id}/skills"
-        resp = httpx.get(url, timeout=5.0)
-        if resp.status_code == 200:
-            skills = resp.json()
-            for skill in skills:
-                sr = skill.get("skill_rank", {})
-                if sr.get("skill_id") == skill_id:
-                    return sr.get("rank_number", 0)
-    except Exception as e:
-        logger.warning(f"Failed to fetch skill data for character {character_id}: {e}")
-    return None
-
 
 def check_condition(
     condition: dict,
@@ -198,15 +180,6 @@ def check_condition(
             .first()
         )
         return exists is not None
-
-    elif ctype == "skill_level":
-        if character_id is None or not stat:
-            return False
-        skill_id = int(stat)
-        rank_level = _fetch_skill_rank(character_id, skill_id)
-        if rank_level is None:
-            return False
-        return compare(rank_level, operator, value)
 
     elif ctype == "gold_balance":
         if character_id is None:

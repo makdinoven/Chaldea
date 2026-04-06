@@ -74,7 +74,6 @@ const CONDITION_DESCRIPTIONS: Record<string, (value: number) => string> = {
   max_win_streak: (v) => `Выиграть ${v} боёв подряд`,
   current_win_streak: (v) => `Текущая серия побед: ${v}`,
   total_rounds_survived: (v) => `Пережить ${v} раундов`,
-  low_hp_wins: (v) => `Победить ${v} раз с низким HP`,
   // Кумулятивная статистика — экономика
   total_gold_earned: (v) => `Заработать ${v} золота`,
   total_gold_spent: (v) => `Потратить ${v} золота`,
@@ -128,7 +127,6 @@ const CONDITION_DESCRIPTIONS: Record<string, (value: number) => string> = {
   perk_count: (v) => `Открыть ${v} перков`,
   gold_balance: (v) => `Иметь ${v} золота`,
   has_perk: () => 'Открыть определённый перк',
-  skill_level: (v) => `Прокачать навык до ранга ${v}`,
 };
 
 /**
@@ -159,9 +157,6 @@ const formatConditionText = (
     const label = condition?.label;
     return label ? `Открыть перк «${label}»` : 'Открыть определённый перк';
   }
-
-  // skill_level — stat is skill_id, value is required rank
-  if (condType === 'skill_level') return `Прокачать навык до ранга ${value}`;
 
   // gold_balance
   if (condType === 'gold_balance') return `Иметь ${value} золота`;

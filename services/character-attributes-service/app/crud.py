@@ -279,7 +279,7 @@ VALID_CATEGORIES = {"combat", "trade", "exploration", "progression", "usage"}
 VALID_RARITIES = {"common", "rare", "legendary"}
 VALID_CONDITION_TYPES = {
     "cumulative_stat", "character_level", "attribute", "quest", "admin_grant",
-    "perk_count", "has_perk", "skill_level", "gold_balance",
+    "perk_count", "has_perk", "gold_balance",
 }
 VALID_OPERATORS = {">=", "<=", "==", ">", "<"}
 

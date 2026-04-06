@@ -6,7 +6,6 @@ export interface PerkCondition {
     | 'quest'
     | 'perk_count'
     | 'has_perk'
-    | 'skill_level'
     | 'gold_balance'
     | 'admin_grant';
   stat?: string;

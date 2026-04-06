@@ -37,7 +37,6 @@ const CONDITION_TYPES = [
   "quest",
   "perk_count",
   "has_perk",
-  "skill_level",
   "gold_balance",
   "admin_grant",
 ] as const;
@@ -49,7 +48,6 @@ const CONDITION_TYPE_LABELS: Record<string, string> = {
   quest: "Квест",
   perk_count: "Кол-во перков",
   has_perk: "Имеет перк (ID)",
-  skill_level: "Уровень навыка",
   gold_balance: "Баланс золота",
   admin_grant: "Ручная выдача",
 };
@@ -72,7 +70,6 @@ const CUMULATIVE_STAT_OPTIONS: { value: string; label: string }[] = [
   { value: "max_win_streak", label: "Макс. серия побед" },
   { value: "current_win_streak", label: "Текущая серия побед" },
   { value: "total_rounds_survived", label: "Раундов пережито" },
-  { value: "low_hp_wins", label: "Побед с HP < 10%" },
   { value: "total_gold_earned", label: "Золота заработано" },
   { value: "total_gold_spent", label: "Золота потрачено" },
   { value: "items_bought", label: "Предметов куплено" },
@@ -591,16 +588,6 @@ const PerkForm = ({ selected, onSuccess, onCancel }: PerkFormProps) => {
                   </option>
                 ))}
               </select>
-            )}
-
-            {cond.type === "skill_level" && (
-              <input
-                type="number"
-                value={cond.stat ?? ""}
-                onChange={(e) => updateCondition(idx, "stat", e.target.value)}
-                placeholder="ID навыка"
-                className="input-underline text-sm w-28"
-              />
             )}
 
             {/* Operator + value (hidden for has_perk and quest/quest_id which use dropdown for value) */}
