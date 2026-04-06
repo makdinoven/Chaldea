@@ -186,10 +186,12 @@ class TestBPTrackingPayload:
     """Verify that move_and_post sends the correct payload to BP service."""
 
     @patch("main.httpx.AsyncClient")
+    @patch("main._auto_progress_quest", new_callable=AsyncMock)
+    @patch("main._count_unique_locations", new_callable=AsyncMock, return_value=0)
     @patch("crud.get_favorite_user_ids", new_callable=AsyncMock, return_value=[])
     @patch("crud.create_post", new_callable=AsyncMock)
     def test_move_sends_bp_tracking_call(
-        self, mock_create_post, mock_fav_ids, mock_client_cls, client
+        self, mock_create_post, mock_fav_ids, mock_count_locs, mock_auto_progress, mock_client_cls, client
     ):
         """POST /{id}/move_and_post should fire POST to BP track-event."""
         from database import get_db
@@ -250,10 +252,12 @@ class TestBPServiceDown:
     """Movement must succeed even when battle-pass-service returns errors."""
 
     @patch("main.httpx.AsyncClient")
+    @patch("main._auto_progress_quest", new_callable=AsyncMock)
+    @patch("main._count_unique_locations", new_callable=AsyncMock, return_value=0)
     @patch("crud.get_favorite_user_ids", new_callable=AsyncMock, return_value=[])
     @patch("crud.create_post", new_callable=AsyncMock)
     def test_move_succeeds_when_bp_returns_500(
-        self, mock_create_post, mock_fav_ids, mock_client_cls, client
+        self, mock_create_post, mock_fav_ids, mock_count_locs, mock_auto_progress, mock_client_cls, client
     ):
         """BP returning 500 should not break move_and_post."""
         from database import get_db
@@ -284,10 +288,12 @@ class TestBPServiceDown:
         assert response.status_code == 200, f"Move should succeed: {response.json()}"
 
     @patch("main.httpx.AsyncClient")
+    @patch("main._auto_progress_quest", new_callable=AsyncMock)
+    @patch("main._count_unique_locations", new_callable=AsyncMock, return_value=0)
     @patch("crud.get_favorite_user_ids", new_callable=AsyncMock, return_value=[])
     @patch("crud.create_post", new_callable=AsyncMock)
     def test_move_succeeds_when_bp_connection_refused(
-        self, mock_create_post, mock_fav_ids, mock_client_cls, client
+        self, mock_create_post, mock_fav_ids, mock_count_locs, mock_auto_progress, mock_client_cls, client
     ):
         """BP connection error should not break move_and_post."""
         from database import get_db
@@ -326,10 +332,12 @@ class TestBPTrackingSkipped:
     """No BP call should be made when BATTLEPASS_SERVICE_URL is empty."""
 
     @patch("main.httpx.AsyncClient")
+    @patch("main._auto_progress_quest", new_callable=AsyncMock)
+    @patch("main._count_unique_locations", new_callable=AsyncMock, return_value=0)
     @patch("crud.get_favorite_user_ids", new_callable=AsyncMock, return_value=[])
     @patch("crud.create_post", new_callable=AsyncMock)
     def test_no_bp_call_when_url_empty(
-        self, mock_create_post, mock_fav_ids, mock_client_cls, client
+        self, mock_create_post, mock_fav_ids, mock_count_locs, mock_auto_progress, mock_client_cls, client
     ):
         """With BATTLEPASS_SERVICE_URL='', no track-event call is made."""
         from database import get_db

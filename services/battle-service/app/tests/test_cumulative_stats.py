@@ -157,17 +157,13 @@ async def test_stats_posted_for_player_participants_not_npcs():
             db_session=db_session,
         )
 
-        # Should be called for char 10 and 20 (players), NOT char 30 (NPC)
-        posted_char_ids = [
-            call.kwargs["json"]["character_id"]
-            if "json" in call.kwargs else call.args[1]["character_id"]
-            for call in mock_client_inst.post.call_args_list
-        ]
-        # Extract character_id from json keyword arg
+        # Filter to only cumulative stats POST calls (not quest auto-progress)
         posted_char_ids = []
         for call in mock_client_inst.post.call_args_list:
-            payload = call.kwargs.get("json") or call.args[1]
-            posted_char_ids.append(payload["character_id"])
+            url = call.args[0] if call.args else call.kwargs.get("url", "")
+            if "cumulative_stats" in str(url):
+                payload = call.kwargs.get("json") or (call.args[1] if len(call.args) > 1 else {})
+                posted_char_ids.append(payload["character_id"])
 
         assert 10 in posted_char_ids
         assert 20 in posted_char_ids
@@ -205,9 +201,13 @@ async def test_correct_increments_dict_built():
             db_session=db_session,
         )
 
-        assert mock_client_inst.post.call_count == 1
-        payload = mock_client_inst.post.call_args.kwargs.get("json")
-        assert payload is not None
+        # Filter cumulative stats calls (exclude quest auto-progress)
+        cum_calls = [
+            c for c in mock_client_inst.post.call_args_list
+            if "cumulative_stats" in str(c.args[0] if c.args else c.kwargs.get("url", ""))
+        ]
+        assert len(cum_calls) == 1
+        payload = cum_calls[0].kwargs.get("json") or cum_calls[0].args[1]
         increments = payload["increments"]
         assert increments["total_damage_dealt"] == 250
         assert increments["total_damage_received"] == 20
@@ -235,7 +235,8 @@ async def test_pvp_wins_losses_set_correctly():
         mock_client_inst = AsyncMock()
 
         async def _capture_post(url, json=None):
-            payloads.append(json)
+            if "cumulative_stats" in str(url):
+                payloads.append(json)
             return mock_response
 
         mock_client_inst.post = _capture_post
@@ -264,8 +265,8 @@ async def test_pvp_wins_losses_set_correctly():
 
 
 @pytest.mark.asyncio
-async def test_no_pvp_stats_for_pve_battle():
-    """PvP wins/losses should NOT appear for PvE battles."""
+async def test_wins_losses_tracked_for_pve_battle():
+    """Wins/losses are now tracked for ALL battles (including PvE)."""
     battle_state = _make_battle_state({
         "1": _make_participant(character_id=10, team=1, hp=50, total_damage_dealt=100),
     })
@@ -280,7 +281,8 @@ async def test_no_pvp_stats_for_pve_battle():
         mock_client_inst = AsyncMock()
 
         async def _capture_post(url, json=None):
-            payloads.append(json)
+            if "cumulative_stats" in str(url):
+                payloads.append(json)
             return mock_response
 
         mock_client_inst.post = _capture_post
@@ -297,8 +299,8 @@ async def test_no_pvp_stats_for_pve_battle():
         )
 
     assert len(payloads) == 1
-    assert "pvp_wins" not in payloads[0]["increments"]
-    assert "pvp_losses" not in payloads[0]["increments"]
+    # Wins are now tracked for all battles (NPCs are full characters)
+    assert payloads[0]["increments"].get("pvp_wins") == 1
 
 
 @pytest.mark.asyncio
@@ -322,7 +324,8 @@ async def test_pve_kills_counted_from_defeated_npcs():
         mock_client_inst = AsyncMock()
 
         async def _capture_post(url, json=None):
-            payloads.append(json)
+            if "cumulative_stats" in str(url):
+                payloads.append(json)
             return mock_response
 
         mock_client_inst.post = _capture_post
@@ -373,7 +376,8 @@ async def test_low_hp_wins_incremented():
         mock_client_inst = AsyncMock()
 
         async def _capture_post(url, json=None):
-            payloads.append(json)
+            if "cumulative_stats" in str(url):
+                payloads.append(json)
             return mock_response
 
         mock_client_inst.post = _capture_post
@@ -413,7 +417,8 @@ async def test_no_low_hp_wins_when_hp_above_threshold():
         mock_client_inst = AsyncMock()
 
         async def _capture_post(url, json=None):
-            payloads.append(json)
+            if "cumulative_stats" in str(url):
+                payloads.append(json)
             return mock_response
 
         mock_client_inst.post = _capture_post
@@ -452,7 +457,8 @@ async def test_max_damage_single_battle_sent_via_set_max():
         mock_client_inst = AsyncMock()
 
         async def _capture_post(url, json=None):
-            payloads.append(json)
+            if "cumulative_stats" in str(url):
+                payloads.append(json)
             return mock_response
 
         mock_client_inst.post = _capture_post
@@ -492,7 +498,8 @@ async def test_no_set_max_when_zero_damage():
         mock_client_inst = AsyncMock()
 
         async def _capture_post(url, json=None):
-            payloads.append(json)
+            if "cumulative_stats" in str(url):
+                payloads.append(json)
             return mock_response
 
         mock_client_inst.post = _capture_post
@@ -530,7 +537,8 @@ async def test_current_win_streak_incremented_on_win():
         mock_client_inst = AsyncMock()
 
         async def _capture_post(url, json=None):
-            payloads.append(json)
+            if "cumulative_stats" in str(url):
+                payloads.append(json)
             return mock_response
 
         mock_client_inst.post = _capture_post
@@ -625,7 +633,8 @@ async def test_draw_no_winner_team():
         mock_client_inst = AsyncMock()
 
         async def _capture_post(url, json=None):
-            payloads.append(json)
+            if "cumulative_stats" in str(url):
+                payloads.append(json)
             return mock_response
 
         mock_client_inst.post = _capture_post
@@ -673,7 +682,8 @@ async def test_zero_damage_entries_filtered_out():
         mock_client_inst = AsyncMock()
 
         async def _capture_post(url, json=None):
-            payloads.append(json)
+            if "cumulative_stats" in str(url):
+                payloads.append(json)
             return mock_response
 
         mock_client_inst.post = _capture_post
