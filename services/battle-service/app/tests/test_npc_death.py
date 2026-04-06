@@ -234,6 +234,7 @@ class TestNpcDeathHook:
     @patch("main.compute_damage_with_rolls", new_callable=AsyncMock)
     @patch("main.fetch_character_class_id", new_callable=AsyncMock, return_value=1)
     @patch("main.fetch_main_weapon", new_callable=AsyncMock)
+    @patch("main.fetch_weapons", new_callable=AsyncMock, return_value={"main_weapon": None, "additional_weapons": None})
     @patch("main.fetch_full_attributes", new_callable=AsyncMock)
     @patch("main.apply_flat_modifiers", MagicMock(return_value={}))
     @patch("main.decrement_cooldowns", MagicMock())
@@ -252,7 +253,7 @@ class TestNpcDeathHook:
         self,
         mock_get_redis, mock_save_state,
         mock_get_rank, mock_has_rank,
-        mock_fetch_attrs, mock_fetch_weapon, mock_fetch_class_id, mock_compute_damage,
+        mock_fetch_attrs, mock_fetch_weapons, mock_fetch_weapon, mock_fetch_class_id, mock_compute_damage,
         mock_load_state, mock_get_battle, mock_write_turn,
         mock_finish_battle, mock_httpx_client,
     ):
@@ -391,6 +392,7 @@ class TestNpcDeathHook:
     @patch("main.compute_damage_with_rolls", new_callable=AsyncMock)
     @patch("main.fetch_character_class_id", new_callable=AsyncMock, return_value=1)
     @patch("main.fetch_main_weapon", new_callable=AsyncMock)
+    @patch("main.fetch_weapons", new_callable=AsyncMock, return_value={"main_weapon": None, "additional_weapons": None})
     @patch("main.fetch_full_attributes", new_callable=AsyncMock)
     @patch("main.apply_flat_modifiers", MagicMock(return_value={}))
     @patch("main.decrement_cooldowns", MagicMock())
@@ -409,7 +411,7 @@ class TestNpcDeathHook:
         self,
         mock_get_redis, mock_save_state,
         mock_get_rank, mock_has_rank,
-        mock_fetch_attrs, mock_fetch_weapon, mock_fetch_class_id, mock_compute_damage,
+        mock_fetch_attrs, mock_fetch_weapons, mock_fetch_weapon, mock_fetch_class_id, mock_compute_damage,
         mock_load_state, mock_get_battle, mock_write_turn,
         mock_finish_battle, mock_httpx_client,
     ):
@@ -522,6 +524,7 @@ class TestNpcDeathHook:
     @patch("main.compute_damage_with_rolls", new_callable=AsyncMock)
     @patch("main.fetch_character_class_id", new_callable=AsyncMock, return_value=1)
     @patch("main.fetch_main_weapon", new_callable=AsyncMock)
+    @patch("main.fetch_weapons", new_callable=AsyncMock, return_value={"main_weapon": None, "additional_weapons": None})
     @patch("main.fetch_full_attributes", new_callable=AsyncMock)
     @patch("main.apply_flat_modifiers", MagicMock(return_value={}))
     @patch("main.decrement_cooldowns", MagicMock())
@@ -540,7 +543,7 @@ class TestNpcDeathHook:
         self,
         mock_get_redis, mock_save_state,
         mock_get_rank, mock_has_rank,
-        mock_fetch_attrs, mock_fetch_weapon, mock_fetch_class_id, mock_compute_damage,
+        mock_fetch_attrs, mock_fetch_weapons, mock_fetch_weapon, mock_fetch_class_id, mock_compute_damage,
         mock_load_state, mock_get_battle, mock_write_turn,
         mock_finish_battle, mock_httpx_client,
     ):

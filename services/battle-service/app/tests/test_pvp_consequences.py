@@ -70,6 +70,7 @@ engine_mock.set_cooldown = MagicMock()
 engine_mock.fetch_full_attributes = AsyncMock(return_value={})
 engine_mock.apply_flat_modifiers = MagicMock(return_value={})
 engine_mock.fetch_main_weapon = AsyncMock(return_value={"damage_type": "physical", "base_damage": 10})
+engine_mock.fetch_weapons = AsyncMock(return_value={"main_weapon": {"damage_type": "physical", "base_damage": 10}, "additional_weapons": None})
 engine_mock.compute_damage_with_rolls = AsyncMock(return_value=(999, {}))  # lethal damage
 
 # Ensure buffs
