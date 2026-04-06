@@ -580,6 +580,12 @@ def get_character_perks(db: Session, character_id: int):
             "strength", "agility", "intelligence", "endurance",
             "health", "mana", "energy", "stamina", "charisma", "luck",
             "damage", "dodge", "critical_hit_chance", "critical_damage",
+            "res_effects", "res_physical", "res_catting", "res_crushing",
+            "res_piercing", "res_magic", "res_fire", "res_ice",
+            "res_watering", "res_electricity", "res_sainting", "res_wind", "res_damning",
+            "vul_effects", "vul_physical", "vul_catting", "vul_crushing",
+            "vul_piercing", "vul_magic", "vul_fire", "vul_ice",
+            "vul_watering", "vul_electricity", "vul_sainting", "vul_wind", "vul_damning",
         ]
         for field in attr_fields:
             attr_dict[field] = getattr(char_attrs, field, 0) or 0
