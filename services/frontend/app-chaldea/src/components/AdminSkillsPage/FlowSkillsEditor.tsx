@@ -1,4 +1,4 @@
-// src/components/AdminSkillsPage/FlowSkillsEditor.jsx
+// src/components/AdminSkillsPage/FlowSkillsEditor.tsx
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
@@ -9,6 +9,9 @@ import {
   addEdge,
   useNodesState,
   useEdgesState,
+  Node,
+  Edge,
+  Connection,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
@@ -19,16 +22,40 @@ import {
   EMPTY_RANK_TEMPLATE,
   CLASS_OPTIONS,
   RACE_OPTIONS,
-  SUBRACE_OPTIONS
+  SUBRACE_OPTIONS,
+  cloneRankAsNew,
+  RankData,
 } from './skillConstants';
 
 import { useDispatch } from 'react-redux';
 
 import { prepareSkillPayload } from './utils/preparePayload';
 
-// Вспомогательные функции
-function findRoots(ranks) {
-  const childIDs = new Set();
+// ---- Types ----
+
+interface SkillTree {
+  id?: number | string;
+  name?: string;
+  skill_type?: string;
+  description?: string;
+  class_limitations?: string;
+  race_limitations?: string;
+  subrace_limitations?: string;
+  min_level?: number;
+  purchase_cost?: number;
+  skill_image?: string;
+  ranks?: RankData[];
+}
+
+interface FlowSkillsEditorProps {
+  skillTree: SkillTree | null;
+  updateStatus: string;
+}
+
+// ---- Helper functions ----
+
+function findRoots(ranks: RankData[]): RankData[] {
+  const childIDs = new Set<string | null>();
   for (const r of ranks) {
     if (r.left_child_id) childIDs.add(r.left_child_id);
     if (r.right_child_id) childIDs.add(r.right_child_id);
@@ -36,15 +63,22 @@ function findRoots(ranks) {
   return ranks.filter(r => !childIDs.has(r.id));
 }
 
-function buildRankMap(ranks) {
-  const map = new Map();
+function buildRankMap(ranks: RankData[]): Map<string, RankData> {
+  const map = new Map<string, RankData>();
   for (const r of ranks) {
     map.set(String(r.id), r);
   }
   return map;
 }
 
-function layoutDFS(rank, x, y, visited, rankMap, nodeMap) {
+function layoutDFS(
+  rank: RankData,
+  x: number,
+  y: number,
+  visited: Set<string>,
+  rankMap: Map<string, RankData>,
+  nodeMap: Map<string, Node<RankData>>
+): void {
   const node = nodeMap.get(String(rank.id));
   if (!node) return;
   node.position = { x, y };
@@ -64,17 +98,17 @@ function layoutDFS(rank, x, y, visited, rankMap, nodeMap) {
   }
 }
 
-function buildNodesAndEdges(skillTree) {
+function buildNodesAndEdges(skillTree: SkillTree): { loadedNodes: Node<RankData>[]; loadedEdges: Edge[] } {
   const ranks = skillTree?.ranks || [];
 
-  const loadedNodes = ranks.map(r => ({
+  const loadedNodes: Node<RankData>[] = ranks.map(r => ({
     id: String(r.id),
     position: { x: 0, y: 0 },
-    data: { ...r, id: String(r.id) },
+    data: { ...r, id: String(r.id) } as RankData,
     type: 'rankNode',
   }));
 
-  const loadedEdges = [];
+  const loadedEdges: Edge[] = [];
   for (const rank of ranks) {
     if (rank.left_child_id) {
       loadedEdges.push({
@@ -103,7 +137,7 @@ function buildNodesAndEdges(skillTree) {
   let startY = 100;
   for (const root of roots) {
     layoutDFS(
-      { ...root, id: String(root.id) },
+      { ...root, id: String(root.id) } as RankData,
       100,
       startY,
       new Set(),
@@ -116,7 +150,7 @@ function buildNodesAndEdges(skillTree) {
   return { loadedNodes, loadedEdges };
 }
 
-function FlowSkillsEditor({ skillTree, updateStatus }) {
+function FlowSkillsEditor({ skillTree, updateStatus }: FlowSkillsEditorProps) {
   const dispatch = useDispatch();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -130,13 +164,13 @@ function FlowSkillsEditor({ skillTree, updateStatus }) {
   const [skillMinLevel, setSkillMinLevel] = useState(1);
   const [skillPurchaseCost, setSkillPurchaseCost] = useState(0);
 
-  const onChangeNode = useCallback((nodeId, field, value) => {
+  const onChangeNode = useCallback((nodeId: string, field: string, value: unknown) => {
     setNodes(prev => prev.map(n =>
       n.id === nodeId ? { ...n, data: { ...n.data, [field]: value } } : n
     ));
   }, [setNodes]);
 
-  const handleDeleteRank = useCallback((nodeId) => {
+  const handleDeleteRank = useCallback((nodeId: string) => {
     setNodes(prev => {
       const newNodes = prev.filter(n => n.id !== nodeId);
       return newNodes.map(n => ({
@@ -175,11 +209,10 @@ function FlowSkillsEditor({ skillTree, updateStatus }) {
     setEdges(loadedEdges);
   }, [skillTree, setNodes, setEdges]);
 
-  const onConnect = useCallback((params) => {
+  const onConnect = useCallback((params: Connection) => {
     setEdges(eds => addEdge(params, eds));
   setNodes(ns => ns.map(node => {
     if (node.id === params.source) {
-      // Это "родитель"
       const newData = { ...node.data };
       if (params.sourceHandle === 'left') {
         newData.left_child_id = params.target;
@@ -221,9 +254,9 @@ function FlowSkillsEditor({ skillTree, updateStatus }) {
     ranks: updatedRanks
   });
 
-  dispatch(updateSkillFullTree({ skillId: skillTree?.id, payload }))
+  dispatch(updateSkillFullTree({ skillId: skillTree?.id, payload }) as any)
     .unwrap()
-    .then(response => {
+    .then((response: any) => {
       if (response.temp_id_map) {
         const idMap = response.temp_id_map;
         setNodes(prevNodes =>
@@ -251,19 +284,28 @@ function FlowSkillsEditor({ skillTree, updateStatus }) {
 
   let tempIdCounter = 1;
   const generateTempId = () => `temp-${tempIdCounter++}`;
+
   const addNode = () => {
-    const newRank = {
-      ...EMPTY_RANK_TEMPLATE,
-      id: generateTempId(),
-      rank_name: 'Новый ранг',
-      damage_entries: [],
-      effects: []
-    };
+    const lastNode = nodes[nodes.length - 1];
+    const newRank = lastNode
+      ? {
+          ...cloneRankAsNew(lastNode.data as RankData),
+          id: generateTempId(),
+          rank_name: 'Новый ранг',
+          rank_number: ((lastNode.data as RankData).rank_number || 0) + 1,
+        }
+      : {
+          ...EMPTY_RANK_TEMPLATE,
+          id: generateTempId(),
+          rank_name: 'Новый ранг',
+          damage_entries: [],
+          effects: [],
+        };
 
     setNodes(nds => [...nds, {
-      id: newRank.id,
+      id: newRank.id!,
       position: { x: 200, y: 200 },
-      data: newRank,
+      data: newRank as RankData,
       type: 'rankNode',
     }]);
   };

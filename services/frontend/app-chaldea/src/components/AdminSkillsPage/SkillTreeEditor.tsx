@@ -1,19 +1,58 @@
-// SkillTreeEditor.jsx
+// SkillTreeEditor.tsx
 import React, { useState, useEffect } from 'react'
 import { useDispatch } from 'react-redux'
 import { updateSkillFullTree } from '../../redux/actions/skillsAdminActions'
-import { cloneRankAsNew, EMPTY_RANK_TEMPLATE, SKILL_TYPES } from './skillConstants'
+import { cloneRankAsNew, EMPTY_RANK_TEMPLATE, SKILL_TYPES, RankData } from './skillConstants'
 import styles from './AdminSkillsPage.module.scss'
 import RankNode from "./RankNode";
 
+// ---- Types ----
+
+interface SkillTree {
+  id?: number | string | null;
+  name?: string;
+  skill_type?: string;
+  description?: string;
+  purchaseCost?: number;
+  classLimitations?: string;
+  raceLimitations?: string;
+  subraceLimitations?: string;
+  ranks?: RankData[];
+}
+
+interface LocalSkill {
+  id: number | string | null;
+  name: string;
+  skill_type: string;
+  description: string;
+  purchaseCost: number;
+  classLimitations: string;
+  raceLimitations: string;
+  subraceLimitations: string;
+  skillImageFile: File | null;
+  skillImagePreview: string;
+  ranks: RankData[];
+}
+
+interface SkillTreeEditorProps {
+  skillTree: SkillTree | null;
+  updateStatus: string;
+}
+
+interface SelectOption {
+  label: string;
+  value: string;
+  race?: string;
+}
+
 // Пример классов (вы можете загрузить динамически)
-const CLASS_OPTIONS = [
+const CLASS_OPTIONS: SelectOption[] = [
   { label: "Warrior", value: "1" },
   { label: "Mage", value: "2" },
   { label: "Rogue", value: "3" },
 ];
 // Список рас
-const RACE_OPTIONS = [
+const RACE_OPTIONS: SelectOption[] = [
   { label: "Человек", value: "1" },
   { label: "Эльф", value: "2" },
   { label: "Драконид", value: "3" },
@@ -23,7 +62,7 @@ const RACE_OPTIONS = [
   { label: "Урук", value: "7" },
 ];
 // Подрасы
-const SUBRACE_OPTIONS = [
+const SUBRACE_OPTIONS: SelectOption[] = [
   { label: "Норды", value: "1", race: "1" },
   { label: "Ост", value: "2", race: "1" },
   { label: "Ориентал", value: "3", race: "1" },
@@ -31,9 +70,9 @@ const SUBRACE_OPTIONS = [
   // ... и т.д.
 ];
 
-const SkillTreeEditor = ({ skillTree, updateStatus }) => {
+const SkillTreeEditor = ({ skillTree, updateStatus }: SkillTreeEditorProps) => {
   const dispatch = useDispatch()
-  const [localSkill, setLocalSkill] = useState({
+  const [localSkill, setLocalSkill] = useState<LocalSkill>({
     id: null,
     name: '',
     skill_type: 'attack',
@@ -47,12 +86,12 @@ const SkillTreeEditor = ({ skillTree, updateStatus }) => {
     ranks: [],
   })
 
-  const [expandedRanks, setExpandedRanks] = useState(new Set())
+  const [expandedRanks, setExpandedRanks] = useState<Set<string | null>>(new Set())
 
   useEffect(() => {
     if (skillTree) {
       setLocalSkill({
-        id: skillTree.id,
+        id: skillTree.id ?? null,
         name: skillTree.name || '',
         skill_type: skillTree.skill_type || 'attack',
         description: skillTree.description || '',
@@ -67,7 +106,7 @@ const SkillTreeEditor = ({ skillTree, updateStatus }) => {
     }
   }, [skillTree])
 
-  const handleSkillFieldChange = (field, value) => {
+  const handleSkillFieldChange = (field: keyof LocalSkill, value: unknown) => {
     setLocalSkill(prev => ({ ...prev, [field]: value }))
   }
 
@@ -78,11 +117,11 @@ const SkillTreeEditor = ({ skillTree, updateStatus }) => {
       ranks: localSkill.ranks.map(r => ({ ...r, isNew: undefined })),
     }
     // Здесь нужно будет передавать и файл (skillImageFile), если нужно сохранить на сервер.
-    dispatch(updateSkillFullTree({ skillId: localSkill.id, payload }))
+    dispatch(updateSkillFullTree({ skillId: localSkill.id, payload }) as any)
   }
 
   // Загрузка локального изображения навыка
-  const handleSkillImageChange = (e) => {
+  const handleSkillImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
     const reader = new FileReader()
@@ -90,13 +129,13 @@ const SkillTreeEditor = ({ skillTree, updateStatus }) => {
       setLocalSkill(prev => ({
         ...prev,
         skillImageFile: file,
-        skillImagePreview: ev.target.result,
+        skillImagePreview: ev.target?.result as string,
       }))
     }
     reader.readAsDataURL(file)
   }
 
-  const toggleExpand = (rankId) => {
+  const toggleExpand = (rankId: string | null) => {
     setExpandedRanks(prev => {
       const newSet = new Set(prev)
       if (newSet.has(rankId)) newSet.delete(rankId)
@@ -105,14 +144,14 @@ const SkillTreeEditor = ({ skillTree, updateStatus }) => {
     })
   }
 
-  const updateRank = (updatedRank) => {
+  const updateRank = (updatedRank: RankData) => {
     setLocalSkill(prev => ({
       ...prev,
       ranks: prev.ranks.map(r => (r.id === updatedRank.id ? updatedRank : r))
     }))
   }
 
-  const deleteRank = (rankId) => {
+  const deleteRank = (rankId: string | null) => {
     setLocalSkill(prev => ({
       ...prev,
       ranks: prev.ranks.filter(r => r.id !== rankId)
@@ -120,16 +159,26 @@ const SkillTreeEditor = ({ skillTree, updateStatus }) => {
   }
 
   const addNewRank = () => {
-    const newRank = { ...EMPTY_RANK_TEMPLATE }
-    newRank.id = `new-${Date.now()}`
-    newRank.isNew = true
+    const lastRank = localSkill.ranks[localSkill.ranks.length - 1];
+    const newRank: RankData = lastRank
+      ? {
+          ...cloneRankAsNew(lastRank),
+          id: `new-${Date.now()}`,
+          isNew: true,
+          rank_number: (lastRank.rank_number || 0) + 1,
+        }
+      : {
+          ...EMPTY_RANK_TEMPLATE,
+          id: `new-${Date.now()}`,
+          isNew: true,
+        };
     setLocalSkill(prev => ({
       ...prev,
       ranks: [...prev.ranks, newRank]
     }))
   }
 
-  const copyRank = (rank) => {
+  const copyRank = (rank: RankData) => {
     const newRank = cloneRankAsNew(rank)
     newRank.id = `copy-${Date.now()}`
     setLocalSkill(prev => ({
@@ -138,8 +187,8 @@ const SkillTreeEditor = ({ skillTree, updateStatus }) => {
     }))
   }
 
-  const findRoots = () => {
-    const childIds = new Set()
+  const findRoots = (): RankData[] => {
+    const childIds = new Set<string | null>()
     localSkill.ranks.forEach(r => {
       if (r.left_child_id) childIds.add(r.left_child_id)
       if (r.right_child_id) childIds.add(r.right_child_id)
@@ -147,14 +196,14 @@ const SkillTreeEditor = ({ skillTree, updateStatus }) => {
     return localSkill.ranks.filter(r => !childIds.has(r.id))
   }
 
-  const getChildren = (rank) => {
+  const getChildren = (rank: RankData): RankData[] => {
     return localSkill.ranks.filter(r => (
       r.id !== rank.id &&
       (rank.left_child_id === r.id || rank.right_child_id === r.id)
     ))
   }
 
-  const renderRankNodes = (rank, depth = 0) => {
+  const renderRankNodes = (rank: RankData, depth = 0): React.ReactNode => {
     const expanded = expandedRanks.has(rank.id)
     const children = getChildren(rank)
     return (

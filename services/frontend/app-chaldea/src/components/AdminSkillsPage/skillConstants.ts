@@ -1,10 +1,122 @@
-// skillConstants.js
-export const CLASS_OPTIONS = [
+// skillConstants.ts
+
+// ---- TypeScript Interfaces ----
+
+export interface DamageEntry {
+  damage_type: string;
+  amount: number;
+  chance: number;
+  weapon_slot?: string;
+  description?: string;
+}
+
+export interface BuffEntry {
+  damage_type: string;
+  percent: number;
+  duration: number;
+  chance: number;
+}
+
+export interface ResistEntry {
+  damage_type: string;
+  percent: number;
+  duration: number;
+  chance: number;
+}
+
+export interface VulnerabilityEntry {
+  type: string;
+  percent: number;
+  duration: number;
+  chance: number;
+}
+
+export interface ComplexEffectEntry {
+  effect_name: string;
+  chance: number;
+  duration: number;
+  magnitude: number;
+  attribute_key?: string;
+}
+
+export interface StatModEntry {
+  key: string;
+  amount: number;
+  duration: number;
+  chance: number;
+}
+
+export interface RankData {
+  id: string | null;
+  rank_number: number;
+  rank_name?: string;
+  left_child_id: string | null;
+  right_child_id: string | null;
+
+  cost_energy: number;
+  cost_mana: number;
+  cooldown: number;
+  level_requirement: number;
+  upgrade_cost: number;
+  rank_description: string;
+
+  rankImageFile: File | null;
+  rankImagePreview: string;
+
+  selfDamage: DamageEntry[];
+  selfDamageBuff: BuffEntry[];
+  selfResist: ResistEntry[];
+  selfVulnerability: VulnerabilityEntry[];
+  selfComplexEffects: ComplexEffectEntry[];
+  selfStatMods: StatModEntry[];
+
+  enemyDamage: DamageEntry[];
+  enemyDamageBuff: BuffEntry[];
+  enemyResist: ResistEntry[];
+  enemyVulnerability: VulnerabilityEntry[];
+  enemyComplexEffects: ComplexEffectEntry[];
+  enemyStatMods: StatModEntry[];
+
+  class_limitations: string;
+  race_limitations: string;
+  subrace_limitations: string;
+
+  isNew?: boolean;
+  damage_entries?: unknown[];
+  effects?: unknown[];
+  [key: string]: unknown;
+}
+
+export interface SelectOption {
+  label: string;
+  value: string;
+  race?: string;
+}
+
+export interface ComplexEffectOption {
+  value: string;
+  label: string;
+  description: string;
+  hasAttributeKey: boolean;
+  attributeKeyOptions: SelectOption[] | null;
+  fixedDuration: number | null;
+  allowedSides: string[] | null;
+}
+
+export interface StatModifierOption {
+  label: string;
+  key: string;
+}
+
+// ---- Constants ----
+
+export const CLASS_OPTIONS: SelectOption[] = [
   { label: "Воин", value: "1" },
   { label: "Маг", value: "2" },
   { label: "Разбойник", value: "3" },
 ];
-export const RACE_OPTIONS = [
+
+export const RACE_OPTIONS: SelectOption[] = [
   { label: "Человек", value: "1" },
   { label: "Эльф", value: "2" },
   { label: "Драконид", value: "3" },
@@ -13,7 +125,8 @@ export const RACE_OPTIONS = [
   { label: "Бистмен", value: "6" },
   { label: "Урук", value: "7" },
 ];
-export const SUBRACE_OPTIONS = [
+
+export const SUBRACE_OPTIONS: SelectOption[] = [
   { label: "Норды", value: "1", race: "1" },
   { label: "Ост", value: "2", race: "1" },
   { label: "Ориентал", value: "3", race: "1" },
@@ -31,13 +144,14 @@ export const SUBRACE_OPTIONS = [
   { label: "Темный", value: "15", race: "7" },
   { label: "Золотой", value: "16", race: "7" },
 ];
-export const SKILL_TYPES = [
+
+export const SKILL_TYPES: SelectOption[] = [
   { label: "Атакующий", value: "attack" },
   { label: "Защитный", value: "defense" },
   { label: "Поддержка", value: "support" },
 ];
 
-export const DAMAGE_TYPES = [
+export const DAMAGE_TYPES: SelectOption[] = [
   { label: "Общий", value: "all" },
   { label: "Физический", value: "physical" },
   { label: "Режущий", value: "catting" },
@@ -53,12 +167,12 @@ export const DAMAGE_TYPES = [
   { label: "Проклятие", value: "damning" },
 ];
 
-export const WEAPON_SLOTS = [
+export const WEAPON_SLOTS: SelectOption[] = [
   { label: "Основное оружие", value: "main_weapon" },
   { label: "Доп. оружие", value: "additional_weapons" },
 ];
 
-export const STAT_MODIFIERS = [
+export const STAT_MODIFIERS: StatModifierOption[] = [
   { label: "Крит.шанс(%)", key: "critical_hit_chance" },
   { label: "Крит.урон(%)", key: "crit_damage" },
   { label: "Шанс уклонения(%)", key: "dodge_chance" },
@@ -67,28 +181,28 @@ export const STAT_MODIFIERS = [
   { label: "Energy(±)", key: "energy" },
 ];
 
-export const SKILL_TYPE_OPTIONS = [
+export const SKILL_TYPE_OPTIONS: SelectOption[] = [
   { label: "Атака", value: "attack" },
   { label: "Поддержка", value: "support" },
   { label: "Защита", value: "defense" },
   { label: "Случайно", value: "random" },
 ];
 
-export const PRIMARY_ATTR_OPTIONS = [
+export const PRIMARY_ATTR_OPTIONS: SelectOption[] = [
   { label: "Сила", value: "strength" },
   { label: "Ловкость", value: "agility" },
   { label: "Интеллект", value: "intelligence" },
   { label: "Выносливость", value: "endurance" },
 ];
 
-export const POISON_SUBTYPE_OPTIONS = [
+export const POISON_SUBTYPE_OPTIONS: SelectOption[] = [
   { label: "Периодический урон", value: "periodic_damage" },
   { label: "Снижение характеристик", value: "stat_reduction" },
   { label: "Снижение защит", value: "defense_reduction" },
   { label: "Паралич", value: "paralysis" },
 ];
 
-export const COMPLEX_EFFECTS = [
+export const COMPLEX_EFFECTS: ComplexEffectOption[] = [
   {
     value: "Bleeding",
     label: "Кровотечение",
@@ -96,7 +210,7 @@ export const COMPLEX_EFFECTS = [
     hasAttributeKey: false,
     attributeKeyOptions: null,
     fixedDuration: null,
-    allowedSides: null, // both
+    allowedSides: null,
   },
   {
     value: "ArmorBreak",
@@ -225,7 +339,7 @@ export const COMPLEX_EFFECTS = [
 /**
  * Пустой ранг: 2 вкладки (self, enemy), по 5 секций (damage, buff, resist, vulnerability, complex).
  */
-export const EMPTY_RANK_TEMPLATE = {
+export const EMPTY_RANK_TEMPLATE: RankData = {
   id: null,
   rank_number: 1,
   left_child_id: null,
@@ -264,20 +378,24 @@ export const EMPTY_RANK_TEMPLATE = {
   subrace_limitations: "",
 };
 
-export function cloneRankAsNew(originalRank) {
-  const { id, rankImageFile, rankImagePreview, ...rest } = originalRank;
+export function cloneRankAsNew(originalRank: RankData): RankData {
+  // Extract rankImageFile before structuredClone — File objects are not cloneable
+  const { rankImageFile, ...rest } = originalRank;
+  const cloned = structuredClone(rest);
   return {
-    ...rest,
+    ...cloned,
     id: null,
     isNew: true,
     rankImageFile: null,
-    rankImagePreview: "", // сбрасываем при копировании
+    rankImagePreview: "",
+    left_child_id: null,
+    right_child_id: null,
   };
 }
 
 let rankIdCounter = 1;
 
-export function generateRankId() {
+export function generateRankId(): string {
   const newId = String(rankIdCounter++);
   return newId;
 }
