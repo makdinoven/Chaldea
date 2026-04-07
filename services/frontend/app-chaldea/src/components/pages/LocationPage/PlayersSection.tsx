@@ -13,6 +13,7 @@ interface PlayersSectionProps {
   currentCharacterLevel?: number;
   locationId: number;
   locationMarkerType?: string;
+  isCharacterHere?: boolean;
 }
 
 const getRarityColorClass = (rarity?: string): string => {
@@ -143,7 +144,7 @@ const NpcCard = ({ npc, onClick, currentCharacterId }: NpcCardProps) => {
   );
 };
 
-const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, currentCharacterLevel = 0, locationId, locationMarkerType = 'safe' }: PlayersSectionProps) => {
+const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, currentCharacterLevel = 0, locationId, locationMarkerType = 'safe', isCharacterHere = false }: PlayersSectionProps) => {
   const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
 
   return (
@@ -214,6 +215,7 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
         <NpcProfileModal
           npcId={selectedNpcId}
           onClose={() => setSelectedNpcId(null)}
+          isCharacterHere={isCharacterHere}
         />
       )}
     </>

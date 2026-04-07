@@ -99,6 +99,22 @@ const userSlice = createSlice({
     setAuthInitialized(state) {
       state.authInitialized = true;
     },
+    setCharacterAfterTeleport(
+      state,
+      action: PayloadAction<{
+        new_location_id: number;
+        new_location_name?: string | null;
+        currency_balance: number;
+      }>
+    ) {
+      if (!state.character) return;
+      state.character.current_location = {
+        id: action.payload.new_location_id,
+        name: action.payload.new_location_name ?? state.character.current_location?.name ?? '',
+      };
+      (state.character as { currency_balance?: number }).currency_balance =
+        action.payload.currency_balance;
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -134,7 +150,7 @@ const userSlice = createSlice({
   },
 });
 
-export const { logout, setAuthInitialized } = userSlice.actions;
+export const { logout, setAuthInitialized, setCharacterAfterTeleport } = userSlice.actions;
 export default userSlice.reducer;
 
 // --- Selectors ---

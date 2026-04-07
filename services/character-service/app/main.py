@@ -2065,9 +2065,19 @@ async def admin_update_npc(
         raise HTTPException(status_code=400, detail="Нет данных для обновления")
 
     old_subrace_id = npc.id_subrace
+    old_role = npc.npc_role
 
     for field, value in update_data.items():
         setattr(npc, field, value)
+
+    # FEAT-123: when an NPC stops being a teleport master, purge its teleport links
+    role_changed_away_from_teleport = (
+        "npc_role" in update_data
+        and old_role == "teleport_master"
+        and npc.npc_role != "teleport_master"
+    )
+    if role_changed_away_from_teleport:
+        crud.purge_teleport_links_for_npc(db, npc.id)
 
     try:
         db.commit()
@@ -2854,6 +2864,115 @@ def get_character_post_history_endpoint(
     return schemas.PostHistoryResponse(
         posts=[schemas.PostHistoryItem(**p) for p in posts],
     )
+
+
+# ============================================================
+# Teleport (FEAT-123) — endpoints
+# ============================================================
+
+@router.get("/npcs/{npc_id}/teleport-options", response_model=schemas.TeleportOptionsResponse)
+def get_teleport_options(
+    npc_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """List teleport destinations for a teleport-master NPC."""
+    options = crud.list_teleport_options_for_npc(db, npc_id)
+    if options is None:
+        raise HTTPException(status_code=404, detail="NPC не является Мастером Телепорта")
+
+    # Cooldown belongs to the player's active character (if any)
+    cooldown = 0
+    row = db.execute(
+        text("SELECT current_character_id FROM users WHERE id = :uid"),
+        {"uid": current_user.id},
+    ).fetchone()
+    if row and row[0]:
+        active = db.query(models.Character).filter(models.Character.id == row[0]).first()
+        if active is not None:
+            cooldown = crud.get_cooldown_seconds_remaining(active)
+
+    return schemas.TeleportOptionsResponse(
+        from_npc_id=npc_id,
+        cooldown_seconds_remaining=cooldown,
+        options=[schemas.TeleportOption(**opt) for opt in options],
+    )
+
+
+@router.post("/npcs/{npc_id}/teleport", response_model=schemas.TeleportResult)
+def post_teleport(
+    npc_id: int,
+    body: schemas.TeleportRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Execute teleport from source NPC via the chosen link."""
+    result = crud.execute_teleport(
+        db=db,
+        user_id=current_user.id,
+        source_npc_id=npc_id,
+        link_id=body.link_id,
+    )
+    return schemas.TeleportResult(**result)
+
+
+# Admin CRUD for teleport links
+
+@router.get("/admin/teleport-links", response_model=List[schemas.TeleportLinkRead])
+def admin_list_teleport_links(
+    npc_id: Optional[int] = Query(None, description="Filter by from_npc_id"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_admin_user),
+):
+    if npc_id is not None:
+        rows = crud.list_teleport_links_by_npc(db, npc_id)
+    else:
+        rows = db.query(models.TeleportLink).all()
+    return rows
+
+
+@router.post("/admin/teleport-links")
+def admin_create_teleport_link(
+    data: schemas.TeleportLinkCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_admin_user),
+):
+    created = crud.create_teleport_link(db, data)
+    return {
+        "detail": "Связь телепорта создана",
+        "items": [
+            {
+                "id": row.id,
+                "from_npc_id": row.from_npc_id,
+                "to_npc_id": row.to_npc_id,
+                "cost_gold": row.cost_gold,
+            }
+            for row in created
+        ],
+    }
+
+
+@router.patch("/admin/teleport-links/{link_id}", response_model=schemas.TeleportLinkRead)
+def admin_patch_teleport_link(
+    link_id: int,
+    data: schemas.TeleportLinkUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_admin_user),
+):
+    if data.cost_gold is None:
+        raise HTTPException(status_code=400, detail="Нет данных для обновления")
+    return crud.update_teleport_link_cost(db, link_id, data.cost_gold)
+
+
+@router.delete("/admin/teleport-links/{link_id}")
+def admin_delete_teleport_link(
+    link_id: int,
+    delete_reverse: bool = Query(True),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_admin_user),
+):
+    crud.delete_teleport_link(db, link_id, delete_reverse=delete_reverse)
+    return {"detail": "Связь телепорта удалена"}
 
 
 app.include_router(router)

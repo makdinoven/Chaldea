@@ -13,6 +13,7 @@ export interface Country {
   area_id: number | null;
   x: number | null;
   y: number | null;
+  is_hidden: boolean;
 }
 
 export interface Region {

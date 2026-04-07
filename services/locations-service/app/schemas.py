@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional, List, Literal, Dict
+from pydantic import BaseModel, validator
+from typing import Optional, List, Literal, Dict, Any
 from datetime import datetime
 
 
@@ -9,6 +9,7 @@ from datetime import datetime
 class CountryBase(BaseModel):
     name: str
     description: str
+    is_hidden: bool = False
 
 class CountryCreate(CountryBase):
     leader_id: Optional[int] = None
@@ -27,6 +28,7 @@ class CountryUpdate(BaseModel):
     area_id: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
+    is_hidden: Optional[bool] = None
 
 class CountryRead(BaseModel):
     id: int
@@ -38,6 +40,7 @@ class CountryRead(BaseModel):
     area_id: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
+    is_hidden: bool = False
 
     class Config:
         orm_mode = True
@@ -1147,6 +1150,128 @@ class ArrowEdgeResponse(BaseModel):
     arrow_id: int
     energy_cost: int
     path_data: Optional[List[PathWaypoint]] = None
+
+    class Config:
+        orm_mode = True
+
+
+# -------------------------------
+#   FLOATING STRUCTURES (FEAT-123)
+# -------------------------------
+def _validate_route_json(v: Any) -> List[Dict[str, float]]:
+    if not isinstance(v, list):
+        raise ValueError("route_json должен быть списком точек")
+    cleaned: List[Dict[str, float]] = []
+    for i, point in enumerate(v):
+        if not isinstance(point, dict):
+            raise ValueError(f"route_json[{i}] должен быть объектом {{x, y}}")
+        if 'x' not in point or 'y' not in point:
+            raise ValueError(f"route_json[{i}] должен содержать поля x и y")
+        try:
+            x = float(point['x'])
+            y = float(point['y'])
+        except (TypeError, ValueError):
+            raise ValueError(f"route_json[{i}].x и .y должны быть числами")
+        if not (0 <= x <= 100) or not (0 <= y <= 100):
+            raise ValueError(f"route_json[{i}] x и y должны быть в диапазоне [0, 100]")
+        cleaned.append({"x": x, "y": y})
+    return cleaned
+
+
+class FloatingStructureBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    icon_url: Optional[str] = None
+    route_json: List[Dict[str, float]] = []
+    speed: float
+    started_at: Optional[datetime] = None
+    internal_district_id: Optional[int] = None
+
+    @validator('route_json', pre=True, always=True)
+    def _vroute(cls, v):
+        if v is None:
+            return []
+        return _validate_route_json(v)
+
+    @validator('speed')
+    def _vspeed(cls, v):
+        if v is None or v <= 0:
+            raise ValueError("speed должен быть больше 0")
+        return v
+
+    @validator('name')
+    def _vname(cls, v):
+        if not v or not v.strip():
+            raise ValueError("name не должно быть пустым")
+        if len(v) > 120:
+            raise ValueError("name не должно превышать 120 символов")
+        return v
+
+
+class FloatingStructureCreate(FloatingStructureBase):
+    pass
+
+
+class FloatingStructureUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    icon_url: Optional[str] = None
+    route_json: Optional[List[Dict[str, float]]] = None
+    speed: Optional[float] = None
+    started_at: Optional[datetime] = None
+    internal_district_id: Optional[int] = None
+
+    @validator('route_json')
+    def _vroute(cls, v):
+        if v is None:
+            return v
+        return _validate_route_json(v)
+
+    @validator('speed')
+    def _vspeed(cls, v):
+        if v is None:
+            return v
+        if v <= 0:
+            raise ValueError("speed должен быть больше 0")
+        return v
+
+    @validator('name')
+    def _vname(cls, v):
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError("name не должно быть пустым")
+        if len(v) > 120:
+            raise ValueError("name не должно превышать 120 символов")
+        return v
+
+
+class FloatingStructureRead(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    icon_url: Optional[str] = None
+    route_json: List[Dict[str, float]]
+    speed: float
+    started_at: datetime
+    internal_district_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+
+class FloatingStructurePublicRead(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    icon_url: Optional[str] = None
+    route_json: List[Dict[str, float]]
+    speed: float
+    started_at: datetime
+    server_now: datetime
+    internal_district_id: Optional[int] = None
 
     class Config:
         orm_mode = True

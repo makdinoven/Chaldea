@@ -9,6 +9,7 @@ import NpcShopEditor from './NpcShopEditor';
 import QuestEditor from './QuestEditor';
 import NpcStatsEditor from './NpcStatsEditor';
 import NpcEquipmentEditor from './NpcEquipmentEditor';
+import TeleportLinksPanel from './TeleportLinksPanel';
 
 /* ── Types ── */
 
@@ -659,6 +660,10 @@ const AdminNpcsPage = () => {
             </button>
           </div>
         </form>
+      )}
+
+      {formOpen && editingId != null && form.npc_role === 'teleport_master' && (
+        <TeleportLinksPanel npcId={editingId} />
       )}
 
       {/* NPC Table */}

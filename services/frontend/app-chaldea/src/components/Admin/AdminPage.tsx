@@ -20,6 +20,7 @@ const sections: AdminSection[] = [
   { label: 'Айтемы', path: '/admin/items', description: 'Управление предметами и экипировкой', module: 'items' },
   { label: 'Крафтовые предметы', path: '/admin/craft-items', description: 'Чертежи, рецепты, камни, руны, ресурсы', module: 'items' },
   { label: 'Локации', path: '/admin/locations', description: 'Редактирование мира, регионов и локаций', module: 'locations' },
+  { label: 'Плавающие структуры', path: '/admin/floating-structures', description: 'Управление плавающими структурами и телепортами', module: 'locations' },
   { label: 'Навыки', path: '/home/admin/skills', description: 'Редактирование деревьев навыков', module: 'skills' },
   { label: 'Деревья классов', path: '/admin/class-trees', description: 'Визуальный редактор деревьев навыков классов и подклассов', module: 'skill_trees' },
   { label: 'Стартовые наборы', path: '/admin/starter-kits', description: 'Настройка стартовых предметов и навыков по классам', module: 'characters' },

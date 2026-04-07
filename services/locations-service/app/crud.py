@@ -77,7 +77,7 @@ from models import (
     PostDeletionRequest, PostReport, DialogueTree, DialogueNode, DialogueOption,
     NpcShopItem, Quest, QuestObjective, CharacterQuest, CharacterQuestProgress,
     ArchiveCategory, ArchiveArticle, ArchiveArticleCategory,
-    RegionTransitionArrow, ArrowNeighbor
+    RegionTransitionArrow, ArrowNeighbor, FloatingStructure
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -174,7 +174,8 @@ async def create_new_country(session: AsyncSession, name: str, description: str,
                        area_id: Optional[int] = None,
                        x: Optional[float] = None,
                        y: Optional[float] = None,
-                       emblem_url: Optional[str] = None) -> Country:
+                       emblem_url: Optional[str] = None,
+                       is_hidden: bool = False) -> Country:
     new_country = Country(
         name=name,
         description=description,
@@ -184,6 +185,7 @@ async def create_new_country(session: AsyncSession, name: str, description: str,
         area_id=area_id,
         x=x,
         y=y,
+        is_hidden=is_hidden,
     )
     session.add(new_country)
     await session.commit()
@@ -1020,6 +1022,7 @@ async def get_admin_panel_data(session: AsyncSession) -> dict:
                 "area_id": country.area_id,
                 "x": country.x,
                 "y": country.y,
+                "is_hidden": country.is_hidden,
             } for country in countries
         ],
         "regions": regions_data
@@ -1039,6 +1042,7 @@ async def get_countries_list(session: AsyncSession) -> List[dict]:
             "area_id": country.area_id,
             "x": country.x,
             "y": country.y,
+            "is_hidden": country.is_hidden,
         } for country in countries
     ]
 
@@ -1527,6 +1531,7 @@ async def get_area_details(session: AsyncSession, area_id: int) -> Optional[dict
                 "y": c.y,
             }
             for c in area.countries
+            if not c.is_hidden
         ],
     }
 
@@ -1621,7 +1626,9 @@ async def get_hierarchy_tree(session: AsyncSession) -> List[dict]:
     )
     areas = areas_result.scalars().all()
 
-    countries_result = await session.execute(select(Country))
+    countries_result = await session.execute(
+        select(Country).where(Country.is_hidden == False)  # noqa: E712
+    )
     countries = countries_result.scalars().all()
 
     regions_result = await session.execute(select(Region))
@@ -4162,3 +4169,77 @@ async def delete_arrow_neighbor(
     await session.commit()
 
     return {"status": "deleted"}
+
+
+# -------------------------------
+#   FLOATING STRUCTURES (FEAT-123)
+# -------------------------------
+async def _ensure_district_exists(session: AsyncSession, district_id: Optional[int]) -> None:
+    if district_id is None:
+        return
+    result = await session.execute(select(District).where(District.id == district_id))
+    if result.scalars().first() is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Район с id={district_id} не найден",
+        )
+
+
+async def list_floating_structures(session: AsyncSession) -> List[FloatingStructure]:
+    result = await session.execute(
+        select(FloatingStructure).order_by(FloatingStructure.id.asc())
+    )
+    return result.scalars().all()
+
+
+async def get_floating_structure(
+    session: AsyncSession, structure_id: int
+) -> Optional[FloatingStructure]:
+    result = await session.execute(
+        select(FloatingStructure).where(FloatingStructure.id == structure_id)
+    )
+    return result.scalars().first()
+
+
+async def create_floating_structure(session: AsyncSession, data) -> FloatingStructure:
+    await _ensure_district_exists(session, data.internal_district_id)
+    obj = FloatingStructure(
+        name=data.name,
+        description=data.description,
+        icon_url=data.icon_url,
+        route_json=data.route_json,
+        speed=data.speed,
+        started_at=data.started_at,
+        internal_district_id=data.internal_district_id,
+    )
+    session.add(obj)
+    await session.commit()
+    await session.refresh(obj)
+    return obj
+
+
+async def update_floating_structure(
+    session: AsyncSession, structure_id: int, data
+) -> FloatingStructure:
+    obj = await get_floating_structure(session, structure_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Плавающая структура не найдена")
+
+    payload = data.dict(exclude_unset=True)
+    if 'internal_district_id' in payload:
+        await _ensure_district_exists(session, payload['internal_district_id'])
+
+    for field, value in payload.items():
+        setattr(obj, field, value)
+
+    await session.commit()
+    await session.refresh(obj)
+    return obj
+
+
+async def delete_floating_structure(session: AsyncSession, structure_id: int) -> None:
+    obj = await get_floating_structure(session, structure_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Плавающая структура не найдена")
+    await session.delete(obj)
+    await session.commit()

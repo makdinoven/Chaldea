@@ -34,6 +34,7 @@ class Country(Base):
     area_id = Column(BigInteger, ForeignKey('Areas.id', ondelete="SET NULL"), nullable=True)
     x = Column(Float, nullable=True)
     y = Column(Float, nullable=True)
+    is_hidden = Column(Boolean, nullable=False, default=False, server_default='0')
 
     area = relationship("Area", back_populates="countries")
     regions = relationship("Region", back_populates="country")
@@ -443,6 +444,30 @@ class ArrowNeighbor(Base):
     arrow_id = Column(BigInteger, ForeignKey('region_transition_arrows.id', ondelete='CASCADE'), nullable=False, index=True)
     energy_cost = Column(Integer, nullable=False, default=0)
     path_data = Column(JSON, nullable=True)
+
+
+class FloatingStructure(Base):
+    __tablename__ = 'floating_structures'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=True)
+    icon_url = Column(String(500), nullable=True)
+    route_json = Column(JSON, nullable=False)
+    speed = Column(Float, nullable=False, server_default=text("0"))
+    started_at = Column(TIMESTAMP, nullable=False, server_default=func.now())
+    internal_district_id = Column(
+        BigInteger,
+        ForeignKey('Districts.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    updated_at = Column(
+        TIMESTAMP,
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
 
 class ArchiveArticleCategory(Base):

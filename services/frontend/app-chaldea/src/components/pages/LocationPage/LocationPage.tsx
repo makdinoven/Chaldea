@@ -379,6 +379,7 @@ const LocationPage = () => {
           currentCharacterLevel={Number(character?.level) || 0}
           locationId={location.id}
           locationMarkerType={location.marker_type}
+          isCharacterHere={isCharacterHere}
         />
 
         {/* Neighbors */}
@@ -438,7 +439,7 @@ const LocationPage = () => {
               <PostCreateForm
                 onSubmit={handleSubmitPost}
                 onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
-                disabled={inBattle || (!isCharacterHere && !character && !userIsStaff)}
+                disabled={inBattle || (!isCharacterHere && !userIsStaff)}
                 isStaff={userIsStaff}
                 npcs={location.npcs ?? []}
               />

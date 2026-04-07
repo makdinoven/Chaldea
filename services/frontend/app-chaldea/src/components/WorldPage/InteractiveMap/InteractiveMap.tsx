@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import type { ClickableZone } from '../../../redux/actions/worldMapActions';
 import ClickableZoneOverlay from './ClickableZoneOverlay';
+import FloatingStructuresLayer from '../FloatingStructuresLayer';
 
 interface InteractiveMapProps {
   mapImageUrl: string | null;
@@ -40,6 +41,7 @@ const InteractiveMap = ({ mapImageUrl, clickableZones, onZoneClick, title, count
                 countries={countries}
               />
             )}
+            <FloatingStructuresLayer />
           </>
         ) : (
           /* Placeholder for missing map image */

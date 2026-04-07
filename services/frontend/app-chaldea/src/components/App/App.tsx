@@ -12,6 +12,7 @@ import RequestsPage from "../Admin/RequestsPage/RequestsPage";
 import Layout from "./Layout/Layout";
 import WorldPage from "../WorldPage/WorldPage";
 import AdminLocationsPage from "../AdminLocationsPage/AdminLocationsPage";
+import FloatingStructuresPage from "../AdminLocationsPage/FloatingStructuresPage";
 import AdminSkillsPage from "../AdminSkillsPage/AdminSkillsPage";
 import LocationPage from "../pages/LocationPage/LocationPage";
 import ItemsAdminPage from "../ItemsAdminPage/ItemsAdminPage";
@@ -130,6 +131,11 @@ const App = () => {
             <Route path="admin/locations" element={
               <ProtectedRoute requiredPermission="locations:read">
                 <AdminLocationsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/floating-structures" element={
+              <ProtectedRoute requiredPermission="locations:read">
+                <FloatingStructuresPage />
               </ProtectedRoute>
             } />
             <Route path="home/admin/skills" element={

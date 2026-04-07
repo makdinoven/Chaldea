@@ -4,6 +4,16 @@
 
 ---
 
+## DONE / Learning notes
+
+### Alembic revision IDs должны быть ≤32 символов DONE (FEAT-123 hotfix)
+**Сервис:** все сервисы с Alembic
+**Описание:** Дефолтная ширина колонки `version_num` в таблицах `alembic_version_*` — VARCHAR(32). Если revision id длиннее, `alembic upgrade head` падает на финальном UPDATE: `(1406, "Data too long for column 'version_num' at row 1")`, контейнер не стартует (fail-fast).
+**Случай:** В FEAT-123 миграция character-service имела id `015_add_teleport_links_and_cooldown` (35 символов) → переименована в `015_teleport_cooldown` (21).
+**Правило:** Все новые revision id — ≤32 символов. Желательно ≤24, чтобы оставить запас. Формат: `NNN_short_slug`.
+
+---
+
 ## HIGH
 
 ### ~~3. Баг: бой не завершается при HP <= 0~~ DONE (FEAT-059, Phase 1)

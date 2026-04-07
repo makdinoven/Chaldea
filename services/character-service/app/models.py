@@ -55,6 +55,7 @@ class Character(Base):
     is_npc = Column(Boolean, nullable=False, default=False, index=True)
     npc_role = Column(String(50), nullable=True)
     npc_status = Column(Enum('alive', 'dead', name='npc_status_enum'), nullable=False, default='alive', server_default='alive')
+    last_teleport_at = Column(DateTime, nullable=True)
 
     titles = relationship("CharacterTitle", back_populates="character")
     current_title = relationship("Title")
@@ -273,6 +274,21 @@ class CharacterLog(Base):
     __table_args__ = (
         Index('idx_character_logs_char_created', 'character_id', created_at.desc()),
         Index('idx_character_logs_event_type', 'event_type'),
+    )
+
+
+class TeleportLink(Base):
+    __tablename__ = "teleport_links"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    from_npc_id = Column(Integer, ForeignKey("characters.id", ondelete="CASCADE"), nullable=False)
+    to_npc_id = Column(Integer, ForeignKey("characters.id", ondelete="CASCADE"), nullable=False)
+    cost_gold = Column(Integer, nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('from_npc_id', 'to_npc_id', name='uq_tlink_pair'),
+        Index('idx_tlink_from', 'from_npc_id'),
     )
 
 

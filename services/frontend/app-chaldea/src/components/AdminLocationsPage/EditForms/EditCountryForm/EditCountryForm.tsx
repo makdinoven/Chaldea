@@ -12,6 +12,7 @@ interface CountryFormData {
   emblem_url: string;
   leader_id: number | null;
   area_id: number | string;
+  is_hidden: boolean;
 }
 
 interface InitialData {
@@ -22,6 +23,7 @@ interface InitialData {
   emblem_url?: string | null;
   leader_id?: number | null;
   area_id?: number | null;
+  is_hidden?: boolean;
 }
 
 interface EditCountryFormProps {
@@ -42,6 +44,7 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
     emblem_url: initialData?.emblem_url || '',
     leader_id: initialData?.leader_id || null,
     area_id: initialData?.area_id || '',
+    is_hidden: initialData?.is_hidden ?? false,
   });
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -300,7 +303,27 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
           </div>
         </div>
 
-        <div className="flex gap-4 mt-8">
+        <div className="mb-6">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={formData.is_hidden}
+              onChange={(e) =>
+                setFormData((prev) => ({ ...prev, is_hidden: e.target.checked }))
+              }
+              className="mt-1 h-4 w-4 accent-site-blue cursor-pointer"
+            />
+            <span className="flex flex-col">
+              <span className="text-[#8ab3d5] font-medium">СКРЫТО</span>
+              <span className="text-xs text-gray-400 mt-1">
+                Не отображать в боковой панели локаций для игроков (но доступно для
+                системных целей: плавающие структуры, и т.п.)
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-4 mt-8">
           <button
             type="submit"
             className="flex-1 py-3 bg-site-blue text-white border-none rounded cursor-pointer font-medium transition-colors hover:bg-[#5d8fa8] disabled:opacity-50 disabled:cursor-not-allowed"

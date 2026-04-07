@@ -30,6 +30,8 @@ import battlePassReducer from './slices/battlePassSlice';
 import cosmeticsReducer from './slices/cosmeticsSlice';
 import dungeonAdminReducer from './slices/dungeonAdminSlice';
 import dungeonReducer from './slices/dungeonSlice';
+import floatingStructuresReducer from './slices/floatingStructuresSlice';
+import teleportReducer from './slices/teleportSlice';
 
 export const store = configureStore({
   reducer: {
@@ -63,6 +65,8 @@ export const store = configureStore({
     cosmetics: cosmeticsReducer,
     dungeonAdmin: dungeonAdminReducer,
     dungeon: dungeonReducer,
+    floatingStructures: floatingStructuresReducer,
+    teleport: teleportReducer,
   },
 });
 

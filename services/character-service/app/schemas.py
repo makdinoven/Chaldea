@@ -968,6 +968,76 @@ class CharacterLogsListResponse(BaseModel):
     total: int
 
 
+# ============================================================
+# Teleport (FEAT-123)
+# ============================================================
+
+class TeleportLinkCreate(BaseModel):
+    from_npc_id: int
+    to_npc_id: int
+    cost_gold: int
+    bidirectional: bool = True
+
+    @validator("cost_gold")
+    def _cost_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("Стоимость телепорта не может быть отрицательной")
+        return v
+
+    @validator("to_npc_id")
+    def _not_same(cls, v, values):
+        if "from_npc_id" in values and v == values["from_npc_id"]:
+            raise ValueError("Нельзя создать связь NPC с самим собой")
+        return v
+
+
+class TeleportLinkUpdate(BaseModel):
+    cost_gold: Optional[int] = None
+
+    @validator("cost_gold")
+    def _cost_non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Стоимость телепорта не может быть отрицательной")
+        return v
+
+
+class TeleportLinkRead(BaseModel):
+    id: int
+    from_npc_id: int
+    to_npc_id: int
+    cost_gold: int
+    created_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+
+class TeleportOption(BaseModel):
+    link_id: int
+    to_npc_id: int
+    to_npc_name: str
+    to_location_id: Optional[int] = None
+    to_location_name: Optional[str] = None
+    cost_gold: int
+
+
+class TeleportOptionsResponse(BaseModel):
+    from_npc_id: int
+    cooldown_seconds_remaining: int
+    options: List[TeleportOption]
+
+
+class TeleportRequest(BaseModel):
+    link_id: int
+
+
+class TeleportResult(BaseModel):
+    new_location_id: int
+    new_location_name: Optional[str] = None
+    currency_balance: int
+    last_teleport_at: datetime
+
+
 class PostHistoryItem(BaseModel):
     id: int
     character_id: int

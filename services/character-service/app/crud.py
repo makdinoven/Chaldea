@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 from models import (
     CharacterRequest, Race, Subrace, Class, Character, LevelThreshold,
     MobTemplate, MobTemplateSkill, MobLootTable, LocationMobSpawn, ActiveMob,
-    MobKill, CharacterLog, GoldTransaction,
+    MobKill, CharacterLog, GoldTransaction, TeleportLink,
 )
+from datetime import datetime, timedelta
+from fastapi import HTTPException
 import logging
 
 logger = logging.getLogger("character-service.crud")
@@ -2126,3 +2128,255 @@ def get_character_post_history(db: Session, character_id: int):
         })
 
     return result
+
+
+# ============================================================
+# Teleport (FEAT-123) — Teleport Master NPC
+# ============================================================
+
+TELEPORT_COOLDOWN = timedelta(hours=24)
+TELEPORT_ROLE = "teleport_master"
+
+
+def _get_location_name(db: Session, location_id):
+    if location_id is None:
+        return None
+    row = db.execute(
+        sa_text("SELECT name FROM Locations WHERE id = :lid"),
+        {"lid": location_id},
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _is_teleport_master(npc):
+    return bool(npc and npc.is_npc and (npc.npc_role or "") == TELEPORT_ROLE)
+
+
+def list_teleport_options_for_npc(db: Session, source_npc_id: int):
+    """Return enriched teleport options from the given source teleport-master NPC.
+
+    Filters out broken links: target NPC missing, role no longer teleport_master,
+    or target NPC has no current_location_id. Returns None if source is not a
+    valid teleport master (so callers can return 404).
+    """
+    source = db.query(Character).filter(Character.id == source_npc_id).first()
+    if not _is_teleport_master(source):
+        return None
+
+    links = db.query(TeleportLink).filter(TeleportLink.from_npc_id == source_npc_id).all()
+    options = []
+    for link in links:
+        target = db.query(Character).filter(Character.id == link.to_npc_id).first()
+        if not _is_teleport_master(target):
+            continue
+        if target.current_location_id is None:
+            continue
+        options.append({
+            "link_id": link.id,
+            "to_npc_id": target.id,
+            "to_npc_name": target.name,
+            "to_location_id": target.current_location_id,
+            "to_location_name": _get_location_name(db, target.current_location_id),
+            "cost_gold": link.cost_gold,
+        })
+    return options
+
+
+def get_cooldown_seconds_remaining(character) -> int:
+    if character.last_teleport_at is None:
+        return 0
+    elapsed = datetime.utcnow() - character.last_teleport_at
+    remaining = TELEPORT_COOLDOWN - elapsed
+    if remaining.total_seconds() <= 0:
+        return 0
+    return int(remaining.total_seconds())
+
+
+def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int):
+    """Atomic teleport flow per FEAT-123 §3.6.
+
+    Raises HTTPException with appropriate status on validation failure.
+    Returns dict on success.
+    """
+    user_row = db.execute(
+        sa_text("SELECT current_character_id FROM users WHERE id = :uid"),
+        {"uid": user_id},
+    ).fetchone()
+    if not user_row or user_row[0] is None:
+        raise HTTPException(status_code=404, detail="Активный персонаж не выбран")
+
+    character_id = user_row[0]
+    character = (
+        db.query(Character)
+        .filter(Character.id == character_id)
+        .with_for_update()
+        .first()
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    source = db.query(Character).filter(Character.id == source_npc_id).first()
+    if not source or not source.is_npc:
+        raise HTTPException(status_code=404, detail="NPC не найден")
+    if (source.npc_role or "") != TELEPORT_ROLE:
+        raise HTTPException(status_code=422, detail="NPC не является Мастером Телепорта")
+    if character.current_location_id != source.current_location_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Вы должны находиться в локации с этим NPC",
+        )
+
+    link = db.query(TeleportLink).filter(TeleportLink.id == link_id).first()
+    if not link or link.from_npc_id != source_npc_id:
+        raise HTTPException(status_code=404, detail="Связь телепорта не найдена")
+
+    target = db.query(Character).filter(Character.id == link.to_npc_id).first()
+    if not target or (target.npc_role or "") != TELEPORT_ROLE or target.current_location_id is None:
+        raise HTTPException(status_code=422, detail="Связь телепорта недействительна")
+
+    cooldown = get_cooldown_seconds_remaining(character)
+    if cooldown > 0:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "cooldown_active",
+                "message": "Телепорт ещё на перезарядке",
+                "cooldown_seconds_remaining": cooldown,
+            },
+        )
+
+    balance = character.currency_balance or 0
+    if balance < link.cost_gold:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "insufficient_gold",
+                "message": "Недостаточно золота",
+                "required": link.cost_gold,
+                "balance": balance,
+            },
+        )
+
+    character.currency_balance = balance - link.cost_gold
+    db.flush()
+    log_gold_transaction(
+        db,
+        character_id=character.id,
+        amount=-link.cost_gold,
+        balance_after=character.currency_balance,
+        transaction_type="teleport",
+        source="character-service",
+        metadata={"link_id": link.id, "from_npc_id": source.id, "to_npc_id": target.id},
+    )
+
+    character.current_location_id = target.current_location_id
+    character.last_teleport_at = datetime.utcnow()
+    db.flush()
+
+    location_name = _get_location_name(db, character.current_location_id)
+
+    db.commit()
+    db.refresh(character)
+
+    return {
+        "new_location_id": character.current_location_id,
+        "new_location_name": location_name,
+        "currency_balance": character.currency_balance,
+        "last_teleport_at": character.last_teleport_at,
+    }
+
+
+def create_teleport_link(db: Session, data):
+    """Create one or two teleport_links rows in a single transaction."""
+    if data.from_npc_id == data.to_npc_id:
+        raise HTTPException(status_code=422, detail="Нельзя создать связь NPC с самим собой")
+
+    src = db.query(Character).filter(Character.id == data.from_npc_id).first()
+    dst = db.query(Character).filter(Character.id == data.to_npc_id).first()
+    if not src or not dst:
+        raise HTTPException(status_code=404, detail="NPC не найден")
+    if not _is_teleport_master(src) or not _is_teleport_master(dst):
+        raise HTTPException(
+            status_code=422,
+            detail="Оба NPC должны иметь роль Мастера Телепорта",
+        )
+
+    created = []
+    try:
+        forward = TeleportLink(
+            from_npc_id=data.from_npc_id,
+            to_npc_id=data.to_npc_id,
+            cost_gold=data.cost_gold,
+        )
+        db.add(forward)
+        db.flush()
+        created.append(forward)
+
+        if data.bidirectional:
+            reverse = TeleportLink(
+                from_npc_id=data.to_npc_id,
+                to_npc_id=data.from_npc_id,
+                cost_gold=data.cost_gold,
+            )
+            db.add(reverse)
+            db.flush()
+            created.append(reverse)
+
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Такая связь телепорта уже существует")
+
+    for row in created:
+        db.refresh(row)
+    return created
+
+
+def update_teleport_link_cost(db: Session, link_id: int, cost_gold: int):
+    link = db.query(TeleportLink).filter(TeleportLink.id == link_id).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Связь телепорта не найдена")
+    link.cost_gold = cost_gold
+    try:
+        db.commit()
+        db.refresh(link)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Failed to update teleport link {link_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении связи телепорта")
+    return link
+
+
+def delete_teleport_link(db: Session, link_id: int, delete_reverse: bool = True):
+    link = db.query(TeleportLink).filter(TeleportLink.id == link_id).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Связь телепорта не найдена")
+
+    from_id, to_id = link.from_npc_id, link.to_npc_id
+    db.delete(link)
+
+    if delete_reverse:
+        reverse = db.query(TeleportLink).filter(
+            TeleportLink.from_npc_id == to_id,
+            TeleportLink.to_npc_id == from_id,
+        ).first()
+        if reverse:
+            db.delete(reverse)
+
+    try:
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Failed to delete teleport link {link_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при удалении связи телепорта")
+
+
+def list_teleport_links_by_npc(db: Session, npc_id: int):
+    return db.query(TeleportLink).filter(TeleportLink.from_npc_id == npc_id).all()
+
+
+def purge_teleport_links_for_npc(db: Session, npc_id: int):
+    """Delete every link where this NPC is an endpoint. Caller is responsible for commit."""
+    db.query(TeleportLink).filter(
+        (TeleportLink.from_npc_id == npc_id) | (TeleportLink.to_npc_id == npc_id)
+    ).delete(synchronize_session=False)

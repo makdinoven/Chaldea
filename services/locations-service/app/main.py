@@ -194,6 +194,7 @@ async def create_country_route(body: schemas.CountryCreate, session: AsyncSessio
         x=body.x,
         y=body.y,
         emblem_url=body.emblem_url,
+        is_hidden=body.is_hidden,
     )
     return new_c
 
@@ -592,6 +593,18 @@ async def create_new_post(
 ):
     await verify_character_ownership(session, post_data.character_id, current_user.id)
     await check_not_in_battle(session, post_data.character_id, "Вы не можете писать посты во время боя")
+
+    # Defense-in-depth: verify the character is physically in the target location.
+    # Staff (admin/moderator) may post anywhere.
+    if getattr(current_user, "role", None) not in ("admin", "moderator"):
+        loc_row = await session.execute(
+            text("SELECT current_location_id FROM characters WHERE id = :cid"),
+            {"cid": post_data.character_id},
+        )
+        row = loc_row.fetchone()
+        current_location = row[0] if row else None
+        if current_location is None or int(current_location) != int(post_data.location_id):
+            raise HTTPException(status_code=403, detail="Вы не находитесь в этой локации")
 
     # Validate minimum post length (strip HTML before counting)
     plain_text = crud.strip_html_tags(post_data.content)
@@ -2604,9 +2617,118 @@ async def delete_arrow_neighbor(
 
 
 # --------------------------------------------------------------------
+# FLOATING STRUCTURES (FEAT-123)
+# --------------------------------------------------------------------
+from datetime import datetime as _dt
+
+floating_router = APIRouter(prefix="/locations")
+
+
+def _serialize_floating(obj) -> dict:
+    return {
+        "id": obj.id,
+        "name": obj.name,
+        "description": obj.description,
+        "icon_url": obj.icon_url,
+        "route_json": obj.route_json or [],
+        "speed": float(obj.speed) if obj.speed is not None else 0.0,
+        "started_at": obj.started_at,
+        "internal_district_id": obj.internal_district_id,
+        "created_at": getattr(obj, "created_at", None),
+        "updated_at": getattr(obj, "updated_at", None),
+    }
+
+
+@floating_router.get("/map/floating-structures")
+async def list_floating_structures_public(
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Публичный список плавающих структур (Цитадель и т.п.).
+    Возвращает route_json + started_at + speed + server_now,
+    клиент сам интерполирует позицию.
+    """
+    items = await crud.list_floating_structures(session)
+    server_now = _dt.utcnow()
+    return [
+        {
+            **_serialize_floating(it),
+            "server_now": server_now,
+        }
+        for it in items
+    ]
+
+
+@floating_router.get("/admin/floating-structures", response_model=List[schemas.FloatingStructureRead])
+async def admin_list_floating_structures(
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_admin_user),
+):
+    items = await crud.list_floating_structures(session)
+    return [_serialize_floating(it) for it in items]
+
+
+@floating_router.post(
+    "/admin/floating-structures",
+    response_model=schemas.FloatingStructureRead,
+    status_code=201,
+)
+async def admin_create_floating_structure(
+    body: schemas.FloatingStructureCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_admin_user),
+):
+    obj = await crud.create_floating_structure(session, body)
+    return _serialize_floating(obj)
+
+
+@floating_router.get(
+    "/admin/floating-structures/{structure_id}",
+    response_model=schemas.FloatingStructureRead,
+)
+async def admin_get_floating_structure(
+    structure_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_admin_user),
+):
+    obj = await crud.get_floating_structure(session, structure_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Плавающая структура не найдена")
+    return _serialize_floating(obj)
+
+
+@floating_router.patch(
+    "/admin/floating-structures/{structure_id}",
+    response_model=schemas.FloatingStructureRead,
+)
+async def admin_update_floating_structure(
+    structure_id: int,
+    body: schemas.FloatingStructureUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_admin_user),
+):
+    obj = await crud.update_floating_structure(session, structure_id, body)
+    return _serialize_floating(obj)
+
+
+@floating_router.delete(
+    "/admin/floating-structures/{structure_id}",
+    status_code=204,
+)
+async def admin_delete_floating_structure(
+    structure_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_admin_user),
+):
+    await crud.delete_floating_structure(session, structure_id)
+    return None
+
+
+# --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------
 app.include_router(router)
 app.include_router(rules_router)
 app.include_router(archive_router)
+app.include_router(floating_router)
 

@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import toast from 'react-hot-toast';
+import axios from 'axios';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
+import {
+  fetchFloatingStructures,
+  selectFloatingStructures,
+} from '../../redux/slices/floatingStructuresSlice';
 import {
   selectAreas,
   selectHierarchyTree,
@@ -99,11 +104,70 @@ const WorldPage = () => {
     dispatch(fetchHierarchyTree());
   }, [dispatch]);
 
-  // Sync cityMapDistrictId from URL query param (handles browser back/forward)
+  // Floating structures (Citadel etc.) — fetch once on mount if not already loaded
+  const floatingStructures = useAppSelector(selectFloatingStructures);
   useEffect(() => {
+    if (floatingStructures.length === 0) {
+      dispatch(fetchFloatingStructures());
+    }
+    // Run only once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispatch]);
+
+  // Citadel mode: when ?citadel=<id> is set, switch into the Citadel's internal district view.
+  // We resolve the structure -> internal_district_id -> region_id (via district details endpoint),
+  // then dispatch fetchRegionDetails and set cityMapDistrictId. Back button clears ?citadel
+  // and returns to the world view (not the region view).
+  const citadelParam = searchParams.get('citadel');
+  const citadelId = citadelParam ? Number(citadelParam) : null;
+
+  useEffect(() => {
+    if (citadelId == null) return;
+    const structure = floatingStructures.find((s) => s.id === citadelId);
+    if (!structure) {
+      // Wait until floating structures are loaded
+      if (floatingStructures.length === 0) return;
+      toast.error('Плавающая структура не найдена');
+      return;
+    }
+    if (structure.internal_district_id == null) {
+      toast.error('У структуры не задана внутренняя карта');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await axios.get(
+          `/locations/districts/${structure.internal_district_id}/details`,
+        );
+        if (cancelled) return;
+        const regionId: number | null = data?.region_id ?? data?.region?.id ?? null;
+        if (regionId == null) {
+          toast.error('Не удалось определить регион внутренней карты Цитадели');
+          return;
+        }
+        await dispatch(fetchRegionDetails(regionId));
+        if (cancelled) return;
+        setCityMapDistrictId(structure.internal_district_id ?? null);
+      } catch {
+        if (!cancelled) {
+          toast.error('Не удалось загрузить внутреннюю карту Цитадели');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [citadelId, floatingStructures, dispatch]);
+
+  // Sync cityMapDistrictId from URL query param (handles browser back/forward).
+  // In Citadel mode (?citadel=<id>) the district id is resolved by a dedicated effect below;
+  // skip the reset here so it isn't clobbered.
+  useEffect(() => {
+    if (searchParams.get('citadel')) return;
     const paramValue = districtParam ? Number(districtParam) : null;
     setCityMapDistrictId(paramValue);
-  }, [districtParam]);
+  }, [districtParam, searchParams]);
 
   // Reset district modal when changing route (but not city map — that's driven by query param)
   useEffect(() => {
@@ -143,12 +207,15 @@ const WorldPage = () => {
     }
   }, [dispatch, viewLevel, areas]);
 
-  // Auto-focus on character's area/country when on world level
+  // Auto-focus on character's area/country when on world level.
+  // Skip in Citadel mode (?citadel=<id>) — otherwise navigate() drops the query string
+  // and the user is bounced from the Citadel internal map back to the area view.
   useEffect(() => {
+    if (citadelId != null) return;
     if (viewLevel === 'world' && areas.length === 1 && !params.areaId) {
       navigate(`/world/area/${areas[0].id}`, { replace: true });
     }
-  }, [viewLevel, areas, navigate, params.areaId]);
+  }, [viewLevel, areas, navigate, params.areaId, citadelId]);
 
   // Animated navigation: zoom-out → navigate → fade-in
   const animatedNavigate = (path: string) => {
@@ -692,7 +759,7 @@ const WorldPage = () => {
               <p className="text-white/50 text-sm">Загрузка карты...</p>
             </div>
           </div>
-        ) : viewLevel === 'region' ? (
+        ) : (viewLevel === 'region' || (citadelId != null && cityMapDistrictId != null)) ? (
           cityMapDistrictId && cityMapImageUrl && cityMapDistrict ? (
             /* City map view for district */
             <div className="flex-1 min-w-0">
@@ -702,7 +769,7 @@ const WorldPage = () => {
                   className="text-white/50 hover:text-white text-sm bg-transparent border-none cursor-pointer transition-colors shrink-0 flex items-center gap-1"
                 >
                   <span>&#9664;</span>
-                  <span className="text-xs">Назад к региону</span>
+                  <span className="text-xs">{citadelId != null ? 'Назад к миру' : 'Назад к региону'}</span>
                 </button>
               </div>
               <h2 className="gold-text text-2xl font-medium uppercase mb-2 text-center">

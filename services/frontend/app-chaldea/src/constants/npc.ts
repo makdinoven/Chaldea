@@ -15,6 +15,7 @@ export const NPC_ROLES = [
   { value: 'bard', label: 'Бард' },
   { value: 'hunter', label: 'Охотник' },
   { value: 'auctioneer', label: 'Аукционист' },
+  { value: 'teleport_master', label: 'Мастер Телепорта' },
 ] as const;
 
 export const NPC_ROLE_LABELS: Record<string, string> = Object.fromEntries(
@@ -38,6 +39,7 @@ export const NPC_ROLE_ICONS: Record<string, string> = {
   bard: '🎵',
   hunter: '🏹',
   auctioneer: '⚖️',
+  teleport_master: '🌀',
 };
 
 export const NPC_SEXES = [

@@ -9,6 +9,7 @@ import NpcDialogueModal from './NpcDialogueModal';
 import NpcShopModal from './NpcShopModal';
 import NpcQuestsModal from './NpcQuestsModal';
 import NpcAuctionModal from './NpcAuctionModal';
+import TeleportMenu from './TeleportMenu';
 
 interface NpcDetail {
   id: number;
@@ -27,9 +28,10 @@ interface NpcDetail {
 interface NpcProfileModalProps {
   npcId: number;
   onClose: () => void;
+  isCharacterHere?: boolean;
 }
 
-const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
+const NpcProfileModal = ({ npcId, onClose, isCharacterHere = false }: NpcProfileModalProps) => {
   const [npc, setNpc] = useState<NpcDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [hasDialogue, setHasDialogue] = useState(false);
@@ -255,7 +257,7 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
             )}
 
             {/* Talk button */}
-            {hasDialogue && (
+            {hasDialogue && isCharacterHere && (
               <button
                 onClick={() => setDialogueOpen(true)}
                 className="
@@ -275,7 +277,7 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
             )}
 
             {/* Trade button */}
-            {hasShop && (
+            {hasShop && isCharacterHere && (
               <button
                 onClick={() => setShopOpen(true)}
                 className="
@@ -295,7 +297,7 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
             )}
 
             {/* Auction button */}
-            {npc.npc_role === 'auctioneer' && (
+            {npc.npc_role === 'auctioneer' && isCharacterHere && (
               <button
                 onClick={() => setAuctionOpen(true)}
                 className="
@@ -314,8 +316,13 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
               </button>
             )}
 
+            {/* Teleport button — only for teleport_master NPCs and present characters */}
+            {npc.npc_role === 'teleport_master' && isCharacterHere && (
+              <TeleportMenu npcId={npc.id} npcName={npc.name} />
+            )}
+
             {/* Quests button */}
-            {hasQuests && (
+            {hasQuests && isCharacterHere && (
               <button
                 onClick={() => setQuestsOpen(true)}
                 className="
@@ -335,7 +342,7 @@ const NpcProfileModal = ({ npcId, onClose }: NpcProfileModalProps) => {
             )}
 
             {/* Attack button */}
-            {characterId && (
+            {characterId && isCharacterHere && (
               <button
                 onClick={handleAttack}
                 disabled={attacking}
