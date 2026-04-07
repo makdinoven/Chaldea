@@ -6,6 +6,13 @@
 
 ## DONE / Learning notes
 
+### Баг: некорректный рендер пути между локациями при рисовании от большего id к меньшему DONE
+**Сервис:** frontend (`AdminPathEditor`) + locations-service
+**Файл:** `services/frontend/app-chaldea/src/components/AdminPathEditor/AdminPathEditorPage.tsx` (`handleDrawClick`)
+**Описание:** При создании пути между локациями (`createNeighborWithPath`) фронтенд отправлял `locationId`/`neighbor_id` в том порядке, в котором пользователь кликал, а `path_data` — в порядке рисования. Backend (`locations-service/app/crud.py::add_neighbor`) хранит обе строки `LocationNeighbor` (forward + reverse) с одинаковым `path_data`. На чтении (`crud.py` ~428) region endpoint нормализует ребро к `(min_id, max_id)` и дедуплицирует по `seen_edges`: какая из двух строк будет оставлена — зависит от порядка итерации по БД. Если оставалась строка, где `location_id > neighbor_id`, код разворачивал `path_data`; иначе — нет. В результате, когда пользователь рисовал от локации с бóльшим id к локации с меньшим id, `path_data` мог остаться в исходном (обратном относительно `min→max`) порядке, и в `RegionMapEditor.tsx` (~строка 897) полилиния `[from, ...path_data, to]` рендерилась с «прыжками».
+**Исправление:** В `handleDrawClick` перед dispatch `createNeighborWithPath` канонизируем направление: всегда отправляем `locationId = min(drawStartId, locId)`, `neighbor_id = max(...)`, и если рисование шло от большего id — реверсируем `drawWaypoints`. Благодаря этому обе строки в БД хранятся в порядке `min→max`, и существующая логика reverse при чтении работает консистентно в обоих направлениях. Аналогичный приём уже был применён в ветке «arrow → location» того же файла.
+**Альтернатива (не реализована):** то же самое можно было сделать в backend `add_neighbor` (нормализовать порядок + reverse при swap), но чтобы минимизировать blast radius, правка сделана только на фронтенде.
+
 ### Alembic revision IDs должны быть ≤32 символов DONE (FEAT-123 hotfix)
 **Сервис:** все сервисы с Alembic
 **Описание:** Дефолтная ширина колонки `version_num` в таблицах `alembic_version_*` — VARCHAR(32). Если revision id длиннее, `alembic upgrade head` падает на финальном UPDATE: `(1406, "Data too long for column 'version_num' at row 1")`, контейнер не стартует (fail-fast).

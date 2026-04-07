@@ -240,15 +240,29 @@ const AdminPathEditorPage = () => {
       return;
     }
 
-    // End drawing — save the path
+    // End drawing — save the path.
+    // Backend normalizes neighbor edges to (min_id, max_id) on read, so we must
+    // canonicalize the draw direction here: always POST with locationId < neighbor_id,
+    // reversing waypoints if the user drew from the higher id to the lower id.
+    // Otherwise the stored path_data stays in the user's draw order while the edge
+    // gets rendered in (min→max) direction, producing a broken polyline.
+    const canonicalFrom = Math.min(drawStartId, locId);
+    const canonicalTo = Math.max(drawStartId, locId);
+    const canonicalWaypoints =
+      drawWaypoints.length > 0
+        ? drawStartId > locId
+          ? [...drawWaypoints].reverse()
+          : drawWaypoints
+        : null;
+
     setSaving(true);
     setError(null);
     dispatch(
       createNeighborWithPath({
-        locationId: drawStartId,
-        neighbor_id: locId,
+        locationId: canonicalFrom,
+        neighbor_id: canonicalTo,
         energy_cost: energyCost,
-        path_data: drawWaypoints.length > 0 ? drawWaypoints : null,
+        path_data: canonicalWaypoints,
       })
     )
       .unwrap()

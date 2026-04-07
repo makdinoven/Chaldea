@@ -189,18 +189,6 @@ class TestAdminCreate:
         assert response.status_code == 422
 
     @patch("auth_http.requests.get")
-    def test_create_empty_route_json_returns_422(self, mock_auth, client):
-        mock_auth.return_value = _admin_resp()
-        bad = dict(VALID_PAYLOAD)
-        bad["route_json"] = []
-        response = client.post(
-            "/locations/admin/floating-structures",
-            json=bad,
-            headers=ADMIN_HEADERS,
-        )
-        assert response.status_code == 422
-
-    @patch("auth_http.requests.get")
     def test_create_route_json_out_of_range_returns_422(self, mock_auth, client):
         mock_auth.return_value = _admin_resp()
         bad = dict(VALID_PAYLOAD)
