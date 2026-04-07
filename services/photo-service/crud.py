@@ -90,6 +90,11 @@ def update_district_icon(db: Session, district_id: int, icon_url: str):
         db.commit()
 
 
+def get_district_map_icon_url(db: Session, district_id: int):
+    district = db.query(District).filter(District.id == district_id).first()
+    return district.map_icon_url if district else None
+
+
 # 4c) Обновляем map_image_url в таблице Districts
 def update_district_map_image(db: Session, district_id: int, map_url: str):
     district = db.query(District).filter(District.id == district_id).first()
@@ -112,6 +117,11 @@ def update_location_icon(db: Session, location_id: int, icon_url: str):
     if location:
         location.map_icon_url = icon_url
         db.commit()
+
+
+def get_location_map_icon_url(db: Session, location_id: int):
+    location = db.query(Location).filter(Location.id == location_id).first()
+    return location.map_icon_url if location else None
 
 
 def update_skill_image(db: Session, skill_id: int, image_url: str):

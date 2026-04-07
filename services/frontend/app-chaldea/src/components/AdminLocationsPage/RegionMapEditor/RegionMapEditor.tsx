@@ -172,12 +172,23 @@ const RegionMapEditor = ({
   const itemKey = (item: MapItemData) => `${item.type}-${item.id}`;
 
   // --- Inline edit ---
-  const [editingItem, setEditingItem] = useState<{ key: string; type: 'location' | 'district'; id: number } | null>(null);
+  const [editingItem, setEditingItem] = useState<{ key: string; type: 'location' | 'district'; id: number; map_icon_url: string | null } | null>(null);
   const [editForm, setEditForm] = useState({ name: '', marker_type: 'safe', recommended_level: '' });
   const [editSaving, setEditSaving] = useState(false);
+  const [editIconFile, setEditIconFile] = useState<File | null>(null);
+  const [editIconPreview, setEditIconPreview] = useState<string | null>(null);
+
+  const clearEditIcon = () => {
+    setEditIconFile(null);
+    setEditIconPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+  };
 
   const startEdit = (item: MapItemData) => {
-    setEditingItem({ key: itemKey(item), type: item.type, id: item.id });
+    clearEditIcon();
+    setEditingItem({ key: itemKey(item), type: item.type, id: item.id, map_icon_url: item.map_icon_url ?? null });
     setEditForm({
       name: item.name,
       marker_type: item.marker_type ?? 'safe',
@@ -186,7 +197,20 @@ const RegionMapEditor = ({
   };
 
   const cancelEdit = () => {
+    clearEditIcon();
     setEditingItem(null);
+  };
+
+  const handleEditIconChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    if (editIconPreview) URL.revokeObjectURL(editIconPreview);
+    if (!file) {
+      setEditIconFile(null);
+      setEditIconPreview(null);
+      return;
+    }
+    setEditIconFile(file);
+    setEditIconPreview(URL.createObjectURL(file));
   };
 
   const saveEdit = async () => {
@@ -210,7 +234,46 @@ const RegionMapEditor = ({
       }
 
       // Update local state (createdItems + edit overrides for backend items)
-      const updatedFields = { name: editForm.name.trim(), marker_type: editForm.marker_type, recommended_level: payload.recommended_level as number | null };
+      const updatedFields: Partial<MapItemData> = {
+        name: editForm.name.trim(),
+        marker_type: editForm.marker_type,
+        recommended_level: payload.recommended_level as number | null,
+      };
+
+      // Upload replacement icon if staged
+      if (editIconFile) {
+        try {
+          const formData = new FormData();
+          if (editingItem.type === 'district') {
+            formData.append('district_id', String(editingItem.id));
+            formData.append('file', editIconFile);
+            const iconResp = await axios.post('/photo/change_district_icon', formData, {
+              headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            const newUrl: string | null = iconResp.data?.map_icon_url ?? iconResp.data?.icon_url ?? null;
+            if (newUrl) updatedFields.map_icon_url = newUrl;
+          } else {
+            formData.append('location_id', String(editingItem.id));
+            formData.append('file', editIconFile);
+            const iconResp = await axios.post('/photo/change_location_icon', formData, {
+              headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            const newUrl: string | null = iconResp.data?.map_icon_url ?? iconResp.data?.icon_url ?? null;
+            if (newUrl) updatedFields.map_icon_url = newUrl;
+          }
+        } catch {
+          toast.error('Не удалось загрузить иконку');
+          // Keep the name/marker_type update already persisted
+          setCreatedItems((prev) =>
+            prev.map((i) => (itemKey(i) === editingItem.key ? { ...i, ...updatedFields } : i)),
+          );
+          setLocalEditOverrides((prev) => ({ ...prev, [editingItem.key]: { ...prev[editingItem.key], ...updatedFields } }));
+          clearEditIcon();
+          setEditingItem(null);
+          return;
+        }
+      }
+
       setCreatedItems((prev) =>
         prev.map((i) =>
           itemKey(i) === editingItem.key
@@ -218,8 +281,9 @@ const RegionMapEditor = ({
             : i,
         ),
       );
-      setLocalEditOverrides((prev) => ({ ...prev, [editingItem.key]: updatedFields }));
+      setLocalEditOverrides((prev) => ({ ...prev, [editingItem.key]: { ...prev[editingItem.key], ...updatedFields } }));
       toast.success('Сохранено');
+      clearEditIcon();
       setEditingItem(null);
     } catch {
       toast.error('Не удалось сохранить');
@@ -998,6 +1062,34 @@ const RegionMapEditor = ({
             className="w-full px-2 py-1 bg-black/30 border border-white/10 rounded text-xs text-[#d4e6f3] placeholder-white/30 focus:border-site-blue/50 focus:outline-none"
           />
         )}
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+          <div className="flex items-center gap-2">
+            {editIconPreview ? (
+              <img
+                src={editIconPreview}
+                alt="Новая иконка"
+                className="w-8 h-8 sm:w-10 sm:h-10 object-contain rounded border border-site-blue/50 bg-black/40"
+              />
+            ) : editingItem.map_icon_url ? (
+              <img
+                src={editingItem.map_icon_url}
+                alt="Текущая иконка"
+                className="w-8 h-8 sm:w-10 sm:h-10 object-contain rounded border border-white/10 bg-black/40"
+              />
+            ) : (
+              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded border border-dashed border-white/20 flex items-center justify-center text-[8px] text-white/40">
+                нет
+              </div>
+            )}
+            <span className="text-[9px] text-white/50 uppercase">Иконка</span>
+          </div>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleEditIconChange}
+            className="text-[10px] text-white/70 file:mr-1 file:py-0.5 file:px-1.5 file:rounded file:border-0 file:text-[10px] file:bg-site-blue/30 file:text-site-blue hover:file:bg-site-blue/40 file:cursor-pointer cursor-pointer w-full"
+          />
+        </div>
         <button
           type="button"
           disabled={editSaving || !editForm.name.trim()}

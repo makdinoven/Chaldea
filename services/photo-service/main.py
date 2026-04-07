@@ -17,6 +17,7 @@ from crud import (
     update_profile_bg_image, get_profile_bg_image, get_character_owner_id,
     update_race_image, update_subrace_image, update_location_icon,
     update_mob_template_avatar, update_recipe_image,
+    get_district_map_icon_url, get_location_map_icon_url,
 )
 from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime
 from fastapi.middleware.cors import CORSMiddleware
@@ -271,11 +272,19 @@ async def change_district_icon(district_id: int = Form(...), file: UploadFile = 
     """
     validate_image_mime(file)
     try:
+        old_icon_url = get_district_map_icon_url(db, district_id)
+
         result = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("district_icon", district_id, extension=result.extension)
         file_url = upload_file_to_s3(result.data, unique_filename, subdirectory="district_icons", content_type=result.content_type)
 
         update_district_icon(db, district_id, file_url)
+
+        if old_icon_url:
+            try:
+                delete_s3_file(old_icon_url)
+            except Exception as del_err:
+                print(f"[change_district_icon] failed to delete old S3 icon {old_icon_url}: {del_err}")
 
         return {
             "message": "Иконка района успешно загружена",
@@ -336,11 +345,19 @@ async def change_location_icon(location_id: int = Form(...), file: UploadFile = 
     """
     validate_image_mime(file)
     try:
+        old_icon_url = get_location_map_icon_url(db, location_id)
+
         result = convert_to_webp(file.file)
         unique_filename = generate_unique_filename("location_icon", location_id, extension=result.extension)
         file_url = upload_file_to_s3(result.data, unique_filename, subdirectory="location_icons", content_type=result.content_type)
 
         update_location_icon(db, location_id, file_url)
+
+        if old_icon_url:
+            try:
+                delete_s3_file(old_icon_url)
+            except Exception as del_err:
+                print(f"[change_location_icon] failed to delete old S3 icon {old_icon_url}: {del_err}")
 
         return {
             "message": "Иконка локации успешно загружена",
