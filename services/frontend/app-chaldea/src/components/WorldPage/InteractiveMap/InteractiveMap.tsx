@@ -1,7 +1,12 @@
+import { useState, type SyntheticEvent } from 'react';
 import { motion } from 'motion/react';
 import type { ClickableZone } from '../../../redux/actions/worldMapActions';
 import ClickableZoneOverlay from './ClickableZoneOverlay';
 import FloatingStructuresLayer from '../FloatingStructuresLayer';
+
+// Fallback aspect ratio used until the image's natural dimensions are known.
+// Prevents layout jumps and matches the historical min-h hint (~16/9).
+const DEFAULT_MAP_ASPECT = '16 / 9';
 
 interface InteractiveMapProps {
   mapImageUrl: string | null;
@@ -9,9 +14,19 @@ interface InteractiveMapProps {
   onZoneClick: (zone: ClickableZone) => void;
   title?: string;
   countries?: Array<{ id: number; emblem_url: string | null }>;
+  showFloatingStructures?: boolean;
 }
 
-const InteractiveMap = ({ mapImageUrl, clickableZones, onZoneClick, title, countries }: InteractiveMapProps) => {
+const InteractiveMap = ({ mapImageUrl, clickableZones, onZoneClick, title, countries, showFloatingStructures = false }: InteractiveMapProps) => {
+  const [aspectRatio, setAspectRatio] = useState<string>(DEFAULT_MAP_ASPECT);
+
+  const handleImgLoad = (e: SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+      setAspectRatio(`${img.naturalWidth} / ${img.naturalHeight}`);
+    }
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -25,7 +40,10 @@ const InteractiveMap = ({ mapImageUrl, clickableZones, onZoneClick, title, count
         </h2>
       )}
 
-      <div className="relative w-full min-h-[300px] md:min-h-[500px] rounded-map overflow-hidden bg-site-dark">
+      <div
+        className="relative w-full rounded-map overflow-hidden bg-site-dark"
+        style={{ aspectRatio }}
+      >
         {mapImageUrl ? (
           <>
             <img
@@ -33,6 +51,7 @@ const InteractiveMap = ({ mapImageUrl, clickableZones, onZoneClick, title, count
               alt={title ?? 'Карта'}
               className="w-full h-full object-cover select-none"
               draggable={false}
+              onLoad={handleImgLoad}
             />
             {clickableZones.length > 0 && (
               <ClickableZoneOverlay
@@ -41,7 +60,7 @@ const InteractiveMap = ({ mapImageUrl, clickableZones, onZoneClick, title, count
                 countries={countries}
               />
             )}
-            <FloatingStructuresLayer />
+            {showFloatingStructures && <FloatingStructuresLayer />}
           </>
         ) : (
           /* Placeholder for missing map image */

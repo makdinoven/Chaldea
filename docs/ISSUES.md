@@ -23,6 +23,16 @@
 
 ## HIGH
 
+### Баг: маркеры на карте мира съезжают при нестандартной ширине окна DONE
+**Сервис:** frontend
+**Файлы:**
+- `services/frontend/app-chaldea/src/components/WorldPage/InteractiveMap/InteractiveMap.tsx`
+- `services/frontend/app-chaldea/src/components/AdminLocationsPage/FloatingRouteEditor.tsx`
+**Описание:** Контейнер карты мира имел `min-h-[300px] md:min-h-[500px]` и `w-full`, то есть его соотношение сторон зависело от ширины окна. Внутри лежал `<img class="w-full h-full object-cover">`, который кропает картинку под контейнер. Все маркеры (clickable zones, локации, плавающие структуры, стрелки) позиционируются в `% left/top` относительно контейнера — поэтому при изменении aspect ratio контейнера они «уезжали» относительно фич карты. Стало особенно заметно при тестировании плавающих структур (FEAT-123).
+**Исправление:** Контейнер теперь блокирует aspect ratio под натуральные размеры загруженной картинки (`onLoad` -> `setAspectRatio(`${naturalWidth} / ${naturalHeight}`)`), `min-h-*` убран. `object-cover` остаётся, но теперь идентичен `object-contain`, потому что контейнер совпадает с картинкой по пропорциям. Все существующие маркеры с `% left/top` автоматически выравниваются на любых ширинах окна (от 360px до 1920px+). Аналогичная правка применена к редактору маршрутов, чтобы клики `getBoundingClientRect` тоже маппились в правильные координаты картинки.
+
+
+
 ### ~~3. Баг: бой не завершается при HP <= 0~~ DONE (FEAT-059, Phase 1)
 ~~**Сервис:** battle-service~~
 ~~**Исправлено в FEAT-059:** Добавлена проверка HP<=0 после применения урона. При обнаружении — battle.status='finished' в MySQL, Redis state expire 5 мин, winner_team в ActionResponse. Повторные action на finished battle возвращают 400.~~

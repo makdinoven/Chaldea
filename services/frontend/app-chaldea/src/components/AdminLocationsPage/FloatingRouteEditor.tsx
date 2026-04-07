@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import { updateFloatingStructure } from '../../redux/slices/floatingStructuresSlice';
@@ -43,7 +43,15 @@ const FloatingRouteEditor = ({ structureId, initialRoute, onClose }: Props) => {
   const [waypoints, setWaypoints] = useState<RouteWaypoint[]>(initialRoute ?? []);
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [aspectRatio, setAspectRatio] = useState<string>('16 / 9');
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  const handleImgLoad = (e: SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+      setAspectRatio(`${img.naturalWidth} / ${img.naturalHeight}`);
+    }
+  };
 
   useEffect(() => {
     if (areas.length === 0) {
@@ -155,13 +163,15 @@ const FloatingRouteEditor = ({ structureId, initialRoute, onClose }: Props) => {
           <div
             ref={containerRef}
             onClick={handleCanvasClick}
-            className="relative w-full min-h-[300px] md:min-h-[500px] overflow-hidden rounded-md border border-white/20 bg-site-dark select-none"
+            className="relative w-full overflow-hidden rounded-md border border-white/20 bg-site-dark select-none"
+            style={{ aspectRatio }}
           >
             <img
               src={worldMapUrl}
               alt="Карта мира"
               className="w-full h-full object-cover pointer-events-none"
               draggable={false}
+              onLoad={handleImgLoad}
             />
             {waypoints.length >= 2 && (
               <svg
