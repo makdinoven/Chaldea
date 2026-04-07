@@ -197,7 +197,7 @@ const GrimoirePageInfo = ({ entry }: GrimoirePageInfoProps) => {
             <div className="flex flex-wrap gap-2">
               {entry.skills.map((skill) => (
                 <span
-                  key={skill.skill_rank_id}
+                  key={skill.skill_id}
                   className="px-2.5 py-1 rounded-sm text-xs sm:text-sm"
                   style={{
                     fontFamily: scriptFont,
@@ -206,7 +206,7 @@ const GrimoirePageInfo = ({ entry }: GrimoirePageInfoProps) => {
                     border: '1px solid rgba(106,58,138,0.15)',
                   }}
                 >
-                  {skill.skill_name ?? `Навык #${skill.skill_rank_id}`}
+                  {skill.skill_name ?? `Навык #${skill.skill_id}`}
                 </span>
               ))}
             </div>

@@ -722,18 +722,12 @@ def upsert_starter_kit(db: Session, class_id: int, data: schemas.StarterKitUpdat
 async def send_skills_presets_request(character_id: int, skill_ids: list[int]):
     """
     Массовое назначение нескольких навыков персонажу.
-    Каждый навык - rank_number=1 (первый ранг).
+    FEAT-125: ранги удалены — отправляем только skill_id.
     """
-    # Сформируем структуру данных под эндпоинт сервисе навыков
     request_body = {
         "character_id": character_id,
-        "skills": []
+        "skills": [{"skill_id": sid} for sid in skill_ids],
     }
-    for skill_id in skill_ids:
-        request_body["skills"].append({
-            "skill_id": skill_id,
-            "rank_number": 1
-        })
 
     try:
         async with httpx.AsyncClient() as client:
@@ -823,11 +817,11 @@ def delete_mob_template(db: Session, template: MobTemplate):
     db.commit()
 
 
-def replace_mob_skills(db: Session, template_id: int, skill_rank_ids: list):
-    """Replace all skills for a mob template."""
+def replace_mob_skills(db: Session, template_id: int, skill_ids: list):
+    """Replace all skills for a mob template (FEAT-125: skill_id, not skill_rank_id)."""
     db.query(MobTemplateSkill).filter(MobTemplateSkill.mob_template_id == template_id).delete()
-    for rank_id in skill_rank_ids:
-        db.add(MobTemplateSkill(mob_template_id=template_id, skill_rank_id=rank_id))
+    for sid in skill_ids:
+        db.add(MobTemplateSkill(mob_template_id=template_id, skill_id=sid))
     db.commit()
 
 
@@ -926,12 +920,13 @@ def spawn_mob_from_template(db: Session, template_id: int, location_id: int, spa
         try:
             db.execute(
                 sa_text(
-                    "INSERT INTO character_skills (character_id, skill_rank_id) VALUES (:cid, :srid)"
+                    "INSERT INTO character_skills (character_id, skill_id, level) "
+                    "VALUES (:cid, :sid, 0)"
                 ),
-                {"cid": new_character.id, "srid": ts.skill_rank_id},
+                {"cid": new_character.id, "sid": ts.skill_id},
             )
         except Exception as e:
-            logger.warning(f"Не удалось назначить навык skill_rank_id={ts.skill_rank_id} мобу {new_character.id}: {e}")
+            logger.warning(f"Не удалось назначить навык skill_id={ts.skill_id} мобу {new_character.id}: {e}")
     if template_skills:
         logger.info(f"Назначено {len(template_skills)} навыков мобу {new_character.id}")
 
@@ -1325,12 +1320,12 @@ def _query_names_by_ids(db: Session, query: str, ids: set):
 
 def _load_name_lookups(db: Session, templates):
     """Load name lookups for skills, items, and locations from shared DB."""
-    skill_rank_ids = set()
+    skill_ids = set()
     item_ids = set()
     location_ids = set()
     for t in templates:
         for s in t.skills:
-            skill_rank_ids.add(s.skill_rank_id)
+            skill_ids.add(s.skill_id)
         for le in t.loot_entries:
             item_ids.add(le.item_id)
         for sl in t.spawn_locations:
@@ -1338,8 +1333,8 @@ def _load_name_lookups(db: Session, templates):
 
     skill_names = _query_names_by_ids(
         db,
-        "SELECT sr.id, s.name FROM skill_ranks sr JOIN skills s ON sr.skill_id = s.id WHERE sr.id IN (:ids)",
-        skill_rank_ids,
+        "SELECT id, name FROM skills WHERE id IN (:ids)",
+        skill_ids,
     )
 
     item_names = _query_names_by_ids(
@@ -1436,7 +1431,7 @@ def get_bestiary(db: Session, character_id: int = None):
 
         def _get_skills():
             return [
-                {"skill_rank_id": s.skill_rank_id, "skill_name": skill_names.get(s.skill_rank_id)}
+                {"skill_id": s.skill_id, "skill_name": skill_names.get(s.skill_id)}
                 for s in t.skills
             ]
 

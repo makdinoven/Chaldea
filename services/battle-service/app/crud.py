@@ -49,9 +49,9 @@ async def write_turn(
         battle_id=battle_id,
         actor_participant_id=actor_participant_id,
         turn_number=turn_number,
-        attack_rank_id=skills.attack_rank_id,
-        defense_rank_id=skills.defense_rank_id,
-        support_rank_id=skills.support_rank_id,
+        attack_skill_id=skills.attack_skill_id,
+        defense_skill_id=skills.defense_skill_id,
+        support_skill_id=skills.support_skill_id,
         item_id=skills.item_id,
         deadline_at=deadline_at,
     )

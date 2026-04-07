@@ -110,6 +110,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - MONGO_URI=mongodb://mongo:27017
       - BATTLE_SERVICE_URL=http://battle-service:8010
+      - SKILLS_SERVICE_URL=http://skills-service:8003
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
     logging:
       driver: "json-file"
       options:
@@ -311,6 +313,7 @@ services:
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
     depends_on:
       mysql:
         condition: service_healthy
@@ -366,6 +369,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      skills-service:
+        condition: service_started
     ports:
       - "8005:8005"
     logging:
@@ -449,6 +454,7 @@ services:
       SKILLS_SERVICE_URL: http://skills-service:8003
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       AUTOBATTLE_SERVICE_URL: http://autobattle-service:8011
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
     depends_on:
       mysql:
         condition: service_healthy

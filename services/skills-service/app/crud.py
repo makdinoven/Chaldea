@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, or_, func
 from sqlalchemy.exc import IntegrityError
@@ -5,6 +7,10 @@ from fastapi import HTTPException
 from sqlalchemy.orm import selectinload
 
 import models, schemas
+
+MAX_LEVEL = 4
+MIN_PERK_POOL = 4
+RESET_COOLDOWN_HOURS = 24
 
 # -----------------------
 # CRUD: Skill
@@ -52,197 +58,323 @@ async def delete_skill(db: AsyncSession, skill_id: int) -> bool:
     if not skill:
         return False
 
-    # Delete character_skills referencing this skill's ranks
-    rank_ids_stmt = select(models.SkillRank.id).where(models.SkillRank.skill_id == skill_id)
-    rank_ids_result = await db.execute(rank_ids_stmt)
-    rank_ids = [r[0] for r in rank_ids_result.fetchall()]
+    # CharacterSkill rows for this skill (cascade by FK on delete in DB, but be explicit
+    # to avoid leaving orphans during ORM-level deletes).
+    cs_stmt = select(models.CharacterSkill).where(models.CharacterSkill.skill_id == skill_id)
+    cs_result = await db.execute(cs_stmt)
+    for cs in cs_result.scalars().all():
+        await db.delete(cs)
 
-    if rank_ids:
-        # Delete character_skills
-        cs_stmt = select(models.CharacterSkill).where(
-            models.CharacterSkill.skill_rank_id.in_(rank_ids)
-        )
-        cs_result = await db.execute(cs_stmt)
-        for cs in cs_result.scalars().all():
-            await db.delete(cs)
-
-    # Delete tree_node_skills referencing this skill
+    # tree_node_skills referencing this skill
     tns_stmt = select(models.TreeNodeSkill).where(models.TreeNodeSkill.skill_id == skill_id)
     tns_result = await db.execute(tns_stmt)
     for tns in tns_result.scalars().all():
         await db.delete(tns)
 
-    # Now delete the skill (cascades to ranks → damage/effects via ORM)
+    # Cascades to base_damage / base_effects / perks via ORM
     await db.delete(skill)
     await db.commit()
     return True
 
-# -----------------------
-# CRUD: SkillRank
-# -----------------------
-async def create_skill_rank(db: AsyncSession, data: schemas.SkillRankCreate) -> models.SkillRank:
-    new_rank = models.SkillRank(**data.dict())
-    db.add(new_rank)
-    await db.commit()
-    await db.refresh(new_rank)
-    return new_rank
+# =====================================================================
+# (FEAT-125) Perk + base damage/effect CRUD + character-skill progression
+# =====================================================================
 
-async def get_skill_rank(db: AsyncSession, rank_id: int) -> models.SkillRank | None:
+def _damage_to_dict(d) -> dict:
+    return {
+        "id": d.id,
+        "damage_type": d.damage_type,
+        "amount": d.amount,
+        "description": d.description,
+        "chance": d.chance,
+        "target_side": d.target_side,
+        "weapon_slot": d.weapon_slot,
+    }
+
+
+def _effect_to_dict(e) -> dict:
+    return {
+        "id": e.id,
+        "target_side": e.target_side,
+        "effect_name": e.effect_name,
+        "description": e.description,
+        "chance": e.chance,
+        "duration": e.duration,
+        "magnitude": e.magnitude,
+        "attribute_key": e.attribute_key,
+    }
+
+
+# ---- base damage / effects (admin) ----
+
+async def create_base_damage(db: AsyncSession, skill_id: int, data: schemas.DamageEntryWrite) -> models.SkillBaseDamage:
+    obj = models.SkillBaseDamage(skill_id=skill_id, **data.dict())
+    db.add(obj)
+    await db.commit()
+    await db.refresh(obj)
+    return obj
+
+
+async def update_base_damage(db: AsyncSession, damage_id: int, data: schemas.DamageEntryWrite) -> models.SkillBaseDamage | None:
+    obj = await db.get(models.SkillBaseDamage, damage_id)
+    if not obj:
+        return None
+    for f, v in data.dict().items():
+        setattr(obj, f, v)
+    await db.commit()
+    await db.refresh(obj)
+    return obj
+
+
+async def delete_base_damage(db: AsyncSession, damage_id: int) -> bool:
+    obj = await db.get(models.SkillBaseDamage, damage_id)
+    if not obj:
+        return False
+    await db.delete(obj)
+    await db.commit()
+    return True
+
+
+async def list_base_damage(db: AsyncSession, skill_id: int) -> list[models.SkillBaseDamage]:
+    res = await db.execute(select(models.SkillBaseDamage).where(models.SkillBaseDamage.skill_id == skill_id))
+    return res.scalars().all()
+
+
+async def create_base_effect(db: AsyncSession, skill_id: int, data: schemas.EffectEntryWrite) -> models.SkillBaseEffect:
+    obj = models.SkillBaseEffect(skill_id=skill_id, **data.dict())
+    db.add(obj)
+    await db.commit()
+    await db.refresh(obj)
+    return obj
+
+
+async def update_base_effect(db: AsyncSession, effect_id: int, data: schemas.EffectEntryWrite) -> models.SkillBaseEffect | None:
+    obj = await db.get(models.SkillBaseEffect, effect_id)
+    if not obj:
+        return None
+    for f, v in data.dict().items():
+        setattr(obj, f, v)
+    await db.commit()
+    await db.refresh(obj)
+    return obj
+
+
+async def delete_base_effect(db: AsyncSession, effect_id: int) -> bool:
+    obj = await db.get(models.SkillBaseEffect, effect_id)
+    if not obj:
+        return False
+    await db.delete(obj)
+    await db.commit()
+    return True
+
+
+async def list_base_effects(db: AsyncSession, skill_id: int) -> list[models.SkillBaseEffect]:
+    res = await db.execute(select(models.SkillBaseEffect).where(models.SkillBaseEffect.skill_id == skill_id))
+    return res.scalars().all()
+
+
+# ---- perk CRUD ----
+
+async def _load_perk(db: AsyncSession, perk_id: int) -> models.SkillPerk | None:
     stmt = (
-        select(models.SkillRank)
+        select(models.SkillPerk)
         .options(
-            selectinload(models.SkillRank.damage_entries),
-            selectinload(models.SkillRank.effects),
+            selectinload(models.SkillPerk.damage_entries),
+            selectinload(models.SkillPerk.effects),
         )
-        .where(models.SkillRank.id == rank_id)
+        .where(models.SkillPerk.id == perk_id)
     )
-    result = await db.execute(stmt)
-    return result.scalar_one_or_none()
+    res = await db.execute(stmt)
+    return res.scalar_one_or_none()
 
-async def list_skill_ranks_by_skill(db: AsyncSession, skill_id: int) -> list[models.SkillRank]:
-    result = await db.execute(select(models.SkillRank).where(models.SkillRank.skill_id == skill_id))
-    return result.scalars().all()
 
-async def update_skill_rank(db: AsyncSession, rank_id: int, data: schemas.SkillRankUpdate) -> models.SkillRank | None:
-    rank = await get_skill_rank(db, rank_id)
-    if not rank:
-        return None
-    for field, value in data.dict(exclude_unset=True).items():
-        setattr(rank, field, value)
+async def get_perk(db: AsyncSession, perk_id: int) -> models.SkillPerk | None:
+    return await _load_perk(db, perk_id)
+
+
+async def list_perks_for_skill(db: AsyncSession, skill_id: int) -> list[models.SkillPerk]:
+    stmt = (
+        select(models.SkillPerk)
+        .options(
+            selectinload(models.SkillPerk.damage_entries),
+            selectinload(models.SkillPerk.effects),
+        )
+        .where(models.SkillPerk.skill_id == skill_id)
+        .order_by(models.SkillPerk.sort_order, models.SkillPerk.id)
+    )
+    res = await db.execute(stmt)
+    return res.scalars().all()
+
+
+async def create_perk(db: AsyncSession, skill_id: int, data: schemas.SkillPerkCreate) -> models.SkillPerk:
+    skill = await get_skill(db, skill_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail="Навык не найден")
+    perk = models.SkillPerk(
+        skill_id=skill_id,
+        name=data.name,
+        description=data.description,
+        perk_image=data.perk_image,
+        delta_cost_energy=data.delta_cost_energy,
+        delta_cost_mana=data.delta_cost_mana,
+        delta_cooldown=data.delta_cooldown,
+        sort_order=data.sort_order,
+    )
+    db.add(perk)
+    await db.flush()
+    for d in data.damage_entries:
+        db.add(models.SkillPerkDamage(skill_perk_id=perk.id, **d.dict()))
+    for e in data.effects:
+        db.add(models.SkillPerkEffect(skill_perk_id=perk.id, **e.dict()))
     await db.commit()
-    await db.refresh(rank)
-    return rank
+    return await _load_perk(db, perk.id)
 
-async def delete_skill_rank(db: AsyncSession, rank_id: int) -> bool:
-    rank = await get_skill_rank(db, rank_id)
-    if not rank:
+
+async def update_perk(db: AsyncSession, perk_id: int, data: schemas.SkillPerkUpdate) -> models.SkillPerk | None:
+    perk = await _load_perk(db, perk_id)
+    if not perk:
+        return None
+    perk.name = data.name
+    perk.description = data.description
+    perk.perk_image = data.perk_image
+    perk.delta_cost_energy = data.delta_cost_energy
+    perk.delta_cost_mana = data.delta_cost_mana
+    perk.delta_cooldown = data.delta_cooldown
+    perk.sort_order = data.sort_order
+
+    # Replace sub-collections wholesale (perk pools are tiny).
+    for old in list(perk.damage_entries):
+        await db.delete(old)
+    for old in list(perk.effects):
+        await db.delete(old)
+    await db.flush()
+    for d in data.damage_entries:
+        db.add(models.SkillPerkDamage(skill_perk_id=perk.id, **d.dict()))
+    for e in data.effects:
+        db.add(models.SkillPerkEffect(skill_perk_id=perk.id, **e.dict()))
+    await db.commit()
+    return await _load_perk(db, perk_id)
+
+
+async def delete_perk(db: AsyncSession, perk_id: int) -> bool:
+    """Delete a perk. Pool-size guard: refuse if it would drop below MIN_PERK_POOL."""
+    perk = await db.get(models.SkillPerk, perk_id)
+    if not perk:
         return False
-    await db.delete(rank)
+    skill_id = perk.skill_id
+    count_res = await db.execute(
+        select(func.count(models.SkillPerk.id)).where(models.SkillPerk.skill_id == skill_id)
+    )
+    current = count_res.scalar_one() or 0
+    if current - 1 < MIN_PERK_POOL:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Нельзя удалить перк: пул должен содержать минимум {MIN_PERK_POOL} перков",
+        )
+    await db.delete(perk)
     await db.commit()
     return True
 
-# -----------------------
-# CRUD: SkillRankDamage
-# -----------------------
-async def create_skill_rank_damage(db: AsyncSession, data: schemas.SkillRankDamageCreate) -> models.SkillRankDamage:
-    new_damage = models.SkillRankDamage(**data.dict())
-    db.add(new_damage)
-    await db.commit()
-    await db.refresh(new_damage)
-    return new_damage
 
-async def get_skill_rank_damage(db: AsyncSession, damage_id: int) -> models.SkillRankDamage | None:
-    stmt = select(models.SkillRankDamage).where(models.SkillRankDamage.id == damage_id)
-    result = await db.execute(stmt)
-    return result.scalar_one_or_none()
+# ---- character_skills (new flat shape) ----
 
-async def update_skill_rank_damage(db: AsyncSession, damage_id: int, data: schemas.SkillRankDamageUpdate) -> models.SkillRankDamage | None:
-    dmg = await get_skill_rank_damage(db, damage_id)
-    if not dmg:
-        return None
-    for field, value in data.dict(exclude_unset=True).items():
-        setattr(dmg, field, value)
-    await db.commit()
-    await db.refresh(dmg)
-    return dmg
+async def get_character_skill(db: AsyncSession, cs_id: int) -> models.CharacterSkill | None:
+    return await db.get(models.CharacterSkill, cs_id)
 
-async def delete_skill_rank_damage(db: AsyncSession, damage_id: int) -> bool:
-    dmg = await get_skill_rank_damage(db, damage_id)
-    if not dmg:
-        return False
-    await db.delete(dmg)
-    await db.commit()
-    return True
 
-# -----------------------
-# CRUD: SkillRankEffect
-# -----------------------
-async def create_skill_rank_effect(db: AsyncSession, data: schemas.SkillRankEffectCreate) -> models.SkillRankEffect:
-    eff = models.SkillRankEffect(**data.dict())
-    db.add(eff)
-    await db.commit()
-    await db.refresh(eff)
-    return eff
+async def get_character_skill_by_skill_id(
+    db: AsyncSession, character_id: int, skill_id: int
+) -> models.CharacterSkill | None:
+    stmt = select(models.CharacterSkill).where(
+        models.CharacterSkill.character_id == character_id,
+        models.CharacterSkill.skill_id == skill_id,
+    )
+    res = await db.execute(stmt)
+    return res.scalar_one_or_none()
 
-async def get_skill_rank_effect(db: AsyncSession, effect_id: int) -> models.SkillRankEffect | None:
-    stmt = select(models.SkillRankEffect).where(models.SkillRankEffect.id == effect_id)
-    result = await db.execute(stmt)
-    return result.scalar_one_or_none()
 
-async def update_skill_rank_effect(db: AsyncSession, effect_id: int, data: schemas.SkillRankEffectUpdate) -> models.SkillRankEffect | None:
-    eff = await get_skill_rank_effect(db, effect_id)
-    if not eff:
-        return None
-    for field, value in data.dict(exclude_unset=True).items():
-        setattr(eff, field, value)
-    await db.commit()
-    await db.refresh(eff)
-    return eff
+async def _load_character_skill_full(db: AsyncSession, cs_id: int) -> models.CharacterSkill | None:
+    stmt = (
+        select(models.CharacterSkill)
+        .options(
+            selectinload(models.CharacterSkill.skill),
+            selectinload(models.CharacterSkill.selected_perks),
+        )
+        .where(models.CharacterSkill.id == cs_id)
+    )
+    res = await db.execute(stmt)
+    return res.scalar_one_or_none()
 
-async def delete_skill_rank_effect(db: AsyncSession, effect_id: int) -> bool:
-    eff = await get_skill_rank_effect(db, effect_id)
-    if not eff:
-        return False
-    await db.delete(eff)
-    await db.commit()
-    return True
 
-# -----------------------
-# CRUD: CharacterSkill
-# -----------------------
-async def create_character_skill(db: AsyncSession, data: schemas.CharacterSkillCreate) -> models.CharacterSkill:
-    cs = models.CharacterSkill(**data.dict())
+async def list_character_skills_for_character(db: AsyncSession, character_id: int) -> list[models.CharacterSkill]:
+    stmt = (
+        select(models.CharacterSkill)
+        .options(
+            selectinload(models.CharacterSkill.skill),
+            selectinload(models.CharacterSkill.selected_perks),
+        )
+        .where(models.CharacterSkill.character_id == character_id)
+    )
+    res = await db.execute(stmt)
+    return res.scalars().all()
+
+
+def serialize_character_skill(cs: models.CharacterSkill) -> dict:
+    selected = [csp.skill_perk_id for csp in (cs.selected_perks or [])]
+    return {
+        "character_skill_id": cs.id,
+        "skill_id": cs.skill_id,
+        "character_id": cs.character_id,
+        "level": cs.level or 0,
+        "free_perk_points": max(0, (cs.level or 0) - len(selected)),
+        "selected_perk_ids": selected,
+        "reset_available_at": cs.reset_available_at,
+        "skill": (
+            {
+                "id": cs.skill.id,
+                "name": cs.skill.name,
+                "skill_type": cs.skill.skill_type,
+                "skill_image": cs.skill.skill_image,
+            }
+            if cs.skill
+            else None
+        ),
+    }
+
+
+async def create_character_skill(
+    db: AsyncSession, character_id: int, skill_id: int, level: int = 0
+) -> models.CharacterSkill:
+    """Create a new (character, skill) row at the given level. 409 if it already exists."""
+    skill = await get_skill(db, skill_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail="Навык не найден")
+    existing = await get_character_skill_by_skill_id(db, character_id, skill_id)
+    if existing:
+        raise HTTPException(status_code=409, detail="Навык уже есть")
+    cs = models.CharacterSkill(character_id=character_id, skill_id=skill_id, level=level)
     db.add(cs)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Навык уже есть")
+    await db.refresh(cs)
+    return cs
+
+
+async def admin_update_character_skill(
+    db: AsyncSession, cs_id: int, skill_id: int, level: int
+) -> models.CharacterSkill:
+    cs = await get_character_skill(db, cs_id)
+    if not cs:
+        raise HTTPException(status_code=404, detail="CharacterSkill не найден")
+    cs.skill_id = skill_id
+    cs.level = level
     await db.commit()
     await db.refresh(cs)
     return cs
 
-async def get_character_skill(db: AsyncSession, cs_id: int) -> models.CharacterSkill | None:
-    stmt = select(models.CharacterSkill).where(models.CharacterSkill.id == cs_id)
-    result = await db.execute(stmt)
-    return result.scalar_one_or_none()
-
-async def list_character_skills_for_character(db: AsyncSession, character_id: int):
-    stmt = (
-        select(models.CharacterSkill)
-        .where(models.CharacterSkill.character_id == character_id)
-        .options(
-            selectinload(models.CharacterSkill.skill_rank)
-                .selectinload(models.SkillRank.damage_entries),
-            selectinload(models.CharacterSkill.skill_rank)
-                .selectinload(models.SkillRank.effects),
-        )
-    )
-    result = await db.execute(stmt)
-    char_skills = result.scalars().all()
-
-    # Denormalize skill info (name, type, image) from the Skill table
-    skill_ids = list({cs.skill_rank.skill_id for cs in char_skills if cs.skill_rank})
-    skill_map: dict[int, models.Skill] = {}
-    if skill_ids:
-        skills_result = await db.execute(
-            select(models.Skill).where(models.Skill.id.in_(skill_ids))
-        )
-        for skill in skills_result.scalars().all():
-            skill_map[skill.id] = skill
-
-    # Attach denormalized fields
-    for cs in char_skills:
-        if cs.skill_rank and cs.skill_rank.skill_id in skill_map:
-            skill = skill_map[cs.skill_rank.skill_id]
-            cs.skill_name = skill.name
-            cs.skill_type = skill.skill_type
-            cs.skill_image = skill.skill_image
-            cs.skill_description = skill.description
-            cs.skill_min_level = skill.min_level
-        else:
-            cs.skill_name = None
-            cs.skill_type = None
-            cs.skill_image = None
-            cs.skill_description = None
-            cs.skill_min_level = None
-
-    return char_skills
 
 async def delete_character_skill(db: AsyncSession, cs_id: int) -> bool:
     cs = await get_character_skill(db, cs_id)
@@ -252,22 +384,11 @@ async def delete_character_skill(db: AsyncSession, cs_id: int) -> bool:
     await db.commit()
     return True
 
-async def get_character_skill_by_skill_id(db: AsyncSession, character_id: int, skill_id: int) -> models.CharacterSkill | None:
-    from sqlalchemy import select
-    stmt = (
-        select(models.CharacterSkill)
-        .join(models.SkillRank, models.SkillRank.id == models.CharacterSkill.skill_rank_id)
-        .where(models.CharacterSkill.character_id == character_id)
-        .where(models.SkillRank.skill_id == skill_id)
-    )
-    result = await db.execute(stmt)
-    return result.scalar_one_or_none()
 
 async def delete_all_character_skills(db: AsyncSession, character_id: int) -> int:
-    """Delete all CharacterSkill rows for the given character_id. Returns count deleted."""
     stmt = select(models.CharacterSkill).where(models.CharacterSkill.character_id == character_id)
-    result = await db.execute(stmt)
-    rows = result.scalars().all()
+    res = await db.execute(stmt)
+    rows = res.scalars().all()
     count = len(rows)
     for row in rows:
         await db.delete(row)
@@ -276,106 +397,206 @@ async def delete_all_character_skills(db: AsyncSession, character_id: int) -> in
     return count
 
 
-async def update_character_skill_rank(db: AsyncSession, cs_id: int, new_rank_id: int) -> models.CharacterSkill:
-    cs = await get_character_skill(db, cs_id)
+async def delete_character_skills_by_skill_ids(
+    db: AsyncSession, character_id: int, skill_ids: list[int]
+) -> int:
+    if not skill_ids:
+        return 0
+    stmt = select(models.CharacterSkill).where(
+        models.CharacterSkill.character_id == character_id,
+        models.CharacterSkill.skill_id.in_(skill_ids),
+    )
+    res = await db.execute(stmt)
+    rows = res.scalars().all()
+    count = len(rows)
+    for row in rows:
+        await db.delete(row)
+    if count > 0:
+        await db.commit()
+    return count
+
+
+# ---- player progression: upgrade / pick perk / reset ----
+
+async def upgrade_character_skill_level(db: AsyncSession, cs_id: int) -> models.CharacterSkill:
+    cs = await _load_character_skill_full(db, cs_id)
     if not cs:
-        raise HTTPException(status_code=404, detail="CharacterSkill not found")
-    cs.skill_rank_id = new_rank_id
+        raise HTTPException(status_code=404, detail="Навык персонажа не найден")
+    if (cs.level or 0) >= MAX_LEVEL:
+        raise HTTPException(status_code=409, detail="Навык уже на максимальном уровне")
+    selected_count = len(cs.selected_perks or [])
+    if selected_count < (cs.level or 0):
+        raise HTTPException(
+            status_code=409,
+            detail="Сначала потратьте имеющееся очко перка",
+        )
+    cs.level = (cs.level or 0) + 1
     await db.commit()
-    await db.refresh(cs)
-    return cs
+    return await _load_character_skill_full(db, cs_id)
 
 
-# -----------------------
-# Синхронизация damage_entries и effects
-# -----------------------
-async def sync_damage_entries(db: AsyncSession, rank_obj: models.SkillRank, new_damage_list):
-    result = await db.execute(
-        select(models.SkillRank)
-        .options(selectinload(models.SkillRank.damage_entries))
-        .where(models.SkillRank.id == rank_obj.id)
-    )
-    rank = result.scalar_one()
-    if not rank:
-        raise HTTPException(status_code=404, detail=f"Rank {rank_obj.id} not found")
+async def pick_perk_for_character_skill(
+    db: AsyncSession, cs_id: int, perk_id: int
+) -> models.CharacterSkill:
+    cs = await _load_character_skill_full(db, cs_id)
+    if not cs:
+        raise HTTPException(status_code=404, detail="Навык персонажа не найден")
+    perk = await db.get(models.SkillPerk, perk_id)
+    if not perk:
+        raise HTTPException(status_code=404, detail="Перк не найден")
+    if perk.skill_id != cs.skill_id:
+        raise HTTPException(status_code=400, detail="Перк не относится к этому навыку")
+    selected = list(cs.selected_perks or [])
+    if (cs.level or 0) - len(selected) < 1:
+        raise HTTPException(status_code=409, detail="Нет свободных очков перков")
+    if any(s.skill_perk_id == perk_id for s in selected):
+        raise HTTPException(status_code=409, detail="Этот перк уже выбран")
+    db.add(models.CharacterSkillPerk(character_skill_id=cs.id, skill_perk_id=perk_id))
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Этот перк уже выбран")
+    return await _load_character_skill_full(db, cs_id)
 
-    old_entries = {d.id: d for d in rank.damage_entries}
-    keep_ids = []
 
-    for dmg_data in new_damage_list:
-        # Если duration присутствует в dmg_data, просто игнорируем его
-        if not getattr(dmg_data, "id", None):
-            new_dmg = models.SkillRankDamage(
-                skill_rank_id=rank.id,
-                damage_type=dmg_data.damage_type,
-                amount=dmg_data.amount,
-                description=dmg_data.description,
-                chance=dmg_data.chance,
-                target_side=dmg_data.target_side,
-                weapon_slot=dmg_data.weapon_slot,
-            )
-            db.add(new_dmg)
-        else:
-            if dmg_data.id not in old_entries:
-                raise HTTPException(400, f"Damage entry id={dmg_data.id} not found")
-            old_entry = old_entries[dmg_data.id]
-            old_entry.damage_type = dmg_data.damage_type
-            old_entry.amount = dmg_data.amount
-            old_entry.description = dmg_data.description
-            old_entry.chance = dmg_data.chance
-            old_entry.target_side = dmg_data.target_side
-            old_entry.weapon_slot = dmg_data.weapon_slot
-            keep_ids.append(dmg_data.id)
-
-    for old_id, old_entry in old_entries.items():
-        if old_id not in keep_ids:
-            await db.delete(old_entry)
-
+async def reset_character_skill(db: AsyncSession, cs_id: int) -> models.CharacterSkill:
+    cs = await _load_character_skill_full(db, cs_id)
+    if not cs:
+        raise HTTPException(status_code=404, detail="Навык персонажа не найден")
+    if (cs.level or 0) <= 0:
+        raise HTTPException(status_code=409, detail="Нечего сбрасывать: навык на уровне 0")
+    now = datetime.utcnow()
+    if cs.reset_available_at and cs.reset_available_at > now:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Сброс будет доступен {cs.reset_available_at.isoformat()}",
+        )
+    for csp in list(cs.selected_perks or []):
+        await db.delete(csp)
+    cs.level = 0
+    cs.reset_available_at = now + timedelta(hours=RESET_COOLDOWN_HOURS)
     await db.commit()
-    await db.refresh(rank)
-    return rank
+    return await _load_character_skill_full(db, cs_id)
 
-async def sync_effects(db: AsyncSession, rank_obj: models.SkillRank, new_effect_list):
-    result = await db.execute(
-        select(models.SkillRank)
-        .options(selectinload(models.SkillRank.effects))
-        .where(models.SkillRank.id == rank_obj.id)
+
+# ---- skill resolver (server-authoritative for battle-service) ----
+
+async def get_skill_with_perks(db: AsyncSession, skill_id: int) -> dict | None:
+    """Return skill base + perk pool dict (used for /skills/{id} and admin views)."""
+    stmt = (
+        select(models.Skill)
+        .options(
+            selectinload(models.Skill.base_damage),
+            selectinload(models.Skill.base_effects),
+            selectinload(models.Skill.perks).selectinload(models.SkillPerk.damage_entries),
+            selectinload(models.Skill.perks).selectinload(models.SkillPerk.effects),
+        )
+        .where(models.Skill.id == skill_id)
     )
-    rank = result.scalar_one_or_none()
-    if not rank:
-        raise HTTPException(status_code=404, detail=f"Rank {rank_obj.id} not found")
-    old_map = {e.id: e for e in rank.effects}
+    res = await db.execute(stmt)
+    skill = res.scalar_one_or_none()
+    if not skill:
+        return None
 
-    keep_ids = []
-    for eff_data in new_effect_list:
-        if eff_data.id is None:
-            new_eff = models.SkillRankEffect(
-                skill_rank_id=rank_obj.id,
-                target_side=eff_data.target_side,
-                effect_name=eff_data.effect_name,
-                description=eff_data.description,
-                chance=eff_data.chance,
-                duration=eff_data.duration,
-                magnitude=eff_data.magnitude,
-                attribute_key=eff_data.attribute_key
-            )
-            db.add(new_eff)
-        else:
-            old_eff = old_map.get(eff_data.id)
-            if not old_eff:
-                raise HTTPException(400, f"Effect entry id={eff_data.id} not found")
-            old_eff.target_side = eff_data.target_side
-            old_eff.effect_name = eff_data.effect_name
-            old_eff.description = eff_data.description
-            old_eff.chance = eff_data.chance
-            old_eff.duration = eff_data.duration
-            old_eff.magnitude = eff_data.magnitude
-            old_eff.attribute_key = eff_data.attribute_key
-            keep_ids.append(eff_data.id)
+    upgrade_cost = (skill.purchase_cost or 0) // 2
 
-    for old_id, old_obj in old_map.items():
-        if old_id not in keep_ids:
-            await db.delete(old_obj)
+    perks_out = []
+    for p in sorted(skill.perks, key=lambda x: (x.sort_order or 0, x.id)):
+        perks_out.append(
+            {
+                "id": p.id,
+                "skill_id": p.skill_id,
+                "name": p.name,
+                "description": p.description,
+                "perk_image": p.perk_image,
+                "delta_cost_energy": p.delta_cost_energy,
+                "delta_cost_mana": p.delta_cost_mana,
+                "delta_cooldown": p.delta_cooldown,
+                "sort_order": p.sort_order or 0,
+                "damage_entries": [_damage_to_dict(d) for d in p.damage_entries],
+                "effects": [_effect_to_dict(e) for e in p.effects],
+            }
+        )
+
+    return {
+        "id": skill.id,
+        "name": skill.name,
+        "skill_type": skill.skill_type,
+        "description": skill.description,
+        "purchase_cost": skill.purchase_cost or 0,
+        "upgrade_cost": upgrade_cost,
+        "skill_image": skill.skill_image,
+        "min_level": skill.min_level or 1,
+        "class_limitations": skill.class_limitations,
+        "race_limitations": skill.race_limitations,
+        "subrace_limitations": skill.subrace_limitations,
+        "base": {
+            "cost_energy": skill.cost_energy or 0,
+            "cost_mana": skill.cost_mana or 0,
+            "cooldown": skill.cooldown or 0,
+            "level_requirement": skill.level_requirement or 1,
+            "damage_entries": [_damage_to_dict(d) for d in skill.base_damage],
+            "effects": [_effect_to_dict(e) for e in skill.base_effects],
+        },
+        "perks": perks_out,
+    }
+
+
+async def resolve_character_skill(
+    db: AsyncSession, character_id: int, skill_id: int
+) -> dict:
+    """Server-authoritative resolved skill stats: base + Σ delta of selected perks."""
+    skill_dict = await get_skill_with_perks(db, skill_id)
+    if not skill_dict:
+        raise HTTPException(status_code=404, detail="Навык не найден")
+
+    cs = await get_character_skill_by_skill_id(db, character_id, skill_id)
+    if not cs:
+        raise HTTPException(status_code=409, detail="У персонажа нет этого навыка")
+    cs_full = await _load_character_skill_full(db, cs.id)
+    selected_ids = [csp.skill_perk_id for csp in (cs_full.selected_perks or [])]
+
+    perks_by_id = {p["id"]: p for p in skill_dict["perks"]}
+    selected_perks = [perks_by_id[pid] for pid in selected_ids if pid in perks_by_id]
+
+    base = skill_dict["base"]
+    cost_energy = base["cost_energy"]
+    cost_mana = base["cost_mana"]
+    cooldown = base["cooldown"]
+    level_requirement = base["level_requirement"]
+
+    damage_entries = list(base["damage_entries"])
+    effects = list(base["effects"])
+
+    for p in selected_perks:
+        if p["delta_cost_energy"] is not None:
+            cost_energy += p["delta_cost_energy"]
+        if p["delta_cost_mana"] is not None:
+            cost_mana += p["delta_cost_mana"]
+        if p["delta_cooldown"] is not None:
+            cooldown += p["delta_cooldown"]
+        damage_entries.extend(p["damage_entries"])
+        effects.extend(p["effects"])
+
+    cooldown = max(0, cooldown)
+    cost_energy = max(0, cost_energy)
+    cost_mana = max(0, cost_mana)
+    # level_requirement is fixed at the base value (PM clarification: no delta).
+
+    return {
+        "skill_id": skill_id,
+        "character_id": character_id,
+        "level": cs_full.level or 0,
+        "selected_perk_ids": selected_ids,
+        "skill_type": skill_dict["skill_type"],
+        "cost_energy": cost_energy,
+        "cost_mana": cost_mana,
+        "cooldown": cooldown,
+        "level_requirement": level_requirement,
+        "damage_entries": damage_entries,
+        "effects": effects,
+    }
 
 
 # ====================================================================
@@ -733,38 +954,7 @@ async def delete_tree_node(db: AsyncSession, node_id: int) -> bool:
     return True
 
 
-async def build_conflicts_for_skill(db: AsyncSession, skill_id: int) -> set[tuple[int,int]]:
-    """
-    Собирает все пары конфликтующих rank_id (x,y),
-    если один родитель имеет нескольких детей.
-    """
-    from models import SkillRank
-    from sqlalchemy import select
-
-    stmt = select(SkillRank).where(SkillRank.skill_id == skill_id)
-    result = await db.execute(stmt)
-    ranks = result.scalars().all()
-
-    parent_to_children = {}
-    for r in ranks:
-        parent_to_children[r.id] = []
-
-    for r in ranks:
-        if r.left_child_id:
-            parent_to_children[r.id].append(r.left_child_id)
-        if r.right_child_id:
-            parent_to_children[r.id].append(r.right_child_id)
-
-    conflicts = set()
-    for parent_id, children_list in parent_to_children.items():
-        n = len(children_list)
-        for i in range(n):
-            for j in range(i+1, n):
-                c1 = children_list[i]
-                c2 = children_list[j]
-                conflicts.add((c1, c2))
-                conflicts.add((c2, c1))
-    return conflicts
+# (FEAT-125) build_conflicts_for_skill removed — binary-DAG ranks no longer exist.
 
 
 # ====================================================================
@@ -916,31 +1106,7 @@ async def get_skills_for_nodes(db: AsyncSession, node_ids: list[int]) -> list[in
     return [row[0] for row in result.fetchall()]
 
 
-async def delete_character_skills_by_skill_ids(
-    db: AsyncSession, character_id: int, skill_ids: list[int]
-) -> int:
-    """
-    Delete character_skills rows where character_id matches AND
-    skill_rank.skill_id is in skill_ids. Returns count of deleted rows.
-    """
-    if not skill_ids:
-        return 0
-    stmt = (
-        select(models.CharacterSkill)
-        .join(models.SkillRank, models.SkillRank.id == models.CharacterSkill.skill_rank_id)
-        .where(
-            models.CharacterSkill.character_id == character_id,
-            models.SkillRank.skill_id.in_(skill_ids),
-        )
-    )
-    result = await db.execute(stmt)
-    rows = result.scalars().all()
-    count = len(rows)
-    for row in rows:
-        await db.delete(row)
-    if count > 0:
-        await db.commit()
-    return count
+# (FEAT-125) duplicate delete_character_skills_by_skill_ids removed — defined earlier in this file.
 
 
 async def get_class_tree_by_class_id(

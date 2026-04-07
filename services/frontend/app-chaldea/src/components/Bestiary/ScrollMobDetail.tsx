@@ -278,9 +278,9 @@ const ScrollMobDetail = ({ entry }: { entry: BestiaryEntry }) => {
           <Section title="Навыки" delay={0.45}>
             <div className="flex flex-wrap gap-2">
               {entry.skills.map((skill) => (
-                <span key={skill.skill_rank_id} className="px-2.5 py-1 rounded-sm text-xs sm:text-sm"
+                <span key={skill.skill_id} className="px-2.5 py-1 rounded-sm text-xs sm:text-sm"
                   style={{ fontFamily: scriptFont, color: '#4a2868', background: 'rgba(106,58,138,0.08)', border: '1px solid rgba(106,58,138,0.15)' }}>
-                  {skill.skill_name ?? `Навык #${skill.skill_rank_id}`}
+                  {skill.skill_name ?? `Навык #${skill.skill_id}`}
                 </span>
               ))}
             </div>

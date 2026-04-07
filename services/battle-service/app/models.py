@@ -108,9 +108,18 @@ class BattleTurn(Base):
 
     turn_number: Mapped[int] = mapped_column(Integer)
 
-    attack_rank_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    defense_rank_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    support_rank_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # FEAT-125: ranks removed. DB column names kept as `*_rank_id` to avoid a
+    # migration on the local battle log table; Python attribute names now
+    # reflect that the stored values are skill ids.
+    attack_skill_id: Mapped[int | None] = mapped_column(
+        "attack_rank_id", Integer, nullable=True
+    )
+    defense_skill_id: Mapped[int | None] = mapped_column(
+        "defense_rank_id", Integer, nullable=True
+    )
+    support_skill_id: Mapped[int | None] = mapped_column(
+        "support_rank_id", Integer, nullable=True
+    )
     item_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     submitted_at: Mapped[datetime] = mapped_column(

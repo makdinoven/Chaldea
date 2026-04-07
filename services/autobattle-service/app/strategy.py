@@ -24,7 +24,9 @@ def _flatten(tree) -> List[dict]:
 class Strategy:
     def __init__(self) -> None:
         self.mode    : str = "balance"
-        self.rating  : Dict[int, Tuple[int, int]] = {}   # rank_id → (likes, dislikes)
+        # FEAT-125: keyed by skill_id (was rank_id). Prior history is dropped
+        # on the cutover — acceptable per the brief (R5).
+        self.rating  : Dict[int, Tuple[int, int]] = {}
 
     # ───────────── публичное API ─────────────
     def set_mode(self, mode: str) -> None:
@@ -32,10 +34,10 @@ class Strategy:
             raise ValueError(f"unknown mode {mode}")
         self.mode = mode
 
-    def feedback(self, rank_ids: List[int], liked: bool) -> None:
-        for rid in rank_ids:
-            good, bad = self.rating.get(rid, (0, 0))
-            self.rating[rid] = (good + (1 if liked else 0),
+    def feedback(self, skill_ids: List[int], liked: bool) -> None:
+        for sid in skill_ids:
+            good, bad = self.rating.get(sid, (0, 0))
+            self.rating[sid] = (good + (1 if liked else 0),
                                 bad  + (0 if liked else 1))
 
     def select_actions(
@@ -55,7 +57,14 @@ class Strategy:
         me_rt = ctx["runtime"]["participants"][str(pid)]
 
         snap  = next(s for s in ctx["snapshot"] if s["participant_id"] == pid)
-        skills = {r["id"]: r for r in _flatten(snap["skills"])}
+        # FEAT-125: snapshot rows come from skills_client.character_skills(),
+        # which exposes both `skill_id` and (as an alias) `id`. Key the local
+        # available-skills dict by skill_id.
+        skills = {
+            (r.get("skill_id") or r.get("id")): r
+            for r in _flatten(snap["skills"])
+            if (r.get("skill_id") or r.get("id")) is not None
+        }
 
         slots  = _flatten(me_rt.get("fast_slots", []))
         cdict  = me_rt["cooldowns"]
@@ -121,11 +130,11 @@ class Strategy:
             t = avail["skills"][rid].get("skill_type", "attack").lower()
             buckets.setdefault(t, []).append((rid, weight))
 
-        skills = {"attack_rank_id": None, "defense_rank_id": None, "support_rank_id": None}
+        skills = {"attack_skill_id": None, "defense_skill_id": None, "support_skill_id": None}
         for t, lst in buckets.items():
             if lst:
-                rid, _ = max(lst, key=lambda x: x[1])
-                skills[f"{t}_rank_id"] = rid
+                sid, _ = max(lst, key=lambda x: x[1])
+                skills[f"{t}_skill_id"] = sid
 
         # ------------- выбор предмета ----------------
         need_hp   = max(0.0, f.get("hp_ratio",1.0)  - 0.7)   # >0 если <70 %

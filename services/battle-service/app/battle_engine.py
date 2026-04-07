@@ -217,11 +217,11 @@ def apply_flat_modifiers(attributes: Dict, modifiers: Dict[str, float]) -> Dict:
         new_attr[key] = new_attr.get(key, 0) + delta
     return new_attr
 
-def set_cooldown(state: dict, pid: int, rank_id: int, cd: int) -> None:
-    """Записываем новый кулдаун ранга."""
+def set_cooldown(state: dict, pid: int, skill_id: int, cd: int) -> None:
+    """Записываем новый кулдаун навыка (FEAT-125: ключ — skill_id)."""
     p = state["participants"][str(pid)]
-    p.setdefault("cooldowns", {})            # ← уже есть при init, но на всякий
-    p["cooldowns"][str(rank_id)] = cd
+    p.setdefault("cooldowns", {})
+    p["cooldowns"][str(skill_id)] = cd
 
 
 def decrement_cooldowns(state: dict) -> None:
@@ -232,11 +232,11 @@ def decrement_cooldowns(state: dict) -> None:
     for p in state["participants"].values():
         cd_map = p.get("cooldowns", {})
         to_delete = []
-        for rank_id, remaining in cd_map.items():
+        for skill_id, remaining in cd_map.items():
             new_val = remaining - 1
             if new_val <= 0:
-                to_delete.append(rank_id)
+                to_delete.append(skill_id)
             else:
-                cd_map[rank_id] = new_val
-        for rid in to_delete:
-            cd_map.pop(rid, None)
+                cd_map[skill_id] = new_val
+        for sid in to_delete:
+            cd_map.pop(sid, None)

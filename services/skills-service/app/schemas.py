@@ -1,34 +1,59 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Union
+from datetime import datetime
 
 
-
-class SkillRankDamageRead(BaseModel):
+# ----------------------------------------------------
+# Damage / Effect entry shared shapes (byte-compatible with old SkillRank* fields — R1)
+# ----------------------------------------------------
+class DamageEntryRead(BaseModel):
     id: int
     damage_type: str
     amount: float
-    chance: int
-    target_side: str
-    weapon_slot: str | None = None
+    description: Optional[str] = None
+    chance: int = 100
+    target_side: str = "self"
+    weapon_slot: Optional[str] = "main_weapon"
 
     class Config:
         orm_mode = True
 
 
-class SkillRankEffectRead(BaseModel):
+class EffectEntryRead(BaseModel):
     id: int
-    target_side: str
+    target_side: str = "self"
     effect_name: str
-    description: str | None = None
-    chance: int
-    duration: int
-    magnitude: float
-    attribute_key: str | None = None
+    description: Optional[str] = None
+    chance: int = 100
+    duration: int = 1
+    magnitude: float = 0.0
+    attribute_key: Optional[str] = None
 
     class Config:
         orm_mode = True
+
+
+class DamageEntryWrite(BaseModel):
+    damage_type: str
+    amount: float = 0.0
+    description: Optional[str] = None
+    chance: int = 100
+    target_side: str = "self"
+    weapon_slot: Optional[str] = "main_weapon"
+
+
+class EffectEntryWrite(BaseModel):
+    target_side: str = "self"
+    effect_name: str
+    description: Optional[str] = None
+    chance: int = 100
+    duration: int = 1
+    magnitude: float = 0.0
+    attribute_key: Optional[str] = None
+
+
 # ----------------------------------------------------
-# 1) Skill
+# 1) Skill (base/admin)
 # ----------------------------------------------------
 class SkillBase(BaseModel):
     name: str
@@ -40,7 +65,13 @@ class SkillBase(BaseModel):
     subrace_limitations: Optional[str] = None
     min_level: int = 1
     purchase_cost: int = 0
-    skill_image: Optional[str] = None  # может быть URL
+    skill_image: Optional[str] = None
+
+    # Numeric base stats (formerly on SkillRank rank-0)
+    cost_energy: int = 0
+    cost_mana: int = 0
+    cooldown: int = 0
+    level_requirement: int = 1
 
 
 class SkillCreate(SkillBase):
@@ -59,261 +90,154 @@ class SkillRead(SkillBase):
 
 
 # ----------------------------------------------------
-# 2) SkillRank
+# Perk schemas
 # ----------------------------------------------------
-class SkillRankBase(BaseModel):
-    # Если skill_id обязателен в БД, оставляем
+DELTA_BOUND = 999
+
+
+class SkillPerkBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = None
+    perk_image: Optional[str] = None
+    delta_cost_energy: Optional[int] = Field(None, ge=-DELTA_BOUND, le=DELTA_BOUND)
+    delta_cost_mana: Optional[int] = Field(None, ge=-DELTA_BOUND, le=DELTA_BOUND)
+    delta_cooldown: Optional[int] = Field(None, ge=-DELTA_BOUND, le=DELTA_BOUND)
+    sort_order: int = 0
+
+
+class SkillPerkCreate(SkillPerkBase):
+    damage_entries: List[DamageEntryWrite] = []
+    effects: List[EffectEntryWrite] = []
+
+
+class SkillPerkUpdate(SkillPerkBase):
+    damage_entries: List[DamageEntryWrite] = []
+    effects: List[EffectEntryWrite] = []
+
+
+class SkillPerkRead(SkillPerkBase):
+    id: int
+    skill_id: int
+    damage_entries: List[DamageEntryRead] = []
+    effects: List[EffectEntryRead] = []
+
+    class Config:
+        orm_mode = True
+
+
+# ----------------------------------------------------
+# Skill base damage / effect (admin CRUD)
+# ----------------------------------------------------
+class SkillBaseDamageRead(DamageEntryRead):
     skill_id: int
 
-    rank_name: Optional[str] = None
-    rank_image: Optional[str] = None
-    rank_number: int = 1
-    left_child_id: Optional[int] = None
-    right_child_id: Optional[int] = None
 
+class SkillBaseEffectRead(EffectEntryRead):
+    skill_id: int
+
+
+# ----------------------------------------------------
+# SkillWithPerks (public/admin combined view)
+# ----------------------------------------------------
+class SkillBaseStats(BaseModel):
     cost_energy: int = 0
     cost_mana: int = 0
     cooldown: int = 0
     level_requirement: int = 1
-    upgrade_cost: int = 0
+    damage_entries: List[DamageEntryRead] = []
+    effects: List[EffectEntryRead] = []
 
+
+class SkillWithPerksRead(BaseModel):
+    id: int
+    name: str
+    skill_type: str
+    description: Optional[str] = None
+    purchase_cost: int = 0
+    upgrade_cost: int = 0
+    skill_image: Optional[str] = None
+    min_level: int = 1
     class_limitations: Optional[str] = None
     race_limitations: Optional[str] = None
     subrace_limitations: Optional[str] = None
-
-    rank_description: Optional[str] = None
-
-
-class SkillRankCreate(SkillRankBase):
-    pass
+    base: SkillBaseStats
+    perks: List[SkillPerkRead] = []
 
 
-class SkillRankUpdate(SkillRankBase):
-    pass
-
-
-class SkillRankRead(BaseModel):
-    id: int
+# ----------------------------------------------------
+# Resolved skill (server-authoritative for battle-service)
+# ----------------------------------------------------
+class ResolvedSkillRead(BaseModel):
     skill_id: int
-    rank_number: int
-    rank_name: str | None = None
-    left_child_id: int | None
-    right_child_id: int | None
+    character_id: int
+    level: int
+    selected_perk_ids: List[int] = []
+    skill_type: str
     cost_energy: int
     cost_mana: int
     cooldown: int
     level_requirement: int
-    upgrade_cost: int
-    class_limitations: str | None
-    race_limitations: str | None
-    subrace_limitations: str | None
-    rank_description: str | None = None
-    rank_image: str | None = None
-
-    # ▼ добавляем вложенные коллекции
-    damage_entries: list[SkillRankDamageRead] = []
-    effects: list[SkillRankEffectRead] = []
-
-    class Config:
-        orm_mode = True
-
-# ----------------------------------------------------
-# 3) SkillRankDamage (CRUD-модели)
-# ----------------------------------------------------
-class SkillRankDamageBase(BaseModel):
-    skill_rank_id: int
-    damage_type: str
-    amount: float = 0.0
-    description: Optional[str] = None
-    target_side: str
-    weapon_slot: str = "main_weapon"
-    chance: int = 100  # не забудь, если у тебя есть chance
-
-
-class SkillRankDamageCreate(SkillRankDamageBase):
-    pass
-
-
-class SkillRankDamageUpdate(SkillRankDamageBase):
-    pass
-
-
+    damage_entries: List[DamageEntryRead] = []
+    effects: List[EffectEntryRead] = []
 
 
 # ----------------------------------------------------
-# 4) SkillRankEffect (CRUD-модели)
+# CharacterSkill schemas (new flat shape)
 # ----------------------------------------------------
-class SkillRankEffectBase(BaseModel):
-    skill_rank_id: int
-    target_side: str
-    effect_name: str
-    description: Optional[str] = None
-    chance: int = 100
-    duration: int = 1
-    magnitude: float = 0.0
-    attribute_key: Optional[str] = None
-
-
-class SkillRankEffectCreate(SkillRankEffectBase):
-    pass
-
-
-class SkillRankEffectUpdate(SkillRankEffectBase):
-    pass
-
-# ----------------------------------------------------
-# 5) CharacterSkill
-# ----------------------------------------------------
-class CharacterSkillBase(BaseModel):
-    character_id: int
-    skill_rank_id: int
-
-
-class CharacterSkillCreate(CharacterSkillBase):
-    pass
-
-
-class CharacterSkillUpdate(CharacterSkillBase):
-    pass
-
-
-class CharacterSkillRead(CharacterSkillBase):
+class CharacterSkillSummarySkill(BaseModel):
     id: int
-    skill_rank: SkillRankRead
-    skill_name: Optional[str] = None
-    skill_type: Optional[str] = None
+    name: str
+    skill_type: str
     skill_image: Optional[str] = None
-    skill_description: Optional[str] = None
-    skill_min_level: Optional[int] = None
 
     class Config:
         orm_mode = True
 
 
+class CharacterSkillRead(BaseModel):
+    character_skill_id: int
+    skill_id: int
+    character_id: int
+    level: int
+    free_perk_points: int
+    selected_perk_ids: List[int] = []
+    reset_available_at: Optional[datetime] = None
+    skill: Optional[CharacterSkillSummarySkill] = None
+
+
+class AdminCharacterSkillUpdate(BaseModel):
+    skill_id: int
+    level: int = Field(0, ge=0, le=4)
+
+
+class AdminCharacterSkillCreate(BaseModel):
+    character_id: int
+    skill_id: int
+    level: int = Field(0, ge=0, le=4)
+
+
 # ----------------------------------------------------
-# 6) LegacySkillRequest
+# Legacy / shared
 # ----------------------------------------------------
 class LegacySkillRequest(BaseModel):
     character_id: int
 
 
-# ----------------------------------------------------
-# 7) Upgrade (прокачка)
-# ----------------------------------------------------
-class SkillUpgradeRequest(BaseModel):
-    character_id: int
-    next_rank_id: int
-
-
-# ----------------------------------------------------
-# 8) Request для апдейта ActiveExperience (пример)
-# ----------------------------------------------------
 class UpdateActiveExperienceRequest(BaseModel):
     amount: int
 
 
-# ----------------------------------------------------
-# 9) Модели для полного дерева (InTree)
-# ----------------------------------------------------
-class SkillRankDamageInTree(BaseModel):
-    id: Optional[int]
-    # Добавляем skill_rank_id, чтобы бэкенд точно знал,
-    # к какому рангу относится урон (или он сам возьмет rank.id)
-    skill_rank_id: Optional[int] = None
-
-    damage_type: str
-    amount: float
-    description: Optional[str]
-    chance: int = 100
-    target_side: str
-    weapon_slot: str
-
-
-class SkillRankEffectInTree(BaseModel):
-    id: Optional[int]
-    # Аналогично, чтобы не терялось
-    skill_rank_id: Optional[int] = None
-
-    target_side: str
-    effect_name: str
-    description: Optional[str] = None
-    chance: int = 100
-    duration: int = 1
-    magnitude: float = 0.0
-    attribute_key: Optional[str] = None
-
-
-class SkillRankInTree(BaseModel):
-    # ID может быть int или str (например, "temp-1")
-    id: Union[int, str]
-
-    # Если нужно skill_id, делаем опциональным
-    skill_id: Optional[int] = None
-
-    rank_name: Optional[str]
-    rank_image: Optional[str]
-    rank_number: int
-    left_child_id: Optional[Union[int, str]] = None
-    right_child_id: Optional[Union[int, str]] = None
-
-    cost_energy: int
-    cost_mana: int
-    cooldown: int
-    level_requirement: int
-    upgrade_cost: int
-    class_limitations: Optional[str]
-    race_limitations: Optional[str]
-    subrace_limitations: Optional[str]
-    rank_description: Optional[str]
-
-    damage_entries: List[SkillRankDamageInTree]
-    effects: List[SkillRankEffectInTree]
-
-
-class FullSkillTreeResponse(BaseModel):
-    id: int
-    name: str
-    skill_type: str
-    description: Optional[str]
-    class_limitations: Optional[str]
-    race_limitations: Optional[str]
-    subrace_limitations: Optional[str]
-    min_level: int
-    purchase_cost: int
-    skill_image: Optional[str]
-
-    ranks: List[SkillRankInTree]
-
-
-class FullSkillTreeUpdateRequest(BaseModel):
-    id: int
-    name: str
-    skill_type: str
-    description: Optional[str]
-
-    class_limitations: Optional[str] = None
-    race_limitations: Optional[str] = None
-    subrace_limitations: Optional[str] = None
-    min_level: int = 1
-    purchase_cost: int = 0
-    skill_image: Optional[str] = None
-
-    ranks: List[SkillRankInTree]
-
 class AssignSkillEntry(BaseModel):
     skill_id: int
-    rank_number: int
+
 
 class MultipleSkillsAssignRequest(BaseModel):
     character_id: int
     skills: List[AssignSkillEntry]
 
 
-# ----------------------------------------------------
-# 11) Admin CharacterSkill update (change rank)
-# ----------------------------------------------------
-class AdminCharacterSkillUpdate(BaseModel):
-    skill_rank_id: int
+
+# (Legacy SkillRank schemas removed in FEAT-125)
 
 
 # ====================================================================
@@ -474,8 +398,8 @@ class ChosenNodeProgress(BaseModel):
 
 class PurchasedSkillProgress(BaseModel):
     skill_id: int
-    skill_rank_id: int
     character_skill_id: int
+    level: int = 0
 
 
 class CharacterTreeProgressResponse(BaseModel):

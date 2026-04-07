@@ -123,7 +123,6 @@ const SkillPurchaseCard = ({
         <SkillUpgradeModal
           skillId={skill.skill_id}
           characterId={characterId}
-          currentRankId={purchased.skill_rank_id}
           onClose={() => setUpgradeOpen(false)}
           onRefresh={onRefresh}
         />

@@ -506,9 +506,9 @@ const BattlePage = () => {
     const turnDataApi = {
       participant_id: myData.participant_id!,
       skills: {
-        attack_rank_id: turnData.attack ? (turnData.attack as SkillSlot).id ?? null : null,
-        defense_rank_id: turnData.defense ? (turnData.defense as SkillSlot).id ?? null : null,
-        support_rank_id: turnData.support ? (turnData.support as SkillSlot).id ?? null : null,
+        attack_skill_id: turnData.attack ? (turnData.attack as SkillSlot).id ?? null : null,
+        defense_skill_id: turnData.defense ? (turnData.defense as SkillSlot).id ?? null : null,
+        support_skill_id: turnData.support ? (turnData.support as SkillSlot).id ?? null : null,
         item_id: turnData.item ? (turnData.item as SkillSlot).item_id ?? null : null,
       },
     };

@@ -169,14 +169,14 @@ export const deleteMobTemplate = createAsyncThunk<
 );
 
 export const updateMobSkills = createAsyncThunk<
-  { detail: string; skill_rank_ids: number[] },
-  { templateId: number; skillRankIds: number[] },
+  { detail: string; skill_ids: number[] },
+  { templateId: number; skillIds: number[] },
   { rejectValue: string }
 >(
   'mobs/updateSkills',
-  async ({ templateId, skillRankIds }, thunkAPI) => {
+  async ({ templateId, skillIds }, thunkAPI) => {
     try {
-      const result = await api.updateMobSkills(templateId, skillRankIds);
+      const result = await api.updateMobSkills(templateId, skillIds);
       toast.success('Навыки моба обновлены');
       return result;
     } catch {

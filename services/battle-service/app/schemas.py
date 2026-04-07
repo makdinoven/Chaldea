@@ -20,9 +20,9 @@ class BattleCreate(BaseModel):
 
 
 class SkillSelection(BaseModel):
-    attack_rank_id: int | None = None
-    defense_rank_id: int | None = None
-    support_rank_id: int | None = None
+    attack_skill_id: int | None = None
+    defense_skill_id: int | None = None
+    support_skill_id: int | None = None
     item_id: Optional[int] = Field(
         default=None,
         description="ID предмета из fast-слота; None, если предмет не используется",

@@ -2353,13 +2353,13 @@ def admin_update_mob_skills(
         raise HTTPException(status_code=404, detail="Шаблон моба не найден")
 
     try:
-        crud.replace_mob_skills(db, template_id, data.skill_rank_ids)
+        crud.replace_mob_skills(db, template_id, data.skill_ids)
     except SQLAlchemyError as e:
         db.rollback()
         logger.error(f"Ошибка при обновлении навыков моба {template_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при обновлении навыков моба")
 
-    return {"detail": "Навыки обновлены", "skill_rank_ids": data.skill_rank_ids}
+    return {"detail": "Навыки обновлены", "skill_ids": data.skill_ids}
 
 
 @router.put("/admin/mob-templates/{template_id}/loot")

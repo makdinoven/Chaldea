@@ -49,10 +49,9 @@ export interface MobTemplateDetail extends MobTemplate {
 
 export interface MobSkillEntry {
   id: number;
-  skill_rank_id: number;
+  skill_id: number;
   skill_name?: string;
   skill_type?: string;
-  rank_name?: string;
 }
 
 export interface MobLootEntry {
@@ -215,11 +214,11 @@ export const deleteMobTemplate = async (id: number): Promise<void> => {
 
 export const updateMobSkills = async (
   templateId: number,
-  skillRankIds: number[],
-): Promise<{ detail: string; skill_rank_ids: number[] }> => {
+  skillIds: number[],
+): Promise<{ detail: string; skill_ids: number[] }> => {
   const { data } = await axios.put(
     `/characters/admin/mob-templates/${templateId}/skills`,
-    { skill_rank_ids: skillRankIds },
+    { skill_ids: skillIds },
   );
   return data;
 };

@@ -123,6 +123,17 @@ battle-service/app/
 | inventory:8004 | GET `/inventory/items/{id}` | Данные предмета |
 | inventory:8004 | GET `/inventory/{id}/fast_slots` | Быстрые слоты |
 
+## FEAT-125: перк-система (контракт с skills-service)
+
+- Внешние поля действия: `SkillSelection = {attack_skill_id, defense_skill_id, support_skill_id, item_id}`. Поля `*_rank_id` удалены.
+- `skills_client.py` общается с новым контрактом skills-service:
+  - `get_resolved_skill(skill_id, character_id)` → `GET /skills/{skill_id}/resolved?character_id=...`
+  - `character_has_skill(character_id, skill_id)` / `character_skills(character_id)` → `GET /skills/characters/{character_id}/skills`
+- Все межсервисные запросы в skills-service идут с `Authorization: Bearer ${INTERNAL_SERVICE_TOKEN}` (env var, DevSecOps FEAT-125 task #20).
+- **Required env var:** `INTERNAL_SERVICE_TOKEN` — используется battle-service и celery-worker при вызове skills-service resolver. В dev есть дефолт `dev-internal-token-change-me` в `docker-compose.yml`. В prod читается строго из `.env` на VPS (без дефолта) — должен быть выставлен до FEAT-125 cutover-деплоя. Для первого cutover-деплоя раскомментировать `BATTLE_RESET_ON_BOOT: "1"` в `docker-compose.prod.yml` (one-shot сброс `battle:*` Redis-ключей rank-эры).
+- Redis-кулдауны (`participants[*].cooldowns`) теперь ключуются по `str(skill_id)` вместо rank_id. Одноразовый flush при первом старте — startup hook `feat125_flush_battle_state`, gated by `BATTLE_RESET_ON_BOOT=1`.
+- `models.BattleTurn` хранит Python-атрибуты `attack_skill_id/defense_skill_id/support_skill_id`, но столбцы MySQL остались с именем `*_rank_id` (миграции нет — это лог).
+
 ## Известные проблемы
 
 1. **Нет проверки HP <= 0** - бой не завершается автоматически при смерти участника

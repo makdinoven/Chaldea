@@ -4,10 +4,17 @@ import type {
   FullClassTreeResponse,
   CharacterTreeProgressResponse,
   ClassSkillTreeRead,
-  SkillFullTree,
+  SkillWithPerks,
+  ResolvedSkill,
+  CharacterSkillState,
 } from '../../components/SkillTreeView/types';
 
 const BASE_URL = '/skills';
+
+const extractError = (err: unknown, fallback: string): string => {
+  const e = err as { response?: { data?: { detail?: string } }; message?: string };
+  return e.response?.data?.detail || e.message || fallback;
+};
 
 export const fetchClassTree = createAsyncThunk<
   FullClassTreeResponse,
@@ -19,11 +26,8 @@ export const fetchClassTree = createAsyncThunk<
     try {
       const res = await axios.get(`${BASE_URL}/class_trees/by_class/${classId}`);
       return res.data;
-    } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string } }; message?: string };
-      return rejectWithValue(
-        error.response?.data?.detail || error.message || 'Ошибка загрузки дерева навыков'
-      );
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка загрузки дерева навыков'));
     }
   }
 );
@@ -40,11 +44,8 @@ export const fetchTreeProgress = createAsyncThunk<
         `${BASE_URL}/class_trees/${treeId}/progress/${characterId}`
       );
       return res.data;
-    } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string } }; message?: string };
-      return rejectWithValue(
-        error.response?.data?.detail || error.message || 'Ошибка загрузки прогресса'
-      );
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка загрузки прогресса'));
     }
   }
 );
@@ -62,11 +63,8 @@ export const chooseNode = createAsyncThunk<
         node_id: nodeId,
       });
       return res.data;
-    } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string } }; message?: string };
-      return rejectWithValue(
-        error.response?.data?.detail || error.message || 'Ошибка выбора узла'
-      );
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка выбора узла'));
     }
   }
 );
@@ -85,33 +83,8 @@ export const purchaseSkill = createAsyncThunk<
         skill_id: skillId,
       });
       return res.data;
-    } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string } }; message?: string };
-      return rejectWithValue(
-        error.response?.data?.detail || error.message || 'Ошибка покупки навыка'
-      );
-    }
-  }
-);
-
-export const upgradeSkill = createAsyncThunk<
-  { detail: string },
-  { characterId: number; nextRankId: number },
-  { rejectValue: string }
->(
-  'playerTree/upgradeSkill',
-  async ({ characterId, nextRankId }, { rejectWithValue }) => {
-    try {
-      const res = await axios.post(`${BASE_URL}/character_skills/upgrade`, {
-        character_id: characterId,
-        next_rank_id: nextRankId,
-      });
-      return res.data;
-    } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string } }; message?: string };
-      return rejectWithValue(
-        error.response?.data?.detail || error.message || 'Ошибка улучшения навыка'
-      );
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка покупки навыка'));
     }
   }
 );
@@ -128,11 +101,8 @@ export const resetTree = createAsyncThunk<
         character_id: characterId,
       });
       return res.data;
-    } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string } }; message?: string };
-      return rejectWithValue(
-        error.response?.data?.detail || error.message || 'Ошибка сброса прогресса'
-      );
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка сброса прогресса'));
     }
   }
 );
@@ -149,30 +119,115 @@ export const fetchSubclassTrees = createAsyncThunk<
         `${BASE_URL}/class_trees/subclass_trees/${classTreeId}`
       );
       return res.data;
-    } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string } }; message?: string };
-      return rejectWithValue(
-        error.response?.data?.detail || error.message || 'Ошибка загрузки подклассов'
-      );
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка загрузки подклассов'));
     }
   }
 );
 
-export const fetchSkillFullTree = createAsyncThunk<
-  SkillFullTree,
+// --- Perk system (FEAT-125) ---
+
+export const fetchSkillWithPerks = createAsyncThunk<
+  SkillWithPerks,
   number,
   { rejectValue: string }
 >(
-  'playerTree/fetchSkillFullTree',
+  'playerTree/fetchSkillWithPerks',
   async (skillId, { rejectWithValue }) => {
     try {
-      const res = await axios.get(`${BASE_URL}/skills/${skillId}/full_tree`);
+      const res = await axios.get(`${BASE_URL}/${skillId}`);
       return res.data;
-    } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string } }; message?: string };
-      return rejectWithValue(
-        error.response?.data?.detail || error.message || 'Ошибка загрузки дерева навыка'
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка загрузки навыка'));
+    }
+  }
+);
+
+export const fetchResolvedSkill = createAsyncThunk<
+  ResolvedSkill,
+  { skillId: number; characterId: number },
+  { rejectValue: string }
+>(
+  'playerTree/fetchResolvedSkill',
+  async ({ skillId, characterId }, { rejectWithValue }) => {
+    try {
+      const res = await axios.get(
+        `${BASE_URL}/${skillId}/resolved`,
+        { params: { character_id: characterId } }
       );
+      return res.data;
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка загрузки характеристик навыка'));
+    }
+  }
+);
+
+export const fetchCharacterSkills = createAsyncThunk<
+  CharacterSkillState[],
+  number,
+  { rejectValue: string }
+>(
+  'playerTree/fetchCharacterSkills',
+  async (characterId, { rejectWithValue }) => {
+    try {
+      const res = await axios.get(`${BASE_URL}/characters/${characterId}/skills`);
+      return res.data;
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка загрузки навыков персонажа'));
+    }
+  }
+);
+
+export const upgradeSkillLevel = createAsyncThunk<
+  CharacterSkillState,
+  { characterId: number; skillId: number },
+  { rejectValue: string }
+>(
+  'playerTree/upgradeSkillLevel',
+  async ({ characterId, skillId }, { rejectWithValue }) => {
+    try {
+      const res = await axios.post(
+        `${BASE_URL}/characters/${characterId}/skills/${skillId}/upgrade`
+      );
+      return res.data;
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка улучшения навыка'));
+    }
+  }
+);
+
+export const pickSkillPerk = createAsyncThunk<
+  CharacterSkillState,
+  { characterId: number; skillId: number; perkId: number },
+  { rejectValue: string }
+>(
+  'playerTree/pickSkillPerk',
+  async ({ characterId, skillId, perkId }, { rejectWithValue }) => {
+    try {
+      const res = await axios.post(
+        `${BASE_URL}/characters/${characterId}/skills/${skillId}/perks/${perkId}`
+      );
+      return res.data;
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка выбора перка'));
+    }
+  }
+);
+
+export const resetSkill = createAsyncThunk<
+  CharacterSkillState,
+  { characterId: number; skillId: number },
+  { rejectValue: string }
+>(
+  'playerTree/resetSkill',
+  async ({ characterId, skillId }, { rejectWithValue }) => {
+    try {
+      const res = await axios.post(
+        `${BASE_URL}/characters/${characterId}/skills/${skillId}/reset`
+      );
+      return res.data;
+    } catch (err) {
+      return rejectWithValue(extractError(err, 'Ошибка сброса навыка'));
     }
   }
 );

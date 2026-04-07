@@ -5,7 +5,7 @@ import {
   fetchTreeProgress,
   chooseNode,
   purchaseSkill,
-  upgradeSkill,
+  upgradeSkillLevel,
   resetTree,
   fetchSubclassTrees,
 } from '../actions/playerTreeActions';
@@ -83,11 +83,11 @@ const playerTreeSlice = createSlice({
         state.error = action.payload ?? 'Ошибка покупки навыка';
       })
 
-      // upgradeSkill
-      .addCase(upgradeSkill.pending, (state) => {
+      // upgradeSkillLevel
+      .addCase(upgradeSkillLevel.pending, (state) => {
         state.error = null;
       })
-      .addCase(upgradeSkill.rejected, (state, action) => {
+      .addCase(upgradeSkillLevel.rejected, (state, action) => {
         state.error = action.payload ?? 'Ошибка улучшения навыка';
       })
 

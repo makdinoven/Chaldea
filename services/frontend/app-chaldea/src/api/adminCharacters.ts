@@ -15,7 +15,6 @@ import type {
   AddCharacterSkillPayload,
   AdminCharacterSkillUpdatePayload,
   ItemData,
-  FullSkillTreeResponse,
 } from '../components/Admin/CharactersPage/types';
 
 // --- Character CRUD ---
@@ -180,22 +179,13 @@ export const fetchAllSkills = async (): Promise<SkillInfo[]> => {
   return data;
 };
 
-export const fetchSkillFullTree = async (
-  skillId: number,
-): Promise<FullSkillTreeResponse> => {
-  const { data } = await axios.get<FullSkillTreeResponse>(
-    `/skills/admin/skills/${skillId}/full_tree`,
-  );
-  return data;
-};
-
 export const addCharacterSkill = async (
   characterId: number,
-  skillRankId: number,
+  skillId: number,
 ): Promise<CharacterSkill> => {
   const payload: AddCharacterSkillPayload = {
     character_id: characterId,
-    skill_rank_id: skillRankId,
+    skill_id: skillId,
   };
   const { data } = await axios.post<CharacterSkill>(
     '/skills/admin/character_skills/',
@@ -210,11 +200,12 @@ export const removeCharacterSkill = async (
   await axios.delete(`/skills/admin/character_skills/${csId}`);
 };
 
-export const updateCharacterSkillRank = async (
+export const updateCharacterSkillLevel = async (
   csId: number,
-  skillRankId: number,
+  skillId: number,
+  level: number,
 ): Promise<CharacterSkill> => {
-  const payload: AdminCharacterSkillUpdatePayload = { skill_rank_id: skillRankId };
+  const payload: AdminCharacterSkillUpdatePayload = { skill_id: skillId, level };
   const { data } = await axios.put<CharacterSkill>(
     `/skills/admin/character_skills/${csId}`,
     payload,

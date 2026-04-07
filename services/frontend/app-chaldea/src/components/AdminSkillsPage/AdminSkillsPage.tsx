@@ -1,69 +1,55 @@
-import React, { useEffect, useState } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+// AdminSkillsPage — perk system (FEAT-125)
+import { useEffect, useState, type ChangeEvent } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
+import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
   fetchSkills,
-  fetchSkillFullTree,
+  fetchSkillAdmin,
   uploadSkillImage,
-  updateSkillFullTree,
 } from '../../redux/actions/skillsAdminActions';
-import { clearSelectedSkillTree } from '../../redux/slices/skillsAdminSlice';
-import FlowSkillsEditor from './FlowSkillsEditor';
-import { prepareSkillPayload } from './utils/preparePayload';
+import { clearSelectedSkill } from '../../redux/slices/skillsAdminSlice';
+import PerkPoolEditor from './PerkPoolEditor';
 
-interface Skill {
-  id: number;
-  name: string;
-  skill_type: string;
-  skill_image: string | null;
-}
-
-interface SkillTree {
-  id: number;
-  skill_image: string | null;
-  [key: string]: unknown;
-}
-
-interface SkillsState {
-  skillsList: Skill[];
-  selectedSkillTree: SkillTree | null;
-  status: 'idle' | 'loading' | 'succeeded' | 'failed';
-  updateStatus: string;
-  error: string | null;
-}
-
-interface RootState {
-  skills: SkillsState;
-}
+const extractError = (err: unknown, fallback: string): string => {
+  const e = err as { response?: { data?: { detail?: string } }; message?: string };
+  return e.response?.data?.detail || e.message || fallback;
+};
 
 const AdminSkillsPage = () => {
-  const dispatch = useDispatch();
-  const { skillsList, selectedSkillTree, status, updateStatus, error } =
-    useSelector((state: RootState) => state.skills);
+  const dispatch = useAppDispatch();
+  const { skillsList, selectedSkill, status, error } = useAppSelector(
+    (state) => state.skills
+  );
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    dispatch(fetchSkills() as unknown as any);
+    dispatch(fetchSkills());
   }, [dispatch]);
 
   const handleSelectSkill = (skillId: number) => {
-    dispatch(clearSelectedSkillTree());
-    dispatch(fetchSkillFullTree(skillId) as unknown as any);
+    dispatch(clearSelectedSkill());
+    dispatch(fetchSkillAdmin(skillId));
   };
 
-  const handleSkillImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const refreshSelected = () => {
+    if (selectedSkill) dispatch(fetchSkillAdmin(selectedSkill.id));
+  };
+
+  const handleSkillImageUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedSkillTree) return;
-    (dispatch(uploadSkillImage({ skillId: selectedSkillTree.id, file }) as unknown as any) as Promise<unknown>)
-      .then(() => {
-        dispatch(fetchSkills() as unknown as any);
-        dispatch(fetchSkillFullTree(selectedSkillTree.id) as unknown as any);
-      });
+    if (!file || !selectedSkill) return;
+    try {
+      await dispatch(uploadSkillImage({ skillId: selectedSkill.id, file })).unwrap();
+      dispatch(fetchSkills());
+      dispatch(fetchSkillAdmin(selectedSkill.id));
+    } catch (err) {
+      toast.error(typeof err === 'string' ? err : 'Ошибка загрузки изображения');
+    }
   };
 
-  const filteredSkills = skillsList.filter((skill) =>
-    skill.name.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredSkills = skillsList.filter((s) =>
+    s.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const handleAddSkill = async () => {
@@ -72,137 +58,133 @@ const AdminSkillsPage = () => {
     let newName = baseName;
     if (existingNames.has(newName)) {
       let counter = 2;
-      while (existingNames.has(`${baseName} (${counter})`)) {
-        counter++;
-      }
+      while (existingNames.has(`${baseName} (${counter})`)) counter++;
       newName = `${baseName} (${counter})`;
     }
-
-    const newSkillPayload = {
-      name: newName,
-      skill_type: 'attack',
-      description: '',
-    };
-
     try {
-      const res = await axios.post('/skills/admin/skills/', newSkillPayload);
-      dispatch(fetchSkills() as unknown as any);
+      const res = await axios.post('/skills/admin/skills/', {
+        name: newName,
+        skill_type: 'attack',
+        description: '',
+      });
+      dispatch(fetchSkills());
       handleSelectSkill(res.data.id);
-    } catch (err: any) {
-      console.error('Ошибка при создании навыка:', err);
-      const message = err?.response?.data?.detail || 'Не удалось создать навык';
-      toast.error(message);
+    } catch (err) {
+      toast.error(extractError(err, 'Не удалось создать навык'));
     }
   };
 
   const handleDeleteSkill = async () => {
-    if (!selectedSkillTree) return;
-    const skillId = selectedSkillTree.id;
-    if (!window.confirm(`Вы действительно хотите удалить навык ID=${skillId}?`)) return;
+    if (!selectedSkill) return;
+    if (!window.confirm(`Удалить навык "${selectedSkill.name}"?`)) return;
     try {
-      await axios.delete(`/skills/admin/skills/${skillId}`);
-      dispatch(fetchSkills() as unknown as any);
-      dispatch(clearSelectedSkillTree());
+      await axios.delete(`/skills/admin/skills/${selectedSkill.id}`);
+      toast.success('Навык удалён');
+      dispatch(fetchSkills());
+      dispatch(clearSelectedSkill());
     } catch (err) {
-      console.error('Ошибка при удалении навыка:', err);
-      toast.error('Не удалось удалить навык');
-    }
-  };
-
-  const handleSaveSkillTree = async () => {
-    if (!selectedSkillTree) return;
-
-    try {
-      const payload = prepareSkillPayload(selectedSkillTree);
-      const result = await dispatch(
-        updateSkillFullTree({ skillId: selectedSkillTree.id, payload }) as unknown as any
-      );
-      if (result.error) throw result.error;
-      dispatch(fetchSkillFullTree(selectedSkillTree.id) as unknown as any);
-      toast.success('Изменения успешно сохранены!');
-    } catch (err) {
-      console.error('Ошибка при сохранении навыка:', err);
-      toast.error('Произошла ошибка при сохранении');
+      toast.error(extractError(err, 'Не удалось удалить навык'));
     }
   };
 
   return (
-    <div className="p-5 text-gray-700 min-h-screen bg-gray-100">
-      <h1 className="text-center mb-5">Администрирование навыков</h1>
-      <div className="flex gap-8">
-        <div className="w-[260px] bg-[#fafafa] border border-gray-300 rounded-md p-4">
-          <h2 className="text-base mb-2.5">Список навыков</h2>
+    <div className="p-3 sm:p-5 min-h-screen text-white">
+      <h1 className="gold-text text-center text-xl sm:text-2xl font-medium uppercase mb-5">
+        Администрирование навыков
+      </h1>
+      <div className="flex flex-col lg:flex-row gap-4 lg:gap-6">
+        {/* Sidebar */}
+        <aside className="w-full lg:w-[260px] flex-shrink-0 rounded-card border border-white/10 bg-white/[0.03] p-3">
+          <h2 className="text-white/80 text-sm font-medium mb-2">Список навыков</h2>
           <input
             type="text"
             placeholder="Поиск навыков..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full p-1.5 mb-2.5 box-border border border-gray-300 rounded"
+            className="gray-bg w-full rounded-sm px-2 py-1.5 text-sm text-white mb-2"
           />
           <button
-            className="w-full bg-green-600 text-white border-none rounded py-2 px-3 mb-2.5 cursor-pointer hover:bg-green-700"
+            type="button"
+            className="btn-blue w-full py-1.5 text-sm mb-2"
             onClick={handleAddSkill}
           >
             + Добавить навык
           </button>
-          {status === 'loading' && <p>Загрузка...</p>}
-          {status === 'failed' && (
-            <p className="text-red-500">Ошибка: {error}</p>
+          {status === 'loading' && <p className="text-white/50 text-xs">Загрузка...</p>}
+          {status === 'failed' && error && (
+            <p className="text-red-400 text-xs">Ошибка: {error}</p>
           )}
-          <div className="mt-2.5">
+          <div className="mt-2 space-y-1.5 max-h-[50vh] lg:max-h-[70vh] overflow-y-auto gold-scrollbar">
             {filteredSkills.map((skill) => (
               <button
                 key={skill.id}
-                className="w-full p-2.5 mb-2.5 bg-white border border-gray-300 rounded-md text-gray-700 cursor-pointer transition-colors hover:bg-gray-200 flex items-center"
+                type="button"
+                className={`w-full flex items-center gap-2 p-2 rounded-sm border text-left text-sm transition-colors ${
+                  selectedSkill?.id === skill.id
+                    ? 'border-gold/60 bg-gold/10'
+                    : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.06]'
+                }`}
                 onClick={() => handleSelectSkill(skill.id)}
               >
                 {skill.skill_image ? (
-                  <img
-                    src={skill.skill_image}
-                    alt="skill"
-                    className="w-10 h-10 object-cover rounded mr-2"
-                  />
+                  <img src={skill.skill_image} alt="" className="w-8 h-8 rounded-sm object-cover" />
                 ) : (
-                  <div className="w-10 h-10 bg-gray-300 rounded mr-2 inline-block" />
+                  <div className="w-8 h-8 bg-white/10 rounded-sm" />
                 )}
-                <span>{skill.name}</span>
-                <span className="text-gray-400 ml-2">({skill.skill_type})</span>
+                <span className="flex-1 truncate text-white">{skill.name}</span>
+                <span className="text-white/40 text-[10px]">{skill.skill_type}</span>
               </button>
             ))}
           </div>
-        </div>
-        <div className="flex-1">
-          {selectedSkillTree ? (
-            <div className="flex flex-col h-full">
-              <div className="mb-2.5">
-                <button
-                  className="bg-red-500 text-white border-none rounded py-2 px-3 cursor-pointer mr-2 hover:bg-red-600"
-                  onClick={handleDeleteSkill}
-                >
-                  Удалить навык
-                </button>
-                <div className="mt-2.5">
-                  <input type="file" onChange={handleSkillImageUpload} />
-                  {selectedSkillTree.skill_image && (
+        </aside>
+
+        {/* Editor */}
+        <main className="flex-1 min-w-0">
+          {selectedSkill ? (
+            <div className="space-y-4">
+              <div className="rounded-card border border-white/10 bg-white/[0.03] p-3 sm:p-4">
+                <div className="flex items-start gap-3 flex-wrap">
+                  {selectedSkill.skill_image && (
                     <img
-                      src={selectedSkillTree.skill_image}
-                      alt="Skill"
-                      className="w-[120px] mt-2.5 rounded"
+                      src={selectedSkill.skill_image}
+                      alt={selectedSkill.name}
+                      className="w-16 h-16 rounded-sm object-cover"
                     />
                   )}
+                  <div className="flex-1 min-w-0">
+                    <h2 className="gold-text text-lg sm:text-xl font-medium">
+                      {selectedSkill.name}
+                    </h2>
+                    <p className="text-white/60 text-xs">
+                      Тип: {selectedSkill.skill_type} · Стоимость: {selectedSkill.purchase_cost}
+                    </p>
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    <label className="btn-line px-3 py-1.5 text-xs cursor-pointer">
+                      Загрузить изображение
+                      <input
+                        type="file"
+                        onChange={handleSkillImageUpload}
+                        className="hidden"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleDeleteSkill}
+                      className="btn-line px-3 py-1.5 text-xs text-red-400 border-red-400/50"
+                    >
+                      Удалить навык
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div className="flex-1">
-                <FlowSkillsEditor
-                  skillTree={selectedSkillTree}
-                  updateStatus={updateStatus}
-                />
-              </div>
+
+              <PerkPoolEditor skill={selectedSkill} onRefresh={refreshSelected} />
             </div>
           ) : (
-            <p>Выберите навык для редактирования</p>
+            <p className="text-white/50 italic">Выберите навык для редактирования</p>
           )}
-        </div>
+        </main>
       </div>
     </div>
   );

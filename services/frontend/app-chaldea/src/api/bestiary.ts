@@ -3,7 +3,7 @@ import axios from 'axios';
 // --- Types ---
 
 export interface BestiarySkillEntry {
-  skill_rank_id: number;
+  skill_id: number;
   skill_name: string | null;
 }
 

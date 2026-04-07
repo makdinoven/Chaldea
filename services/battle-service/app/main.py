@@ -42,7 +42,7 @@ from redis_state import init_battle_state, load_state, save_state, get_redis_cli
 from config import settings
 from mongo_helpers import save_snapshot, load_snapshot
 from tasks import save_log
-from skills_client import character_has_rank, get_rank, get_item, character_ranks
+from skills_client import character_has_skill, get_resolved_skill, get_item, character_skills
 import httpx
 import logging
 import os
@@ -69,14 +69,15 @@ def next_pid_after(cur, order):            # order = [id,id,…]
     idx = order.index(cur)
     return order[(idx + 1) % len(order)]
 
-def _ensure_not_on_cooldown(state: Dict, pid: int, rank_ids: list[int]) -> None:
+def _ensure_not_on_cooldown(state: Dict, pid: int, skill_ids: list[int]) -> None:
     """
-    Если у участника pid для любого rank_id из списка
-    cooldowns[rank_id] > 0  → HTTP 400.
+    FEAT-125: cooldowns are keyed by skill_id (was rank_id).
+    Если у участника pid для любого skill_id из списка
+    cooldowns[skill_id] > 0 → HTTP 400.
     """
     cd = state["participants"][str(pid)]["cooldowns"]
-    for rid in rank_ids:
-        remaining = cd.get(str(rid), 0)
+    for sid in skill_ids:
+        remaining = cd.get(str(sid), 0)
         if remaining > 0:
             raise HTTPException(400, f"Навык на перезарядке (осталось ходов: {remaining})")
 
@@ -134,7 +135,7 @@ async def build_participant_info(char_id: int, participant_id: int) -> dict:
         raise HTTPException(500, f"Не удалось получить атрибуты персонажа {char_id}")
 
     try:
-        ranks = await character_ranks(char_id)
+        ranks = await character_skills(char_id)
     except Exception as e:
         logger.warning(f"Не удалось получить навыки персонажа {char_id}: {e}")
         ranks = []
@@ -1073,27 +1074,27 @@ async def _make_action_core(
     participant_info = battle_state["participants"][str(request.participant_id)]
     attacker_character_id: int = participant_info["character_id"]
 
-    for rank_id in filter(
+    for skill_id in filter(
         None,
         [
-            request.skills.attack_rank_id,
-            request.skills.defense_rank_id,
-            request.skills.support_rank_id,
+            request.skills.attack_skill_id,
+            request.skills.defense_skill_id,
+            request.skills.support_skill_id,
         ],
     ):
-        if not await character_has_rank(attacker_character_id, rank_id):
+        if not await character_has_skill(attacker_character_id, skill_id):
             raise HTTPException(
                 400,
                 "Персонаж не владеет этим навыком",
             )
-    rank_ids = [
-        r_id for r_id in [
-            request.skills.attack_rank_id,
-            request.skills.defense_rank_id,
-            request.skills.support_rank_id,
-        ] if r_id
+    skill_ids = [
+        s_id for s_id in [
+            request.skills.attack_skill_id,
+            request.skills.defense_skill_id,
+            request.skills.support_skill_id,
+        ] if s_id
     ]
-    _ensure_not_on_cooldown(battle_state, request.participant_id, rank_ids)
+    _ensure_not_on_cooldown(battle_state, request.participant_id, skill_ids)
 
     # ------------------------------------------------------------------------------
     # 5. Готовим атрибуты + активные модификаторы атакующего
@@ -1135,9 +1136,9 @@ async def _make_action_core(
     # ------------------------------------------------------------------------------
     # 6. SUPPORT-навык (баффы на self)
     # ------------------------------------------------------------------------------
-    support_id = request.skills.support_rank_id
+    support_id = request.skills.support_skill_id
     if support_id and support_id > 0:
-        support_rank = await get_rank(request.skills.support_rank_id)
+        support_rank = await get_resolved_skill(support_id, attacker_character_id)
 
         # self-эффекты
         self_effects = [e for e in support_rank.get("effects", [])
@@ -1163,9 +1164,9 @@ async def _make_action_core(
     # ------------------------------------------------------------------------------
     # 7. DEFENSE-навык (баффы на self)
     # ------------------------------------------------------------------------------
-    defense_id=request.skills.defense_rank_id
+    defense_id = request.skills.defense_skill_id
     if defense_id and defense_id > 0:
-        defense_rank = await get_rank(request.skills.defense_rank_id)
+        defense_rank = await get_resolved_skill(defense_id, attacker_character_id)
 
         self_effects = [e for e in defense_rank.get("effects", [])
                         if e.get("target_side") == "self"]
@@ -1255,11 +1256,11 @@ async def _make_action_core(
     # ------------------------------------------------------------------------------
     # 9. ATTACK-навык
     # ------------------------------------------------------------------------------
-    attack_id=request.skills.attack_rank_id
-    logger.debug(f"[SKILL] attack_rank_id={request.skills.attack_rank_id}")
-    if attack_id and attack_id >0:
-        attack_rank = await get_rank(request.skills.attack_rank_id)
-        logger.debug(f"[SKILL] attack_rank full_json={attack_rank}")
+    attack_id = request.skills.attack_skill_id
+    logger.debug(f"[SKILL] attack_skill_id={request.skills.attack_skill_id}")
+    if attack_id and attack_id > 0:
+        attack_rank = await get_resolved_skill(attack_id, attacker_character_id)
+        logger.debug(f"[SKILL] attack_skill resolved={attack_rank}")
 
         attacker_buff_modifiers = aggregate_modifiers(
             battle_state.get("active_effects", {}).get(str(request.participant_id), [])
@@ -1341,24 +1342,38 @@ async def _make_action_core(
                     if slot_data["current_durability"] == 0:
                         turn_events.append({"event": "item_broken", "who": defender_pid, "slot": slot_type})
 
-    attack_rank = await get_rank(request.skills.attack_rank_id) if request.skills.attack_rank_id else None
-    defense_rank = await get_rank(request.skills.defense_rank_id) if request.skills.defense_rank_id else None
-    support_rank = await get_rank(request.skills.support_rank_id) if request.skills.support_rank_id else None
+    attack_rank = (
+        await get_resolved_skill(request.skills.attack_skill_id, attacker_character_id)
+        if request.skills.attack_skill_id else None
+    )
+    defense_rank = (
+        await get_resolved_skill(request.skills.defense_skill_id, attacker_character_id)
+        if request.skills.defense_skill_id else None
+    )
+    support_rank = (
+        await get_resolved_skill(request.skills.support_skill_id, attacker_character_id)
+        if request.skills.support_skill_id else None
+    )
 
     spend = await _pay_skill_costs(
         battle_state,
         request.participant_id,
         [r for r in (attack_rank, defense_rank, support_rank) if r]
     )
+    # FEAT-125: cooldowns are keyed by skill_id (resolved payload uses
+    # `skill_id`, not `id`). Fall back to the request id for safety.
     if attack_rank and attack_rank.get("cooldown"):
         set_cooldown(battle_state, request.participant_id,
-                      attack_rank["id"], attack_rank["cooldown"])
+                     attack_rank.get("skill_id") or request.skills.attack_skill_id,
+                     attack_rank["cooldown"])
     if defense_rank and defense_rank.get("cooldown"):
         set_cooldown(battle_state, request.participant_id,
-                      defense_rank["id"], defense_rank["cooldown"])
+                     defense_rank.get("skill_id") or request.skills.defense_skill_id,
+                     defense_rank["cooldown"])
     if support_rank and support_rank.get("cooldown"):
         set_cooldown(battle_state, request.participant_id,
-                      support_rank["id"], support_rank["cooldown"])
+                     support_rank.get("skill_id") or request.skills.support_skill_id,
+                     support_rank["cooldown"])
 
     turn_events.append(
         {"event": "resource_spend", "who": request.participant_id, **spend}
@@ -3440,6 +3455,32 @@ async def startup_ws_subscriber():
     """Start the Redis Pub/Sub subscriber as a background task."""
     asyncio.create_task(_redis_state_update_subscriber())
     logger.info("WS state_update subscriber task created")
+
+
+@app.on_event("startup")
+async def feat125_flush_battle_state() -> None:
+    """
+    FEAT-125 one-shot: the cooldowns dict in redis battle state changed
+    its key schema from rank_id → skill_id. In-flight battles from the
+    rank era would poison the new engine, so we flush them on first boot
+    after deploy. Gated by BATTLE_RESET_ON_BOOT=1 (set in compose for the
+    rollout, removed in the follow-up).
+    """
+    if os.environ.get("BATTLE_RESET_ON_BOOT", "").strip() != "1":
+        return
+    try:
+        redis = await get_redis_client()
+        # Scan & delete any battle:* keys.
+        deleted = 0
+        async for key in redis.scan_iter(match="battle:*"):
+            await redis.delete(key)
+            deleted += 1
+        logger.warning(
+            "FEAT-125 BATTLE_RESET_ON_BOOT: flushed %d battle:* keys from Redis",
+            deleted,
+        )
+    except Exception as exc:
+        logger.error("FEAT-125 BATTLE_RESET_ON_BOOT flush failed: %s", exc)
 
 
 app.include_router(router)

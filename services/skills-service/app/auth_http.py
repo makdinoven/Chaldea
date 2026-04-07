@@ -55,6 +55,21 @@ def require_permission(permission: str):
     return checker
 
 
+INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
+
+
+def allow_jwt_or_service_token(token: str = Depends(OAUTH2_SCHEME)) -> Optional[UserRead]:
+    """
+    Accepts either a normal JWT (returns the UserRead) OR a shared internal
+    service token from the INTERNAL_SERVICE_TOKEN env var (returns None).
+    Used for endpoints that battle-service / autobattle-service must call
+    without acting on behalf of any specific user.
+    """
+    if INTERNAL_SERVICE_TOKEN and token == INTERNAL_SERVICE_TOKEN:
+        return None
+    return get_current_user_via_http(token)
+
+
 def get_admin_user(user: UserRead = Depends(get_current_user_via_http)) -> UserRead:
     """
     Проверяет, что пользователь имеет роль admin или moderator.

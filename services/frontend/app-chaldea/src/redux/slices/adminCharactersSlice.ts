@@ -287,13 +287,13 @@ export const fetchAdminSkills = createAsyncThunk<
 
 export const addAdminCharacterSkill = createAsyncThunk<
   void,
-  { characterId: number; skillRankId: number },
+  { characterId: number; skillId: number },
   { rejectValue: string; dispatch: AppDispatch }
 >(
   'adminCharacters/addSkill',
-  async ({ characterId, skillRankId }, thunkAPI) => {
+  async ({ characterId, skillId }, thunkAPI) => {
     try {
-      await api.addCharacterSkill(characterId, skillRankId);
+      await api.addCharacterSkill(characterId, skillId);
       toast.success('Навык добавлен');
       thunkAPI.dispatch(fetchAdminSkills(characterId));
     } catch {
@@ -321,20 +321,20 @@ export const removeAdminCharacterSkill = createAsyncThunk<
   },
 );
 
-export const updateAdminSkillRank = createAsyncThunk<
+export const updateAdminSkillLevel = createAsyncThunk<
   void,
-  { csId: number; skillRankId: number; characterId: number },
+  { csId: number; skillId: number; level: number; characterId: number },
   { rejectValue: string; dispatch: AppDispatch }
 >(
-  'adminCharacters/updateSkillRank',
-  async ({ csId, skillRankId, characterId }, thunkAPI) => {
+  'adminCharacters/updateSkillLevel',
+  async ({ csId, skillId, level, characterId }, thunkAPI) => {
     try {
-      await api.updateCharacterSkillRank(csId, skillRankId);
-      toast.success('Ранг навыка обновлён');
+      await api.updateCharacterSkillLevel(csId, skillId, level);
+      toast.success('Уровень навыка обновлён');
       thunkAPI.dispatch(fetchAdminSkills(characterId));
     } catch {
-      toast.error('Не удалось обновить ранг навыка');
-      return thunkAPI.rejectWithValue('Не удалось обновить ранг навыка');
+      toast.error('Не удалось обновить уровень навыка');
+      return thunkAPI.rejectWithValue('Не удалось обновить уровень навыка');
     }
   },
 );

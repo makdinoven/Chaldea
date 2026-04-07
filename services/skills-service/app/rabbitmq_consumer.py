@@ -37,34 +37,17 @@ async def process_message(message: aio_pika.IncomingMessage):
                     return
 
                 for skill_id in skill_ids:
-                    # Verify skill exists
                     skill_obj = await crud.get_skill(db, skill_id)
                     if not skill_obj:
                         logger.warning(f"Skill {skill_id} not found, skipping")
                         continue
-
-                    # Find rank 1 for this skill
-                    ranks = await crud.list_skill_ranks_by_skill(db, skill_id)
-                    rank_obj = None
-                    for r in ranks:
-                        if r.rank_number == 1:
-                            rank_obj = r
-                            break
-
-                    # If rank 1 doesn't exist, create it
-                    if not rank_obj:
-                        rank_data = schemas.SkillRankCreate(
-                            skill_id=skill_id,
-                            rank_number=1,
+                    # (FEAT-125) Insert CharacterSkill at level 0 — no ranks anymore.
+                    try:
+                        await crud.create_character_skill(
+                            db, character_id=character_id, skill_id=skill_id, level=0,
                         )
-                        rank_obj = await crud.create_skill_rank(db, rank_data)
-
-                    # Create CharacterSkill
-                    cs_data = schemas.CharacterSkillCreate(
-                        character_id=character_id,
-                        skill_rank_id=rank_obj.id,
-                    )
-                    await crud.create_character_skill(db, cs_data)
+                    except Exception as e:
+                        logger.warning(f"Could not assign skill {skill_id}: {e}")
 
                 logger.info(f"Skills assigned for character {character_id}")
             except Exception as e:

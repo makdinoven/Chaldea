@@ -83,6 +83,14 @@ services:
     command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8003 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      DB_HOST: ${DB_HOST}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
 
   inventory-service:
     command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8004 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
@@ -93,6 +101,11 @@ services:
     command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8005 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
+    depends_on:
+      mysql:
+        condition: service_healthy
+      skills-service:
+        condition: service_started
 
   locations-service:
     command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8006 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
@@ -152,6 +165,9 @@ services:
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       AUTOBATTLE_SERVICE_URL: http://autobattle-service:8011
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      # FEAT-125 cutover: enable on first deploy, then remove
+      # BATTLE_RESET_ON_BOOT: "1"
 
   autobattle-service:
     command: sh -c "PYTHONPATH=/app uvicorn main:app --host 0.0.0.0 --port 8011 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
@@ -185,6 +201,14 @@ services:
   celery-worker:
     command: celery -A tasks:celery_app worker --loglevel=info
     volumes: !reset []
+    environment:
+      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      REDIS_URL: redis://redis:6379/0
+      MONGO_URI: mongodb://mongo:27017
+      BATTLE_SERVICE_URL: http://battle-service:8010
+      SKILLS_SERVICE_URL: http://skills-service:8003
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
 
   celery-beat:
     command: celery -A tasks:celery_app beat --loglevel=info

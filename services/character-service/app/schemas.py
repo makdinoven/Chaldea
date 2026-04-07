@@ -650,7 +650,7 @@ class MobTemplateListResponse(BaseModel):
 
 class MobSkillResponse(BaseModel):
     id: int
-    skill_rank_id: int
+    skill_id: int
 
     class Config:
         orm_mode = True
@@ -703,7 +703,7 @@ class MobTemplateDetailResponse(BaseModel):
 
 
 class MobSkillsUpdate(BaseModel):
-    skill_rank_ids: List[int]
+    skill_ids: List[int]
 
 
 class MobLootEntry(BaseModel):
@@ -894,7 +894,7 @@ class RecordMobKillResponse(BaseModel):
 
 
 class BestiarySkillEntry(BaseModel):
-    skill_rank_id: int
+    skill_id: int
     skill_name: Optional[str] = None
 
     class Config:

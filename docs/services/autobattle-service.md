@@ -77,6 +77,12 @@ autobattle-service/app/
 ### Redis Pub/Sub (входящие)
 - `battle:*:your_turn` -> триггер автохода
 
+## FEAT-125: перк-система
+
+- `Strategy.rating: Dict[int, Tuple[int, int]]` теперь ключуется по `skill_id` (раньше — `rank_id`). Прежняя история лайков/дизлайков дропается на cutover.
+- Payload `/battles/{id}/action` формируется с `{attack_skill_id, defense_skill_id, support_skill_id}` (раньше `*_rank_id`).
+- `_filter_available` читает `skill_id` (с fallback на `id`) из snapshot rows; battle-service `skills_client.character_skills` денормализует `skill_id` в `id` alias для совместимости.
+
 ## Известные проблемы
 
 1. **Memory leak** - `LAST_STATS` растёт бесконечно, нет очистки после завершения боя

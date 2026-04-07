@@ -185,10 +185,10 @@ class MobTemplateSkill(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     mob_template_id = Column(Integer, ForeignKey("mob_templates.id", ondelete="CASCADE"), nullable=False)
-    skill_rank_id = Column(Integer, nullable=False)
+    skill_id = Column(Integer, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint('mob_template_id', 'skill_rank_id', name='uq_mob_template_skill'),
+        UniqueConstraint('mob_template_id', 'skill_id', name='uq_mob_template_skill'),
     )
 
     mob_template = relationship("MobTemplate", back_populates="skills")

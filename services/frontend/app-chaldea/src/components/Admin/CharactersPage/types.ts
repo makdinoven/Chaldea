@@ -178,46 +178,19 @@ export interface AddInventoryItemPayload {
 
 // --- Skills ---
 
-export interface SkillRank {
-  id: number | string;
-  skill_id: number | null;
-  rank_number: number;
-  rank_name: string | null;
-  rank_description: string | null;
-  rank_image: string | null;
-  cost_energy: number;
-  cost_mana: number;
-  cooldown: number;
-  level_requirement: number;
-  upgrade_cost: number;
-  class_limitations: string | null;
-  race_limitations: string | null;
-  subrace_limitations: string | null;
-  left_child_id: number | string | null;
-  right_child_id: number | string | null;
-}
-
 export interface CharacterSkill {
   id: number;
   character_id: number;
-  skill_rank_id: number;
-  skill_rank: {
+  skill_id: number;
+  level: number;
+  free_perk_points: number;
+  selected_perk_ids: number[];
+  reset_available_at: string | null;
+  skill: {
     id: number;
-    skill_id: number;
-    rank_number: number;
-    rank_name: string | null;
-    rank_image: string | null;
-    rank_description: string | null;
-    left_child_id: number | null;
-    right_child_id: number | null;
-    cost_energy: number;
-    cost_mana: number;
-    cooldown: number;
-    level_requirement: number;
-    upgrade_cost: number;
-    class_limitations: string | null;
-    race_limitations: string | null;
-    subrace_limitations: string | null;
+    name: string;
+    skill_type: string;
+    skill_image: string | null;
   };
 }
 
@@ -234,27 +207,14 @@ export interface SkillInfo {
   subrace_limitations: string | null;
 }
 
-export interface FullSkillTreeResponse {
-  id: number;
-  name: string;
-  skill_type: string;
-  description: string | null;
-  class_limitations: string | null;
-  race_limitations: string | null;
-  subrace_limitations: string | null;
-  min_level: number;
-  purchase_cost: number;
-  skill_image: string | null;
-  ranks: SkillRank[];
-}
-
 export interface AdminCharacterSkillUpdatePayload {
-  skill_rank_id: number;
+  skill_id: number;
+  level: number;
 }
 
 export interface AddCharacterSkillPayload {
   character_id: number;
-  skill_rank_id: number;
+  skill_id: number;
 }
 
 // --- Catalog search ---

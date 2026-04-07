@@ -107,6 +107,13 @@ character-service/app/
 ### RabbitMQ
 Полностью закомментирован. Ранее планировались очереди: `character_request_queue`, `character_inventory_queue`, `character_skills_queue`, `character_attributes_queue`
 
+## FEAT-125: mob_template_skills теперь по skill_id
+
+- Таблица `mob_template_skills` после Alembic `016_repoint_mob_template_skills` хранит `skill_id` (FK → `skills.id`, ON DELETE CASCADE) вместо `skill_rank_id`. UNIQUE переимённован на `(mob_template_id, skill_id)`.
+- Бэкфилл колонки делает skills-service `003_perk_system`, character-service 016 только дропает старое и промоутит NOT NULL (+ 30-секундный short-poll, чтобы выдержать Compose race).
+- `crud.send_skills_presets_request` теперь шлёт в skills-service `{character_id, skills:[{skill_id}]}` без `rank_number`.
+- `schemas.MobSkillResponse.skill_id`, `MobSkillsUpdate.skill_ids`, `BestiarySkillEntry.skill_id`.
+
 ## Известные проблемы
 
 1. **RabbitMQ отключён** - весь код закомментирован, aio_pika в зависимостях
