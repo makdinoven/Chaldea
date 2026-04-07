@@ -22,7 +22,7 @@ def _mock_response(status_code: int, json_data: dict = None):
 
 
 def _create_test_image(fmt: str = "PNG") -> bytes:
-    img = Image.new("RGBA", (50, 50), color=(0, 128, 255, 255))
+    img = Image.new("RGB", (100, 100), color=(0, 128, 255))
     buf = io.BytesIO()
     img.save(buf, format=fmt)
     return buf.getvalue()
