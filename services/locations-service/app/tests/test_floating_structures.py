@@ -2,7 +2,7 @@
 Tests for floating_structures endpoints in locations-service (FEAT-123 / T14).
 
 Covers:
-- GET /map/floating-structures (empty + populated, server_now present, route round-trip)
+- GET /locations/map/floating-structures (empty + populated, server_now present, route round-trip)
 - Admin CRUD: create (valid + invalid route_json + missing district), get, patch, delete
 - 401/403 without admin auth
 
@@ -76,20 +76,20 @@ ADMIN_HEADERS = {"Authorization": "Bearer admin-token"}
 
 
 # ---------------------------------------------------------------------------
-# Public GET /map/floating-structures
+# Public GET /locations/map/floating-structures
 # ---------------------------------------------------------------------------
 class TestPublicListFloatingStructures:
     @patch("crud.list_floating_structures", new_callable=AsyncMock)
     def test_empty_list(self, mock_list, client):
         mock_list.return_value = []
-        response = client.get("/map/floating-structures")
+        response = client.get("/locations/map/floating-structures")
         assert response.status_code == 200
         assert response.json() == []
 
     @patch("crud.list_floating_structures", new_callable=AsyncMock)
     def test_returns_record_with_server_now_and_route(self, mock_list, client):
         mock_list.return_value = [_make_obj()]
-        response = client.get("/map/floating-structures")
+        response = client.get("/locations/map/floating-structures")
         assert response.status_code == 200
         body = response.json()
         assert isinstance(body, list) and len(body) == 1
@@ -113,30 +113,30 @@ class TestPublicListFloatingStructures:
 # ---------------------------------------------------------------------------
 class TestAdminAuthGating:
     def test_list_no_token_401(self, client):
-        response = client.get("/admin/floating-structures")
+        response = client.get("/locations/admin/floating-structures")
         assert response.status_code == 401
 
     def test_create_no_token_401(self, client):
-        response = client.post("/admin/floating-structures", json=VALID_PAYLOAD)
+        response = client.post("/locations/admin/floating-structures", json=VALID_PAYLOAD)
         assert response.status_code == 401
 
     def test_get_no_token_401(self, client):
-        response = client.get("/admin/floating-structures/1")
+        response = client.get("/locations/admin/floating-structures/1")
         assert response.status_code == 401
 
     def test_patch_no_token_401(self, client):
-        response = client.patch("/admin/floating-structures/1", json={"name": "X"})
+        response = client.patch("/locations/admin/floating-structures/1", json={"name": "X"})
         assert response.status_code == 401
 
     def test_delete_no_token_401(self, client):
-        response = client.delete("/admin/floating-structures/1")
+        response = client.delete("/locations/admin/floating-structures/1")
         assert response.status_code == 401
 
     @patch("auth_http.requests.get")
     def test_create_non_admin_403(self, mock_get, client):
         mock_get.return_value = _user_resp()
         response = client.post(
-            "/admin/floating-structures",
+            "/locations/admin/floating-structures",
             json=VALID_PAYLOAD,
             headers={"Authorization": "Bearer user-token"},
         )
@@ -146,7 +146,7 @@ class TestAdminAuthGating:
     def test_list_non_admin_403(self, mock_get, client):
         mock_get.return_value = _user_resp()
         response = client.get(
-            "/admin/floating-structures",
+            "/locations/admin/floating-structures",
             headers={"Authorization": "Bearer user-token"},
         )
         assert response.status_code == 403
@@ -162,7 +162,7 @@ class TestAdminCreate:
         mock_auth.return_value = _admin_resp()
         mock_create.return_value = _make_obj()
         response = client.post(
-            "/admin/floating-structures",
+            "/locations/admin/floating-structures",
             json=VALID_PAYLOAD,
             headers=ADMIN_HEADERS,
         )
@@ -182,7 +182,7 @@ class TestAdminCreate:
         # missing 'y' field
         bad["route_json"] = [{"x": 10.0}]
         response = client.post(
-            "/admin/floating-structures",
+            "/locations/admin/floating-structures",
             json=bad,
             headers=ADMIN_HEADERS,
         )
@@ -194,7 +194,7 @@ class TestAdminCreate:
         bad = dict(VALID_PAYLOAD)
         bad["route_json"] = []
         response = client.post(
-            "/admin/floating-structures",
+            "/locations/admin/floating-structures",
             json=bad,
             headers=ADMIN_HEADERS,
         )
@@ -206,7 +206,7 @@ class TestAdminCreate:
         bad = dict(VALID_PAYLOAD)
         bad["route_json"] = [{"x": 999.0, "y": 5.0}]
         response = client.post(
-            "/admin/floating-structures",
+            "/locations/admin/floating-structures",
             json=bad,
             headers=ADMIN_HEADERS,
         )
@@ -225,7 +225,7 @@ class TestAdminCreate:
         payload = dict(VALID_PAYLOAD)
         payload["internal_district_id"] = 999
         response = client.post(
-            "/admin/floating-structures",
+            "/locations/admin/floating-structures",
             json=payload,
             headers=ADMIN_HEADERS,
         )
@@ -242,7 +242,7 @@ class TestAdminGetPatchDelete:
         mock_auth.return_value = _admin_resp()
         mock_get.return_value = _make_obj()
         response = client.get(
-            "/admin/floating-structures/1", headers=ADMIN_HEADERS
+            "/locations/admin/floating-structures/1", headers=ADMIN_HEADERS
         )
         assert response.status_code == 200
         assert response.json()["id"] == 1
@@ -253,7 +253,7 @@ class TestAdminGetPatchDelete:
         mock_auth.return_value = _admin_resp()
         mock_get.return_value = None
         response = client.get(
-            "/admin/floating-structures/9999", headers=ADMIN_HEADERS
+            "/locations/admin/floating-structures/9999", headers=ADMIN_HEADERS
         )
         assert response.status_code == 404
 
@@ -263,7 +263,7 @@ class TestAdminGetPatchDelete:
         mock_auth.return_value = _admin_resp()
         mock_update.return_value = _make_obj(name="Renamed")
         response = client.patch(
-            "/admin/floating-structures/1",
+            "/locations/admin/floating-structures/1",
             json={"name": "Renamed"},
             headers=ADMIN_HEADERS,
         )
@@ -275,7 +275,7 @@ class TestAdminGetPatchDelete:
     def test_patch_invalid_route_json_returns_422(self, mock_auth, client):
         mock_auth.return_value = _admin_resp()
         response = client.patch(
-            "/admin/floating-structures/1",
+            "/locations/admin/floating-structures/1",
             json={"route_json": [{"x": 1.0}]},  # missing y
             headers=ADMIN_HEADERS,
         )
@@ -291,7 +291,7 @@ class TestAdminGetPatchDelete:
             status_code=404, detail="Район с id=999 не найден"
         )
         response = client.patch(
-            "/admin/floating-structures/1",
+            "/locations/admin/floating-structures/1",
             json={"internal_district_id": 999},
             headers=ADMIN_HEADERS,
         )
@@ -303,7 +303,7 @@ class TestAdminGetPatchDelete:
         mock_auth.return_value = _admin_resp()
         mock_delete.return_value = None
         response = client.delete(
-            "/admin/floating-structures/1", headers=ADMIN_HEADERS
+            "/locations/admin/floating-structures/1", headers=ADMIN_HEADERS
         )
         assert response.status_code == 204
         assert mock_delete.await_count == 1
@@ -316,6 +316,6 @@ class TestAdminGetPatchDelete:
             status_code=404, detail="Плавающая структура не найдена"
         )
         response = client.delete(
-            "/admin/floating-structures/9999", headers=ADMIN_HEADERS
+            "/locations/admin/floating-structures/9999", headers=ADMIN_HEADERS
         )
         assert response.status_code == 404

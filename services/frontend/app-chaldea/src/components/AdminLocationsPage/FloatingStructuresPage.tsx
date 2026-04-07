@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import toast from 'react-hot-toast';
+import { uploadArchiveImage } from '../../api/archive';
 import { useRequireAuth } from '../../hooks/useRequireAuth';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
@@ -68,6 +70,25 @@ const FloatingStructuresPage = () => {
   const [form, setForm] = useState<FormState>({ ...emptyForm, started_at: nowLocalValue() });
   const [editingId, setEditingId] = useState<number | null>(null);
   const [routeEditorFor, setRouteEditorFor] = useState<FloatingStructure | null>(null);
+  const [iconUploading, setIconUploading] = useState(false);
+  const iconFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleIconFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIconUploading(true);
+    try {
+      const { image_url } = await uploadArchiveImage(file);
+      setForm((prev) => ({ ...prev, icon_url: image_url }));
+      toast.success('Иконка загружена');
+    } catch (err) {
+      console.error('Icon upload failed:', err);
+      toast.error('Не удалось загрузить иконку');
+    } finally {
+      setIconUploading(false);
+      if (iconFileInputRef.current) iconFileInputRef.current.value = '';
+    }
+  };
 
   useEffect(() => {
     dispatch(fetchAdminFloatingStructures());
@@ -167,16 +188,49 @@ const FloatingStructuresPage = () => {
           />
         </label>
 
-        <label className="flex flex-col text-sm">
-          <span className="mb-1 text-white/70">Иконка (URL)</span>
+        <div className="flex flex-col text-sm">
+          <span className="mb-1 text-white/70">Иконка</span>
+          <div className="flex items-center gap-3 flex-wrap">
+            {form.icon_url ? (
+              <img
+                src={form.icon_url}
+                alt="icon"
+                className="w-12 h-12 rounded object-cover border border-white/10 flex-shrink-0"
+              />
+            ) : (
+              <div className="w-12 h-12 rounded border border-dashed border-white/20 flex items-center justify-center text-[10px] text-white/40 flex-shrink-0">
+                нет
+              </div>
+            )}
+            <input
+              ref={iconFileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleIconFileChange}
+              disabled={iconUploading}
+              className="text-xs text-white/70 file:mr-2 file:rounded file:border-0 file:bg-site-blue/30 file:px-3 file:py-1.5 file:text-xs file:text-white hover:file:bg-site-blue/50 file:cursor-pointer disabled:opacity-50 min-w-0 flex-1"
+            />
+            {form.icon_url && (
+              <button
+                type="button"
+                onClick={() => setForm((prev) => ({ ...prev, icon_url: '' }))}
+                className="btn-line px-2 py-1 text-xs text-site-red border-site-red/40"
+              >
+                Очистить
+              </button>
+            )}
+          </div>
+          {iconUploading && (
+            <span className="mt-1 text-xs text-white/50">Загрузка...</span>
+          )}
           <input
             type="text"
             value={form.icon_url}
             onChange={(e) => setForm({ ...form, icon_url: e.target.value })}
-            placeholder="https://..."
-            className="input-underline px-3 py-2 bg-transparent border border-white/20 rounded"
+            placeholder="или вставьте URL вручную"
+            className="mt-2 input-underline px-3 py-2 bg-transparent border border-white/20 rounded text-xs"
           />
-        </label>
+        </div>
 
         <label className="col-span-full flex flex-col text-sm">
           <span className="mb-1 text-white/70">Описание</span>

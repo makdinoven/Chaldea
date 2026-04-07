@@ -42,6 +42,10 @@ class CountryRead(BaseModel):
     y: Optional[float] = None
     is_hidden: bool = False
 
+    @validator('is_hidden', pre=True, always=True)
+    def _default_is_hidden(cls, v):
+        return False if v is None else bool(v)
+
     class Config:
         orm_mode = True
 
