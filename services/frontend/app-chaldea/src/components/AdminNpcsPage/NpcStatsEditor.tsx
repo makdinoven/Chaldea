@@ -47,11 +47,20 @@ interface EquipmentSlotData {
   [key: string]: unknown;
 }
 
-interface SkillAssignment {
+interface SkillRankNested {
   id: number;
   skill_id: number;
-  skill_name: string;
   rank_number: number;
+}
+
+interface SkillAssignment {
+  id: number;
+  character_id: number;
+  skill_rank_id: number;
+  skill_rank: SkillRankNested;
+  skill_name: string | null;
+  skill_type?: string | null;
+  skill_image?: string | null;
 }
 
 interface SkillInfo {
@@ -80,6 +89,8 @@ interface SelectedSkill {
   rank_number: number;
   /** skill_rank_id from the full_tree endpoint — needed for display/lookup */
   skill_rank_id: number;
+  /** character_skill row id — present only for skills already saved on the server (used for targeted DELETE). */
+  character_skill_id?: number;
 }
 
 const STAT_LABELS: Record<string, string> = {
@@ -166,12 +177,14 @@ const NpcStatsEditor = ({ npcId, npcName, npcLevel, racesData, onClose }: NpcSta
       if (skillsRes.status === 'fulfilled') {
         const skillData: SkillAssignment[] = Array.isArray(skillsRes.value.data) ? skillsRes.value.data : [];
         setSkills(skillData);
-        // Convert to SelectedSkill format for the editor
+        // Convert to SelectedSkill format for the editor.
+        // The backend returns skill_id / rank_number nested inside skill_rank.
         const selected: SelectedSkill[] = skillData.map((s) => ({
-          skill_id: s.skill_id,
-          skill_name: s.skill_name,
-          rank_number: s.rank_number,
-          skill_rank_id: s.id, // the assignment ID is used as a key but we track by skill_id+rank_number
+          skill_id: s.skill_rank.skill_id,
+          skill_name: s.skill_name ?? `Навык #${s.skill_rank.skill_id}`,
+          rank_number: s.skill_rank.rank_number,
+          skill_rank_id: s.skill_rank.id,
+          character_skill_id: s.id,
         }));
         setCurrentSkills(selected);
         setOriginalSkills(selected);
@@ -275,18 +288,33 @@ const NpcStatsEditor = ({ npcId, npcName, npcLevel, racesData, onClose }: NpcSta
   const handleSaveSkills = async () => {
     setSavingSkills(true);
     try {
-      // Step 1: Delete all current skills
-      await axios.delete(`${BASE_URL}/skills/admin/character_skills/by_character/${npcId}`);
+      // Diff original vs current by composite key skill_id:rank_number.
+      const keyOf = (s: SelectedSkill) => `${s.skill_id}:${s.rank_number}`;
+      const originalKeys = new Set(originalSkills.map(keyOf));
+      const currentKeys = new Set(currentSkills.map(keyOf));
 
-      // Step 2: Assign new skills (if any)
-      if (currentSkills.length > 0) {
+      const toAdd = currentSkills.filter((s) => !originalKeys.has(keyOf(s)));
+      const toRemove = originalSkills.filter(
+        (s) => !currentKeys.has(keyOf(s)) && s.character_skill_id != null,
+      );
+
+      // Step 1: POST additions first. If this fails, existing skills survive untouched.
+      if (toAdd.length > 0) {
         await axios.post(`${BASE_URL}/skills/assign_multiple`, {
           character_id: npcId,
-          skills: currentSkills.map((s) => ({
+          skills: toAdd.map((s) => ({
             skill_id: s.skill_id,
             rank_number: s.rank_number,
           })),
         });
+      }
+
+      // Step 2: DELETE only the entries the user actually removed, by character_skill id.
+      // Done sequentially so a single failure doesn't leave the UI in an unknown state.
+      for (const s of toRemove) {
+        await axios.delete(
+          `${BASE_URL}/skills/admin/character_skills/${s.character_skill_id}`,
+        );
       }
 
       toast.success('Навыки НПС обновлены');

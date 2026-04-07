@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_, func
 from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException
 from sqlalchemy.orm import selectinload
@@ -24,8 +24,16 @@ async def get_skill(db: AsyncSession, skill_id: int) -> models.Skill | None:
     result = await db.execute(select(models.Skill).where(models.Skill.id == skill_id))
     return result.scalar_one_or_none()
 
-async def list_skills(db: AsyncSession) -> list[models.Skill]:
-    result = await db.execute(select(models.Skill))
+async def list_skills(db: AsyncSession, q: str | None = None) -> list[models.Skill]:
+    stmt = select(models.Skill)
+    if q is not None and q.strip():
+        q_stripped = q.strip()
+        name_clause = func.lower(models.Skill.name).like(f"%{q_stripped.lower()}%")
+        if q_stripped.isdigit():
+            stmt = stmt.where(or_(name_clause, models.Skill.id == int(q_stripped)))
+        else:
+            stmt = stmt.where(name_clause)
+    result = await db.execute(stmt)
     return result.scalars().all()
 
 async def update_skill(db: AsyncSession, skill_id: int, data: schemas.SkillUpdate) -> models.Skill | None:

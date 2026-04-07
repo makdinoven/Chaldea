@@ -96,6 +96,9 @@ const AdminNpcsPage = () => {
   const [form, setForm] = useState<NpcFormData>(INITIAL_FORM);
   const [saving, setSaving] = useState(false);
   const [locations, setLocations] = useState<LocationOption[]>([]);
+  const [locationSearchQuery, setLocationSearchQuery] = useState('');
+  const debouncedLocationQuery = useDebounce(locationSearchQuery);
+  const [locationSearchLoading, setLocationSearchLoading] = useState(false);
   const [dialogueNpc, setDialogueNpc] = useState<{ id: number; name: string } | null>(null);
   const [shopNpc, setShopNpc] = useState<{ id: number; name: string } | null>(null);
   const [questNpc, setQuestNpc] = useState<{ id: number; name: string } | null>(null);
@@ -130,18 +133,16 @@ const AdminNpcsPage = () => {
     fetchNpcs();
   }, [fetchNpcs]);
 
-  const fetchLocations = useCallback(async () => {
-    try {
-      const res = await axios.get<LocationOption[]>(`${BASE_URL}/locations/locations/lookup`);
-      setLocations(res.data);
-    } catch {
-      // Locations list not critical, silently fail
-    }
-  }, []);
-
   useEffect(() => {
-    fetchLocations();
-  }, [fetchLocations]);
+    setLocationSearchLoading(true);
+    const params: Record<string, string> = {};
+    if (debouncedLocationQuery) params.q = debouncedLocationQuery;
+    axios
+      .get<LocationOption[]>(`${BASE_URL}/locations/locations/lookup`, { params })
+      .then((res) => setLocations(Array.isArray(res.data) ? res.data : []))
+      .catch(() => toast.error('Не удалось загрузить список локаций'))
+      .finally(() => setLocationSearchLoading(false));
+  }, [debouncedLocationQuery]);
 
   // Fetch all races with subraces once on mount
   const fetchRacesData = useCallback(async () => {
@@ -272,11 +273,10 @@ const AdminNpcsPage = () => {
     return res.data.avatar_url as string;
   };
 
-  const handleLocationChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const val = e.target.value;
+  const handleLocationSelect = (locationId: number | null) => {
     setForm((prev) => ({
       ...prev,
-      current_location_id: val === '' ? null : Number(val),
+      current_location_id: locationId,
     }));
   };
 
@@ -547,15 +547,66 @@ const AdminNpcsPage = () => {
             </label>
 
             {/* Location */}
-            <label className="flex flex-col gap-1">
+            <div className="flex flex-col gap-1 sm:col-span-2 lg:col-span-3">
               <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">Локация</span>
-              <select value={form.current_location_id ?? ''} onChange={handleLocationChange} className="input-underline">
-                <option value="" className="bg-site-dark text-white">Без локации</option>
-                {locations.map((loc) => (
-                  <option key={loc.id} value={loc.id} className="bg-site-dark text-white">{loc.name}</option>
-                ))}
-              </select>
-            </label>
+              <div className="flex flex-wrap items-center gap-2 mb-2">
+                <span className="text-white/50 text-xs">Выбрано:</span>
+                {form.current_location_id != null ? (
+                  <div className="flex items-center gap-2 bg-white/[0.07] rounded-full px-3 py-1">
+                    <span className="text-white text-sm">
+                      {locations.find((l) => l.id === form.current_location_id)?.name
+                        ?? `Локация #${form.current_location_id}`}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleLocationSelect(null)}
+                      className="text-site-red hover:text-white text-xs transition-colors"
+                      title="Убрать локацию"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-white/40 text-sm">Без локации</span>
+                )}
+              </div>
+              <input
+                type="text"
+                className="input-underline w-full max-w-[320px] mb-2"
+                placeholder="Поиск локации по названию или ID..."
+                value={locationSearchQuery}
+                onChange={(e) => setLocationSearchQuery(e.target.value)}
+              />
+              {locationSearchLoading && (
+                <div className="flex items-center gap-2 text-white/50 text-sm">
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
+                  Поиск...
+                </div>
+              )}
+              {!locationSearchLoading && locations.length > 0 && (
+                <div className="flex flex-col gap-1 max-h-[240px] overflow-y-auto gold-scrollbar">
+                  {locations.map((loc) => {
+                    const selected = form.current_location_id === loc.id;
+                    return (
+                      <button
+                        key={loc.id}
+                        type="button"
+                        onClick={() => handleLocationSelect(loc.id)}
+                        className={`flex items-center gap-2 px-3 py-2 rounded text-left transition-colors ${
+                          selected ? 'bg-white/[0.12]' : 'hover:bg-white/[0.07]'
+                        }`}
+                      >
+                        <span className="text-white text-sm flex-1 truncate">{loc.name}</span>
+                        <span className="text-white/30 text-xs">#{loc.id}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {!locationSearchLoading && locations.length === 0 && (
+                <span className="text-white/50 text-sm">Локации не найдены</span>
+              )}
+            </div>
 
             {/* Avatar upload */}
             <label className="flex flex-col gap-1">

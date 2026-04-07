@@ -139,8 +139,24 @@ async def get_location_tree(session: AsyncSession, location: Location) -> dict:
 # -------------------------------
 #   LOOKUP
 # -------------------------------
-async def get_locations_lookup(session: AsyncSession) -> List[dict]:
-    result = await session.execute(select(Location))
+async def get_locations_lookup(session: AsyncSession, q: Optional[str] = None) -> List[dict]:
+    from sqlalchemy import or_
+    stmt = select(Location)
+    if q is not None:
+        q_stripped = q.strip()
+        if q_stripped:
+            if q_stripped.isdigit():
+                stmt = stmt.where(
+                    or_(
+                        Location.id == int(q_stripped),
+                        sa_func.lower(Location.name).like(f"%{q_stripped.lower()}%"),
+                    )
+                )
+            else:
+                stmt = stmt.where(
+                    sa_func.lower(Location.name).like(f"%{q_stripped.lower()}%")
+                )
+    result = await session.execute(stmt)
     db_locs = result.scalars().all()
     return [{"id": loc.id, "name": loc.name} for loc in db_locs]
 

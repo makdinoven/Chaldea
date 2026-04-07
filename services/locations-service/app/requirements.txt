@@ -11,4 +11,5 @@ requests
 pika
 pytest
 pytest-asyncio
+aiosqlite
 alembic

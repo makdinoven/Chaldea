@@ -2,7 +2,7 @@ import os
 import math
 import logging
 from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request, BackgroundTasks, Query
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 import asyncio
@@ -62,11 +62,15 @@ async def _auto_progress_quest(
 
 async def _count_unique_locations(session: AsyncSession, character_id: int) -> int:
     """Count distinct locations where a character has posted."""
-    result = await session.execute(
-        text("SELECT COUNT(DISTINCT location_id) FROM posts WHERE character_id = :cid"),
-        {"cid": character_id},
-    )
-    return result.scalar() or 0
+    try:
+        result = await session.execute(
+            text("SELECT COUNT(DISTINCT location_id) FROM posts WHERE character_id = :cid"),
+            {"cid": character_id},
+        )
+        val = result.scalar()
+        return int(val) if val else 0
+    except Exception:
+        return 0
 
 
 async def _try_spawn_mob(location_id: int, character_id: int):
@@ -153,8 +157,11 @@ def get_optional_user(token: Optional[str] = Depends(OAUTH2_SCHEME_OPTIONAL)) ->
 # LOOKUP (короткие списки)
 # --------------------------------------------------------------------
 @router.get("/locations/lookup", response_model=List[schemas.LocationLookup])
-async def locations_lookup(session: AsyncSession = Depends(get_db)):
-    data = await crud.get_locations_lookup(session)
+async def locations_lookup(
+    q: Optional[str] = Query(None),
+    session: AsyncSession = Depends(get_db),
+):
+    data = await crud.get_locations_lookup(session, q=q)
     return data
 
 @router.get("/districts/lookup", response_model=List[schemas.DistrictLookup])

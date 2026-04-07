@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, APIRouter, Depends, HTTPException
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -113,8 +113,12 @@ async def admin_create_skill(
     return await crud.create_skill(db, data)
 
 @router.get("/admin/skills/", response_model=List[schemas.SkillRead])
-async def admin_list_skills(db: AsyncSession = Depends(get_db), current_user = Depends(require_permission("skills:read"))):
-    return await crud.list_skills(db)
+async def admin_list_skills(
+    q: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("skills:read")),
+):
+    return await crud.list_skills(db, q=q)
 
 @router.get("/admin/skills/{skill_id}", response_model=schemas.SkillRead)
 async def admin_get_skill(
