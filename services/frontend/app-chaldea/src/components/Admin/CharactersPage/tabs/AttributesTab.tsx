@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import toast from 'react-hot-toast';
+import axios from 'axios';
 import { useAppDispatch, useAppSelector } from '../../../../redux/store';
 import {
   fetchAdminAttributes,
@@ -8,7 +9,16 @@ import {
   selectAdminAttributes,
   selectAdminDetailLoading,
 } from '../../../../redux/slices/adminCharactersSlice';
+import { grantActiveXp } from '../../../../api/adminCharacters';
 import type { CharacterAttributes, AdminAttributeUpdate } from '../types';
+
+const extractErrorDetail = (err: unknown): string => {
+  if (axios.isAxiosError(err)) {
+    const detail = (err.response?.data as { detail?: unknown } | undefined)?.detail;
+    if (typeof detail === 'string' && detail.length > 0) return detail;
+  }
+  return 'Ошибка изменения опыта';
+};
 
 interface AttributesTabProps {
   characterId: number;
@@ -104,6 +114,24 @@ const AttributesTab = ({ characterId }: AttributesTabProps) => {
   const loading = useAppSelector(selectAdminDetailLoading);
   const [localAttrs, setLocalAttrs] = useState<CharacterAttributes | null>(null);
   const [saving, setSaving] = useState(false);
+  const [xpDelta, setXpDelta] = useState<number>(100);
+  const [grantingXp, setGrantingXp] = useState(false);
+
+  const handleGrantXp = async () => {
+    setGrantingXp(true);
+    try {
+      const result = await grantActiveXp(characterId, xpDelta);
+      setLocalAttrs((prev) =>
+        prev ? { ...prev, active_experience: result.active_experience } : prev,
+      );
+      dispatch(fetchAdminAttributes(characterId));
+      toast.success(`Опыт обновлён: ${result.active_experience}`);
+    } catch (err) {
+      toast.error(extractErrorDetail(err));
+    } finally {
+      setGrantingXp(false);
+    }
+  };
 
   useEffect(() => {
     dispatch(fetchAdminAttributes(characterId));
@@ -192,6 +220,34 @@ const AttributesTab = ({ characterId }: AttributesTabProps) => {
           </div>
         </div>
       ))}
+
+      <div className="gray-bg p-6">
+        <h3 className="gold-text text-lg font-medium uppercase mb-4">Выдача активного опыта</h3>
+        <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+          <div className="flex flex-col gap-1 flex-1 min-w-0">
+            <label className="text-white/60 text-xs uppercase tracking-[0.06em]">
+              Активный опыт (текущий: {localAttrs.active_experience})
+            </label>
+            <input
+              type="number"
+              className="input-underline w-full"
+              value={xpDelta}
+              step="1"
+              onChange={(e) => setXpDelta(Number(e.target.value) || 0)}
+            />
+          </div>
+          <button
+            className="btn-blue whitespace-nowrap"
+            onClick={handleGrantXp}
+            disabled={grantingXp}
+          >
+            {grantingXp ? 'Изменение...' : 'Изменить опыт'}
+          </button>
+        </div>
+        <p className="text-white/40 text-xs mt-2">
+          Можно указать отрицательное значение для снятия опыта. Итог не может быть меньше 0.
+        </p>
+      </div>
 
       <div className="flex gap-4">
         <button className="btn-blue" onClick={handleSave} disabled={saving}>

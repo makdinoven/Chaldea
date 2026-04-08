@@ -44,6 +44,15 @@ def _find_skill_rank_ids_for_class(conn, id_class: int) -> list[int]:
 def upgrade() -> None:
     conn = op.get_bind()
 
+    # FEAT-125 dropped the `skill_ranks` table. On a fresh DB bootstrap this
+    # legacy seed migration would crash with "Table 'skill_ranks' doesn't exist"
+    # before it ever runs. Skip the entire seed if the table is gone — the
+    # post-FEAT-125 perk system handles mob skills via `skills.id` directly,
+    # and migration 016 repoints `mob_template_skills` accordingly.
+    inspector = sa.inspect(conn)
+    if not inspector.has_table("skill_ranks"):
+        return
+
     # 1. Get all mob templates
     templates = conn.execute(
         sa.text("SELECT id, id_class FROM mob_templates")

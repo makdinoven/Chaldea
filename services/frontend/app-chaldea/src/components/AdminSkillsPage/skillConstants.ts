@@ -110,10 +110,11 @@ export interface StatModifierOption {
 
 // ---- Constants ----
 
+// Canonical class list (matches docker/mysql/init/01-seed-data.sql `classes` table)
 export const CLASS_OPTIONS: SelectOption[] = [
   { label: "Воин", value: "1" },
-  { label: "Маг", value: "2" },
-  { label: "Разбойник", value: "3" },
+  { label: "Плут", value: "2" },
+  { label: "Маг", value: "3" },
 ];
 
 export const RACE_OPTIONS: SelectOption[] = [

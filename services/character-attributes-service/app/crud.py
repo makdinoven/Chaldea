@@ -128,6 +128,26 @@ def update_passive_experience(db: Session, character_id: int, new_passive_experi
     return attr.passive_experience
 
 
+def grant_active_experience(db: Session, character_id: int, delta: int):
+    """
+    Админская операция: выдать/снять активный опыт персонажу.
+    Итоговое значение клампается до 0 (не может быть отрицательным).
+    Возвращает новое значение active_experience или None, если атрибуты не найдены.
+    """
+    attr = db.query(models.CharacterAttributes).filter(
+        models.CharacterAttributes.character_id == character_id
+    ).with_for_update().first()
+    if not attr:
+        return None
+    new_value = (attr.active_experience or 0) + delta
+    if new_value < 0:
+        new_value = 0
+    attr.active_experience = new_value
+    db.commit()
+    db.refresh(attr)
+    return attr.active_experience
+
+
 def recalculate_attributes(db: Session, character_id: int):
     """
     Пересчитывает все производные статы из базовых значений (10 прокачиваемых статов).

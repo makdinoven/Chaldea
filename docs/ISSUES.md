@@ -23,6 +23,11 @@
 
 ## HIGH
 
+### ~~Баг: locations-service миграция 004 падает на свежей БД (отсутствует таблица `permissions`)~~ DONE (2026-04-08)
+~~**Сервис:** locations-service~~
+~~**Файлы:** `services/locations-service/app/alembic/versions/004_game_time_config.py`~~
+**Исправлено:** В `upgrade()` добавлен defensive guard — блок `INSERT INTO permissions / role_permissions` выполняется только если `inspector.get_table_names()` содержит `permissions`, `roles` и `role_permissions`. Схема (`game_time_config`) создаётся безусловно. `INSERT` заменён на `INSERT IGNORE` для идемпотентности. На prod no-op (таблицы существуют), фикс улучшает только dev/CI/disaster-recovery bootstrap. Проверено: `docker compose up -d locations-service` — миграции проходят 003 -> 028, uvicorn стартует, `curl http://localhost/characters/races` = 200 `[]`.
+
 ### Баг: маркеры на карте мира съезжают при нестандартной ширине окна DONE
 **Сервис:** frontend
 **Файлы:**
@@ -49,6 +54,15 @@
 ~~**Сервис:** autobattle-service~~
 ~~**Описание:** `LAST_STATS` dict растёт бесконечно — записи никогда не удаляются после завершения боя.~~
 **Частично исправлено:** `_cleanup_battle()` добавлена, но cleanup LAST_STATS не работает корректно из-за бага #22 (несовпадение ключей).
+
+### Баг: DoT-эффекты и контроли не работают в боёвке
+**Сервис:** battle-service
+**Файлы:**
+- `services/battle-service/app/buffs.py` (строки 5-35 `_normalize_effect`, 38-61 `apply_new_effects`, 64-75 `decrement_durations`)
+- `services/battle-service/app/main.py:1068`
+**Описание:** Все 14 сложных эффектов из `COMPLEX_EFFECTS` (Bleeding, Burn, Poison, ArmorBreak, Stun, Knockdown, Daze, MagicImpact, Freeze, Wet, Electrify, Windburn, Holy, Curse) молча игнорируются боевым движком. `_normalize_effect` распознаёт только префиксы `Buff:` / `Resist:` и StatModifier — всё остальное проваливается в else-ветку и превращается в произвольный атрибут (`bleeding`, `burn`, ...). Эти атрибуты не входят в `inst_attrs = {hp,mana,energy,stamina}`, поэтому `apply_new_effects` не применяет мгновенный урон. На последующих ходах единственный per-turn вызов — `decrement_durations()` — только уменьшает `duration`, но никогда не читает `magnitude` и не вычитает HP. DoT-эффекты сохраняются в state, тикают по длительности, но не наносят урона. Аналогично сломан контроль: `next_actor` в `main.py` не консультируется с `active_effects` для пропуска хода оглушённых целей.
+**Impact:** DoT-навыки (кровотечение, ожог, яд) бесполезны в бою. Контролей фактически нет. Замечено пользователем во время тестирования FEAT-125, но баг существовал и до FEAT-125 — это не регресс, а латентный баг боевого движка.
+**Решение:** Добавить функцию `tick_dot_effects(state)` в `buffs.py`, вызвать её перед `decrement_durations()` в `main.py:1068`. Контроли — отдельная задача (модификация `next_actor` с чтением `active_effects` для пропуска хода при Stun/Freeze/Knockdown).
 
 ### 22. Баг: несовпадение ключей LAST_STATS и HISTORY в autobattle-service
 **Сервис:** autobattle-service

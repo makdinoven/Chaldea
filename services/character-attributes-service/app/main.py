@@ -887,6 +887,50 @@ def recalculate_attributes_endpoint(
 
 
 # -----------------------------
+# 8b. Admin: grant/deduct active experience
+# -----------------------------
+@router.post("/admin/{character_id}/grant_active_xp", response_model=schemas.GrantActiveXpResponse)
+def admin_grant_active_xp(
+    character_id: int,
+    data: schemas.GrantActiveXpRequest,
+    db: Session = Depends(get_db),
+    admin: UserRead = Depends(require_permission("characters:update")),
+):
+    """
+    Выдаёт или снимает активный опыт персонажу. Итог клампается до 0.
+    """
+    try:
+        new_value = crud.grant_active_experience(db, character_id, data.delta)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при изменении активного опыта: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось изменить активный опыт")
+
+    if new_value is None:
+        raise HTTPException(status_code=404, detail="Атрибуты персонажа не найдены")
+
+    # Fire-and-forget лог в character-service
+    try:
+        httpx.post(
+            f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/logs",
+            json={
+                "event_type": "admin_experience_change",
+                "description": f"Админ изменил активный опыт на {data.delta:+d} (итог: {new_value})",
+                "metadata": {
+                    "active_experience": new_value,
+                    "delta": data.delta,
+                    "admin_action": True,
+                },
+            },
+            timeout=5.0,
+        )
+    except Exception:
+        pass
+
+    return {"character_id": character_id, "active_experience": new_value}
+
+
+# -----------------------------
 # 9. Admin: удаление атрибутов
 # -----------------------------
 @router.delete("/{character_id}")

@@ -912,22 +912,6 @@ class TestExistingEndpointsContract:
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
-    @pytest.mark.asyncio
-    async def test_get_skill_rank_returns_correct_shape(self, admin_client, db_session):
-        """GET /skills/admin/skill_ranks/{id} should still return the rank with nested data."""
-        # Seed a skill with rank
-        skill = models.Skill(id=10, name="TestSkill", skill_type="Attack")
-        db_session.add(skill)
-        await db_session.flush()
-        rank = models.SkillRank(id=10, skill_id=10, rank_number=1, rank_name="Rank I")
-        db_session.add(rank)
-        await db_session.commit()
-
-        resp = await admin_client.get("/skills/admin/skill_ranks/10")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "id" in data
-        assert "skill_id" in data
-        assert "rank_number" in data
-        assert "damage_entries" in data
-        assert "effects" in data
+    # (FEAT-125) test_get_skill_rank_returns_correct_shape removed:
+    # /skills/admin/skill_ranks/{id} endpoint deleted, replaced by /skills/{id}
+    # and /skills/{id}/resolved.

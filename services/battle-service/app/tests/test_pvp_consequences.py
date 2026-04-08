@@ -83,8 +83,8 @@ buffs_mock.build_percent_resist_buffs = MagicMock(return_value={})
 
 # Ensure skills_client
 skills_mock = sys.modules["skills_client"]
-skills_mock.character_has_rank = AsyncMock(return_value=True)
-skills_mock.get_rank = AsyncMock(return_value={
+skills_mock.character_has_skill = AsyncMock(return_value=True)
+skills_mock.get_resolved_skill = AsyncMock(return_value={
     "id": 1, "skill_type": "attack", "damage_type": "physical",
     "base_damage": 50, "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
     "cooldown_turns": 0, "cooldown": 0, "effect_type": None,
@@ -92,7 +92,7 @@ skills_mock.get_rank = AsyncMock(return_value={
     "effects": [],
 })
 skills_mock.get_item = AsyncMock(return_value={})
-skills_mock.character_ranks = AsyncMock(return_value=[])
+skills_mock.character_skills = AsyncMock(return_value=[])
 
 # Ensure mongo_helpers
 mongo_mock = sys.modules["mongo_helpers"]
@@ -190,9 +190,9 @@ def _build_battle_state(battle_type="pvp_training"):
 ACTION_PAYLOAD = {
     "participant_id": 1,
     "skills": {
-        "attack_rank_id": 1,
-        "defense_rank_id": None,
-        "support_rank_id": None,
+        "attack_skill_id": 1,
+        "defense_skill_id": None,
+        "support_skill_id": None,
         "item_id": None,
     },
 }
@@ -211,16 +211,16 @@ class TestPvpTrainingConsequences:
     @patch("main.write_turn", new_callable=AsyncMock)
     @patch("main.get_battle", new_callable=AsyncMock)
     @patch("main.load_state", new_callable=AsyncMock)
-    @patch("main.character_has_rank", new_callable=AsyncMock, return_value=True)
-    @patch("main.get_rank", new_callable=AsyncMock)
+    @patch("main.character_has_skill", new_callable=AsyncMock, return_value=True)
+    @patch("main.get_resolved_skill", new_callable=AsyncMock)
     @patch("main.compute_damage_with_rolls", new_callable=AsyncMock, return_value=(999, {}))
     @patch("main.fetch_weapons", new_callable=AsyncMock, return_value={"main_weapon": None, "additional_weapons": None})
     def test_pvp_training_sets_loser_hp_to_1(
-        self, mock_fetch_weapons, mock_compute, mock_get_rank, mock_has_rank,
+        self, mock_fetch_weapons, mock_compute, mock_get_resolved_skill, mock_has_skill,
         mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
     ):
         """After pvp_training finishes, loser's HP in character_attributes is set to 1."""
-        mock_get_rank.return_value = {
+        mock_get_resolved_skill.return_value = {
             "id": 1, "skill_type": "attack", "damage_type": "physical",
             "base_damage": 50, "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
             "cooldown_turns": 0, "cooldown": 0, "effect_type": None,
@@ -297,16 +297,16 @@ class TestPvpTrainingConsequences:
     @patch("main.write_turn", new_callable=AsyncMock)
     @patch("main.get_battle", new_callable=AsyncMock)
     @patch("main.load_state", new_callable=AsyncMock)
-    @patch("main.character_has_rank", new_callable=AsyncMock, return_value=True)
-    @patch("main.get_rank", new_callable=AsyncMock)
+    @patch("main.character_has_skill", new_callable=AsyncMock, return_value=True)
+    @patch("main.get_resolved_skill", new_callable=AsyncMock)
     @patch("main.compute_damage_with_rolls", new_callable=AsyncMock, return_value=(999, {}))
     @patch("main.fetch_weapons", new_callable=AsyncMock, return_value={"main_weapon": None, "additional_weapons": None})
     def test_pvp_attack_no_hp_override(
-        self, mock_fetch_weapons, mock_compute, mock_get_rank, mock_has_rank,
+        self, mock_fetch_weapons, mock_compute, mock_get_resolved_skill, mock_has_skill,
         mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
     ):
         """After pvp_attack finishes, no special HP override happens."""
-        mock_get_rank.return_value = {
+        mock_get_resolved_skill.return_value = {
             "id": 1, "skill_type": "attack", "damage_type": "physical",
             "base_damage": 50, "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
             "cooldown_turns": 0, "cooldown": 0, "effect_type": None,
@@ -373,16 +373,16 @@ class TestPvpTrainingConsequences:
     @patch("main.write_turn", new_callable=AsyncMock)
     @patch("main.get_battle", new_callable=AsyncMock)
     @patch("main.load_state", new_callable=AsyncMock)
-    @patch("main.character_has_rank", new_callable=AsyncMock, return_value=True)
-    @patch("main.get_rank", new_callable=AsyncMock)
+    @patch("main.character_has_skill", new_callable=AsyncMock, return_value=True)
+    @patch("main.get_resolved_skill", new_callable=AsyncMock)
     @patch("main.compute_damage_with_rolls", new_callable=AsyncMock, return_value=(999, {}))
     @patch("main.fetch_weapons", new_callable=AsyncMock, return_value={"main_weapon": None, "additional_weapons": None})
     def test_pve_no_hp_override(
-        self, mock_fetch_weapons, mock_compute, mock_get_rank, mock_has_rank,
+        self, mock_fetch_weapons, mock_compute, mock_get_resolved_skill, mock_has_skill,
         mock_load_state, mock_get_battle, mock_write_turn, mock_finish_battle
     ):
         """After PvE battle finishes, no HP=1 override happens."""
-        mock_get_rank.return_value = {
+        mock_get_resolved_skill.return_value = {
             "id": 1, "skill_type": "attack", "damage_type": "physical",
             "base_damage": 50, "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
             "cooldown_turns": 0, "cooldown": 0, "effect_type": None,

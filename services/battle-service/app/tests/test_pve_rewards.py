@@ -92,10 +92,10 @@ buffs_mock.build_percent_resist_buffs = MagicMock(return_value={})
 
 # Ensure skills_client has the required functions
 skills_mock = sys.modules["skills_client"]
-skills_mock.character_has_rank = AsyncMock(return_value=True)
-skills_mock.get_rank = AsyncMock(return_value={})
+skills_mock.character_has_skill = AsyncMock(return_value=True)
+skills_mock.get_resolved_skill = AsyncMock(return_value={})
 skills_mock.get_item = AsyncMock(return_value={})
-skills_mock.character_ranks = AsyncMock(return_value=[])
+skills_mock.character_skills = AsyncMock(return_value=[])
 
 # Ensure mongo_helpers
 mongo_mock = sys.modules["mongo_helpers"]

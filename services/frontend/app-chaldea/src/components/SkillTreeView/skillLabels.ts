@@ -2,37 +2,92 @@
 // Used by PerkCard / SkillUpgradeModal to render damage_type / effect_name / target_side
 // in human-readable Russian instead of raw API codes.
 
+// Canonical values: see AdminSkillsPage/skillConstants.ts DAMAGE_TYPES
 const DAMAGE_TYPE_RU: Record<string, string> = {
-  all: 'все типы',
-  physical: 'физический',
-  slashing: 'рубящий',
-  piercing: 'колющий',
-  blunt: 'дробящий',
-  crushing: 'дробящий',
-  fire: 'огонь',
-  cold: 'холод',
-  ice: 'лёд',
-  frost: 'мороз',
-  lightning: 'молния',
-  electric: 'электричество',
-  shock: 'разряд',
-  holy: 'свет',
-  light: 'свет',
-  dark: 'тьма',
-  shadow: 'тень',
-  poison: 'яд',
-  acid: 'кислота',
-  arcane: 'магия',
-  magic: 'магия',
-  nature: 'природа',
-  earth: 'земля',
-  water: 'вода',
-  wind: 'воздух',
-  air: 'воздух',
-  necrotic: 'некротика',
-  psychic: 'разум',
-  true: 'чистый',
+  all: 'Все типы',
+  physical: 'Физический',
+  catting: 'Режущий',
+  crushing: 'Дробящий',
+  piercing: 'Колющий',
+  magic: 'Магия',
+  fire: 'Огонь',
+  ice: 'Лёд',
+  watering: 'Вода',
+  electricity: 'Электричество',
+  wind: 'Ветер',
+  sainting: 'Святой',
+  damning: 'Тёмный',
+  // legacy aliases (kept for tolerance with old data)
+  slashing: 'Режущий',
+  blunt: 'Дробящий',
+  cold: 'Лёд',
+  frost: 'Лёд',
+  lightning: 'Электричество',
+  electric: 'Электричество',
+  shock: 'Электричество',
+  holy: 'Святой',
+  light: 'Святой',
+  dark: 'Тёмный',
+  shadow: 'Тёмный',
+  poison: 'Яд',
+  acid: 'Кислота',
+  arcane: 'Магия',
+  nature: 'Природа',
+  earth: 'Земля',
+  water: 'Вода',
+  air: 'Ветер',
+  necrotic: 'Некротика',
+  psychic: 'Разум',
+  true: 'Чистый',
 };
+
+// Mobile-friendly target labels for the resolved card.
+const TARGET_SIDE_CARD_RU: Record<string, string> = {
+  self: 'На себя',
+  enemy: 'На врага',
+  enemies: 'На всех врагов',
+  ally: 'На союзника',
+  allies: 'На всех союзников',
+  all: 'На всех',
+};
+
+// Skill type (canonical attack/defense/support).
+const SKILL_TYPE_RU: Record<string, string> = {
+  attack: 'Атакующий',
+  defense: 'Защитный',
+  support: 'Поддержки',
+};
+
+// StatModifier attribute_key → Russian label (see skillConstants STAT_MODIFIERS).
+const STAT_LABELS: Record<string, string> = {
+  critical_hit_chance: 'Шанс крита',
+  crit_damage: 'Урон крита',
+  dodge_chance: 'Уклонение',
+  hp: 'Здоровье',
+  mana: 'Мана',
+  energy: 'Энергия',
+};
+
+// Complex effect key → Russian label (see skillConstants COMPLEX_EFFECTS).
+const COMPLEX_EFFECT_LABELS: Record<string, string> = {
+  Bleeding: 'Кровотечение',
+  Burn: 'Возгорание',
+  Poison: 'Отравление',
+  Stun: 'Оглушение',
+  Freeze: 'Обледенение',
+  Knockdown: 'Сбитие с ног',
+  Daze: 'Ошеломление',
+  MagicImpact: 'Магическое воздействие',
+  Wet: 'Мокрый',
+  Electrify: 'Электролизация',
+  Windburn: 'Обветрение',
+  Holy: 'Святость',
+  Curse: 'Проклятие',
+  ArmorBreak: 'Раскол брони',
+};
+
+// Stats that are FLAT (not percent) when rendered.
+const FLAT_STAT_KEYS = new Set(['hp', 'mana', 'energy']);
 
 const TARGET_SIDE_RU: Record<string, string> = {
   self: 'себя',
@@ -160,4 +215,80 @@ export const ruEffectName = (
   }
 
   return lookup(EFFECT_NAME_RU, trimmed) ?? trimmed;
+};
+
+// --- New exports for the player skill info card (FEAT-125) ---
+
+export const ruTargetSideCard = (key: string | null | undefined): string => {
+  if (!key) return '';
+  return TARGET_SIDE_CARD_RU[key.toLowerCase().trim()] ?? key;
+};
+
+export const ruSkillType = (key: string | null | undefined): string => {
+  if (!key) return '';
+  return SKILL_TYPE_RU[key.toLowerCase().trim()] ?? key;
+};
+
+export type EffectCategory = 'buff' | 'resist' | 'stat' | 'complex';
+
+export interface ParsedEffect {
+  category: EffectCategory;
+  friendlyName: string;
+  /** If true, magnitude is rendered as percent; otherwise flat number. */
+  isPercent: boolean;
+}
+
+/**
+ * Parse an effect_name (+ optional attribute_key) into a display-friendly
+ * shape. See CLAUDE.md FEAT-125 — the admin payload builder emits:
+ *   "Buff: fire" / "Debuff: fire" (legacy) / "Resist: cold" /
+ *   "Vulnerability: holy" (legacy) / "StatModifier" / raw complex effect keys.
+ */
+export const parseEffectName = (
+  effectName: string | null | undefined,
+  attributeKey?: string | null
+): ParsedEffect => {
+  const name = (effectName ?? '').trim();
+
+  const colonIdx = name.indexOf(':');
+  if (colonIdx > 0) {
+    const prefix = name.slice(0, colonIdx).trim().toLowerCase();
+    const suffix = name.slice(colonIdx + 1).trim();
+    const dmgRu = ruDamageType(suffix);
+
+    if (prefix === 'buff' || prefix === 'debuff') {
+      return { category: 'buff', friendlyName: `Бафф ${dmgRu.toLowerCase()}`, isPercent: true };
+    }
+    if (prefix === 'resist' || prefix === 'vulnerability') {
+      const label = prefix === 'vulnerability' ? 'Уязвимость' : 'Резист';
+      return { category: 'resist', friendlyName: `${label} ${dmgRu.toLowerCase()}`, isPercent: true };
+    }
+  }
+
+  if (name === 'StatModifier') {
+    const key = (attributeKey ?? '').trim();
+    const friendly = STAT_LABELS[key] ?? key ?? 'Характеристика';
+    return {
+      category: 'stat',
+      friendlyName: friendly,
+      isPercent: !FLAT_STAT_KEYS.has(key),
+    };
+  }
+
+  const complex = COMPLEX_EFFECT_LABELS[name];
+  return {
+    category: 'complex',
+    friendlyName: complex ?? name ?? 'Эффект',
+    isPercent: false,
+  };
+};
+
+/** Russian turn-count pluralization: 1 ход / 2–4 хода / 5+ ходов. */
+export const pluralizeTurns = (n: number): string => {
+  const abs = Math.abs(n);
+  const mod10 = abs % 10;
+  const mod100 = abs % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${n} ход`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} хода`;
+  return `${n} ходов`;
 };

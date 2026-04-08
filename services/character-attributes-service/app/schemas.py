@@ -120,6 +120,15 @@ class UpdatePassiveExperienceRequest(BaseModel):
     amount: int  # Положительное число означает "добавить", отрицательное — "снять".
 
 
+class GrantActiveXpRequest(BaseModel):
+    delta: int  # Положительное число — выдать, отрицательное — снять. Итог клампается до 0.
+
+
+class GrantActiveXpResponse(BaseModel):
+    character_id: int
+    active_experience: int
+
+
 # Схема для админского обновления атрибутов (все поля Optional — partial update)
 class AdminAttributeUpdate(BaseModel):
     # Resources

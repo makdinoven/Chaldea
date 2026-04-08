@@ -64,7 +64,7 @@ class TestProcessMessage:
 
     @pytest.mark.asyncio
     async def test_assigns_skills_to_new_character(self):
-        """Valid message assigns skills using existing rank 1."""
+        """(FEAT-125) Valid message assigns skills at level 0 (no ranks)."""
         payload = {
             "character_id": 42,
             "skill_ids": [10, 20],
@@ -74,60 +74,44 @@ class TestProcessMessage:
         mock_db = MagicMock()
         mock_skill_10 = MagicMock(id=10)
         mock_skill_20 = MagicMock(id=20)
-        mock_rank_10 = MagicMock(id=100, rank_number=1)
-        mock_rank_20 = MagicMock(id=200, rank_number=1)
 
         with (
             patch("rabbitmq_consumer.async_session") as mock_session_factory,
             patch("rabbitmq_consumer.crud") as mock_crud,
-            patch("rabbitmq_consumer.schemas") as mock_schemas,
         ):
-            # Setup async session context manager
             @asynccontextmanager
             async def session_cm():
                 yield mock_db
             mock_session_factory.return_value = session_cm()
 
-            # No existing skills
             mock_crud.list_character_skills_for_character = AsyncMock(return_value=[])
-            # Skills exist
             mock_crud.get_skill = AsyncMock(side_effect=[mock_skill_10, mock_skill_20])
-            # Ranks exist (rank 1 present)
-            mock_crud.list_skill_ranks_by_skill = AsyncMock(
-                side_effect=[[mock_rank_10], [mock_rank_20]]
-            )
             mock_crud.create_character_skill = AsyncMock()
 
             from rabbitmq_consumer import process_message
             await process_message(msg)
 
-            # Should check existing skills
             mock_crud.list_character_skills_for_character.assert_called_once_with(mock_db, 42)
-            # Should look up each skill
             assert mock_crud.get_skill.call_count == 2
-            # Should create CharacterSkill for each
             assert mock_crud.create_character_skill.call_count == 2
-            # Verify schema construction
-            mock_schemas.CharacterSkillCreate.assert_any_call(
-                character_id=42, skill_rank_id=100,
+            mock_crud.create_character_skill.assert_any_call(
+                mock_db, character_id=42, skill_id=10, level=0,
             )
-            mock_schemas.CharacterSkillCreate.assert_any_call(
-                character_id=42, skill_rank_id=200,
+            mock_crud.create_character_skill.assert_any_call(
+                mock_db, character_id=42, skill_id=20, level=0,
             )
 
     @pytest.mark.asyncio
-    async def test_creates_rank_1_if_missing(self):
-        """If rank 1 doesn't exist for a skill, it is created."""
-        payload = {"character_id": 5, "skill_ids": [10]}
+    async def test_create_character_skill_exception_is_swallowed(self):
+        """(FEAT-125) If create_character_skill fails for one skill, others still process."""
+        payload = {"character_id": 5, "skill_ids": [10, 20]}
         msg = _make_message(payload)
         mock_db = MagicMock()
         mock_skill = MagicMock(id=10)
-        mock_new_rank = MagicMock(id=999)
 
         with (
             patch("rabbitmq_consumer.async_session") as mock_session_factory,
             patch("rabbitmq_consumer.crud") as mock_crud,
-            patch("rabbitmq_consumer.schemas") as mock_schemas,
         ):
             @asynccontextmanager
             async def session_cm():
@@ -136,23 +120,14 @@ class TestProcessMessage:
 
             mock_crud.list_character_skills_for_character = AsyncMock(return_value=[])
             mock_crud.get_skill = AsyncMock(return_value=mock_skill)
-            # No ranks for this skill
-            mock_crud.list_skill_ranks_by_skill = AsyncMock(return_value=[])
-            mock_crud.create_skill_rank = AsyncMock(return_value=mock_new_rank)
-            mock_crud.create_character_skill = AsyncMock()
+            mock_crud.create_character_skill = AsyncMock(
+                side_effect=[RuntimeError("duplicate"), None]
+            )
 
             from rabbitmq_consumer import process_message
             await process_message(msg)
 
-            # Should create rank 1
-            mock_schemas.SkillRankCreate.assert_called_once_with(
-                skill_id=10, rank_number=1,
-            )
-            mock_crud.create_skill_rank.assert_called_once()
-            # Should use the new rank's id
-            mock_schemas.CharacterSkillCreate.assert_called_once_with(
-                character_id=5, skill_rank_id=999,
-            )
+            assert mock_crud.create_character_skill.call_count == 2
 
     @pytest.mark.asyncio
     async def test_skips_nonexistent_skill(self):
@@ -245,12 +220,10 @@ class TestIdempotency:
         payload = {"character_id": 42, "skill_ids": [10]}
         mock_db = MagicMock()
         mock_skill = MagicMock(id=10)
-        mock_rank = MagicMock(id=100, rank_number=1)
 
         with (
             patch("rabbitmq_consumer.async_session") as mock_session_factory,
             patch("rabbitmq_consumer.crud") as mock_crud,
-            patch("rabbitmq_consumer.schemas"),
         ):
             # First call: no existing skills
             @asynccontextmanager
@@ -259,7 +232,6 @@ class TestIdempotency:
             mock_session_factory.return_value = session_cm_1()
             mock_crud.list_character_skills_for_character = AsyncMock(return_value=[])
             mock_crud.get_skill = AsyncMock(return_value=mock_skill)
-            mock_crud.list_skill_ranks_by_skill = AsyncMock(return_value=[mock_rank])
             mock_crud.create_character_skill = AsyncMock()
 
             from rabbitmq_consumer import process_message

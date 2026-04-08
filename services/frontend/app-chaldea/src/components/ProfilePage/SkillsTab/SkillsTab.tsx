@@ -9,8 +9,9 @@ import { X } from 'react-feather';
 import type {
   CharacterSkillState,
   ResolvedSkill,
+  SkillWithPerks,
 } from '../../SkillTreeView/types';
-import { ruDamageType, ruEffectName, ruTargetSide } from '../../SkillTreeView/skillLabels';
+import ResolvedSkillCard from './ResolvedSkillCard';
 
 interface SkillsTabProps {
   characterId: number;
@@ -53,6 +54,7 @@ const SkillsTab = ({ characterId }: SkillsTabProps) => {
   const [error, setError] = useState<string | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<CharacterSkillState | null>(null);
   const [resolved, setResolved] = useState<ResolvedSkill | null>(null);
+  const [skillWithPerks, setSkillWithPerks] = useState<SkillWithPerks | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
   const character = useAppSelector((state) => state.user.character);
@@ -80,15 +82,24 @@ const SkillsTab = ({ characterId }: SkillsTabProps) => {
   useEffect(() => {
     if (!selectedSkill) {
       setResolved(null);
+      setSkillWithPerks(null);
       return;
     }
     setDetailLoading(true);
-    axios
-      .get<ResolvedSkill>(`/skills/${selectedSkill.skill_id}/resolved`, {
+    Promise.all([
+      axios.get<ResolvedSkill>(`/skills/${selectedSkill.skill_id}/resolved`, {
         params: { character_id: characterId },
+      }),
+      axios.get<SkillWithPerks>(`/skills/${selectedSkill.skill_id}`),
+    ])
+      .then(([resolvedRes, skillRes]) => {
+        setResolved(resolvedRes.data);
+        setSkillWithPerks(skillRes.data);
       })
-      .then((res) => setResolved(res.data))
-      .catch(() => toast.error('Не удалось загрузить характеристики навыка'))
+      .catch(() => {
+        toast.error('Не удалось загрузить характеристики навыка');
+        setError('Не удалось загрузить характеристики навыка');
+      })
       .finally(() => setDetailLoading(false));
   }, [selectedSkill, characterId]);
 
@@ -190,32 +201,12 @@ const SkillsTab = ({ characterId }: SkillsTabProps) => {
               className="modal-content gold-outline max-w-md w-full mx-4"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-start justify-between mb-4 gap-3">
-                <div className="flex items-center gap-4 min-w-0">
-                  {selectedSkill.skill?.skill_image ? (
-                    <img
-                      src={selectedSkill.skill.skill_image}
-                      alt={selectedSkill.skill.name}
-                      className="w-16 h-16 rounded-lg object-cover border border-white/10"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center">
-                      <span className="text-white/20 text-2xl">⚔</span>
-                    </div>
-                  )}
-                  <div className="min-w-0">
-                    <h2 className="gold-text text-xl font-medium truncate">
-                      {selectedSkill.skill?.name}
-                    </h2>
-                    <div className="text-white/50 text-xs mt-1">
-                      Уровень {selectedSkill.level}/4 · Перков: {selectedSkill.selected_perk_ids.length}
-                    </div>
-                  </div>
-                </div>
+              <div className="flex items-start justify-end mb-2">
                 <button
                   type="button"
                   onClick={() => setSelectedSkill(null)}
                   className="text-white/40 hover:text-white transition-colors"
+                  aria-label="Закрыть"
                 >
                   <X size={20} />
                 </button>
@@ -227,49 +218,17 @@ const SkillsTab = ({ characterId }: SkillsTabProps) => {
                 </div>
               )}
 
-              {resolved && (
-                <>
-                  <div className="flex flex-wrap gap-3 mb-4 text-sm">
-                    <div className="text-white/80">Энергия: {resolved.cost_energy}</div>
-                    <div className="text-white/80">Мана: {resolved.cost_mana}</div>
-                    <div className="text-white/80">КД: {resolved.cooldown}</div>
-                  </div>
-
-                  {resolved.damage_entries.length > 0 && (
-                    <div className="mb-3">
-                      <h4 className="text-white/50 text-xs uppercase mb-1.5">Урон</h4>
-                      <div className="space-y-1">
-                        {resolved.damage_entries.map((d, i) => (
-                          <div
-                            key={i}
-                            className="text-sm bg-white/5 rounded px-3 py-1.5 text-white/80"
-                          >
-                            {d.amount} {ruDamageType(d.damage_type)}
-                            {d.target_side ? ` — ${ruTargetSide(d.target_side)}` : ''}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {resolved.effects.length > 0 && (
-                    <div className="mb-3">
-                      <h4 className="text-white/50 text-xs uppercase mb-1.5">Эффекты</h4>
-                      <div className="space-y-1">
-                        {resolved.effects.map((e, i) => (
-                          <div
-                            key={i}
-                            className="text-sm bg-white/5 rounded px-3 py-1.5 text-purple-300"
-                          >
-                            {ruEffectName(e.effect_name, e.attribute_key)}
-                            {e.duration ? ` · ${e.duration} ход.` : ''}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
+              {!detailLoading && !resolved && error && (
+                <div className="text-red-300 text-sm text-center py-4">{error}</div>
               )}
+
+              {resolved && (
+                <ResolvedSkillCard resolved={resolved} skill={skillWithPerks} />
+              )}
+
+              <div className="text-white/40 text-xs mt-3 text-center">
+                Уровень {selectedSkill.level}/4
+              </div>
             </motion.div>
           </div>
         )}

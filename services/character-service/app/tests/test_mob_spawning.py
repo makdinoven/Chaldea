@@ -265,8 +265,8 @@ class TestSpawnMobFromTemplate:
     def test_assigns_template_skills(self, mock_attrs, db_session):
         template = _create_mob_template(db_session)
         # Add template skills
-        skill1 = models.MobTemplateSkill(mob_template_id=template.id, skill_rank_id=10)
-        skill2 = models.MobTemplateSkill(mob_template_id=template.id, skill_rank_id=20)
+        skill1 = models.MobTemplateSkill(mob_template_id=template.id, skill_id=10)
+        skill2 = models.MobTemplateSkill(mob_template_id=template.id, skill_id=20)
         db_session.add_all([skill1, skill2])
         db_session.commit()
 

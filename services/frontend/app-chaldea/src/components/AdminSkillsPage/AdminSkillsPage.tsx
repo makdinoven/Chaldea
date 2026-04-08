@@ -10,6 +10,7 @@ import {
 } from '../../redux/actions/skillsAdminActions';
 import { clearSelectedSkill } from '../../redux/slices/skillsAdminSlice';
 import PerkPoolEditor from './PerkPoolEditor';
+import SkillBaseEditor from './SkillBaseEditor';
 
 const extractError = (err: unknown, fallback: string): string => {
   const e = err as { response?: { data?: { detail?: string } }; message?: string };
@@ -179,6 +180,7 @@ const AdminSkillsPage = () => {
                 </div>
               </div>
 
+              <SkillBaseEditor skill={selectedSkill} onRefresh={refreshSelected} />
               <PerkPoolEditor skill={selectedSkill} onRefresh={refreshSelected} />
             </div>
           ) : (

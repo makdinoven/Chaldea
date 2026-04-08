@@ -111,7 +111,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
       <svg
         viewBox="0 0 100 100"
         className="absolute inset-0 w-full h-full"
-        style={{ filter: state === 'chosen' || state === 'available' ? `drop-shadow(${stateColors.glow.split(',')[0]})` : undefined }}
+        style={{ filter: 'glow' in stateColors ? `drop-shadow(${stateColors.glow.split(',')[0]})` : undefined }}
       >
         {/* Glow background for chosen */}
         {state === 'chosen' && (

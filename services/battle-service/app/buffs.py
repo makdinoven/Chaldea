@@ -35,15 +35,26 @@ def _normalize_effect(row: Dict) -> Dict:
     }
 
 
-def apply_new_effects(state: Dict, pid: int, raw_effect_rows: List[Dict], is_enemy: bool = False) -> None:
+def apply_new_effects(
+    state: Dict,
+    pid: int,
+    raw_effect_rows: List[Dict],
+    is_enemy: bool = False,
+    owner_pid: int | None = None,
+) -> None:
     """
     • Для hp/mana/energy/stamina — применяем сразу (clamp 0..max_*)
     • Для остальных — нормализуем и добавляем в active_effects[pid]
     • is_enemy=True — эффекты применяются к врагу (положительные мгновенные
       значения инвертируются в урон, чтобы не лечить противника)
+    • owner_pid — id участника, который КАСТанул эффект (caster). Если None,
+      считаем, что владелец = target (legacy-поведение). Owner используется
+      для тика длительности: эффект убывает только в конце хода владельца,
+      даже если лежит в active_effects цели.
     """
     inst_attrs = {"hp", "mana", "energy", "stamina"}
     aid = str(pid)
+    owner_id = int(owner_pid) if owner_pid is not None else int(pid)
 
     for row in raw_effect_rows:
         eff = _normalize_effect(row)
@@ -58,21 +69,39 @@ def apply_new_effects(state: Dict, pid: int, raw_effect_rows: List[Dict], is_ene
             new = part[eff["attribute"]] + magnitude
             part[eff["attribute"]] = max(0, min(mx, new))
         else:
+            eff["owner_id"] = owner_id
             state.setdefault("active_effects", {}).setdefault(aid, []).append(eff)
 
 
-def decrement_durations(state: Dict) -> None:
+def decrement_durations(state: Dict, participant_id: int | None = None) -> None:
     """
-    Каждый ход уменьшаем duration всех активных эффектов,
-    удаляем, когда duration == 0.
+    Уменьшаем duration активных эффектов в конце хода владельца (caster).
+    Если participant_id указан — тикают ТОЛЬКО эффекты, которые КАСТанул
+    этот участник, независимо от того, на ком они висят. Это гарантирует,
+    что дебафф, повешенный на врага, убывает на ходу кастера, а не жертвы.
+    Если None — тикает у всех (legacy).
+    Эффекты без owner_id считаются принадлежащими участнику, в чьём списке
+    они лежат (обратная совместимость со старым state в Redis).
+    Удаляем, когда duration == 0.
     """
-    for pid, lst in list(state.get("active_effects", {}).items()):
+    active = state.get("active_effects", {})
+    pids = list(active.keys())
+    owner_filter = int(participant_id) if participant_id is not None else None
+
+    for pid in pids:
+        lst = active.get(pid)
+        if not lst:
+            continue
         new_lst = []
         for eff in lst:
+            eff_owner = eff.get("owner_id", int(pid))  # legacy: own list
+            if owner_filter is not None and eff_owner != owner_filter:
+                new_lst.append(eff)
+                continue
             eff["duration"] -= 1
             if eff["duration"] > 0:
                 new_lst.append(eff)
-        state["active_effects"][pid] = new_lst
+        active[pid] = new_lst
 
 
 def aggregate_modifiers(effects_for_participant: List[Dict]) -> Dict[str, float]:

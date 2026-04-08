@@ -219,11 +219,7 @@ async def _seed_tree_with_nodes(admin_client, db_session):
     db_session.add_all([skill1, skill2])
     await db_session.commit()
 
-    # Create rank 1 for each skill
-    rank1_s1 = models.SkillRank(id=1, skill_id=1, rank_number=1, rank_name="Fireball I")
-    rank1_s2 = models.SkillRank(id=2, skill_id=2, rank_number=1, rank_name="Shield Bash I")
-    db_session.add_all([rank1_s1, rank1_s2])
-    await db_session.commit()
+    # (FEAT-125) Skills no longer have ranks — only flat skill rows.
 
     # Create tree via admin API
     resp = await admin_client.post("/skills/admin/class_trees/", json=TREE_PAYLOAD)
@@ -706,8 +702,9 @@ class TestPurchaseSkill:
                 "skill_id": ids["skill1_id"],
             },
         )
-        assert resp.status_code == 400
-        assert "уже изучен" in resp.json()["detail"].lower()
+        # (FEAT-125) backend now returns 409 "Навык уже есть"
+        assert resp.status_code == 409
+        assert "уже" in resp.json()["detail"].lower()
 
     @pytest.mark.asyncio
     @patch.object(main_module, "get_active_experience", new_callable=AsyncMock)
@@ -736,7 +733,8 @@ class TestPurchaseSkill:
                 "skill_id": ids["skill1_id"],
             },
         )
-        assert resp.status_code == 400
+        # (FEAT-125) 402 Payment Required for insufficient XP
+        assert resp.status_code == 402
         assert "опыт" in resp.json()["detail"].lower()
 
     @pytest.mark.asyncio

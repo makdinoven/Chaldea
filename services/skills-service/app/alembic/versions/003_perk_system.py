@@ -105,6 +105,30 @@ def upgrade() -> None:
                 sa.Column('reset_available_at', sa.DateTime(), nullable=True),
             )
 
+        # Dedupe rows that collide on (character_id, skill_id) BEFORE we drop
+        # the skill_rank_id column. Multiple character_skills rows can map to
+        # the same parent skill_id (different ranks of the same skill). For
+        # each (character_id, skill_id) group we keep the row whose source
+        # rank had the LOWEST rank_number (the cleanest base entry — prod is
+        # test data only and progression is throwaway), with id ASC as a
+        # stable tiebreaker. Requires MySQL 8+ (window functions).
+        if _has_column(inspector, 'character_skills', 'skill_rank_id') and 'skill_ranks' in tables:
+            op.execute(
+                """
+                DELETE FROM character_skills WHERE id IN (
+                    SELECT id FROM (
+                        SELECT cs.id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY cs.character_id, cs.skill_id
+                                   ORDER BY sr.rank_number ASC, cs.id ASC
+                               ) AS rn
+                        FROM character_skills cs
+                        JOIN skill_ranks sr ON sr.id = cs.skill_rank_id
+                    ) ranked WHERE rn > 1
+                )
+                """
+            )
+
         # Drop FK and column skill_rank_id if present
         if _has_column(inspector, 'character_skills', 'skill_rank_id'):
             fk_name = _fk_name(inspector, 'character_skills', 'skill_rank_id')
@@ -141,6 +165,74 @@ def upgrade() -> None:
                 )
 
     # Refresh inspector for the next steps
+    inspector = sa.inspect(bind)
+    tables = set(inspector.get_table_names())
+
+    # ----------------------------------------------------------------
+    # 2b. Add the four base scalar columns to `skills` and backfill
+    #     from rank-1 rows of `skill_ranks` BEFORE the rank tables are dropped.
+    #     Previously these columns lived on SkillRank; in the perk model they
+    #     belong directly on the skill row. We must preserve rank-1 values of
+    #     already-configured skills on prod deploy.
+    # ----------------------------------------------------------------
+    SCALAR_COLS = (
+        ('cost_energy', '0'),
+        ('cost_mana', '0'),
+        ('cooldown', '0'),
+        ('level_requirement', '1'),
+    )
+
+    if 'skills' in tables:
+        # Add columns as nullable first so backfill can write freely.
+        for col_name, _ in SCALAR_COLS:
+            if not _has_column(inspector, 'skills', col_name):
+                op.add_column(
+                    'skills',
+                    sa.Column(col_name, sa.Integer(), nullable=True),
+                )
+        # Refresh inspector after add_column
+        inspector = sa.inspect(bind)
+        tables = set(inspector.get_table_names())
+
+        # Backfill from rank-1 (lowest rank_number per skill) while skill_ranks still exists.
+        if 'skill_ranks' in tables:
+            op.execute(
+                """
+                UPDATE skills s
+                JOIN skill_ranks sr
+                    ON sr.skill_id = s.id
+                   AND sr.rank_number = (
+                        SELECT MIN(rank_number)
+                        FROM (SELECT skill_id, rank_number FROM skill_ranks) sr2
+                        WHERE sr2.skill_id = s.id
+                   )
+                SET s.cost_energy      = COALESCE(sr.cost_energy, 0),
+                    s.cost_mana        = COALESCE(sr.cost_mana, 0),
+                    s.cooldown         = COALESCE(sr.cooldown, 0),
+                    s.level_requirement = COALESCE(sr.level_requirement, 1)
+                """
+            )
+
+        # Fill any still-NULL rows (skills without ranks) with type defaults,
+        # then lock to NOT NULL with server_default matching the type.
+        op.execute(
+            """
+            UPDATE skills
+            SET cost_energy       = COALESCE(cost_energy, 0),
+                cost_mana         = COALESCE(cost_mana, 0),
+                cooldown          = COALESCE(cooldown, 0),
+                level_requirement = COALESCE(level_requirement, 1)
+            """
+        )
+        for col_name, default in SCALAR_COLS:
+            op.alter_column(
+                'skills', col_name,
+                existing_type=sa.Integer(),
+                nullable=False,
+                server_default=default,
+            )
+
+    # Refresh inspector before next section
     inspector = sa.inspect(bind)
     tables = set(inspector.get_table_names())
 

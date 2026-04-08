@@ -102,7 +102,52 @@ def upgrade():
             break
         time.sleep(1.0)
 
-    # 3. Drop old UNIQUE on (mob_template_id, skill_rank_id) if still present.
+    # 2b. Dedupe rows that collide on (mob_template_id, skill_id) BEFORE we
+    #     drop skill_rank_id and add the new UNIQUE constraint. Multiple
+    #     mob_template_skills rows can reference different ranks of the same
+    #     parent skill; after the skill_rank_id -> skill_id repoint they
+    #     collapse into duplicates. Keep the row whose source rank had the
+    #     LOWEST rank_number (cleanest base entry — prod is test data only);
+    #     id ASC tiebreaker. Requires MySQL 8+.
+    if (
+        _has_column(inspector, TABLE, OLD_COL)
+        and "skill_ranks" in inspector.get_table_names()
+    ):
+        bind.execute(
+            sa.text(
+                f"""
+                DELETE FROM {TABLE} WHERE id IN (
+                    SELECT id FROM (
+                        SELECT mts.id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY mts.mob_template_id, mts.{NEW_COL}
+                                   ORDER BY sr.rank_number ASC, mts.id ASC
+                               ) AS rn
+                        FROM {TABLE} mts
+                        JOIN skill_ranks sr ON sr.id = mts.{OLD_COL}
+                    ) ranked WHERE rn > 1
+                )
+                """
+            )
+        )
+
+    # 3. Drop old FK on skill_rank_id FIRST (MySQL refuses to drop the
+    #    unique index it depends on otherwise).
+    if _has_column(inspector, TABLE, OLD_COL):
+        fk_name = _fk_name_for_column(inspector, TABLE, OLD_COL)
+        if fk_name:
+            op.drop_constraint(fk_name, TABLE, type_="foreignkey")
+        inspector = sa.inspect(bind)
+
+    # 3b. Before dropping the UNIQUE index (which also backs the FK on
+    #     mob_template_id), create a plain index on mob_template_id so MySQL
+    #     has a replacement backing index (errno 1553 otherwise).
+    existing_indexes = {ix["name"] for ix in inspector.get_indexes(TABLE)}
+    if "ix_mts_mob_template_id" not in existing_indexes:
+        op.create_index("ix_mts_mob_template_id", TABLE, ["mob_template_id"])
+        inspector = sa.inspect(bind)
+
+    # 4. Drop old UNIQUE on (mob_template_id, skill_rank_id) if still present.
     uq_name = _unique_name_on_columns(inspector, TABLE, {"mob_template_id", OLD_COL})
     if uq_name:
         op.drop_constraint(uq_name, TABLE, type_="unique")
@@ -114,13 +159,15 @@ def upgrade():
             pass
     inspector = sa.inspect(bind)
 
-    # 4. Drop old FK on skill_rank_id if present.
+    # 5. Drop the now-orphan column.
     if _has_column(inspector, TABLE, OLD_COL):
-        fk_name = _fk_name_for_column(inspector, TABLE, OLD_COL)
-        if fk_name:
-            op.drop_constraint(fk_name, TABLE, type_="foreignkey")
         op.drop_column(TABLE, OLD_COL)
         inspector = sa.inspect(bind)
+
+    # 4b. Wipe orphan rows whose skill_id we could not resolve (the source
+    #     skill_rank_id pointed to a missing skill_ranks row). Mirrors the
+    #     equivalent step in skills-service migration 003 for character_skills.
+    bind.execute(sa.text(f"DELETE FROM {TABLE} WHERE {NEW_COL} IS NULL"))
 
     # 5. Promote skill_id to NOT NULL (only if no nulls remain).
     null_count = bind.execute(

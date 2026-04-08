@@ -91,6 +91,22 @@ export const updateCharacterAttributes = async (
   return data;
 };
 
+export interface GrantActiveXpResponse {
+  character_id: number;
+  active_experience: number;
+}
+
+export const grantActiveXp = async (
+  characterId: number,
+  delta: number,
+): Promise<GrantActiveXpResponse> => {
+  const { data } = await axios.post<GrantActiveXpResponse>(
+    `/attributes/admin/${characterId}/grant_active_xp`,
+    { delta },
+  );
+  return data;
+};
+
 // --- Inventory ---
 
 export const fetchCharacterInventory = async (

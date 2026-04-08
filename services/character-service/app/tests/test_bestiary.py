@@ -222,7 +222,7 @@ class TestGetBestiaryCRUD:
             base_attributes={"strength": 15},
         )
         # Add skill, loot, spawn data
-        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_rank_id=42))
+        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_id=42))
         db_session.add(
             models.MobLootTable(
                 mob_template_id=template.id,
@@ -253,7 +253,7 @@ class TestGetBestiaryCRUD:
         assert entry["description"] == "Описание"
         assert entry["base_attributes"] == {"strength": 15}
         assert len(entry["skills"]) == 1
-        assert entry["skills"][0]["skill_rank_id"] == 42
+        assert entry["skills"][0]["skill_id"] == 42
         assert len(entry["loot_entries"]) == 1
         assert entry["loot_entries"][0]["item_id"] == 7
         assert len(entry["spawn_locations"]) == 1
@@ -315,7 +315,7 @@ class TestGetBestiaryCRUD:
             description="Раскрытое описание элиты",
             base_attributes={"strength": 50, "agility": 30},
         )
-        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_rank_id=99))
+        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_id=99))
         db_session.commit()
 
         _create_mob_kill(character_id=1, mob_template_id=template.id)
@@ -327,7 +327,7 @@ class TestGetBestiaryCRUD:
         assert entry["description"] == "Раскрытое описание элиты"
         assert entry["base_attributes"] == {"strength": 50, "agility": 30}
         assert len(entry["skills"]) == 1
-        assert entry["skills"][0]["skill_rank_id"] == 99
+        assert entry["skills"][0]["skill_id"] == 99
 
     def test_killed_count_reflects_kills(
         self, db_session, _create_mob_template, _create_mob_kill

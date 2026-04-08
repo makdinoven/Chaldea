@@ -71,10 +71,10 @@ buffs_mock.build_percent_resist_buffs = MagicMock(return_value={})
 
 # Configure skills_client mock
 skills_mock = sys.modules["skills_client"]
-skills_mock.character_has_rank = AsyncMock(return_value=True)
-skills_mock.get_rank = AsyncMock(return_value={})
+skills_mock.character_has_skill = AsyncMock(return_value=True)
+skills_mock.get_resolved_skill = AsyncMock(return_value={})
 skills_mock.get_item = AsyncMock(return_value={})
-skills_mock.character_ranks = AsyncMock(return_value=[])
+skills_mock.character_skills = AsyncMock(return_value=[])
 
 # Configure inventory_client
 inv_mock = sys.modules["inventory_client"]
@@ -170,14 +170,14 @@ def _make_battle_state(
     }
 
 
-def _make_action_payload(item_id=None, attack_rank_id=None):
+def _make_action_payload(item_id=None, attack_skill_id=None):
     """Build an action payload with optional item_id."""
     return {
         "participant_id": 1,
         "skills": {
-            "attack_rank_id": attack_rank_id,
-            "defense_rank_id": None,
-            "support_rank_id": None,
+            "attack_skill_id": attack_skill_id,
+            "defense_skill_id": None,
+            "support_skill_id": None,
             "item_id": item_id,
         },
     }
@@ -253,8 +253,8 @@ def _build_common_patches(
             200, {"id": 5, "username": "player", "role": "user", "permissions": []}
         )),
         "main.save_log": mock_save_log,
-        "main.character_has_rank": AsyncMock(return_value=True),
-        "main.get_rank": AsyncMock(return_value=attack_rank),
+        "main.character_has_skill": AsyncMock(return_value=True),
+        "main.get_resolved_skill": AsyncMock(return_value=attack_rank),
         "main.consume_item": AsyncMock(return_value=consume_result),
     }
 

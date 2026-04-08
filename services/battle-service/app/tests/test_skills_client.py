@@ -1,14 +1,15 @@
 """
-Tests for case normalization in skills_client.character_ranks()
-(FEAT-060, Task #6).
+(FEAT-125) Tests for the rewritten battle-service skills_client:
 
-Verifies that:
-- character_ranks() normalizes skill_type to lowercase in returned data
-- Works correctly with mixed case inputs ("Attack", "DEFENSE", "support")
+- get_resolved_skill(skill_id, character_id) -> GET /skills/{id}/resolved
+- character_has_skill(character_id, skill_id) -> ownership check via /characters/{id}/skills
+- character_skills(character_id) -> list of owned skills, normalized
+
+skills-service is mocked at the httpx layer.
 """
 
-import sys
 import os
+import sys
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -25,54 +26,29 @@ os.environ.setdefault("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# Remove any mocked versions of skills_client left by other test files
-# (e.g. test_battle_fixes.py injects MagicMock into sys.modules at module level)
+# Drop any MagicMock-replaced skills_client left by other test files.
 for _mod in ("skills_client",):
     if _mod in sys.modules and isinstance(sys.modules[_mod], MagicMock):
         del sys.modules[_mod]
 
-# Patch database engine before importing anything that touches it
 import database  # noqa: E402
 database.engine = MagicMock()
 
 import skills_client  # noqa: E402
 
-# IMPORTANT: Save a direct reference to the real character_ranks function.
-# Later test files (e.g. test_spectate.py) collected after this module will
-# overwrite skills_client.character_ranks with an AsyncMock via sys.modules.
-# By capturing the real function here, we can call it in tests regardless.
-_real_character_ranks = skills_client.character_ranks
+# Save direct references; later test files (e.g. test_battle_fixes.py) inject
+# AsyncMock into sys.modules["skills_client"], which would otherwise hide
+# the real functions when this module's tests run after them.
+_real_get_resolved_skill = skills_client.get_resolved_skill
+_real_character_has_skill = skills_client.character_has_skill
+_real_character_skills = skills_client.character_skills
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_char_skill_row(rank_id, skill_type, skill_name="Test Skill"):
-    """Build a character skill row as returned by skills-service API."""
-    return {
-        "id": rank_id + 100,
-        "character_id": 1,
-        "skill_rank_id": rank_id,
-        "skill_type": skill_type,
-        "skill_name": skill_name,
-        "skill_image": "/img/skill.png",
-        "skill_description": "A test skill",
-        "skill_rank": {
-            "id": rank_id,
-            "skill_id": rank_id * 10,
-            "rank_number": 1,
-            "rank_image": "/img/rank.png",
-            "damage_base": 10,
-            "cost_energy": 5,
-            "cost_mana": 0,
-            "cost_stamina": 0,
-        },
-    }
-
-
 def _mock_httpx_response(json_data):
-    """Create a mock httpx response (httpx Response.json() is sync, not async)."""
     mock_resp = MagicMock()
     mock_resp.json.return_value = json_data
     mock_resp.raise_for_status = MagicMock()
@@ -80,13 +56,7 @@ def _mock_httpx_response(json_data):
 
 
 def _make_mock_client(api_response):
-    """Create a properly configured mock httpx.AsyncClient for Python 3.10+.
-
-    Uses MagicMock for the client (constructor is sync) with explicit
-    async context-manager protocol and an AsyncMock for the .get() method.
-    """
     mock_resp = _mock_httpx_response(api_response)
-
     mock_client = MagicMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -94,125 +64,117 @@ def _make_mock_client(api_response):
     return mock_client
 
 
+_RESOLVED_PAYLOAD = {
+    "skill_id": 7,
+    "character_id": 100,
+    "level": 2,
+    "selected_perk_ids": [10, 11],
+    "skill_type": "Attack",
+    "cost_energy": 4,
+    "cost_mana": 12,
+    "cooldown": 0,
+    "level_requirement": 1,
+    "damage_entries": [
+        {"damage_type": "fire", "amount": 10.0, "chance": 100,
+         "target_side": "enemy", "weapon_slot": "main_weapon"},
+    ],
+    "effects": [
+        {"effect_name": "burn", "target_side": "enemy",
+         "chance": 100, "duration": 2, "magnitude": 1.0},
+    ],
+}
+
+
 # ---------------------------------------------------------------------------
-# Tests
+# get_resolved_skill
 # ---------------------------------------------------------------------------
 
-class TestCharacterRanksCaseNormalization:
-    """character_ranks() should normalize skill_type to lowercase."""
+class TestGetResolvedSkill:
 
     @pytest.mark.asyncio
-    async def test_capitalized_skill_types_normalized(self):
-        """Capitalized types ('Attack', 'Defense', 'Support') become lowercase."""
-        api_response = [
-            _make_char_skill_row(1, "Attack"),
-            _make_char_skill_row(2, "Defense"),
-            _make_char_skill_row(3, "Support"),
-        ]
-
-        mock_client = _make_mock_client(api_response)
-
+    async def test_calls_correct_url_with_params(self):
+        mock_client = _make_mock_client(_RESOLVED_PAYLOAD)
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await _real_character_ranks(character_id=1)
-
-        assert len(results) == 3
-        assert results[0]["skill_type"] == "attack"
-        assert results[1]["skill_type"] == "defense"
-        assert results[2]["skill_type"] == "support"
+            result = await _real_get_resolved_skill(skill_id=7, character_id=100)
+        # Assert the URL ends with /skills/7/resolved and has correct query
+        call_args = mock_client.get.call_args
+        url = call_args[0][0]
+        assert url.endswith("/skills/7/resolved")
+        params = call_args[1]["params"]
+        assert params == {"character_id": 100}
+        # skill_type normalized to lowercase
+        assert result["skill_type"] == "attack"
+        assert result["damage_entries"][0]["damage_type"] == "fire"
 
     @pytest.mark.asyncio
-    async def test_uppercase_skill_types_normalized(self):
-        """Fully uppercase types ('ATTACK', 'DEFENSE', 'SUPPORT') become lowercase."""
-        api_response = [
-            _make_char_skill_row(1, "ATTACK"),
-            _make_char_skill_row(2, "DEFENSE"),
-            _make_char_skill_row(3, "SUPPORT"),
-        ]
-
-        mock_client = _make_mock_client(api_response)
-
+    async def test_byte_compatible_damage_and_effect_fields(self):
+        """Resolver output preserves byte-compatible field names (R1)."""
+        mock_client = _make_mock_client(_RESOLVED_PAYLOAD)
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await _real_character_ranks(character_id=1)
+            result = await _real_get_resolved_skill(skill_id=7, character_id=100)
+        de = result["damage_entries"][0]
+        for key in ("damage_type", "amount", "chance", "target_side", "weapon_slot"):
+            assert key in de
+        ef = result["effects"][0]
+        for key in ("effect_name", "target_side", "chance", "duration", "magnitude"):
+            assert key in ef
 
-        assert len(results) == 3
-        assert results[0]["skill_type"] == "attack"
-        assert results[1]["skill_type"] == "defense"
-        assert results[2]["skill_type"] == "support"
+
+# ---------------------------------------------------------------------------
+# character_has_skill
+# ---------------------------------------------------------------------------
+
+class TestCharacterHasSkill:
 
     @pytest.mark.asyncio
-    async def test_already_lowercase_unchanged(self):
-        """Already-lowercase types remain lowercase."""
-        api_response = [
-            _make_char_skill_row(1, "attack"),
-            _make_char_skill_row(2, "defense"),
-            _make_char_skill_row(3, "support"),
+    async def test_returns_true_when_skill_owned(self):
+        api = [
+            {"character_skill_id": 1, "skill_id": 7, "level": 0, "selected_perk_ids": []},
+            {"character_skill_id": 2, "skill_id": 9, "level": 1, "selected_perk_ids": []},
         ]
-
-        mock_client = _make_mock_client(api_response)
-
+        mock_client = _make_mock_client(api)
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await _real_character_ranks(character_id=1)
-
-        assert len(results) == 3
-        assert results[0]["skill_type"] == "attack"
-        assert results[1]["skill_type"] == "defense"
-        assert results[2]["skill_type"] == "support"
+            assert await _real_character_has_skill(100, 7) is True
 
     @pytest.mark.asyncio
-    async def test_mixed_case_all_normalized(self):
-        """Mixed case ('Attack', 'DEFENSE', 'support') all normalize to lowercase."""
-        api_response = [
-            _make_char_skill_row(1, "Attack"),
-            _make_char_skill_row(2, "DEFENSE"),
-            _make_char_skill_row(3, "support"),
-        ]
-
-        mock_client = _make_mock_client(api_response)
-
+    async def test_returns_false_when_not_owned(self):
+        api = [{"character_skill_id": 1, "skill_id": 9, "level": 0, "selected_perk_ids": []}]
+        mock_client = _make_mock_client(api)
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await _real_character_ranks(character_id=1)
+            assert await _real_character_has_skill(100, 7) is False
 
-        assert len(results) == 3
-        assert results[0]["skill_type"] == "attack"
-        assert results[1]["skill_type"] == "defense"
-        assert results[2]["skill_type"] == "support"
+
+# ---------------------------------------------------------------------------
+# character_skills
+# ---------------------------------------------------------------------------
+
+class TestCharacterSkillsList:
 
     @pytest.mark.asyncio
-    async def test_skill_type_from_row_level_normalized(self):
-        """skill_type inherited from row level (not in skill_rank) is also normalized."""
-        api_response = [
+    async def test_returns_normalized_list(self):
+        api = [
             {
-                "id": 100,
-                "character_id": 1,
-                "skill_rank_id": 1,
-                "skill_type": "Attack",
-                "skill_name": "Slash",
-                "skill_image": "/img/slash.png",
-                "skill_description": "A basic attack",
-                "skill_rank": {
-                    "id": 1,
-                    "skill_id": 10,
-                    "rank_number": 1,
-                    "rank_image": "",
-                    "damage_base": 15,
-                },
+                "character_skill_id": 1, "skill_id": 7, "level": 1,
+                "free_perk_points": 0, "selected_perk_ids": [10],
+                "skill": {"id": 7, "name": "Fireball",
+                          "skill_type": "Attack", "skill_image": "/img.png"},
             },
         ]
-
-        mock_client = _make_mock_client(api_response)
-
+        mock_client = _make_mock_client(api)
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await _real_character_ranks(character_id=1)
+            results = await _real_character_skills(100)
 
         assert len(results) == 1
-        assert results[0]["skill_type"] == "attack"
+        row = results[0]
+        assert row["skill_id"] == 7
+        # skill_type denormalized + lowercased
+        assert row["skill_type"] == "attack"
+        # `id` alias points to skill_id (consumed by autobattle/strategy)
+        assert row["id"] == 7
+        assert row["skill_image"] == "/img.png"
 
     @pytest.mark.asyncio
-    async def test_empty_skills_returns_empty(self):
-        """Character with no skills returns empty list."""
+    async def test_empty_list(self):
         mock_client = _make_mock_client([])
-
         with patch("skills_client.httpx.AsyncClient", return_value=mock_client):
-            results = await _real_character_ranks(character_id=999)
-
-        assert results == []
+            assert await _real_character_skills(100) == []

@@ -150,6 +150,7 @@ export interface CharacterAttributes {
   res_sainting: number;
   res_wind: number;
   res_damning: number;
+  active_experience: number;
 }
 
 export interface UpgradeStatsPayload {

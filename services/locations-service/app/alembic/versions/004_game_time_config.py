@@ -38,24 +38,32 @@ def upgrade() -> None:
         "VALUES ('2026-03-19 00:00:00', 0)"
     )
 
-    # 3. Insert RBAC permissions
-    op.execute(
-        "INSERT INTO permissions (module, action, description) VALUES "
-        "('gametime', 'read', 'View game time admin page'), "
-        "('gametime', 'update', 'Modify game time settings')"
-    )
+    # 3. Insert RBAC permissions — guarded because `permissions` / `roles` /
+    # `role_permissions` are owned by user-service Alembic. On a fresh
+    # `docker compose up -d` bootstrap there is no orchestration guarantee
+    # that user-service migrations have finished before locations-service
+    # runs, so we skip seeding if the cross-service tables don't exist yet.
+    # user-service will seed its own RBAC rows on its next run; re-running
+    # this migration is a no-op on prod where the tables already exist.
+    cross_tables = set(inspector.get_table_names())
+    if {'permissions', 'roles', 'role_permissions'}.issubset(cross_tables):
+        op.execute(
+            "INSERT IGNORE INTO permissions (module, action, description) VALUES "
+            "('gametime', 'read', 'View game time admin page'), "
+            "('gametime', 'update', 'Modify game time settings')"
+        )
 
-    # 4. Assign permissions to admin role
-    op.execute(
-        "INSERT INTO role_permissions (role_id, permission_id) "
-        "SELECT r.id, p.id FROM roles r "
-        "CROSS JOIN permissions p "
-        "WHERE r.name = 'admin' AND p.module = 'gametime' "
-        "AND NOT EXISTS ("
-        "  SELECT 1 FROM role_permissions rp "
-        "  WHERE rp.role_id = r.id AND rp.permission_id = p.id"
-        ")"
-    )
+        # 4. Assign permissions to admin role
+        op.execute(
+            "INSERT INTO role_permissions (role_id, permission_id) "
+            "SELECT r.id, p.id FROM roles r "
+            "CROSS JOIN permissions p "
+            "WHERE r.name = 'admin' AND p.module = 'gametime' "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM role_permissions rp "
+            "  WHERE rp.role_id = r.id AND rp.permission_id = p.id"
+            ")"
+        )
 
 
 def downgrade() -> None:

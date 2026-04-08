@@ -2,38 +2,30 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
-import DamageEditor from './DamageEditor';
-import EffectEditor from './EffectEditor';
+import SkillEffectSections from './SkillEffectSections';
 import type {
   SkillWithPerks,
   SkillPerkRead,
-  DamageEntry,
-  EffectEntry,
 } from '../SkillTreeView/types';
+
+// Temporary id counter for in-memory new damage/effect rows within a perk draft.
+// Negative to avoid collisions with real server ids.
+let tempIdCounter = -1;
+const nextTempId = () => tempIdCounter--;
 
 interface PerkPoolEditorProps {
   skill: SkillWithPerks;
   onRefresh: () => void;
 }
 
-const emptyDamage = (): DamageEntry => ({
-  damage_type: '',
-  amount: 0,
-  chance: 100,
-  target_side: 'enemy',
-  weapon_slot: null,
-  description: '',
-});
-
-const emptyEffect = (): EffectEntry => ({
-  target_side: 'enemy',
-  effect_name: '',
-  description: '',
-  chance: 100,
-  duration: 0,
-  magnitude: 0,
-  attribute_key: null,
-});
+// Strip client-side negative temp ids before sending perk payload to backend
+const stripTempId = <T extends { id?: number }>(row: T): T => {
+  if (row.id !== undefined && row.id < 0) {
+    const { id: _id, ...rest } = row;
+    return rest as T;
+  }
+  return row;
+};
 
 const emptyPerk = (): SkillPerkRead => ({
   id: 0,
@@ -93,8 +85,8 @@ const PerkRow = ({ perk, skillId, isNew, onSaved, onRemoveLocal }: PerkRowProps)
         delta_cooldown: draft.delta_cooldown,
         delta_level_requirement: draft.delta_level_requirement,
         sort_order: draft.sort_order ?? 0,
-        damage_entries: draft.damage_entries,
-        effects: draft.effects,
+        damage_entries: draft.damage_entries.map(stripTempId),
+        effects: draft.effects.map(stripTempId),
       };
       if (isNew) {
         await axios.post(`/skills/admin/skills/${skillId}/perks`, payload);
@@ -127,7 +119,7 @@ const PerkRow = ({ perk, skillId, isNew, onSaved, onRemoveLocal }: PerkRowProps)
   };
 
   return (
-    <div className="rounded-card border border-white/15 bg-white/[0.02] p-3 sm:p-4">
+    <div className="rounded-card border border-white/10 gray-bg p-3 sm:p-4">
       <div className="flex items-center justify-between gap-2">
         <button
           type="button"
@@ -153,7 +145,7 @@ const PerkRow = ({ perk, skillId, isNew, onSaved, onRemoveLocal }: PerkRowProps)
               type="text"
               value={draft.name}
               onChange={(e) => patch('name', e.target.value)}
-              className="gray-bg rounded-sm px-2 py-1 text-white text-sm"
+              className="bg-black/50 border border-white/15 rounded-sm px-2 py-1 text-white text-sm focus:outline-none focus:border-gold/60"
             />
           </div>
 
@@ -163,7 +155,7 @@ const PerkRow = ({ perk, skillId, isNew, onSaved, onRemoveLocal }: PerkRowProps)
               value={draft.description ?? ''}
               onChange={(e) => patch('description', e.target.value)}
               rows={2}
-              className="gray-bg rounded-sm px-2 py-1 text-white text-sm"
+              className="bg-black/50 border border-white/15 rounded-sm px-2 py-1 text-white text-sm focus:outline-none focus:border-gold/60"
             />
           </div>
 
@@ -180,73 +172,47 @@ const PerkRow = ({ perk, skillId, isNew, onSaved, onRemoveLocal }: PerkRowProps)
                   type="number"
                   value={draft[key] ?? ''}
                   onChange={(e) => patch(key, numOrNull(e.target.value))}
-                  className="gray-bg rounded-sm px-2 py-1 text-white text-sm"
+                  className="bg-black/50 border border-white/15 rounded-sm px-2 py-1 text-white text-sm focus:outline-none focus:border-gold/60"
                 />
               </div>
             ))}
           </div>
 
-          {/* Damage entries */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <h5 className="text-white/70 text-xs uppercase">Доп. урон</h5>
-              <button
-                type="button"
-                onClick={() => patch('damage_entries', [...draft.damage_entries, emptyDamage()])}
-                className="text-xs text-gold hover:text-gold/80"
-              >
-                + добавить
-              </button>
-            </div>
-            <div className="space-y-2">
-              {draft.damage_entries.map((d, i) => (
-                <DamageEditor
-                  key={i}
-                  damage={d}
-                  onChange={(nd) => {
-                    const copy = [...draft.damage_entries];
-                    copy[i] = nd;
-                    patch('damage_entries', copy);
-                  }}
-                  onDelete={() => {
-                    const copy = draft.damage_entries.filter((_, j) => j !== i);
-                    patch('damage_entries', copy);
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Effects */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <h5 className="text-white/70 text-xs uppercase">Доп. эффекты</h5>
-              <button
-                type="button"
-                onClick={() => patch('effects', [...draft.effects, emptyEffect()])}
-                className="text-xs text-gold hover:text-gold/80"
-              >
-                + добавить
-              </button>
-            </div>
-            <div className="space-y-2">
-              {draft.effects.map((e, i) => (
-                <EffectEditor
-                  key={i}
-                  effect={e}
-                  onChange={(ne) => {
-                    const copy = [...draft.effects];
-                    copy[i] = ne;
-                    patch('effects', copy);
-                  }}
-                  onDelete={() => {
-                    const copy = draft.effects.filter((_, j) => j !== i);
-                    patch('effects', copy);
-                  }}
-                />
-              ))}
-            </div>
-          </div>
+          {/* 5-section editor for perk damage + effects (local draft, persisted on Save) */}
+          <SkillEffectSections
+            damageEntries={draft.damage_entries}
+            effects={draft.effects}
+            onAddDamage={async (d) => {
+              patch('damage_entries', [...draft.damage_entries, { ...d, id: nextTempId() }]);
+            }}
+            onUpdateDamage={async (d) => {
+              patch(
+                'damage_entries',
+                draft.damage_entries.map((x) => (x.id === d.id ? d : x))
+              );
+            }}
+            onDeleteDamage={async (d) => {
+              patch(
+                'damage_entries',
+                draft.damage_entries.filter((x) => x.id !== d.id)
+              );
+            }}
+            onAddEffect={async (e) => {
+              patch('effects', [...draft.effects, { ...e, id: nextTempId() }]);
+            }}
+            onUpdateEffect={async (e) => {
+              patch(
+                'effects',
+                draft.effects.map((x) => (x.id === e.id ? e : x))
+              );
+            }}
+            onDeleteEffect={async (e) => {
+              patch(
+                'effects',
+                draft.effects.filter((x) => x.id !== e.id)
+              );
+            }}
+          />
 
           <button
             type="button"
@@ -279,20 +245,6 @@ const PerkPoolEditor = ({ skill, onRefresh }: PerkPoolEditorProps) => {
 
   return (
     <div className="space-y-4">
-      {/* Base stats (read-only summary) */}
-      <div className="rounded-card border border-white/10 bg-white/[0.03] p-3 sm:p-4">
-        <h3 className="gold-text text-sm sm:text-base font-medium mb-2">Базовые характеристики</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs sm:text-sm text-white/80">
-          <div>Энергия: {skill.base.cost_energy}</div>
-          <div>Мана: {skill.base.cost_mana}</div>
-          <div>КД: {skill.base.cooldown}</div>
-          <div>Треб. уровень: {skill.base.level_requirement}</div>
-        </div>
-        <p className="text-white/40 text-[10px] mt-2">
-          Базовые поля, урон и эффекты редактируются через PATCH навыка. Здесь отображение для контекста.
-        </p>
-      </div>
-
       {/* Perk pool */}
       <div>
         <div className="flex items-center justify-between mb-2">

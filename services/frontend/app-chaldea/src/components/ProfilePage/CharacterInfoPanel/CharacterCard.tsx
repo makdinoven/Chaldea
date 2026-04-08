@@ -6,6 +6,7 @@ import {
   selectRaceInfo,
   selectAvatarUploading,
   selectRaceNamesMap,
+  selectAttributes,
   uploadCharacterAvatar,
 } from '../../../redux/slices/profileSlice';
 import { CLASS_NAMES } from '../constants';
@@ -28,6 +29,7 @@ export default function CharacterCard() {
   const raceInfo = useAppSelector(selectRaceInfo);
   const avatarUploading = useAppSelector(selectAvatarUploading);
   const raceNamesMap = useAppSelector(selectRaceNamesMap);
+  const attributes = useAppSelector(selectAttributes);
   const userId = useAppSelector((state) => state.user.id) as number | null;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -171,12 +173,20 @@ export default function CharacterCard() {
         </div>
       </div>
 
-      {/* Currency */}
-      <div className="flex items-center gap-2 mt-1">
-        <img src={goldCoinsIcon} alt="" className="w-5 h-5" />
-        <span className="gold-text text-sm font-medium">
-          {profile.currency_balance.toLocaleString('ru-RU')}
-        </span>
+      {/* Currency + Active XP */}
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 mt-1">
+        <div className="flex items-center gap-2">
+          <img src={goldCoinsIcon} alt="" className="w-5 h-5" />
+          <span className="gold-text text-sm font-medium">
+            {profile.currency_balance.toLocaleString('ru-RU')}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="gold-text text-sm font-medium uppercase">Опыт:</span>
+          <span className="gold-text text-sm font-medium">
+            {(attributes?.active_experience ?? 0).toLocaleString('ru-RU')}
+          </span>
+        </div>
       </div>
     </div>
   );

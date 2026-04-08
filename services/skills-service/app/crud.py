@@ -432,6 +432,7 @@ async def upgrade_character_skill_level(db: AsyncSession, cs_id: int) -> models.
         )
     cs.level = (cs.level or 0) + 1
     await db.commit()
+    db.expire(cs)
     return await _load_character_skill_full(db, cs_id)
 
 
@@ -457,6 +458,9 @@ async def pick_perk_for_character_skill(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status_code=409, detail="Этот перк уже выбран")
+    # Expire the cached cs so _load_character_skill_full rehydrates selected_perks
+    # from the database instead of returning the stale identity-map copy.
+    db.expire(cs)
     return await _load_character_skill_full(db, cs_id)
 
 
@@ -477,6 +481,7 @@ async def reset_character_skill(db: AsyncSession, cs_id: int) -> models.Characte
     cs.level = 0
     cs.reset_available_at = now + timedelta(hours=RESET_COOLDOWN_HOURS)
     await db.commit()
+    db.expire(cs)
     return await _load_character_skill_full(db, cs_id)
 
 
@@ -543,6 +548,45 @@ async def get_skill_with_perks(db: AsyncSession, skill_id: int) -> dict | None:
     }
 
 
+def _merge_resolved_effects(effects: list[dict]) -> list[dict]:
+    """Merge duplicate effects from base + perks.
+
+    Match key: (effect_name, target_side, attribute_key). None attribute_key
+    is treated as a value (so two None-keyed effects with same name+side merge).
+
+    Merge rules:
+      - magnitude: SUM
+      - duration: SUM
+      - chance: SUM (no cap — battle engine subtracts a vitality stat from
+        proc chance, so storing >100% is intentional)
+      - other fields (description, etc.): take from first occurrence
+      - insertion order: position of first occurrence is preserved
+      - None handling: a field stays None only if both inputs are None;
+        otherwise None is treated as 0 and the non-null value is summed in.
+    """
+    merged: dict = {}
+    order: list = []
+    for eff in effects:
+        key = (eff.get("effect_name"), eff.get("target_side"), eff.get("attribute_key"))
+        if key not in merged:
+            # Shallow copy so we don't mutate the original dict from base/perk data.
+            merged[key] = dict(eff)
+            order.append(key)
+        else:
+            existing = merged[key]
+            # magnitude: SUM (treat None as 0)
+            a = existing.get("magnitude") or 0
+            b = eff.get("magnitude") or 0
+            existing["magnitude"] = a + b
+            # duration: SUM (None only if both are None)
+            d1, d2 = existing.get("duration"), eff.get("duration")
+            existing["duration"] = None if d1 is None and d2 is None else (d1 or 0) + (d2 or 0)
+            # chance: SUM (None only if both are None, no cap)
+            c1, c2 = existing.get("chance"), eff.get("chance")
+            existing["chance"] = None if c1 is None and c2 is None else (c1 or 0) + (c2 or 0)
+    return [merged[k] for k in order]
+
+
 async def resolve_character_skill(
     db: AsyncSession, character_id: int, skill_id: int
 ) -> dict:
@@ -583,6 +627,10 @@ async def resolve_character_skill(
     cost_energy = max(0, cost_energy)
     cost_mana = max(0, cost_mana)
     # level_requirement is fixed at the base value (PM clarification: no delta).
+
+    # Merge duplicate effects from base + perks (FEAT-125 bug fix).
+    # damage_entries are intentionally NOT merged — battle engine sums them at compute time.
+    effects = _merge_resolved_effects(effects)
 
     return {
         "skill_id": skill_id,

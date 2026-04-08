@@ -280,14 +280,14 @@ class TestGetMobTemplateDetail:
 
     def test_get_detail_with_skills(self, mob_client, _create_template, db_session):
         template = _create_template(name="Моб с навыками")
-        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_rank_id=10))
-        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_rank_id=20))
+        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_id=10))
+        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_id=20))
         db_session.commit()
         resp = mob_client.get(f"/characters/admin/mob-templates/{template.id}")
         assert resp.status_code == 200
         body = resp.json()
         assert len(body["skills"]) == 2
-        skill_ids = [s["skill_rank_id"] for s in body["skills"]]
+        skill_ids = [s["skill_id"] for s in body["skills"]]
         assert 10 in skill_ids
         assert 20 in skill_ids
 
@@ -409,7 +409,7 @@ class TestDeleteMobTemplate:
 
     def test_delete_cascades_skills(self, mob_client, _create_template, db_session):
         template = _create_template(name="Каскадное удаление")
-        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_rank_id=1))
+        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_id=1))
         db_session.commit()
         resp = mob_client.delete(f"/characters/admin/mob-templates/{template.id}")
         assert resp.status_code == 200
@@ -432,39 +432,39 @@ class TestUpdateMobSkills:
         template = _create_template(name="Навыковый моб")
         resp = mob_client.put(
             f"/characters/admin/mob-templates/{template.id}/skills",
-            json={"skill_rank_ids": [1, 2, 3]},
+            json={"skill_ids": [1, 2, 3]},
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["skill_rank_ids"] == [1, 2, 3]
+        assert body["skill_ids"] == [1, 2, 3]
 
     def test_replace_skills_replaces_old(self, mob_client, _create_template, db_session):
         template = _create_template(name="Замена навыков")
-        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_rank_id=100))
+        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_id=100))
         db_session.commit()
 
         resp = mob_client.put(
             f"/characters/admin/mob-templates/{template.id}/skills",
-            json={"skill_rank_ids": [200, 300]},
+            json={"skill_ids": [200, 300]},
         )
         assert resp.status_code == 200
 
         skills = db_session.query(models.MobTemplateSkill).filter_by(
             mob_template_id=template.id
         ).all()
-        rank_ids = [s.skill_rank_id for s in skills]
+        rank_ids = [s.skill_id for s in skills]
         assert 100 not in rank_ids
         assert 200 in rank_ids
         assert 300 in rank_ids
 
     def test_replace_skills_empty_list(self, mob_client, _create_template, db_session):
         template = _create_template(name="Очистка навыков")
-        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_rank_id=1))
+        db_session.add(models.MobTemplateSkill(mob_template_id=template.id, skill_id=1))
         db_session.commit()
 
         resp = mob_client.put(
             f"/characters/admin/mob-templates/{template.id}/skills",
-            json={"skill_rank_ids": []},
+            json={"skill_ids": []},
         )
         assert resp.status_code == 200
 
@@ -476,7 +476,7 @@ class TestUpdateMobSkills:
     def test_replace_skills_template_not_found(self, mob_client):
         resp = mob_client.put(
             "/characters/admin/mob-templates/99999/skills",
-            json={"skill_rank_ids": [1]},
+            json={"skill_ids": [1]},
         )
         assert resp.status_code == 404
 
@@ -702,7 +702,7 @@ class TestMobTemplateAuth:
     def test_skills_no_token_returns_401(self, client):
         resp = client.put(
             "/characters/admin/mob-templates/1/skills",
-            json={"skill_rank_ids": [1]},
+            json={"skill_ids": [1]},
         )
         assert resp.status_code == 401
 

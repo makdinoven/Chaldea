@@ -144,22 +144,20 @@ async def non_admin_client(setup_db):
 # ---------------------------------------------------------------------------
 
 async def _seed_skill(db: AsyncSession):
-    """Create a Skill with two SkillRanks."""
-    skill = models.Skill(id=1, name="Fireball", skill_type="Attack", description="Fire spell")
-    db.add(skill)
-    await db.flush()
-
-    rank1 = models.SkillRank(id=1, skill_id=1, rank_number=1, rank_name="Rank I")
-    rank2 = models.SkillRank(id=2, skill_id=1, rank_number=2, rank_name="Rank II")
-    db.add(rank1)
-    db.add(rank2)
+    """(FEAT-125) Create two skills for CharacterSkill tests."""
+    skill1 = models.Skill(id=1, name="Fireball", skill_type="Attack", description="Fire spell")
+    skill2 = models.Skill(id=2, name="Ice Spear", skill_type="Attack", description="Ice spell")
+    db.add(skill1)
+    db.add(skill2)
     await db.commit()
-    return skill, rank1, rank2
+    return skill1, skill2
 
 
-async def _seed_character_skill(db: AsyncSession, cs_id=1, character_id=1, skill_rank_id=1):
-    """Create a CharacterSkill row."""
-    cs = models.CharacterSkill(id=cs_id, character_id=character_id, skill_rank_id=skill_rank_id)
+async def _seed_character_skill(db: AsyncSession, cs_id=1, character_id=1, skill_id=1, level=0):
+    """(FEAT-125) Create a CharacterSkill row (flat shape)."""
+    cs = models.CharacterSkill(
+        id=cs_id, character_id=character_id, skill_id=skill_id, level=level,
+    )
     db.add(cs)
     await db.commit()
     await db.refresh(cs)
@@ -170,34 +168,37 @@ async def _seed_character_skill(db: AsyncSession, cs_id=1, character_id=1, skill
 # PUT /skills/admin/character_skills/{cs_id}
 # ===========================================================================
 
-class TestAdminUpdateCharacterSkillRank:
+class TestAdminUpdateCharacterSkill:
+    """(FEAT-125) PUT admin/character_skills/{id} accepts {skill_id, level}."""
 
     @pytest.mark.asyncio
-    async def test_update_rank_success(self, admin_client, db_session):
+    async def test_update_success(self, admin_client, db_session):
         await _seed_skill(db_session)
-        await _seed_character_skill(db_session, cs_id=1, skill_rank_id=1)
+        await _seed_character_skill(db_session, cs_id=1, skill_id=1, level=0)
 
         resp = await admin_client.put(
             "/skills/admin/character_skills/1",
-            json={"skill_rank_id": 2},
+            json={"skill_id": 2, "level": 3},
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["skill_rank"]["id"] == 2
+        assert data["skill_id"] == 2
+        assert data["level"] == 3
 
     @pytest.mark.asyncio
-    async def test_update_rank_not_found(self, admin_client, db_session):
+    async def test_update_not_found(self, admin_client, db_session):
+        await _seed_skill(db_session)
         resp = await admin_client.put(
             "/skills/admin/character_skills/999",
-            json={"skill_rank_id": 1},
+            json={"skill_id": 1, "level": 0},
         )
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_update_rank_forbidden(self, non_admin_client, db_session):
+    async def test_update_forbidden(self, non_admin_client, db_session):
         resp = await non_admin_client.put(
             "/skills/admin/character_skills/1",
-            json={"skill_rank_id": 1},
+            json={"skill_id": 1, "level": 0},
         )
         assert resp.status_code == 403
 
@@ -211,8 +212,8 @@ class TestAdminDeleteAllCharacterSkills:
     @pytest.mark.asyncio
     async def test_bulk_delete_success(self, admin_client, db_session):
         await _seed_skill(db_session)
-        await _seed_character_skill(db_session, cs_id=1, character_id=1, skill_rank_id=1)
-        await _seed_character_skill(db_session, cs_id=2, character_id=1, skill_rank_id=2)
+        await _seed_character_skill(db_session, cs_id=1, character_id=1, skill_id=1)
+        await _seed_character_skill(db_session, cs_id=2, character_id=1, skill_id=2)
 
         resp = await admin_client.delete("/skills/admin/character_skills/by_character/1")
         assert resp.status_code == 200

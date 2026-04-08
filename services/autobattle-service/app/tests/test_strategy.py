@@ -3,7 +3,7 @@ Tests for case normalization in Strategy._pick_best() and _calc_weights()
 (FEAT-060, Task #6).
 
 Verifies that:
-- _pick_best() produces lowercase keys (attack_rank_id, defense_rank_id, support_rank_id)
+- _pick_best() produces lowercase keys (attack_skill_id, defense_skill_id, support_skill_id)
   regardless of skill_type case ("Attack", "DEFENSE", "support")
 - _calc_weights() correctly applies mode bonuses regardless of skill_type case
 """
@@ -63,9 +63,9 @@ class TestPickBestCaseNormalization:
 
         result = s._pick_best(weights, avail, feats)
 
-        assert result["skills"]["attack_rank_id"] == 1
-        assert result["skills"]["defense_rank_id"] == 2
-        assert result["skills"]["support_rank_id"] == 3
+        assert result["skills"]["attack_skill_id"] == 1
+        assert result["skills"]["defense_skill_id"] == 2
+        assert result["skills"]["support_skill_id"] == 3
 
     def test_uppercase_skill_types(self):
         """Fully uppercase types ("ATTACK", "DEFENSE", "SUPPORT") map to lowercase keys."""
@@ -80,9 +80,9 @@ class TestPickBestCaseNormalization:
 
         result = s._pick_best(weights, avail, feats)
 
-        assert result["skills"]["attack_rank_id"] == 10
-        assert result["skills"]["defense_rank_id"] == 20
-        assert result["skills"]["support_rank_id"] == 30
+        assert result["skills"]["attack_skill_id"] == 10
+        assert result["skills"]["defense_skill_id"] == 20
+        assert result["skills"]["support_skill_id"] == 30
 
     def test_already_lowercase_skill_types(self):
         """Already-lowercase types still work correctly."""
@@ -97,9 +97,9 @@ class TestPickBestCaseNormalization:
 
         result = s._pick_best(weights, avail, feats)
 
-        assert result["skills"]["attack_rank_id"] == 5
-        assert result["skills"]["defense_rank_id"] == 6
-        assert result["skills"]["support_rank_id"] == 7
+        assert result["skills"]["attack_skill_id"] == 5
+        assert result["skills"]["defense_skill_id"] == 6
+        assert result["skills"]["support_skill_id"] == 7
 
     def test_mixed_case_skill_types(self):
         """Mixed case ("Attack", "defense", "SUPPORT") all normalize to lowercase keys."""
@@ -114,9 +114,9 @@ class TestPickBestCaseNormalization:
 
         result = s._pick_best(weights, avail, feats)
 
-        assert result["skills"]["attack_rank_id"] == 1
-        assert result["skills"]["defense_rank_id"] == 2
-        assert result["skills"]["support_rank_id"] == 3
+        assert result["skills"]["attack_skill_id"] == 1
+        assert result["skills"]["defense_skill_id"] == 2
+        assert result["skills"]["support_skill_id"] == 3
 
     def test_no_capitalized_keys_in_output(self):
         """No keys like 'Attack_rank_id' should appear — only lowercase."""
@@ -138,9 +138,9 @@ class TestPickBestCaseNormalization:
         assert "Support_rank_id" not in skills
 
         # Should have lowercase keys
-        assert "attack_rank_id" in skills
-        assert "defense_rank_id" in skills
-        assert "support_rank_id" in skills
+        assert "attack_skill_id" in skills
+        assert "defense_skill_id" in skills
+        assert "support_skill_id" in skills
 
     def test_empty_skills(self):
         """With no skills, all rank_ids should be None."""
@@ -151,9 +151,9 @@ class TestPickBestCaseNormalization:
 
         result = s._pick_best(weights, avail, feats)
 
-        assert result["skills"]["attack_rank_id"] is None
-        assert result["skills"]["defense_rank_id"] is None
-        assert result["skills"]["support_rank_id"] is None
+        assert result["skills"]["attack_skill_id"] is None
+        assert result["skills"]["defense_skill_id"] is None
+        assert result["skills"]["support_skill_id"] is None
 
     def test_picks_highest_weight_per_bucket(self):
         """When multiple skills of same type exist, picks highest weight."""
@@ -168,8 +168,8 @@ class TestPickBestCaseNormalization:
 
         result = s._pick_best(weights, avail, feats)
 
-        assert result["skills"]["attack_rank_id"] == 2  # higher weight
-        assert result["skills"]["defense_rank_id"] == 3
+        assert result["skills"]["attack_skill_id"] == 2  # higher weight
+        assert result["skills"]["defense_skill_id"] == 3
 
 
 # ---------------------------------------------------------------------------

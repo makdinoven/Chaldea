@@ -67,10 +67,10 @@ buffs_mock.build_percent_resist_buffs = MagicMock(return_value={})
 
 # Configure skills_client mock
 skills_mock = sys.modules["skills_client"]
-skills_mock.character_has_rank = AsyncMock(return_value=True)
-skills_mock.get_rank = AsyncMock(return_value={})
+skills_mock.character_has_skill = AsyncMock(return_value=True)
+skills_mock.get_resolved_skill = AsyncMock(return_value={})
 skills_mock.get_item = AsyncMock(return_value={})
-skills_mock.character_ranks = AsyncMock(return_value=[])
+skills_mock.character_skills = AsyncMock(return_value=[])
 
 # Configure mongo_helpers
 mongo_mock = sys.modules["mongo_helpers"]
@@ -130,7 +130,7 @@ class TestEnsureNotOnCooldown:
             }
         }
         with pytest.raises(HTTPException) as exc_info:
-            _ensure_not_on_cooldown(state, pid=1, rank_ids=[42])
+            _ensure_not_on_cooldown(state, pid=1, skill_ids=[42])
 
         assert exc_info.value.status_code == 400
         assert "перезарядке" in exc_info.value.detail
@@ -143,7 +143,7 @@ class TestEnsureNotOnCooldown:
             }
         }
         with pytest.raises(HTTPException) as exc_info:
-            _ensure_not_on_cooldown(state, pid=1, rank_ids=[99])
+            _ensure_not_on_cooldown(state, pid=1, skill_ids=[99])
 
         assert "5" in exc_info.value.detail
 
@@ -155,7 +155,7 @@ class TestEnsureNotOnCooldown:
             }
         }
         with pytest.raises(HTTPException) as exc_info:
-            _ensure_not_on_cooldown(state, pid=1, rank_ids=[10])
+            _ensure_not_on_cooldown(state, pid=1, skill_ids=[10])
 
         detail = exc_info.value.detail.lower()
         assert "cooldown" not in detail
@@ -170,7 +170,7 @@ class TestEnsureNotOnCooldown:
             }
         }
         with pytest.raises(HTTPException) as exc_info:
-            _ensure_not_on_cooldown(state, pid=1, rank_ids=[rank_id])
+            _ensure_not_on_cooldown(state, pid=1, skill_ids=[rank_id])
 
         # The rank_id 777 should not appear in the message
         # (remaining turns = 1, which is fine)
@@ -185,7 +185,7 @@ class TestEnsureNotOnCooldown:
             }
         }
         # Should not raise
-        _ensure_not_on_cooldown(state, pid=1, rank_ids=[42])
+        _ensure_not_on_cooldown(state, pid=1, skill_ids=[42])
 
     def test_no_error_when_no_cooldowns(self):
         """No exception when skill has no cooldown entry at all."""
@@ -194,7 +194,7 @@ class TestEnsureNotOnCooldown:
                 "1": _make_participant_state(cooldowns={}),
             }
         }
-        _ensure_not_on_cooldown(state, pid=1, rank_ids=[42])
+        _ensure_not_on_cooldown(state, pid=1, skill_ids=[42])
 
 
 # ──────────────────────────────────────────────────────────────────────────────

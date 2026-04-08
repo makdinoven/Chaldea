@@ -29,6 +29,29 @@ const EffectEditor = ({ effect, onChange, onDelete }: EffectEditorProps) => {
       </div>
 
       <div className="flex flex-col gap-1">
+        <label className="text-white/60 text-[11px]">Цель:</label>
+        <div className="inline-flex rounded-sm overflow-hidden border border-white/15 w-fit">
+          {(['self', 'enemy'] as const).map((side) => {
+            const active = (effect.target_side ?? 'self') === side;
+            return (
+              <button
+                key={side}
+                type="button"
+                onClick={() => handleField('target_side', side)}
+                className={`px-3 py-1 text-xs transition-colors ${
+                  active
+                    ? 'bg-gold/20 text-gold'
+                    : 'bg-white/[0.03] text-white/60 hover:bg-white/[0.08]'
+                }`}
+              >
+                {side === 'self' ? 'На себя' : 'На врага'}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1">
         <label className="text-white/60 text-[11px]">Тип эффекта:</label>
         <select
           value={effect.effect_name || ''}

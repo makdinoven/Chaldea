@@ -85,8 +85,14 @@ export default function SubmitPage({
           navigateTo('/home');
         }
       })
-      .catch(() => {
-        toast.error('Ошибка при подаче заявки');
+      .catch((err: unknown) => {
+        const detail =
+          axios.isAxiosError(err) && err.response?.data?.detail
+            ? String(err.response.data.detail)
+            : null;
+        toast.error(
+          detail ? `Ошибка при подаче заявки: ${detail}` : 'Ошибка при подаче заявки'
+        );
       })
       .finally(() => {
         setSubmitting(false);

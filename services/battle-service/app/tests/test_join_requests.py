@@ -99,10 +99,10 @@ buffs_mock.build_percent_resist_buffs = MagicMock(return_value={})
 
 # Configure skills_client mock
 skills_mock = sys.modules["skills_client"]
-skills_mock.character_has_rank = AsyncMock(return_value=True)
-skills_mock.get_rank = AsyncMock(return_value={})
+skills_mock.character_has_skill = AsyncMock(return_value=True)
+skills_mock.get_resolved_skill = AsyncMock(return_value={})
 skills_mock.get_item = AsyncMock(return_value={})
-skills_mock.character_ranks = AsyncMock(return_value=[])
+skills_mock.character_skills = AsyncMock(return_value=[])
 
 # Configure mongo_helpers mock
 mongo_mock = sys.modules["mongo_helpers"]
@@ -677,7 +677,7 @@ class TestActionRejectedWhilePaused:
         client = _get_client_with_mocks(user, mock_db)
         response = client.post(
             "/battles/1/action",
-            json={"participant_id": 1, "skills": {"attack_rank_id": 1, "defense_rank_id": None, "support_rank_id": None}},
+            json={"participant_id": 1, "skills": {"attack_skill_id": 1, "defense_skill_id": None, "support_skill_id": None}},
         )
 
         assert response.status_code == 400

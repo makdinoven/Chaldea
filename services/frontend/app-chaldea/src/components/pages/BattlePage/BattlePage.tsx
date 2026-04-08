@@ -161,8 +161,9 @@ const BattlePage = () => {
   // Navigate back: to dungeon session if in dungeon, otherwise to location
   const navigateAfterBattle = useCallback(() => {
     const charId = character?.id;
+    const goToLocation = () => navigate(`/locations/${locationId}`);
     if (!charId) {
-      navigateAfterBattle();
+      goToLocation();
       return;
     }
     checkActiveSession(charId)
@@ -170,12 +171,10 @@ const BattlePage = () => {
         if (result.in_dungeon && result.session_id) {
           navigate(`/dungeon-session/${result.session_id}`);
         } else {
-          navigateAfterBattle();
+          goToLocation();
         }
       })
-      .catch(() => {
-        navigateAfterBattle();
-      });
+      .catch(goToLocation);
   }, [character?.id, locationId, navigate]);
   const battleResultSetRef = useRef(false);
 

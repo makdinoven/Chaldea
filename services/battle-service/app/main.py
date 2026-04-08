@@ -107,18 +107,26 @@ async def fetch_character_class_id(db: AsyncSession, character_id: int) -> int:
     return row[0] if row and row[0] else 1
 
 
-def _filter_effects_by_chance(effects: list, luck_bonus: float) -> list:
-    """Filter effects by their chance field, applying luck bonus.
+def _filter_effects_by_chance(
+    effects: list, luck_bonus: float, defender_endurance: float = 0
+) -> list:
+    """Filter effects by their chance field, applying luck bonus and
+    defender's endurance reduction.
 
-    Each effect has a 'chance' field (0..100). Luck adds +0.1% per point
-    to the proc probability. Effects with chance >= 100 always proc.
+    Each effect has a 'chance' field (0..100). Attacker's luck adds
+    +0.1% per point to the proc probability. Defender's endurance
+    subtracts 0.2% per point from the proc probability of effects
+    landing on the defender (self-effects should not pass endurance).
     Returns only effects that passed the roll.
     """
+    endurance_penalty = (defender_endurance or 0) * 0.2
     passed = []
     for eff in effects:
         base_chance = eff.get("chance", 100)
-        actual_chance = base_chance + luck_bonus
-        if actual_chance >= 100 or roll_chance(actual_chance):
+        actual_chance = base_chance + luck_bonus - endurance_penalty
+        if actual_chance < 0:
+            actual_chance = 0
+        if roll_chance(actual_chance):
             passed.append(eff)
     return passed
 
@@ -559,13 +567,20 @@ async def create_battle_endpoint(
     if len(battle_in.players) < 2:
         raise HTTPException(400, "Нужно минимум два участника")
 
-    # 1.5. Derive location_id from first player character
-    loc_result = await db.execute(
-        text("SELECT current_location_id FROM characters WHERE id = :cid"),
-        {"cid": player_ids[0]},
-    )
-    loc_row = loc_result.fetchone()
-    battle_location_id = loc_row[0] if loc_row else None
+    # 1.5. Same-location check: every participant must share current_location_id
+    locations: set = set()
+    for cid in player_ids:
+        loc_result = await db.execute(
+            text("SELECT current_location_id FROM characters WHERE id = :cid"),
+            {"cid": cid},
+        )
+        loc_row = loc_result.fetchone()
+        if not loc_row:
+            raise HTTPException(404, f"Персонаж {cid} не найден")
+        locations.add(loc_row[0])
+    if len(locations) > 1 or None in locations:
+        raise HTTPException(400, "Все участники боя должны находиться в одной локации")
+    battle_location_id = locations.pop()
 
     # 2. CRUD-создание записи в БД + участников
     bt = battle_in.battle_type or "pve"
@@ -1063,9 +1078,11 @@ async def _make_action_core(
         raise HTTPException(403, "Сейчас не ваш ход")
 
     # ------------------------------------------------------------------------------
-    # 3. Уменьшаем длительность старых баффов/дебаффов
+    # 3. Уменьшаем длительность кулдаунов в начале хода.
+    # Эффекты (баффы/дебаффы) тикают в КОНЦЕ хода их владельца — см. секцию 9.6,
+    # чтобы 1-ходовые баффы успели сработать на этом же ходу, а длительные
+    # эффекты не убывали на ходу противника.
     # ------------------------------------------------------------------------------
-    decrement_durations(battle_state)
     decrement_cooldowns(battle_state)
 
     # ------------------------------------------------------------------------------
@@ -1144,7 +1161,10 @@ async def _make_action_core(
         self_effects = [e for e in support_rank.get("effects", [])
                         if e.get("target_side") == "self"]
         if self_effects:
-            apply_new_effects(battle_state, request.participant_id, self_effects)
+            apply_new_effects(
+                battle_state, request.participant_id, self_effects,
+                owner_pid=request.participant_id,
+            )
             turn_events.append({
                 "event": "apply_effects", "who": request.participant_id,
                 "kind": "support", "effects": [e["effect_name"] for e in self_effects],
@@ -1153,9 +1173,16 @@ async def _make_action_core(
         # enemy-эффекты (with luck-based proc chance)
         enemy_effects = [e for e in support_rank.get("effects", [])
                          if e.get("target_side") == "enemy"]
-        enemy_effects = _filter_effects_by_chance(enemy_effects, attacker_luck_bonus)
+        enemy_effects = _filter_effects_by_chance(
+            enemy_effects,
+            attacker_luck_bonus,
+            base_defender_attributes.get("endurance", 0),
+        )
         if enemy_effects:
-            apply_new_effects(battle_state, defender_pid, enemy_effects, is_enemy=True)
+            apply_new_effects(
+                battle_state, defender_pid, enemy_effects, is_enemy=True,
+                owner_pid=request.participant_id,
+            )
             turn_events.append({
                 "event": "apply_effects", "who": defender_pid,
                 "kind": "support", "effects": [e["effect_name"] for e in enemy_effects],
@@ -1171,7 +1198,10 @@ async def _make_action_core(
         self_effects = [e for e in defense_rank.get("effects", [])
                         if e.get("target_side") == "self"]
         if self_effects:
-            apply_new_effects(battle_state, request.participant_id, self_effects)
+            apply_new_effects(
+                battle_state, request.participant_id, self_effects,
+                owner_pid=request.participant_id,
+            )
             turn_events.append({
                 "event": "apply_effects", "who": request.participant_id,
                 "kind": "defense", "effects": [e["effect_name"] for e in self_effects],
@@ -1180,9 +1210,16 @@ async def _make_action_core(
         # enemy-эффекты (with luck-based proc chance)
         enemy_effects = [e for e in defense_rank.get("effects", [])
                          if e.get("target_side") == "enemy"]
-        enemy_effects = _filter_effects_by_chance(enemy_effects, attacker_luck_bonus)
+        enemy_effects = _filter_effects_by_chance(
+            enemy_effects,
+            attacker_luck_bonus,
+            base_defender_attributes.get("endurance", 0),
+        )
         if enemy_effects:
-            apply_new_effects(battle_state, defender_pid, enemy_effects, is_enemy=True)
+            apply_new_effects(
+                battle_state, defender_pid, enemy_effects, is_enemy=True,
+                owner_pid=request.participant_id,
+            )
             turn_events.append({
                 "event": "apply_effects", "who": defender_pid,
                 "kind": "defense", "effects": [e["effect_name"] for e in enemy_effects],
@@ -1262,6 +1299,40 @@ async def _make_action_core(
         attack_rank = await get_resolved_skill(attack_id, attacker_character_id)
         logger.debug(f"[SKILL] attack_skill resolved={attack_rank}")
 
+        # ── 9.0. Apply attack self-effects BEFORE damage so they buff this hit
+        attack_self_effects = [e for e in attack_rank.get("effects", [])
+                               if e.get("target_side") == "self"]
+        if attack_self_effects:
+            apply_new_effects(
+                battle_state, request.participant_id, attack_self_effects,
+                owner_pid=request.participant_id,
+            )
+            turn_events.append({
+                "event": "apply_effects", "who": request.participant_id,
+                "kind": "attack",
+                "effects": [e["effect_name"] for e in attack_self_effects],
+            })
+
+        # ── 9.0b. Apply attack enemy-effects BEFORE damage so debuffs (e.g.
+        # resist-down) affect this same hit. Luck-proc filter applies.
+        attack_enemy_effects = [e for e in attack_rank.get("effects", [])
+                                if e.get("target_side") == "enemy"]
+        attack_enemy_effects = _filter_effects_by_chance(
+            attack_enemy_effects,
+            attacker_luck_bonus,
+            base_defender_attributes.get("endurance", 0),
+        )
+        if attack_enemy_effects:
+            apply_new_effects(
+                battle_state, defender_pid, attack_enemy_effects, is_enemy=True,
+                owner_pid=request.participant_id,
+            )
+            turn_events.append({
+                "event": "apply_effects", "who": defender_pid,
+                "kind": "attack",
+                "effects": [e["effect_name"] for e in attack_enemy_effects],
+            })
+
         attacker_buff_modifiers = aggregate_modifiers(
             battle_state.get("active_effects", {}).get(str(request.participant_id), [])
         )
@@ -1275,6 +1346,11 @@ async def _make_action_core(
             battle_state.get("active_effects", {}).get(str(defender_pid), [])
         )
         defender_percent_resists = build_percent_resist_buffs(defender_buff_modifiers)
+        # Re-apply flat modifiers on defender too in case attack_enemy_effects
+        # included flat stat debuffs that affect damage formula.
+        defender_attributes = apply_flat_modifiers(
+            base_defender_attributes, defender_buff_modifiers
+        )
 
         # damage_entries
         for dmg in attack_rank.get("damage_entries", []):
@@ -1298,18 +1374,6 @@ async def _make_action_core(
             turn_events.append({
                 "event": "damage", "source": request.participant_id,
                 "target": defender_pid, **log
-            })
-
-        # enemy-эффекты (with luck-based proc chance)
-        enemy_effects = [e for e in attack_rank.get("effects", [])
-                         if e.get("target_side") == "enemy"]
-        enemy_effects = _filter_effects_by_chance(enemy_effects, attacker_luck_bonus)
-        if enemy_effects:
-            apply_new_effects(battle_state, defender_pid, enemy_effects, is_enemy=True)
-            turn_events.append({
-                "event": "apply_effects", "who": defender_pid,
-                "kind": "attack",
-                "effects": [e["effect_name"] for e in enemy_effects],
             })
 
     # ------------------------------------------------------------------------------
@@ -1379,6 +1443,14 @@ async def _make_action_core(
         {"event": "resource_spend", "who": request.participant_id, **spend}
     )
     logger.debug("[EVENTS] turn_events=%s", turn_events)
+
+    # ------------------------------------------------------------------------------
+    # 9.4. Тик длительности эффектов АТАКУЮЩЕГО (конец его хода).
+    # 1-ходовые баффы (cast в support → использован в attack этого же хода) тут
+    # обнуляются и удаляются. Эффекты противника НЕ трогаем — они оттикают
+    # в конце ЕГО собственного хода.
+    # ------------------------------------------------------------------------------
+    decrement_durations(battle_state, request.participant_id)
 
     # ------------------------------------------------------------------------------
     # 9.5. Проверка HP <= 0 — завершение боя при гибели участника
