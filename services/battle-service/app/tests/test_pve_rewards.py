@@ -557,6 +557,9 @@ class TestMobAIAutoRegistration:
                     result.fetchone = MagicMock(return_value=(1,))
                 else:
                     result.fetchone = MagicMock(return_value=(999,))
+            elif "current_location_id" in query_str:
+                # Same-location check — both characters share location 1
+                result.fetchone = MagicMock(return_value=(1,))
             elif "is_npc" in query_str:
                 # NPC check
                 if params and params.get("cid") == 20:
