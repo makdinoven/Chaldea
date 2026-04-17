@@ -11,14 +11,16 @@ services:
     profiles: ["dev"]
 
   # --- Dev tools: disabled in production ---
-  adminer:
-    profiles: ["dev"]
-
   redis-insight:
     profiles: ["dev"]
 
   mongo-express:
     profiles: ["dev"]
+
+  # Adminer остаётся доступным в prod через api-gateway /adminer/
+  # (порт наружу не публикуем, доступ только через Nginx)
+  adminer:
+    ports: !reset []
 
   # --- API Gateway: production build with SSL ---
   api-gateway:
