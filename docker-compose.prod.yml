@@ -92,7 +92,7 @@ services:
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
 
   inventory-service:
     command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8004 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
@@ -167,7 +167,7 @@ services:
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       AUTOBATTLE_SERVICE_URL: http://autobattle-service:8011
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
       # FEAT-125 cutover: enable on first deploy, then remove
       # BATTLE_RESET_ON_BOOT: "1"
 
@@ -210,7 +210,7 @@ services:
       MONGO_URI: mongodb://mongo:27017
       BATTLE_SERVICE_URL: http://battle-service:8010
       SKILLS_SERVICE_URL: http://skills-service:8003
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
 
   celery-beat:
     command: celery -A tasks:celery_app beat --loglevel=info
