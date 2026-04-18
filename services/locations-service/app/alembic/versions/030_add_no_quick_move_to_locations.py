@@ -11,7 +11,7 @@ from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
-revision = '030_add_no_quick_move_to_locations'
+revision = '030_no_quick_move'
 down_revision = '029_floating_structure_area_id'
 branch_labels = None
 depends_on = None
