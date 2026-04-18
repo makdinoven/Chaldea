@@ -13,6 +13,7 @@ interface PostCardProps {
   players: Player[];
   locationId: number;
   locationMarkerType?: string;
+  isCharacterHere?: boolean;
   onLike: (postId: number) => void;
   onUnlike: (postId: number) => void;
   onTagPlayer: (targetUserId: number) => void;
@@ -94,6 +95,7 @@ const PostCard = ({
   players,
   locationId,
   locationMarkerType = 'safe',
+  isCharacterHere = false,
   onLike,
   onUnlike,
   onTagPlayer,
@@ -223,7 +225,7 @@ const PostCard = ({
         </span>
 
         {/* Actions menu — NPC attack or PvP menu for other players */}
-        {currentCharacterId !== null && !post.user_id && (
+        {currentCharacterId !== null && !post.user_id && isCharacterHere && (
           <NpcPostAttackButton
             npcId={post.character_id}
             npcName={post.character_name}
@@ -240,6 +242,7 @@ const PostCard = ({
             currentCharacterLevel={currentCharacterLevel}
             locationId={locationId}
             locationMarkerType={locationMarkerType}
+            isCharacterHere={isCharacterHere}
           />
         )}
       </div>

@@ -61,6 +61,7 @@ interface NpcCardProps {
   npc: NpcInLocation;
   onClick: () => void;
   currentCharacterId?: number | null;
+  isCharacterHere?: boolean;
 }
 
 const NpcAttackButton = ({ npcId, npcName, currentCharacterId }: { npcId: number; npcName: string; currentCharacterId: number }) => {
@@ -96,7 +97,7 @@ const NpcAttackButton = ({ npcId, npcName, currentCharacterId }: { npcId: number
   );
 };
 
-const NpcCard = ({ npc, onClick, currentCharacterId }: NpcCardProps) => {
+const NpcCard = ({ npc, onClick, currentCharacterId, isCharacterHere = false }: NpcCardProps) => {
   const roleLabel = npc.npc_role ? (NPC_ROLE_LABELS[npc.npc_role] || npc.npc_role) : null;
   const roleIcon = npc.npc_role ? (NPC_ROLE_ICONS[npc.npc_role] || null) : null;
 
@@ -133,7 +134,7 @@ const NpcCard = ({ npc, onClick, currentCharacterId }: NpcCardProps) => {
           </span>
         )}
       </button>
-      {currentCharacterId != null && (
+      {currentCharacterId != null && isCharacterHere && (
         <NpcAttackButton
           npcId={npc.id}
           npcName={npc.name}
@@ -180,6 +181,7 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
                         currentCharacterLevel={currentCharacterLevel}
                         locationId={locationId}
                         locationMarkerType={locationMarkerType}
+                        isCharacterHere={isCharacterHere}
                       />
                     ) : undefined
                   }
@@ -204,6 +206,7 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
                   npc={npc}
                   onClick={() => setSelectedNpcId(npc.id)}
                   currentCharacterId={currentCharacterId}
+                  isCharacterHere={isCharacterHere}
                 />
               ))}
             </div>

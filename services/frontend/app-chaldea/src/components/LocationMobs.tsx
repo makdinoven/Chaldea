@@ -214,22 +214,23 @@ const LocationMobs = ({ locationId, characterId }: LocationMobsProps) => {
                           </div>
                         </div>
 
-                        {/* Attack button */}
-                        <button
-                          onClick={() => handleAttack(mob)}
-                          disabled={
-                            !characterId ||
-                            mob.status === 'in_battle' ||
-                            isAttacking
-                          }
-                          className="btn-blue text-xs sm:text-sm px-3 py-1.5 sm:px-4 sm:py-2 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                          {isAttacking ? (
-                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          ) : (
-                            'Атаковать'
-                          )}
-                        </button>
+                        {/* Attack button — hidden when character is not at this location */}
+                        {characterId && (
+                          <button
+                            onClick={() => handleAttack(mob)}
+                            disabled={
+                              mob.status === 'in_battle' ||
+                              isAttacking
+                            }
+                            className="btn-blue text-xs sm:text-sm px-3 py-1.5 sm:px-4 sm:py-2 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {isAttacking ? (
+                              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            ) : (
+                              'Атаковать'
+                            )}
+                          </button>
+                        )}
                       </motion.div>
                     );
                   })}

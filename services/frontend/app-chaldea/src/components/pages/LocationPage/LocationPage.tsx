@@ -460,6 +460,7 @@ const LocationPage = () => {
                   players={location.players}
                   locationId={location.id}
                   locationMarkerType={location.marker_type}
+                  isCharacterHere={isCharacterHere}
                   onLike={handleLike}
                   onUnlike={handleUnlike}
                   onTagPlayer={handleTagPlayer}
