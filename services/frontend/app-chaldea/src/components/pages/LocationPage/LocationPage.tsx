@@ -373,6 +373,8 @@ const LocationPage = () => {
 
   const handleQuickMove = useCallback(async () => {
     if (!character?.id || !location) return;
+    const cost = neighborEntry?.energy_cost ? neighborEntry.energy_cost * 2 : 0;
+    if (!window.confirm(`Быстрое перемещение в "${location.name}" стоит ${cost} выносливости. Продолжить?`)) return;
     setQuickMoving(true);
     try {
       await axios.post(`${BASE_URL}/locations/${location.id}/quick_move`, {
