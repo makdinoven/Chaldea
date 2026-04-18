@@ -206,7 +206,7 @@ const WorldPage = () => {
   // and the user is bounced from the Citadel internal map back to the area view.
   useEffect(() => {
     if (citadelId != null) return;
-    if (viewLevel === 'world' && areas.length === 1 && !params.areaId) {
+    if (viewLevel === 'world' && areas.length >= 1 && !params.areaId) {
       navigate(`/world/area/${areas[0].id}`, { replace: true });
     }
   }, [viewLevel, areas, navigate, params.areaId, citadelId]);
