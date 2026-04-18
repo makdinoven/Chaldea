@@ -876,6 +876,8 @@ async def move_and_post(
                 travel_cooldown_until.replace("Z", "+00:00")
             )
             now = datetime.now(timezone.utc)
+            if cooldown_dt.tzinfo is None:
+                cooldown_dt = cooldown_dt.replace(tzinfo=timezone.utc)
             if cooldown_dt > now:
                 remaining = int((cooldown_dt - now).total_seconds())
                 minutes = remaining // 60
@@ -1087,6 +1089,9 @@ async def quick_move(
             travel_cooldown_until.replace("Z", "+00:00")
         )
         now = datetime.now(timezone.utc)
+        # Ensure both datetimes are comparable (both aware or both naive)
+        if cooldown_dt.tzinfo is None:
+            cooldown_dt = cooldown_dt.replace(tzinfo=timezone.utc)
         if cooldown_dt > now:
             remaining = int((cooldown_dt - now).total_seconds())
             minutes = remaining // 60
