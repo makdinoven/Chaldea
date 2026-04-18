@@ -40,32 +40,31 @@ const LocationPage = () => {
   // --- Travel cooldown timer ---
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
 
+  // Sync from server value (getMe response)
   useEffect(() => {
     const cooldownUntil = character?.travel_cooldown_until;
-    if (!cooldownUntil) {
-      setCooldownRemaining(0);
-      return;
-    }
-
-    const calcRemaining = () => {
-      const diff = new Date(cooldownUntil).getTime() - Date.now();
-      return Math.max(0, Math.ceil(diff / 1000));
-    };
-
-    setCooldownRemaining(calcRemaining());
-
-    if (calcRemaining() <= 0) return;
-
-    const interval = setInterval(() => {
-      const remaining = calcRemaining();
+    if (!cooldownUntil) return;
+    const diff = new Date(cooldownUntil).getTime() - Date.now();
+    const remaining = Math.max(0, Math.ceil(diff / 1000));
+    if (remaining > 0) {
       setCooldownRemaining(remaining);
-      if (remaining <= 0) {
-        clearInterval(interval);
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
+    }
   }, [character?.travel_cooldown_until]);
+
+  // Tick down every second when cooldown is active
+  useEffect(() => {
+    if (cooldownRemaining <= 0) return;
+    const interval = setInterval(() => {
+      setCooldownRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [cooldownRemaining > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isTravelOnCooldown = cooldownRemaining > 0;
   const cooldownMinutes = Math.floor(cooldownRemaining / 60);
@@ -299,6 +298,10 @@ const LocationPage = () => {
         // If character moved to this location, update Redux state + refresh cooldown
         if (character?.current_location?.id !== Number(locationId) && location) {
           dispatch(setCharacterLocation({ id: location.id, name: location.name }));
+          // Set cooldown immediately so timer appears without waiting for getMe()
+          if (neighborEntry?.energy_cost) {
+            setCooldownRemaining(neighborEntry.energy_cost * 60);
+          }
           dispatch(getMe());
         }
         toast.success('Пост отправлен');
@@ -376,6 +379,10 @@ const LocationPage = () => {
         character_id: character.id,
       });
       dispatch(setCharacterLocation({ id: location.id, name: location.name }));
+      // Set cooldown immediately so timer appears without waiting for getMe()
+      if (neighborEntry?.energy_cost) {
+        setCooldownRemaining(neighborEntry.energy_cost * 60);
+      }
       dispatch(getMe());
       toast.success(`Вы переместились в ${location.name}`);
       await fetchLocationData();
