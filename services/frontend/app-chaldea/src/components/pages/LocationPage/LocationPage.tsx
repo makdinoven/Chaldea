@@ -5,7 +5,7 @@ import axios from 'axios';
 import { BASE_URL } from '../../../api/api';
 import { useBodyBackground } from '../../../hooks/useBodyBackground';
 import { useAppSelector, useAppDispatch } from '../../../redux/store';
-import { setCharacterLocation } from '../../../redux/slices/userSlice';
+import { setCharacterLocation, getMe } from '../../../redux/slices/userSlice';
 import { isStaff } from '../../../utils/permissions';
 import { LocationData } from './types';
 import LocationHeader from './LocationHeader';
@@ -36,6 +36,40 @@ const LocationPage = () => {
   const userRole = useAppSelector((state) => state.user.role);
   const userIsStaff = isStaff(userRole);
   const { inBattle } = useBattleLock(character?.id);
+
+  // --- Travel cooldown timer ---
+  const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
+
+  useEffect(() => {
+    const cooldownUntil = character?.travel_cooldown_until;
+    if (!cooldownUntil) {
+      setCooldownRemaining(0);
+      return;
+    }
+
+    const calcRemaining = () => {
+      const diff = new Date(cooldownUntil).getTime() - Date.now();
+      return Math.max(0, Math.ceil(diff / 1000));
+    };
+
+    setCooldownRemaining(calcRemaining());
+
+    if (calcRemaining() <= 0) return;
+
+    const interval = setInterval(() => {
+      const remaining = calcRemaining();
+      setCooldownRemaining(remaining);
+      if (remaining <= 0) {
+        clearInterval(interval);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [character?.travel_cooldown_until]);
+
+  const isTravelOnCooldown = cooldownRemaining > 0;
+  const cooldownMinutes = Math.floor(cooldownRemaining / 60);
+  const cooldownSeconds = cooldownRemaining % 60;
 
   useBodyBackground(location?.image_url);
 
@@ -262,9 +296,10 @@ const LocationPage = () => {
           location_id: locationId,
           content,
         });
-        // If character moved to this location, update Redux state
+        // If character moved to this location, update Redux state + refresh cooldown
         if (character?.current_location?.id !== Number(locationId) && location) {
           dispatch(setCharacterLocation({ id: location.id, name: location.name }));
+          dispatch(getMe());
         }
         toast.success('Пост отправлен');
         await fetchLocationData();
@@ -341,6 +376,7 @@ const LocationPage = () => {
         character_id: character.id,
       });
       dispatch(setCharacterLocation({ id: location.id, name: location.name }));
+      dispatch(getMe());
       toast.success(`Вы переместились в ${location.name}`);
       await fetchLocationData();
     } catch (err) {
@@ -489,51 +525,68 @@ const LocationPage = () => {
 
               {/* Movement choice UI for neighbor locations */}
               {!isCharacterHere && isNeighborLocation && !inBattle && neighborEntry && (
-                <div className="flex flex-col sm:flex-row gap-3">
-                  {/* Option 1: Write post to move */}
-                  <button
-                    onClick={() => setShowPostForm(true)}
-                    className={`flex-1 rounded-lg border p-4 text-left transition-colors ${
-                      showPostForm
-                        ? 'border-stat-energy bg-stat-energy/10'
-                        : 'border-white/10 bg-white/5 hover:border-white/20'
-                    }`}
-                  >
-                    <p className="text-white text-sm font-medium mb-1">
-                      Написать пост для перемещения
+                isTravelOnCooldown ? (
+                  /* Cooldown timer */
+                  <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4 flex items-center gap-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-yellow-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p className="text-yellow-300 text-sm">
+                      Перемещение будет доступно через{' '}
+                      <span className="font-mono font-bold">
+                        {cooldownMinutes > 0
+                          ? `${cooldownMinutes} мин ${String(cooldownSeconds).padStart(2, '0')} сек`
+                          : `${cooldownSeconds} сек`}
+                      </span>
                     </p>
-                    <p className="text-stat-energy text-xs flex items-center gap-1">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                      </svg>
-                      {neighborEntry.energy_cost} выносливости
-                    </p>
-                  </button>
-
-                  {/* Option 2: Quick move */}
-                  {!location.no_quick_move && (
+                  </div>
+                ) : (
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    {/* Option 1: Write post to move */}
                     <button
-                      onClick={handleQuickMove}
-                      disabled={quickMoving}
-                      className="flex-1 rounded-lg border border-white/10 bg-white/5 hover:border-white/20 p-4 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={() => setShowPostForm(true)}
+                      className={`flex-1 rounded-lg border p-4 text-left transition-colors ${
+                        showPostForm
+                          ? 'border-stat-energy bg-stat-energy/10'
+                          : 'border-white/10 bg-white/5 hover:border-white/20'
+                      }`}
                     >
                       <p className="text-white text-sm font-medium mb-1">
-                        {quickMoving ? 'Перемещение...' : 'Быстрое перемещение'}
+                        Написать пост для перемещения
                       </p>
                       <p className="text-stat-energy text-xs flex items-center gap-1">
                         <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
                         </svg>
-                        {neighborEntry.energy_cost * 2} выносливости
+                        {neighborEntry.energy_cost} выносливости
                       </p>
-                      <p className="text-white/40 text-xs mt-1">Без написания поста</p>
                     </button>
-                  )}
-                </div>
+
+                    {/* Option 2: Quick move */}
+                    {!location.no_quick_move && (
+                      <button
+                        onClick={handleQuickMove}
+                        disabled={quickMoving}
+                        className="flex-1 rounded-lg border border-white/10 bg-white/5 hover:border-white/20 p-4 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <p className="text-white text-sm font-medium mb-1">
+                          {quickMoving ? 'Перемещение...' : 'Быстрое перемещение'}
+                        </p>
+                        <p className="text-stat-energy text-xs flex items-center gap-1">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                          </svg>
+                          {neighborEntry.energy_cost * 2} выносливости
+                        </p>
+                        <p className="text-white/40 text-xs mt-1">Без написания поста</p>
+                      </button>
+                    )}
+                  </div>
+                )
               )}
 
-              {/* Post form: always shown if at location or staff, shown on neighbor if user chose post option */}
-              {(isCharacterHere || showPostForm || (!isNeighborLocation && !isCharacterHere) || userIsStaff) && (
+              {/* Post form: always shown if at location or staff, shown on neighbor if user chose post option (not during cooldown) */}
+              {(isCharacterHere || (showPostForm && !isTravelOnCooldown) || (!isNeighborLocation && !isCharacterHere) || userIsStaff) && (
                 <PostCreateForm
                   onSubmit={handleSubmitPost}
                   onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}

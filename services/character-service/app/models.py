@@ -56,6 +56,7 @@ class Character(Base):
     npc_role = Column(String(50), nullable=True)
     npc_status = Column(Enum('alive', 'dead', name='npc_status_enum'), nullable=False, default='alive', server_default='alive')
     last_teleport_at = Column(DateTime, nullable=True)
+    travel_cooldown_until = Column(TIMESTAMP, nullable=True, default=None)
 
     titles = relationship("CharacterTitle", back_populates="character")
     current_title = relationship("Title")

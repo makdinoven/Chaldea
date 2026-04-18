@@ -12,6 +12,7 @@ interface CharacterData {
     id: number;
     name: string;
   } | null;
+  travel_cooldown_until?: string | null;
   [key: string]: unknown;
 }
 

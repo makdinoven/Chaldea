@@ -151,6 +151,7 @@ async def _fetch_character_short(char_id: int):
             "race_name": ch_json.get("race_name"),
             "class_name": ch_json.get("class_name"),
             "subrace_name": ch_json.get("subrace_name"),
+            "travel_cooldown_until": ch_json.get("travel_cooldown_until"),
         }
 
 

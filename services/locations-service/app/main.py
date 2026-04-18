@@ -1,6 +1,7 @@
 import os
 import math
 import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request, BackgroundTasks, Query
 from fastapi.security import OAuth2PasswordBearer
@@ -863,6 +864,27 @@ async def move_and_post(
         profile_data = profile_resp.json()
     current_location = profile_data.get("current_location_id")  # может быть NULL
 
+    # 1.5. Проверяем кулдаун перемещения (только если реально перемещаемся)
+    actually_moving = (
+        current_location is not None
+        and int(current_location) != destination_location_id
+    )
+    if actually_moving:
+        travel_cooldown_until = profile_data.get("travel_cooldown_until")
+        if travel_cooldown_until:
+            cooldown_dt = datetime.fromisoformat(
+                travel_cooldown_until.replace("Z", "+00:00")
+            )
+            now = datetime.now(timezone.utc)
+            if cooldown_dt > now:
+                remaining = int((cooldown_dt - now).total_seconds())
+                minutes = remaining // 60
+                seconds = remaining % 60
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Перемещение будет доступно через {minutes} мин {seconds} сек",
+                )
+
     # 2. Проверяем, можно ли переходить в целевую локацию
     if current_location is None:
         # персонаж ещё ни разу не «стоял» в локации – позволяем перемещаться куда угодно
@@ -926,6 +948,14 @@ async def move_and_post(
         update_resp = await client.put(update_url, json={"new_location_id": destination_location_id})
         if update_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Failed to update character location")
+
+    # 6.5. Устанавливаем кулдаун перемещения (energy_cost минут)
+    if movement_cost > 0:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/set_travel_cooldown",
+                json={"minutes": movement_cost},
+            )
 
     # 7. Списываем выносливость (вызываем эндпоинт consume_stamina в Attributes‑service)
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1050,6 +1080,22 @@ async def quick_move(
     current_location = profile_data.get("current_location_id")
     character_name = profile_data.get("character_name", "Неизвестный")
 
+    # 1.5. Проверяем кулдаун перемещения
+    travel_cooldown_until = profile_data.get("travel_cooldown_until")
+    if travel_cooldown_until:
+        cooldown_dt = datetime.fromisoformat(
+            travel_cooldown_until.replace("Z", "+00:00")
+        )
+        now = datetime.now(timezone.utc)
+        if cooldown_dt > now:
+            remaining = int((cooldown_dt - now).total_seconds())
+            minutes = remaining // 60
+            seconds = remaining % 60
+            raise HTTPException(
+                status_code=400,
+                detail=f"Перемещение будет доступно через {minutes} мин {seconds} сек",
+            )
+
     # 2. Нельзя быстро перемещаться в ту же локацию
     if current_location is not None and int(current_location) == destination_location_id:
         raise HTTPException(
@@ -1073,6 +1119,7 @@ async def quick_move(
     # 3. Проверяем соседство и получаем стоимость перехода
     if current_location is None:
         # Персонаж ещё нигде не стоял — разрешаем, стоимость 0
+        base_energy_cost = 0
         movement_cost = 0
     else:
         q = await session.execute(
@@ -1087,7 +1134,8 @@ async def quick_move(
                 status_code=400,
                 detail="Целевая локация не является соседней",
             )
-        movement_cost = neighbor.energy_cost * 2  # двойная стоимость
+        base_energy_cost = neighbor.energy_cost
+        movement_cost = base_energy_cost * 2  # двойная стоимость
 
     # 4. Проверяем выносливость
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1115,6 +1163,14 @@ async def quick_move(
         update_resp = await client.put(update_url, json={"new_location_id": destination_location_id})
         if update_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
+
+    # 6.5. Устанавливаем кулдаун перемещения (base energy_cost, NOT doubled)
+    if base_energy_cost > 0:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/set_travel_cooldown",
+                json={"minutes": base_energy_cost},
+            )
 
     # 7. Списываем удвоенную выносливость
     async with httpx.AsyncClient(timeout=5.0) as client:

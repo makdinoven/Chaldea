@@ -251,6 +251,7 @@ class CharacterProfileResponse(BaseModel):
         user_id: Optional[int] = None
         user_nickname: Optional[str] = None
         current_location_id: Optional[int] = None
+        travel_cooldown_until: Optional[datetime] = None
 
         class Config:
             orm_mode = True
@@ -1051,3 +1052,7 @@ class PostHistoryItem(BaseModel):
 
 class PostHistoryResponse(BaseModel):
     posts: List[PostHistoryItem]
+
+
+class SetTravelCooldownRequest(BaseModel):
+    minutes: int

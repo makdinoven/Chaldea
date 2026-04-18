@@ -1,5 +1,6 @@
 import os
 import httpx
+from datetime import datetime, timedelta
 from fastapi import FastAPI, Depends, APIRouter, HTTPException, Query
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import Session
@@ -1554,6 +1555,7 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
         "user_nickname": user_nickname,
         "character_name": character.name,
         "current_location_id": character.current_location_id,
+        "travel_cooldown_until": character.travel_cooldown_until,
     }
 
 @router.get("/{character_id}/short_info")
@@ -1585,6 +1587,7 @@ def get_short_info(character_id: int, db: Session = Depends(get_db)):
         "personality": ch.personality,
         "sex": ch.sex,
         "age": ch.age,
+        "travel_cooldown_until": ch.travel_cooldown_until.isoformat() if ch.travel_cooldown_until else None,
     }
 
 @router.get("/list")
@@ -2973,6 +2976,39 @@ def admin_delete_teleport_link(
 ):
     crud.delete_teleport_link(db, link_id, delete_reverse=delete_reverse)
     return {"detail": "Связь телепорта удалена"}
+
+
+# ============================================================
+# Travel Cooldown (internal, service-to-service)
+# ============================================================
+
+@router.post("/{character_id}/set_travel_cooldown")
+def set_travel_cooldown(
+    character_id: int,
+    body: schemas.SetTravelCooldownRequest,
+    db: Session = Depends(get_db),
+):
+    """Set or clear travel cooldown for a character (internal endpoint)."""
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    if body.minutes <= 0:
+        character.travel_cooldown_until = None
+    else:
+        character.travel_cooldown_until = datetime.utcnow() + timedelta(minutes=body.minutes)
+
+    try:
+        db.commit()
+        db.refresh(character)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при установке кулдауна перемещения: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении кулдауна перемещения")
+
+    return {
+        "travel_cooldown_until": character.travel_cooldown_until.isoformat() if character.travel_cooldown_until else None
+    }
 
 
 app.include_router(router)
