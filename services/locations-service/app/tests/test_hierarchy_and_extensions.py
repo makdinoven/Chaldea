@@ -78,6 +78,7 @@ def _make_location(location_id=1, name="Test Location", district_id=1,
     loc.map_x = map_x
     loc.map_y = map_y
     loc.region_id = region_id
+    loc.no_quick_move = False
     return loc
 
 

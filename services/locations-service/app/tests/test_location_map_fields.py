@@ -70,6 +70,7 @@ def _make_location(
     loc.map_icon_url = map_icon_url
     loc.map_x = map_x
     loc.map_y = map_y
+    loc.no_quick_move = False
     return loc
 
 
