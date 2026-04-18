@@ -145,23 +145,25 @@ const PlayerActionsMenu = ({
             transition={{ duration: 0.15 }}
             className="dropdown-menu absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 sm:w-52 z-30"
           >
-            {/* Trade */}
-            <button
-              onClick={handleTradeClick}
-              disabled={proposingTrade}
-              className="dropdown-item w-full text-left"
-            >
-              <span className="flex items-center gap-2">
-                {proposingTrade ? (
-                  <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0" />
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                  </svg>
-                )}
-                {proposingTrade ? 'Предложение...' : 'Предложить обмен'}
-              </span>
-            </button>
+            {/* Trade — hidden when character is not at this location */}
+            {isCharacterHere && (
+              <button
+                onClick={handleTradeClick}
+                disabled={proposingTrade}
+                className="dropdown-item w-full text-left"
+              >
+                <span className="flex items-center gap-2">
+                  {proposingTrade ? (
+                    <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0" />
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                    </svg>
+                  )}
+                  {proposingTrade ? 'Предложение...' : 'Предложить обмен'}
+                </span>
+              </button>
+            )}
 
             {/* Training Duel — hidden when character is not at this location */}
             {isCharacterHere && (
