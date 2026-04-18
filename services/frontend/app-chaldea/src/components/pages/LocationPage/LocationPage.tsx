@@ -1,10 +1,11 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import axios from 'axios';
 import { BASE_URL } from '../../../api/api';
 import { useBodyBackground } from '../../../hooks/useBodyBackground';
-import { useAppSelector } from '../../../redux/store';
+import { useAppSelector, useAppDispatch } from '../../../redux/store';
+import { setCharacterLocation } from '../../../redux/slices/userSlice';
 import { isStaff } from '../../../utils/permissions';
 import { LocationData } from './types';
 import LocationHeader from './LocationHeader';
@@ -22,6 +23,7 @@ import DungeonEntrance from '../../DungeonPage/DungeonEntrance';
 
 const LocationPage = () => {
   const navigate = useNavigate();
+  const dispatch = useAppDispatch();
   const { locationId } = useParams<{ locationId: string }>();
   const [location, setLocation] = useState<LocationData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -258,13 +260,21 @@ const LocationPage = () => {
           location_id: locationId,
           content,
         });
+        // If character moved to this location, update Redux state
+        if (character?.current_location?.id !== Number(locationId) && location) {
+          dispatch(setCharacterLocation({ id: location.id, name: location.name }));
+        }
         toast.success('Пост отправлен');
         await fetchLocationData();
-      } catch {
-        toast.error('Не удалось отправить пост');
+      } catch (err) {
+        const message =
+          axios.isAxiosError(err) && err.response?.data?.detail
+            ? err.response.data.detail
+            : 'Не удалось отправить пост';
+        toast.error(message);
       }
     },
-    [locationId, character?.id, fetchLocationData]
+    [locationId, character?.id, character?.current_location?.id, location, dispatch, fetchLocationData]
   );
 
   // --- NPC post submit (admin only) ---
@@ -339,6 +349,16 @@ const LocationPage = () => {
   }
 
   const isCharacterHere = character?.current_location?.id === location.id;
+
+  // Neighbor links are bidirectional with the same energy_cost.
+  // If the character's current location appears in this location's neighbor list,
+  // then this location is reachable from the character's current location.
+  const neighborEntry = useMemo(() => {
+    if (!character?.current_location?.id || isCharacterHere) return null;
+    return location.neighbors.find((n) => n.id === character.current_location!.id) ?? null;
+  }, [character?.current_location?.id, isCharacterHere, location.neighbors]);
+
+  const isNeighborLocation = neighborEntry !== null;
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 pb-10">
@@ -436,10 +456,18 @@ const LocationPage = () => {
               {inBattle && (
                 <p className="text-yellow-400 text-sm font-medium">Вы в бою</p>
               )}
+              {!isCharacterHere && isNeighborLocation && !inBattle && neighborEntry && (
+                <p className="text-stat-energy text-sm flex items-center gap-1.5">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  Отправка поста переместит вас сюда (стоимость: {neighborEntry.energy_cost} выносливости)
+                </p>
+              )}
               <PostCreateForm
                 onSubmit={handleSubmitPost}
                 onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
-                disabled={inBattle || (!isCharacterHere && !userIsStaff)}
+                disabled={inBattle || (!isCharacterHere && !isNeighborLocation && !userIsStaff)}
                 isStaff={userIsStaff}
                 npcs={location.npcs ?? []}
               />

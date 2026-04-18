@@ -115,6 +115,13 @@ const userSlice = createSlice({
       (state.character as { currency_balance?: number }).currency_balance =
         action.payload.currency_balance;
     },
+    setCharacterLocation(
+      state,
+      action: PayloadAction<{ id: number; name: string }>
+    ) {
+      if (!state.character) return;
+      state.character.current_location = action.payload;
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -150,7 +157,7 @@ const userSlice = createSlice({
   },
 });
 
-export const { logout, setAuthInitialized, setCharacterAfterTeleport } = userSlice.actions;
+export const { logout, setAuthInitialized, setCharacterAfterTeleport, setCharacterLocation } = userSlice.actions;
 export default userSlice.reducer;
 
 // --- Selectors ---
