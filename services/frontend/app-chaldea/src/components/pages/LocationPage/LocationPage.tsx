@@ -594,8 +594,8 @@ const LocationPage = () => {
                 )
               )}
 
-              {/* Post form: shown if at current location, or if user chose "write post" on a neighbor (not during cooldown), or staff */}
-              {(isCharacterHere || (isNeighborLocation && showPostForm && !isTravelOnCooldown) || userIsStaff) && (
+              {/* Post form: shown if at current location, or if user chose "write post" on a neighbor (not during cooldown) */}
+              {(isCharacterHere || (isNeighborLocation && showPostForm && !isTravelOnCooldown) || (!isNeighborLocation && !isCharacterHere && userIsStaff)) && (
                 <PostCreateForm
                   onSubmit={handleSubmitPost}
                   onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
