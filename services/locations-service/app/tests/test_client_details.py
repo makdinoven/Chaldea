@@ -199,7 +199,7 @@ class TestGetLocationClientDetails:
         data = response.json()
         expected_keys = {
             "id", "name", "type", "parent_id", "description", "image_url",
-            "recommended_level", "quick_travel_marker", "marker_type",
+            "recommended_level", "quick_travel_marker", "no_quick_move", "marker_type",
             "district_id", "region_id", "is_favorited",
             "neighbors", "players", "npcs", "posts", "loot",
         }
