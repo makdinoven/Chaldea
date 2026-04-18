@@ -66,6 +66,7 @@ export interface LocationData {
   recommended_level: number;
   image_url: string | null;
   marker_type: string;
+  no_quick_move?: boolean;
   is_favorited?: boolean;
   neighbors: NeighborLocation[];
   players: Player[];

@@ -28,6 +28,7 @@ interface LocationFormData {
   description: string;
   recommended_level: number;
   quick_travel_marker: boolean;
+  no_quick_move: boolean;
   marker_type: 'safe' | 'dangerous' | 'dungeon';
   image_url?: string;
   id?: number | string;
@@ -41,6 +42,7 @@ interface InitialData {
   parent_id?: number | null;
   recommended_level?: number;
   quick_travel_marker?: boolean;
+  no_quick_move?: boolean;
   marker_type?: 'safe' | 'dangerous' | 'dungeon';
   image_url?: string;
   map_icon_url?: string;
@@ -80,6 +82,7 @@ const EditLocationForm = ({
     description: '',
     recommended_level: 1,
     quick_travel_marker: false,
+    no_quick_move: false,
     marker_type: 'safe',
     ...initialData,
   });
@@ -114,6 +117,7 @@ const EditLocationForm = ({
         recommended_level: (currentLocation.recommended_level as number) || 1,
         parent_id: (currentLocation.parent_id as number) || null,
         quick_travel_marker: (currentLocation.quick_travel_marker as boolean) ?? false,
+        no_quick_move: (currentLocation.no_quick_move as boolean) ?? false,
         marker_type: (currentLocation.marker_type as 'safe' | 'dangerous' | 'dungeon') || 'safe',
       });
       if (currentLocation.map_icon_url && !iconFile) {
@@ -155,6 +159,13 @@ const EditLocationForm = ({
     setFormData((prev) => ({
       ...prev,
       quick_travel_marker: e.target.checked,
+    }));
+  };
+
+  const handleNoQuickMoveChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData((prev) => ({
+      ...prev,
+      no_quick_move: e.target.checked,
     }));
   };
 
@@ -209,6 +220,7 @@ const EditLocationForm = ({
         recommended_level: formData.recommended_level ? Number(formData.recommended_level) : 1,
         type: 'location',
         quick_travel_marker: Boolean(formData.quick_travel_marker),
+        no_quick_move: Boolean(formData.no_quick_move),
         district_id: formData.district_id ? Number(formData.district_id) : null,
         marker_type: formData.marker_type || 'safe',
       };
@@ -349,6 +361,19 @@ const EditLocationForm = ({
                 className="w-4 h-4"
               />
               Возможность быстрого перехода
+            </label>
+          </div>
+
+          <div className="mb-4">
+            <label className="flex items-center gap-2 text-[#d4e6f3] cursor-pointer">
+              <input
+                type="checkbox"
+                name="no_quick_move"
+                checked={formData.no_quick_move}
+                onChange={handleNoQuickMoveChange}
+                className="w-4 h-4"
+              />
+              Запретить быстрое перемещение
             </label>
           </div>
 

@@ -28,6 +28,8 @@ const LocationPage = () => {
   const [location, setLocation] = useState<LocationData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [quickMoving, setQuickMoving] = useState(false);
+  const [showPostForm, setShowPostForm] = useState(false);
 
   const character = useAppSelector((state) => state.user.character);
   const userId = useAppSelector((state) => state.user.id);
@@ -324,6 +326,34 @@ const LocationPage = () => {
     [character?.id, locationId, fetchLocationData]
   );
 
+  // Reset post form choice when character arrives at location
+  useEffect(() => {
+    setShowPostForm(false);
+  }, [character?.current_location?.id]);
+
+  // --- Quick move ---
+
+  const handleQuickMove = useCallback(async () => {
+    if (!character?.id || !location) return;
+    setQuickMoving(true);
+    try {
+      await axios.post(`${BASE_URL}/locations/${location.id}/quick_move`, {
+        character_id: character.id,
+      });
+      dispatch(setCharacterLocation({ id: location.id, name: location.name }));
+      toast.success(`Вы переместились в ${location.name}`);
+      await fetchLocationData();
+    } catch (err) {
+      const message =
+        axios.isAxiosError(err) && err.response?.data?.detail
+          ? err.response.data.detail
+          : 'Не удалось выполнить быстрое перемещение';
+      toast.error(message);
+    } finally {
+      setQuickMoving(false);
+    }
+  }, [character?.id, location, dispatch, fetchLocationData]);
+
   // --- Loading state ---
   if (loading) {
     return (
@@ -456,21 +486,62 @@ const LocationPage = () => {
               {inBattle && (
                 <p className="text-yellow-400 text-sm font-medium">Вы в бою</p>
               )}
+
+              {/* Movement choice UI for neighbor locations */}
               {!isCharacterHere && isNeighborLocation && !inBattle && neighborEntry && (
-                <p className="text-stat-energy text-sm flex items-center gap-1.5">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                  Отправка поста переместит вас сюда (стоимость: {neighborEntry.energy_cost} выносливости)
-                </p>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  {/* Option 1: Write post to move */}
+                  <button
+                    onClick={() => setShowPostForm(true)}
+                    className={`flex-1 rounded-lg border p-4 text-left transition-colors ${
+                      showPostForm
+                        ? 'border-stat-energy bg-stat-energy/10'
+                        : 'border-white/10 bg-white/5 hover:border-white/20'
+                    }`}
+                  >
+                    <p className="text-white text-sm font-medium mb-1">
+                      Написать пост для перемещения
+                    </p>
+                    <p className="text-stat-energy text-xs flex items-center gap-1">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      {neighborEntry.energy_cost} выносливости
+                    </p>
+                  </button>
+
+                  {/* Option 2: Quick move */}
+                  {!location.no_quick_move && (
+                    <button
+                      onClick={handleQuickMove}
+                      disabled={quickMoving}
+                      className="flex-1 rounded-lg border border-white/10 bg-white/5 hover:border-white/20 p-4 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <p className="text-white text-sm font-medium mb-1">
+                        {quickMoving ? 'Перемещение...' : 'Быстрое перемещение'}
+                      </p>
+                      <p className="text-stat-energy text-xs flex items-center gap-1">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        {neighborEntry.energy_cost * 2} выносливости
+                      </p>
+                      <p className="text-white/40 text-xs mt-1">Без написания поста</p>
+                    </button>
+                  )}
+                </div>
               )}
-              <PostCreateForm
-                onSubmit={handleSubmitPost}
-                onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
-                disabled={inBattle || (!isCharacterHere && !isNeighborLocation && !userIsStaff)}
-                isStaff={userIsStaff}
-                npcs={location.npcs ?? []}
-              />
+
+              {/* Post form: always shown if at location or staff, shown on neighbor if user chose post option */}
+              {(isCharacterHere || showPostForm || (!isNeighborLocation && !isCharacterHere) || userIsStaff) && (
+                <PostCreateForm
+                  onSubmit={handleSubmitPost}
+                  onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
+                  disabled={inBattle || (!isCharacterHere && !isNeighborLocation && !userIsStaff)}
+                  isStaff={userIsStaff}
+                  npcs={location.npcs ?? []}
+                />
+              )}
             </>
           )}
 

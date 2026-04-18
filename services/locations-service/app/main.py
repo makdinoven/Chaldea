@@ -367,6 +367,7 @@ async def create_location(location: schemas.LocationCreate, db: AsyncSession = D
             "image_url": db_location.image_url,
             "recommended_level": db_location.recommended_level,
             "quick_travel_marker": db_location.quick_travel_marker,
+            "no_quick_move": db_location.no_quick_move,
             "parent_id": db_location.parent_id,
             "description": db_location.description,
             "marker_type": db_location.marker_type,
@@ -390,6 +391,7 @@ async def update_location_route(location_id: int, body: schemas.LocationUpdate, 
             "image_url": db_location.image_url or "",  # Преобразуем None в пустую строку
             "recommended_level": db_location.recommended_level,
             "quick_travel_marker": db_location.quick_travel_marker,
+            "no_quick_move": db_location.no_quick_move,
             "parent_id": db_location.parent_id,
             "description": db_location.description or "",
             "marker_type": db_location.marker_type,
@@ -1017,6 +1019,164 @@ async def move_and_post(
         _auto_progress_quest, session, movement.character_id,
         "write_chars_in_location", move_char_count, destination_location_id,
     )
+
+    return new_post
+
+
+@router.post("/{destination_location_id}/quick_move", response_model=schemas.PostResponse)
+async def quick_move(
+        destination_location_id: int,
+        body: schemas.QuickMoveRequest,
+        background_tasks: BackgroundTasks,
+        session: AsyncSession = Depends(get_db),
+        current_user=Depends(get_current_user_via_http),
+):
+    """
+    Быстрое перемещение в соседнюю локацию без написания поста.
+    Стоимость — 2× обычной стоимости перехода.
+    Автоматически создаётся системный пост о прибытии.
+    """
+    # 0. Проверяем владение персонажем и отсутствие боя
+    await verify_character_ownership(session, body.character_id, current_user.id)
+    await check_not_in_battle(session, body.character_id, "Вы не можете покинуть локацию во время боя")
+
+    # 1. Получаем профиль персонажа (текущая локация + имя)
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/profile"
+        profile_resp = await client.get(profile_url)
+        if profile_resp.status_code != 200:
+            raise HTTPException(status_code=404, detail="Профиль персонажа не найден")
+        profile_data = profile_resp.json()
+    current_location = profile_data.get("current_location_id")
+    character_name = profile_data.get("character_name", "Неизвестный")
+
+    # 2. Нельзя быстро перемещаться в ту же локацию
+    if current_location is not None and int(current_location) == destination_location_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Вы уже находитесь в этой локации",
+        )
+
+    # 2.1. Проверяем, разрешено ли быстрое перемещение в целевую локацию
+    dest_loc_result = await session.execute(
+        select(models.Location).where(models.Location.id == destination_location_id)
+    )
+    dest_location = dest_loc_result.scalars().first()
+    if not dest_location:
+        raise HTTPException(status_code=404, detail="Локация не найдена")
+    if dest_location.no_quick_move:
+        raise HTTPException(
+            status_code=400,
+            detail="Быстрое перемещение в эту локацию запрещено",
+        )
+
+    # 3. Проверяем соседство и получаем стоимость перехода
+    if current_location is None:
+        # Персонаж ещё нигде не стоял — разрешаем, стоимость 0
+        movement_cost = 0
+    else:
+        q = await session.execute(
+            select(models.LocationNeighbor).where(
+                models.LocationNeighbor.location_id == current_location,
+                models.LocationNeighbor.neighbor_id == destination_location_id,
+            )
+        )
+        neighbor = q.scalars().first()
+        if not neighbor:
+            raise HTTPException(
+                status_code=400,
+                detail="Целевая локация не является соседней",
+            )
+        movement_cost = neighbor.energy_cost * 2  # двойная стоимость
+
+    # 4. Проверяем выносливость
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        attr_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{body.character_id}"
+        attr_resp = await client.get(attr_url)
+        if attr_resp.status_code != 200:
+            raise HTTPException(status_code=404, detail="Атрибуты персонажа не найдены")
+        attr_data = attr_resp.json()
+        current_stamina = attr_data.get("current_stamina", 0)
+        if current_stamina < movement_cost:
+            raise HTTPException(status_code=400, detail="Недостаточно выносливости для быстрого перемещения")
+
+    # 5. Автоматический системный пост (без проверки MIN_POST_LENGTH)
+    auto_content = f"<em>*{character_name} прибывает в локацию*</em>"
+    post_in = schemas.PostCreate(
+        character_id=body.character_id,
+        location_id=destination_location_id,
+        content=auto_content,
+    )
+    new_post = await crud.create_post(session, post_in)
+
+    # 6. Обновляем текущую локацию персонажа
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/update_location"
+        update_resp = await client.put(update_url, json={"new_location_id": destination_location_id})
+        if update_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
+
+    # 7. Списываем удвоенную выносливость
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        consume_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{body.character_id}/consume_stamina"
+        consume_resp = await client.post(consume_url, json={"amount": movement_cost})
+        if consume_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Не удалось списать выносливость")
+
+    # 7.5. Fire-and-forget: battle pass tracking
+    if settings.BATTLEPASS_SERVICE_URL:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    f"{settings.BATTLEPASS_SERVICE_URL}/battle-pass/internal/track-event",
+                    json={
+                        "user_id": current_user.id,
+                        "event_type": "location_visit",
+                        "character_id": body.character_id,
+                        "metadata": {"location_id": destination_location_id},
+                    },
+                )
+        except Exception:
+            pass
+
+    # 8. Уведомления для подписчиков локации
+    dest_result = await session.execute(
+        select(models.Location).where(models.Location.id == destination_location_id)
+    )
+    dest_loc = dest_result.scalars().first()
+    location_name = dest_loc.name if dest_loc else f"локация #{destination_location_id}"
+    if dest_loc:
+        fav_user_ids = await crud.get_favorite_user_ids(session, destination_location_id)
+        author_user_id = current_user.id
+        for uid in fav_user_ids:
+            if uid != author_user_id:
+                msg = f"Новый пост на локации «{location_name}»"
+                background_tasks.add_task(publish_notification_sync, uid, msg)
+
+    # 9. Fire-and-forget: mob spawn check
+    background_tasks.add_task(
+        _try_spawn_mob, destination_location_id, body.character_id
+    )
+
+    # 10. Cumulative stats: total_posts + transition
+    move_increments = {"total_posts": 1}
+    move_set_max = {}
+    if current_location is not None and int(current_location) != destination_location_id:
+        move_increments["total_transitions"] = 1
+        unique_count = await _count_unique_locations(session, body.character_id)
+        if unique_count > 0:
+            move_set_max["locations_visited"] = unique_count
+    background_tasks.add_task(
+        _track_cumulative_stats, body.character_id, move_increments,
+        move_set_max if move_set_max else None,
+    )
+
+    # 11. Quest auto-progress: visit_location + total_transitions (NOT write_posts)
+    if current_location is not None and int(current_location) != destination_location_id:
+        background_tasks.add_task(
+            _auto_progress_quest, session, body.character_id,
+            "visit_location", 1, destination_location_id,
+        )
 
     return new_post
 

@@ -75,6 +75,7 @@ class LocationCreate(BaseModel):
     image_url: Optional[str] = ""
     recommended_level: Optional[int] = 1
     quick_travel_marker: Optional[bool] = False
+    no_quick_move: Optional[bool] = False
     marker_type: Optional[Literal["safe", "dangerous", "dungeon", "farm"]] = "safe"
     map_icon_url: Optional[str] = None
     map_x: Optional[float] = None
@@ -91,6 +92,7 @@ class LocationCreateResponse(BaseModel):
     image_url: Optional[str] = ""
     recommended_level: Optional[int] = 1
     quick_travel_marker: Optional[bool] = False
+    no_quick_move: Optional[bool] = False
     marker_type: str = "safe"
     map_icon_url: Optional[str] = None
     map_x: Optional[float] = None
@@ -104,6 +106,7 @@ class LocationUpdate(BaseModel):
     image_url: Optional[str] = ""
     recommended_level: Optional[int] = 1
     quick_travel_marker: Optional[bool] = False
+    no_quick_move: Optional[bool] = False
     description: Optional[str] = ""
     parent_id: Optional[int] = None
     marker_type: Optional[Literal["safe", "dangerous", "dungeon", "farm"]] = None
@@ -118,6 +121,7 @@ class LocationRead(BaseModel):
     description: str
     recommended_level: int
     quick_travel_marker: bool
+    no_quick_move: bool = False
     image_url: Optional[str] = None
     parent_id: Optional[int] = None
     marker_type: str = "safe"
@@ -529,6 +533,7 @@ class LocationClientDetails(BaseModel):
     image_url: Optional[str]
     recommended_level: int
     quick_travel_marker: bool
+    no_quick_move: bool = False
     marker_type: Optional[str] = None
     district_id: Optional[int] = None
     region_id: Optional[int] = None
@@ -545,6 +550,9 @@ class LocationClientDetails(BaseModel):
 class MovementPostRequest(BaseModel):
     character_id: int
     content: str
+
+class QuickMoveRequest(BaseModel):
+    character_id: int
 
 class NpcPostCreate(BaseModel):
     npc_id: int

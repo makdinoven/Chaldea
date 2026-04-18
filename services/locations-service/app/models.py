@@ -119,6 +119,7 @@ class Location(Base):
     map_x = Column(Float, nullable=True)
     map_y = Column(Float, nullable=True)
     sort_order = Column(Integer, nullable=False, default=0)
+    no_quick_move = Column(Boolean, nullable=False, default=False, server_default="0")
 
     # ЯВНО указываем, какие колонке использовать в ForeignKey для district:
     district = relationship(

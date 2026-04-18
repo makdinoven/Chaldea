@@ -118,6 +118,7 @@ async def get_location_tree(session: AsyncSession, location: Location) -> dict:
             "image_url": location.image_url,
             "recommended_level": location.recommended_level,
             "quick_travel_marker": location.quick_travel_marker,
+            "no_quick_move": location.no_quick_move,
             "description": location.description,
             "parent_id": location.parent_id,
             "children": children_list
@@ -131,6 +132,7 @@ async def get_location_tree(session: AsyncSession, location: Location) -> dict:
             "image_url": location.image_url,
             "recommended_level": location.recommended_level,
             "quick_travel_marker": location.quick_travel_marker,
+            "no_quick_move": location.no_quick_move,
             "description": location.description,
             "parent_id": location.parent_id,
             "children": []
@@ -322,6 +324,7 @@ async def get_region_full_details(session: AsyncSession, region_id: int) -> Opti
         "image_url": loc.image_url,
         "recommended_level": loc.recommended_level,
         "quick_travel_marker": loc.quick_travel_marker,
+        "no_quick_move": loc.no_quick_move,
         "description": loc.description,
         "parent_id": loc.parent_id,
         "marker_type": loc.marker_type,
@@ -605,6 +608,7 @@ async def create_location(session: AsyncSession, location_data: LocationCreate) 
         location_dict['description'] = location_dict.get('description', '')
         location_dict['recommended_level'] = location_dict.get('recommended_level', 1)
         location_dict['quick_travel_marker'] = location_dict.get('quick_travel_marker', False)
+        location_dict['no_quick_move'] = location_dict.get('no_quick_move', False)
         print(f"Данные после установки значений по умолчанию: {location_dict}")
 
         # Создаем новую локацию
@@ -814,6 +818,7 @@ async def get_location_details(session: AsyncSession, location_id: int) -> Optio
         "image_url": loc.image_url,
         "recommended_level": loc.recommended_level,
         "quick_travel_marker": loc.quick_travel_marker,
+        "no_quick_move": loc.no_quick_move,
         "district_id": loc.district_id,
         "region_id": loc.region_id,
         "marker_type": loc.marker_type,
@@ -1381,6 +1386,7 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         "image_url": loc.image_url,
         "recommended_level": loc.recommended_level,
         "quick_travel_marker": loc.quick_travel_marker,
+        "no_quick_move": loc.no_quick_move,
         "marker_type": loc.marker_type,
         "district_id": loc.district_id,
         "region_id": loc.region_id,
