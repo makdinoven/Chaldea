@@ -390,6 +390,18 @@ const LocationPage = () => {
     }
   }, [character?.id, location, dispatch, fetchLocationData]);
 
+  const isCharacterHere = character?.current_location?.id === location?.id;
+
+  // Neighbor links are bidirectional with the same energy_cost.
+  // If the character's current location appears in this location's neighbor list,
+  // then this location is reachable from the character's current location.
+  const neighborEntry = useMemo(() => {
+    if (!character?.current_location?.id || isCharacterHere || !location) return null;
+    return location.neighbors.find((n) => n.id === character.current_location!.id) ?? null;
+  }, [character?.current_location?.id, isCharacterHere, location]);
+
+  const isNeighborLocation = neighborEntry !== null;
+
   // --- Loading state ---
   if (loading) {
     return (
@@ -413,18 +425,6 @@ const LocationPage = () => {
       </div>
     );
   }
-
-  const isCharacterHere = character?.current_location?.id === location.id;
-
-  // Neighbor links are bidirectional with the same energy_cost.
-  // If the character's current location appears in this location's neighbor list,
-  // then this location is reachable from the character's current location.
-  const neighborEntry = useMemo(() => {
-    if (!character?.current_location?.id || isCharacterHere) return null;
-    return location.neighbors.find((n) => n.id === character.current_location!.id) ?? null;
-  }, [character?.current_location?.id, isCharacterHere, location.neighbors]);
-
-  const isNeighborLocation = neighborEntry !== null;
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 pb-10">
