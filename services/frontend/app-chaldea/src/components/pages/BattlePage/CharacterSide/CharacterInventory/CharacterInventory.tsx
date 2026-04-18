@@ -8,9 +8,14 @@ interface SkillItem {
   id: number;
   skill_type?: string;
   name?: string;
-  image?: string;
-  rank_image?: string;
-  rank_name?: string;
+  skill_name?: string;
+  skill_image?: string;
+  skill?: {
+    id: number;
+    name: string;
+    skill_type: string;
+    skill_image: string | null;
+  };
   cooldown?: number;
   cost_energy?: number;
   cost_mana?: number;
