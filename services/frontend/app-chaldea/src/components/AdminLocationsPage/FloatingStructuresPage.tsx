@@ -25,16 +25,26 @@ interface FormState {
   name: string;
   description: string;
   icon_url: string;
-  speed: string;
+  travel_days: string;
   internal_district_id: string;
   area_id: string;
 }
+
+/** Convert speed (progress per second) to travel time in days. */
+const speedToDays = (speed: number): number => {
+  if (!Number.isFinite(speed) || speed <= 0) return 30;
+  const days = Math.round(1 / (speed * 86400));
+  return days < 1 ? 1 : days;
+};
+
+/** Convert travel time in days to speed (progress per second). */
+const daysToSpeed = (days: number): number => 1 / (days * 86400);
 
 const emptyForm: FormState = {
   name: '',
   description: '',
   icon_url: '',
-  speed: '0.0001',
+  travel_days: '30',
   internal_district_id: '',
   area_id: '',
 };
@@ -89,7 +99,7 @@ const FloatingStructuresPage = () => {
       name: item.name,
       description: item.description ?? '',
       icon_url: item.icon_url ?? '',
-      speed: String(item.speed ?? 0),
+      travel_days: String(speedToDays(item.speed ?? 0)),
       internal_district_id:
         item.internal_district_id !== null && item.internal_district_id !== undefined
           ? String(item.internal_district_id)
@@ -103,11 +113,11 @@ const FloatingStructuresPage = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const speedNum = Number(form.speed);
+    const travelDays = Math.round(Number(form.travel_days));
     if (!form.name.trim()) {
       return;
     }
-    if (!Number.isFinite(speedNum) || speedNum <= 0) {
+    if (!Number.isFinite(travelDays) || travelDays < 1) {
       return;
     }
     const districtId = form.internal_district_id.trim()
@@ -125,7 +135,7 @@ const FloatingStructuresPage = () => {
       name: form.name.trim(),
       description: form.description.trim() || null,
       icon_url: form.icon_url.trim() || null,
-      speed: speedNum,
+      speed: daysToSpeed(travelDays),
       // started_at is set automatically: now for new structures, unchanged for edits
       started_at: editingId ? undefined : new Date().toISOString(),
       internal_district_id: districtId,
@@ -236,15 +246,13 @@ const FloatingStructuresPage = () => {
         </label>
 
         <label className="flex flex-col text-sm">
-          <span className="mb-1 text-white/70">
-            Скорость (доля маршрута в секунду)*
-          </span>
+          <span className="mb-1 text-white/70">Время пути (дней)*</span>
           <input
             type="number"
-            step="any"
-            min="0"
-            value={form.speed}
-            onChange={(e) => setForm({ ...form, speed: e.target.value })}
+            step="1"
+            min="1"
+            value={form.travel_days}
+            onChange={(e) => setForm({ ...form, travel_days: e.target.value })}
             required
             className="input-underline px-3 py-2 bg-transparent border border-white/20 rounded"
           />
@@ -340,7 +348,7 @@ const FloatingStructuresPage = () => {
                 </div>
               )}
               <div className="text-xs text-white/50 grid grid-cols-2 gap-1">
-                <div>Скорость: {item.speed}</div>
+                <div>Путь: {speedToDays(item.speed)} дн.</div>
                 <div>Точек: {item.route_json?.length ?? 0}</div>
                 <div className="col-span-2">
                   District: {item.internal_district_id ?? '—'}
