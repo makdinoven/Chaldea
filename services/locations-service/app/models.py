@@ -461,6 +461,11 @@ class FloatingStructure(Base):
         ForeignKey('Districts.id', ondelete='SET NULL'),
         nullable=True,
     )
+    area_id = Column(
+        BigInteger,
+        ForeignKey('Areas.id', ondelete='SET NULL'),
+        nullable=True,
+    )
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
     updated_at = Column(
         TIMESTAMP,

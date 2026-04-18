@@ -1190,6 +1190,7 @@ class FloatingStructureBase(BaseModel):
     speed: float
     started_at: Optional[datetime] = None
     internal_district_id: Optional[int] = None
+    area_id: Optional[int] = None
 
     @validator('route_json', pre=True, always=True)
     def _vroute(cls, v):
@@ -1224,6 +1225,7 @@ class FloatingStructureUpdate(BaseModel):
     speed: Optional[float] = None
     started_at: Optional[datetime] = None
     internal_district_id: Optional[int] = None
+    area_id: Optional[int] = None
 
     @validator('route_json')
     def _vroute(cls, v):
@@ -1259,6 +1261,7 @@ class FloatingStructureRead(BaseModel):
     speed: float
     started_at: datetime
     internal_district_id: Optional[int] = None
+    area_id: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -1276,6 +1279,7 @@ class FloatingStructurePublicRead(BaseModel):
     started_at: datetime
     server_now: datetime
     internal_district_id: Optional[int] = None
+    area_id: Optional[int] = None
 
     class Config:
         orm_mode = True

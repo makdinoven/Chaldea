@@ -17,6 +17,8 @@ import type {
   FloatingStructure,
   FloatingStructureCreatePayload,
 } from '../../redux/slices/floatingStructuresSlice';
+import { selectAreas } from '../../redux/slices/worldMapSlice';
+import { fetchAreas } from '../../redux/actions/worldMapActions';
 import FloatingRouteEditor from './FloatingRouteEditor';
 
 interface FormState {
@@ -26,6 +28,7 @@ interface FormState {
   speed: string;
   started_at: string; // datetime-local string
   internal_district_id: string;
+  area_id: string;
 }
 
 const emptyForm: FormState = {
@@ -35,6 +38,7 @@ const emptyForm: FormState = {
   speed: '0.0001',
   started_at: '',
   internal_district_id: '',
+  area_id: '',
 };
 
 const toLocalInputValue = (iso: string | null | undefined): string => {
@@ -66,6 +70,7 @@ const FloatingStructuresPage = () => {
   const loading = useAppSelector(selectFloatingStructuresLoading);
   const saving = useAppSelector(selectFloatingStructuresSaving);
   const error = useAppSelector(selectFloatingStructuresError);
+  const areas = useAppSelector(selectAreas);
 
   const [form, setForm] = useState<FormState>({ ...emptyForm, started_at: nowLocalValue() });
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -92,7 +97,10 @@ const FloatingStructuresPage = () => {
 
   useEffect(() => {
     dispatch(fetchAdminFloatingStructures());
-  }, [dispatch]);
+    if (areas.length === 0) {
+      dispatch(fetchAreas());
+    }
+  }, [dispatch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resetForm = () => {
     setForm({ ...emptyForm, started_at: nowLocalValue() });
@@ -110,6 +118,10 @@ const FloatingStructuresPage = () => {
       internal_district_id:
         item.internal_district_id !== null && item.internal_district_id !== undefined
           ? String(item.internal_district_id)
+          : '',
+      area_id:
+        item.area_id !== null && item.area_id !== undefined
+          ? String(item.area_id)
           : '',
     });
   };
@@ -129,6 +141,10 @@ const FloatingStructuresPage = () => {
     if (districtId !== null && (!Number.isInteger(districtId) || districtId <= 0)) {
       return;
     }
+    const areaId = form.area_id.trim() ? Number(form.area_id) : null;
+    if (areaId !== null && (!Number.isInteger(areaId) || areaId <= 0)) {
+      return;
+    }
 
     const payload: FloatingStructureCreatePayload = {
       name: form.name.trim(),
@@ -137,6 +153,7 @@ const FloatingStructuresPage = () => {
       speed: speedNum,
       started_at: fromLocalInputValue(form.started_at),
       internal_district_id: districtId,
+      area_id: areaId,
       // route_json is required by API; for new structures start with an empty
       // closed loop placeholder — admin then opens the route editor to draw it.
       route_json: editingId ? (items.find((it) => it.id === editingId)?.route_json ?? []) : [],
@@ -284,6 +301,25 @@ const FloatingStructuresPage = () => {
           </span>
         </label>
 
+        <label className="flex flex-col text-sm">
+          <span className="mb-1 text-white/70">Область (Area)</span>
+          <select
+            value={form.area_id}
+            onChange={(e) => setForm({ ...form, area_id: e.target.value })}
+            className="input-underline px-3 py-2 bg-transparent border border-white/20 rounded"
+          >
+            <option value="" className="bg-site-dark">Не указана</option>
+            {areas.map((area) => (
+              <option key={area.id} value={String(area.id)} className="bg-site-dark">
+                {area.name} (ID: {area.id})
+              </option>
+            ))}
+          </select>
+          <span className="mt-1 text-xs text-white/40">
+            Область, на карте которой отображается структура.
+          </span>
+        </label>
+
         <div className="col-span-full flex flex-wrap gap-2 pt-2">
           <button
             type="submit"
@@ -343,6 +379,12 @@ const FloatingStructuresPage = () => {
                 <div className="col-span-2">
                   District: {item.internal_district_id ?? '—'}
                 </div>
+                <div className="col-span-2">
+                  Область:{' '}
+                  {item.area_id != null
+                    ? (areas.find((a) => a.id === item.area_id)?.name ?? `ID: ${item.area_id}`)
+                    : '—'}
+                </div>
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 <button
@@ -376,6 +418,7 @@ const FloatingStructuresPage = () => {
         <FloatingRouteEditor
           structureId={routeEditorFor.id}
           initialRoute={routeEditorFor.route_json ?? []}
+          areaId={routeEditorFor.area_id}
           onClose={() => setRouteEditorFor(null)}
         />
       )}

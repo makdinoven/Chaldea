@@ -104,15 +104,8 @@ const WorldPage = () => {
     dispatch(fetchHierarchyTree());
   }, [dispatch]);
 
-  // Floating structures (Citadel etc.) — fetch once on mount if not already loaded
+  // Floating structures (Citadel etc.) — fetched per-area in the data-fetching effect below
   const floatingStructures = useAppSelector(selectFloatingStructures);
-  useEffect(() => {
-    if (floatingStructures.length === 0) {
-      dispatch(fetchFloatingStructures());
-    }
-    // Run only once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dispatch]);
 
   // Citadel mode: when ?citadel=<id> is set, switch into the Citadel's internal district view.
   // We resolve the structure -> internal_district_id -> region_id (via district details endpoint),
@@ -184,6 +177,7 @@ const WorldPage = () => {
         if (entityId) {
           dispatch(fetchAreaDetails(entityId));
           dispatch(fetchClickableZones({ parentType: 'area', parentId: entityId }));
+          dispatch(fetchFloatingStructures(entityId));
         }
         break;
       case 'country':
@@ -823,6 +817,7 @@ const WorldPage = () => {
                   ? areaDetails.countries.map((c) => ({ id: c.id, emblem_url: c.emblem_url }))
                   : undefined
             }
+            showFloatingStructures={viewLevel === 'area' && citadelId == null && cityMapDistrictId == null}
           />
         )}
         </div>

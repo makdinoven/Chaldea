@@ -18,6 +18,7 @@ import {
 interface Props {
   structureId: number;
   initialRoute: RouteWaypoint[];
+  areaId?: number | null;
   onClose: () => void;
 }
 
@@ -35,10 +36,12 @@ interface Props {
  *
  * Per FEAT-123 §3.5 / §4.T12: this editor MUST NOT modify RegionMapEditor.tsx.
  */
-const FloatingRouteEditor = ({ structureId, initialRoute, onClose }: Props) => {
+const FloatingRouteEditor = ({ structureId, initialRoute, areaId, onClose }: Props) => {
   const dispatch = useAppDispatch();
   const areas = useAppSelector(selectAreas);
-  const worldMapUrl = areas.length > 0 ? areas[0]?.map_image_url ?? null : null;
+  const matchedArea = areaId != null ? areas.find((a) => a.id === areaId) : null;
+  const worldMapUrl = matchedArea?.map_image_url
+    ?? (areas.length > 0 ? areas[0]?.map_image_url ?? null : null);
 
   const [waypoints, setWaypoints] = useState<RouteWaypoint[]>(initialRoute ?? []);
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);

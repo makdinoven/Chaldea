@@ -2634,6 +2634,7 @@ def _serialize_floating(obj) -> dict:
         "speed": float(obj.speed) if obj.speed is not None else 0.0,
         "started_at": obj.started_at,
         "internal_district_id": obj.internal_district_id,
+        "area_id": obj.area_id,
         "created_at": getattr(obj, "created_at", None),
         "updated_at": getattr(obj, "updated_at", None),
     }
@@ -2641,6 +2642,7 @@ def _serialize_floating(obj) -> dict:
 
 @floating_router.get("/map/floating-structures")
 async def list_floating_structures_public(
+    area_id: Optional[int] = Query(None),
     session: AsyncSession = Depends(get_db),
 ):
     """
@@ -2648,7 +2650,7 @@ async def list_floating_structures_public(
     Возвращает route_json + started_at + speed + server_now,
     клиент сам интерполирует позицию.
     """
-    items = await crud.list_floating_structures(session)
+    items = await crud.list_floating_structures(session, area_id=area_id)
     server_now = _dt.utcnow()
     return [
         {

@@ -19,6 +19,7 @@ export interface FloatingStructure {
   speed: number;
   started_at: string; // ISO
   internal_district_id: number | null;
+  area_id: number | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -40,6 +41,7 @@ export interface FloatingStructureCreatePayload {
   speed: number;
   started_at?: string | null;
   internal_district_id?: number | null;
+  area_id?: number | null;
 }
 
 export type FloatingStructureUpdatePayload = Partial<FloatingStructureCreatePayload>;
@@ -72,15 +74,16 @@ interface FetchFloatingStructuresResult {
 
 export const fetchFloatingStructures = createAsyncThunk<
   FetchFloatingStructuresResult,
-  void,
+  number | undefined,
   { rejectValue: string }
 >(
   'floatingStructures/fetch',
-  async (_, thunkAPI) => {
+  async (areaId, thunkAPI) => {
     try {
-      const { data } = await axios.get<FloatingStructurePublic[]>(
-        '/locations/map/floating-structures',
-      );
+      const url = areaId != null
+        ? `/locations/map/floating-structures?area_id=${areaId}`
+        : '/locations/map/floating-structures';
+      const { data } = await axios.get<FloatingStructurePublic[]>(url);
       const list = Array.isArray(data) ? data : [];
       const clientNow = Date.now();
       let offset = 0;
@@ -99,9 +102,11 @@ export const fetchFloatingStructures = createAsyncThunk<
         speed: it.speed,
         started_at: it.started_at,
         internal_district_id: it.internal_district_id,
+        area_id: it.area_id,
       }));
       return { items, serverNowOffsetMs: offset };
     } catch {
+      toast.error('Не удалось загрузить плавающие структуры');
       return thunkAPI.rejectWithValue('Не удалось загрузить плавающие структуры');
     }
   },

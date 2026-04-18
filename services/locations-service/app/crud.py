@@ -4185,10 +4185,13 @@ async def _ensure_district_exists(session: AsyncSession, district_id: Optional[i
         )
 
 
-async def list_floating_structures(session: AsyncSession) -> List[FloatingStructure]:
-    result = await session.execute(
-        select(FloatingStructure).order_by(FloatingStructure.id.asc())
-    )
+async def list_floating_structures(
+    session: AsyncSession, area_id: Optional[int] = None
+) -> List[FloatingStructure]:
+    query = select(FloatingStructure)
+    if area_id is not None:
+        query = query.where(FloatingStructure.area_id == area_id)
+    result = await session.execute(query.order_by(FloatingStructure.id.asc()))
     return result.scalars().all()
 
 
@@ -4211,6 +4214,7 @@ async def create_floating_structure(session: AsyncSession, data) -> FloatingStru
         speed=data.speed,
         started_at=data.started_at,
         internal_district_id=data.internal_district_id,
+        area_id=data.area_id,
     )
     session.add(obj)
     await session.commit()
