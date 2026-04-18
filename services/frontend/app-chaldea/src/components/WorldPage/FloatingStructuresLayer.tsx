@@ -11,8 +11,7 @@ import {
 /**
  * Computes the (x, y) position along an OPEN polyline at fractional progress in [0, 1].
  * The polyline is traversed from waypoints[0] to waypoints[n-1] (NO wrap-around).
- * Callers are expected to pass `progress` already mapped via a triangle wave so that
- * the structure ping-pongs A -> B -> A -> B ... smoothly.
+ * When progress reaches 1.0 the structure stays at the last waypoint permanently.
  */
 const interpolatePolyline = (
   waypoints: RouteWaypoint[],
@@ -57,16 +56,8 @@ const interpolatePolyline = (
   return { x: last.x, y: last.y };
 };
 
-/**
- * Triangle wave: maps a monotonically increasing value into [0, 1] that
- * oscillates 0 -> 1 -> 0 -> 1 ... Period is 2 input units.
- */
-const triangleWave = (value: number): number => {
-  let v = value % 2;
-  if (v < 0) v += 2;
-  // 1 - |v - 1| gives 0 at v=0, 1 at v=1, 0 at v=2.
-  return 1 - Math.abs(v - 1);
-};
+/** Clamp a value into [0, 1]. Once progress reaches 1 the structure stays at the end. */
+const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
 interface FloatingStructureMarkerProps {
   structure: FloatingStructure;
@@ -85,9 +76,8 @@ const FloatingStructureMarker = ({
       return { x: 0, y: 0 };
     }
     const tSeconds = (Date.now() - serverNowOffsetMs - startedAtMs) / 1000;
-    // Ping-pong: triangle wave maps [0, ∞) → [0, 1] → [1, 0] → ... so the
-    // structure travels A → B → A → B continuously along the OPEN polyline.
-    const progress = triangleWave(tSeconds * structure.speed);
+    // One-way: progress goes 0 → 1 and stays at 1 (structure stops at the end).
+    const progress = clamp01(tSeconds * structure.speed);
     return interpolatePolyline(structure.route_json, progress);
   };
 

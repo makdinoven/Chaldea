@@ -26,7 +26,6 @@ interface FormState {
   description: string;
   icon_url: string;
   speed: string;
-  started_at: string; // datetime-local string
   internal_district_id: string;
   area_id: string;
 }
@@ -36,31 +35,8 @@ const emptyForm: FormState = {
   description: '',
   icon_url: '',
   speed: '0.0001',
-  started_at: '',
   internal_district_id: '',
   area_id: '',
-};
-
-const toLocalInputValue = (iso: string | null | undefined): string => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  // Format: YYYY-MM-DDTHH:mm
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
-
-const fromLocalInputValue = (value: string): string | null => {
-  if (!value) return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
-};
-
-const nowLocalValue = (): string => {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
 const FloatingStructuresPage = () => {
@@ -72,7 +48,7 @@ const FloatingStructuresPage = () => {
   const error = useAppSelector(selectFloatingStructuresError);
   const areas = useAppSelector(selectAreas);
 
-  const [form, setForm] = useState<FormState>({ ...emptyForm, started_at: nowLocalValue() });
+  const [form, setForm] = useState<FormState>({ ...emptyForm });
   const [editingId, setEditingId] = useState<number | null>(null);
   const [routeEditorFor, setRouteEditorFor] = useState<FloatingStructure | null>(null);
   const [iconUploading, setIconUploading] = useState(false);
@@ -103,7 +79,7 @@ const FloatingStructuresPage = () => {
   }, [dispatch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resetForm = () => {
-    setForm({ ...emptyForm, started_at: nowLocalValue() });
+    setForm({ ...emptyForm });
     setEditingId(null);
   };
 
@@ -114,7 +90,6 @@ const FloatingStructuresPage = () => {
       description: item.description ?? '',
       icon_url: item.icon_url ?? '',
       speed: String(item.speed ?? 0),
-      started_at: toLocalInputValue(item.started_at) || nowLocalValue(),
       internal_district_id:
         item.internal_district_id !== null && item.internal_district_id !== undefined
           ? String(item.internal_district_id)
@@ -151,7 +126,8 @@ const FloatingStructuresPage = () => {
       description: form.description.trim() || null,
       icon_url: form.icon_url.trim() || null,
       speed: speedNum,
-      started_at: fromLocalInputValue(form.started_at),
+      // started_at is set automatically: now for new structures, unchanged for edits
+      started_at: editingId ? undefined : new Date().toISOString(),
       internal_district_id: districtId,
       area_id: areaId,
       // route_json is required by API; for new structures start with an empty
@@ -270,16 +246,6 @@ const FloatingStructuresPage = () => {
             value={form.speed}
             onChange={(e) => setForm({ ...form, speed: e.target.value })}
             required
-            className="input-underline px-3 py-2 bg-transparent border border-white/20 rounded"
-          />
-        </label>
-
-        <label className="flex flex-col text-sm">
-          <span className="mb-1 text-white/70">Начало движения</span>
-          <input
-            type="datetime-local"
-            value={form.started_at}
-            onChange={(e) => setForm({ ...form, started_at: e.target.value })}
             className="input-underline px-3 py-2 bg-transparent border border-white/20 rounded"
           />
         </label>

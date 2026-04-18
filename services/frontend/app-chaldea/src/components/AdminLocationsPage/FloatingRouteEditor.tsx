@@ -27,7 +27,7 @@ interface Props {
  *
  * Features:
  * - Loads world-map background (areas[0].map_image_url) as the editing canvas.
- * - Renders existing route_json as an OPEN ping-pong polyline (A → B → A) with draggable handles.
+ * - Renders existing route_json as an OPEN polyline (A → B, stops at B) with draggable handles.
  * - Left-click anywhere: append waypoint at end of the route.
  * - Shift + left-click: insert waypoint into the closest segment (explicit gesture).
  * - Right-click a waypoint: delete it.
@@ -120,7 +120,7 @@ const FloatingRouteEditor = ({ structureId, initialRoute, areaId, onClose }: Pro
       const result = await dispatch(
         updateFloatingStructure({
           id: structureId,
-          payload: { route_json: waypoints },
+          payload: { route_json: waypoints, started_at: new Date().toISOString() },
         }),
       );
       if (updateFloatingStructure.fulfilled.match(result)) {
@@ -159,7 +159,7 @@ const FloatingRouteEditor = ({ structureId, initialRoute, areaId, onClose }: Pro
           <p>Shift + ЛКМ — вставить точку между существующими (в ближайший сегмент).</p>
           <p>ПКМ по точке — удалить точку.</p>
           <p>Перетаскивание точки — переместить её.</p>
-          <p>Маршрут открытый (ping-pong): структура движется A → B → A → B. Первая точка — A, последняя — B.</p>
+          <p>Маршрут: структура движется A → B и останавливается в конце. Первая точка — A, последняя — B.</p>
         </div>
 
         {worldMapUrl ? (
