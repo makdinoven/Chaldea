@@ -14,6 +14,7 @@ import {
 } from '../../../../redux/actions/locationEditActions';
 import { selectLocationEdit } from '../../../../redux/selectors/locationSelectors';
 import LocationNeighborsEditor from './LocationNeighborsEditor/LocationNeighborsEditor';
+import GatheringNodesEditor from './GatheringNodesEditor/GatheringNodesEditor';
 import type { AppDispatch } from '../../../../redux/store';
 
 interface Neighbor {
@@ -437,6 +438,13 @@ const EditLocationForm = ({
             onRemove={handleNeighborRemove}
           />
         </div>
+
+        {locationId !== 'new' && typeof locationId === 'number' && (
+          <div className="mb-6">
+            <h3 className="text-white mb-4 pb-2 border-b border-white/10">Ноды добычи</h3>
+            <GatheringNodesEditor locationId={locationId} />
+          </div>
+        )}
 
         <div className="flex gap-4 mt-8">
           <button

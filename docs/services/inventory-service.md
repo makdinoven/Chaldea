@@ -45,16 +45,31 @@ inventory-service/app/
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/inventory/items?q=&page=&page_size=` | Поиск предметов (пагинация) |
-| POST | `/inventory/items` | Создать предмет |
+| POST | `/inventory/items` | Создать предмет (включая `gathering_tool` с `tool_category` + 3 бонуса) |
 | GET | `/inventory/items/{id}` | Предмет по ID |
 | PUT | `/inventory/items/{id}` | Обновить предмет |
 | DELETE | `/inventory/items/{id}` | Удалить предмет |
+| GET | `/inventory/{id}/items?item_type=gathering_tool&category=pickaxe` | Фильтр по типу + tool_category (FEAT-128, для модалки выбора инструмента) |
+
+### Добыча ресурсов (FEAT-128)
+
+#### Player-facing (auth required)
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/inventory/characters/{character_id}/gathering-skills` | 3-скилла payload (Горное дело/Травничество/Лесорубство), lazy-create rows на первом запросе. Видимо read-only на чужих профилях |
+
+#### Internal (no JWT, защищено Nginx + INTERNAL_SERVICE_TOKEN на API-gateway)
+| Метод | Путь | Описание |
+|-------|------|----------|
+| POST | `/inventory/internal/characters/{cid}/gathering/award` | Атомарная транзакция: SELECT FOR UPDATE на character_inventory + tool + character_gathering_skills, добавление ресурса (с обработкой full-inventory), декремент durability, добавление XP, rank-up loop. Вызывается locations-service на finalize |
+| POST | `/inventory/internal/characters/{cid}/free_slots_check` | Возвращает `{free_slot_count, is_full}`. Вызывается locations-service на старте добычи (preflight) |
 
 ## Таблицы БД
 
 ### items (каталог)
 - Базовые: id, name (unique), image, item_level, description, price, max_stack_size, is_unique
-- **item_type** enum: head, body, cloak, belt, ring, necklace, bracelet, main_weapon, consumable, additional_weapons, resource, scroll, misc
+- **item_type** enum: head, body, cloak, belt, ring, necklace, bracelet, main_weapon, consumable, additional_weapons, resource, scroll, misc, shield, blueprint, recipe, gem, rune, **gathering_tool** (FEAT-128)
+- **Поля для gathering_tool** (FEAT-128, NULL для других типов): `tool_category` enum(pickaxe/sickle/axe), `gather_double_chance_bonus` FLOAT, `gather_speed_bonus_pct` FLOAT, `gather_stamina_bonus_pct` FLOAT (все в диапазоне 0..50)
 - **item_rarity** enum: common, rare, epic, legendary, mythical, divine, demonic
 - **armor_subclass**: cloth, light_armor, medium_armor, heavy_armor
 - **weapon_subclass**: 25 типов (one_handed_weapon, two_handed_weapon, daggers, bows, staffs, grimoires...)
@@ -71,6 +86,15 @@ inventory-service/app/
 
 ### equipment_slots
 - id, character_id, slot_type (enum: head/body/cloak/belt/ring/necklace/bracelet/main_weapon/additional_weapons/fast_slot_1..10), item_id (FK), is_enabled
+
+### gathering_skills (FEAT-128, каталог)
+- id, slug (UNIQUE: mining/herbalism/woodcutting), name, category (UNIQUE: ore/herb/wood), description, icon, max_rank=5
+
+### gathering_skill_ranks (FEAT-128)
+- id, skill_id (FK CASCADE), rank_number (1..5), required_experience (XP для входа в ранг: 0/10/25/50/100), double_chance_bonus, speed_bonus_pct, stamina_bonus_pct (значения 0/4/8/12/20). UNIQUE(skill_id, rank_number)
+
+### character_gathering_skills (FEAT-128)
+- id, character_id, skill_id (FK CASCADE), current_rank (default 1), experience (toward NEXT rank, resets on rank-up), experience_total (lifetime), created_at, updated_at. UNIQUE(character_id, skill_id). Lazy-создаётся на первом обращении/первом начислении XP.
 
 ## Система экипировки (equip)
 
@@ -93,6 +117,9 @@ inventory-service/app/
 ### HTTP (исходящие)
 - `character-attributes-service:8002` -> POST `/attributes/{id}/apply_modifiers` (при equip/unequip)
 - `character-attributes-service:8002` -> POST `/attributes/{id}/recover` (при use_item)
+
+### check_not_gathering integration (FEAT-128)
+Защитная проверка `is_character_gathering` (raw SQL `SELECT 1 FROM gathering_sessions WHERE character_id=:cid AND status='active' AND complete_at > NOW()`) добавлена в 11 action-эндпоинтов: `equip`, `unequip`, `craft`, `sharpen`, `extract-essence`, `transmute`, `insert-gem`, `extract-gem`, `smelt`, `identify`, `use-buff-item`, `use_item`. Возвращает 400 «Действие заблокировано во время добычи» если у персонажа активная сессия. Зеркальный паттерн `is_character_in_battle`.
 
 ## Известные проблемы
 

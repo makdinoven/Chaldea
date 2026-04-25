@@ -437,3 +437,339 @@ def _make_mock_db(execute_side_effects=None):
     if execute_side_effects:
         mock_db.execute = AsyncMock(side_effect=execute_side_effects)
     return mock_db
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-128 Task #17 / #28: pvp_attack must call locations-service
+# /locations/internal/cancel-gathering BEFORE creating the battle.
+# The call is best-effort: failures (timeout, 5xx, 503) must NOT block battle
+# creation. The header is X-Internal-Token (matches implementation).
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+import httpx  # noqa: E402
+
+
+class _AsyncCMResponse:
+    """A fake httpx.AsyncClient context manager whose .post() returns a
+    pre-baked response object (or raises a configured exception).
+
+    Used in place of `httpx.AsyncClient(timeout=...)` in pvp_attack."""
+
+    def __init__(self, post_response=None, post_exception=None):
+        self._post_response = post_response
+        self._post_exception = post_exception
+        self.post_calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, url, json=None, headers=None):
+        # Record the call so the test can assert the args.
+        self.post_calls.append({"url": url, "json": json, "headers": headers or {}})
+        if self._post_exception is not None:
+            raise self._post_exception
+        return self._post_response
+
+
+class _FakeResponse:
+    def __init__(self, status_code, json_body=None):
+        self.status_code = status_code
+        self._json_body = json_body if json_body is not None else {}
+
+    def json(self):
+        return self._json_body
+
+
+def _make_async_client_factory(fake_cm):
+    """Return a callable that mimics `httpx.AsyncClient(timeout=...)` and
+    yields the same fake CM each time it's called.
+
+    pvp_attack does `async with httpx.AsyncClient(timeout=3.0) as client:` —
+    we patch `main.httpx.AsyncClient` to this factory.
+    """
+
+    def _factory(*args, **kwargs):
+        return fake_cm
+
+    return _factory
+
+
+def _setup_pvp_attack_happy_mocks(mock_create_battle, mock_build_info):
+    """Prime the standard happy-path mocks for create_battle / build_info."""
+    mock_battle = MagicMock()
+    mock_battle.id = 99
+    mock_p1 = MagicMock()
+    mock_p1.id = 300
+    mock_p1.character_id = 1
+    mock_p1.team = 0
+    mock_p2 = MagicMock()
+    mock_p2.id = 301
+    mock_p2.character_id = 2
+    mock_p2.team = 1
+    mock_create_battle.return_value = (mock_battle, [mock_p1, mock_p2])
+
+    mock_build_info.return_value = {
+        "participant_id": 300,
+        "character_id": 1,
+        "name": "Test",
+        "avatar": "",
+        "attributes": {
+            "current_health": 100, "current_mana": 50,
+            "current_energy": 50, "current_stamina": 50,
+            "max_health": 100, "max_mana": 50,
+            "max_energy": 50, "max_stamina": 50,
+        },
+        "skills": [],
+        "fast_slots": [],
+    }
+
+
+class TestPvpAttackCancelsGathering:
+    """FEAT-128 Task #28: pvp_attack must POST to
+    /locations/internal/cancel-gathering before creating the battle, with
+    the victim's character_id and the X-Internal-Token header.
+    Failures of that call are best-effort and must NOT block battle creation.
+    """
+
+    def setup_method(self):
+        app.dependency_overrides.clear()
+        # Provide a deterministic INTERNAL_SERVICE_TOKEN for header assertions.
+        os.environ["INTERNAL_SERVICE_TOKEN"] = "test-internal-token-xyz"
+
+    def teardown_method(self):
+        app.dependency_overrides.clear()
+        os.environ.pop("INTERNAL_SERVICE_TOKEN", None)
+
+    @patch("main.build_participant_info", new_callable=AsyncMock)
+    @patch("main.create_battle", new_callable=AsyncMock)
+    @patch("main.publish_notification", new_callable=AsyncMock)
+    def test_cancel_gathering_called_with_correct_payload_and_header(
+        self, mock_publish, mock_create_battle, mock_build_info,
+    ):
+        """pvp_attack posts to /locations/internal/cancel-gathering with
+        {character_id: victim_id} and X-Internal-Token header."""
+        _setup_pvp_attack_happy_mocks(mock_create_battle, mock_build_info)
+
+        fake_cm = _AsyncCMResponse(
+            post_response=_FakeResponse(
+                200,
+                {"cancelled": True, "session_id": 555, "stamina_refunded": 4},
+            )
+        )
+
+        mock_db = _make_mock_db()
+        mock_db.execute = AsyncMock(side_effect=_build_attack_side_effects())
+        mock_db.commit = AsyncMock()
+
+        redis_state_mock.get_redis_client = AsyncMock(return_value=AsyncMock())
+
+        client = _get_client_with_mocks(_make_user(user_id=10), mock_db)
+
+        with patch("main.httpx.AsyncClient", _make_async_client_factory(fake_cm)):
+            response = client.post("/battles/pvp/attack", json=ATTACK_PAYLOAD)
+
+        # Battle still created normally
+        assert response.status_code == 201
+        assert response.json()["battle_id"] == 99
+
+        # Exactly one cancel-gathering call
+        assert len(fake_cm.post_calls) == 1
+        call = fake_cm.post_calls[0]
+
+        # URL ends with the canonical internal path
+        assert call["url"].endswith("/locations/internal/cancel-gathering"), (
+            f"unexpected URL: {call['url']}"
+        )
+
+        # Payload carries the VICTIM's character_id (not attacker)
+        assert call["json"]["character_id"] == 2  # victim id from ATTACK_PAYLOAD
+
+        # Header carries the configured internal token
+        assert call["headers"].get("X-Internal-Token") == "test-internal-token-xyz"
+
+        # And mock_create_battle was called AFTER the cancel-gathering call
+        # (we don't have call ordering frameworks here, but if create_battle
+        # was called and the post was recorded, the flow is correct because
+        # the implementation is sequential).
+        mock_create_battle.assert_called_once()
+
+    @patch("main.build_participant_info", new_callable=AsyncMock)
+    @patch("main.create_battle", new_callable=AsyncMock)
+    @patch("main.publish_notification", new_callable=AsyncMock)
+    def test_cancel_returns_cancelled_true_battle_created(
+        self, mock_publish, mock_create_battle, mock_build_info,
+    ):
+        """Locations-service returns {cancelled: true, ...} -> battle still created."""
+        _setup_pvp_attack_happy_mocks(mock_create_battle, mock_build_info)
+
+        fake_cm = _AsyncCMResponse(
+            post_response=_FakeResponse(
+                200,
+                {"cancelled": True, "session_id": 12, "stamina_refunded": 3},
+            )
+        )
+
+        mock_db = _make_mock_db()
+        mock_db.execute = AsyncMock(side_effect=_build_attack_side_effects())
+        mock_db.commit = AsyncMock()
+        redis_state_mock.get_redis_client = AsyncMock(return_value=AsyncMock())
+
+        client = _get_client_with_mocks(_make_user(user_id=10), mock_db)
+        with patch("main.httpx.AsyncClient", _make_async_client_factory(fake_cm)):
+            response = client.post("/battles/pvp/attack", json=ATTACK_PAYLOAD)
+
+        assert response.status_code == 201
+        assert len(fake_cm.post_calls) == 1
+        mock_create_battle.assert_called_once()
+
+    @patch("main.build_participant_info", new_callable=AsyncMock)
+    @patch("main.create_battle", new_callable=AsyncMock)
+    @patch("main.publish_notification", new_callable=AsyncMock)
+    def test_cancel_returns_no_active_session_battle_created(
+        self, mock_publish, mock_create_battle, mock_build_info,
+    ):
+        """Victim has no active session -> battle is still created normally."""
+        _setup_pvp_attack_happy_mocks(mock_create_battle, mock_build_info)
+
+        fake_cm = _AsyncCMResponse(
+            post_response=_FakeResponse(
+                200,
+                {"cancelled": False, "reason": "no_active_session"},
+            )
+        )
+
+        mock_db = _make_mock_db()
+        mock_db.execute = AsyncMock(side_effect=_build_attack_side_effects())
+        mock_db.commit = AsyncMock()
+        redis_state_mock.get_redis_client = AsyncMock(return_value=AsyncMock())
+
+        client = _get_client_with_mocks(_make_user(user_id=10), mock_db)
+        with patch("main.httpx.AsyncClient", _make_async_client_factory(fake_cm)):
+            response = client.post("/battles/pvp/attack", json=ATTACK_PAYLOAD)
+
+        assert response.status_code == 201
+        # No errors raised; battle creation proceeded
+        mock_create_battle.assert_called_once()
+        assert len(fake_cm.post_calls) == 1
+
+    @patch("main.build_participant_info", new_callable=AsyncMock)
+    @patch("main.create_battle", new_callable=AsyncMock)
+    @patch("main.publish_notification", new_callable=AsyncMock)
+    def test_cancel_timeout_battle_still_created(
+        self, mock_publish, mock_create_battle, mock_build_info, caplog,
+    ):
+        """httpx.TimeoutException during cancel-gathering -> battle still created,
+        warning logged."""
+        _setup_pvp_attack_happy_mocks(mock_create_battle, mock_build_info)
+
+        fake_cm = _AsyncCMResponse(
+            post_exception=httpx.TimeoutException("timed out"),
+        )
+
+        mock_db = _make_mock_db()
+        mock_db.execute = AsyncMock(side_effect=_build_attack_side_effects())
+        mock_db.commit = AsyncMock()
+        redis_state_mock.get_redis_client = AsyncMock(return_value=AsyncMock())
+
+        client = _get_client_with_mocks(_make_user(user_id=10), mock_db)
+        with caplog.at_level("WARNING", logger="battle-service"):
+            with patch("main.httpx.AsyncClient", _make_async_client_factory(fake_cm)):
+                response = client.post("/battles/pvp/attack", json=ATTACK_PAYLOAD)
+
+        assert response.status_code == 201
+        mock_create_battle.assert_called_once()
+        # Warning was emitted
+        assert any(
+            "cancel-gathering" in rec.getMessage().lower()
+            for rec in caplog.records
+        ), "Expected a warning log mentioning cancel-gathering on timeout"
+
+    @patch("main.build_participant_info", new_callable=AsyncMock)
+    @patch("main.create_battle", new_callable=AsyncMock)
+    @patch("main.publish_notification", new_callable=AsyncMock)
+    def test_cancel_returns_5xx_battle_still_created(
+        self, mock_publish, mock_create_battle, mock_build_info, caplog,
+    ):
+        """Locations-service returns 500 -> battle still created, warning logged."""
+        _setup_pvp_attack_happy_mocks(mock_create_battle, mock_build_info)
+
+        fake_cm = _AsyncCMResponse(post_response=_FakeResponse(500, {}))
+
+        mock_db = _make_mock_db()
+        mock_db.execute = AsyncMock(side_effect=_build_attack_side_effects())
+        mock_db.commit = AsyncMock()
+        redis_state_mock.get_redis_client = AsyncMock(return_value=AsyncMock())
+
+        client = _get_client_with_mocks(_make_user(user_id=10), mock_db)
+        with caplog.at_level("WARNING", logger="battle-service"):
+            with patch("main.httpx.AsyncClient", _make_async_client_factory(fake_cm)):
+                response = client.post("/battles/pvp/attack", json=ATTACK_PAYLOAD)
+
+        assert response.status_code == 201
+        mock_create_battle.assert_called_once()
+        # The cancel-gathering call was actually made
+        assert len(fake_cm.post_calls) == 1
+        # And a warning was emitted because of the 5xx
+        assert any(
+            "cancel-gathering" in rec.getMessage().lower()
+            for rec in caplog.records
+        ), "Expected a warning log mentioning cancel-gathering on 5xx"
+
+    @patch("main.build_participant_info", new_callable=AsyncMock)
+    @patch("main.create_battle", new_callable=AsyncMock)
+    @patch("main.publish_notification", new_callable=AsyncMock)
+    def test_cancel_returns_503_battle_still_created(
+        self, mock_publish, mock_create_battle, mock_build_info, caplog,
+    ):
+        """Locations-service returns 503 (e.g. service down) -> same as 5xx."""
+        _setup_pvp_attack_happy_mocks(mock_create_battle, mock_build_info)
+
+        fake_cm = _AsyncCMResponse(post_response=_FakeResponse(503, {}))
+
+        mock_db = _make_mock_db()
+        mock_db.execute = AsyncMock(side_effect=_build_attack_side_effects())
+        mock_db.commit = AsyncMock()
+        redis_state_mock.get_redis_client = AsyncMock(return_value=AsyncMock())
+
+        client = _get_client_with_mocks(_make_user(user_id=10), mock_db)
+        with caplog.at_level("WARNING", logger="battle-service"):
+            with patch("main.httpx.AsyncClient", _make_async_client_factory(fake_cm)):
+                response = client.post("/battles/pvp/attack", json=ATTACK_PAYLOAD)
+
+        assert response.status_code == 201
+        mock_create_battle.assert_called_once()
+        assert len(fake_cm.post_calls) == 1
+        assert any(
+            "cancel-gathering" in rec.getMessage().lower()
+            for rec in caplog.records
+        ), "Expected a warning log mentioning cancel-gathering on 503"
+
+    @patch("main.build_participant_info", new_callable=AsyncMock)
+    @patch("main.create_battle", new_callable=AsyncMock)
+    @patch("main.publish_notification", new_callable=AsyncMock)
+    def test_cancel_connection_error_battle_still_created(
+        self, mock_publish, mock_create_battle, mock_build_info, caplog,
+    ):
+        """httpx.ConnectError (locations-service down) -> battle still created."""
+        _setup_pvp_attack_happy_mocks(mock_create_battle, mock_build_info)
+
+        fake_cm = _AsyncCMResponse(
+            post_exception=httpx.ConnectError("connection refused"),
+        )
+
+        mock_db = _make_mock_db()
+        mock_db.execute = AsyncMock(side_effect=_build_attack_side_effects())
+        mock_db.commit = AsyncMock()
+        redis_state_mock.get_redis_client = AsyncMock(return_value=AsyncMock())
+
+        client = _get_client_with_mocks(_make_user(user_id=10), mock_db)
+        with caplog.at_level("WARNING", logger="battle-service"):
+            with patch("main.httpx.AsyncClient", _make_async_client_factory(fake_cm)):
+                response = client.post("/battles/pvp/attack", json=ATTACK_PAYLOAD)
+
+        assert response.status_code == 201
+        mock_create_battle.assert_called_once()

@@ -3,7 +3,7 @@ import math
 import logging
 from datetime import datetime, timezone
 from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request, BackgroundTasks, Query
+from fastapi import FastAPI, Depends, HTTPException, APIRouter, Request, BackgroundTasks, Query, Header
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 import asyncio
@@ -130,6 +130,25 @@ async def check_not_in_battle(db: AsyncSession, character_id: int, message: str 
             "SELECT b.id FROM battles b "
             "JOIN battle_participants bp ON b.id = bp.battle_id "
             "WHERE bp.character_id = :cid AND b.status IN ('pending', 'in_progress') "
+            "LIMIT 1"
+        ),
+        {"cid": character_id},
+    )
+    if result.fetchone():
+        raise HTTPException(status_code=400, detail=message)
+
+
+async def check_not_gathering(db: AsyncSession, character_id: int, message: str = "Действие заблокировано во время добычи"):
+    """Raise 400 if character has an active (non-overdue) gathering session (shared DB query).
+
+    A session whose `complete_at` is already in the past is "finished but not yet finalized" —
+    it is treated as NOT active for blocking purposes; the lazy-finalize path will close it
+    on the next read.
+    """
+    result = await db.execute(
+        text(
+            "SELECT 1 FROM gathering_sessions "
+            "WHERE character_id = :cid AND status = 'active' AND complete_at > NOW() "
             "LIMIT 1"
         ),
         {"cid": character_id},
@@ -596,6 +615,7 @@ async def create_new_post(
 ):
     await verify_character_ownership(session, post_data.character_id, current_user.id)
     await check_not_in_battle(session, post_data.character_id, "Вы не можете писать посты во время боя")
+    await check_not_gathering(session, post_data.character_id, "Вы не можете писать посты во время добычи")
 
     # Defense-in-depth: verify the character is physically in the target location.
     # Staff (admin/moderator) may post anywhere.
@@ -742,6 +762,15 @@ async def get_admin_panel_data_route(session: AsyncSession = Depends(get_db), cu
 @router.get("/{location_id}/client/details", response_model=schemas.LocationClientDetails)
 async def get_location_client_details(
     location_id: int,
+    character_id: Optional[int] = Query(
+        None,
+        description=(
+            "Optional viewing-character id. When provided, that character's "
+            "due gathering sessions are lazy-finalized before the response "
+            "is built (FEAT-128 §3.5.2). When omitted, all overdue active "
+            "sessions are finalized so the surface stays consistent."
+        ),
+    ),
     session: AsyncSession = Depends(get_db),
     current_user: Optional[UserRead] = Depends(get_optional_user),
 ):
@@ -752,7 +781,24 @@ async def get_location_client_details(
       - Список персонажей (игроков) в локации
       - Посты пользователей, обогащенные информацией о профиле автора, полученной из Character‑service
       - is_favorited (если пользователь авторизован)
+      - gathering_nodes — ноды добычи на локации (FEAT-128)
     """
+    # FEAT-128 task #11: lazy-finalize any due gathering sessions BEFORE we
+    # build the response so the active-sessions list and current_bank values
+    # reflect the latest state. Best-effort: failures inside the helper are
+    # logged but never break the location load.
+    try:
+        await crud.finalize_due_sessions(session, character_id=character_id)
+    except Exception as exc:
+        logger.warning(
+            "Lazy-finalize failed for location %s (character_id=%s): %s",
+            location_id, character_id, exc,
+        )
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+
     user_id = current_user.id if current_user else None
     data = await crud.get_client_location_details(session, location_id, user_id=user_id)
     if not data:
@@ -854,6 +900,7 @@ async def move_and_post(
     # 0. Проверяем, что персонаж принадлежит текущему пользователю
     await verify_character_ownership(session, movement.character_id, current_user.id)
     await check_not_in_battle(session, movement.character_id, "Вы не можете покинуть локацию во время боя")
+    await check_not_gathering(session, movement.character_id, "Вы не можете покинуть локацию во время добычи")
 
     # 1. Получаем профиль персонажа (чтобы узнать current_location_id)
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1071,6 +1118,7 @@ async def quick_move(
     # 0. Проверяем владение персонажем и отсутствие боя
     await verify_character_ownership(session, body.character_id, current_user.id)
     await check_not_in_battle(session, body.character_id, "Вы не можете покинуть локацию во время боя")
+    await check_not_gathering(session, body.character_id, "Вы не можете покинуть локацию во время добычи")
 
     # 1. Получаем профиль персонажа (текущая локация + имя)
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -2945,6 +2993,256 @@ async def admin_delete_floating_structure(
 ):
     await crud.delete_floating_structure(session, structure_id)
     return None
+
+
+# --------------------------------------------------------------------
+# GATHERING NODES — ADMIN CRUD (FEAT-128, task #10)
+# --------------------------------------------------------------------
+# All routes require RBAC permission `gathering:<action>`.
+# `gathering:read` -> list; `gathering:create` -> create;
+# `gathering:update` -> update + restore; `gathering:delete` -> delete.
+# location_id is validated for existence (404) on every route.
+# Active sessions on a node are unaffected by edits — `effective_*` snapshot
+# fields on `gathering_sessions` ensure mid-flight calculations stay stable.
+
+@router.get(
+    "/admin/locations/{location_id}/gathering-nodes",
+    response_model=List[schemas.GatheringNodeAdmin],
+)
+async def admin_list_gathering_nodes(
+    location_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("gathering:read")),
+):
+    """List all gathering nodes for a location (includes disabled)."""
+    return await crud.list_gathering_nodes_admin(session, location_id)
+
+
+@router.post(
+    "/admin/locations/{location_id}/gathering-nodes",
+    response_model=schemas.GatheringNodeAdmin,
+)
+async def admin_create_gathering_node(
+    location_id: int,
+    body: schemas.GatheringNodeAdminCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("gathering:create")),
+):
+    """Create a new gathering node on a location.
+
+    Validates that `result_item_id` exists in the shared `items` table; returns
+    422 with detail "Предмет не найден" if not. Initializes `current_bank` to
+    `daily_bank_max` and leaves `depleted_at`/`restore_at` null.
+    """
+    return await crud.create_gathering_node_admin(session, location_id, body)
+
+
+@router.put(
+    "/admin/gathering-nodes/{node_id}",
+    response_model=schemas.GatheringNodeAdmin,
+)
+async def admin_update_gathering_node(
+    node_id: int,
+    body: schemas.GatheringNodeAdminUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("gathering:update")),
+):
+    """Partial update of a gathering node.
+
+    Active sessions are unaffected (snapshots on `gathering_sessions`).
+    If `daily_bank_max` is lowered below `current_bank`, `current_bank` is
+    clamped down. Admins use `/restore` to top up the bank.
+    """
+    return await crud.update_gathering_node_admin(session, node_id, body)
+
+
+@router.delete(
+    "/admin/gathering-nodes/{node_id}",
+    status_code=204,
+)
+async def admin_delete_gathering_node(
+    node_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("gathering:delete")),
+):
+    """Delete a gathering node. FK ON DELETE CASCADE removes its sessions."""
+    await crud.delete_gathering_node_admin(session, node_id)
+    return None
+
+
+@router.post(
+    "/admin/gathering-nodes/{node_id}/restore",
+    response_model=schemas.GatheringNodeAdmin,
+)
+async def admin_restore_gathering_node(
+    node_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("gathering:update")),
+):
+    """Manual full-restore: current_bank=daily_bank_max, clear depleted/restore timestamps."""
+    return await crud.restore_gathering_node_admin(session, node_id)
+
+
+# --------------------------------------------------------------------
+# GATHERING — PLAYER-FACING START (FEAT-128 task #14)
+# --------------------------------------------------------------------
+# Player-facing endpoint to start a gathering session on a node.
+# Auth: authenticated user, owner-only on the character.
+# Rate limit: handled at the api-gateway layer (see docker/api-gateway/nginx.conf
+# zone `gathering_limit`, 10r/m + burst=5).
+#
+# The heavy lifting (FOR UPDATE on the node row, all cross-service validation,
+# stamina consume, session insert, auto-post) lives in `crud.start_gathering`.
+# This route is a thin dispatcher that handles auth and shapes the response.
+
+@router.post(
+    "/{location_id}/gathering-nodes/{node_id}/start",
+    response_model=schemas.StartGatheringResponse,
+    status_code=201,
+)
+async def start_gathering_route(
+    location_id: int,
+    node_id: int,
+    body: schemas.StartGatheringRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Начать сессию добычи на ноде.
+
+    Полный pipeline валидации описан в FEAT-128 §3.5.1:
+      * проверка владения персонажем + текущей локации,
+      * lazy-finalize устаревших сессий персонажа,
+      * запреты на бой / уже идущую добычу,
+      * SELECT FOR UPDATE на ноду + проверки is_enabled / current_bank /
+        restore_at и concurrency-guard,
+      * валидация инструмента (категория / прочность / владение),
+      * расчёт effective_seconds / effective_stamina_paid /
+        effective_double_chance_pct по §3.6,
+      * pre-flight проверка стамины и свободного слота инвентаря,
+      * списание стамины через character-attributes-service,
+      * INSERT в gathering_sessions с снапшотом эффективных бонусов,
+      * авто-пост о начале добычи (best-effort).
+    """
+    payload = await crud.start_gathering(
+        session,
+        location_id=location_id,
+        node_id=node_id,
+        character_id=body.character_id,
+        tool_inventory_item_id=body.tool_inventory_item_id,
+        current_user_id=current_user.id,
+    )
+    return schemas.StartGatheringResponse(**payload)
+
+
+# --------------------------------------------------------------------
+# FEAT-128 task #15 — cancel gathering (player-facing manual + internal)
+# --------------------------------------------------------------------
+# Player-facing: owner-only on the character; same-location guard; refund =
+# ceil(stamina_paid * 0.5) per FEAT-128 §3.6.
+# Internal: verified via INTERNAL_SERVICE_TOKEN env var compared against the
+# X-Internal-Token request header. Idempotent — second call with no active
+# session returns `cancelled: false`.
+
+INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
+
+
+def verify_internal_token(
+    x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
+) -> None:
+    """Reject the request unless `X-Internal-Token` matches
+    `INTERNAL_SERVICE_TOKEN` from env. Empty env -> always reject (we never
+    want a missing config to silently disable auth on an internal endpoint).
+    """
+    if not INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="Internal service token не настроен",
+        )
+    if not x_internal_token or x_internal_token != INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=401,
+            detail="Недействительный internal token",
+        )
+
+
+@router.post(
+    "/{location_id}/gathering-nodes/{node_id}/cancel",
+    response_model=schemas.CancelGatheringResponse,
+)
+async def cancel_gathering_route(
+    location_id: int,
+    node_id: int,
+    body: schemas.CancelGatheringRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Отменить активную сессию добычи (player manual cancel).
+
+    Возвращает 50%-возврат стамины (округление вверх — игроку дружелюбное
+    округление по FEAT-128 §3.6). Если активной сессии нет — 400.
+    """
+    payload = await crud.cancel_gathering_manual(
+        session,
+        location_id=location_id,
+        node_id=node_id,
+        character_id=body.character_id,
+        current_user_id=current_user.id,
+    )
+    return schemas.CancelGatheringResponse(**payload)
+
+
+@router.post(
+    "/internal/cancel-gathering",
+    response_model=schemas.CancelGatheringResponse,
+)
+async def cancel_gathering_internal_route(
+    body: schemas.CancelGatheringInternalRequest,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Internal cancel — used by battle-service when a PvP battle starts.
+
+    Идемпотентен: если активной сессии нет, возвращает
+    `{cancelled: false, reason: "no_active_session"}` без ошибки.
+    Статус сессии при успехе — `interrupted_by_battle`.
+    """
+    payload = await crud.cancel_gathering_internal(
+        session,
+        character_id=body.character_id,
+    )
+    return schemas.CancelGatheringResponse(**payload)
+
+
+# --------------------------------------------------------------------
+# FEAT-128 task #16 — poll active gathering for a character
+# --------------------------------------------------------------------
+# Owner-only. Lazy-finalizes any due sessions before responding; the first
+# response after finalize includes a one-shot `last_finished_session` block
+# (toast trigger). Subsequent polls return `last_finished_session: null`.
+
+@router.get(
+    "/characters/{character_id}/active_gathering",
+    response_model=schemas.ActiveGatheringResponse,
+)
+async def get_active_gathering_route(
+    character_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Polled by the frontend (~10s) while gathering is active.
+
+    Запускает `finalize_due_sessions` для этого персонажа перед формированием
+    ответа: если в этом самом запросе была завершена сессия, в ответе будет
+    `last_finished_session` (одноразовый toast). На последующих опросах поле
+    вернётся `null`.
+    """
+    # Owner-only guard.
+    await verify_character_ownership(session, character_id, current_user.id)
+
+    payload = await crud.get_active_gathering_for_character(
+        session, character_id=character_id,
+    )
+    return schemas.ActiveGatheringResponse(**payload)
 
 
 # --------------------------------------------------------------------

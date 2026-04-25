@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, root_validator, validator
 from typing import List, Optional, Any
 from enum import Enum
 from datetime import datetime
@@ -26,6 +26,63 @@ class ItemType(str, Enum):
     recipe = "recipe"
     gem = "gem"
     rune = "rune"
+    gathering_tool = "gathering_tool"
+
+
+class ToolCategory(str, Enum):
+    pickaxe = "pickaxe"
+    sickle = "sickle"
+    axe = "axe"
+
+
+# Equipment-stat modifier fields that gathering_tool items must NOT set.
+GATHERING_TOOL_FORBIDDEN_STAT_FIELDS = (
+    "strength_modifier",
+    "agility_modifier",
+    "intelligence_modifier",
+    "endurance_modifier",
+    "health_modifier",
+    "energy_modifier",
+    "mana_modifier",
+    "stamina_modifier",
+    "charisma_modifier",
+    "luck_modifier",
+    "damage_modifier",
+    "dodge_modifier",
+    "res_effects_modifier",
+    "res_physical_modifier",
+    "res_catting_modifier",
+    "res_crushing_modifier",
+    "res_piercing_modifier",
+    "res_magic_modifier",
+    "res_fire_modifier",
+    "res_ice_modifier",
+    "res_watering_modifier",
+    "res_electricity_modifier",
+    "res_wind_modifier",
+    "res_sainting_modifier",
+    "res_damning_modifier",
+    "critical_hit_chance_modifier",
+    "critical_damage_modifier",
+    "health_recovery",
+    "energy_recovery",
+    "mana_recovery",
+    "stamina_recovery",
+    "vul_effects_modifier",
+    "vul_physical_modifier",
+    "vul_catting_modifier",
+    "vul_crushing_modifier",
+    "vul_piercing_modifier",
+    "vul_magic_modifier",
+    "vul_fire_modifier",
+    "vul_ice_modifier",
+    "vul_watering_modifier",
+    "vul_electricity_modifier",
+    "vul_sainting_modifier",
+    "vul_wind_modifier",
+    "vul_damning_modifier",
+)
+
 
 class ItemRarity(str, Enum):
     common = "common"
@@ -73,6 +130,12 @@ class ItemBase(BaseModel):
     primary_damage_type: Optional[str] = None
     armor_subclass: Optional[str] = None
     weapon_subclass: Optional[str] = None
+
+    # Gathering tool fields (only meaningful when item_type='gathering_tool')
+    tool_category: Optional[ToolCategory] = None
+    gather_double_chance_bonus: Optional[float] = None
+    gather_speed_bonus_pct: Optional[float] = None
+    gather_stamina_bonus_pct: Optional[float] = None
 
 
     # Модификаторы характеристик
@@ -125,10 +188,63 @@ class ItemBase(BaseModel):
 
 class ItemCreate(ItemBase):
     """
-    Схема для создания нового предмета (ничем не отличается от базовой,
-    но на будущее можно расширять).
+    Схема для создания/обновления предмета.
+    Включает валидацию специфичных для gathering_tool полей.
     """
-    pass
+
+    @root_validator
+    def _validate_gathering_tool_fields(cls, values):
+        item_type = values.get("item_type")
+        tool_category = values.get("tool_category")
+        bonus_fields = (
+            "gather_double_chance_bonus",
+            "gather_speed_bonus_pct",
+            "gather_stamina_bonus_pct",
+        )
+
+        is_tool = item_type == ItemType.gathering_tool or item_type == "gathering_tool"
+
+        if is_tool:
+            # tool_category required and must be in enum (Pydantic already validates enum membership)
+            if tool_category is None:
+                raise ValueError("Категория инструмента обязательна для предмета типа 'gathering_tool'")
+
+            # max_durability >= 1 required
+            max_durability = values.get("max_durability")
+            if max_durability is None or max_durability < 1:
+                raise ValueError("Прочность инструмента сбора должна быть не меньше 1")
+
+            # Each of the 3 bonus fields must be within 0..50 if provided
+            for field in bonus_fields:
+                val = values.get(field)
+                if val is None:
+                    continue
+                if val < 0 or val > 50:
+                    raise ValueError(
+                        f"Бонус '{field}' должен быть в диапазоне от 0 до 50"
+                    )
+
+            # All equipment-stat modifiers must be null/zero
+            for field in GATHERING_TOOL_FORBIDDEN_STAT_FIELDS:
+                v = values.get(field)
+                if v is not None and v != 0:
+                    raise ValueError(
+                        "Инструмент сбора не может иметь модификаторы экипировки"
+                    )
+        else:
+            # Non-tool items must NOT set tool_category or any bonus fields
+            if tool_category is not None:
+                raise ValueError(
+                    "Поле 'tool_category' допустимо только для предметов типа 'gathering_tool'"
+                )
+            for field in bonus_fields:
+                v = values.get(field)
+                if v is not None and v != 0:
+                    raise ValueError(
+                        f"Поле '{field}' допустимо только для предметов типа 'gathering_tool'"
+                    )
+
+        return values
 
 class Item(ItemBase):
     """
@@ -1138,6 +1254,123 @@ class AuctionDepositResponse(BaseModel):
     item_name: str
     quantity: int
     message: str
+
+
+# -----------------------------------------------------------------------------
+# 19. Gathering schemas
+# -----------------------------------------------------------------------------
+
+
+class GatheringRankBonuses(BaseModel):
+    double_chance_bonus: float
+    speed_bonus_pct: float
+    stamina_bonus_pct: float
+
+
+class GatheringNextRank(BaseModel):
+    rank_number: int
+    required_experience: int
+    double_chance_bonus: float
+    speed_bonus_pct: float
+    stamina_bonus_pct: float
+
+
+class GatheringSkillOut(BaseModel):
+    skill_id: int
+    slug: str
+    name: str
+    category: str
+    current_rank: int
+    experience: int
+    experience_total: int
+    is_max_rank: bool
+    current_rank_bonuses: GatheringRankBonuses
+    next_rank: Optional[GatheringNextRank] = None
+    next_rank_bonuses: Optional[GatheringRankBonuses] = None
+    experience_to_next: Optional[int] = None
+
+
+class CharacterGatheringSkillsResponse(BaseModel):
+    character_id: int
+    skills: List[GatheringSkillOut] = []
+
+
+class FreeSlotsCheckResponse(BaseModel):
+    free_slot_count: int
+    is_full: bool
+
+
+class GatheringAwardRequest(BaseModel):
+    """Тело запроса internal-эндпоинта /gathering/award.
+
+    Все количества — неотрицательные. Если `tool_inventory_item_id` не задан,
+    `tool_durability_to_consume` обязан быть 0; при наличии инструмента —
+    > 0.
+    """
+
+    skill_slug: str
+    result_item_id: int
+    result_quantity: int
+    xp_to_add: int
+    tool_inventory_item_id: Optional[int] = None
+    tool_durability_to_consume: int = 0
+
+    @validator("skill_slug")
+    def _slug_in_set(cls, v: str) -> str:
+        if v not in {"mining", "herbalism", "woodcutting"}:
+            raise ValueError("Неизвестный навык добычи")
+        return v
+
+    @validator("result_quantity")
+    def _quantity_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("result_quantity должен быть >= 0")
+        return v
+
+    @validator("xp_to_add")
+    def _xp_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("xp_to_add должен быть >= 0")
+        return v
+
+    @validator("tool_durability_to_consume")
+    def _dur_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("tool_durability_to_consume должен быть >= 0")
+        return v
+
+    @root_validator
+    def _tool_durability_consistency(cls, values: dict) -> dict:
+        tool_id = values.get("tool_inventory_item_id")
+        consume = values.get("tool_durability_to_consume", 0)
+        if tool_id is None and consume != 0:
+            raise ValueError(
+                "tool_durability_to_consume должен быть 0, если инструмент не указан"
+            )
+        if tool_id is not None and consume <= 0:
+            raise ValueError(
+                "tool_durability_to_consume должен быть > 0, если указан инструмент"
+            )
+        return values
+
+
+class GatheringAwardResponse(BaseModel):
+    """Ответ internal-эндпоинта /gathering/award.
+
+    `tool_durability_remaining` равен None, если инструмент не использовался.
+    `new_rank_bonuses` присутствует только если в этом вызове произошёл rank-up.
+    """
+
+    items_added: bool
+    actual_quantity_added: int
+    inventory_full: bool
+    tool_durability_remaining: Optional[int] = None
+    tool_broke: bool
+    xp_awarded: int
+    current_rank: int
+    current_experience: int
+    rank_up: bool
+    new_rank_bonuses: Optional[GatheringRankBonuses] = None
 
 
 # -----------------------------------------------------------------------------

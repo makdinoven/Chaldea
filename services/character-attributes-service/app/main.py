@@ -811,6 +811,43 @@ def consume_stamina(character_id: int, payload: dict, db: Session = Depends(get_
         "current_stamina": attr.current_stamina
     }
 
+
+@router.post("/{character_id}/refund_stamina", response_model=schemas.RefundStaminaResponse)
+def refund_stamina(
+    character_id: int,
+    payload: schemas.RefundStaminaRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Возвращает (рефандит) выносливость персонажу. Парный к consume_stamina эндпоинт (FEAT-128).
+
+    Запрос:
+      {
+          "amount": <положительное целое число (>=1)>
+      }
+
+    Поведение:
+      - Использует SELECT ... FOR UPDATE на строке атрибутов — конкурентные рефанды
+        не двойно начислят.
+      - Прибавляет `amount` к current_stamina, но кэпит на max_stamina.
+      - Избыточный рефанд молча обрезается (не ошибка).
+      - amount<=0 отвергается через Pydantic (422).
+
+    Аутентификация: как у consume_stamina — без HTTP-auth, только через
+    внутреннюю docker-сеть (Nginx не проксирует /attributes/ наружу).
+    """
+    attr, refunded = crud.refund_stamina(db, character_id, payload.amount)
+    if attr is None:
+        raise HTTPException(status_code=404, detail="Атрибуты персонажа не найдены")
+
+    return schemas.RefundStaminaResponse(
+        character_id=attr.character_id,
+        current_stamina=int(attr.current_stamina or 0),
+        max_stamina=int(attr.max_stamina or 0),
+        refunded=int(refunded),
+    )
+
+
 # -----------------------------
 # 7. Admin: обновление атрибутов (partial update, без ограничений прокачки)
 # -----------------------------

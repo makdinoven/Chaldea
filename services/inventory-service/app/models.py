@@ -14,7 +14,7 @@ class Items(Base):
     item_type = Column(Enum(
         'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet', 'main_weapon',
         'consumable','additional_weapons', 'resource', 'scroll', 'misc', 'shield',
-        'blueprint', 'recipe', 'gem', 'rune'
+        'blueprint', 'recipe', 'gem', 'rune', 'gathering_tool'
     ), nullable=False)
     blueprint_recipe_id = Column(Integer, ForeignKey('recipes.id', ondelete='SET NULL'), nullable=True)
     item_rarity = Column(Enum(
@@ -35,6 +35,15 @@ class Items(Base):
 
     max_durability = Column(Integer, default=0, server_default="0")  # 0 means no durability system
     repair_power = Column(Integer, nullable=True)  # For repair kits: 25/50/75/100 (% of max_durability restored)
+
+    # Gathering tool fields (only meaningful when item_type='gathering_tool')
+    tool_category = Column(
+        Enum('pickaxe', 'sickle', 'axe', name='tool_category_enum'),
+        nullable=True,
+    )
+    gather_double_chance_bonus = Column(Float, nullable=False, default=0.0, server_default="0")
+    gather_speed_bonus_pct = Column(Float, nullable=False, default=0.0, server_default="0")
+    gather_stamina_bonus_pct = Column(Float, nullable=False, default=0.0, server_default="0")
 
     fast_slot_bonus = Column(Integer, default=0)  # Сколько дополнительных быстрых слотов даёт предмет
 
@@ -373,4 +382,62 @@ class AuctionStorage(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     item = relationship("Items")
+
+
+# Gathering system models
+class GatheringSkill(Base):
+    __tablename__ = "gathering_skills"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    slug = Column(String(50), nullable=False, unique=True)
+    name = Column(String(100), nullable=False)
+    category = Column(
+        Enum('ore', 'herb', 'wood', name='gathering_skill_category_enum'),
+        nullable=False,
+        unique=True,
+    )
+    description = Column(Text, nullable=True)
+    icon = Column(String(255), nullable=True)
+    max_rank = Column(Integer, nullable=False, default=5, server_default='5')
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    ranks = relationship("GatheringSkillRank", back_populates="skill", cascade="all, delete-orphan")
+    character_progress = relationship("CharacterGatheringSkill", back_populates="skill", cascade="all, delete-orphan")
+
+
+class GatheringSkillRank(Base):
+    __tablename__ = "gathering_skill_ranks"
+    __table_args__ = (
+        UniqueConstraint('skill_id', 'rank_number', name='uq_gathering_skill_rank'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    skill_id = Column(Integer, ForeignKey('gathering_skills.id', ondelete='CASCADE'), nullable=False)
+    rank_number = Column(Integer, nullable=False)
+    required_experience = Column(Integer, nullable=False, default=0, server_default='0')
+    double_chance_bonus = Column(Float, nullable=False, default=0.0, server_default='0')
+    speed_bonus_pct = Column(Float, nullable=False, default=0.0, server_default='0')
+    stamina_bonus_pct = Column(Float, nullable=False, default=0.0, server_default='0')
+
+    skill = relationship("GatheringSkill", back_populates="ranks")
+
+
+class CharacterGatheringSkill(Base):
+    __tablename__ = "character_gathering_skills"
+    __table_args__ = (
+        UniqueConstraint('character_id', 'skill_id', name='uq_character_gathering_skill'),
+        Index('ix_character_gathering_skills_character', 'character_id'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # No FK on character_id — owned by character-service (cross-service shared-DB convention)
+    character_id = Column(Integer, nullable=False)
+    skill_id = Column(Integer, ForeignKey('gathering_skills.id', ondelete='CASCADE'), nullable=False)
+    current_rank = Column(Integer, nullable=False, default=1, server_default='1')
+    experience = Column(Integer, nullable=False, default=0, server_default='0')
+    experience_total = Column(Integer, nullable=False, default=0, server_default='0')
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    skill = relationship("GatheringSkill", back_populates="character_progress")
 

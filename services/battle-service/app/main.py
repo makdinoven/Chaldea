@@ -2395,6 +2395,52 @@ async def pvp_attack(
     if await get_active_battle_for_character(db, req.victim_character_id):
         raise HTTPException(400, "Целевой персонаж уже в бою")
 
+    # FEAT-128 task #17 — best-effort cancel of victim's active gathering session
+    # before creating the battle row. Per spec §3.5.3 "attacker wins the race":
+    # if locations-service is down or slow, log a warning and proceed with battle
+    # creation anyway — the stamina refund miss is recoverable, blocking the
+    # attack is not.
+    _internal_token = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            cancel_resp = await client.post(
+                f"{settings.LOCATIONS_SERVICE_URL.rstrip('/')}/locations/internal/cancel-gathering",
+                json={"character_id": req.victim_character_id},
+                headers={"X-Internal-Token": _internal_token} if _internal_token else {},
+            )
+        if cancel_resp.status_code == 200:
+            try:
+                _cancel_data = cancel_resp.json()
+            except Exception:
+                _cancel_data = {}
+            if _cancel_data.get("cancelled"):
+                logger.info(
+                    "Cancelled victim's gathering session before battle "
+                    "(victim=%s, session_id=%s, stamina_refunded=%s)",
+                    req.victim_character_id,
+                    _cancel_data.get("session_id"),
+                    _cancel_data.get("stamina_refunded"),
+                )
+            else:
+                logger.debug(
+                    "No active gathering session to cancel for victim %s (reason=%s)",
+                    req.victim_character_id,
+                    _cancel_data.get("reason"),
+                )
+        else:
+            logger.warning(
+                "cancel-gathering returned HTTP %s for victim %s; proceeding with battle",
+                cancel_resp.status_code,
+                req.victim_character_id,
+            )
+    except Exception as e:
+        logger.warning(
+            "cancel-gathering call to locations-service failed for victim %s: %s; "
+            "proceeding with battle (attacker wins per spec)",
+            req.victim_character_id,
+            e,
+        )
+
     # Create battle immediately (derive location_id from attacker)
     attack_location_id = attacker["current_location_id"] if attacker else None
     battle_obj, participant_objs = await create_battle(

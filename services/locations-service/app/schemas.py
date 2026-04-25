@@ -543,6 +543,7 @@ class LocationClientDetails(BaseModel):
     npcs: List[NpcInLocation] = []
     posts: List[ClientPost] = []
     loot: List[LocationLootItem] = []
+    gathering_nodes: List["GatheringNodeClient"] = []
 
     class Config:
         orm_mode = True
@@ -1291,4 +1292,375 @@ class FloatingStructurePublicRead(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+# -------------------------------
+#   GATHERING NODE — ADMIN SCHEMAS (FEAT-128)
+# -------------------------------
+GatheringCategory = Literal["ore", "herb", "wood"]
+
+
+class GatheringNodeAdminCreate(BaseModel):
+    """Admin payload for creating a gathering node on a location."""
+
+    node_name: str
+    category: GatheringCategory
+    result_item_id: int
+    result_quantity_per_gather: int = 1
+    stamina_per_gather: int
+    daily_bank_max: int
+    allow_concurrent_gather: bool = False
+    is_enabled: bool = True
+
+    @validator('node_name')
+    def _vname(cls, v):
+        if v is None or not v.strip():
+            raise ValueError("Название ноды не может быть пустым")
+        if len(v) > 120:
+            raise ValueError("Название ноды не должно превышать 120 символов")
+        return v.strip()
+
+    @validator('result_item_id')
+    def _vresult_item_id(cls, v):
+        if v is None or v <= 0:
+            raise ValueError("result_item_id должен быть положительным числом")
+        return v
+
+    @validator('result_quantity_per_gather')
+    def _vqty(cls, v):
+        if v is None or v < 1:
+            raise ValueError("result_quantity_per_gather должно быть >= 1")
+        return v
+
+    @validator('stamina_per_gather')
+    def _vstamina(cls, v):
+        if v is None or v < 1:
+            raise ValueError("stamina_per_gather должно быть >= 1")
+        return v
+
+    @validator('daily_bank_max')
+    def _vbank(cls, v):
+        if v is None or v < 1:
+            raise ValueError("daily_bank_max должно быть >= 1")
+        return v
+
+
+class GatheringNodeAdminUpdate(BaseModel):
+    """Admin payload for partial-update of a gathering node. All fields optional."""
+
+    node_name: Optional[str] = None
+    category: Optional[GatheringCategory] = None
+    result_item_id: Optional[int] = None
+    result_quantity_per_gather: Optional[int] = None
+    stamina_per_gather: Optional[int] = None
+    daily_bank_max: Optional[int] = None
+    allow_concurrent_gather: Optional[bool] = None
+    is_enabled: Optional[bool] = None
+
+    @validator('node_name')
+    def _vname(cls, v):
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError("Название ноды не может быть пустым")
+        if len(v) > 120:
+            raise ValueError("Название ноды не должно превышать 120 символов")
+        return v.strip()
+
+    @validator('result_item_id')
+    def _vresult_item_id(cls, v):
+        if v is None:
+            return v
+        if v <= 0:
+            raise ValueError("result_item_id должен быть положительным числом")
+        return v
+
+    @validator('result_quantity_per_gather')
+    def _vqty(cls, v):
+        if v is None:
+            return v
+        if v < 1:
+            raise ValueError("result_quantity_per_gather должно быть >= 1")
+        return v
+
+    @validator('stamina_per_gather')
+    def _vstamina(cls, v):
+        if v is None:
+            return v
+        if v < 1:
+            raise ValueError("stamina_per_gather должно быть >= 1")
+        return v
+
+    @validator('daily_bank_max')
+    def _vbank(cls, v):
+        if v is None:
+            return v
+        if v < 1:
+            raise ValueError("daily_bank_max должно быть >= 1")
+        return v
+
+
+class GatheringNodeAdmin(BaseModel):
+    """Admin read-shape for a gathering node, enriched with cross-service item info."""
+
+    id: int
+    location_id: int
+    node_name: str
+    category: str
+    result_item_id: int
+    result_quantity_per_gather: int
+    stamina_per_gather: int
+    daily_bank_max: int
+    current_bank: int
+    allow_concurrent_gather: bool
+    depleted_at: Optional[datetime] = None
+    restore_at: Optional[datetime] = None
+    is_enabled: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    # Cross-service joined fields from items table (inventory-service-owned)
+    result_item_name: Optional[str] = None
+    result_item_image: Optional[str] = None
+    result_item_type: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+# -------------------------------
+#   GATHERING — CLIENT-FACING SCHEMAS (FEAT-128 task #11)
+# -------------------------------
+class ActiveGatherer(BaseModel):
+    """Per-character entry inside `GatheringNodeClient.active_sessions`.
+
+    Cross-service fields (`character_name`, `character_avatar_url`) are
+    enriched on the locations-service side via the existing players-by-location
+    lookup or `/{character_id}/short_info` fallback. Both may be empty strings
+    if the character lookup failed (best-effort enrichment).
+    """
+
+    session_id: int
+    character_id: int
+    character_name: Optional[str] = ""
+    character_avatar_url: Optional[str] = None
+    started_at: Optional[datetime] = None
+    complete_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class GatheringNodeClient(BaseModel):
+    """Player-facing shape of a gathering node, surfaced inside
+    `LocationClientDetails.gathering_nodes`. Mirrors section 3.1 of FEAT-128.
+
+    `result_item_*` fields are joined from the shared `items` table (owned by
+    inventory-service). `active_sessions` lists currently-active sessions on
+    this node with character-name/avatar enriched in batch.
+    """
+
+    id: int
+    node_name: str
+    category: str
+    result_item_id: int
+    result_item_name: Optional[str] = None
+    result_item_image: Optional[str] = None
+    result_item_type: Optional[str] = None
+    result_quantity_per_gather: int
+    stamina_per_gather: int
+    base_seconds: int
+    current_bank: int
+    daily_bank_max: int
+    allow_concurrent_gather: bool
+    depleted_at: Optional[datetime] = None
+    restore_at: Optional[datetime] = None
+    is_enabled: bool
+    active_sessions: List[ActiveGatherer] = []
+
+    class Config:
+        orm_mode = True
+
+
+# Resolve forward reference: `LocationClientDetails` declares
+# `gathering_nodes: List["GatheringNodeClient"]` before this class exists.
+LocationClientDetails.update_forward_refs(GatheringNodeClient=GatheringNodeClient)
+
+
+# -------------------------------
+#   GATHERING — START SESSION SCHEMAS (FEAT-128 task #14)
+# -------------------------------
+class StartGatheringRequest(BaseModel):
+    """Player-facing request body for POST /gathering-nodes/{node_id}/start.
+
+    `tool_inventory_item_id` is nullable — null means "gather without a tool"
+    (lenient mode per FEAT-128 §3.6: rank speed/stamina bonuses still apply,
+    only tool bonuses are zeroed and ×2 time penalty is added).
+    """
+
+    character_id: int
+    tool_inventory_item_id: Optional[int] = None
+
+    @validator('character_id')
+    def _vcid(cls, v):
+        if v is None or v <= 0:
+            raise ValueError("character_id должен быть положительным числом")
+        return v
+
+    @validator('tool_inventory_item_id')
+    def _vtool(cls, v):
+        if v is None:
+            return v
+        if v <= 0:
+            raise ValueError("tool_inventory_item_id должен быть положительным числом")
+        return v
+
+
+class NodeStateAfter(BaseModel):
+    """Snapshot of node-side state immediately after a successful gather start.
+
+    `current_bank` is unchanged on start (bank only decrements at finalize per
+    FEAT-128 §3.5.1 step 15). `active_sessions_count` reflects the number of
+    sessions on the node with `status='active'` and `complete_at > NOW()`
+    AFTER the new session has been inserted (i.e. includes the just-created
+    one).
+    """
+
+    current_bank: int
+    active_sessions_count: int
+
+
+class StartGatheringResponse(BaseModel):
+    """Player-facing response for POST /gathering-nodes/{node_id}/start.
+
+    Mirrors the contract in FEAT-128 §3.1.1. `effective_*` fields are the
+    snapshot of the bonuses used at start, persisted on the session row so
+    later admin edits to the node never affect the in-flight calculation.
+
+    Spec-required fields: `tool_durability_at_start` and `auto_post_id`
+    (added in Review #1 fix). `effective_stamina_bonus_pct` and
+    `node_state_after` are additive debug info kept for the frontend's
+    optional consumption — frontend ignores unknown fields.
+    """
+
+    session_id: int
+    node_id: int
+    character_id: int
+    started_at: datetime
+    complete_at: datetime
+    effective_seconds: int
+    effective_stamina_paid: int
+    effective_speed_bonus_pct: float
+    effective_double_chance_pct: float
+    effective_stamina_bonus_pct: float
+    tool_inventory_item_id: Optional[int] = None
+    tool_durability_at_start: Optional[int] = None
+    status: str
+    auto_post_id: Optional[int] = None
+    node_state_after: NodeStateAfter
+
+    class Config:
+        orm_mode = True
+
+
+# -------------------------------
+#   GATHERING — CANCEL SESSION SCHEMAS (FEAT-128 task #15)
+# -------------------------------
+class CancelGatheringRequest(BaseModel):
+    """Request body for the player-facing manual cancel endpoint."""
+    character_id: int
+
+    @validator('character_id')
+    def _vcid(cls, v):
+        if v is None or v <= 0:
+            raise ValueError("character_id должен быть положительным числом")
+        return v
+
+
+class CancelGatheringInternalRequest(BaseModel):
+    """Request body for the internal cancel-gathering endpoint (called by
+    battle-service when a battle interrupts the victim's gathering).
+    """
+    character_id: int
+
+    @validator('character_id')
+    def _vcid(cls, v):
+        if v is None or v <= 0:
+            raise ValueError("character_id должен быть положительным числом")
+        return v
+
+
+class CancelGatheringResponse(BaseModel):
+    """Response shape for both cancel endpoints. `cancelled=False` is only
+    used by the internal cancel when no active session existed (idempotent
+    no-op). The manual cancel raises 400 in that case instead.
+    """
+    cancelled: bool
+    session_id: Optional[int] = None
+    stamina_refunded: Optional[int] = None
+    reason: Optional[str] = None
+
+
+# -------------------------------
+#   GATHERING — POLL ACTIVE GATHERING SCHEMAS (FEAT-128 task #16)
+# -------------------------------
+class LastFinishedSessionInfo(BaseModel):
+    """One-shot completion summary returned by the poll endpoint when a
+    session was finalized DURING THE CURRENT REQUEST. Subsequent polls return
+    `last_finished_session: null` — the client renders this as a toast.
+
+    Field names match the frontend `FinishedGatheringSummary` interface in
+    `services/frontend/app-chaldea/src/types/gathering.ts`:
+      * `session_id` (was `id`)
+      * `xp_gained`  (was `xp_awarded`)
+      * `rank_up_to: int | None` (replaces `rank_up: bool` + `new_rank`).
+        Truthy <=> rank changed; null <=> no rank-up this session.
+      * `skill_slug` and `tool_durability_remaining` are added per spec.
+    """
+    session_id: int
+    node_id: Optional[int] = None
+    node_name: str = ""
+    result_item_id: Optional[int] = None
+    result_item_name: Optional[str] = None
+    result_quantity: int
+    xp_gained: int
+    skill_slug: Optional[str] = None
+    rank_up_to: Optional[int] = None
+    tool_durability_remaining: Optional[int] = None
+    tool_broke: bool
+    status: str
+
+    class Config:
+        orm_mode = True
+
+
+class ActiveGatheringResponse(BaseModel):
+    """Top-level poll response for
+    `GET /locations/characters/{cid}/active_gathering`.
+
+    Per FEAT-128 §3.1.1 the active-session fields are FLAT on the top-level
+    object (no nested `session` wrapper). This matches the frontend
+    discriminated union `ActiveGatheringSession | NoActiveGatheringResponse`
+    in `types/gathering.ts`. When `active=false`, the active-only fields are
+    omitted (None).
+    """
+    active: bool
+    # Active-only fields (populated when active=True):
+    session_id: Optional[int] = None
+    node_id: Optional[int] = None
+    node_name: Optional[str] = None
+    location_id: Optional[int] = None
+    started_at: Optional[datetime] = None
+    complete_at: Optional[datetime] = None
+    remaining_seconds: Optional[int] = None
+    stamina_paid: Optional[int] = None
+    tool_inventory_item_id: Optional[int] = None
+    effective_speed_bonus_pct: Optional[float] = None
+    effective_double_chance_pct: Optional[float] = None
+    effective_stamina_bonus_pct: Optional[float] = None
+    # Toast trigger — only populated on the first poll after a finalize.
+    last_finished_session: Optional[LastFinishedSessionInfo] = None
+
+    class Config:
+        orm_mode = True
+
 

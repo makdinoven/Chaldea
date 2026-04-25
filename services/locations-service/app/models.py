@@ -486,3 +486,135 @@ class ArchiveArticleCategory(Base):
     __table_args__ = (
         UniqueConstraint('article_id', 'category_id', name='uq_article_category'),
     )
+
+
+class GatheringNode(Base):
+    """Admin-configured ore/herb/wood gathering node attached to a Location.
+
+    Cross-service note: ``result_item_id`` references the items table owned by
+    inventory-service. Per the codebase convention (see LocationLoot.item_id,
+    npc_shop_items.item_id) cross-service references are plain Integer columns
+    with NO ForeignKey declared.
+    """
+
+    __tablename__ = 'gathering_nodes'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    location_id = Column(
+        BigInteger,
+        ForeignKey('Locations.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    node_name = Column(String(120), nullable=False)
+    category = Column(
+        Enum('ore', 'herb', 'wood', name='gathering_node_category'),
+        nullable=False,
+    )
+    # Cross-service: inventory-service owns the items table — no FK.
+    result_item_id = Column(Integer, nullable=False)
+    result_quantity_per_gather = Column(Integer, nullable=False, default=1, server_default=text('1'))
+    stamina_per_gather = Column(Integer, nullable=False)
+    daily_bank_max = Column(Integer, nullable=False)
+    current_bank = Column(Integer, nullable=False)
+    allow_concurrent_gather = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text('0'),
+    )
+    depleted_at = Column(TIMESTAMP, nullable=True)
+    restore_at = Column(TIMESTAMP, nullable=True)
+    is_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text('1'),
+    )
+    created_at = Column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text('CURRENT_TIMESTAMP'),
+    )
+    updated_at = Column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text('CURRENT_TIMESTAMP'),
+        onupdate=func.now(),
+    )
+
+    location = relationship('Location', foreign_keys=[location_id])
+    sessions = relationship(
+        'GatheringSession',
+        back_populates='node',
+        cascade='all, delete-orphan',
+    )
+
+    __table_args__ = (
+        Index('ix_gathering_nodes_location', 'location_id'),
+        Index('ix_gathering_nodes_category', 'category'),
+        Index('ix_gathering_nodes_restore_at', 'restore_at'),
+        {'mysql_engine': 'InnoDB'},
+    )
+
+
+class GatheringSession(Base):
+    """Per-character gathering session on a gathering_node.
+
+    ``effective_*`` fields are snapshots taken at session start so that admin
+    edits to the node mid-session do not affect the in-flight calculation.
+
+    Cross-service columns (``character_id``, ``tool_inventory_item_id``) have
+    NO ForeignKey declared — characters and inventory items are owned by other
+    services. ``tool_inventory_item_id`` is null when the player chose to
+    gather without a tool.
+    """
+
+    __tablename__ = 'gathering_sessions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    node_id = Column(
+        Integer,
+        ForeignKey('gathering_nodes.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    # Cross-service: character-service owns characters — no FK.
+    character_id = Column(Integer, nullable=False)
+    # Cross-service: inventory-service owns inventory items — no FK.
+    # null = "without tool"
+    tool_inventory_item_id = Column(Integer, nullable=True)
+    started_at = Column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text('CURRENT_TIMESTAMP'),
+    )
+    complete_at = Column(TIMESTAMP, nullable=False)
+    effective_speed_bonus_pct = Column(Float, nullable=False, default=0, server_default=text('0'))
+    effective_double_chance_pct = Column(Float, nullable=False, default=0, server_default=text('0'))
+    effective_stamina_bonus_pct = Column(Float, nullable=False, default=0, server_default=text('0'))
+    stamina_paid = Column(Integer, nullable=False)
+    status = Column(
+        Enum(
+            'active',
+            'completed',
+            'cancelled',
+            'interrupted_by_battle',
+            'inventory_full',
+            name='gathering_session_status',
+        ),
+        nullable=False,
+        default='active',
+        server_default=text("'active'"),
+    )
+    finished_at = Column(TIMESTAMP, nullable=True)
+    result_quantity = Column(Integer, nullable=True)
+    xp_awarded = Column(Integer, nullable=True)
+
+    node = relationship('GatheringNode', back_populates='sessions')
+
+    __table_args__ = (
+        Index('ix_gathering_sessions_character', 'character_id'),
+        Index('ix_gathering_sessions_node', 'node_id'),
+        Index('ix_gathering_sessions_status', 'status'),
+        Index('ix_gathering_sessions_complete_at', 'complete_at'),
+        {'mysql_engine': 'InnoDB'},
+    )

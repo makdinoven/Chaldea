@@ -396,6 +396,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       BATTLEPASS_SERVICE_URL: http://battle-pass-service:8012
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
     depends_on:
       mysql:
         condition: service_healthy

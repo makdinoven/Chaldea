@@ -32,6 +32,7 @@ import dungeonAdminReducer from './slices/dungeonAdminSlice';
 import dungeonReducer from './slices/dungeonSlice';
 import floatingStructuresReducer from './slices/floatingStructuresSlice';
 import teleportReducer from './slices/teleportSlice';
+import gatheringReducer from './slices/gatheringSlice';
 
 export const store = configureStore({
   reducer: {
@@ -67,6 +68,7 @@ export const store = configureStore({
     dungeon: dungeonReducer,
     floatingStructures: floatingStructuresReducer,
     teleport: teleportReducer,
+    gathering: gatheringReducer,
   },
 });
 

@@ -81,8 +81,8 @@ Chaldea - это браузерная RPG-игра с микросервисно
 | character-service | `characters`, `character_requests`, `races`, `subraces`, `classes`, `titles`, `character_titles`, `level_thresholds` |
 | character-attributes-service | `character_attributes` |
 | skills-service | `skills`, `skill_ranks`, `skill_rank_damages`, `skill_rank_effects`, `character_skills` |
-| inventory-service | `items`, `character_inventory`, `equipment_slots` |
-| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts` |
+| inventory-service | `items`, `character_inventory`, `equipment_slots`, `gathering_skills`, `gathering_skill_ranks`, `character_gathering_skills` (FEAT-128) |
+| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128) |
 | notification-service | `notifications` |
 | battle-service | `battles`, `battle_participants`, `battle_turns` |
 
@@ -111,9 +111,12 @@ character-service ──> inventory-service (создание инвентаря
                   ──> user-service (привязка персонажа к юзеру)
 
 locations-service ──> character-service (игроки в локации)
-                  ──> character-attributes-service (стамина для перемещения)
+                  ──> character-attributes-service (стамина для перемещения, refund_stamina при cancel/battle-interrupt — FEAT-128)
+                  ──> inventory-service (FEAT-128: gathering/award на finalize, free_slots_check на старте, gathering-skills на старте для расчёта бонусов)
 
 inventory-service ──> character-attributes-service (модификаторы при экипировке)
+
+battle-service ──> locations-service (FEAT-128: /internal/cancel-gathering при pvp_attack — отменяет добычу victim перед созданием боя)
 
 battle-service ──> character-attributes-service (боевые характеристики)
                ──> character-service (профиль)

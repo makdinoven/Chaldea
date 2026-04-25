@@ -70,6 +70,12 @@ def check_not_in_battle(db: Session, character_id: int, message: str = "Дейс
         raise HTTPException(status_code=400, detail=message)
 
 
+def check_not_gathering(db: Session, character_id: int, message: str = "Действие заблокировано во время добычи"):
+    """Raise 400 if character has an active gathering session (shared DB query)."""
+    if crud.is_character_gathering(db, character_id):
+        raise HTTPException(status_code=400, detail=message)
+
+
 @router.post("/", response_model=schemas.InventoryResponse)
 def create_inventory(inventory_request: schemas.InventoryRequest, db: Session = Depends(get_db)):
     """
@@ -175,11 +181,47 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends
 # --- Character inventory ---
 
 @router.get("/{character_id}/items", response_model=List[schemas.CharacterInventory])
-def get_character_inventory(character_id: int, db: Session = Depends(get_db)):
+def get_character_inventory(
+    character_id: int,
+    item_type: Optional[str] = Query(None, description="Фильтр по типу предмета (например 'gathering_tool')"),
+    category: Optional[str] = Query(None, description="Фильтр по категории инструмента: pickaxe|sickle|axe (только при item_type=gathering_tool)"),
+    db: Session = Depends(get_db),
+):
     """
     Получить все предметы в инвентаре персонажа.
+
+    Дополнительные фильтры:
+    - item_type — например 'gathering_tool' оставит только инструменты сбора.
+    - category — фильтрация по категории инструмента (только если item_type='gathering_tool').
     """
-    return crud.get_inventory_items(db, character_id)
+    # Validate category early — only allowed when item_type == 'gathering_tool'.
+    if category is not None:
+        allowed_categories = {"pickaxe", "sickle", "axe"}
+        if category not in allowed_categories:
+            raise HTTPException(
+                status_code=422,
+                detail="Недопустимая категория инструмента. Допустимы: pickaxe, sickle, axe",
+            )
+        if item_type != "gathering_tool":
+            raise HTTPException(
+                status_code=422,
+                detail="Параметр 'category' доступен только при item_type='gathering_tool'",
+            )
+
+    query = (
+        db.query(models.CharacterInventory)
+        .filter(models.CharacterInventory.character_id == character_id)
+    )
+
+    if item_type is not None or category is not None:
+        # Join with items to filter by item-template fields.
+        query = query.join(models.Items, models.CharacterInventory.item_id == models.Items.id)
+        if item_type is not None:
+            query = query.filter(models.Items.item_type == item_type)
+        if category is not None:
+            query = query.filter(models.Items.tool_category == category)
+
+    return query.all()
 
 
 @router.post("/{character_id}/items", response_model=List[schemas.CharacterInventory])
@@ -338,6 +380,7 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
     """
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Вы не можете менять экипировку во время боя")
+    check_not_gathering(db, character_id, "Вы не можете менять экипировку во время добычи")
 
     try:
         # 1) Проверяем предмет
@@ -493,6 +536,7 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
     """
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Вы не можете менять экипировку во время боя")
+    check_not_gathering(db, character_id, "Вы не можете менять экипировку во время добычи")
     try:
         slot = db.query(models.EquipmentSlot).filter(
             models.EquipmentSlot.character_id == character_id,
@@ -586,6 +630,7 @@ async def use_item(character_id: int, req: schemas.InventoryItem, db: Session = 
       2) Если есть health_recovery и т.п., вызываем /recover
     """
     verify_character_ownership(db, character_id, current_user.id)
+    check_not_gathering(db, character_id, "Нельзя использовать предметы во время добычи")
     db_item = db.query(models.Items).filter(models.Items.id == req.item_id).first()
     if not db_item:
         raise HTTPException(status_code=404, detail="Предмет не найден")
@@ -1082,6 +1127,59 @@ def consume_item_internal(
 
 
 # ---------------------------------------------------------------------------
+# Internal: free-slots check (FEAT-128)
+# ---------------------------------------------------------------------------
+# Used by locations-service at gather-start to confirm the inventory can
+# accept new items. Without auth — same pattern as other internal endpoints
+# in this service (e.g. consume_item / update-durability above). External
+# access is blocked at the api-gateway.
+
+@router.post(
+    "/internal/characters/{character_id}/free_slots_check",
+    response_model=schemas.FreeSlotsCheckResponse,
+)
+def free_slots_check_internal(
+    character_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Возвращает количество свободных слотов и флаг is_full для указанного
+    персонажа. Используется locations-service перед стартом добычи.
+    Без авторизации — только для межсервисных вызовов.
+    """
+    free, is_full = crud.get_inventory_free_slots(db, character_id)
+    return {"free_slot_count": free, "is_full": is_full}
+
+
+# ---------------------------------------------------------------------------
+# Internal: gathering award (FEAT-128 task #7)
+# ---------------------------------------------------------------------------
+# Atomically applies all post-gather inventory side effects:
+#   - adds the result item (capacity-aware, partial-add scaling)
+#   - decrements the tool durability (if any)
+#   - awards XP and runs the rank-up loop on character_gathering_skills
+# All under one DB transaction with row locks. Locations-service calls this
+# from its lazy-finalize path (3.5.2). Without auth — same convention as
+# other /internal/ endpoints in this service; external traffic is blocked
+# by Nginx.
+
+@router.post(
+    "/internal/characters/{character_id}/gathering/award",
+    response_model=schemas.GatheringAwardResponse,
+)
+def gathering_award_internal(
+    character_id: int,
+    req: schemas.GatheringAwardRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Внутренний эндпоинт: одна транзакция на все эффекты завершённой добычи —
+    инвентарь, прочность инструмента, опыт и rank-up.
+    """
+    return crud.award_gathering(db, character_id, req)
+
+
+# ---------------------------------------------------------------------------
 # Profession endpoints — PUBLIC
 # ---------------------------------------------------------------------------
 
@@ -1389,6 +1487,30 @@ def admin_set_rank(
 
 
 # ---------------------------------------------------------------------------
+# Gathering skills endpoints — PUBLIC (FEAT-128)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/characters/{character_id}/gathering-skills",
+    response_model=schemas.CharacterGatheringSkillsResponse,
+)
+def get_character_gathering_skills(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """
+    Возвращает прогресс трёх навыков добычи (Горное дело / Травничество /
+    Лесорубство) для персонажа. Лениво создаёт строки прогресса с
+    rank=1, xp=0 при первом обращении.
+
+    Доступно любому аутентифицированному пользователю — вкладка «Сбор»
+    видна в read-only режиме на чужих профилях (см. 2.7 #4).
+    """
+    return crud.build_gathering_skills_response(db, character_id)
+
+
+# ---------------------------------------------------------------------------
 # Crafting endpoints — PUBLIC
 # ---------------------------------------------------------------------------
 
@@ -1414,6 +1536,7 @@ def craft_item(
     """Выполнить крафт предмета."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя крафтить во время боя")
+    check_not_gathering(db, character_id, "Нельзя крафтить во время добычи")
 
     # 1. Get character's profession
     cp = crud.get_character_profession(db, character_id)
@@ -1913,6 +2036,7 @@ async def sharpen_item(
     """Заточить конкретный стат предмета с помощью точильного камня."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя затачивать предметы во время боя")
+    check_not_gathering(db, character_id, "Нельзя затачивать предметы во время добычи")
 
     # 1. Check profession
     cp = crud.get_character_profession(db, character_id)
@@ -2149,6 +2273,7 @@ def extract_essence(
     """Extract an essence from a crystal. Alchemist only. 75% success chance."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя извлекать эссенции во время боя")
+    check_not_gathering(db, character_id, "Нельзя извлекать эссенции во время добычи")
 
     # 1. Check profession
     cp = crud.get_character_profession(db, character_id)
@@ -2331,6 +2456,7 @@ def transmute_item(
     """Transmute 5 resource items into 1 of the next rarity. Alchemist only."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя трансмутировать предметы во время боя")
+    check_not_gathering(db, character_id, "Нельзя трансмутировать предметы во время добычи")
 
     # 1. Check profession
     cp = crud.get_character_profession(db, character_id)
@@ -2573,6 +2699,7 @@ async def insert_gem(
     """Вставить камень/руну в слот предмета."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя вставлять камни/руны во время боя")
+    check_not_gathering(db, character_id, "Нельзя вставлять камни/руны во время добычи")
 
     # 1. Check profession
     cp = crud.get_character_profession(db, character_id)
@@ -2731,6 +2858,7 @@ async def extract_gem(
     """Извлечь камень/руну из слота предмета."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя извлекать камни/руны во время боя")
+    check_not_gathering(db, character_id, "Нельзя извлекать камни/руны во время добычи")
 
     # 1. Check profession + get rank
     cp = crud.get_character_profession(db, character_id)
@@ -2949,6 +3077,7 @@ def smelt_item(
     """Переплавить украшение в материалы."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя переплавлять предметы во время боя")
+    check_not_gathering(db, character_id, "Нельзя переплавлять предметы во время добычи")
 
     # 1. Check profession
     cp = crud.get_character_profession(db, character_id)
@@ -3060,6 +3189,7 @@ async def identify_item(
     """Опознать предмет в инвентаре, расходуя свиток идентификации."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя опознавать предметы во время боя")
+    check_not_gathering(db, character_id, "Нельзя опознавать предметы во время добычи")
 
     try:
         # 1. Find inventory row
@@ -3134,6 +3264,7 @@ def use_buff_item(
     """Использовать баффовый предмет (книгу опыта и т.д.)."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя использовать предметы во время боя")
+    check_not_gathering(db, character_id, "Нельзя использовать предметы во время добычи")
 
     try:
         # 1. Find inventory row

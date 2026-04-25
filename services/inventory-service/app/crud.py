@@ -792,6 +792,24 @@ def is_character_in_battle(db: Session, character_id: int) -> bool:
     return row is not None
 
 
+def is_character_gathering(db: Session, character_id: int) -> bool:
+    """Check if character has an active (non-overdue) gathering session via shared DB.
+
+    A session whose `complete_at` is already in the past is "finished but not yet finalized" —
+    it is treated as NOT active for blocking purposes; the locations-service lazy-finalize
+    path will close it on the next read.
+    """
+    row = db.execute(
+        text(
+            "SELECT 1 FROM gathering_sessions "
+            "WHERE character_id = :cid AND status = 'active' AND complete_at > NOW() "
+            "LIMIT 1"
+        ),
+        {"cid": character_id}
+    ).fetchone()
+    return row is not None
+
+
 def get_active_trade_between(
     db: Session, char_a: int, char_b: int
 ) -> Optional[models.TradeOffer]:
@@ -3255,4 +3273,472 @@ def check_auctioneer_endpoint(
     return {
         "has_auctioneer": auctioneer is not None,
         "auctioneer_name": auctioneer["name"] if auctioneer else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Gathering skills (FEAT-128)
+# ---------------------------------------------------------------------------
+
+# Default per-character inventory capacity. The codebase has no explicit
+# per-character max-slot column today, so we use a conservative default that
+# can be overridden later via config/settings if needed.
+DEFAULT_INVENTORY_MAX_SLOTS = 50
+
+
+def get_inventory_max_slots(db: Session, character_id: int) -> int:
+    """Return the maximum number of inventory rows (slots) a character can hold.
+
+    Currently a constant default. If a per-character or per-config capacity is
+    introduced in the future, this is the single hook to update.
+    """
+    return DEFAULT_INVENTORY_MAX_SLOTS
+
+
+def get_inventory_free_slots(db: Session, character_id: int) -> Tuple[int, bool]:
+    """Return (free_slot_count, is_full) for the given character.
+
+    A "slot" is a row in character_inventory. Stack space inside an existing
+    row does not count as a free slot here — this is a coarse pre-flight
+    check used by gather-start to bail out early when the inventory cannot
+    accept any new distinct item type.
+    """
+    used = db.query(models.CharacterInventory).filter(
+        models.CharacterInventory.character_id == character_id,
+    ).count()
+    max_slots = get_inventory_max_slots(db, character_id)
+    free = max(0, max_slots - used)
+    return free, free == 0
+
+
+def get_or_create_character_gathering_skills(
+    db: Session, character_id: int
+) -> List[Tuple[models.GatheringSkill, models.CharacterGatheringSkill]]:
+    """Return (skill, progress) pairs for all gathering skills for character.
+
+    Lazy-creates `character_gathering_skills` rows with rank=1, xp=0 if they
+    don't exist yet. Designed to be O(1-2) queries (no N+1).
+    """
+    # 1) Load all skills with their ranks (eager).
+    skills = (
+        db.query(models.GatheringSkill)
+        .options(joinedload(models.GatheringSkill.ranks))
+        .order_by(models.GatheringSkill.id.asc())
+        .all()
+    )
+
+    # 2) Load existing progress rows for this character in one query.
+    progress_rows = db.query(models.CharacterGatheringSkill).filter(
+        models.CharacterGatheringSkill.character_id == character_id,
+    ).all()
+    progress_by_skill = {p.skill_id: p for p in progress_rows}
+
+    # 3) For any missing skill, create a default row.
+    created = False
+    for skill in skills:
+        if skill.id not in progress_by_skill:
+            new_progress = models.CharacterGatheringSkill(
+                character_id=character_id,
+                skill_id=skill.id,
+                current_rank=1,
+                experience=0,
+                experience_total=0,
+            )
+            db.add(new_progress)
+            progress_by_skill[skill.id] = new_progress
+            created = True
+
+    if created:
+        db.commit()
+        # Refresh to populate ids/timestamps if needed
+        for p in progress_by_skill.values():
+            try:
+                db.refresh(p)
+            except Exception:
+                # newly-created rows may not need refresh; defensive
+                pass
+
+    return [(skill, progress_by_skill[skill.id]) for skill in skills]
+
+
+def _rank_by_number(skill: models.GatheringSkill, rank_number: int) -> Optional[models.GatheringSkillRank]:
+    """Find the rank row for a given rank_number on a loaded skill (with ranks)."""
+    for r in skill.ranks:
+        if r.rank_number == rank_number:
+            return r
+    return None
+
+
+def build_gathering_skills_response(
+    db: Session, character_id: int
+) -> dict:
+    """Compose the GET /inventory/characters/{cid}/gathering-skills payload."""
+    pairs = get_or_create_character_gathering_skills(db, character_id)
+
+    skills_out: List[dict] = []
+    for skill, progress in pairs:
+        current_rank_row = _rank_by_number(skill, progress.current_rank)
+        current_bonuses = {
+            "double_chance_bonus": (
+                current_rank_row.double_chance_bonus if current_rank_row else 0.0
+            ),
+            "speed_bonus_pct": (
+                current_rank_row.speed_bonus_pct if current_rank_row else 0.0
+            ),
+            "stamina_bonus_pct": (
+                current_rank_row.stamina_bonus_pct if current_rank_row else 0.0
+            ),
+        }
+
+        next_rank_number = progress.current_rank + 1
+        is_max_rank = progress.current_rank >= skill.max_rank
+        next_rank_row = None if is_max_rank else _rank_by_number(skill, next_rank_number)
+
+        next_rank_payload = None
+        next_bonuses_payload = None
+        experience_to_next = None
+        if next_rank_row is not None:
+            next_rank_payload = {
+                "rank_number": next_rank_row.rank_number,
+                "required_experience": next_rank_row.required_experience,
+                "double_chance_bonus": next_rank_row.double_chance_bonus,
+                "speed_bonus_pct": next_rank_row.speed_bonus_pct,
+                "stamina_bonus_pct": next_rank_row.stamina_bonus_pct,
+            }
+            next_bonuses_payload = {
+                "double_chance_bonus": next_rank_row.double_chance_bonus,
+                "speed_bonus_pct": next_rank_row.speed_bonus_pct,
+                "stamina_bonus_pct": next_rank_row.stamina_bonus_pct,
+            }
+            experience_to_next = max(
+                0,
+                next_rank_row.required_experience - progress.experience,
+            )
+
+        skills_out.append({
+            "skill_id": skill.id,
+            "slug": skill.slug,
+            "name": skill.name,
+            "category": skill.category,
+            "current_rank": progress.current_rank,
+            "experience": progress.experience,
+            "experience_total": progress.experience_total,
+            "is_max_rank": is_max_rank,
+            "current_rank_bonuses": current_bonuses,
+            "next_rank": next_rank_payload,
+            "next_rank_bonuses": next_bonuses_payload,
+            "experience_to_next": experience_to_next,
+        })
+
+    return {
+        "character_id": character_id,
+        "skills": skills_out,
+    }
+
+
+def _add_items_with_capacity(
+    db: Session,
+    character_id: int,
+    item_id: int,
+    quantity: int,
+) -> int:
+    """Add up to `quantity` units of `item_id` to a character's inventory,
+    respecting stack sizes AND the character's free-slot budget.
+
+    Returns the number of units actually added (0..quantity).
+
+    Locks behaviour:
+      - The caller is expected to already hold a row-lock on the target
+        `character_inventory` rows for this character (FOR UPDATE) so that
+        the slot count read here is consistent.
+      - This function appends new rows OR adds to existing stacks; it never
+        creates a new stack if doing so would exceed `max_slots`.
+
+    Note: only same-item rows are explicitly locked; the slot-count itself is
+    not strictly serializable, but the locations-service start-time pre-flight
+    plus this last-minute capacity check is consistent with how other actions
+    in this service handle inventory capacity.
+    """
+    if quantity <= 0:
+        return 0
+
+    item_obj = db.query(models.Items).filter(models.Items.id == item_id).first()
+    if not item_obj:
+        return 0
+    max_stack = max(1, int(item_obj.max_stack_size or 1))
+
+    remaining = quantity
+    added = 0
+
+    # 1) Top up existing same-item stacks (locked by caller for this char).
+    existing = (
+        db.query(models.CharacterInventory)
+        .filter(
+            models.CharacterInventory.character_id == character_id,
+            models.CharacterInventory.item_id == item_id,
+            models.CharacterInventory.quantity < max_stack,
+        )
+        .with_for_update()
+        .all()
+    )
+    for slot in existing:
+        if remaining <= 0:
+            break
+        space = max_stack - int(slot.quantity)
+        if space <= 0:
+            continue
+        to_add = min(space, remaining)
+        slot.quantity = int(slot.quantity) + to_add
+        remaining -= to_add
+        added += to_add
+
+    if remaining <= 0:
+        db.flush()
+        return added
+
+    # 2) Need new rows — check free-slot budget.
+    used_slots = (
+        db.query(models.CharacterInventory)
+        .filter(models.CharacterInventory.character_id == character_id)
+        .count()
+    )
+    max_slots = get_inventory_max_slots(db, character_id)
+    free_slots = max(0, max_slots - used_slots)
+
+    while remaining > 0 and free_slots > 0:
+        to_add = min(remaining, max_stack)
+        new_slot = models.CharacterInventory(
+            character_id=character_id,
+            item_id=item_id,
+            quantity=to_add,
+        )
+        db.add(new_slot)
+        remaining -= to_add
+        added += to_add
+        free_slots -= 1
+
+    db.flush()
+    return added
+
+
+def _scale_down(value: int, numerator: int, denominator: int) -> int:
+    """Scale `value` by `numerator/denominator` using floor (round half-down).
+
+    Used to prorate XP and tool durability when only a fraction of the requested
+    resources actually fit into the inventory.
+    """
+    if denominator <= 0:
+        return 0
+    if numerator <= 0:
+        return 0
+    if numerator >= denominator:
+        return value
+    # math.floor of (value * num / den) with integer arithmetic:
+    return (value * numerator) // denominator
+
+
+def award_gathering(
+    db: Session,
+    character_id: int,
+    payload: schemas.GatheringAwardRequest,
+) -> dict:
+    """Apply the side-effects of a successful gather completion atomically.
+
+    Performs (in one DB transaction, with row locks):
+      1. SELECT FOR UPDATE on character_inventory rows for this character.
+      2. SELECT FOR UPDATE on the tool's character_inventory row (if any).
+      3. SELECT FOR UPDATE on the character_gathering_skills row for the
+         (character, skill); lazy-creates it with rank=1, xp=0 if missing.
+      4. Adds the resource (respecting stacks and free-slot capacity); on
+         partial fit, scales `xp_to_add` and `tool_durability_to_consume` by
+         actual_added / requested.
+      5. Decrements tool durability (capped at 0; sets `tool_broke` if it hits 0).
+      6. Adds XP and runs the rank-up loop (cumulative XP, no XP subtraction —
+         matching the existing profession `execute_craft` pattern in this service).
+      7. Returns the full response payload.
+
+    Any exception inside the body causes a rollback of the whole transaction.
+    """
+    from fastapi import HTTPException
+
+    # -- Validate `result_item_id` exists in items table (raw SELECT) ---------
+    item_row = db.execute(
+        text("SELECT id FROM items WHERE id = :iid"),
+        {"iid": payload.result_item_id},
+    ).fetchone()
+    if not item_row:
+        raise HTTPException(status_code=422, detail="Предмет не найден")
+
+    # -- Validate character_id exists ----------------------------------------
+    char_row = db.execute(
+        text("SELECT id FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    ).fetchone()
+    if not char_row:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    # -- Lock the character's inventory rows (FOR UPDATE) --------------------
+    # Locking the whole inventory keeps the free-slot count consistent across
+    # this transaction.
+    db.query(models.CharacterInventory).filter(
+        models.CharacterInventory.character_id == character_id,
+    ).with_for_update().all()
+
+    # -- Resolve the gathering skill (and its ranks) -------------------------
+    skill = (
+        db.query(models.GatheringSkill)
+        .options(joinedload(models.GatheringSkill.ranks))
+        .filter(models.GatheringSkill.slug == payload.skill_slug)
+        .first()
+    )
+    if not skill:
+        raise HTTPException(status_code=422, detail="Навык добычи не найден")
+
+    # -- Lock (and lazy-create) the per-character progress row ---------------
+    progress = (
+        db.query(models.CharacterGatheringSkill)
+        .filter(
+            models.CharacterGatheringSkill.character_id == character_id,
+            models.CharacterGatheringSkill.skill_id == skill.id,
+        )
+        .with_for_update()
+        .first()
+    )
+    if progress is None:
+        progress = models.CharacterGatheringSkill(
+            character_id=character_id,
+            skill_id=skill.id,
+            current_rank=1,
+            experience=0,
+            experience_total=0,
+        )
+        db.add(progress)
+        db.flush()
+        # Re-acquire the row under FOR UPDATE for the rest of the transaction.
+        progress = (
+            db.query(models.CharacterGatheringSkill)
+            .filter(models.CharacterGatheringSkill.id == progress.id)
+            .with_for_update()
+            .first()
+        )
+
+    # -- Lock the tool inventory row (if any) --------------------------------
+    tool_row: Optional[models.CharacterInventory] = None
+    if payload.tool_inventory_item_id is not None:
+        tool_row = (
+            db.query(models.CharacterInventory)
+            .filter(
+                models.CharacterInventory.id == payload.tool_inventory_item_id,
+                models.CharacterInventory.character_id == character_id,
+            )
+            .with_for_update()
+            .first()
+        )
+        if tool_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Инструмент не найден в инвентаре персонажа",
+            )
+
+    # -- Try to add result items to inventory --------------------------------
+    requested_qty = int(payload.result_quantity)
+    actual_added = 0
+    if requested_qty > 0:
+        actual_added = _add_items_with_capacity(
+            db, character_id, payload.result_item_id, requested_qty
+        )
+
+    items_added = actual_added > 0
+    inventory_full = (requested_qty > 0) and (actual_added < requested_qty)
+
+    # -- Scale XP and durability spend by the partial-add factor -------------
+    if requested_qty > 0:
+        xp_award = _scale_down(int(payload.xp_to_add), actual_added, requested_qty)
+        durability_to_spend = _scale_down(
+            int(payload.tool_durability_to_consume), actual_added, requested_qty
+        )
+    else:
+        # Edge case: caller asked to award 0 items (allowed). No XP, no spend.
+        xp_award = 0
+        durability_to_spend = 0
+
+    # -- Tool durability decrement -------------------------------------------
+    tool_durability_remaining: Optional[int] = None
+    tool_broke = False
+    if tool_row is not None:
+        # current_durability semantics: NULL = full (max), 0 = broken.
+        # Resolve the effective starting value.
+        item_template = db.query(models.Items).filter(
+            models.Items.id == tool_row.item_id
+        ).first()
+        max_dur = int(item_template.max_durability) if item_template and item_template.max_durability else 0
+        current = (
+            int(tool_row.current_durability)
+            if tool_row.current_durability is not None
+            else max_dur
+        )
+        # Cap by remaining; never below 0.
+        spend = min(durability_to_spend, max(0, current))
+        new_dur = max(0, current - spend)
+        tool_row.current_durability = new_dur
+        tool_durability_remaining = new_dur
+        tool_broke = new_dur == 0 and spend > 0
+
+    # -- XP and rank-up loop -------------------------------------------------
+    pre_rank = int(progress.current_rank)
+    if xp_award > 0:
+        progress.experience = int(progress.experience) + xp_award
+        progress.experience_total = int(progress.experience_total) + xp_award
+
+    # Mirror the cumulative-XP rank-up loop used by execute_craft above.
+    # XP is NOT subtracted on rank-up (per spec: cumulative profession XP).
+    all_ranks = sorted(skill.ranks, key=lambda r: r.rank_number)
+    rank_changed = False
+    new_rank_row: Optional[models.GatheringSkillRank] = None
+    while progress.current_rank < skill.max_rank:
+        next_candidates = [
+            r for r in all_ranks if r.rank_number == progress.current_rank + 1
+        ]
+        if not next_candidates:
+            break
+        next_rank = next_candidates[0]
+        if int(progress.experience) >= int(next_rank.required_experience):
+            progress.current_rank = next_rank.rank_number
+            new_rank_row = next_rank
+            rank_changed = True
+        else:
+            break
+
+    # If rank changed but new_rank_row got overwritten by additional jumps,
+    # re-fetch the *final* rank row so the bonuses reflect the latest rank.
+    if rank_changed:
+        for r in all_ranks:
+            if r.rank_number == progress.current_rank:
+                new_rank_row = r
+                break
+
+    rank_up = rank_changed and progress.current_rank > pre_rank
+
+    new_rank_bonuses_payload = None
+    if rank_up and new_rank_row is not None:
+        new_rank_bonuses_payload = {
+            "double_chance_bonus": float(new_rank_row.double_chance_bonus or 0.0),
+            "speed_bonus_pct": float(new_rank_row.speed_bonus_pct or 0.0),
+            "stamina_bonus_pct": float(new_rank_row.stamina_bonus_pct or 0.0),
+        }
+
+    # -- Commit the whole transaction ----------------------------------------
+    db.commit()
+
+    return {
+        "items_added": items_added,
+        "actual_quantity_added": actual_added,
+        "inventory_full": inventory_full,
+        "tool_durability_remaining": tool_durability_remaining,
+        "tool_broke": tool_broke,
+        "xp_awarded": xp_award,
+        "current_rank": int(progress.current_rank),
+        "current_experience": int(progress.experience),
+        "rank_up": rank_up,
+        "new_rank_bonuses": new_rank_bonuses_payload,
     }

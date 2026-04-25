@@ -148,6 +148,33 @@ def grant_active_experience(db: Session, character_id: int, delta: int):
     return attr.active_experience
 
 
+def refund_stamina(db: Session, character_id: int, amount: int):
+    """
+    Возвращает (рефандит) указанное количество выносливости персонажу (FEAT-128).
+    Использует with_for_update() — конкурентные рефанды не должны двойно начислять.
+    Кэп: current_stamina не может превысить max_stamina (избыточный рефанд молча обрезается).
+
+    :return: tuple (attr, refunded) если успех, или (None, 0) если атрибуты не найдены.
+             refunded — фактически зачисленная величина (с учётом cap).
+    """
+    attr = db.query(models.CharacterAttributes).filter(
+        models.CharacterAttributes.character_id == character_id
+    ).with_for_update().first()
+    if not attr:
+        return None, 0
+
+    before = int(attr.current_stamina or 0)
+    max_st = int(attr.max_stamina or 0)
+    new_value = before + int(amount)
+    if new_value > max_st:
+        new_value = max_st
+    refunded = new_value - before
+    attr.current_stamina = new_value
+    db.commit()
+    db.refresh(attr)
+    return attr, refunded
+
+
 def recalculate_attributes(db: Session, character_id: int):
     """
     Пересчитывает все производные статы из базовых значений (10 прокачиваемых статов).

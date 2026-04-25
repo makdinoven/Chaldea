@@ -129,6 +129,19 @@ class GrantActiveXpResponse(BaseModel):
     active_experience: int
 
 
+# --- Stamina refund (FEAT-128) ---
+
+class RefundStaminaRequest(BaseModel):
+    amount: int = Field(..., ge=1, description="Сколько единиц выносливости вернуть (>=1)")
+
+
+class RefundStaminaResponse(BaseModel):
+    character_id: int
+    current_stamina: int
+    max_stamina: int
+    refunded: int
+
+
 # Схема для админского обновления атрибутов (все поля Optional — partial update)
 class AdminAttributeUpdate(BaseModel):
     # Resources

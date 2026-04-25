@@ -73,6 +73,12 @@ export interface LocationData {
   posts: Post[];
   loot: LocationLootItem[];
   npcs: NpcInLocation[];
+  /**
+   * FEAT-128 resource gathering nodes attached to this location. The field is
+   * optional because the backend extension lands in task #11; until then the
+   * key may simply be absent and the frontend treats it as an empty list.
+   */
+  gathering_nodes?: import('../../../types/gathering').GatheringNode[];
 }
 
 export type MarkerType = 'safe' | 'dangerous' | 'dungeon' | 'farm';

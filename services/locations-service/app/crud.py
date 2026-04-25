@@ -1,8 +1,10 @@
 import json
 import logging
+import random
 import re
 import math
 import httpx
+from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -77,7 +79,8 @@ from models import (
     PostDeletionRequest, PostReport, DialogueTree, DialogueNode, DialogueOption,
     NpcShopItem, Quest, QuestObjective, CharacterQuest, CharacterQuestProgress,
     ArchiveCategory, ArchiveArticle, ArchiveArticleCategory,
-    RegionTransitionArrow, ArrowNeighbor, FloatingStructure
+    RegionTransitionArrow, ArrowNeighbor, FloatingStructure,
+    GatheringNode, GatheringSession,
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -85,7 +88,8 @@ from schemas import (
     AreaCreate, AreaUpdate, ClickableZoneCreate, ClickableZoneUpdate,
     ArchiveCategoryCreate, ArchiveCategoryUpdate,
     ArchiveArticleCreate, ArchiveArticleUpdate,
-    TransitionArrowCreate, TransitionArrowUpdate, ArrowNeighborCreate
+    TransitionArrowCreate, TransitionArrowUpdate, ArrowNeighborCreate,
+    GatheringNodeAdminCreate, GatheringNodeAdminUpdate,
 )
 
 # -------------------------------
@@ -1377,6 +1381,30 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
     if user_id is not None:
         favorited = await is_favorited(session, user_id, location_id)
 
+    # 8. (FEAT-128 task #11) Lazy-restore depleted gathering nodes whose
+    #    24h cooldown has elapsed, then build the surfaced gathering_nodes
+    #    payload. The lazy-finalize step happens in the route handler before
+    #    this function is invoked so the active-sessions list reflects the
+    #    just-finalized state.
+    try:
+        await lazy_restore_depleted_nodes(session, location_id)
+        gathering_nodes = await fetch_gathering_nodes_with_active_sessions(
+            session, location_id, players_at_location=players,
+        )
+        # Commit the lazy-restore mutations (UPDATE only — idempotent and
+        # safe to commit independently from the rest of the read).
+        await session.commit()
+    except Exception as exc:
+        logger.warning(
+            "Failed to surface gathering_nodes for location %s: %s",
+            location_id, exc,
+        )
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        gathering_nodes = []
+
     return {
         "id": loc.id,
         "name": loc.name,
@@ -1396,6 +1424,7 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         "npcs": npcs,
         "posts": detailed_posts,
         "loot": loot_items,
+        "gathering_nodes": gathering_nodes,
     }
 
 async def get_post_details(post: Post) -> dict:
@@ -4253,3 +4282,1886 @@ async def delete_floating_structure(session: AsyncSession, structure_id: int) ->
         raise HTTPException(status_code=404, detail="Плавающая структура не найдена")
     await session.delete(obj)
     await session.commit()
+
+
+# -----------------------------------------------------------------------------
+# GATHERING NODE — ADMIN CRUD (FEAT-128)
+# -----------------------------------------------------------------------------
+async def _ensure_location_exists(session: AsyncSession, location_id: int) -> None:
+    """Raise 404 if Locations.id does not exist."""
+    result = await session.execute(
+        select(Location.id).where(Location.id == location_id)
+    )
+    if result.scalars().first() is None:
+        raise HTTPException(status_code=404, detail="Локация не найдена")
+
+
+async def _ensure_item_exists(session: AsyncSession, item_id: int) -> None:
+    """Cross-service existence check on the shared `items` table.
+
+    The `items` table is owned by inventory-service. We use a raw SELECT
+    (no FK by codebase convention 2.5#6).
+    """
+    result = await session.execute(
+        text("SELECT id FROM items WHERE id = :iid"),
+        {"iid": item_id},
+    )
+    if result.fetchone() is None:
+        raise HTTPException(status_code=422, detail="Предмет не найден")
+
+
+async def _fetch_item_brief(
+    session: AsyncSession, item_ids: List[int]
+) -> Dict[int, Dict[str, Optional[str]]]:
+    """Batch-fetch name/image/item_type from items table for a list of ids."""
+    if not item_ids:
+        return {}
+    # SQLAlchemy text() with `expanding` bindparam for IN clause
+    from sqlalchemy import bindparam
+    stmt = text(
+        "SELECT id, name, image, item_type FROM items WHERE id IN :ids"
+    ).bindparams(bindparam("ids", expanding=True))
+    result = await session.execute(stmt, {"ids": list(item_ids)})
+    out: Dict[int, Dict[str, Optional[str]]] = {}
+    for row in result.fetchall():
+        out[int(row[0])] = {
+            "name": row[1],
+            "image": row[2],
+            "item_type": row[3],
+        }
+    return out
+
+
+def _serialize_gathering_node(
+    node: GatheringNode, item_brief: Optional[Dict[str, Optional[str]]] = None
+) -> dict:
+    """Convert a GatheringNode ORM row + optional item brief into a dict suitable
+    for `GatheringNodeAdmin` response (works with `orm_mode`-style validation
+    when wrapped via `parse_obj`)."""
+    return {
+        "id": node.id,
+        "location_id": node.location_id,
+        "node_name": node.node_name,
+        "category": node.category,
+        "result_item_id": node.result_item_id,
+        "result_quantity_per_gather": node.result_quantity_per_gather,
+        "stamina_per_gather": node.stamina_per_gather,
+        "daily_bank_max": node.daily_bank_max,
+        "current_bank": node.current_bank,
+        "allow_concurrent_gather": bool(node.allow_concurrent_gather),
+        "depleted_at": _ensure_aware_utc(node.depleted_at),
+        "restore_at": _ensure_aware_utc(node.restore_at),
+        "is_enabled": bool(node.is_enabled),
+        "created_at": _ensure_aware_utc(node.created_at),
+        "updated_at": _ensure_aware_utc(node.updated_at),
+        "result_item_name": (item_brief or {}).get("name"),
+        "result_item_image": (item_brief or {}).get("image"),
+        "result_item_type": (item_brief or {}).get("item_type"),
+    }
+
+
+async def list_gathering_nodes_admin(
+    session: AsyncSession, location_id: int
+) -> List[dict]:
+    """List all gathering nodes for a location (admin view, includes disabled)."""
+    await _ensure_location_exists(session, location_id)
+    result = await session.execute(
+        select(GatheringNode)
+        .where(GatheringNode.location_id == location_id)
+        .order_by(GatheringNode.id.asc())
+    )
+    nodes: List[GatheringNode] = list(result.scalars().all())
+    item_ids = {n.result_item_id for n in nodes if n.result_item_id is not None}
+    items_brief = await _fetch_item_brief(session, list(item_ids))
+    return [_serialize_gathering_node(n, items_brief.get(n.result_item_id)) for n in nodes]
+
+
+async def create_gathering_node_admin(
+    session: AsyncSession, location_id: int, data: GatheringNodeAdminCreate
+) -> dict:
+    """Create a new gathering node for a location.
+
+    - Verifies location exists (404 if not).
+    - Verifies result_item_id exists in items table (422 with Russian message if not).
+    - Initializes current_bank = daily_bank_max, depleted_at = NULL, restore_at = NULL.
+    """
+    await _ensure_location_exists(session, location_id)
+    await _ensure_item_exists(session, data.result_item_id)
+
+    node = GatheringNode(
+        location_id=location_id,
+        node_name=data.node_name,
+        category=data.category,
+        result_item_id=data.result_item_id,
+        result_quantity_per_gather=data.result_quantity_per_gather,
+        stamina_per_gather=data.stamina_per_gather,
+        daily_bank_max=data.daily_bank_max,
+        current_bank=data.daily_bank_max,
+        allow_concurrent_gather=bool(data.allow_concurrent_gather),
+        depleted_at=None,
+        restore_at=None,
+        is_enabled=bool(data.is_enabled),
+    )
+    session.add(node)
+    await session.commit()
+    await session.refresh(node)
+
+    items_brief = await _fetch_item_brief(session, [node.result_item_id])
+    return _serialize_gathering_node(node, items_brief.get(node.result_item_id))
+
+
+async def update_gathering_node_admin(
+    session: AsyncSession,
+    node_id: int,
+    data: GatheringNodeAdminUpdate,
+) -> dict:
+    """Partial-update a gathering node.
+
+    Active sessions are NOT affected: their `effective_*` snapshots ensure
+    they finish with the bonuses they started with.
+    `current_bank` is left unchanged here — admins use the dedicated
+    `restore` endpoint to top it up. If `daily_bank_max` is set lower than
+    `current_bank`, we clamp `current_bank` down to the new max (per spec
+    decision in 3.1.2).
+    """
+    result = await session.execute(
+        select(GatheringNode).where(GatheringNode.id == node_id)
+    )
+    node: Optional[GatheringNode] = result.scalars().first()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Нода добычи не найдена")
+
+    payload = data.dict(exclude_unset=True)
+
+    # Cross-service item existence check if result_item_id is being changed
+    if "result_item_id" in payload and payload["result_item_id"] != node.result_item_id:
+        await _ensure_item_exists(session, payload["result_item_id"])
+
+    for field, value in payload.items():
+        setattr(node, field, value)
+
+    # Clamp current_bank if daily_bank_max was lowered below it.
+    if "daily_bank_max" in payload and node.current_bank > node.daily_bank_max:
+        node.current_bank = node.daily_bank_max
+
+    await session.commit()
+    await session.refresh(node)
+
+    items_brief = await _fetch_item_brief(session, [node.result_item_id])
+    return _serialize_gathering_node(node, items_brief.get(node.result_item_id))
+
+
+async def delete_gathering_node_admin(
+    session: AsyncSession, node_id: int
+) -> None:
+    """Delete a gathering node. FK ON DELETE CASCADE removes its sessions."""
+    result = await session.execute(
+        select(GatheringNode).where(GatheringNode.id == node_id)
+    )
+    node: Optional[GatheringNode] = result.scalars().first()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Нода добычи не найдена")
+
+    await session.execute(
+        delete(GatheringNode).where(GatheringNode.id == node_id)
+    )
+    await session.commit()
+
+
+async def restore_gathering_node_admin(
+    session: AsyncSession, node_id: int
+) -> dict:
+    """Manual full restore: current_bank=daily_bank_max, clear depleted_at/restore_at."""
+    result = await session.execute(
+        select(GatheringNode).where(GatheringNode.id == node_id)
+    )
+    node: Optional[GatheringNode] = result.scalars().first()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Нода добычи не найдена")
+
+    node.current_bank = node.daily_bank_max
+    node.depleted_at = None
+    node.restore_at = None
+
+    await session.commit()
+    await session.refresh(node)
+
+    items_brief = await _fetch_item_brief(session, [node.result_item_id])
+    return _serialize_gathering_node(node, items_brief.get(node.result_item_id))
+    await session.commit()
+
+
+# -----------------------------------------------------------------------------
+# GATHERING — CLIENT-FACING HELPERS (FEAT-128 task #11)
+# -----------------------------------------------------------------------------
+#
+# This block adds the lazy-restore + lazy-finalize machinery surfaced from
+# `GET /locations/{id}/client/details`. See FEAT-128 sections 3.5.2 and 3.6.
+#
+# Key invariants:
+#   - Lazy-restore: when a node's `restore_at` is in the past, refill the bank
+#     and clear depletion timestamps before returning data. Idempotent.
+#   - Lazy-finalize: any active session whose `complete_at` is past is closed
+#     (status -> completed | inventory_full) and the resource is awarded via
+#     inventory-service. Bank is decremented atomically; on inventory_full we
+#     re-credit the unused portion back to the bank.
+#   - Both helpers use SELECT ... FOR UPDATE on the row level so a manual cancel
+#     racing with the lazy finalize sees a consistent state.
+#   - Cross-service inventory call is best-effort: a 5xx/timeout leaves the
+#     session as `active` so the next poll retries. We never break the calling
+#     `client/details` request because of an inventory hiccup.
+
+
+def _ensure_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Treat naive timestamps coming from MySQL as UTC."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+async def lazy_restore_depleted_nodes(
+    session: AsyncSession, location_id: int
+) -> None:
+    """Refill any depleted gathering nodes on the location whose restore_at
+    has passed.
+
+    Atomically sets `current_bank = daily_bank_max`, `depleted_at = NULL`,
+    `restore_at = NULL`. Driven by a single UPDATE so it remains race-safe
+    against concurrent gather-finalize hits.
+    """
+    await session.execute(
+        text(
+            "UPDATE gathering_nodes "
+            "SET current_bank = daily_bank_max, "
+            "    depleted_at = NULL, "
+            "    restore_at = NULL "
+            "WHERE location_id = :lid "
+            "  AND restore_at IS NOT NULL "
+            "  AND restore_at <= NOW()"
+        ),
+        {"lid": location_id},
+    )
+    # Commit happens at the boundary (caller). We don't commit here so that
+    # the lazy-restore + lazy-finalize sequence inside `client/details` shares
+    # a single transaction.
+
+
+def _roll_double_units(base_quantity: int, double_chance_pct: float) -> int:
+    """Per-base-unit double-roll. Returns the number of EXTRA units rolled.
+
+    Per FEAT-128 section 3.6: for each base unit, roll uniform 0..100 and add
+    one if the roll succeeds. Sum of extras is returned (clamping happens at
+    the caller).
+    """
+    if base_quantity <= 0 or double_chance_pct <= 0:
+        return 0
+    extras = 0
+    threshold = double_chance_pct
+    for _ in range(base_quantity):
+        if random.random() * 100.0 < threshold:
+            extras += 1
+    return extras
+
+
+async def _award_via_inventory(
+    character_id: int,
+    skill_slug: str,
+    result_item_id: int,
+    granted_quantity: int,
+    tool_inventory_item_id: Optional[int],
+) -> Optional[Dict]:
+    """Best-effort POST to inventory-service /internal/.../gathering/award.
+
+    Returns the parsed JSON on success, None on any transport / 5xx failure.
+    The caller must treat None as "leave the session active and retry next
+    poll" — never propagate the error to the client/details handler.
+    """
+    payload = {
+        "skill_slug": skill_slug,
+        "result_item_id": int(result_item_id),
+        "result_quantity": int(granted_quantity),
+        "xp_to_add": int(granted_quantity),  # 1 XP per unit gathered, FEAT-128 §1
+        "tool_inventory_item_id": (
+            int(tool_inventory_item_id)
+            if tool_inventory_item_id is not None
+            else None
+        ),
+        "tool_durability_to_consume": (
+            int(granted_quantity) if tool_inventory_item_id is not None else 0
+        ),
+    }
+    url = (
+        f"{settings.INVENTORY_SERVICE_URL}"
+        f"/inventory/internal/characters/{character_id}/gathering/award"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, json=payload)
+        if resp.status_code != 200:
+            logger.warning(
+                "gathering award returned status %s for char %s: %s",
+                resp.status_code, character_id, resp.text,
+            )
+            # 4xx is a permanent input error — surface as non-success so the
+            # session retries (in case of transient validation drift). For
+            # 5xx/timeouts we also retry. Either way, return None.
+            return None
+        return resp.json()
+    except Exception as exc:
+        logger.warning(
+            "gathering award call failed for char %s: %s", character_id, exc,
+        )
+        return None
+
+
+async def _get_tool_current_durability(
+    session: AsyncSession, tool_inventory_item_id: int
+) -> Optional[int]:
+    """Read `character_inventory.current_durability` for a tool slot from the
+    shared DB. Returns None if the row is missing or has NULL durability
+    (NULL = full per inventory-service convention).
+
+    Per FEAT-128 §3.5.4: the durability cap on awarded units is
+    `current_durability_now + 1` (one grace unit on the very last point).
+    """
+    try:
+        result = await session.execute(
+            text(
+                "SELECT current_durability FROM character_inventory "
+                "WHERE id = :iid LIMIT 1"
+            ),
+            {"iid": tool_inventory_item_id},
+        )
+        row = result.fetchone()
+    except Exception as exc:
+        logger.warning(
+            "Failed to read tool durability for inventory_item_id %s: %s",
+            tool_inventory_item_id, exc,
+        )
+        return None
+    if row is None:
+        return None
+    val = row[0]
+    if val is None:
+        # NULL = full — no cap from durability is meaningful here, return a
+        # sentinel large value so the caller's `min(...)` is a no-op.
+        return None
+    return int(val)
+
+
+# Snapshot of node category -> skill slug used by the inventory award call.
+_CATEGORY_TO_SKILL_SLUG = {
+    "ore": "mining",
+    "herb": "herbalism",
+    "wood": "woodcutting",
+}
+
+
+async def finalize_due_sessions(
+    db: AsyncSession, character_id: Optional[int] = None
+) -> List[Dict]:
+    """Lazy-finalize active gathering sessions whose `complete_at <= NOW()`.
+
+    Reusable from both `client/details` (no character filter — finalizes any
+    overdue session globally so the location surface stays consistent) and
+    the per-character poll endpoint (filtered to one character).
+
+    For each due session:
+      1. SELECT FOR UPDATE the session row + parent node row.
+      2. Roll the base + per-unit double-chance to compute desired quantity.
+      3. Cap by `tool_durability_at_start + 1` per FEAT-128 §3.5.4. Since we
+         do not snapshot starting durability, we read the tool's current
+         durability now (i.e. what's left after any prior partial spends) and
+         use `current_durability_now + 1` as the cap. Without a tool, no cap.
+      4. Cap by `current_bank` of the node (the pool can't go negative).
+      5. Decrement bank atomically; if it hits 0, mark depleted and start the
+         24h restore timer.
+      6. Call inventory-service award (best-effort). If it fails, leave the
+         session active for retry on the next poll.
+      7. Apply the response: status=completed | inventory_full,
+         finished_at=NOW(), result_quantity=actual_quantity_added,
+         xp_awarded=response.xp_awarded.
+      8. If inventory was full and only part of the granted units was
+         accepted, re-credit the unused portion back to the bank (which may
+         also resurrect the node from `depleted` back to live).
+
+    Returns the list of finalize summary dicts (one per finalized session).
+    The list is currently used by callers for logging / future extension; the
+    poll endpoint will instead read the session row back to build its own
+    response shape.
+    """
+    # 1. Find due active sessions (optionally scoped to a single character).
+    sql = (
+        "SELECT id FROM gathering_sessions "
+        "WHERE status = 'active' AND complete_at <= NOW() "
+    )
+    params: Dict[str, int] = {}
+    if character_id is not None:
+        sql += "AND character_id = :cid "
+        params["cid"] = int(character_id)
+    sql += "ORDER BY complete_at ASC LIMIT 50 FOR UPDATE"
+
+    try:
+        due_rows = (await db.execute(text(sql), params)).fetchall()
+    except Exception as exc:
+        # Never break the calling endpoint because of a finalize SELECT
+        # failure — the next poll will retry.
+        logger.warning("finalize_due_sessions select failed: %s", exc)
+        return []
+
+    summaries: List[Dict] = []
+
+    for (sess_id,) in due_rows:
+        try:
+            summary = await _finalize_one_session(db, int(sess_id))
+            if summary is not None:
+                summaries.append(summary)
+        except Exception as exc:
+            # Per session: log and continue. Don't poison the rest of the
+            # batch and don't propagate to the calling endpoint.
+            logger.exception(
+                "finalize_due_sessions: failure on session %s: %s",
+                sess_id, exc,
+            )
+
+    # Caller controls the outer commit (e.g. client/details handler), but if
+    # there were finalizations we flush them now so subsequent reads in the
+    # same transaction see updated state.
+    if summaries:
+        try:
+            await db.commit()
+        except Exception as exc:
+            logger.warning("finalize_due_sessions commit failed: %s", exc)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+
+    return summaries
+
+
+async def _finalize_one_session(
+    db: AsyncSession, session_id: int
+) -> Optional[Dict]:
+    """Finalize a single overdue gathering session. Returns a summary dict on
+    success, None if the session was no longer active by the time we locked
+    it (raced with manual cancel)."""
+    # Re-lock the row with FOR UPDATE so a concurrent cancel can't slip in.
+    sess_row = (
+        await db.execute(
+            text(
+                "SELECT id, node_id, character_id, tool_inventory_item_id, "
+                "       complete_at, effective_double_chance_pct, "
+                "       stamina_paid, status "
+                "FROM gathering_sessions "
+                "WHERE id = :sid FOR UPDATE"
+            ),
+            {"sid": session_id},
+        )
+    ).fetchone()
+    if sess_row is None:
+        return None
+    if sess_row.status != "active":
+        # Already cancelled/finalized between the outer SELECT and this lock.
+        return None
+
+    node_id = int(sess_row.node_id)
+    character_id = int(sess_row.character_id)
+    tool_inv_id = (
+        int(sess_row.tool_inventory_item_id)
+        if sess_row.tool_inventory_item_id is not None
+        else None
+    )
+    double_chance_pct = float(sess_row.effective_double_chance_pct or 0.0)
+
+    # Lock the parent node so concurrent finalizers serialize on the bank.
+    node_row = (
+        await db.execute(
+            text(
+                "SELECT id, location_id, node_name, category, result_item_id, "
+                "       result_quantity_per_gather, current_bank, "
+                "       daily_bank_max "
+                "FROM gathering_nodes WHERE id = :nid FOR UPDATE"
+            ),
+            {"nid": node_id},
+        )
+    ).fetchone()
+    if node_row is None:
+        # Node was deleted — close the session as cancelled to keep the table
+        # clean.
+        await db.execute(
+            text(
+                "UPDATE gathering_sessions "
+                "SET status = 'cancelled', finished_at = NOW(), "
+                "    result_quantity = 0, xp_awarded = 0 "
+                "WHERE id = :sid"
+            ),
+            {"sid": session_id},
+        )
+        return {
+            "session_id": session_id,
+            "node_id": node_id,
+            "character_id": character_id,
+            "tool_inventory_item_id": tool_inv_id,
+            "status": "cancelled",
+            "result_quantity": 0,
+            "xp_gained": 0,
+            "rank_up_to": None,
+            "skill_slug": None,
+            "tool_durability_remaining": None,
+            "tool_broke": False,
+            "node_name": None,
+            "result_item_id": None,
+            "result_item_name": None,
+        }
+
+    base_quantity = int(node_row.result_quantity_per_gather or 0)
+    current_bank = int(node_row.current_bank or 0)
+    daily_bank_max = int(node_row.daily_bank_max or 0)
+
+    # Step 2: per-base-unit double-chance roll
+    extras = _roll_double_units(base_quantity, double_chance_pct)
+    desired = base_quantity + extras
+
+    # Step 3: tool-durability cap (FEAT-128 §3.5.4)
+    if tool_inv_id is not None:
+        cur_dur = await _get_tool_current_durability(db, tool_inv_id)
+        if cur_dur is not None:
+            cap = max(0, cur_dur) + 1
+            if desired > cap:
+                desired = cap
+    # else: no tool, no durability cap
+
+    # Step 4: cap by available bank
+    granted = max(0, min(desired, current_bank))
+
+    # Step 5: decrement the bank atomically. We compute the new value here
+    # because we already hold the row lock; a single UPDATE covers it.
+    new_bank = current_bank - granted
+    bank_was_depleted_now = new_bank <= 0
+    if bank_was_depleted_now:
+        await db.execute(
+            text(
+                "UPDATE gathering_nodes "
+                "SET current_bank = 0, "
+                "    depleted_at = NOW(), "
+                "    restore_at = DATE_ADD(NOW(), INTERVAL 24 HOUR) "
+                "WHERE id = :nid"
+            ),
+            {"nid": node_id},
+        )
+        new_bank = 0
+    else:
+        await db.execute(
+            text(
+                "UPDATE gathering_nodes "
+                "SET current_bank = :nb "
+                "WHERE id = :nid"
+            ),
+            {"nb": new_bank, "nid": node_id},
+        )
+
+    # Step 6: best-effort inventory-service award
+    skill_slug = _CATEGORY_TO_SKILL_SLUG.get(
+        str(node_row.category), "mining"
+    )
+
+    if granted == 0:
+        # Nothing to award (bank empty or durability was 0 from the cap).
+        # Close as completed with zeros — no inventory call needed.
+        await db.execute(
+            text(
+                "UPDATE gathering_sessions "
+                "SET status = 'completed', finished_at = NOW(), "
+                "    result_quantity = 0, xp_awarded = 0 "
+                "WHERE id = :sid"
+            ),
+            {"sid": session_id},
+        )
+        # No inventory call -> tool durability is whatever it currently is on
+        # the row (we already read it above for the cap, may be None).
+        tool_durability_now: Optional[int] = None
+        if tool_inv_id is not None:
+            try:
+                tool_durability_now = await _get_tool_current_durability(
+                    db, tool_inv_id
+                )
+            except Exception:
+                tool_durability_now = None
+        return {
+            "session_id": session_id,
+            "node_id": node_id,
+            "character_id": character_id,
+            "tool_inventory_item_id": tool_inv_id,
+            "status": "completed",
+            "result_quantity": 0,
+            "xp_gained": 0,
+            "rank_up_to": None,
+            "skill_slug": skill_slug,
+            "tool_durability_remaining": tool_durability_now,
+            "tool_broke": False,
+            "node_name": str(node_row.node_name or ""),
+            "result_item_id": int(node_row.result_item_id),
+            "result_item_name": None,
+        }
+
+    award_resp = await _award_via_inventory(
+        character_id=character_id,
+        skill_slug=skill_slug,
+        result_item_id=int(node_row.result_item_id),
+        granted_quantity=granted,
+        tool_inventory_item_id=tool_inv_id,
+    )
+
+    if award_resp is None:
+        # Inventory-service is unavailable. Roll back our bank decrement and
+        # leave the session as `active` so the next poll retries.
+        rollback_bank = current_bank  # original value before decrement
+        await db.execute(
+            text(
+                "UPDATE gathering_nodes "
+                "SET current_bank = :nb, "
+                "    depleted_at = NULL, "
+                "    restore_at = NULL "
+                "WHERE id = :nid"
+            ),
+            {"nb": rollback_bank, "nid": node_id},
+        )
+        return None
+
+    actual_added = int(award_resp.get("actual_quantity_added", 0) or 0)
+    inv_full = bool(award_resp.get("inventory_full", False))
+    xp_gained = int(award_resp.get("xp_awarded", 0) or 0)
+    rank_up = bool(award_resp.get("rank_up", False))
+    new_rank_val = award_resp.get("current_rank")
+    new_rank_int = int(new_rank_val) if new_rank_val is not None else None
+    # rank_up_to is the new rank number IFF a rank-up actually happened this
+    # session. Otherwise None — frontend uses truthiness to detect rank-up.
+    rank_up_to = new_rank_int if rank_up else None
+    tool_broke = bool(award_resp.get("tool_broke", False))
+    tool_durability_remaining_val = award_resp.get("tool_durability_remaining")
+    tool_durability_remaining = (
+        int(tool_durability_remaining_val)
+        if tool_durability_remaining_val is not None
+        else None
+    )
+
+    if inv_full or actual_added < granted:
+        # Inventory could not absorb everything — re-credit the unused
+        # portion back to the bank. If this re-credit pulls the bank back
+        # above zero, undo the depletion timestamps we just set.
+        unused = granted - actual_added
+        new_status = "inventory_full"
+        if unused > 0:
+            await db.execute(
+                text(
+                    "UPDATE gathering_nodes "
+                    "SET current_bank = LEAST(current_bank + :inc, :cap), "
+                    "    depleted_at = CASE "
+                    "        WHEN (current_bank + :inc) > 0 "
+                    "        THEN NULL ELSE depleted_at END, "
+                    "    restore_at = CASE "
+                    "        WHEN (current_bank + :inc) > 0 "
+                    "        THEN NULL ELSE restore_at END "
+                    "WHERE id = :nid"
+                ),
+                {"inc": unused, "cap": daily_bank_max, "nid": node_id},
+            )
+    else:
+        new_status = "completed"
+
+    await db.execute(
+        text(
+            "UPDATE gathering_sessions "
+            "SET status = :st, finished_at = NOW(), "
+            "    result_quantity = :rq, xp_awarded = :xp "
+            "WHERE id = :sid"
+        ),
+        {
+            "st": new_status,
+            "rq": actual_added,
+            "xp": xp_gained,
+            "sid": session_id,
+        },
+    )
+
+    # Resolve item name for the toast (best-effort, single SELECT on items).
+    result_item_name: Optional[str] = None
+    try:
+        items_brief = await _fetch_item_brief(db, [int(node_row.result_item_id)])
+        result_item_name = (
+            (items_brief.get(int(node_row.result_item_id)) or {}).get("name")
+        )
+    except Exception:
+        result_item_name = None
+
+    return {
+        "session_id": session_id,
+        "node_id": node_id,
+        "character_id": character_id,
+        "tool_inventory_item_id": tool_inv_id,
+        "status": new_status,
+        "result_quantity": actual_added,
+        "xp_gained": xp_gained,
+        "rank_up_to": rank_up_to,
+        "skill_slug": skill_slug,
+        "tool_durability_remaining": tool_durability_remaining,
+        "tool_broke": tool_broke,
+        "node_name": str(node_row.node_name or ""),
+        "result_item_id": int(node_row.result_item_id),
+        "result_item_name": result_item_name,
+    }
+
+
+async def _fetch_active_sessions_for_nodes(
+    session: AsyncSession, node_ids: List[int]
+) -> Dict[int, List[Dict]]:
+    """Return active (non-overdue) sessions grouped by node_id.
+
+    Uses a single SQL query and is callable after `finalize_due_sessions` has
+    closed any overdue rows, so the listing reflects only sessions still in
+    progress (`status='active' AND complete_at > NOW()`).
+    """
+    if not node_ids:
+        return {}
+    from sqlalchemy import bindparam
+    stmt = text(
+        "SELECT id, node_id, character_id, started_at, complete_at "
+        "FROM gathering_sessions "
+        "WHERE node_id IN :nids "
+        "  AND status = 'active' "
+        "  AND complete_at > NOW() "
+        "ORDER BY complete_at ASC"
+    ).bindparams(bindparam("nids", expanding=True))
+    rows = (await session.execute(stmt, {"nids": list(node_ids)})).fetchall()
+    out: Dict[int, List[Dict]] = {}
+    for row in rows:
+        out.setdefault(int(row.node_id), []).append({
+            "session_id": int(row.id),
+            "character_id": int(row.character_id),
+            "started_at": _ensure_aware_utc(row.started_at),
+            "complete_at": _ensure_aware_utc(row.complete_at),
+        })
+    return out
+
+
+async def _fetch_character_brief_map(
+    character_ids: List[int]
+) -> Dict[int, Dict[str, Optional[str]]]:
+    """Batch-fetch `{id: {name, avatar}}` from character-service.
+
+    Calls `/{cid}/short_info` for each id (the service has no explicit batch
+    endpoint — see analyst notes 2.2). Failures are non-fatal: we return an
+    empty entry for that id so the surface still renders.
+    """
+    if not character_ids:
+        return {}
+    out: Dict[int, Dict[str, Optional[str]]] = {}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for cid in set(character_ids):
+            try:
+                resp = await client.get(
+                    f"{settings.CHARACTER_SERVICE_URL}/characters/{cid}/short_info"
+                )
+                if resp.status_code == 200:
+                    data = resp.json() or {}
+                    out[int(cid)] = {
+                        "name": data.get("name", ""),
+                        "avatar": data.get("avatar"),
+                    }
+                else:
+                    out[int(cid)] = {"name": "", "avatar": None}
+            except Exception as exc:
+                logger.warning(
+                    "short_info lookup failed for character %s: %s", cid, exc,
+                )
+                out[int(cid)] = {"name": "", "avatar": None}
+    return out
+
+
+async def fetch_gathering_nodes_with_active_sessions(
+    session: AsyncSession,
+    location_id: int,
+    players_at_location: Optional[List[Dict]] = None,
+) -> List[Dict]:
+    """Build the `gathering_nodes[]` payload for `LocationClientDetails`.
+
+    - Pulls all enabled-or-disabled nodes on the location (admins surface
+      both; clients see them all and the frontend filters by `is_enabled`).
+    - JOINs `result_item_*` from the shared `items` table in batch.
+    - Lists each node's currently-active sessions (status='active',
+      complete_at > NOW()) with character_name / avatar enriched in batch.
+    - Falls back to `players_at_location` (already loaded by the
+      `client/details` handler) before reaching out to character-service to
+      avoid duplicate HTTP calls when the gatherer is the player viewing.
+    """
+    result = await session.execute(
+        select(GatheringNode)
+        .where(GatheringNode.location_id == location_id)
+        .order_by(GatheringNode.id.asc())
+    )
+    nodes: List[GatheringNode] = list(result.scalars().all())
+    if not nodes:
+        return []
+
+    # Batch item lookup
+    item_ids = {n.result_item_id for n in nodes if n.result_item_id is not None}
+    items_brief = await _fetch_item_brief(session, list(item_ids))
+
+    # Batch active-sessions per node
+    sessions_by_node = await _fetch_active_sessions_for_nodes(
+        session, [n.id for n in nodes]
+    )
+
+    # Collect all character_ids needing name/avatar enrichment
+    needed_cids: set = set()
+    for sess_list in sessions_by_node.values():
+        for sess in sess_list:
+            needed_cids.add(sess["character_id"])
+
+    # Use already-loaded players list as a no-cost lookup map first.
+    player_map: Dict[int, Dict[str, Optional[str]]] = {}
+    if players_at_location:
+        for p in players_at_location:
+            try:
+                pid = int(p.get("id"))
+            except (TypeError, ValueError):
+                continue
+            player_map[pid] = {
+                "name": p.get("name") or p.get("character_name") or "",
+                "avatar": p.get("avatar") or p.get("character_photo"),
+            }
+
+    missing_cids = [cid for cid in needed_cids if cid not in player_map]
+    fetched_map = await _fetch_character_brief_map(missing_cids)
+    char_map: Dict[int, Dict[str, Optional[str]]] = {}
+    char_map.update(player_map)
+    char_map.update(fetched_map)
+
+    out: List[Dict] = []
+    for n in nodes:
+        item_brief = items_brief.get(n.result_item_id) or {}
+        active_payload: List[Dict] = []
+        for sess in sessions_by_node.get(n.id, []):
+            cid = sess["character_id"]
+            cdata = char_map.get(cid) or {}
+            active_payload.append({
+                "session_id": sess["session_id"],
+                "character_id": cid,
+                "character_name": cdata.get("name") or "",
+                "character_avatar_url": cdata.get("avatar"),
+                "started_at": sess["started_at"],
+                "complete_at": sess["complete_at"],
+            })
+
+        out.append({
+            "id": int(n.id),
+            "node_name": n.node_name,
+            "category": str(n.category),
+            "result_item_id": int(n.result_item_id),
+            "result_item_name": item_brief.get("name"),
+            "result_item_image": item_brief.get("image"),
+            "result_item_type": item_brief.get("item_type"),
+            "result_quantity_per_gather": int(n.result_quantity_per_gather or 0),
+            "stamina_per_gather": int(n.stamina_per_gather or 0),
+            # Per spec 3.6: base_seconds = stamina_per_gather * 5 * 60
+            "base_seconds": int((n.stamina_per_gather or 0) * 5 * 60),
+            "current_bank": int(n.current_bank or 0),
+            "daily_bank_max": int(n.daily_bank_max or 0),
+            "allow_concurrent_gather": bool(n.allow_concurrent_gather),
+            "depleted_at": _ensure_aware_utc(n.depleted_at),
+            "restore_at": _ensure_aware_utc(n.restore_at),
+            "is_enabled": bool(n.is_enabled),
+            "active_sessions": active_payload,
+        })
+
+    return out
+
+
+# -----------------------------------------------------------------------------
+# GATHERING — START SESSION (FEAT-128 task #14)
+# -----------------------------------------------------------------------------
+#
+# Implements POST /locations/{lid}/gathering-nodes/{nid}/start per FEAT-128
+# section 3.5.1. The route handler in main.py is a thin wrapper; this helper
+# does the bulk of validation + cross-service orchestration.
+#
+# Key invariants:
+#   - SELECT ... FOR UPDATE on the gathering_nodes row is held from the bank /
+#     concurrency check through to the gathering_sessions INSERT and final
+#     COMMIT. Concurrent starts on the same node block here and re-evaluate
+#     bank / occupancy on resume.
+#   - Stamina is consumed via attributes-service BEFORE the session row is
+#     inserted; on cross-service failure the route returns 502 and the
+#     session is never created (stamina untouched per the receiving service).
+#   - Auto-post creation is best-effort. If posting fails, we log and ignore;
+#     the gathering session is still committed (the player has already paid
+#     stamina and we don't want to roll that back over a cosmetic post).
+
+
+# Mapping from gathering node category to required tool category and the
+# inventory-service skill slug. Single source of truth for FEAT-128 §3.6.
+_GATHER_NODE_CATEGORY_TO_TOOL_CATEGORY = {
+    "ore": "pickaxe",
+    "herb": "sickle",
+    "wood": "axe",
+}
+_GATHER_NODE_CATEGORY_TO_SKILL_SLUG = {
+    "ore": "mining",
+    "herb": "herbalism",
+    "wood": "woodcutting",
+}
+
+# Caps from FEAT-128 §3.6.
+_GATHER_SPEED_CAP_PCT = 60.0
+_GATHER_STAMINA_CAP_PCT = 50.0
+_GATHER_DOUBLE_CHANCE_CAP_PCT = 80.0
+_GATHER_MIN_SECONDS = 30
+_GATHER_MIN_STAMINA = 1
+
+
+async def _load_gathering_node_for_update(
+    session: AsyncSession, node_id: int, location_id: int
+):
+    """Load a gathering node by id with FOR UPDATE row lock.
+
+    Raises 404 if missing or if its `location_id` does not match the path
+    (so requests like `/locations/5/gathering-nodes/12/start` referring to
+    a node that belongs to location 7 fail cleanly).
+    """
+    stmt = (
+        select(GatheringNode)
+        .where(GatheringNode.id == node_id)
+        .with_for_update()
+    )
+    result = await session.execute(stmt)
+    node: Optional[GatheringNode] = result.scalars().first()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Нода добычи не найдена")
+    if int(node.location_id) != int(location_id):
+        raise HTTPException(status_code=404, detail="Нода добычи не найдена")
+    return node
+
+
+async def _count_active_sessions_on_node(
+    session: AsyncSession, node_id: int
+) -> int:
+    """Count sessions on a node that are still in-flight (active and not
+    overdue). Sessions whose `complete_at` is past are excluded — they are
+    effectively closed pending lazy finalize and shouldn't count for the
+    `allow_concurrent_gather=False` guard.
+    """
+    result = await session.execute(
+        text(
+            "SELECT COUNT(*) FROM gathering_sessions "
+            "WHERE node_id = :nid AND status = 'active' AND complete_at > NOW()"
+        ),
+        {"nid": node_id},
+    )
+    val = result.scalar()
+    return int(val or 0)
+
+
+async def _load_tool_for_gathering(
+    session: AsyncSession,
+    tool_inventory_item_id: int,
+    character_id: int,
+    node_category: str,
+) -> Dict:
+    """Validate a tool selection against a gathering node category.
+
+    Performs a single raw-SQL JOIN against the shared `character_inventory`
+    + `items` tables (both owned by inventory-service). All validation errors
+    raise HTTPException with Russian messages and the proper status codes.
+
+    Returns a dict with the tool's gather_* bonuses (ready to feed into the
+    formula in FEAT-128 §3.6).
+    """
+    expected_tool_category = _GATHER_NODE_CATEGORY_TO_TOOL_CATEGORY.get(node_category)
+    if expected_tool_category is None:
+        # Defensive: should be impossible since node.category is constrained.
+        raise HTTPException(
+            status_code=422,
+            detail="Неизвестная категория ноды добычи",
+        )
+
+    result = await session.execute(
+        text(
+            "SELECT ci.character_id, ci.current_durability, "
+            "       i.item_type, i.tool_category, "
+            "       COALESCE(i.gather_double_chance_bonus, 0) AS dbl, "
+            "       COALESCE(i.gather_speed_bonus_pct, 0) AS spd, "
+            "       COALESCE(i.gather_stamina_bonus_pct, 0) AS stm "
+            "FROM character_inventory ci "
+            "JOIN items i ON i.id = ci.item_id "
+            "WHERE ci.id = :iid"
+        ),
+        {"iid": tool_inventory_item_id},
+    )
+    row = result.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Инструмент не найден")
+
+    if int(row[0]) != int(character_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Этот инструмент не принадлежит вашему персонажу",
+        )
+
+    item_type = row[2]
+    tool_category_actual = row[3]
+
+    if item_type != "gathering_tool":
+        raise HTTPException(
+            status_code=422,
+            detail="Предмет не является инструментом сбора",
+        )
+
+    if tool_category_actual != expected_tool_category:
+        raise HTTPException(
+            status_code=422,
+            detail="Инструмент не подходит для этого ресурса",
+        )
+
+    durability = row[1]
+    # NULL durability == full per inventory-service convention; only treat
+    # explicit 0 as "broken".
+    if durability is not None and int(durability) <= 0:
+        raise HTTPException(status_code=422, detail="Инструмент сломан")
+
+    return {
+        "gather_double_chance_bonus": float(row[4] or 0.0),
+        "gather_speed_bonus_pct": float(row[5] or 0.0),
+        "gather_stamina_bonus_pct": float(row[6] or 0.0),
+    }
+
+
+async def _fetch_rank_bonuses_for_category(
+    character_id: int, node_category: str
+) -> Dict[str, float]:
+    """Cross-service GET to inventory-service to read the character's current
+    gathering-skill rank bonuses for the matching skill (mining/herbalism/
+    woodcutting). Returns a dict with `S_speed`, `S_stamina`, `S_double` keys.
+
+    On any cross-service failure we degrade gracefully: rank bonuses default
+    to zero. This matches the lazy-create behaviour on the inventory side
+    (any new character starts at rank 1 with all bonuses = 0 anyway).
+    """
+    skill_slug = _GATHER_NODE_CATEGORY_TO_SKILL_SLUG.get(node_category)
+    if skill_slug is None:
+        return {"speed_pct": 0.0, "stamina_pct": 0.0, "double_chance_pct": 0.0}
+
+    url = (
+        f"{settings.INVENTORY_SERVICE_URL}"
+        f"/inventory/characters/{character_id}/gathering-skills"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            logger.warning(
+                "gathering-skills lookup returned %s for char %s: %s",
+                resp.status_code, character_id, resp.text,
+            )
+            return {"speed_pct": 0.0, "stamina_pct": 0.0, "double_chance_pct": 0.0}
+        data = resp.json() or {}
+    except Exception as exc:
+        logger.warning(
+            "gathering-skills lookup failed for char %s: %s", character_id, exc,
+        )
+        return {"speed_pct": 0.0, "stamina_pct": 0.0, "double_chance_pct": 0.0}
+
+    for skill in (data.get("skills") or []):
+        if skill.get("slug") == skill_slug:
+            cur = skill.get("current_rank_bonuses") or {}
+            return {
+                "speed_pct": float(cur.get("speed_bonus_pct", 0.0) or 0.0),
+                "stamina_pct": float(cur.get("stamina_bonus_pct", 0.0) or 0.0),
+                "double_chance_pct": float(cur.get("double_chance_bonus", 0.0) or 0.0),
+            }
+
+    return {"speed_pct": 0.0, "stamina_pct": 0.0, "double_chance_pct": 0.0}
+
+
+def _compute_effective_gather_params(
+    base_stamina: int,
+    has_tool: bool,
+    rank_bonuses: Dict[str, float],
+    tool_bonuses: Dict[str, float],
+) -> Dict[str, float]:
+    """Apply the FEAT-128 §3.6 formulas (lenient no-tool variant).
+
+    Returns a dict with effective_seconds (int), effective_stamina_paid (int),
+    effective_speed_bonus_pct (float, capped), effective_double_chance_pct
+    (float, gated on tool), effective_stamina_bonus_pct (float, capped).
+    """
+    base_seconds = int(base_stamina) * 5 * 60  # 1 stamina = 5 min
+
+    s_speed = float(rank_bonuses.get("speed_pct", 0.0) or 0.0)
+    s_stamina = float(rank_bonuses.get("stamina_pct", 0.0) or 0.0)
+    s_double = float(rank_bonuses.get("double_chance_pct", 0.0) or 0.0)
+
+    if has_tool:
+        t_speed = float(tool_bonuses.get("gather_speed_bonus_pct", 0.0) or 0.0)
+        t_stamina = float(tool_bonuses.get("gather_stamina_bonus_pct", 0.0) or 0.0)
+        t_double = float(tool_bonuses.get("gather_double_chance_bonus", 0.0) or 0.0)
+    else:
+        t_speed = 0.0
+        t_stamina = 0.0
+        t_double = 0.0
+
+    speed_total_pct = min(s_speed + t_speed, _GATHER_SPEED_CAP_PCT)
+    seconds = math.floor(base_seconds * (1.0 - speed_total_pct / 100.0))
+    if not has_tool:
+        seconds = seconds * 2  # ×2 penalty AFTER rank speed bonus
+    seconds = max(int(seconds), _GATHER_MIN_SECONDS)
+
+    stamina_total_pct = min(s_stamina + t_stamina, _GATHER_STAMINA_CAP_PCT)
+    paid = math.ceil(int(base_stamina) * (1.0 - stamina_total_pct / 100.0))
+    paid = max(int(paid), _GATHER_MIN_STAMINA)
+
+    if has_tool:
+        double_chance = min(s_double + t_double, _GATHER_DOUBLE_CHANCE_CAP_PCT)
+    else:
+        double_chance = 0.0
+
+    return {
+        "effective_seconds": int(seconds),
+        "effective_stamina_paid": int(paid),
+        "effective_speed_bonus_pct": float(speed_total_pct),
+        "effective_double_chance_pct": float(double_chance),
+        "effective_stamina_bonus_pct": float(stamina_total_pct),
+    }
+
+
+async def _consume_stamina_via_attributes(
+    character_id: int, amount: int
+) -> bool:
+    """Cross-service POST to attributes-service /consume_stamina.
+
+    Returns True on a 200 OK, False on any other outcome (4xx/5xx/transport).
+    On False the caller MUST return a 502 to the player without inserting a
+    session row — we do not want to create a session that was never paid for.
+    """
+    url = (
+        f"{settings.ATTRIBUTES_SERVICE_URL}"
+        f"/attributes/{character_id}/consume_stamina"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(url, json={"amount": int(amount)})
+        if resp.status_code != 200:
+            logger.warning(
+                "consume_stamina returned %s for char %s: %s",
+                resp.status_code, character_id, resp.text,
+            )
+            return False
+        return True
+    except Exception as exc:
+        logger.warning(
+            "consume_stamina call failed for char %s: %s", character_id, exc,
+        )
+        return False
+
+
+async def _read_current_stamina(character_id: int) -> Optional[int]:
+    """Cross-service GET to attributes-service /attributes/{cid}.
+    Returns current_stamina (int) on success, None on failure.
+    """
+    url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{character_id}"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            return None
+        data = resp.json() or {}
+        val = data.get("current_stamina")
+        if val is None:
+            return None
+        return int(val)
+    except Exception as exc:
+        logger.warning(
+            "attributes lookup failed for char %s: %s", character_id, exc,
+        )
+        return None
+
+
+async def _check_inventory_has_free_slot(character_id: int) -> bool:
+    """Cross-service POST to inventory-service /internal/free_slots_check.
+
+    Returns True if the character has at least one free slot, False if full
+    OR if the cross-service call fails (fail-safe: blocking is the right
+    behaviour rather than letting the player start a session whose award
+    might bounce). The caller surfaces this as 400 to the player.
+    """
+    url = (
+        f"{settings.INVENTORY_SERVICE_URL}"
+        f"/inventory/internal/characters/{character_id}/free_slots_check"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(url, json={})
+        if resp.status_code != 200:
+            logger.warning(
+                "free_slots_check returned %s for char %s: %s",
+                resp.status_code, character_id, resp.text,
+            )
+            return False
+        data = resp.json() or {}
+        return not bool(data.get("is_full", True))
+    except Exception as exc:
+        logger.warning(
+            "free_slots_check call failed for char %s: %s", character_id, exc,
+        )
+        return False
+
+
+async def _read_character_for_start(
+    session: AsyncSession, character_id: int
+) -> Tuple[int, Optional[int], str]:
+    """Read the minimal character fields needed by the start endpoint from
+    the shared `characters` table: (user_id, current_location_id, name).
+
+    Raises 404 if the character does not exist. Owner-check is performed by
+    the caller, not here.
+    """
+    result = await session.execute(
+        text(
+            "SELECT user_id, current_location_id, name "
+            "FROM characters WHERE id = :cid LIMIT 1"
+        ),
+        {"cid": character_id},
+    )
+    row = result.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    return (
+        int(row[0]) if row[0] is not None else None,
+        int(row[1]) if row[1] is not None else None,
+        row[2] or "",
+    )
+
+
+async def start_gathering(
+    db: AsyncSession,
+    *,
+    location_id: int,
+    node_id: int,
+    character_id: int,
+    tool_inventory_item_id: Optional[int],
+    current_user_id: int,
+) -> Dict:
+    """Start a gathering session on a node. Implements FEAT-128 §3.5.1.
+
+    Holds a SELECT FOR UPDATE on the node row from the validation block all
+    the way through to the final commit, so concurrent calls on the same
+    node serialize cleanly.
+
+    Returns a dict suitable for `StartGatheringResponse.parse_obj`.
+    """
+    # 1. Load character + ownership check.
+    user_id, current_loc, character_name = await _read_character_for_start(
+        db, character_id
+    )
+    if user_id != int(current_user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Вы можете управлять только своими персонажами",
+        )
+
+    # 2. Same-location check.
+    if current_loc is None or int(current_loc) != int(location_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Персонаж не находится на этой локации",
+        )
+
+    # 3. Reap any stale completed sessions for THIS character before proceeding.
+    # If finalize commits inside the helper we just lost any FOR UPDATE we
+    # were holding — but we haven't taken any locks yet, so this is fine.
+    try:
+        await finalize_due_sessions(db, character_id=character_id)
+    except Exception as exc:
+        logger.warning(
+            "finalize_due_sessions(%s) failed pre-start, continuing: %s",
+            character_id, exc,
+        )
+
+    # 4. Battle-lock + already-gathering-lock checks. Late import keeps the
+    # main->crud import direction one-way (no module-level cycle).
+    from main import check_not_in_battle, check_not_gathering  # noqa: WPS433
+    await check_not_in_battle(
+        db, character_id, "Нельзя начать добычу во время боя"
+    )
+    await check_not_gathering(db, character_id, "Уже идёт добыча")
+
+    # 5. Lock the node row. From here on we hold the lock until commit.
+    node = await _load_gathering_node_for_update(db, node_id, location_id)
+
+    # 6. Enabled?
+    if not bool(node.is_enabled):
+        raise HTTPException(status_code=400, detail="Нода отключена")
+
+    # 7. Bank not exhausted? A node with current_bank=0 OR a future restore_at
+    # is depleted.
+    now = datetime.now(timezone.utc)
+    restore_at = _ensure_aware_utc(node.restore_at)
+    is_depleted = (
+        int(node.current_bank or 0) <= 0
+        or (restore_at is not None and restore_at > now)
+    )
+    if is_depleted:
+        raise HTTPException(status_code=400, detail="Нода истощена")
+
+    # 8. Concurrency guard: if the node disallows concurrent gathering, refuse
+    # if any other active (non-overdue) session exists.
+    if not bool(node.allow_concurrent_gather):
+        active_count = await _count_active_sessions_on_node(db, int(node.id))
+        if active_count > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Нода занята другим персонажем",
+            )
+
+    # 9. Tool validation (if provided). Reads from shared DB inside the same
+    # transaction as the FOR UPDATE on the node.
+    has_tool = tool_inventory_item_id is not None
+    tool_bonuses: Dict[str, float] = {
+        "gather_double_chance_bonus": 0.0,
+        "gather_speed_bonus_pct": 0.0,
+        "gather_stamina_bonus_pct": 0.0,
+    }
+    if has_tool:
+        tool_bonuses = await _load_tool_for_gathering(
+            db, int(tool_inventory_item_id), character_id, str(node.category),
+        )
+
+    # 10. Compute effective parameters.
+    rank_bonuses = await _fetch_rank_bonuses_for_category(
+        character_id, str(node.category)
+    )
+    eff = _compute_effective_gather_params(
+        base_stamina=int(node.stamina_per_gather),
+        has_tool=has_tool,
+        rank_bonuses=rank_bonuses,
+        tool_bonuses=tool_bonuses,
+    )
+
+    # 11. Stamina sufficiency check (read first, consume after pre-flight).
+    current_stamina = await _read_current_stamina(character_id)
+    if current_stamina is None or current_stamina < eff["effective_stamina_paid"]:
+        raise HTTPException(status_code=400, detail="Недостаточно стамины")
+
+    # 12. Pre-flight inventory check (no point spending stamina if there's no
+    # room for the result item even before we factor doubles).
+    has_free = await _check_inventory_has_free_slot(character_id)
+    if not has_free:
+        raise HTTPException(
+            status_code=400,
+            detail="Инвентарь полон — освободите слот",
+        )
+
+    # 13. Spend stamina via attributes-service. On failure we abort BEFORE
+    # creating the session.
+    spent = await _consume_stamina_via_attributes(
+        character_id, int(eff["effective_stamina_paid"])
+    )
+    if not spent:
+        # Don't leak a session; lock on node will be released by rollback.
+        await db.rollback()
+        raise HTTPException(status_code=502, detail="Не удалось списать стамину")
+
+    # 14. Insert the session row. Times are computed server-side using NOW()
+    # for `started_at` (so the row matches the DB's clock used in lazy queries
+    # like `complete_at <= NOW()`); we mirror them in Python for the response.
+    # `tool_durability_at_start` is read here as a snapshot so the response can
+    # surface it (FEAT-128 §3.1.1, fix Review #1 issue #3). The actual cap on
+    # awarded units at finalize uses `current_durability_now + 1` (§3.5.4),
+    # not this snapshot — the field is informational for the frontend.
+    tool_durability_at_start: Optional[int] = None
+    if tool_inventory_item_id is not None:
+        try:
+            tool_durability_at_start = await _get_tool_current_durability(
+                db, int(tool_inventory_item_id)
+            )
+        except Exception:
+            tool_durability_at_start = None
+    started_at_py = datetime.now(timezone.utc)
+    complete_at_py = started_at_py + timedelta(seconds=int(eff["effective_seconds"]))
+    new_session = GatheringSession(
+        node_id=int(node.id),
+        character_id=int(character_id),
+        tool_inventory_item_id=(
+            int(tool_inventory_item_id) if tool_inventory_item_id is not None else None
+        ),
+        started_at=started_at_py,
+        complete_at=complete_at_py,
+        effective_speed_bonus_pct=float(eff["effective_speed_bonus_pct"]),
+        effective_double_chance_pct=float(eff["effective_double_chance_pct"]),
+        effective_stamina_bonus_pct=float(eff["effective_stamina_bonus_pct"]),
+        stamina_paid=int(eff["effective_stamina_paid"]),
+        status="active",
+    )
+    db.add(new_session)
+    await db.flush()  # populate new_session.id without releasing locks
+
+    # 15. Auto-post on the location (mirror the quick_move pattern). Best-
+    # effort: a failure here MUST NOT roll back the gathering session.
+    # `crud.create_post` calls `await session.commit()` internally, so this
+    # commit also flushes our gathering_session insert and releases the FOR
+    # UPDATE lock on the node row. That's intentional — we want both writes
+    # to land atomically before responding.
+    result_item_name = ""
+    try:
+        items_brief = await _fetch_item_brief(db, [int(node.result_item_id)])
+        result_item_name = (
+            (items_brief.get(int(node.result_item_id)) or {}).get("name") or ""
+        )
+    except Exception:
+        result_item_name = ""
+
+    auto_content = (
+        f"<em>*{character_name} начинает добычу: {result_item_name}*</em>"
+        if result_item_name
+        else f"<em>*{character_name} начинает добычу*</em>"
+    )
+    auto_post_committed = False
+    auto_post_id: Optional[int] = None
+    try:
+        post_in = PostCreate(
+            character_id=int(character_id),
+            location_id=int(location_id),
+            content=auto_content,
+        )
+        new_post_obj = await create_post(db, post_in)
+        auto_post_committed = True
+        if new_post_obj is not None and getattr(new_post_obj, "id", None) is not None:
+            auto_post_id = int(new_post_obj.id)
+    except Exception as exc:
+        logger.warning(
+            "Auto-post on gathering start failed for char %s, node %s: %s",
+            character_id, node.id, exc,
+        )
+
+    # 16. If create_post did NOT commit (because it raised), we still need to
+    # commit our gathering_session row + locked node so the player sees the
+    # session and the stamina charge isn't a black hole.
+    if not auto_post_committed:
+        try:
+            await db.commit()
+        except Exception as exc:
+            logger.error(
+                "Failed to commit gathering_session after post failure for "
+                "char %s, node %s: %s. Stamina was already consumed.",
+                character_id, node.id, exc,
+            )
+            await db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Не удалось сохранить сессию добычи",
+            )
+
+    # 17. Re-read state for the response. The session is committed, so a
+    # plain SELECT (no FOR UPDATE) is fine here.
+    refreshed_active = await _count_active_sessions_on_node(db, int(node.id))
+    return {
+        "session_id": int(new_session.id),
+        "node_id": int(node.id),
+        "character_id": int(character_id),
+        "started_at": started_at_py,
+        "complete_at": complete_at_py,
+        "effective_seconds": int(eff["effective_seconds"]),
+        "effective_stamina_paid": int(eff["effective_stamina_paid"]),
+        "effective_speed_bonus_pct": float(eff["effective_speed_bonus_pct"]),
+        "effective_double_chance_pct": float(eff["effective_double_chance_pct"]),
+        "effective_stamina_bonus_pct": float(eff["effective_stamina_bonus_pct"]),
+        "tool_inventory_item_id": (
+            int(tool_inventory_item_id) if tool_inventory_item_id is not None else None
+        ),
+        "tool_durability_at_start": tool_durability_at_start,
+        "status": "active",
+        "auto_post_id": auto_post_id,
+        "node_state_after": {
+            # Bank only decrements at finalize per FEAT-128 §3.5.1 step 15;
+            # we expose the unchanged value so the frontend can refresh
+            # without a second round-trip.
+            "current_bank": int(node.current_bank or 0),
+            "active_sessions_count": int(refreshed_active),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# FEAT-128 task #15 — cancel gathering (player-facing manual + internal)
+# ---------------------------------------------------------------------------
+# Both flows share the bulk of the logic: row-locked SELECT of the active
+# session, ceil(stamina_paid/2) refund via attributes-service (best-effort —
+# we do not roll back the cancel if the refund call fails), then a status
+# update. The two flows differ only in:
+#   * how the active session is located (node_id known for manual, any node
+#     for internal),
+#   * the final `status` value ('cancelled' vs 'interrupted_by_battle'),
+#   * the auth/ownership checks (manual = owner-only, internal = trusted
+#     internal token, performed by the route handler).
+# Per FEAT-128 §3.6 the refund formula is `ceil(stamina_paid * 0.5)` —
+# player-friendly rounding decided in §3.7.
+
+async def _refund_stamina_via_attributes(
+    character_id: int, amount: int
+) -> bool:
+    """Best-effort POST to attributes-service /attributes/{cid}/refund_stamina.
+
+    Returns True on a 200 OK, False on any other outcome. Per spec, the
+    caller MUST tolerate a False here (the cancel still proceeds — the
+    refund failure is a recoverable accounting bug, not a blocker).
+    """
+    if amount <= 0:
+        return True
+    url = (
+        f"{settings.ATTRIBUTES_SERVICE_URL}"
+        f"/attributes/{character_id}/refund_stamina"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(url, json={"amount": int(amount)})
+        if resp.status_code != 200:
+            logger.warning(
+                "refund_stamina returned %s for char %s: %s",
+                resp.status_code, character_id, resp.text,
+            )
+            return False
+        return True
+    except Exception as exc:
+        logger.warning(
+            "refund_stamina call failed for char %s: %s", character_id, exc,
+        )
+        return False
+
+
+def _compute_refund(stamina_paid: int) -> int:
+    """ceil(stamina_paid * 0.5) — see FEAT-128 §3.6.
+
+    Implemented via integer arithmetic (no float) so paid=0 -> 0, paid=1 -> 1,
+    paid=5 -> 3.
+    """
+    if stamina_paid is None or stamina_paid <= 0:
+        return 0
+    return (int(stamina_paid) + 1) // 2
+
+
+async def _lock_active_session_for_character(
+    db: AsyncSession,
+    character_id: int,
+    node_id: Optional[int] = None,
+) -> Optional[Dict]:
+    """SELECT ... FOR UPDATE the active session row for `character_id` (and
+    optionally constrained to a specific `node_id` for the manual cancel
+    path). Returns a dict with the columns we need, or None if no active
+    session exists.
+
+    The FOR UPDATE serializes simultaneous cancel attempts: the second
+    caller will see `status != 'active'` (or no row, if the row has just
+    been updated) and short-circuit.
+    """
+    sql = (
+        "SELECT id, node_id, character_id, stamina_paid, status "
+        "FROM gathering_sessions "
+        "WHERE character_id = :cid AND status = 'active' "
+    )
+    params: Dict[str, int] = {"cid": int(character_id)}
+    if node_id is not None:
+        sql += "AND node_id = :nid "
+        params["nid"] = int(node_id)
+    sql += "ORDER BY started_at DESC LIMIT 1 FOR UPDATE"
+    row = (await db.execute(text(sql), params)).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": int(row.id),
+        "node_id": int(row.node_id),
+        "character_id": int(row.character_id),
+        "stamina_paid": int(row.stamina_paid or 0),
+        "status": str(row.status),
+    }
+
+
+async def cancel_gathering_manual(
+    db: AsyncSession,
+    *,
+    location_id: int,
+    node_id: int,
+    character_id: int,
+    current_user_id: int,
+) -> Dict:
+    """Player-facing manual cancel. Implements FEAT-128 §3.5.4.
+
+    Errors raised:
+      * 403 if the character is not owned by `current_user_id`.
+      * 400 if the character is not on `location_id`.
+      * 404 if the node does not exist or belongs to a different location.
+      * 400 "Активная добыча не найдена" if no row matches the node + char
+        with status='active'.
+    """
+    # 1. Load character + ownership + same-location check.
+    user_id, current_loc, _name = await _read_character_for_start(
+        db, character_id
+    )
+    if user_id != int(current_user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Вы можете управлять только своими персонажами",
+        )
+    if current_loc is None or int(current_loc) != int(location_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Персонаж не находится на этой локации",
+        )
+
+    # 2. Verify the node exists on this location (404 otherwise — keeps the
+    # error mode consistent with the start endpoint).
+    node_row = (
+        await db.execute(
+            text(
+                "SELECT id, location_id FROM gathering_nodes "
+                "WHERE id = :nid LIMIT 1"
+            ),
+            {"nid": int(node_id)},
+        )
+    ).fetchone()
+    if node_row is None:
+        raise HTTPException(status_code=404, detail="Нода не найдена")
+    if int(node_row.location_id) != int(location_id):
+        raise HTTPException(status_code=404, detail="Нода не найдена на этой локации")
+
+    # 3. Lock the active session row for this (node, character).
+    sess = await _lock_active_session_for_character(
+        db, character_id=character_id, node_id=node_id,
+    )
+    if sess is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Активная добыча не найдена",
+        )
+
+    # 4. Compute refund and call attributes-service. Failures are tolerated.
+    refund = _compute_refund(sess["stamina_paid"])
+    refund_ok = await _refund_stamina_via_attributes(
+        character_id=character_id, amount=refund,
+    )
+    if not refund_ok:
+        logger.warning(
+            "Stamina refund failed for char %s session %s — cancel proceeding",
+            character_id, sess["id"],
+        )
+
+    # 5. Update session row. If the refund call failed we still record the
+    # nominal refund amount in the response — the session is closed; the
+    # accounting drift is logged for ops follow-up.
+    await db.execute(
+        text(
+            "UPDATE gathering_sessions "
+            "SET status = 'cancelled', finished_at = NOW(), "
+            "    result_quantity = 0, xp_awarded = 0 "
+            "WHERE id = :sid AND status = 'active'"
+        ),
+        {"sid": sess["id"]},
+    )
+    await db.commit()
+
+    return {
+        "cancelled": True,
+        "session_id": sess["id"],
+        "stamina_refunded": int(refund),
+    }
+
+
+async def cancel_gathering_internal(
+    db: AsyncSession,
+    *,
+    character_id: int,
+) -> Dict:
+    """Internal cancel — called by battle-service when a battle starts.
+
+    Idempotent: if no active session exists, returns
+    `{cancelled: False, reason: 'no_active_session'}` rather than raising.
+    """
+    sess = await _lock_active_session_for_character(
+        db, character_id=character_id, node_id=None,
+    )
+    if sess is None:
+        return {"cancelled": False, "reason": "no_active_session"}
+
+    refund = _compute_refund(sess["stamina_paid"])
+    refund_ok = await _refund_stamina_via_attributes(
+        character_id=character_id, amount=refund,
+    )
+    if not refund_ok:
+        logger.warning(
+            "Stamina refund failed for char %s session %s "
+            "(internal cancel) — cancel proceeding",
+            character_id, sess["id"],
+        )
+
+    await db.execute(
+        text(
+            "UPDATE gathering_sessions "
+            "SET status = 'interrupted_by_battle', finished_at = NOW(), "
+            "    result_quantity = 0, xp_awarded = 0 "
+            "WHERE id = :sid AND status = 'active'"
+        ),
+        {"sid": sess["id"]},
+    )
+    await db.commit()
+
+    return {
+        "cancelled": True,
+        "session_id": sess["id"],
+        "stamina_refunded": int(refund),
+    }
+
+
+# ---------------------------------------------------------------------------
+# FEAT-128 task #16 — poll active gathering for a character
+# ---------------------------------------------------------------------------
+# Strategy for `last_finished_session`: when `finalize_due_sessions` finalizes
+# any sessions for THIS character during this very request, we surface the
+# most recent one as `last_finished_session`. On subsequent polls,
+# `finalize_due_sessions` is a no-op (no due sessions remain) so the field
+# returns null — the client only ever sees a completion toast once.
+
+async def get_active_gathering_for_character(
+    db: AsyncSession,
+    character_id: int,
+) -> Dict:
+    """Fetch the active (or just-finalized) gathering session for a character.
+
+    Flow:
+      1. Run `finalize_due_sessions` filtered to this character. Capture any
+         summaries it produced — those are sessions that finished during
+         THIS request and should be surfaced as `last_finished_session`.
+      2. SELECT the most recent active session for the character (if any).
+      3. Build the response shape per FEAT-128 §3.1.1.
+    """
+    # 1. Lazy-finalize any due sessions for this character. May commit.
+    finalized: List[Dict] = []
+    try:
+        finalized = await finalize_due_sessions(
+            db, character_id=character_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "finalize_due_sessions(%s) failed during poll, continuing: %s",
+            character_id, exc,
+        )
+        finalized = []
+
+    # 2. Query the most-recent active session (if any).
+    row = (
+        await db.execute(
+            text(
+                "SELECT s.id, s.node_id, s.started_at, s.complete_at, "
+                "       s.stamina_paid, s.tool_inventory_item_id, "
+                "       s.effective_speed_bonus_pct, "
+                "       s.effective_double_chance_pct, "
+                "       s.effective_stamina_bonus_pct, "
+                "       n.node_name, n.location_id "
+                "FROM gathering_sessions s "
+                "JOIN gathering_nodes n ON n.id = s.node_id "
+                "WHERE s.character_id = :cid AND s.status = 'active' "
+                "ORDER BY s.started_at DESC LIMIT 1"
+            ),
+            {"cid": int(character_id)},
+        )
+    ).fetchone()
+
+    # Flat top-level payload (FEAT-128 §3.1.1, fix Review #1 issue #1).
+    # Active-only fields are populated only when there's an active session;
+    # otherwise they are absent from the dict and Pydantic will default them
+    # to None on the response model.
+    active_fields: Dict = {}
+    if row is not None:
+        complete_at = _ensure_aware_utc(row.complete_at)
+        now = datetime.now(timezone.utc)
+        if complete_at is not None:
+            remaining_seconds = max(
+                0, int((complete_at - now).total_seconds())
+            )
+        else:
+            remaining_seconds = 0
+        active_fields = {
+            "session_id": int(row.id),
+            "node_id": int(row.node_id),
+            "node_name": str(row.node_name or ""),
+            "location_id": (
+                int(row.location_id) if row.location_id is not None else None
+            ),
+            "started_at": _ensure_aware_utc(row.started_at),
+            "complete_at": _ensure_aware_utc(row.complete_at),
+            "remaining_seconds": int(remaining_seconds),
+            "stamina_paid": int(row.stamina_paid or 0),
+            "tool_inventory_item_id": (
+                int(row.tool_inventory_item_id)
+                if row.tool_inventory_item_id is not None
+                else None
+            ),
+            "effective_speed_bonus_pct": float(
+                row.effective_speed_bonus_pct or 0.0
+            ),
+            "effective_double_chance_pct": float(
+                row.effective_double_chance_pct or 0.0
+            ),
+            "effective_stamina_bonus_pct": float(
+                row.effective_stamina_bonus_pct or 0.0
+            ),
+        }
+
+    # Build last_finished_session from the in-request finalize summaries
+    # (if any). Pick the most recent by session_id (later id == later start
+    # in practice for a single character). Field names match
+    # `LastFinishedSessionInfo` schema and frontend `FinishedGatheringSummary`.
+    last_finished_payload: Optional[Dict] = None
+    if finalized:
+        # Some entries (e.g. node-deleted branch) may have status='cancelled'
+        # but still belong to this character — surface them too. Filter to
+        # this character to be defensive (finalize_due_sessions was already
+        # filtered, but the helper is shared with other callers).
+        my_finals = [
+            s for s in finalized
+            if s.get("character_id") == int(character_id)
+        ]
+        if my_finals:
+            latest = max(my_finals, key=lambda s: int(s.get("session_id", 0)))
+            rank_up_to_val = latest.get("rank_up_to")
+            tdr_val = latest.get("tool_durability_remaining")
+            last_finished_payload = {
+                "session_id": int(latest.get("session_id")),
+                "node_id": (
+                    int(latest["node_id"])
+                    if latest.get("node_id") is not None
+                    else None
+                ),
+                "node_name": latest.get("node_name") or "",
+                "result_item_id": latest.get("result_item_id"),
+                "result_item_name": latest.get("result_item_name"),
+                "result_quantity": int(latest.get("result_quantity") or 0),
+                "xp_gained": int(latest.get("xp_gained") or 0),
+                "skill_slug": latest.get("skill_slug"),
+                "rank_up_to": (
+                    int(rank_up_to_val) if rank_up_to_val is not None else None
+                ),
+                "tool_durability_remaining": (
+                    int(tdr_val) if tdr_val is not None else None
+                ),
+                "tool_broke": bool(latest.get("tool_broke") or False),
+                "status": str(latest.get("status") or "completed"),
+            }
+
+    return {
+        "active": row is not None,
+        **active_fields,
+        "last_finished_session": last_finished_payload,
+    }
+
+

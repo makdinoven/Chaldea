@@ -20,6 +20,9 @@ import BattlesSection from './BattlesSection';
 import useBattleLock from '../../../hooks/useBattleLock';
 import BattleLockBanner from '../../CommonComponents/BattleLockBanner';
 import DungeonEntrance from '../../DungeonPage/DungeonEntrance';
+import useGatheringLock from '../../../hooks/useGatheringLock';
+import GatheringLockBanner from '../../CommonComponents/GatheringLockBanner';
+import GatheringSection from './GatheringSection/GatheringSection';
 
 const LocationPage = () => {
   const navigate = useNavigate();
@@ -36,6 +39,11 @@ const LocationPage = () => {
   const userRole = useAppSelector((state) => state.user.role);
   const userIsStaff = isStaff(userRole);
   const { inBattle } = useBattleLock(character?.id);
+  const { isGathering } = useGatheringLock(character?.id);
+  // Combined "the character cannot take voluntary actions" flag — used to
+  // gate the post form, quick-move button and neighbor links so that
+  // gathering players can't bypass the lock by pressing UI shortcuts.
+  const actionsLocked = inBattle || isGathering;
 
   // --- Travel cooldown timer ---
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
@@ -455,6 +463,13 @@ const LocationPage = () => {
           <BattleLockBanner message="Вы в бою! Завершите бой, чтобы продолжить." />
         )}
 
+        {/* Gathering lock banner — shown while a resource-gathering session
+            is active. Mirrors BattleLockBanner placement so the player
+            always sees what is blocking actions on this page. */}
+        {character?.id && isGathering && (
+          <GatheringLockBanner characterId={character.id} />
+        )}
+
         {/* Header */}
         <LocationHeader
           location={location}
@@ -478,7 +493,7 @@ const LocationPage = () => {
         />
 
         {/* Neighbors */}
-        <div className={inBattle ? 'pointer-events-none opacity-50' : ''}>
+        <div className={actionsLocked ? 'pointer-events-none opacity-50' : ''}>
           <NeighborsSection neighbors={location.neighbors} />
         </div>
 
@@ -495,8 +510,20 @@ const LocationPage = () => {
           inBattle={inBattle}
         />
 
+        {/* Resource gathering — shown only when nodes exist on the location.
+            Hidden by GatheringSection itself when the array is empty. */}
+        <GatheringSection
+          locationId={location.id}
+          characterId={character?.id ?? null}
+          inventoryId={character?.id ?? null}
+          isCharacterHere={isCharacterHere}
+          actionsLocked={actionsLocked}
+          nodes={location.gathering_nodes ?? []}
+          onGatherSucceeded={fetchLocationData}
+        />
+
         {/* Dungeon entrance — shown when dungeons exist at this location */}
-        {isCharacterHere && !inBattle && (
+        {isCharacterHere && !actionsLocked && (
           <DungeonEntrance
             locationId={location.id}
             players={location.players}
@@ -531,9 +558,12 @@ const LocationPage = () => {
               {inBattle && (
                 <p className="text-yellow-400 text-sm font-medium">Вы в бою</p>
               )}
+              {!inBattle && isGathering && (
+                <p className="text-yellow-400 text-sm font-medium">Идёт добыча — действия заблокированы</p>
+              )}
 
               {/* Movement choice UI for neighbor locations */}
-              {!isCharacterHere && isNeighborLocation && !inBattle && neighborEntry && (
+              {!isCharacterHere && isNeighborLocation && !actionsLocked && neighborEntry && (
                 isTravelOnCooldown ? (
                   /* Cooldown timer */
                   <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4 flex items-center gap-3">
@@ -594,12 +624,13 @@ const LocationPage = () => {
                 )
               )}
 
-              {/* Post form: shown if at current location, staff (always), or user chose "write post" on a neighbor (not during cooldown) */}
-              {(isCharacterHere || userIsStaff || (isNeighborLocation && showPostForm && !isTravelOnCooldown)) && (
+              {/* Post form: shown if at current location, staff (always), or user chose "write post" on a neighbor (not during cooldown).
+                  Hidden entirely while gathering — the player cannot post during a gather session. */}
+              {!isGathering && (isCharacterHere || userIsStaff || (isNeighborLocation && showPostForm && !isTravelOnCooldown)) && (
                 <PostCreateForm
                   onSubmit={handleSubmitPost}
                   onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
-                  disabled={inBattle || (!isCharacterHere && !isNeighborLocation && !userIsStaff)}
+                  disabled={actionsLocked || (!isCharacterHere && !isNeighborLocation && !userIsStaff)}
                   isStaff={userIsStaff}
                   npcs={location.npcs ?? []}
                 />

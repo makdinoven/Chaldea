@@ -12,7 +12,7 @@ import toast from "react-hot-toast";
 const ITEM_TYPES = [
   "head", "body", "cloak", "belt", "ring", "necklace", "bracelet",
   "main_weapon", "additional_weapons", "shield", "consumable", "resource",
-  "scroll", "misc", "blueprint", "recipe", "gem", "rune",
+  "scroll", "misc", "blueprint", "recipe", "gem", "rune", "gathering_tool",
 ] as const;
 
 const ITEM_TYPE_LABELS: Record<string, string> = {
@@ -21,6 +21,15 @@ const ITEM_TYPE_LABELS: Record<string, string> = {
   main_weapon: "Основное оружие", additional_weapons: "Доп. оружие", shield: "Щит",
   consumable: "Расходуемое", resource: "Ресурс", scroll: "Свиток", misc: "Разное",
   blueprint: "Чертёж", recipe: "Рецепт", gem: "Камень", rune: "Руна",
+  gathering_tool: "Инструмент сбора",
+};
+
+/* Gathering tool categories (FEAT-128) */
+const TOOL_CATEGORIES = ["pickaxe", "sickle", "axe"] as const;
+const TOOL_CATEGORY_LABELS: Record<string, string> = {
+  pickaxe: "Кирка",
+  sickle: "Серп",
+  axe: "Топор",
 };
 
 const ITEM_RARITIES = [
@@ -136,6 +145,11 @@ interface ItemFormState {
   socket_count: number;
   whetstone_level: string;
   max_durability: number;
+  // Gathering tool fields (FEAT-128)
+  tool_category: string | null;
+  gather_double_chance_bonus: number;
+  gather_speed_bonus_pct: number;
+  gather_stamina_bonus_pct: number;
   [key: string]: unknown;
 }
 
@@ -161,6 +175,10 @@ const INITIAL_STATE: ItemFormState = [...ATTR_MODS, ...RES_MODS, ...VUL_MODS].re
     socket_count: 0,
     whetstone_level: "",
     max_durability: 0,
+    tool_category: null,
+    gather_double_chance_bonus: 0,
+    gather_speed_bonus_pct: 0,
+    gather_stamina_bonus_pct: 0,
   },
 );
 
@@ -204,6 +222,19 @@ const ItemForm = ({ selected, onSuccess, onCancel }: ItemFormProps) => {
         if (DURABILITY_TYPES.includes(value as string) && (st.max_durability === 0 || st.max_durability === "0")) {
           updated.max_durability = 100;
         }
+        // Gathering-tool defaults: pre-fill durability and a default category
+        if (value === "gathering_tool") {
+          if (Number(st.max_durability) === 0) {
+            updated.max_durability = 50;
+          }
+          if (!st.tool_category) {
+            updated.tool_category = "pickaxe";
+          }
+        } else {
+          // Switching away from gathering_tool: clear tool_category so the
+          // backend constraint (tool_category MUST be null when type != gathering_tool) holds.
+          updated.tool_category = null;
+        }
       }
       return updated;
     });
@@ -212,16 +243,34 @@ const ItemForm = ({ selected, onSuccess, onCancel }: ItemFormProps) => {
   const showArmor = ["head", "body"].includes(item.item_type);
   const showWeapon = ["main_weapon", "additional_weapons"].includes(item.item_type);
   const showConsumable = item.item_type === "consumable";
-  const excludeMods = ["resource", "scroll", "misc", "consumable"].includes(item.item_type);
+  const showGatheringTool = item.item_type === "gathering_tool";
+  // Hide all equipment-stat sections (modifiers/armor/weapon/consumable) for gathering tools.
+  const excludeMods =
+    ["resource", "scroll", "misc", "consumable"].includes(item.item_type) ||
+    showGatheringTool;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const isGatheringTool = item.item_type === "gathering_tool";
       const payload = {
         ...item,
         socket_count: Number(item.socket_count) || 0,
         whetstone_level: item.whetstone_level ? Number(item.whetstone_level) : null,
         max_durability: Number(item.max_durability) || 0,
+        // Gathering tool fields: only meaningful when type=gathering_tool;
+        // otherwise force back to neutral values so the server-side
+        // constraint (tool_category MUST be null) is satisfied.
+        tool_category: isGatheringTool ? item.tool_category : null,
+        gather_double_chance_bonus: isGatheringTool
+          ? Number(item.gather_double_chance_bonus) || 0
+          : 0,
+        gather_speed_bonus_pct: isGatheringTool
+          ? Number(item.gather_speed_bonus_pct) || 0
+          : 0,
+        gather_stamina_bonus_pct: isGatheringTool
+          ? Number(item.gather_stamina_bonus_pct) || 0
+          : 0,
       };
       const saved = editMode
         ? await updateItem(selected!, payload)
@@ -574,6 +623,90 @@ const ItemForm = ({ selected, onSuccess, onCancel }: ItemFormProps) => {
             />
           </label>
         </div>
+      )}
+
+      {showGatheringTool && (
+        <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03]">
+          <legend className="text-white/50 text-xs font-medium uppercase tracking-[0.06em] px-2">
+            Инструмент сбора
+          </legend>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 mt-2">
+            {/* Tool category */}
+            <label className="flex flex-col gap-1">
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+                Тип инструмента
+              </span>
+              <select
+                name="tool_category"
+                value={item.tool_category ?? ""}
+                onChange={handleChange}
+                required
+                className="input-underline"
+              >
+                {TOOL_CATEGORIES.map((t) => (
+                  <option key={t} value={t} className="bg-site-dark text-white">
+                    {TOOL_CATEGORY_LABELS[t]}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {/* Double chance bonus */}
+            <label className="flex flex-col gap-1">
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+                Бонус шанса дубля (%)
+              </span>
+              <input
+                type="number"
+                name="gather_double_chance_bonus"
+                value={item.gather_double_chance_bonus}
+                onChange={handleChange}
+                min={0}
+                max={50}
+                step={0.5}
+                className="input-underline"
+              />
+            </label>
+
+            {/* Speed bonus */}
+            <label className="flex flex-col gap-1">
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+                Бонус скорости (%)
+              </span>
+              <input
+                type="number"
+                name="gather_speed_bonus_pct"
+                value={item.gather_speed_bonus_pct}
+                onChange={handleChange}
+                min={0}
+                max={50}
+                step={0.5}
+                className="input-underline"
+              />
+            </label>
+
+            {/* Stamina bonus */}
+            <label className="flex flex-col gap-1">
+              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+                Бонус экономии стамины (%)
+              </span>
+              <input
+                type="number"
+                name="gather_stamina_bonus_pct"
+                value={item.gather_stamina_bonus_pct}
+                onChange={handleChange}
+                min={0}
+                max={50}
+                step={0.5}
+                className="input-underline"
+              />
+            </label>
+          </div>
+          <p className="text-white/40 text-xs mt-3">
+            Прочность задаётся в поле «Макс. прочность» выше и должна быть ≥ 1.
+            Для инструментов сбора характеристики экипировки не применяются.
+          </p>
+        </fieldset>
       )}
 
       {/* ── Modifiers ── */}
