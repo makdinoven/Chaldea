@@ -201,7 +201,7 @@ class TestGetLocationClientDetails:
             "id", "name", "type", "parent_id", "description", "image_url",
             "recommended_level", "quick_travel_marker", "no_quick_move", "marker_type",
             "district_id", "region_id", "is_favorited",
-            "neighbors", "players", "npcs", "posts", "loot",
+            "neighbors", "players", "npcs", "posts", "loot", "gathering_nodes",
         }
         assert set(data.keys()) == expected_keys
 
