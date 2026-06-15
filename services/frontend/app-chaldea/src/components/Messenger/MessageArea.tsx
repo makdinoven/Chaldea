@@ -49,37 +49,101 @@ const MessageArea = ({
   onEditSubmit,
   onQuoteInserted,
 }: MessageAreaProps) => {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const prevMessageCountRef = useRef(0);
+  // Track the newest/oldest message ids to tell apart a freshly arrived
+  // message (appended at the bottom) from a "load older" prepend at the top.
+  const prevNewestIdRef = useRef<number | null>(null);
+  const prevOldestIdRef = useRef<number | null>(null);
+  // Snapshot taken right before a "load older" request so we can keep the
+  // currently-read message in place once the older page is prepended.
+  const loadMoreAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
 
-  // Scroll chat container to bottom when conversation changes
+  // Distance from the bottom (px) within which we still auto-follow new messages.
+  const NEAR_BOTTOM_THRESHOLD = 150;
+  // Scroll position (px from top) that triggers loading older messages.
+  const LOAD_MORE_THRESHOLD = 50;
+
+  // Reset tracking when switching conversations.
   useEffect(() => {
-    if (conversation?.id != null) {
-      prevMessageCountRef.current = 0;
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView();
-      }, 50);
-    }
+    prevNewestIdRef.current = null;
+    prevOldestIdRef.current = null;
+    loadMoreAnchorRef.current = null;
   }, [conversation?.id]);
 
-  // Scroll chat container to bottom when new messages arrive
+  // Manage scroll position as the message list changes.
+  // IMPORTANT: only the inner container is scrolled — never the page/window
+  // (the previous scrollIntoView() pulled the whole page down).
   useEffect(() => {
-    if (messages.length > prevMessageCountRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-    prevMessageCountRef.current = messages.length;
-  }, [messages.length]);
+    const container = scrollContainerRef.current;
+    if (!container) return;
 
-  // Load more on scroll up
+    if (messages.length === 0) {
+      prevNewestIdRef.current = null;
+      prevOldestIdRef.current = null;
+      return;
+    }
+
+    // messages are newest-first: [0] is newest, [last] is oldest
+    const newestId = messages[0].id;
+    const oldestId = messages[messages.length - 1].id;
+    const prevNewest = prevNewestIdRef.current;
+    const prevOldest = prevOldestIdRef.current;
+
+    const isFirstLoad = prevNewest === null;
+    const newMessageAtBottom = prevNewest !== null && newestId !== prevNewest;
+    const loadedOlder =
+      prevOldest !== null && oldestId !== prevOldest && newestId === prevNewest;
+
+    if (isFirstLoad) {
+      // Jump to the latest message instantly on open.
+      requestAnimationFrame(() => {
+        container.scrollTop = container.scrollHeight;
+      });
+    } else if (loadedOlder && loadMoreAnchorRef.current) {
+      // Older page prepended — preserve the reading position so the view
+      // doesn't jump (this is what made history unreadable before).
+      const { scrollHeight, scrollTop } = loadMoreAnchorRef.current;
+      requestAnimationFrame(() => {
+        container.scrollTop = container.scrollHeight - scrollHeight + scrollTop;
+      });
+      loadMoreAnchorRef.current = null;
+    } else if (newMessageAtBottom) {
+      // Only follow a new message if the user is already near the bottom,
+      // so we don't yank them away while they read older history.
+      const nearBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight <
+        NEAR_BOTTOM_THRESHOLD;
+      if (nearBottom) {
+        requestAnimationFrame(() => {
+          container.scrollTop = container.scrollHeight;
+        });
+      }
+    }
+
+    prevNewestIdRef.current = newestId;
+    prevOldestIdRef.current = oldestId;
+  }, [messages]);
+
+  // Snapshot the scroll metrics, then request the older page.
+  const requestLoadMore = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container || isLoading || !hasMoreMessages) return;
+    loadMoreAnchorRef.current = {
+      scrollHeight: container.scrollHeight,
+      scrollTop: container.scrollTop,
+    };
+    onLoadMore();
+  }, [isLoading, hasMoreMessages, onLoadMore]);
+
+  // Load more when scrolled near the top.
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container || isLoading || !hasMoreMessages) return;
 
-    if (container.scrollTop < 50) {
-      onLoadMore();
+    if (container.scrollTop < LOAD_MORE_THRESHOLD) {
+      requestLoadMore();
     }
-  }, [isLoading, hasMoreMessages, onLoadMore]);
+  }, [isLoading, hasMoreMessages, requestLoadMore]);
 
   // No conversation selected
   if (!conversation) {
@@ -152,7 +216,7 @@ const MessageArea = ({
         {hasMoreMessages && !isLoading && (
           <div className="flex items-center justify-center py-3">
             <button
-              onClick={onLoadMore}
+              onClick={requestLoadMore}
               className="text-site-blue text-xs hover:text-gold-light transition-colors duration-200 ease-site cursor-pointer"
             >
               Загрузить ранние сообщения
@@ -178,8 +242,6 @@ const MessageArea = ({
             onEdit={onEdit}
           />
         ))}
-
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Input */}
