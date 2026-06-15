@@ -533,7 +533,18 @@ const messengerSlice = createSlice({
       })
       .addCase(fetchMessages.fulfilled, (state, action) => {
         const { conversationId, items, total, page, page_size } = action.payload;
-        state.messages[conversationId] = items;
+        if (page <= 1) {
+          // Fresh load — replace with the newest page.
+          state.messages[conversationId] = items;
+        } else {
+          // Older page — messages are newest-first, so the older items belong
+          // at the end. Append them (deduped) instead of replacing, otherwise
+          // the newest messages are lost and can't be scrolled back to.
+          const existing = state.messages[conversationId] ?? [];
+          const seen = new Set(existing.map((m) => m.id));
+          const olderUnique = items.filter((m) => !seen.has(m.id));
+          state.messages[conversationId] = [...existing, ...olderUnique];
+        }
         state.messagesPagination[conversationId] = {
           page,
           totalPages: Math.max(1, Math.ceil(total / page_size)),
