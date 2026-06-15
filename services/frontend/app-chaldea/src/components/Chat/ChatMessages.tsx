@@ -35,7 +35,7 @@ const ChatMessages = ({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto gold-scrollbar">
+    <div className="flex-1 overflow-y-auto overscroll-contain gold-scrollbar">
       {messages.map((message) => (
         <ChatMessage
           key={message.id}

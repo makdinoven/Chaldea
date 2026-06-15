@@ -1,5 +1,5 @@
-import { useEffect, useRef, useCallback } from 'react';
-import { ArrowLeft } from 'react-feather';
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
+import { ArrowLeft, ArrowDown } from 'react-feather';
 import type { ConversationListItem, PrivateMessage } from '../../types/messenger';
 import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
@@ -26,6 +26,36 @@ interface MessageAreaProps {
   onEditSubmit: (messageId: number, content: string) => void;
   onQuoteInserted: () => void;
 }
+
+// Distance from the bottom (px) within which we still auto-follow new messages.
+const NEAR_BOTTOM_THRESHOLD = 150;
+// Scroll position (px from top) that triggers loading older messages.
+const LOAD_MORE_THRESHOLD = 50;
+
+const dayKey = (d: Date): string => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+
+const formatDateLabel = (dateStr: string): string => {
+  const d = new Date(dateStr);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (dayKey(d) === dayKey(today)) return 'Сегодня';
+  if (dayKey(d) === dayKey(yesterday)) return 'Вчера';
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+};
+
+const pluralNew = (n: number): string => {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'новое сообщение';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'новых сообщения';
+  return 'новых сообщений';
+};
+
+type RenderItem =
+  | { kind: 'date'; key: string; label: string }
+  | { kind: 'unread'; key: string }
+  | { kind: 'message'; key: string; message: PrivateMessage };
 
 const MessageArea = ({
   conversation,
@@ -58,21 +88,36 @@ const MessageArea = ({
   // currently-read message in place once the older page is prepended.
   const loadMoreAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
 
-  // Distance from the bottom (px) within which we still auto-follow new messages.
-  const NEAR_BOTTOM_THRESHOLD = 150;
-  // Scroll position (px from top) that triggers loading older messages.
-  const LOAD_MORE_THRESHOLD = 50;
+  // Count of new messages that arrived while the user was reading history
+  // (i.e. not near the bottom). Drives the "jump to new messages" pill.
+  const [newCount, setNewCount] = useState(0);
+  // Snapshot of the conversation's unread count at open time, used to place
+  // the "unread messages" divider before it gets cleared by mark-read.
+  const [unreadSnapshot, setUnreadSnapshot] = useState(0);
+
+  const conversationId = conversation?.id ?? null;
 
   // Reset tracking when switching conversations.
   useEffect(() => {
     prevNewestIdRef.current = null;
     prevOldestIdRef.current = null;
     loadMoreAnchorRef.current = null;
-  }, [conversation?.id]);
+    setNewCount(0);
+    setUnreadSnapshot(conversation?.unread_count ?? 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
+
+  const scrollToBottom = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight;
+    });
+    setNewCount(0);
+  }, []);
 
   // Manage scroll position as the message list changes.
-  // IMPORTANT: only the inner container is scrolled — never the page/window
-  // (the previous scrollIntoView() pulled the whole page down).
+  // IMPORTANT: only the inner container is scrolled — never the page/window.
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -84,7 +129,8 @@ const MessageArea = ({
     }
 
     // messages are newest-first: [0] is newest, [last] is oldest
-    const newestId = messages[0].id;
+    const newest = messages[0];
+    const newestId = newest.id;
     const oldestId = messages[messages.length - 1].id;
     const prevNewest = prevNewestIdRef.current;
     const prevOldest = prevOldestIdRef.current;
@@ -108,21 +154,25 @@ const MessageArea = ({
       });
       loadMoreAnchorRef.current = null;
     } else if (newMessageAtBottom) {
-      // Only follow a new message if the user is already near the bottom,
-      // so we don't yank them away while they read older history.
       const nearBottom =
         container.scrollHeight - container.scrollTop - container.clientHeight <
         NEAR_BOTTOM_THRESHOLD;
-      if (nearBottom) {
+      const isOwnNewest = newest.sender_id === currentUserId;
+      if (nearBottom || isOwnNewest) {
+        // Follow when already near the bottom, or when it's our own message.
         requestAnimationFrame(() => {
           container.scrollTop = container.scrollHeight;
         });
+        setNewCount(0);
+      } else {
+        // Reading history — don't yank; surface a "jump to new" pill instead.
+        setNewCount((c) => c + 1);
       }
     }
 
     prevNewestIdRef.current = newestId;
     prevOldestIdRef.current = oldestId;
-  }, [messages]);
+  }, [messages, currentUserId]);
 
   // Snapshot the scroll metrics, then request the older page.
   const requestLoadMore = useCallback(() => {
@@ -135,15 +185,46 @@ const MessageArea = ({
     onLoadMore();
   }, [isLoading, hasMoreMessages, onLoadMore]);
 
-  // Load more when scrolled near the top.
+  // React to scrolling: load older near the top, clear the pill near the bottom.
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
-    if (!container || isLoading || !hasMoreMessages) return;
+    if (!container) return;
 
-    if (container.scrollTop < LOAD_MORE_THRESHOLD) {
+    if (container.scrollTop < LOAD_MORE_THRESHOLD && hasMoreMessages && !isLoading) {
       requestLoadMore();
     }
-  }, [isLoading, hasMoreMessages, requestLoadMore]);
+
+    const nearBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight <
+      NEAR_BOTTOM_THRESHOLD;
+    if (nearBottom) {
+      setNewCount((c) => (c === 0 ? c : 0));
+    }
+  }, [hasMoreMessages, isLoading, requestLoadMore]);
+
+  // Messages are newest-first from API, reverse for display (oldest at top).
+  const displayMessages = useMemo(() => [...messages].reverse(), [messages]);
+
+  // Build the render list with date separators and the unread divider.
+  const renderItems = useMemo<RenderItem[]>(() => {
+    const items: RenderItem[] = [];
+    const firstUnreadIndex =
+      unreadSnapshot > 0 ? Math.max(0, displayMessages.length - unreadSnapshot) : -1;
+
+    let lastDay: string | null = null;
+    displayMessages.forEach((msg, idx) => {
+      const msgDay = dayKey(new Date(msg.created_at));
+      if (msgDay !== lastDay) {
+        items.push({ kind: 'date', key: `date-${msg.id}`, label: formatDateLabel(msg.created_at) });
+        lastDay = msgDay;
+      }
+      if (idx === firstUnreadIndex) {
+        items.push({ kind: 'unread', key: `unread-${msg.id}` });
+      }
+      items.push({ kind: 'message', key: `msg-${msg.id}`, message: msg });
+    });
+    return items;
+  }, [displayMessages, unreadSnapshot]);
 
   // No conversation selected
   if (!conversation) {
@@ -164,9 +245,6 @@ const MessageArea = ({
       : conversation.participants[0]?.username ?? 'Неизвестный';
 
   const participantCount = conversation.participants.length;
-
-  // Messages are newest-first from API, reverse for display (oldest at top)
-  const displayMessages = [...messages].reverse();
 
   return (
     <div className="flex flex-col h-full">
@@ -200,48 +278,87 @@ const MessageArea = ({
         </div>
       )}
 
-      {/* Messages */}
-      <div
-        ref={scrollContainerRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto gold-scrollbar"
-      >
-        {/* Load more indicator */}
-        {isLoading && (
-          <div className="flex items-center justify-center py-3">
-            <div className="w-5 h-5 border-2 border-gold/30 border-t-gold rounded-full animate-spin" />
-          </div>
-        )}
+      {/* Messages area (relative wrapper anchors the "new messages" pill) */}
+      <div className="relative flex-1 min-h-0">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="absolute inset-0 overflow-y-auto overscroll-contain gold-scrollbar"
+        >
+          {/* Load more indicator */}
+          {isLoading && (
+            <div className="flex items-center justify-center py-3">
+              <div className="w-5 h-5 border-2 border-gold/30 border-t-gold rounded-full animate-spin" />
+            </div>
+          )}
 
-        {hasMoreMessages && !isLoading && (
-          <div className="flex items-center justify-center py-3">
-            <button
-              onClick={requestLoadMore}
-              className="text-site-blue text-xs hover:text-gold-light transition-colors duration-200 ease-site cursor-pointer"
-            >
-              Загрузить ранние сообщения
-            </button>
-          </div>
-        )}
+          {hasMoreMessages && !isLoading && (
+            <div className="flex items-center justify-center py-3">
+              <button
+                onClick={requestLoadMore}
+                className="text-site-blue text-xs hover:text-gold-light transition-colors duration-200 ease-site cursor-pointer"
+              >
+                Загрузить ранние сообщения
+              </button>
+            </div>
+          )}
 
-        {/* Empty state */}
-        {!isLoading && displayMessages.length === 0 && (
-          <div className="flex items-center justify-center h-full text-white/30 text-sm">
-            Нет сообщений. Напишите первыми!
-          </div>
-        )}
+          {/* Empty state */}
+          {!isLoading && displayMessages.length === 0 && (
+            <div className="flex items-center justify-center h-full text-white/30 text-sm">
+              Нет сообщений. Напишите первыми!
+            </div>
+          )}
 
-        {/* Message list */}
-        {displayMessages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            isOwn={msg.sender_id === currentUserId}
-            onDelete={onDeleteMessage}
-            onReply={onReply}
-            onEdit={onEdit}
-          />
-        ))}
+          {/* Message list with date / unread separators */}
+          {renderItems.map((item) => {
+            if (item.kind === 'date') {
+              return (
+                <div key={item.key} className="flex items-center justify-center py-2">
+                  <span className="text-white/40 text-xs bg-white/5 rounded-full px-3 py-1">
+                    {item.label}
+                  </span>
+                </div>
+              );
+            }
+            if (item.kind === 'unread') {
+              return (
+                <div key={item.key} className="flex items-center gap-2 px-3 py-1.5">
+                  <span className="flex-1 h-px bg-site-blue/30" />
+                  <span className="text-site-blue text-xs whitespace-nowrap">
+                    непрочитанные сообщения
+                  </span>
+                  <span className="flex-1 h-px bg-site-blue/30" />
+                </div>
+              );
+            }
+            return (
+              <MessageBubble
+                key={item.key}
+                message={item.message}
+                isOwn={item.message.sender_id === currentUserId}
+                onDelete={onDeleteMessage}
+                onReply={onReply}
+                onEdit={onEdit}
+              />
+            );
+          })}
+        </div>
+
+        {/* Jump-to-new-messages pill */}
+        {newCount > 0 && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10
+              flex items-center gap-1.5
+              bg-site-bg/95 backdrop-blur-sm border border-gold/40 text-gold
+              text-xs rounded-full px-3 py-1.5 shadow-card
+              hover:bg-white/10 transition-colors duration-200 ease-site cursor-pointer"
+          >
+            <ArrowDown size={14} />
+            {newCount} {pluralNew(newCount)}
+          </button>
+        )}
       </div>
 
       {/* Input */}
