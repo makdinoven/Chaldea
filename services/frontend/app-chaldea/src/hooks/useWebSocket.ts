@@ -55,16 +55,51 @@ interface UseWebSocketReturn {
 // Module-level WebSocket reference for sendWsMessage
 let activeWs: WebSocket | null = null;
 
+// Outbound frames produced while the socket is briefly reconnecting
+// (e.g. right after a production deploy restarts notification-service).
+// They are flushed on reconnect, so a transient drop doesn't surface an error.
+interface QueuedFrame {
+  frame: string;
+  ts: number;
+}
+let outboundQueue: QueuedFrame[] = [];
+const OUTBOUND_QUEUE_MAX = 50;
+const OUTBOUND_TTL_MS = 30000;
+
+/** Flush queued frames once the socket is open again, dropping stale ones. */
+const flushOutboundQueue = (): void => {
+  if (!activeWs || activeWs.readyState !== WebSocket.OPEN) return;
+  const now = Date.now();
+  const pending = outboundQueue;
+  outboundQueue = [];
+  for (const item of pending) {
+    if (now - item.ts > OUTBOUND_TTL_MS) continue; // too old — drop
+    try {
+      activeWs.send(item.frame);
+    } catch {
+      // Socket died again mid-flush — keep it for the next reconnect.
+      outboundQueue.push(item);
+    }
+  }
+};
+
 /**
  * Send a message through the shared WebSocket connection.
- * Returns true if the message was sent, false if the socket is not connected.
+ * If the socket is momentarily reconnecting, the frame is queued and flushed
+ * once the connection is back. Returns true if the frame was sent or queued,
+ * false only if the queue is full (a genuine inability to deliver).
  */
 export const sendWsMessage = (action: string, data: Record<string, unknown>): boolean => {
-  if (!activeWs || activeWs.readyState !== WebSocket.OPEN) {
-    return false;
+  const frame = JSON.stringify({ action, data });
+  if (activeWs && activeWs.readyState === WebSocket.OPEN) {
+    activeWs.send(frame);
+    return true;
   }
-  activeWs.send(JSON.stringify({ action, data }));
-  return true;
+  if (outboundQueue.length < OUTBOUND_QUEUE_MAX) {
+    outboundQueue.push({ frame, ts: Date.now() });
+    return true;
+  }
+  return false;
 };
 
 const useWebSocket = (): UseWebSocketReturn => {
@@ -106,6 +141,8 @@ const useWebSocket = (): UseWebSocketReturn => {
         if (!mountedRef.current) return;
         setConnected(true);
         reconnectDelayRef.current = INITIAL_RECONNECT_DELAY;
+        // Deliver anything queued while we were reconnecting.
+        flushOutboundQueue();
       };
 
       ws.onmessage = (event: MessageEvent) => {
