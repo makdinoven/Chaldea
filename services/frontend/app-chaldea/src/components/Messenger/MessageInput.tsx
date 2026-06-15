@@ -16,6 +16,9 @@ interface MessageInputProps {
 }
 
 const MAX_LENGTH = 2000;
+// Matches the backend messenger rate limit (1s) so we block the button locally
+// instead of letting the user hit a 429-style error.
+const SEND_COOLDOWN_MS = 1000;
 
 const truncate = (text: string, maxLen: number): string => {
   if (text.length <= maxLen) return text;
@@ -35,7 +38,14 @@ const MessageInput = ({
   onQuoteInserted,
 }: MessageInputProps) => {
   const [text, setText] = useState('');
+  const [onCooldown, setOnCooldown] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const cooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear any pending cooldown timer on unmount.
+  useEffect(() => () => {
+    if (cooldownTimerRef.current) clearTimeout(cooldownTimerRef.current);
+  }, []);
 
   // When editingMessage is set, populate the textarea
   useEffect(() => {
@@ -77,14 +87,18 @@ const MessageInput = ({
   const handleSubmit = useCallback(() => {
     const content = text.trim();
     if (!content || disabled || sending) return;
+    // Send is rate-limited; editing is not.
+    if (!editingMessage && onCooldown) return;
 
     if (editingMessage) {
       onEditSubmit(editingMessage.id, content);
     } else {
       onSend(content);
+      setOnCooldown(true);
+      cooldownTimerRef.current = setTimeout(() => setOnCooldown(false), SEND_COOLDOWN_MS);
     }
     setText('');
-  }, [text, disabled, sending, editingMessage, onSend, onEditSubmit]);
+  }, [text, disabled, sending, editingMessage, onCooldown, onSend, onEditSubmit]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -176,7 +190,7 @@ const MessageInput = ({
         {/* Send / Save button */}
         <button
           onClick={handleSubmit}
-          disabled={!text.trim() || disabled || sending || isOverLimit}
+          disabled={!text.trim() || disabled || sending || isOverLimit || (!editingMessage && onCooldown)}
           className="btn-blue !px-3 !py-1.5 !text-sm disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {sending

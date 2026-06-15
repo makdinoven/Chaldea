@@ -3,10 +3,13 @@ import Header from '../../CommonComponents/Header/Header';
 import Footer from '../../CommonComponents/Footer/Footer';
 import { Outlet } from 'react-router-dom';
 import { useWebSocket } from '../../../hooks/useWebSocket';
+import { useAppSelector } from '../../../redux/store';
 import ChatWidget from '../../Chat/ChatWidget';
+import ConnectionStatus from '../../common/ConnectionStatus';
 
 const Layout = () => {
-  useWebSocket();
+  const { connected } = useWebSocket();
+  const userId = useAppSelector((state) => state.user.id) as number | null;
 
   // Apply saved site background from localStorage on mount
   useEffect(() => {
@@ -27,6 +30,7 @@ const Layout = () => {
       </div>
       <Footer />
       <ChatWidget />
+      {userId !== null && <ConnectionStatus connected={connected} />}
     </>
   );
 };

@@ -1,5 +1,8 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { ChatMessage, ChatChannel } from '../../types/chat';
+
+// Matches the backend global-chat rate limit (2s).
+const SEND_COOLDOWN_MS = 2000;
 
 interface ChatInputProps {
   activeChannel: ChatChannel;
@@ -23,6 +26,8 @@ const ChatInput = ({
   onClearQuote,
 }: ChatInputProps) => {
   const [text, setText] = useState('');
+  const [onCooldown, setOnCooldown] = useState(false);
+  const cooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // When quote text arrives, place it in the input
   useEffect(() => {
@@ -32,12 +37,19 @@ const ChatInput = ({
     }
   }, [quoteText, onClearQuote]);
 
+  // Clear any pending cooldown timer on unmount.
+  useEffect(() => () => {
+    if (cooldownTimerRef.current) clearTimeout(cooldownTimerRef.current);
+  }, []);
+
   const handleSubmit = useCallback(() => {
     const content = text.trim();
-    if (!content) return;
+    if (!content || onCooldown) return;
     onSend(content, replyingTo?.id ?? null);
     setText('');
-  }, [text, replyingTo, onSend]);
+    setOnCooldown(true);
+    cooldownTimerRef.current = setTimeout(() => setOnCooldown(false), SEND_COOLDOWN_MS);
+  }, [text, replyingTo, onCooldown, onSend]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -143,7 +155,7 @@ const ChatInput = ({
         {/* Send button */}
         <button
           onClick={handleSubmit}
-          disabled={!text.trim()}
+          disabled={!text.trim() || onCooldown}
           className="btn-blue !px-3 !py-1.5 !text-sm disabled:opacity-40 disabled:cursor-not-allowed"
         >
           Отправить
