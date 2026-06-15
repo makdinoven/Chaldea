@@ -16,8 +16,10 @@ CHAT_CHANNELS = ("general", "trade", "help")
 # State
 # ──────────────────────────────────────────────
 
-# All active WS connections: user_id -> WebSocket
-active_connections: dict[int, WebSocket] = {}
+# All active WS connections: user_id -> set of WebSocket.
+# A user may have several connections open at once (multiple browser tabs);
+# every tab gets its own socket and all of them receive broadcasts.
+active_connections: dict[int, set[WebSocket]] = {}
 
 # Channel subscriptions: channel_name -> set(user_id)
 channel_subscriptions: dict[str, set[int]] = {ch: set() for ch in CHAT_CHANNELS}
@@ -46,57 +48,78 @@ async def _close_ws_safe(ws: WebSocket) -> None:
         pass
 
 
+def _sockets_for(user_id: int) -> list[WebSocket]:
+    """Snapshot of the user's current sockets (safe to iterate while mutating)."""
+    conns = active_connections.get(user_id)
+    return list(conns) if conns else []
+
+
 # ──────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────
 
 async def connect(user_id: int, websocket: WebSocket) -> None:
     """
-    Register a new WS connection. If the user already has a connection,
-    close the old one first (max 1 connection per user).
-    Subscribes the user to all chat channels.
+    Register a new WS connection for the user. Multiple connections per user
+    are allowed (e.g. several tabs) — the socket is added to the user's set,
+    existing sockets are kept open. Subscribes the user to all chat channels.
     """
     global _loop
     _loop = asyncio.get_event_loop()
 
-    # Close existing connection if any
-    old_ws = active_connections.get(user_id)
-    if old_ws is not None:
-        await _close_ws_safe(old_ws)
-
-    active_connections[user_id] = websocket
+    active_connections.setdefault(user_id, set()).add(websocket)
 
     # Subscribe to all chat channels
     for channel in CHAT_CHANNELS:
         channel_subscriptions[channel].add(user_id)
 
-    logger.info("WS: user %d connected (channels: %s)", user_id, ", ".join(CHAT_CHANNELS))
+    logger.info(
+        "WS: user %d connected (%d active socket(s))",
+        user_id,
+        len(active_connections.get(user_id, ())),
+    )
 
 
-async def disconnect(user_id: int) -> None:
+async def disconnect(user_id: int, websocket: WebSocket | None = None) -> None:
     """
-    Remove user from active_connections and all channel_subscriptions.
-    Closes the WebSocket gracefully.
+    Remove a connection for the user.
+
+    If `websocket` is given, only that socket is removed; the user stays
+    subscribed as long as they have other open sockets. If `websocket` is
+    None, all of the user's sockets are closed and removed (full teardown).
+    Channel subscriptions are dropped only once the user's last socket closes.
     """
-    ws = active_connections.pop(user_id, None)
-    if ws is not None:
-        await _close_ws_safe(ws)
+    conns = active_connections.get(user_id)
+    if conns is None:
+        return
 
-    for channel in CHAT_CHANNELS:
-        channel_subscriptions[channel].discard(user_id)
+    if websocket is None:
+        for ws in list(conns):
+            await _close_ws_safe(ws)
+        conns.clear()
+    else:
+        conns.discard(websocket)
+        await _close_ws_safe(websocket)
 
-    logger.info("WS: user %d disconnected", user_id)
+    if not conns:
+        active_connections.pop(user_id, None)
+        for channel in CHAT_CHANNELS:
+            channel_subscriptions[channel].discard(user_id)
+        logger.info("WS: user %d fully disconnected", user_id)
+    else:
+        logger.info(
+            "WS: user %d closed one socket (%d remaining)", user_id, len(conns)
+        )
 
 
 def send_to_user(user_id: int, data: dict) -> None:
     """
-    Send JSON data to a specific user.
+    Send JSON data to all of a user's active connections.
     Thread-safe: uses asyncio.run_coroutine_threadsafe for calls from
-    RabbitMQ consumer threads.
-    Handles exceptions silently (stale connections).
+    RabbitMQ consumer threads. Handles exceptions silently (stale connections).
     """
-    ws = active_connections.get(user_id)
-    if ws is None:
+    sockets = _sockets_for(user_id)
+    if not sockets:
         return
 
     loop = _loop
@@ -104,12 +127,13 @@ def send_to_user(user_id: int, data: dict) -> None:
         logger.warning("WS: no event loop available for send_to_user")
         return
 
-    asyncio.run_coroutine_threadsafe(_send_json_safe(ws, data), loop)
+    for ws in sockets:
+        asyncio.run_coroutine_threadsafe(_send_json_safe(ws, data), loop)
 
 
 def broadcast_to_channel(channel: str, data: dict) -> None:
     """
-    Send data to all users subscribed to the given channel.
+    Send data to all sockets of all users subscribed to the given channel.
     Thread-safe: uses asyncio.run_coroutine_threadsafe.
     """
     subscriber_ids = channel_subscriptions.get(channel)
@@ -122,16 +146,17 @@ def broadcast_to_channel(channel: str, data: dict) -> None:
         return
 
     for uid in list(subscriber_ids):
-        ws = active_connections.get(uid)
-        if ws is None:
+        sockets = _sockets_for(uid)
+        if not sockets:
             channel_subscriptions[channel].discard(uid)
             continue
-        asyncio.run_coroutine_threadsafe(_send_json_safe(ws, data), loop)
+        for ws in sockets:
+            asyncio.run_coroutine_threadsafe(_send_json_safe(ws, data), loop)
 
 
 def broadcast_to_all(data: dict) -> None:
     """
-    Send data to ALL active connections.
+    Send data to ALL active sockets of all users.
     Thread-safe: uses asyncio.run_coroutine_threadsafe.
     """
     if not active_connections:
@@ -142,5 +167,6 @@ def broadcast_to_all(data: dict) -> None:
         logger.warning("WS: no event loop available for broadcast_to_all")
         return
 
-    for uid, ws in list(active_connections.items()):
-        asyncio.run_coroutine_threadsafe(_send_json_safe(ws, data), loop)
+    for uid in list(active_connections.keys()):
+        for ws in _sockets_for(uid):
+            asyncio.run_coroutine_threadsafe(_send_json_safe(ws, data), loop)

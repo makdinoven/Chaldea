@@ -58,7 +58,7 @@ class TestWsManagerConnect:
 
     @pytest.mark.asyncio
     async def test_connect_adds_user_to_active_connections(self):
-        """connect() registers the user in active_connections and all channels."""
+        """connect() registers the user's socket in active_connections and all channels."""
         import ws_manager
 
         # Save and reset state
@@ -74,7 +74,7 @@ class TestWsManagerConnect:
             await ws_manager.connect(42, mock_ws)
 
             assert 42 in ws_manager.active_connections
-            assert ws_manager.active_connections[42] is mock_ws
+            assert mock_ws in ws_manager.active_connections[42]
             for ch in ws_manager.CHAT_CHANNELS:
                 assert 42 in ws_manager.channel_subscriptions[ch]
         finally:
@@ -82,8 +82,8 @@ class TestWsManagerConnect:
             ws_manager.channel_subscriptions = orig_subscriptions
 
     @pytest.mark.asyncio
-    async def test_connect_replaces_old_connection(self):
-        """Duplicate connect() closes old WS and replaces with new one."""
+    async def test_connect_allows_multiple_connections(self):
+        """Multiple connect() calls for one user keep all sockets open (multi-tab)."""
         import ws_manager
 
         orig_connections = ws_manager.active_connections.copy()
@@ -94,15 +94,16 @@ class TestWsManagerConnect:
             for ch in ws_manager.CHAT_CHANNELS:
                 ws_manager.channel_subscriptions[ch] = set()
 
-            old_ws = AsyncMock()
-            new_ws = AsyncMock()
+            first_ws = AsyncMock()
+            second_ws = AsyncMock()
 
-            await ws_manager.connect(42, old_ws)
-            await ws_manager.connect(42, new_ws)
+            await ws_manager.connect(42, first_ws)
+            await ws_manager.connect(42, second_ws)
 
-            assert ws_manager.active_connections[42] is new_ws
-            # Old WS should have been closed
-            old_ws.close.assert_called_once()
+            # Both sockets coexist; neither is closed.
+            assert ws_manager.active_connections[42] == {first_ws, second_ws}
+            first_ws.close.assert_not_called()
+            second_ws.close.assert_not_called()
         finally:
             ws_manager.active_connections = orig_connections
             ws_manager.channel_subscriptions = orig_subscriptions
@@ -112,7 +113,7 @@ class TestWsManagerDisconnect:
 
     @pytest.mark.asyncio
     async def test_disconnect_removes_user(self):
-        """disconnect() removes user from active_connections and all channels."""
+        """disconnect() of the last socket removes user from connections and channels."""
         import ws_manager
 
         orig_connections = ws_manager.active_connections.copy()
@@ -125,11 +126,40 @@ class TestWsManagerDisconnect:
 
             mock_ws = AsyncMock()
             await ws_manager.connect(42, mock_ws)
-            await ws_manager.disconnect(42)
+            await ws_manager.disconnect(42, mock_ws)
 
             assert 42 not in ws_manager.active_connections
             for ch in ws_manager.CHAT_CHANNELS:
                 assert 42 not in ws_manager.channel_subscriptions[ch]
+        finally:
+            ws_manager.active_connections = orig_connections
+            ws_manager.channel_subscriptions = orig_subscriptions
+
+    @pytest.mark.asyncio
+    async def test_disconnect_one_socket_keeps_user_with_others(self):
+        """Closing one tab leaves the user connected and subscribed via the other."""
+        import ws_manager
+
+        orig_connections = ws_manager.active_connections.copy()
+        orig_subscriptions = {ch: s.copy() for ch, s in ws_manager.channel_subscriptions.items()}
+
+        try:
+            ws_manager.active_connections.clear()
+            for ch in ws_manager.CHAT_CHANNELS:
+                ws_manager.channel_subscriptions[ch] = set()
+
+            first_ws = AsyncMock()
+            second_ws = AsyncMock()
+            await ws_manager.connect(42, first_ws)
+            await ws_manager.connect(42, second_ws)
+
+            await ws_manager.disconnect(42, first_ws)
+
+            # User still present via the second socket; still subscribed.
+            assert 42 in ws_manager.active_connections
+            assert ws_manager.active_connections[42] == {second_ws}
+            for ch in ws_manager.CHAT_CHANNELS:
+                assert 42 in ws_manager.channel_subscriptions[ch]
         finally:
             ws_manager.active_connections = orig_connections
             ws_manager.channel_subscriptions = orig_subscriptions
@@ -159,7 +189,7 @@ class TestWsManagerSendToUser:
 
         try:
             mock_ws = AsyncMock()
-            ws_manager.active_connections = {10: mock_ws}
+            ws_manager.active_connections = {10: {mock_ws}}
 
             loop = asyncio.new_event_loop()
             ws_manager._loop = loop
@@ -168,6 +198,35 @@ class TestWsManagerSendToUser:
                 ws_manager.send_to_user(10, {"type": "notification", "data": {"msg": "hi"}})
                 await asyncio.sleep(0.05)
                 mock_ws.send_json.assert_called_once_with({"type": "notification", "data": {"msg": "hi"}})
+
+            loop.run_until_complete(_test())
+            loop.close()
+        finally:
+            ws_manager.active_connections = orig_connections
+            ws_manager._loop = orig_loop
+
+    def test_send_to_user_sends_to_all_sockets(self):
+        """send_to_user() delivers to every socket the user has open (multi-tab)."""
+        import ws_manager
+
+        orig_connections = ws_manager.active_connections.copy()
+        orig_loop = ws_manager._loop
+
+        try:
+            mock_ws1 = AsyncMock()
+            mock_ws2 = AsyncMock()
+            ws_manager.active_connections = {10: {mock_ws1, mock_ws2}}
+
+            loop = asyncio.new_event_loop()
+            ws_manager._loop = loop
+
+            data = {"type": "private_message", "data": {"id": 7}}
+
+            async def _test():
+                ws_manager.send_to_user(10, data)
+                await asyncio.sleep(0.05)
+                mock_ws1.send_json.assert_called_once_with(data)
+                mock_ws2.send_json.assert_called_once_with(data)
 
             loop.run_until_complete(_test())
             loop.close()
@@ -203,7 +262,7 @@ class TestWsManagerBroadcastToChannel:
             mock_ws2 = AsyncMock()
             mock_ws3 = AsyncMock()
 
-            ws_manager.active_connections = {1: mock_ws1, 2: mock_ws2, 3: mock_ws3}
+            ws_manager.active_connections = {1: {mock_ws1}, 2: {mock_ws2}, 3: {mock_ws3}}
             ws_manager.channel_subscriptions["general"] = {1, 2}
             ws_manager.channel_subscriptions["trade"] = {3}
             ws_manager.channel_subscriptions["help"] = set()
@@ -252,7 +311,7 @@ class TestWsManagerBroadcastToAll:
             mock_ws1 = AsyncMock()
             mock_ws2 = AsyncMock()
 
-            ws_manager.active_connections = {1: mock_ws1, 2: mock_ws2}
+            ws_manager.active_connections = {1: {mock_ws1}, 2: {mock_ws2}}
 
             loop = asyncio.new_event_loop()
             ws_manager._loop = loop

@@ -109,7 +109,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
     except Exception:
         pass
     finally:
-        await ws_manager.disconnect(user_id)
+        await ws_manager.disconnect(user_id, websocket)
 
 
 def _publish_admin_notification(payload: dict):
