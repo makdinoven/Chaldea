@@ -137,6 +137,7 @@ class ConversationResponse(BaseModel):
     id: int
     type: ConversationType
     title: Optional[str] = None
+    avatar: Optional[str] = None
     created_by: int
     created_at: datetime
     participants: List[ParticipantInfo] = []
@@ -149,6 +150,7 @@ class ConversationListItem(BaseModel):
     id: int
     type: ConversationType
     title: Optional[str] = None
+    avatar: Optional[str] = None
     created_at: datetime
     participants: List[ParticipantInfo] = []
     last_message: Optional[LastMessagePreview] = None

@@ -18,6 +18,7 @@ class Conversation(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     type = Column(Enum("direct", "group", name="conversation_type"), nullable=False)
     title = Column(String(100), nullable=True)
+    avatar = Column(String(500), nullable=True)  # group chat avatar URL (S3)
     created_by = Column(Integer, nullable=False)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 

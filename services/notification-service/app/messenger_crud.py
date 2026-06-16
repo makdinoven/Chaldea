@@ -516,6 +516,7 @@ def list_conversations(
             "id": conv.id,
             "type": conv.type,
             "title": conv.title,
+            "avatar": conv.avatar,
             "created_at": conv.created_at,
             "participants": [
                 {

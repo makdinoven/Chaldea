@@ -239,6 +239,7 @@ def create_conversation(
                 id=existing.id,
                 type=existing.type,
                 title=existing.title,
+                avatar=existing.avatar,
                 created_by=existing.created_by,
                 created_at=existing.created_at,
                 participants=participants,
@@ -282,6 +283,7 @@ def create_conversation(
         id=conv.id,
         type=conv.type,
         title=conv.title,
+        avatar=conv.avatar,
         created_by=conv.created_by,
         created_at=conv.created_at,
         participants=participants,
@@ -294,6 +296,7 @@ def create_conversation(
             "id": conv.id,
             "type": conv.type,
             "title": conv.title,
+            "avatar": conv.avatar,
             "participants": [
                 {
                     "user_id": p["user_id"],
