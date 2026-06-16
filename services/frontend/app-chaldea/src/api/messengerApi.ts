@@ -11,6 +11,7 @@ import type {
   AddParticipantsPayload,
   AddParticipantsResponse,
   UnreadCountResponse,
+  PresenceResponse,
   UserBlockCreateResponse,
   UserBlockListResponse,
   BlockCheckResponse,
@@ -62,6 +63,9 @@ export const unpinConversation = (conversationId: number) =>
 
 export const getUnreadCount = () =>
   axios.get<UnreadCountResponse>(`${BASE_URL_DEFAULT}/notifications/messenger/unread-count`);
+
+export const getPresence = (userId: number) =>
+  axios.get<PresenceResponse>(`${BASE_URL_DEFAULT}/notifications/messenger/presence/${userId}`);
 
 export const addParticipants = (conversationId: number, data: AddParticipantsPayload) =>
   axios.post<AddParticipantsResponse>(

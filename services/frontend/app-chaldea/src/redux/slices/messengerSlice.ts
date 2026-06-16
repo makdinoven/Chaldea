@@ -20,6 +20,7 @@ import type {
   WsConversationCreatedData,
   WsConversationReadData,
   WsConversationPinChangedData,
+  WsTypingData,
 } from '../../types/messenger';
 import axios from 'axios';
 
@@ -81,7 +82,12 @@ export interface MessengerState {
   blocks: UserBlockItem[];
   editingMessage: PrivateMessage | null;
   replyToMessage: PrivateMessage | null;
+  // conversationId -> userId -> { username, ts (ms) } of who is currently typing
+  typingByConversation: Record<number, Record<number, { username: string; ts: number }>>;
 }
+
+// How long a typing signal stays "fresh" before it is pruned (ms).
+const TYPING_TTL_MS = 6000;
 
 const initialState: MessengerState = {
   conversations: [],
@@ -95,6 +101,7 @@ const initialState: MessengerState = {
   blocks: [],
   editingMessage: null,
   replyToMessage: null,
+  typingByConversation: {},
 };
 
 // --- Async Thunks ---
@@ -234,6 +241,13 @@ export const markConversationRead = createAsyncThunk<
       return thunkAPI.rejectWithValue('Не удалось отметить как прочитанное');
     }
     // Fire-and-forget: state update happens via conversation_read WS event
+  },
+);
+
+export const sendTypingSignal = createAsyncThunk<void, number>(
+  'messenger/sendTyping',
+  async (conversationId) => {
+    sendWsMessage('messenger_typing', { conversation_id: conversationId });
   },
 );
 
@@ -529,6 +543,34 @@ const messengerSlice = createSlice({
       applyPinState(state.conversations, conversation_id, is_pinned);
     },
 
+    receiveTyping(state, action: PayloadAction<WsTypingData>) {
+      const { conversation_id, user_id, username } = action.payload;
+      if (!state.typingByConversation[conversation_id]) {
+        state.typingByConversation[conversation_id] = {};
+      }
+      state.typingByConversation[conversation_id][user_id] = {
+        username: username ?? '',
+        ts: Date.now(),
+      };
+    },
+
+    /** Drop typing entries that have gone stale (no signal within the TTL). */
+    pruneTyping(state) {
+      const now = Date.now();
+      for (const convId of Object.keys(state.typingByConversation)) {
+        const conv = Number(convId);
+        const users = state.typingByConversation[conv];
+        for (const uid of Object.keys(users)) {
+          if (now - users[Number(uid)].ts > TYPING_TTL_MS) {
+            delete users[Number(uid)];
+          }
+        }
+        if (Object.keys(users).length === 0) {
+          delete state.typingByConversation[conv];
+        }
+      }
+    },
+
     receiveConversationRead(state, action: PayloadAction<WsConversationReadData>) {
       const { conversation_id } = action.payload;
       const conv = state.conversations.find((c) => c.id === conversation_id);
@@ -765,6 +807,8 @@ export const {
   receiveConversationCreated,
   receiveConversationRead,
   receiveConversationPinChanged,
+  receiveTyping,
+  pruneTyping,
   receiveOwnSentMessage,
   setActiveConversation,
   clearActiveConversation,
@@ -817,5 +861,19 @@ export const selectEditingMessage = (state: RootState) =>
 
 export const selectReplyToMessage = (state: RootState) =>
   state.messenger.replyToMessage;
+
+/** Usernames currently typing in a conversation (fresh within the TTL). */
+export const selectTypingUsernames =
+  (conversationId: number | null) =>
+  (state: RootState): string[] => {
+    if (conversationId === null) return [];
+    const users = state.messenger.typingByConversation[conversationId];
+    if (!users) return [];
+    const now = Date.now();
+    return Object.values(users)
+      .filter((u) => now - u.ts < TYPING_TTL_MS)
+      .map((u) => u.username)
+      .filter((name): name is string => Boolean(name));
+  };
 
 export default messengerSlice.reducer;

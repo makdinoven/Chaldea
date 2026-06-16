@@ -201,3 +201,14 @@ export interface WsConversationPinChangedData {
   conversation_id: number;
   is_pinned: boolean;
 }
+
+export interface WsTypingData {
+  conversation_id: number;
+  user_id: number;
+  username: string | null;
+}
+
+export interface PresenceResponse {
+  user_id: number;
+  online: boolean;
+}

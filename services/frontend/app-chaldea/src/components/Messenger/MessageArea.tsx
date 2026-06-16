@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { ArrowLeft, ArrowDown } from 'react-feather';
 import type { ConversationListItem, PrivateMessage } from '../../types/messenger';
+import { getPresence } from '../../api/messengerApi';
 import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
 
@@ -12,6 +13,8 @@ interface MessageAreaProps {
   error: string | null;
   hasMoreMessages: boolean;
   sending: boolean;
+  typingUsernames: string[];
+  onTyping: () => void;
   replyTo: PrivateMessage | null;
   editingMessage: PrivateMessage | null;
   quoteText: string | null;
@@ -65,6 +68,8 @@ const MessageArea = ({
   error,
   hasMoreMessages,
   sending,
+  typingUsernames,
+  onTyping,
   replyTo,
   editingMessage,
   quoteText,
@@ -96,6 +101,34 @@ const MessageArea = ({
   const [unreadSnapshot, setUnreadSnapshot] = useState(0);
 
   const conversationId = conversation?.id ?? null;
+
+  // Online status of the other party in a direct chat (polled).
+  const [otherOnline, setOtherOnline] = useState<boolean | null>(null);
+  const otherUserId =
+    conversation?.type === 'direct' ? conversation.participants[0]?.user_id ?? null : null;
+
+  useEffect(() => {
+    if (otherUserId === null) {
+      setOtherOnline(null);
+      return;
+    }
+    let cancelled = false;
+    const fetchPresence = () => {
+      getPresence(otherUserId)
+        .then((resp) => {
+          if (!cancelled) setOtherOnline(resp.data.online);
+        })
+        .catch(() => {
+          if (!cancelled) setOtherOnline(null);
+        });
+    };
+    fetchPresence();
+    const interval = setInterval(fetchPresence, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [otherUserId]);
 
   // Reset tracking when switching conversations.
   useEffect(() => {
@@ -268,6 +301,11 @@ const MessageArea = ({
               {participantCount} {participantCount === 1 ? 'участник' : participantCount < 5 ? 'участника' : 'участников'}
             </span>
           )}
+          {conversation.type === 'direct' && otherOnline !== null && (
+            <span className={`text-xs ${otherOnline ? 'text-green-400' : 'text-white/30'}`}>
+              {otherOnline ? 'в сети' : 'не в сети'}
+            </span>
+          )}
         </div>
       </div>
 
@@ -361,9 +399,19 @@ const MessageArea = ({
         )}
       </div>
 
+      {/* Typing indicator */}
+      {typingUsernames.length > 0 && (
+        <div className="px-3 py-1 text-xs text-white/50 italic flex-shrink-0">
+          {typingUsernames.length === 1
+            ? `${typingUsernames[0]} печатает…`
+            : `${typingUsernames.slice(0, 2).join(', ')} печатают…`}
+        </div>
+      )}
+
       {/* Input */}
       <MessageInput
         onSend={onSendMessage}
+        onTyping={onTyping}
         disabled={!conversation}
         sending={sending}
         replyTo={replyTo}

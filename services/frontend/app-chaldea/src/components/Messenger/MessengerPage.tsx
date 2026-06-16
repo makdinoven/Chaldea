@@ -10,6 +10,8 @@ import {
   createConversation,
   markConversationRead,
   pinConversation,
+  sendTypingSignal,
+  pruneTyping,
   fetchUnreadCount,
   setActiveConversation,
   clearActiveConversation,
@@ -26,6 +28,7 @@ import {
   selectMessagesPagination,
   selectEditingMessage,
   selectReplyToMessage,
+  selectTypingUsernames,
 } from '../../redux/slices/messengerSlice';
 import type { ConversationType, PrivateMessage } from '../../types/messenger';
 import ConversationList from './ConversationList';
@@ -47,6 +50,7 @@ const MessengerPage = () => {
   const currentUserId = useAppSelector((state) => state.user.id) as number | null;
   const editingMsg = useAppSelector(selectEditingMessage);
   const replyToMsg = useAppSelector(selectReplyToMessage);
+  const typingUsernames = useAppSelector(selectTypingUsernames(activeConversationId));
 
   const [showNewModal, setShowNewModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -102,6 +106,18 @@ const MessengerPage = () => {
     },
     [dispatch],
   );
+
+  const handleTyping = useCallback(() => {
+    if (activeConversationId !== null) {
+      dispatch(sendTypingSignal(activeConversationId));
+    }
+  }, [activeConversationId, dispatch]);
+
+  // Periodically expire stale "typing" indicators.
+  useEffect(() => {
+    const interval = setInterval(() => dispatch(pruneTyping()), 3000);
+    return () => clearInterval(interval);
+  }, [dispatch]);
 
   const handleSendMessage = useCallback(
     async (content: string) => {
@@ -248,6 +264,8 @@ const MessengerPage = () => {
             error={error}
             hasMoreMessages={hasMoreMessages}
             sending={isSending}
+            typingUsernames={typingUsernames}
+            onTyping={handleTyping}
             replyTo={replyToMsg}
             editingMessage={editingMsg}
             quoteText={null}

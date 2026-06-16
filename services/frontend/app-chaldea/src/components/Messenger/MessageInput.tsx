@@ -4,6 +4,7 @@ import type { PrivateMessage } from '../../types/messenger';
 
 interface MessageInputProps {
   onSend: (content: string) => void;
+  onTyping?: () => void;
   disabled?: boolean;
   sending?: boolean;
   replyTo: PrivateMessage | null;
@@ -27,6 +28,7 @@ const truncate = (text: string, maxLen: number): string => {
 
 const MessageInput = ({
   onSend,
+  onTyping,
   disabled = false,
   sending = false,
   replyTo,
@@ -41,6 +43,22 @@ const MessageInput = ({
   const [onCooldown, setOnCooldown] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const cooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTypingSentRef = useRef(0);
+
+  // Throttle "typing" signals to at most one per 3s while there is content.
+  const handleChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      setText(e.target.value);
+      if (onTyping && e.target.value.trim()) {
+        const now = Date.now();
+        if (now - lastTypingSentRef.current > 3000) {
+          lastTypingSentRef.current = now;
+          onTyping();
+        }
+      }
+    },
+    [onTyping],
+  );
 
   // Clear any pending cooldown timer on unmount.
   useEffect(() => () => {
@@ -172,7 +190,7 @@ const MessageInput = ({
       <textarea
         ref={textareaRef}
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={handleChange}
         onKeyDown={handleKeyDown}
         placeholder={disabled ? 'Выберите диалог...' : 'Написать сообщение...'}
         maxLength={MAX_LENGTH}
