@@ -589,6 +589,17 @@ const messengerSlice = createSlice({
       if (conv) conv.avatar = action.payload.avatar;
     },
 
+    /** Drop a conversation locally (e.g. the user was removed from a group). */
+    removeConversation(state, action: PayloadAction<number>) {
+      const id = action.payload;
+      state.conversations = state.conversations.filter((c) => c.id !== id);
+      if (state.activeConversationId === id) {
+        state.activeConversationId = null;
+      }
+      delete state.messages[id];
+      delete state.messagesPagination[id];
+    },
+
     receiveReaction(state, action: PayloadAction<WsMessageReactionData & { is_self: boolean }>) {
       const { message_id, conversation_id, emoji, action: act, is_self } = action.payload;
       const arr = state.messages[conversation_id];
@@ -927,6 +938,7 @@ export const {
   receiveConversationRead,
   receiveConversationPinChanged,
   setConversationAvatar,
+  removeConversation,
   receiveReaction,
   receiveTyping,
   pruneTyping,

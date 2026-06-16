@@ -172,6 +172,25 @@ export interface AddParticipantsResponse {
   skipped: number[];
 }
 
+// ── Group participants ──────────────────────────────────────────────────────
+
+export interface GroupParticipant {
+  user_id: number;
+  username: string | null;
+  avatar: string | null;
+  avatar_frame: string | null;
+  is_creator: boolean;
+}
+
+export interface GroupParticipantsResponse {
+  created_by: number;
+  participants: GroupParticipant[];
+}
+
+export interface WsConversationRemovedData {
+  conversation_id: number;
+}
+
 // ── WebSocket Event Data ────────────────────────────────────────────────────
 
 export interface WsPrivateMessageData {

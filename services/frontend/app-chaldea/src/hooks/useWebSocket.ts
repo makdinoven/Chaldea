@@ -12,6 +12,7 @@ import {
   receiveTyping,
   receiveReaction,
   removeOptimisticMessage,
+  removeConversation,
   receiveOwnSentMessage,
 } from '../redux/slices/messengerSlice';
 import {
@@ -34,6 +35,7 @@ import type {
   WsConversationPinChangedData,
   WsTypingData,
   WsMessageReactionData,
+  WsConversationRemovedData,
 } from '../types/messenger';
 import type {
   WsAuctionOutbidData,
@@ -244,6 +246,12 @@ const useWebSocket = (): UseWebSocketReturn => {
             }
             case 'conversation_pin_changed': {
               dispatch(receiveConversationPinChanged(parsed.data as WsConversationPinChangedData));
+              break;
+            }
+            case 'conversation_removed': {
+              const data = parsed.data as WsConversationRemovedData;
+              dispatch(removeConversation(data.conversation_id));
+              toast('Вас исключили из беседы');
               break;
             }
             case 'messenger_typing': {

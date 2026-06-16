@@ -1,9 +1,10 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { ArrowLeft, ArrowDown, Search, X } from 'react-feather';
+import { ArrowLeft, ArrowDown, Search, X, Users } from 'react-feather';
 import type { ConversationListItem, PrivateMessage } from '../../types/messenger';
 import { getPresence, searchMessages } from '../../api/messengerApi';
 import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
+import GroupParticipantsModal from './GroupParticipantsModal';
 
 interface MessageAreaProps {
   conversation: ConversationListItem | null;
@@ -103,6 +104,9 @@ const MessageArea = ({
   const [unreadSnapshot, setUnreadSnapshot] = useState(0);
 
   const conversationId = conversation?.id ?? null;
+
+  // Group participants modal.
+  const [showParticipants, setShowParticipants] = useState(false);
 
   // In-conversation message search.
   const [searchOpen, setSearchOpen] = useState(false);
@@ -341,6 +345,18 @@ const MessageArea = ({
           )}
         </div>
 
+        {/* Group participants */}
+        {conversation.type === 'group' && (
+          <button
+            onClick={() => setShowParticipants(true)}
+            className="p-1 text-white/50 hover:text-site-blue transition-colors duration-200 ease-site cursor-pointer"
+            aria-label="Участники"
+            title="Участники"
+          >
+            <Users size={18} />
+          </button>
+        )}
+
         {/* Search toggle */}
         <button
           onClick={() => setSearchOpen((o) => !o)}
@@ -509,6 +525,15 @@ const MessageArea = ({
         onEditSubmit={onEditSubmit}
         onQuoteInserted={onQuoteInserted}
       />
+
+      {conversation.type === 'group' && (
+        <GroupParticipantsModal
+          isOpen={showParticipants}
+          onClose={() => setShowParticipants(false)}
+          conversationId={conversation.id}
+          conversationTitle={conversation.title ?? 'Группа'}
+        />
+      )}
     </div>
   );
 };

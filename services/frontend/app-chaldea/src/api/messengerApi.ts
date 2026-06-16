@@ -10,6 +10,7 @@ import type {
   EditMessagePayload,
   AddParticipantsPayload,
   AddParticipantsResponse,
+  GroupParticipantsResponse,
   UnreadCountResponse,
   PresenceResponse,
   UserBlockCreateResponse,
@@ -103,6 +104,16 @@ export const addParticipants = (conversationId: number, data: AddParticipantsPay
   axios.post<AddParticipantsResponse>(
     `${BASE_URL_DEFAULT}/notifications/messenger/conversations/${conversationId}/participants`,
     data,
+  );
+
+export const getGroupParticipants = (conversationId: number) =>
+  axios.get<GroupParticipantsResponse>(
+    `${BASE_URL_DEFAULT}/notifications/messenger/conversations/${conversationId}/participants`,
+  );
+
+export const removeParticipant = (conversationId: number, userId: number) =>
+  axios.delete<{ detail: string }>(
+    `${BASE_URL_DEFAULT}/notifications/messenger/conversations/${conversationId}/participants/${userId}`,
   );
 
 export const leaveConversation = (conversationId: number) =>
