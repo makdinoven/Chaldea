@@ -258,6 +258,19 @@ const useWebSocket = (): UseWebSocketReturn => {
               toast.error(errData.detail ?? 'Ошибка мессенджера');
               break;
             }
+            case 'messenger_mention': {
+              const m = parsed.data as { from_username?: string };
+              const text = `${m.from_username ?? 'Кто-то'} упомянул вас`;
+              toast(text);
+              dispatch(addNotification({
+                id: Date.now(),
+                user_id: 0,
+                message: text,
+                status: 'unread',
+                created_at: new Date().toISOString(),
+              } as NotificationItem));
+              break;
+            }
             case 'auction_outbid': {
               const outbidData = parsed.data as WsAuctionOutbidData;
               dispatch(handleAuctionOutbid(outbidData));

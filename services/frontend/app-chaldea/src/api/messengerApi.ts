@@ -34,6 +34,17 @@ export const getMessages = (conversationId: number, params: { page?: number; pag
     { params },
   );
 
+export const searchMessages = (
+  conversationId: number,
+  q: string,
+  page = 1,
+  page_size = 20,
+) =>
+  axios.get<PaginatedMessages>(
+    `${BASE_URL_DEFAULT}/notifications/messenger/conversations/${conversationId}/search`,
+    { params: { q, page, page_size } },
+  );
+
 export const sendMessage = (conversationId: number, data: SendMessagePayload) =>
   axios.post<PrivateMessage>(
     `${BASE_URL_DEFAULT}/notifications/messenger/conversations/${conversationId}/messages`,

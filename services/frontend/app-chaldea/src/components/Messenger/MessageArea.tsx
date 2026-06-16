@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { ArrowLeft, ArrowDown } from 'react-feather';
+import { ArrowLeft, ArrowDown, Search, X } from 'react-feather';
 import type { ConversationListItem, PrivateMessage } from '../../types/messenger';
-import { getPresence } from '../../api/messengerApi';
+import { getPresence, searchMessages } from '../../api/messengerApi';
 import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
 
@@ -103,6 +103,33 @@ const MessageArea = ({
   const [unreadSnapshot, setUnreadSnapshot] = useState(0);
 
   const conversationId = conversation?.id ?? null;
+
+  // In-conversation message search.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<PrivateMessage[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    setSearchOpen(false);
+    setSearchQuery('');
+    setSearchResults([]);
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!searchOpen || conversationId === null || !searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    const handle = setTimeout(() => {
+      setSearching(true);
+      searchMessages(conversationId, searchQuery.trim(), 1, 20)
+        .then((resp) => setSearchResults(resp.data.items))
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearching(false));
+    }, 350);
+    return () => clearTimeout(handle);
+  }, [searchOpen, conversationId, searchQuery]);
 
   // Online status of the other party in a direct chat (polled).
   const [otherOnline, setOtherOnline] = useState<boolean | null>(null);
@@ -309,7 +336,60 @@ const MessageArea = ({
             </span>
           )}
         </div>
+
+        {/* Search toggle */}
+        <button
+          onClick={() => setSearchOpen((o) => !o)}
+          className={`p-1 transition-colors duration-200 ease-site cursor-pointer ${
+            searchOpen ? 'text-site-blue' : 'text-white/50 hover:text-site-blue'
+          }`}
+          aria-label="Поиск по сообщениям"
+          title="Поиск по сообщениям"
+        >
+          <Search size={18} />
+        </button>
       </div>
+
+      {/* Search bar + results */}
+      {searchOpen && (
+        <div className="relative px-3 py-2 border-b border-white/10 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Поиск по сообщениям..."
+              className="input-underline w-full text-sm !py-1.5"
+              autoFocus
+            />
+            <button
+              onClick={() => { setSearchOpen(false); setSearchQuery(''); }}
+              className="text-white/40 hover:text-white/70 cursor-pointer flex-shrink-0"
+              aria-label="Закрыть поиск"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          {searchQuery.trim() && (
+            <div className="absolute left-0 right-0 top-full z-20 max-h-64 overflow-y-auto gold-scrollbar bg-site-bg/98 backdrop-blur-sm border-b border-white/10 shadow-dropdown">
+              {searching ? (
+                <div className="px-3 py-3 text-white/40 text-xs">Поиск…</div>
+              ) : searchResults.length === 0 ? (
+                <div className="px-3 py-3 text-white/40 text-xs">Ничего не найдено</div>
+              ) : (
+                searchResults.map((m) => (
+                  <div key={m.id} className="px-3 py-2 border-b border-white/5">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-site-blue text-xs font-medium truncate">{m.sender_username}</span>
+                      <span className="text-white/30 text-[10px] flex-shrink-0">{formatDateLabel(m.created_at)}</span>
+                    </div>
+                    <p className="text-white/70 text-xs truncate">{m.content || '📷 Изображение'}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Error display */}
       {error && (

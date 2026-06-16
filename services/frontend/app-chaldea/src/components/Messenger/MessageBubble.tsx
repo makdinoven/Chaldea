@@ -14,6 +14,18 @@ interface MessageBubbleProps {
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
+const MENTION_SPLIT = /(@[A-Za-z0-9_-]+)/g;
+
+// Render message text with @username mentions highlighted.
+const renderContent = (text: string) =>
+  text.split(MENTION_SPLIT).map((part, i) =>
+    part.startsWith('@') ? (
+      <span key={i} className="text-site-blue font-medium">{part}</span>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+
 const formatTime = (dateStr: string): string => {
   try {
     const date = new Date(dateStr);
@@ -162,7 +174,7 @@ const MessageBubble = ({ message, isOwn, onDelete, onReply, onEdit, onReact }: M
           )}
           {message.content && (
             <p className="text-white text-sm break-words whitespace-pre-wrap">
-              {message.content}
+              {renderContent(message.content)}
             </p>
           )}
         </div>
