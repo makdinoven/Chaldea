@@ -13,6 +13,7 @@ export interface Conversation {
   id: number;
   type: ConversationType;
   title: string | null;
+  avatar: string | null;
   created_by: number;
   created_at: string;
   participants: ConversationParticipant[];
@@ -31,6 +32,7 @@ export interface ConversationListItem {
   id: number;
   type: ConversationType;
   title: string | null;
+  avatar: string | null;
   created_at: string;
   participants: ConversationParticipant[];
   last_message: LastMessage | null;
@@ -185,6 +187,7 @@ export interface WsConversationCreatedData {
   id: number;
   type: ConversationType;
   title: string | null;
+  avatar: string | null;
   participants: ConversationParticipant[];
 }
 

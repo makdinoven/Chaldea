@@ -49,8 +49,9 @@ const ConversationItem = ({ conversation, isActive, onClick, onTogglePin }: Conv
       ? conversation.title
       : participant?.username ?? 'Неизвестный';
 
-  const avatarUrl = participant?.avatar ?? null;
-  const frameSlug = participant?.avatar_frame ?? null;
+  const isGroup = conversation.type === 'group';
+  const avatarUrl = isGroup ? conversation.avatar : (participant?.avatar ?? null);
+  const frameSlug = isGroup ? null : (participant?.avatar_frame ?? null);
 
   const lastMessageTime = conversation.last_message?.created_at;
   const lastMessagePreview = conversation.last_message?.content ?? '';

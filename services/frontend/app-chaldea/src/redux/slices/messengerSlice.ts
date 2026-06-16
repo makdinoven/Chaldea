@@ -558,6 +558,7 @@ const messengerSlice = createSlice({
           id: data.id,
           type: data.type,
           title: data.title,
+          avatar: data.avatar,
           created_at: new Date().toISOString(),
           participants: data.participants,
           last_message: null,
@@ -571,6 +572,11 @@ const messengerSlice = createSlice({
     receiveConversationPinChanged(state, action: PayloadAction<WsConversationPinChangedData>) {
       const { conversation_id, is_pinned } = action.payload;
       applyPinState(state.conversations, conversation_id, is_pinned);
+    },
+
+    setConversationAvatar(state, action: PayloadAction<{ conversationId: number; avatar: string | null }>) {
+      const conv = state.conversations.find((c) => c.id === action.payload.conversationId);
+      if (conv) conv.avatar = action.payload.avatar;
     },
 
     receiveTyping(state, action: PayloadAction<WsTypingData>) {
@@ -785,6 +791,7 @@ const messengerSlice = createSlice({
             id: conv.id,
             type: conv.type,
             title: conv.title,
+            avatar: conv.avatar,
             created_at: conv.created_at,
             participants: conv.participants,
             last_message: null,
@@ -885,6 +892,7 @@ export const {
   receiveConversationCreated,
   receiveConversationRead,
   receiveConversationPinChanged,
+  setConversationAvatar,
   receiveTyping,
   pruneTyping,
   addOptimisticMessage,

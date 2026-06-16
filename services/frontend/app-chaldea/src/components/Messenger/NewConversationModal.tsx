@@ -9,7 +9,12 @@ interface NewConversationModalProps {
   isOpen: boolean;
   isCreating: boolean;
   onClose: () => void;
-  onCreate: (type: ConversationType, participantIds: number[], title: string | null) => void;
+  onCreate: (
+    type: ConversationType,
+    participantIds: number[],
+    title: string | null,
+    avatarFile: File | null,
+  ) => void;
 }
 
 const NewConversationModal = ({
@@ -24,6 +29,17 @@ const NewConversationModal = ({
   const [selectedUsers, setSelectedUsers] = useState<UserPublicItem[]>([]);
   const [conversationType, setConversationType] = useState<ConversationType>('direct');
   const [groupTitle, setGroupTitle] = useState('');
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+
+  const handleAvatarChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setAvatarFile(file);
+    setAvatarPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return file ? URL.createObjectURL(file) : null;
+    });
+  }, []);
 
   // Load users on mount
   useEffect(() => {
@@ -61,6 +77,11 @@ const NewConversationModal = ({
       setSelectedUsers([]);
       setConversationType('direct');
       setGroupTitle('');
+      setAvatarFile(null);
+      setAvatarPreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
     }
   }, [isOpen]);
 
@@ -105,6 +126,7 @@ const NewConversationModal = ({
       type,
       selectedUsers.map((u) => u.id),
       title,
+      type === 'group' ? avatarFile : null,
     );
   };
 
@@ -146,20 +168,39 @@ const NewConversationModal = ({
               </div>
             )}
 
-            {/* Group title */}
+            {/* Group title + avatar */}
             {(selectedUsers.length > 1 || conversationType === 'group') && (
-              <div className="mb-4">
-                <label className="text-white/50 text-xs uppercase tracking-wider mb-1 block">
-                  Название группы
+              <div className="mb-4 flex items-end gap-3">
+                {/* Avatar picker */}
+                <label
+                  className="w-12 h-12 rounded-full overflow-hidden bg-white/10 border border-white/15 flex-shrink-0 cursor-pointer flex items-center justify-center hover:border-gold/40 transition-colors duration-200 ease-site"
+                  title="Аватар группы"
+                >
+                  {avatarPreview ? (
+                    <img src={avatarPreview} alt="Аватар группы" className="w-full h-full object-cover" />
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-white/40">
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <polyline points="21 15 16 10 5 21" />
+                    </svg>
+                  )}
+                  <input type="file" accept="image/*" onChange={handleAvatarChange} className="hidden" />
                 </label>
-                <input
-                  type="text"
-                  value={groupTitle}
-                  onChange={(e) => setGroupTitle(e.target.value)}
-                  placeholder="Введите название..."
-                  maxLength={100}
-                  className="input-underline w-full text-sm !py-1.5"
-                />
+
+                <div className="flex-1 min-w-0">
+                  <label className="text-white/50 text-xs uppercase tracking-wider mb-1 block">
+                    Название группы
+                  </label>
+                  <input
+                    type="text"
+                    value={groupTitle}
+                    onChange={(e) => setGroupTitle(e.target.value)}
+                    placeholder="Введите название..."
+                    maxLength={100}
+                    className="input-underline w-full text-sm !py-1.5"
+                  />
+                </div>
               </div>
             )}
 

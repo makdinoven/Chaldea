@@ -12,6 +12,7 @@ import {
   pinConversation,
   sendTypingSignal,
   pruneTyping,
+  setConversationAvatar,
   fetchUnreadCount,
   setActiveConversation,
   clearActiveConversation,
@@ -31,6 +32,7 @@ import {
   selectTypingUsernames,
 } from '../../redux/slices/messengerSlice';
 import type { ConversationType, PrivateMessage } from '../../types/messenger';
+import { uploadGroupAvatar } from '../../api/messengerApi';
 import ConversationList from './ConversationList';
 import MessageArea from './MessageArea';
 import NewConversationModal from './NewConversationModal';
@@ -170,12 +172,25 @@ const MessengerPage = () => {
   }, [activeConversationId, messagesPagination, dispatch]);
 
   const handleCreateConversation = useCallback(
-    async (type: ConversationType, participantIds: number[], title: string | null) => {
+    async (
+      type: ConversationType,
+      participantIds: number[],
+      title: string | null,
+      avatarFile: File | null,
+    ) => {
       setIsCreating(true);
       try {
-        await dispatch(
+        const conv = await dispatch(
           createConversation({ type, participant_ids: participantIds, title }),
         ).unwrap();
+        if (avatarFile && conv.type === 'group') {
+          try {
+            const resp = await uploadGroupAvatar(conv.id, avatarFile);
+            dispatch(setConversationAvatar({ conversationId: conv.id, avatar: resp.data.avatar_url }));
+          } catch {
+            toast.error('Диалог создан, но не удалось загрузить аватар');
+          }
+        }
         setShowNewModal(false);
         setMobileView('chat');
       } catch (err) {

@@ -67,6 +67,18 @@ export const getUnreadCount = () =>
 export const getPresence = (userId: number) =>
   axios.get<PresenceResponse>(`${BASE_URL_DEFAULT}/notifications/messenger/presence/${userId}`);
 
+// ── Group chat avatar (via photo-service) ──────────────────────────────────
+
+export const uploadGroupAvatar = (conversationId: number, file: File) => {
+  const formData = new FormData();
+  formData.append('conversation_id', String(conversationId));
+  formData.append('file', file);
+  return axios.post<{ message: string; avatar_url: string }>(
+    `${BASE_URL_DEFAULT}/photo/change_group_avatar`,
+    formData,
+  );
+};
+
 export const addParticipants = (conversationId: number, data: AddParticipantsPayload) =>
   axios.post<AddParticipantsResponse>(
     `${BASE_URL_DEFAULT}/notifications/messenger/conversations/${conversationId}/participants`,
