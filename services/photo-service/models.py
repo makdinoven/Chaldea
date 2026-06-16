@@ -128,6 +128,7 @@ class Conversation(Base):
     id = Column(Integer, primary_key=True)
     type = Column(String(10), nullable=True)
     avatar = Column(String(500), nullable=True)
+    created_by = Column(Integer, nullable=True)
 
 
 class ConversationParticipant(Base):

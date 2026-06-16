@@ -41,9 +41,9 @@ class TestGroupAvatarUpload:
     @patch("main.update_conversation_avatar")
     @patch("main.upload_file_to_s3", return_value=S3_URL)
     @patch("main.get_conversation_type", return_value="group")
-    @patch("main.is_conversation_participant", return_value=True)
+    @patch("main.get_conversation_created_by", return_value=42)
     @patch("auth_http.requests.get")
-    def test_upload_returns_200(self, mock_auth, mock_part, mock_type, mock_s3, mock_db, mock_convert, mock_validate, client):
+    def test_upload_returns_200(self, mock_auth, mock_creator, mock_type, mock_s3, mock_db, mock_convert, mock_validate, client):
         mock_auth.return_value = _mock_response(200, USER_42)
         resp = client.post(
             "/photo/change_group_avatar",
@@ -57,9 +57,10 @@ class TestGroupAvatarUpload:
         mock_s3.assert_called_once()
         mock_db.assert_called_once()
 
-    @patch("main.is_conversation_participant", return_value=False)
+    @patch("main.get_conversation_type", return_value="group")
+    @patch("main.get_conversation_created_by", return_value=99)
     @patch("auth_http.requests.get")
-    def test_non_participant_returns_403(self, mock_auth, mock_part, client):
+    def test_non_creator_returns_403(self, mock_auth, mock_creator, mock_type, client):
         mock_auth.return_value = _mock_response(200, USER_42)
         resp = client.post(
             "/photo/change_group_avatar",

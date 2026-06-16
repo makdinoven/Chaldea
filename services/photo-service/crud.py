@@ -203,6 +203,12 @@ def get_conversation_type(db: Session, conversation_id: int):
     return conv.type if conv else None
 
 
+def get_conversation_created_by(db: Session, conversation_id: int):
+    """Return the conversation creator's user_id, or None if not found."""
+    conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    return conv.created_by if conv else None
+
+
 def update_conversation_avatar(db: Session, conversation_id: int, avatar_url):
     conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if conv:

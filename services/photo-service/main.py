@@ -19,7 +19,7 @@ from crud import (
     update_mob_template_avatar, update_recipe_image,
     get_district_map_icon_url, get_location_map_icon_url,
     update_conversation_avatar, get_conversation_avatar,
-    is_conversation_participant, get_conversation_type,
+    is_conversation_participant, get_conversation_type, get_conversation_created_by,
 )
 from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime
 from fastapi.middleware.cors import CORSMiddleware
@@ -69,10 +69,10 @@ async def delete_user_avatar_photo(user_id: int, current_user = Depends(get_curr
 
 @app.post("/photo/change_group_avatar")
 async def change_group_avatar(conversation_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_current_user_via_http), db: Session = Depends(get_db)):
-    if not is_conversation_participant(db, conversation_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Вы не являетесь участником этой беседы")
     if get_conversation_type(db, conversation_id) != "group":
         raise HTTPException(status_code=400, detail="Аватар можно задать только групповому чату")
+    if get_conversation_created_by(db, conversation_id) != current_user.id:
+        raise HTTPException(status_code=403, detail="Только создатель беседы может менять аватар")
     validate_image_mime(file)
     try:
         result = convert_to_webp(file.file)
@@ -86,8 +86,8 @@ async def change_group_avatar(conversation_id: int = Form(...), file: UploadFile
 
 @app.delete("/photo/delete_group_avatar")
 async def delete_group_avatar(conversation_id: int, current_user = Depends(get_current_user_via_http), db: Session = Depends(get_db)):
-    if not is_conversation_participant(db, conversation_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Вы не являетесь участником этой беседы")
+    if get_conversation_created_by(db, conversation_id) != current_user.id:
+        raise HTTPException(status_code=403, detail="Только создатель беседы может менять аватар")
     try:
         avatar_url = get_conversation_avatar(db, conversation_id)
         if avatar_url:
