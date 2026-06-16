@@ -453,15 +453,21 @@ const MessageArea = ({
               );
             }
             return (
-              <MessageBubble
+              // content-visibility lets the browser skip rendering/layout of
+              // off-screen messages (lightweight virtualization, no JS windowing).
+              <div
                 key={item.key}
-                message={item.message}
-                isOwn={item.message.sender_id === currentUserId}
-                onDelete={onDeleteMessage}
-                onReply={onReply}
-                onEdit={onEdit}
-                onReact={onReact}
-              />
+                style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 64px' }}
+              >
+                <MessageBubble
+                  message={item.message}
+                  isOwn={item.message.sender_id === currentUserId}
+                  onDelete={onDeleteMessage}
+                  onReply={onReply}
+                  onEdit={onEdit}
+                  onReact={onReact}
+                />
+              </div>
             );
           })}
         </div>
