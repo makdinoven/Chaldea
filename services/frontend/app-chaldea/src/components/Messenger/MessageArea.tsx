@@ -203,10 +203,14 @@ const MessageArea = ({
       prevOldest !== null && oldestId !== prevOldest && newestId === prevNewest;
 
     if (isFirstLoad) {
-      // Jump to the latest message instantly on open.
-      requestAnimationFrame(() => {
+      // Jump to the latest message on open, and once more shortly after to
+      // account for late layout (e.g. images finishing loading) so we reliably
+      // land at the very bottom.
+      const toBottom = () => {
         container.scrollTop = container.scrollHeight;
-      });
+      };
+      requestAnimationFrame(toBottom);
+      setTimeout(toBottom, 120);
     } else if (loadedOlder && loadMoreAnchorRef.current) {
       // Older page prepended — preserve the reading position so the view
       // doesn't jump (this is what made history unreadable before).
@@ -453,21 +457,15 @@ const MessageArea = ({
               );
             }
             return (
-              // content-visibility lets the browser skip rendering/layout of
-              // off-screen messages (lightweight virtualization, no JS windowing).
-              <div
+              <MessageBubble
                 key={item.key}
-                style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 64px' }}
-              >
-                <MessageBubble
-                  message={item.message}
-                  isOwn={item.message.sender_id === currentUserId}
-                  onDelete={onDeleteMessage}
-                  onReply={onReply}
-                  onEdit={onEdit}
-                  onReact={onReact}
-                />
-              </div>
+                message={item.message}
+                isOwn={item.message.sender_id === currentUserId}
+                onDelete={onDeleteMessage}
+                onReply={onReply}
+                onEdit={onEdit}
+                onReact={onReact}
+              />
             );
           })}
         </div>
