@@ -120,3 +120,19 @@ class Recipe(Base):
 
     id = Column(Integer, primary_key=True)
     icon = Column(String(255), nullable=True)
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True)
+    type = Column(String(10), nullable=True)
+    avatar = Column(String(500), nullable=True)
+
+
+class ConversationParticipant(Base):
+    __tablename__ = "conversation_participants"
+
+    id = Column(Integer, primary_key=True)
+    conversation_id = Column(Integer, nullable=False)
+    user_id = Column(Integer, nullable=False)

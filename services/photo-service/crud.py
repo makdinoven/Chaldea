@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from models import (
     User, Character, Area, Country, Region, District,
     Location, Skill, SkillRank, Item, GameRule, Race, Subrace,
-    MobTemplate, Recipe,
+    MobTemplate, Recipe, Conversation, ConversationParticipant,
 )
 
 
@@ -183,6 +183,36 @@ def update_mob_template_avatar(db: Session, mob_template_id: int, avatar_url: st
     if mob:
         mob.avatar = avatar_url
         db.commit()
+
+
+def is_conversation_participant(db: Session, conversation_id: int, user_id: int) -> bool:
+    """True if user_id participates in the conversation."""
+    return (
+        db.query(ConversationParticipant)
+        .filter(
+            ConversationParticipant.conversation_id == conversation_id,
+            ConversationParticipant.user_id == user_id,
+        )
+        .first()
+    ) is not None
+
+
+def get_conversation_type(db: Session, conversation_id: int):
+    """Return the conversation type ('direct'/'group') or None if not found."""
+    conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    return conv.type if conv else None
+
+
+def update_conversation_avatar(db: Session, conversation_id: int, avatar_url):
+    conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if conv:
+        conv.avatar = avatar_url
+        db.commit()
+
+
+def get_conversation_avatar(db: Session, conversation_id: int):
+    conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    return conv.avatar if conv else None
 
 
 def update_recipe_image(db: Session, recipe_id: int, image_url: str):
