@@ -100,6 +100,20 @@ async def delete_group_avatar(conversation_id: int, current_user = Depends(get_c
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/photo/upload_chat_image")
+async def upload_chat_image(file: UploadFile = File(...), current_user = Depends(get_current_user_via_http)):
+    """Upload an image for a chat message. Returns the S3 URL; no DB write
+    (the URL is attached to the message by notification-service on send)."""
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        unique_filename = generate_unique_filename("chat_image", current_user.id, extension=result.extension)
+        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="chat_images", content_type=result.content_type)
+        return {"image_url": image_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/photo/change_character_avatar_photo")
 async def change_character_avatar_photo(character_id: int = Form(...), user_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(get_current_user_via_http), db: Session = Depends(get_db)):
     owner_id = get_character_owner_id(db, character_id)
