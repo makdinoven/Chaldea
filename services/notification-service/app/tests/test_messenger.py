@@ -976,3 +976,33 @@ class TestTypingAndPresence:
         resp = messenger_client.get("/notifications/messenger/presence/4242")
         assert resp.status_code == 200
         assert resp.json()["online"] is False
+
+
+# ===========================================================================
+# Optimistic send — temp_id echo (FEAT-131 optimistic)
+# ===========================================================================
+
+
+class TestOptimisticTempId:
+
+    def test_send_echoes_temp_id_on_error(self):
+        """handle_messenger_send echoes the client temp_id back in error results
+        so the optimistic placeholder can be reconciled/removed."""
+        from messenger_ws_handler import handle_messenger_send
+
+        with patch("messenger_ws_handler.SessionLocal", return_value=MagicMock()):
+            # Missing content → early error, but temp_id must still be echoed.
+            result = handle_messenger_send(1, "tok", {"conversation_id": 5, "temp_id": -7})
+
+        assert result["type"] == "messenger_error"
+        assert result["data"]["temp_id"] == -7
+
+    def test_send_without_temp_id_unchanged(self):
+        """No temp_id in the request → no temp_id added to the response."""
+        from messenger_ws_handler import handle_messenger_send
+
+        with patch("messenger_ws_handler.SessionLocal", return_value=MagicMock()):
+            result = handle_messenger_send(1, "tok", {"conversation_id": 5})
+
+        assert result["type"] == "messenger_error"
+        assert "temp_id" not in result["data"]

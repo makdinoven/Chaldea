@@ -82,7 +82,18 @@ def handle_messenger_typing(user_id: int, data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def handle_messenger_send(user_id: int, user_token: str, data: dict) -> dict:
-    """Send a message via WebSocket. Returns the response dict to send back."""
+    """Send a message via WebSocket, echoing the client's temp_id back in the
+    response (ok or error) so the client can reconcile its optimistic message."""
+    result = _handle_messenger_send_impl(user_id, user_token, data)
+    temp_id = data.get("temp_id")
+    if temp_id is not None and isinstance(result, dict) and isinstance(result.get("data"), dict):
+        # Copy so we never mutate the dict already handed to the broadcast.
+        return {**result, "data": {**result["data"], "temp_id": temp_id}}
+    return result
+
+
+def _handle_messenger_send_impl(user_id: int, user_token: str, data: dict) -> dict:
+    """Actual send logic. Returns the response dict to send back."""
     action = "messenger_send"
     db = SessionLocal()
     try:
