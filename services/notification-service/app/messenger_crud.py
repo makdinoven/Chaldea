@@ -220,6 +220,32 @@ def get_message_by_id(
     return db.query(PrivateMessage).filter(PrivateMessage.id == message_id).first()
 
 
+def search_messages(
+    db: Session,
+    conversation_id: int,
+    query: str,
+    page: int = 1,
+    page_size: int = 20,
+):
+    """Full-text-ish search (LIKE) over non-deleted messages in a conversation."""
+    like = f"%{query}%"
+    base = [
+        PrivateMessage.conversation_id == conversation_id,
+        PrivateMessage.deleted_at.is_(None),
+        PrivateMessage.content.like(like),
+    ]
+    total = db.query(func.count(PrivateMessage.id)).filter(*base).scalar()
+    items = (
+        db.query(PrivateMessage)
+        .filter(*base)
+        .order_by(desc(PrivateMessage.created_at))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
 # ---------------------------------------------------------------------------
 # Reactions
 # ---------------------------------------------------------------------------

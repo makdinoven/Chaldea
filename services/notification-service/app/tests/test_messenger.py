@@ -1100,3 +1100,101 @@ class TestImageAttachment:
         with patch("messenger_ws_handler.SessionLocal", return_value=MagicMock()):
             result = handle_messenger_send(1, "tok", {"conversation_id": 5, "content": ""})
         assert result["type"] == "messenger_error"
+
+
+# ===========================================================================
+# Search + mentions (FEAT-138)
+# ===========================================================================
+
+
+class TestSearch:
+
+    def test_search_finds_matching(self, messenger_client, db_session):
+        from messenger_models import Conversation, ConversationParticipant, PrivateMessage
+        conv = Conversation(type="direct", created_by=1)
+        db_session.add(conv)
+        db_session.flush()
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=1))
+        db_session.add(PrivateMessage(conversation_id=conv.id, sender_id=1, content="hello world"))
+        db_session.add(PrivateMessage(conversation_id=conv.id, sender_id=1, content="goodbye moon"))
+        db_session.commit()
+
+        with _Patches():
+            resp = messenger_client.get(
+                f"/notifications/messenger/conversations/{conv.id}/search?q=hello"
+            )
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert len(items) == 1
+        assert "hello" in items[0]["content"]
+
+    def test_search_non_participant_403(self, messenger_client, db_session):
+        from messenger_models import Conversation, ConversationParticipant
+        conv = Conversation(type="direct", created_by=2)
+        db_session.add(conv)
+        db_session.flush()
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=2))
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=3))
+        db_session.commit()
+
+        with _Patches():
+            resp = messenger_client.get(
+                f"/notifications/messenger/conversations/{conv.id}/search?q=x"
+            )
+        assert resp.status_code == 403
+
+
+class TestMentions:
+
+    def test_mention_notifies_participant(self, db_session):
+        import messenger_ws_handler as h
+        from messenger_models import Conversation, ConversationParticipant
+        conv = Conversation(type="group", title="g", created_by=1)
+        db_session.add(conv)
+        db_session.flush()
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=1))
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=2))
+        db_session.commit()
+
+        def fake_profile(uid):
+            name = {1: "alice", 2: "bob"}.get(uid)
+            return {"username": name, "avatar": None, "avatar_frame": None, "chat_background": None}
+
+        with patch.object(h, "SessionLocal", return_value=db_session), \
+                patch.object(h, "_fetch_user_profile", side_effect=fake_profile), \
+                patch.object(h, "send_to_user") as mock_send, \
+                patch.object(h, "_last_message_time", {}):
+            result = h.handle_messenger_send(1, "tok", {"conversation_id": conv.id, "content": "hey @bob"})
+
+        assert result["type"] == "messenger_send_ok"
+        mention_calls = [
+            c for c in mock_send.call_args_list if c[0][1].get("type") == "messenger_mention"
+        ]
+        assert len(mention_calls) == 1
+        assert mention_calls[0][0][0] == 2  # delivered to bob
+        assert mention_calls[0][0][1]["data"]["from_username"] == "alice"
+
+    def test_no_mention_no_notification(self, db_session):
+        import messenger_ws_handler as h
+        from messenger_models import Conversation, ConversationParticipant
+        conv = Conversation(type="group", title="g", created_by=1)
+        db_session.add(conv)
+        db_session.flush()
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=1))
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=2))
+        db_session.commit()
+
+        def fake_profile(uid):
+            name = {1: "alice", 2: "bob"}.get(uid)
+            return {"username": name, "avatar": None, "avatar_frame": None, "chat_background": None}
+
+        with patch.object(h, "SessionLocal", return_value=db_session), \
+                patch.object(h, "_fetch_user_profile", side_effect=fake_profile), \
+                patch.object(h, "send_to_user") as mock_send, \
+                patch.object(h, "_last_message_time", {}):
+            h.handle_messenger_send(1, "tok", {"conversation_id": conv.id, "content": "no mentions here"})
+
+        mention_calls = [
+            c for c in mock_send.call_args_list if c[0][1].get("type") == "messenger_mention"
+        ]
+        assert mention_calls == []

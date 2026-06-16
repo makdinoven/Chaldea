@@ -451,6 +451,64 @@ def get_messages(
 
 
 # ---------------------------------------------------------------------------
+# GET /messenger/conversations/{conversation_id}/search — Search messages
+# ---------------------------------------------------------------------------
+
+@messenger_router.get(
+    "/conversations/{conversation_id}/search",
+    response_model=PaginatedMessages,
+)
+def search_conversation_messages(
+    conversation_id: int,
+    q: str = Query(..., min_length=1),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    conv = messenger_crud.get_conversation_by_id(db, conversation_id)
+    if conv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Беседа не найдена")
+    if not messenger_crud.is_participant(db, conversation_id, current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Вы не являетесь участником этой беседы",
+        )
+
+    result = messenger_crud.search_messages(db, conversation_id, q.strip(), page, page_size)
+
+    profile_cache: Dict[int, dict] = {}
+    items = []
+    for msg in result["items"]:
+        if msg.sender_id not in profile_cache:
+            profile_cache[msg.sender_id] = _fetch_user_profile(msg.sender_id)
+        prof = profile_cache[msg.sender_id]
+        items.append(PrivateMessageResponse(
+            id=msg.id,
+            conversation_id=msg.conversation_id,
+            sender_id=msg.sender_id,
+            sender_username=prof["username"],
+            sender_avatar=prof["avatar"],
+            sender_avatar_frame=prof["avatar_frame"],
+            content=msg.content,
+            image_url=msg.image_url,
+            created_at=msg.created_at,
+            is_deleted=False,
+            edited_at=msg.edited_at,
+            reply_to_id=msg.reply_to_id,
+            reply_to=None,
+            reactions=[],
+        ))
+
+    return PaginatedMessages(
+        items=items,
+        total=result["total"],
+        page=result["page"],
+        page_size=result["page_size"],
+    )
+
+
+# ---------------------------------------------------------------------------
 # POST /messenger/conversations/{conversation_id}/messages — Send message
 # ---------------------------------------------------------------------------
 

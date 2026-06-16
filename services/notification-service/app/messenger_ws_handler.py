@@ -17,6 +17,9 @@ from ws_manager import send_to_user
 
 logger = logging.getLogger(__name__)
 
+# @username mention pattern (letters, digits, underscore, hyphen).
+_MENTION_RE = re.compile(r"@([A-Za-z0-9_\-]+)")
+
 # ---------------------------------------------------------------------------
 # Rate limiting (shared with messenger_routes — import from there)
 # ---------------------------------------------------------------------------
@@ -231,6 +234,23 @@ def _handle_messenger_send_impl(user_id: int, user_token: str, data: dict) -> di
         for pid in participant_ids:
             if pid != user_id:
                 send_to_user(pid, ws_push)
+
+        # 9.1 Notify @mentioned participants (only when content has mentions).
+        mentioned = set(_MENTION_RE.findall(content))
+        if mentioned:
+            for pid in participant_ids:
+                if pid == user_id:
+                    continue
+                prof = _fetch_user_profile(pid)
+                if prof.get("username") in mentioned:
+                    send_to_user(pid, {
+                        "type": "messenger_mention",
+                        "data": {
+                            "conversation_id": conversation_id,
+                            "message_id": msg.id,
+                            "from_username": sender_profile.get("username"),
+                        },
+                    })
 
         return {"type": "messenger_send_ok", "data": msg_data}
 
