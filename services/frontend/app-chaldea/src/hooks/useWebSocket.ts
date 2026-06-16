@@ -209,7 +209,21 @@ const useWebSocket = (): UseWebSocketReturn => {
               break;
             }
             case 'private_message': {
-              dispatch(receivePrivateMessage(parsed.data as WsPrivateMessageData));
+              const pm = parsed.data as WsPrivateMessageData;
+              dispatch(receivePrivateMessage(pm));
+              // Desktop notification when the tab is in the background.
+              if (
+                typeof document !== 'undefined' && document.hidden &&
+                typeof Notification !== 'undefined' && Notification.permission === 'granted'
+              ) {
+                try {
+                  new Notification(pm.sender_username || 'Новое сообщение', {
+                    body: pm.content || '📷 Изображение',
+                  });
+                } catch {
+                  // Ignore — notifications are best-effort.
+                }
+              }
               break;
             }
             case 'private_message_deleted': {
