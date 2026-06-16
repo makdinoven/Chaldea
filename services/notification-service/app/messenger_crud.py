@@ -178,6 +178,7 @@ def create_message(
     sender_id: int,
     content: str,
     reply_to_id: Optional[int] = None,
+    image_url: Optional[str] = None,
 ) -> PrivateMessage:
     """Insert a new private message and return it."""
     msg = PrivateMessage(
@@ -185,6 +186,7 @@ def create_message(
         sender_id=sender_id,
         content=content,
         reply_to_id=reply_to_id,
+        image_url=image_url,
     )
     db.add(msg)
     db.commit()

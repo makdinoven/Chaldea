@@ -138,9 +138,10 @@ def _handle_messenger_send_impl(user_id: int, user_token: str, data: dict) -> di
         conversation_id = data.get("conversation_id")
         content = data.get("content")
         reply_to_id = data.get("reply_to_id")
+        image_url = data.get("image_url")
 
-        if not conversation_id or not content:
-            return _error(action, "Не указан conversation_id или content")
+        if not conversation_id or (not content and not image_url):
+            return _error(action, "Пустое сообщение")
 
         # 1. Rate limit
         now = time.time()
@@ -167,7 +168,7 @@ def _handle_messenger_send_impl(user_id: int, user_token: str, data: dict) -> di
                     return _error(action, error)
 
         # 5. Sanitize content
-        content = _strip_html(content)
+        content = _strip_html(content or "")
 
         # 5.1. Validate reply_to_id
         reply_preview_data = None
@@ -196,6 +197,7 @@ def _handle_messenger_send_impl(user_id: int, user_token: str, data: dict) -> di
             sender_id=user_id,
             content=content,
             reply_to_id=reply_to_id,
+            image_url=image_url,
         )
 
         # 7. Update rate limit
@@ -212,6 +214,7 @@ def _handle_messenger_send_impl(user_id: int, user_token: str, data: dict) -> di
             "sender_avatar": sender_profile["avatar"],
             "sender_avatar_frame": sender_profile["avatar_frame"],
             "content": msg.content,
+            "image_url": msg.image_url,
             "created_at": msg.created_at.isoformat(),
             "is_deleted": False,
             "edited_at": None,

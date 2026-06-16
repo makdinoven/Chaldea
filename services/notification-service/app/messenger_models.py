@@ -69,6 +69,7 @@ class PrivateMessage(Base):
     )
     sender_id = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)
+    image_url = Column(String(500), nullable=True)  # optional attached image (S3)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     deleted_at = Column(DateTime, nullable=True)
     edited_at = Column(DateTime, nullable=True)

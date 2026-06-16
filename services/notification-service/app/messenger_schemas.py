@@ -112,6 +112,7 @@ class PrivateMessageResponse(BaseModel):
     sender_avatar: Optional[str] = None
     sender_avatar_frame: Optional[str] = None
     content: str
+    image_url: Optional[str] = None
     created_at: datetime
     is_deleted: bool = False
     edited_at: Optional[datetime] = None

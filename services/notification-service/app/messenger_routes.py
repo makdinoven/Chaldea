@@ -432,6 +432,7 @@ def get_messages(
                 sender_avatar=profile["avatar"],
                 sender_avatar_frame=profile["avatar_frame"],
                 content="" if is_deleted else msg.content,
+                image_url=None if is_deleted else msg.image_url,
                 created_at=msg.created_at,
                 is_deleted=is_deleted,
                 edited_at=msg.edited_at,

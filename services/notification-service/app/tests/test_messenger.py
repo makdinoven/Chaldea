@@ -1071,3 +1071,32 @@ class TestReactions:
             handle_messenger_react(1, {"message_id": msg.id, "emoji": "👍"})
 
         mock_send.assert_not_called()
+
+
+# ===========================================================================
+# Image attachments (FEAT-137)
+# ===========================================================================
+
+
+class TestImageAttachment:
+
+    def test_create_message_with_image(self, db_session):
+        import messenger_crud
+        from messenger_models import Conversation, ConversationParticipant
+        conv = Conversation(type="direct", created_by=1)
+        db_session.add(conv)
+        db_session.flush()
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=1))
+        db_session.commit()
+
+        msg = messenger_crud.create_message(
+            db_session, conv.id, 1, "", image_url="https://s3/x.webp"
+        )
+        assert msg.image_url == "https://s3/x.webp"
+        assert msg.content == ""
+
+    def test_send_empty_without_image_errors(self):
+        from messenger_ws_handler import handle_messenger_send
+        with patch("messenger_ws_handler.SessionLocal", return_value=MagicMock()):
+            result = handle_messenger_send(1, "tok", {"conversation_id": 5, "content": ""})
+        assert result["type"] == "messenger_error"
