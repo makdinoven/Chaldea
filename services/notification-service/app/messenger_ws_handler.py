@@ -46,6 +46,44 @@ def _error(action: str, detail: str) -> dict:
 # messenger_typing — ephemeral "user is typing" relay (no DB writes)
 # ---------------------------------------------------------------------------
 
+def handle_messenger_react(user_id: int, data: dict) -> None:
+    """Toggle an emoji reaction on a message and broadcast the change to all
+    participants (including the reactor, so every client updates uniformly)."""
+    db = SessionLocal()
+    try:
+        message_id = data.get("message_id")
+        emoji = data.get("emoji")
+        if not message_id or not emoji:
+            return
+        emoji = str(emoji)[:16]
+
+        msg = messenger_crud.get_message_by_id(db, message_id)
+        if msg is None:
+            return
+        if not messenger_crud.is_participant(db, msg.conversation_id, user_id):
+            return
+
+        added = messenger_crud.toggle_reaction(db, message_id, user_id, emoji)
+
+        participant_ids = messenger_crud.get_participant_ids(db, msg.conversation_id)
+        event = {
+            "type": "message_reaction",
+            "data": {
+                "message_id": message_id,
+                "conversation_id": msg.conversation_id,
+                "user_id": user_id,
+                "emoji": emoji,
+                "action": "add" if added else "remove",
+            },
+        }
+        for pid in participant_ids:
+            send_to_user(pid, event)
+    except Exception as e:
+        logger.warning("handle_messenger_react error for user %d: %s", user_id, e)
+    finally:
+        db.close()
+
+
 def handle_messenger_typing(user_id: int, data: dict) -> None:
     """Relay a typing signal to the other participants. Ephemeral — nothing is
     persisted and nothing is echoed back to the sender."""

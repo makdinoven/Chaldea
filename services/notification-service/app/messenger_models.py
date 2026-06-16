@@ -86,3 +86,22 @@ class PrivateMessage(Base):
         Index("ix_pm_sender", "sender_id"),
         Index("ix_pm_reply_to", "reply_to_id"),
     )
+
+
+class MessageReaction(Base):
+    __tablename__ = "message_reactions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(
+        Integer,
+        ForeignKey("private_messages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(Integer, nullable=False)
+    emoji = Column(String(16), nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("message_id", "user_id", "emoji", name="uq_reaction"),
+        Index("ix_reaction_message", "message_id"),
+    )

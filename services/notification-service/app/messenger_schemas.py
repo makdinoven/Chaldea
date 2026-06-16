@@ -98,6 +98,12 @@ class ReplyPreview(BaseModel):
         orm_mode = True
 
 
+class ReactionSummary(BaseModel):
+    emoji: str
+    count: int
+    reacted_by_me: bool = False
+
+
 class PrivateMessageResponse(BaseModel):
     id: int
     conversation_id: int
@@ -111,6 +117,7 @@ class PrivateMessageResponse(BaseModel):
     edited_at: Optional[datetime] = None
     reply_to_id: Optional[int] = None
     reply_to: Optional[ReplyPreview] = None
+    reactions: List[ReactionSummary] = []
 
     class Config:
         orm_mode = True

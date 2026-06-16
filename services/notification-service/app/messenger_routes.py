@@ -24,6 +24,7 @@ from messenger_schemas import (
     PrivateMessageUpdate,
     PrivateMessageResponse,
     ReplyPreview,
+    ReactionSummary,
     AddParticipantsRequest,
     AddParticipantsResponse,
     UnreadCountResponse,
@@ -388,6 +389,10 @@ def get_messages(
         blocked_user_ids=blocked_ids if blocked_ids else None,
     )
 
+    # Batch-fetch reaction summaries for this page of messages.
+    msg_ids = [m.id for m in result["items"]]
+    reactions_map = messenger_crud.get_reactions_summary(db, msg_ids, current_user.id)
+
     # Convert ORM objects to response dicts with enriched sender info
     enriched_items = []
     # Cache profiles to avoid duplicate requests
@@ -432,6 +437,7 @@ def get_messages(
                 edited_at=msg.edited_at,
                 reply_to_id=msg.reply_to_id,
                 reply_to=reply_preview,
+                reactions=[ReactionSummary(**r) for r in reactions_map.get(msg.id, [])],
             )
         )
 

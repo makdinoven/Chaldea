@@ -30,6 +30,7 @@ from messenger_ws_handler import (
     handle_messenger_delete,
     handle_messenger_mark_read,
     handle_messenger_typing,
+    handle_messenger_react,
 )
 
 import pika
@@ -103,6 +104,11 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                         # Ephemeral typing relay — no response echoed to sender.
                         await asyncio.to_thread(
                             handle_messenger_typing, user_id, payload
+                        )
+                    elif action == "messenger_react":
+                        # Reaction toggle — broadcast handled inside, no echo.
+                        await asyncio.to_thread(
+                            handle_messenger_react, user_id, payload
                         )
                     # else: ignore unknown actions (backward compat)
                 except json.JSONDecodeError:

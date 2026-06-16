@@ -10,7 +10,7 @@ from typing import Optional, List, Set
 from sqlalchemy.orm import Session, joinedload, aliased
 from sqlalchemy import desc, func, and_
 
-from messenger_models import Conversation, ConversationParticipant, PrivateMessage
+from messenger_models import Conversation, ConversationParticipant, PrivateMessage, MessageReaction
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +216,63 @@ def get_message_by_id(
 ) -> Optional[PrivateMessage]:
     """Get a single message by ID."""
     return db.query(PrivateMessage).filter(PrivateMessage.id == message_id).first()
+
+
+# ---------------------------------------------------------------------------
+# Reactions
+# ---------------------------------------------------------------------------
+
+def toggle_reaction(db: Session, message_id: int, user_id: int, emoji: str) -> bool:
+    """Toggle a reaction. Returns True if it was added, False if removed."""
+    existing = (
+        db.query(MessageReaction)
+        .filter(
+            MessageReaction.message_id == message_id,
+            MessageReaction.user_id == user_id,
+            MessageReaction.emoji == emoji,
+        )
+        .first()
+    )
+    if existing is not None:
+        db.delete(existing)
+        db.commit()
+        return False
+    db.add(MessageReaction(message_id=message_id, user_id=user_id, emoji=emoji))
+    db.commit()
+    return True
+
+
+def get_reactions_summary(
+    db: Session,
+    message_ids: List[int],
+    current_user_id: int,
+) -> dict:
+    """Return {message_id: [{emoji, count, reacted_by_me}]} for the given messages."""
+    if not message_ids:
+        return {}
+
+    rows = (
+        db.query(MessageReaction.message_id, MessageReaction.emoji, MessageReaction.user_id)
+        .filter(MessageReaction.message_id.in_(message_ids))
+        .all()
+    )
+
+    # message_id -> emoji -> {count, reacted_by_me}
+    acc: dict = {}
+    for mid, emoji, uid in rows:
+        emap = acc.setdefault(mid, {})
+        entry = emap.setdefault(emoji, {"count": 0, "reacted_by_me": False})
+        entry["count"] += 1
+        if uid == current_user_id:
+            entry["reacted_by_me"] = True
+
+    result = {}
+    for mid, emap in acc.items():
+        result[mid] = [
+            {"emoji": emoji, "count": v["count"], "reacted_by_me": v["reacted_by_me"]}
+            for emoji, v in emap.items()
+        ]
+    return result
 
 
 def edit_message(

@@ -1006,3 +1006,68 @@ class TestOptimisticTempId:
 
         assert result["type"] == "messenger_error"
         assert "temp_id" not in result["data"]
+
+
+# ===========================================================================
+# Reactions (FEAT-136)
+# ===========================================================================
+
+
+def _make_conv_with_message(db_session, participant_ids, sender_id, content="hi"):
+    from messenger_models import Conversation, ConversationParticipant, PrivateMessage
+    conv = Conversation(type="direct", created_by=sender_id)
+    db_session.add(conv)
+    db_session.flush()
+    for uid in participant_ids:
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=uid))
+    msg = PrivateMessage(conversation_id=conv.id, sender_id=sender_id, content=content)
+    db_session.add(msg)
+    db_session.commit()
+    return conv, msg
+
+
+class TestReactions:
+
+    def test_toggle_reaction_add_then_remove(self, db_session):
+        import messenger_crud
+        _conv, msg = _make_conv_with_message(db_session, [1], 1)
+
+        assert messenger_crud.toggle_reaction(db_session, msg.id, 2, "👍") is True
+        summ = messenger_crud.get_reactions_summary(db_session, [msg.id], 2)
+        assert summ[msg.id] == [{"emoji": "👍", "count": 1, "reacted_by_me": True}]
+
+        # Another user reacts with a different emoji.
+        messenger_crud.toggle_reaction(db_session, msg.id, 3, "❤️")
+        summ2 = messenger_crud.get_reactions_summary(db_session, [msg.id], 2)
+        emojis = {e["emoji"]: e for e in summ2[msg.id]}
+        assert emojis["❤️"]["count"] == 1
+        assert emojis["❤️"]["reacted_by_me"] is False
+
+        # Toggle off.
+        assert messenger_crud.toggle_reaction(db_session, msg.id, 2, "👍") is False
+        summ3 = messenger_crud.get_reactions_summary(db_session, [msg.id], 2)
+        assert all(e["emoji"] != "👍" for e in summ3.get(msg.id, []))
+
+    def test_react_broadcasts_to_all_participants(self, db_session):
+        from messenger_ws_handler import handle_messenger_react
+        _conv, msg = _make_conv_with_message(db_session, [1, 2], 1)
+
+        with patch("messenger_ws_handler.send_to_user") as mock_send, \
+                patch("messenger_ws_handler.SessionLocal", return_value=db_session):
+            handle_messenger_react(2, {"message_id": msg.id, "emoji": "❤️"})
+
+        assert mock_send.call_count == 2  # both participants
+        payload = mock_send.call_args_list[0][0][1]
+        assert payload["type"] == "message_reaction"
+        assert payload["data"]["action"] == "add"
+        assert payload["data"]["emoji"] == "❤️"
+
+    def test_react_non_participant_no_op(self, db_session):
+        from messenger_ws_handler import handle_messenger_react
+        _conv, msg = _make_conv_with_message(db_session, [2, 3], 2)
+
+        with patch("messenger_ws_handler.send_to_user") as mock_send, \
+                patch("messenger_ws_handler.SessionLocal", return_value=db_session):
+            handle_messenger_react(1, {"message_id": msg.id, "emoji": "👍"})
+
+        mock_send.assert_not_called()
