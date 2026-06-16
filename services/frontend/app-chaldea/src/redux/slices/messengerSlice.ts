@@ -89,6 +89,11 @@ export interface MessengerState {
 // How long a typing signal stays "fresh" before it is pruned (ms).
 const TYPING_TTL_MS = 6000;
 
+// Optimistic messages use unique negative ids (real ids are positive) until the
+// server confirms them via messenger_send_ok (which echoes back the temp id).
+let optimisticIdCounter = -1;
+const nextOptimisticId = (): number => optimisticIdCounter--;
+
 const initialState: MessengerState = {
   conversations: [],
   activeConversationId: null,
@@ -152,16 +157,41 @@ export const fetchMessages = createAsyncThunk<
 export const sendMessage = createAsyncThunk<
   void,
   { conversationId: number; content: string; reply_to_id?: number },
-  { rejectValue: string }
+  { state: RootState; rejectValue: string }
 >(
   'messenger/sendMessage',
   async ({ conversationId, content, reply_to_id }, thunkAPI) => {
+    const user = thunkAPI.getState().user;
+    const tempId = nextOptimisticId();
+
+    // Show the message immediately (optimistic). It is reconciled with the real
+    // message on messenger_send_ok, or removed on messenger_error / send failure.
+    const optimistic: PrivateMessage = {
+      id: tempId,
+      conversation_id: conversationId,
+      sender_id: user.id ?? 0,
+      sender_username: user.username ?? '',
+      sender_avatar: user.avatar ?? null,
+      sender_avatar_frame: null,
+      sender_chat_background: null,
+      content,
+      created_at: new Date().toISOString(),
+      is_deleted: false,
+      edited_at: null,
+      reply_to_id: reply_to_id ?? null,
+      reply_to: null,
+      status: 'sending',
+    };
+    thunkAPI.dispatch(addOptimisticMessage(optimistic));
+
     const sent = sendWsMessage('messenger_send', {
       conversation_id: conversationId,
       content,
+      temp_id: tempId,
       ...(reply_to_id != null ? { reply_to_id } : {}),
     });
     if (!sent) {
+      thunkAPI.dispatch(removeOptimisticMessage({ tempId }));
       return thunkAPI.rejectWithValue('WebSocket не подключён. Попробуйте позже.');
     }
     // Fire-and-forget: state update happens via messenger_send_ok / private_message WS events
@@ -581,17 +611,66 @@ const messengerSlice = createSlice({
       }
     },
 
-    /** Handle messenger_send_ok — adds the sender's own message to state */
-    receiveOwnSentMessage(state, action: PayloadAction<PrivateMessage>) {
+    /** Add an optimistic (not-yet-confirmed) message to the top of the list. */
+    addOptimisticMessage(state, action: PayloadAction<PrivateMessage>) {
       const msg = action.payload;
+      const convId = msg.conversation_id;
+      if (!state.messages[convId]) {
+        state.messages[convId] = [];
+      }
+      state.messages[convId].unshift(msg);
+
+      const conv = state.conversations.find((c) => c.id === convId);
+      if (conv) {
+        conv.last_message = {
+          id: msg.id,
+          sender_id: msg.sender_id,
+          sender_username: msg.sender_username,
+          content: msg.content,
+          created_at: msg.created_at,
+        };
+        bumpConversationToTop(state.conversations, convId);
+      }
+    },
+
+    /** Remove an optimistic message by its temp id (on send failure / error). */
+    removeOptimisticMessage(state, action: PayloadAction<{ tempId: number }>) {
+      const { tempId } = action.payload;
+      for (const key of Object.keys(state.messages)) {
+        const arr = state.messages[Number(key)];
+        const idx = arr.findIndex((m) => m.id === tempId);
+        if (idx !== -1) {
+          arr.splice(idx, 1);
+          return;
+        }
+      }
+    },
+
+    /** Handle messenger_send_ok — reconciles the optimistic message (matched by
+     *  temp_id) with the confirmed server message. */
+    receiveOwnSentMessage(state, action: PayloadAction<PrivateMessage & { temp_id?: number }>) {
+      const { temp_id, ...rest } = action.payload;
+      const msg: PrivateMessage = { ...rest, status: 'sent' };
       const convId = msg.conversation_id;
 
       if (!state.messages[convId]) {
         state.messages[convId] = [];
       }
-      const exists = state.messages[convId].some((m) => m.id === msg.id);
-      if (!exists) {
-        state.messages[convId].unshift(msg);
+      const arr = state.messages[convId];
+      const alreadyReal = arr.some((m) => m.id === msg.id);
+
+      if (temp_id != null) {
+        const idx = arr.findIndex((m) => m.id === temp_id);
+        if (idx !== -1) {
+          // Replace the optimistic placeholder in place (or drop it if the real
+          // message somehow already arrived, e.g. via another tab).
+          if (alreadyReal) arr.splice(idx, 1);
+          else arr[idx] = msg;
+        } else if (!alreadyReal) {
+          arr.unshift(msg);
+        }
+      } else if (!alreadyReal) {
+        arr.unshift(msg);
       }
 
       // Update last_message in conversation list
@@ -604,7 +683,6 @@ const messengerSlice = createSlice({
           content: msg.content,
           created_at: msg.created_at,
         };
-        // Bump the conversation up the list (TG-style live reorder).
         bumpConversationToTop(state.conversations, convId);
       }
 
@@ -809,6 +887,8 @@ export const {
   receiveConversationPinChanged,
   receiveTyping,
   pruneTyping,
+  addOptimisticMessage,
+  removeOptimisticMessage,
   receiveOwnSentMessage,
   setActiveConversation,
   clearActiveConversation,

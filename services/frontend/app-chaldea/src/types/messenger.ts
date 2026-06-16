@@ -63,6 +63,8 @@ export interface PrivateMessage {
   edited_at?: string | null;
   reply_to_id?: number | null;
   reply_to?: ReplyPreview | null;
+  // Client-side delivery state for optimistic messages (absent on server data).
+  status?: 'sending' | 'sent';
 }
 
 // ── Pagination ──────────────────────────────────────────────────────────────

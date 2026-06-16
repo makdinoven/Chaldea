@@ -60,7 +60,11 @@ const MessageBubble = ({ message, isOwn, onDelete, onReply, onEdit }: MessageBub
     );
   }
 
+  const isSending = message.status === 'sending';
+
   const handleBubbleClick = () => {
+    // Optimistic (not-yet-confirmed) messages have no real id — no actions yet.
+    if (isSending) return;
     setShowActions((prev) => !prev);
   };
 
@@ -100,6 +104,11 @@ const MessageBubble = ({ message, isOwn, onDelete, onReply, onEdit }: MessageBub
                 (ред.)
               </span>
             )}
+            {isSending && (
+              <span className="text-white/25 text-[10px]" title="Отправляется">
+                отправка…
+              </span>
+            )}
           </span>
         </div>
 
@@ -132,7 +141,7 @@ const MessageBubble = ({ message, isOwn, onDelete, onReply, onEdit }: MessageBub
             isOwn
               ? 'rounded-lg rounded-tr-none bg-site-blue/10 border-site-blue/15'
               : 'rounded-lg rounded-tl-none'
-          }`}
+          }${isSending ? ' opacity-60' : ''}`}
         >
           <p className="text-white text-sm break-words whitespace-pre-wrap">
             {message.content}

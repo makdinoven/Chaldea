@@ -10,6 +10,7 @@ import {
   receiveConversationRead,
   receiveConversationPinChanged,
   receiveTyping,
+  removeOptimisticMessage,
   receiveOwnSentMessage,
 } from '../redux/slices/messengerSlice';
 import {
@@ -238,7 +239,10 @@ const useWebSocket = (): UseWebSocketReturn => {
               // Success confirmations — state already updated via WS broadcast events
               break;
             case 'messenger_error': {
-              const errData = parsed.data as { detail?: string };
+              const errData = parsed.data as { detail?: string; temp_id?: number };
+              if (errData.temp_id != null) {
+                dispatch(removeOptimisticMessage({ tempId: errData.temp_id }));
+              }
               toast.error(errData.detail ?? 'Ошибка мессенджера');
               break;
             }
