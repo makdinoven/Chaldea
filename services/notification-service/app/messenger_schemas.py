@@ -153,6 +153,7 @@ class ConversationListItem(BaseModel):
     participants: List[ParticipantInfo] = []
     last_message: Optional[LastMessagePreview] = None
     unread_count: int = 0
+    is_pinned: bool = False
 
     class Config:
         orm_mode = True

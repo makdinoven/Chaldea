@@ -756,6 +756,50 @@ def mark_read(
 
 
 # ---------------------------------------------------------------------------
+# PUT/DELETE /messenger/conversations/{conversation_id}/pin — Pin / unpin
+# ---------------------------------------------------------------------------
+
+def _set_pin(conversation_id: int, pinned: bool, db: Session, user: UserRead):
+    """Shared pin/unpin logic with participation checks + cross-tab WS sync."""
+    conv = messenger_crud.get_conversation_by_id(db, conversation_id)
+    if conv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Беседа не найдена")
+
+    if not messenger_crud.is_participant(db, conversation_id, user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Вы не являетесь участником этой беседы",
+        )
+
+    messenger_crud.set_conversation_pin(db, conversation_id, user.id, pinned)
+
+    # Cross-tab sync for the same user.
+    send_to_user(user.id, {
+        "type": "conversation_pin_changed",
+        "data": {"conversation_id": conversation_id, "is_pinned": pinned},
+    })
+    return {"detail": "ok", "is_pinned": pinned}
+
+
+@messenger_router.put("/conversations/{conversation_id}/pin")
+def pin_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    return _set_pin(conversation_id, True, db, current_user)
+
+
+@messenger_router.delete("/conversations/{conversation_id}/pin")
+def unpin_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    return _set_pin(conversation_id, False, db, current_user)
+
+
+# ---------------------------------------------------------------------------
 # GET /messenger/unread-count — Total unread count
 # ---------------------------------------------------------------------------
 

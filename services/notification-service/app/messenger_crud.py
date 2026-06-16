@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Set
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, aliased
 from sqlalchemy import desc, func, and_
 
 from messenger_models import Conversation, ConversationParticipant, PrivateMessage
@@ -294,6 +294,28 @@ def get_messages(
 # Read tracking / unread counts
 # ---------------------------------------------------------------------------
 
+def set_conversation_pin(
+    db: Session,
+    conversation_id: int,
+    user_id: int,
+    pinned: bool,
+) -> bool:
+    """Pin/unpin a conversation for a participant. Returns True if updated."""
+    p = (
+        db.query(ConversationParticipant)
+        .filter(
+            ConversationParticipant.conversation_id == conversation_id,
+            ConversationParticipant.user_id == user_id,
+        )
+        .first()
+    )
+    if p is None:
+        return False
+    p.pinned_at = datetime.utcnow() if pinned else None
+    db.commit()
+    return True
+
+
 def mark_conversation_read(
     db: Session,
     conversation_id: int,
@@ -425,13 +447,25 @@ def list_conversations(
         .subquery()
     )
 
-    # Get conversations ordered by last message time (conversations with no messages
-    # use created_at as fallback via COALESCE)
-    conversations = (
-        db.query(Conversation)
+    # Get conversations ordered: pinned first (most recently pinned first), then
+    # by last message time (conversations with no messages fall back to created_at).
+    # The current user's participant row carries the per-user pinned_at.
+    # NOTE: `pinned_at IS NOT NULL DESC` is used as the primary key so ordering is
+    # identical on MySQL and SQLite (which disagree on where NULLs sort).
+    cp = aliased(ConversationParticipant)
+    rows = (
+        db.query(Conversation, cp.pinned_at)
+        .join(
+            cp,
+            and_(cp.conversation_id == Conversation.id, cp.user_id == user_id),
+        )
         .outerjoin(last_msg_time, Conversation.id == last_msg_time.c.conversation_id)
         .filter(Conversation.id.in_(conv_ids))
-        .order_by(desc(func.coalesce(last_msg_time.c.last_time, Conversation.created_at)))
+        .order_by(
+            desc(cp.pinned_at.isnot(None)),
+            desc(cp.pinned_at),
+            desc(func.coalesce(last_msg_time.c.last_time, Conversation.created_at)),
+        )
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
@@ -439,7 +473,7 @@ def list_conversations(
 
     # Build result items
     items = []
-    for conv in conversations:
+    for conv, pinned_at in rows:
         # Participants (exclude current user for display in direct chats)
         participants = (
             db.query(ConversationParticipant)
@@ -494,6 +528,7 @@ def list_conversations(
             ],
             "last_message": last_message_preview,
             "unread_count": unread,
+            "is_pinned": pinned_at is not None,
         })
 
     return {

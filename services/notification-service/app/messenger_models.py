@@ -45,6 +45,9 @@ class ConversationParticipant(Base):
     user_id = Column(Integer, nullable=False)
     joined_at = Column(DateTime, nullable=False, server_default=func.now())
     last_read_at = Column(DateTime, nullable=True)
+    # When set, the participant has pinned this conversation to the top of their
+    # list. Per-user (lives on the participant row, not the conversation).
+    pinned_at = Column(DateTime, nullable=True)
 
     conversation = relationship("Conversation", back_populates="participants")
 

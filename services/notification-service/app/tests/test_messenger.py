@@ -830,3 +830,79 @@ class TestSecurity:
         with _Patches() as p:
             resp = _send_msg(messenger_client, conv_id, "   ")
         assert resp.status_code == 422
+
+
+# ===========================================================================
+# Pinning conversations (FEAT-134)
+# ===========================================================================
+
+
+class TestPinning:
+
+    def test_pin_marks_conversation_pinned(self, messenger_client, db_session):
+        import messenger_routes
+        messenger_routes._last_conversation_time.clear()
+        with _Patches():
+            conv_id = _create_direct(messenger_client, participant_id=2).json()["id"]
+
+            resp = messenger_client.put(
+                f"/notifications/messenger/conversations/{conv_id}/pin"
+            )
+            assert resp.status_code == 200
+            assert resp.json()["is_pinned"] is True
+
+            listed = messenger_client.get("/notifications/messenger/conversations").json()
+            item = next(i for i in listed["items"] if i["id"] == conv_id)
+            assert item["is_pinned"] is True
+
+    def test_unpin_clears_pinned(self, messenger_client, db_session):
+        import messenger_routes
+        messenger_routes._last_conversation_time.clear()
+        with _Patches():
+            conv_id = _create_direct(messenger_client, participant_id=2).json()["id"]
+            messenger_client.put(f"/notifications/messenger/conversations/{conv_id}/pin")
+
+            resp = messenger_client.delete(
+                f"/notifications/messenger/conversations/{conv_id}/pin"
+            )
+            assert resp.status_code == 200
+            assert resp.json()["is_pinned"] is False
+
+            listed = messenger_client.get("/notifications/messenger/conversations").json()
+            item = next(i for i in listed["items"] if i["id"] == conv_id)
+            assert item["is_pinned"] is False
+
+    def test_pinned_conversation_sorts_first(self, messenger_client, db_session):
+        import messenger_routes
+        messenger_routes._last_conversation_time.clear()
+        with _Patches():
+            conv_a = _create_direct(messenger_client, participant_id=2).json()["id"]
+            conv_b = _create_direct(messenger_client, participant_id=3).json()["id"]
+            # conv_b is newer, so without pinning it would sort first. Pin conv_a.
+            messenger_client.put(f"/notifications/messenger/conversations/{conv_a}/pin")
+
+            listed = messenger_client.get("/notifications/messenger/conversations").json()
+            assert listed["items"][0]["id"] == conv_a
+            assert listed["items"][0]["is_pinned"] is True
+
+    def test_pin_nonexistent_conversation_404(self, messenger_client):
+        with _Patches():
+            resp = messenger_client.put(
+                "/notifications/messenger/conversations/99999/pin"
+            )
+            assert resp.status_code == 404
+
+    def test_pin_not_participant_403(self, messenger_client, db_session):
+        from messenger_models import Conversation, ConversationParticipant
+        with _Patches():
+            conv = Conversation(type="direct", title=None, created_by=2)
+            db_session.add(conv)
+            db_session.flush()
+            db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=2))
+            db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=3))
+            db_session.commit()
+
+            resp = messenger_client.put(
+                f"/notifications/messenger/conversations/{conv.id}/pin"
+            )
+            assert resp.status_code == 403
