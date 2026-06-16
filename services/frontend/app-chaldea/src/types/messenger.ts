@@ -35,6 +35,7 @@ export interface ConversationListItem {
   participants: ConversationParticipant[];
   last_message: LastMessage | null;
   unread_count: number;
+  is_pinned: boolean;
 }
 
 // ── Messages ────────────────────────────────────────────────────────────────
@@ -194,4 +195,9 @@ export interface WsMessageEditedData {
 
 export interface WsConversationReadData {
   conversation_id: number;
+}
+
+export interface WsConversationPinChangedData {
+  conversation_id: number;
+  is_pinned: boolean;
 }

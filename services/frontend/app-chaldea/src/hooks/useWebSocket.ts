@@ -8,6 +8,7 @@ import {
   receiveMessageEdited,
   receiveConversationCreated,
   receiveConversationRead,
+  receiveConversationPinChanged,
   receiveOwnSentMessage,
 } from '../redux/slices/messengerSlice';
 import {
@@ -27,6 +28,7 @@ import type {
   WsMessageEditedData,
   WsConversationCreatedData,
   WsConversationReadData,
+  WsConversationPinChangedData,
 } from '../types/messenger';
 import type {
   WsAuctionOutbidData,
@@ -214,6 +216,10 @@ const useWebSocket = (): UseWebSocketReturn => {
             }
             case 'conversation_read': {
               dispatch(receiveConversationRead(parsed.data as WsConversationReadData));
+              break;
+            }
+            case 'conversation_pin_changed': {
+              dispatch(receiveConversationPinChanged(parsed.data as WsConversationPinChangedData));
               break;
             }
             case 'messenger_send_ok': {

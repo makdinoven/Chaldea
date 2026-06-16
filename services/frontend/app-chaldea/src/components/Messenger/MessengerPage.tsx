@@ -9,6 +9,7 @@ import {
   editMessage,
   createConversation,
   markConversationRead,
+  pinConversation,
   fetchUnreadCount,
   setActiveConversation,
   clearActiveConversation,
@@ -94,6 +95,13 @@ const MessengerPage = () => {
     dispatch(clearActiveConversation());
     setMobileView('list');
   }, [dispatch]);
+
+  const handleTogglePin = useCallback(
+    (id: number, pinned: boolean) => {
+      dispatch(pinConversation({ conversationId: id, pinned }));
+    },
+    [dispatch],
+  );
 
   const handleSendMessage = useCallback(
     async (content: string) => {
@@ -220,6 +228,7 @@ const MessengerPage = () => {
             activeConversationId={activeConversationId}
             isLoading={isLoading}
             onSelectConversation={handleSelectConversation}
+            onTogglePin={handleTogglePin}
             onNewConversation={() => setShowNewModal(true)}
             onOpenSettings={() => setShowSettings(true)}
           />

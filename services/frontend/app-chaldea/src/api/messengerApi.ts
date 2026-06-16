@@ -50,6 +50,16 @@ export const markConversationRead = (conversationId: number) =>
     `${BASE_URL_DEFAULT}/notifications/messenger/conversations/${conversationId}/read`,
   );
 
+export const pinConversation = (conversationId: number) =>
+  axios.put<{ detail: string; is_pinned: boolean }>(
+    `${BASE_URL_DEFAULT}/notifications/messenger/conversations/${conversationId}/pin`,
+  );
+
+export const unpinConversation = (conversationId: number) =>
+  axios.delete<{ detail: string; is_pinned: boolean }>(
+    `${BASE_URL_DEFAULT}/notifications/messenger/conversations/${conversationId}/pin`,
+  );
+
 export const getUnreadCount = () =>
   axios.get<UnreadCountResponse>(`${BASE_URL_DEFAULT}/notifications/messenger/unread-count`);
 

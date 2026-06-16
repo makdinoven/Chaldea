@@ -19,8 +19,48 @@ import type {
   WsMessageEditedData,
   WsConversationCreatedData,
   WsConversationReadData,
+  WsConversationPinChangedData,
 } from '../../types/messenger';
 import axios from 'axios';
+
+// --- Ordering helpers (operate on the Immer draft) ---
+
+/** Move an unpinned conversation to the top of the unpinned block (TG-style
+ *  bump on new activity). Pinned conversations keep their position. */
+const bumpConversationToTop = (
+  conversations: ConversationListItem[],
+  convId: number,
+): void => {
+  const idx = conversations.findIndex((c) => c.id === convId);
+  if (idx === -1) return;
+  const conv = conversations[idx];
+  if (conv.is_pinned) return;
+  conversations.splice(idx, 1);
+  const firstUnpinned = conversations.findIndex((c) => !c.is_pinned);
+  const insertAt = firstUnpinned === -1 ? conversations.length : firstUnpinned;
+  conversations.splice(insertAt, 0, conv);
+};
+
+/** Apply a pin/unpin and reposition: pinned go to the very top, unpinned to the
+ *  top of the unpinned block. */
+const applyPinState = (
+  conversations: ConversationListItem[],
+  convId: number,
+  pinned: boolean,
+): void => {
+  const idx = conversations.findIndex((c) => c.id === convId);
+  if (idx === -1) return;
+  const conv = conversations[idx];
+  conv.is_pinned = pinned;
+  conversations.splice(idx, 1);
+  if (pinned) {
+    conversations.unshift(conv);
+  } else {
+    const firstUnpinned = conversations.findIndex((c) => !c.is_pinned);
+    const insertAt = firstUnpinned === -1 ? conversations.length : firstUnpinned;
+    conversations.splice(insertAt, 0, conv);
+  }
+};
 
 // --- State ---
 
@@ -194,6 +234,29 @@ export const markConversationRead = createAsyncThunk<
       return thunkAPI.rejectWithValue('Не удалось отметить как прочитанное');
     }
     // Fire-and-forget: state update happens via conversation_read WS event
+  },
+);
+
+export const pinConversation = createAsyncThunk<
+  { conversationId: number; pinned: boolean },
+  { conversationId: number; pinned: boolean },
+  { rejectValue: string }
+>(
+  'messenger/pinConversation',
+  async ({ conversationId, pinned }, thunkAPI) => {
+    try {
+      if (pinned) {
+        await messengerApi.pinConversation(conversationId);
+      } else {
+        await messengerApi.unpinConversation(conversationId);
+      }
+      return { conversationId, pinned };
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        return thunkAPI.rejectWithValue(error.response.data.detail);
+      }
+      return thunkAPI.rejectWithValue('Не удалось изменить закрепление');
+    }
   },
 );
 
@@ -395,6 +458,8 @@ const messengerSlice = createSlice({
           conv.unread_count += 1;
           state.totalUnread += 1;
         }
+        // Bump the conversation up the list (TG-style live reorder).
+        bumpConversationToTop(state.conversations, convId);
       }
     },
 
@@ -453,9 +518,15 @@ const messengerSlice = createSlice({
           participants: data.participants,
           last_message: null,
           unread_count: 0,
+          is_pinned: false,
         };
         state.conversations.unshift(newConv);
       }
+    },
+
+    receiveConversationPinChanged(state, action: PayloadAction<WsConversationPinChangedData>) {
+      const { conversation_id, is_pinned } = action.payload;
+      applyPinState(state.conversations, conversation_id, is_pinned);
     },
 
     receiveConversationRead(state, action: PayloadAction<WsConversationReadData>) {
@@ -491,6 +562,8 @@ const messengerSlice = createSlice({
           content: msg.content,
           created_at: msg.created_at,
         };
+        // Bump the conversation up the list (TG-style live reorder).
+        bumpConversationToTop(state.conversations, convId);
       }
 
       // Clear editing state on successful edit confirmation (if applicable)
@@ -596,6 +669,7 @@ const messengerSlice = createSlice({
             participants: conv.participants,
             last_message: null,
             unread_count: 0,
+            is_pinned: false,
           };
           state.conversations.unshift(newItem);
         }
@@ -608,6 +682,14 @@ const messengerSlice = createSlice({
 
       // markConversationRead (fire-and-forget via WebSocket; state updated by conversation_read)
       .addCase(markConversationRead.rejected, (state, action) => {
+        state.error = action.payload ?? 'Произошла ошибка';
+      })
+
+      // pinConversation
+      .addCase(pinConversation.fulfilled, (state, action) => {
+        applyPinState(state.conversations, action.payload.conversationId, action.payload.pinned);
+      })
+      .addCase(pinConversation.rejected, (state, action) => {
         state.error = action.payload ?? 'Произошла ошибка';
       })
 
@@ -682,6 +764,7 @@ export const {
   receiveMessageEdited,
   receiveConversationCreated,
   receiveConversationRead,
+  receiveConversationPinChanged,
   receiveOwnSentMessage,
   setActiveConversation,
   clearActiveConversation,

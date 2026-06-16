@@ -7,6 +7,7 @@ interface ConversationListProps {
   activeConversationId: number | null;
   isLoading: boolean;
   onSelectConversation: (id: number) => void;
+  onTogglePin: (id: number, pinned: boolean) => void;
   onNewConversation: () => void;
   onOpenSettings: () => void;
 }
@@ -16,6 +17,7 @@ const ConversationList = ({
   activeConversationId,
   isLoading,
   onSelectConversation,
+  onTogglePin,
   onNewConversation,
   onOpenSettings,
 }: ConversationListProps) => {
@@ -93,6 +95,7 @@ const ConversationList = ({
               conversation={conv}
               isActive={conv.id === activeConversationId}
               onClick={onSelectConversation}
+              onTogglePin={onTogglePin}
             />
           ))
         )}
