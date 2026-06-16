@@ -24,6 +24,7 @@ interface MessageAreaProps {
   onBack: () => void;
   onReply: (message: PrivateMessage) => void;
   onEdit: (message: PrivateMessage) => void;
+  onReact: (messageId: number, emoji: string) => void;
   onClearReply: () => void;
   onClearEdit: () => void;
   onEditSubmit: (messageId: number, content: string) => void;
@@ -79,6 +80,7 @@ const MessageArea = ({
   onBack,
   onReply,
   onEdit,
+  onReact,
   onClearReply,
   onClearEdit,
   onEditSubmit,
@@ -378,6 +380,7 @@ const MessageArea = ({
                 onDelete={onDeleteMessage}
                 onReply={onReply}
                 onEdit={onEdit}
+                onReact={onReact}
               />
             );
           })}

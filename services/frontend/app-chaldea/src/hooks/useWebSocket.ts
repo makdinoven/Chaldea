@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useAppDispatch } from '../redux/store';
+import { useAppDispatch, useAppSelector } from '../redux/store';
 import { addNotification, NotificationItem } from '../redux/slices/notificationSlice';
 import { addMessage, removeMessage } from '../redux/slices/chatSlice';
 import {
@@ -10,6 +10,7 @@ import {
   receiveConversationRead,
   receiveConversationPinChanged,
   receiveTyping,
+  receiveReaction,
   removeOptimisticMessage,
   receiveOwnSentMessage,
 } from '../redux/slices/messengerSlice';
@@ -32,6 +33,7 @@ import type {
   WsConversationReadData,
   WsConversationPinChangedData,
   WsTypingData,
+  WsMessageReactionData,
 } from '../types/messenger';
 import type {
   WsAuctionOutbidData,
@@ -110,6 +112,11 @@ export const sendWsMessage = (action: string, data: Record<string, unknown>): bo
 const useWebSocket = (): UseWebSocketReturn => {
   const [connected, setConnected] = useState(false);
   const dispatch = useAppDispatch();
+  const currentUserId = useAppSelector((state) => state.user.id);
+  const currentUserIdRef = useRef(currentUserId);
+  useEffect(() => {
+    currentUserIdRef.current = currentUserId;
+  }, [currentUserId]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectDelayRef = useRef(INITIAL_RECONNECT_DELAY);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -227,6 +234,11 @@ const useWebSocket = (): UseWebSocketReturn => {
             }
             case 'messenger_typing': {
               dispatch(receiveTyping(parsed.data as WsTypingData));
+              break;
+            }
+            case 'message_reaction': {
+              const r = parsed.data as WsMessageReactionData;
+              dispatch(receiveReaction({ ...r, is_self: r.user_id === currentUserIdRef.current }));
               break;
             }
             case 'messenger_send_ok': {

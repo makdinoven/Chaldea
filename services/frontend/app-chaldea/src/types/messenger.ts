@@ -51,6 +51,12 @@ export interface ReplyPreview {
   is_deleted: boolean;
 }
 
+export interface ReactionSummary {
+  emoji: string;
+  count: number;
+  reacted_by_me: boolean;
+}
+
 export interface PrivateMessage {
   id: number;
   conversation_id: number;
@@ -65,6 +71,7 @@ export interface PrivateMessage {
   edited_at?: string | null;
   reply_to_id?: number | null;
   reply_to?: ReplyPreview | null;
+  reactions?: ReactionSummary[];
   // Client-side delivery state for optimistic messages (absent on server data).
   status?: 'sending' | 'sent';
 }
@@ -211,6 +218,14 @@ export interface WsTypingData {
   conversation_id: number;
   user_id: number;
   username: string | null;
+}
+
+export interface WsMessageReactionData {
+  message_id: number;
+  conversation_id: number;
+  user_id: number;
+  emoji: string;
+  action: 'add' | 'remove';
 }
 
 export interface PresenceResponse {

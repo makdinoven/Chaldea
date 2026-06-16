@@ -11,6 +11,7 @@ import {
   markConversationRead,
   pinConversation,
   sendTypingSignal,
+  sendReaction,
   pruneTyping,
   setConversationAvatar,
   fetchUnreadCount,
@@ -114,6 +115,13 @@ const MessengerPage = () => {
       dispatch(sendTypingSignal(activeConversationId));
     }
   }, [activeConversationId, dispatch]);
+
+  const handleReact = useCallback(
+    (messageId: number, emoji: string) => {
+      dispatch(sendReaction({ messageId, emoji }));
+    },
+    [dispatch],
+  );
 
   // Periodically expire stale "typing" indicators.
   useEffect(() => {
@@ -281,6 +289,7 @@ const MessengerPage = () => {
             sending={isSending}
             typingUsernames={typingUsernames}
             onTyping={handleTyping}
+            onReact={handleReact}
             replyTo={replyToMsg}
             editingMessage={editingMsg}
             quoteText={null}

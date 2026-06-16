@@ -21,6 +21,7 @@ import type {
   WsConversationReadData,
   WsConversationPinChangedData,
   WsTypingData,
+  WsMessageReactionData,
 } from '../../types/messenger';
 import axios from 'axios';
 
@@ -278,6 +279,13 @@ export const sendTypingSignal = createAsyncThunk<void, number>(
   'messenger/sendTyping',
   async (conversationId) => {
     sendWsMessage('messenger_typing', { conversation_id: conversationId });
+  },
+);
+
+export const sendReaction = createAsyncThunk<void, { messageId: number; emoji: string }>(
+  'messenger/sendReaction',
+  async ({ messageId, emoji }) => {
+    sendWsMessage('messenger_react', { message_id: messageId, emoji });
   },
 );
 
@@ -577,6 +585,30 @@ const messengerSlice = createSlice({
     setConversationAvatar(state, action: PayloadAction<{ conversationId: number; avatar: string | null }>) {
       const conv = state.conversations.find((c) => c.id === action.payload.conversationId);
       if (conv) conv.avatar = action.payload.avatar;
+    },
+
+    receiveReaction(state, action: PayloadAction<WsMessageReactionData & { is_self: boolean }>) {
+      const { message_id, conversation_id, emoji, action: act, is_self } = action.payload;
+      const arr = state.messages[conversation_id];
+      if (!arr) return;
+      const msg = arr.find((m) => m.id === message_id);
+      if (!msg) return;
+      if (!msg.reactions) msg.reactions = [];
+      const existing = msg.reactions.find((r) => r.emoji === emoji);
+      if (act === 'add') {
+        if (existing) {
+          existing.count += 1;
+          if (is_self) existing.reacted_by_me = true;
+        } else {
+          msg.reactions.push({ emoji, count: 1, reacted_by_me: is_self });
+        }
+      } else if (existing) {
+        existing.count -= 1;
+        if (is_self) existing.reacted_by_me = false;
+        if (existing.count <= 0) {
+          msg.reactions = msg.reactions.filter((r) => r.emoji !== emoji);
+        }
+      }
     },
 
     receiveTyping(state, action: PayloadAction<WsTypingData>) {
@@ -893,6 +925,7 @@ export const {
   receiveConversationRead,
   receiveConversationPinChanged,
   setConversationAvatar,
+  receiveReaction,
   receiveTyping,
   pruneTyping,
   addOptimisticMessage,

@@ -9,7 +9,10 @@ interface MessageBubbleProps {
   onDelete: (messageId: number) => void;
   onReply: (message: PrivateMessage) => void;
   onEdit: (message: PrivateMessage) => void;
+  onReact: (messageId: number, emoji: string) => void;
 }
+
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
 const formatTime = (dateStr: string): string => {
   try {
@@ -27,7 +30,7 @@ const truncate = (text: string, maxLen: number): string => {
   return text.slice(0, maxLen) + '...';
 };
 
-const MessageBubble = ({ message, isOwn, onDelete, onReply, onEdit }: MessageBubbleProps) => {
+const MessageBubble = ({ message, isOwn, onDelete, onReply, onEdit, onReact }: MessageBubbleProps) => {
   const [showActions, setShowActions] = useState(false);
   const actionBarRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
@@ -148,14 +151,48 @@ const MessageBubble = ({ message, isOwn, onDelete, onReply, onEdit }: MessageBub
           </p>
         </div>
 
+        {/* Reactions */}
+        {message.reactions && message.reactions.length > 0 && (
+          <div className={`flex flex-wrap gap-1 mt-1 ${isOwn ? 'justify-end' : 'justify-start'}`}>
+            {message.reactions.map((r) => (
+              <button
+                key={r.emoji}
+                onClick={() => onReact(message.id, r.emoji)}
+                className={`flex items-center gap-1 text-xs rounded-full px-1.5 py-0.5 border transition-colors duration-200 ease-site cursor-pointer ${
+                  r.reacted_by_me
+                    ? 'bg-site-blue/20 border-site-blue/40 text-white'
+                    : 'bg-white/[0.06] border-white/10 text-white/70 hover:bg-white/10'
+                }`}
+                title={r.reacted_by_me ? 'Убрать реакцию' : 'Поставить реакцию'}
+              >
+                <span>{r.emoji}</span>
+                <span>{r.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Action bar */}
         {showActions && (
           <div
             ref={actionBarRef}
-            className={`mt-1 flex gap-0.5 bg-site-bg/95 rounded-lg px-1 py-0.5 shadow-dropdown border border-white/10 ${
+            className={`mt-1 flex items-center gap-0.5 bg-site-bg/95 rounded-lg px-1 py-0.5 shadow-dropdown border border-white/10 ${
               isOwn ? 'self-end' : 'self-start'
             }`}
           >
+            {/* Quick reactions */}
+            <div className="flex gap-0.5 pr-1 mr-1 border-r border-white/10">
+              {QUICK_REACTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  onClick={() => { onReact(message.id, emoji); setShowActions(false); }}
+                  className="text-sm px-1 py-0.5 hover:bg-white/10 rounded transition-colors duration-200 ease-site cursor-pointer"
+                  aria-label={`Реакция ${emoji}`}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
             <button
               onClick={() => { onReply(message); setShowActions(false); }}
               className="text-white/50 hover:text-site-blue text-xs px-2 py-1 transition-colors duration-200 ease-site cursor-pointer whitespace-nowrap"
