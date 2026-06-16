@@ -27,6 +27,8 @@ from messenger_schemas import (
     ReactionSummary,
     AddParticipantsRequest,
     AddParticipantsResponse,
+    GroupParticipant,
+    GroupParticipantsResponse,
     UnreadCountResponse,
 )
 import messenger_crud
@@ -144,6 +146,21 @@ def _enrich_participants(participant_dicts: list) -> list:
         p["avatar"] = profile["avatar"]
         p["avatar_frame"] = profile["avatar_frame"]
     return participant_dicts
+
+
+def _group_participants(db, conversation_id: int, created_by: int) -> list:
+    """Full participant list (with profiles and is_creator flag) for a group."""
+    items = []
+    for pid in messenger_crud.get_participant_ids(db, conversation_id):
+        prof = _fetch_user_profile(pid)
+        items.append({
+            "user_id": pid,
+            "username": prof["username"],
+            "avatar": prof["avatar"],
+            "avatar_frame": prof["avatar_frame"],
+            "is_creator": pid == created_by,
+        })
+    return items
 
 
 def _check_conversation_rate_limit(user_id: int):
@@ -905,6 +922,31 @@ def get_unread_count(
 # POST /messenger/conversations/{conversation_id}/participants — Add participants
 # ---------------------------------------------------------------------------
 
+@messenger_router.get(
+    "/conversations/{conversation_id}/participants",
+    response_model=GroupParticipantsResponse,
+)
+def list_participants(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    conv = messenger_crud.get_conversation_by_id(db, conversation_id)
+    if conv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Беседа не найдена")
+    if not messenger_crud.is_participant(db, conversation_id, current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Вы не являетесь участником этой беседы",
+        )
+
+    items = _group_participants(db, conversation_id, conv.created_by)
+    return GroupParticipantsResponse(
+        created_by=conv.created_by,
+        participants=[GroupParticipant(**i) for i in items],
+    )
+
+
 @messenger_router.post(
     "/conversations/{conversation_id}/participants",
     response_model=AddParticipantsResponse,
@@ -915,30 +957,84 @@ def add_participants(
     db: Session = Depends(get_db),
     current_user: UserRead = Depends(get_current_user_via_http),
 ):
-    # Check conversation exists
     conv = messenger_crud.get_conversation_by_id(db, conversation_id)
     if conv is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Беседа не найдена",
-        )
-
-    # Only group conversations
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Беседа не найдена")
     if conv.type == "direct":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Нельзя добавлять участников в личный чат",
         )
-
-    # Check participation
-    if not messenger_crud.is_participant(db, conversation_id, current_user.id):
+    # Only the creator manages membership.
+    if conv.created_by != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Вы не являетесь участником этой беседы",
+            detail="Только создатель беседы может добавлять участников",
         )
 
     result = messenger_crud.add_participants(db, conversation_id, data.user_ids)
+
+    # Notify newly added users so the group appears in their list.
+    if result["added"]:
+        participants_info = _group_participants(db, conversation_id, conv.created_by)
+        conv_data = {
+            "id": conv.id,
+            "type": conv.type,
+            "title": conv.title,
+            "avatar": conv.avatar,
+            "participants": [
+                {
+                    "user_id": p["user_id"],
+                    "username": p["username"],
+                    "avatar": p["avatar"],
+                    "avatar_frame": p["avatar_frame"],
+                }
+                for p in participants_info
+            ],
+        }
+        for uid in result["added"]:
+            send_to_user(uid, {"type": "conversation_created", "data": conv_data})
+
     return AddParticipantsResponse(**result)
+
+
+@messenger_router.delete("/conversations/{conversation_id}/participants/{user_id}")
+def remove_participant(
+    conversation_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    conv = messenger_crud.get_conversation_by_id(db, conversation_id)
+    if conv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Беседа не найдена")
+    if conv.type == "direct":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нельзя исключать участников из личного чата",
+        )
+    if conv.created_by != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Только создатель беседы может исключать участников",
+        )
+    if user_id == conv.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нельзя исключить создателя беседы",
+        )
+    if not messenger_crud.is_participant(db, conversation_id, user_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Участник не найден")
+
+    messenger_crud.remove_participant(db, conversation_id, user_id)
+
+    # Tell the removed user to drop the conversation from their list.
+    send_to_user(user_id, {
+        "type": "conversation_removed",
+        "data": {"conversation_id": conversation_id},
+    })
+
+    return {"detail": "Участник исключён"}
 
 
 # ---------------------------------------------------------------------------

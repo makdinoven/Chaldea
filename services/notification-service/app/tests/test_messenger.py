@@ -1198,3 +1198,88 @@ class TestMentions:
             c for c in mock_send.call_args_list if c[0][1].get("type") == "messenger_mention"
         ]
         assert mention_calls == []
+
+
+# ===========================================================================
+# Group management — participants / add / kick (FEAT-141)
+# ===========================================================================
+
+
+class TestGroupManagement:
+
+    def test_list_participants(self, messenger_client, db_session):
+        import messenger_routes
+        messenger_routes._last_conversation_time.clear()
+        with _Patches():
+            conv_id = _create_group(messenger_client, [2, 3], "G").json()["id"]
+            resp = messenger_client.get(
+                f"/notifications/messenger/conversations/{conv_id}/participants"
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["created_by"] == 1
+        ids = {p["user_id"] for p in data["participants"]}
+        assert ids == {1, 2, 3}
+        creator = next(p for p in data["participants"] if p["user_id"] == 1)
+        assert creator["is_creator"] is True
+
+    def test_add_participants_creator(self, messenger_client, db_session):
+        import messenger_routes
+        messenger_routes._last_conversation_time.clear()
+        with _Patches():
+            conv_id = _create_group(messenger_client, [2, 3], "G").json()["id"]
+            resp = messenger_client.post(
+                f"/notifications/messenger/conversations/{conv_id}/participants",
+                json={"user_ids": [4]},
+            )
+        assert resp.status_code == 200
+        assert 4 in resp.json()["added"]
+
+    def test_add_participants_non_creator_403(self, messenger_client, db_session):
+        from messenger_models import Conversation, ConversationParticipant
+        conv = Conversation(type="group", title="g", created_by=2)
+        db_session.add(conv)
+        db_session.flush()
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=1))
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=2))
+        db_session.commit()
+        with _Patches():
+            resp = messenger_client.post(
+                f"/notifications/messenger/conversations/{conv.id}/participants",
+                json={"user_ids": [4]},
+            )
+        assert resp.status_code == 403
+
+    def test_remove_participant_creator(self, messenger_client, db_session):
+        import messenger_routes
+        messenger_routes._last_conversation_time.clear()
+        with _Patches():
+            conv_id = _create_group(messenger_client, [2, 3], "G").json()["id"]
+            resp = messenger_client.delete(
+                f"/notifications/messenger/conversations/{conv_id}/participants/2"
+            )
+        assert resp.status_code == 200
+
+    def test_cannot_remove_creator(self, messenger_client, db_session):
+        import messenger_routes
+        messenger_routes._last_conversation_time.clear()
+        with _Patches():
+            conv_id = _create_group(messenger_client, [2, 3], "G").json()["id"]
+            resp = messenger_client.delete(
+                f"/notifications/messenger/conversations/{conv_id}/participants/1"
+            )
+        assert resp.status_code == 400
+
+    def test_remove_non_creator_403(self, messenger_client, db_session):
+        from messenger_models import Conversation, ConversationParticipant
+        conv = Conversation(type="group", title="g", created_by=2)
+        db_session.add(conv)
+        db_session.flush()
+        for uid in (1, 2, 3):
+            db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=uid))
+        db_session.commit()
+        with _Patches():
+            resp = messenger_client.delete(
+                f"/notifications/messenger/conversations/{conv.id}/participants/3"
+            )
+        assert resp.status_code == 403

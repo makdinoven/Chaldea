@@ -198,3 +198,16 @@ class UnreadCountResponse(BaseModel):
 class AddParticipantsResponse(BaseModel):
     added: List[int]
     skipped: List[int]
+
+
+class GroupParticipant(BaseModel):
+    user_id: int
+    username: Optional[str] = None
+    avatar: Optional[str] = None
+    avatar_frame: Optional[str] = None
+    is_creator: bool = False
+
+
+class GroupParticipantsResponse(BaseModel):
+    created_by: int
+    participants: List[GroupParticipant] = []
