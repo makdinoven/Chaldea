@@ -18,7 +18,7 @@ interface MessageAreaProps {
   replyTo: PrivateMessage | null;
   editingMessage: PrivateMessage | null;
   quoteText: string | null;
-  onSendMessage: (content: string) => void;
+  onSendMessage: (content: string, imageUrl?: string | null) => void;
   onDeleteMessage: (messageId: number) => void;
   onLoadMore: () => void;
   onBack: () => void;

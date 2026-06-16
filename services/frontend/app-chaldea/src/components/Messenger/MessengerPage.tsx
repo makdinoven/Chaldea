@@ -130,16 +130,24 @@ const MessengerPage = () => {
   }, [dispatch]);
 
   const handleSendMessage = useCallback(
-    async (content: string) => {
+    async (content: string, imageUrl?: string | null) => {
       if (!activeConversationId) return;
       setIsSending(true);
       try {
-        const payload: { conversationId: number; content: string; reply_to_id?: number } = {
+        const payload: {
+          conversationId: number;
+          content: string;
+          reply_to_id?: number;
+          image_url?: string | null;
+        } = {
           conversationId: activeConversationId,
           content,
         };
         if (replyToMsg) {
           payload.reply_to_id = replyToMsg.id;
+        }
+        if (imageUrl) {
+          payload.image_url = imageUrl;
         }
         await dispatch(sendMessage(payload)).unwrap();
         dispatch(clearReplyToMessage());

@@ -157,11 +157,11 @@ export const fetchMessages = createAsyncThunk<
 
 export const sendMessage = createAsyncThunk<
   void,
-  { conversationId: number; content: string; reply_to_id?: number },
+  { conversationId: number; content: string; reply_to_id?: number; image_url?: string | null },
   { state: RootState; rejectValue: string }
 >(
   'messenger/sendMessage',
-  async ({ conversationId, content, reply_to_id }, thunkAPI) => {
+  async ({ conversationId, content, reply_to_id, image_url }, thunkAPI) => {
     const user = thunkAPI.getState().user;
     const tempId = nextOptimisticId();
 
@@ -176,6 +176,7 @@ export const sendMessage = createAsyncThunk<
       sender_avatar_frame: null,
       sender_chat_background: null,
       content,
+      image_url: image_url ?? null,
       created_at: new Date().toISOString(),
       is_deleted: false,
       edited_at: null,
@@ -190,6 +191,7 @@ export const sendMessage = createAsyncThunk<
       content,
       temp_id: tempId,
       ...(reply_to_id != null ? { reply_to_id } : {}),
+      ...(image_url ? { image_url } : {}),
     });
     if (!sent) {
       thunkAPI.dispatch(removeOptimisticMessage({ tempId }));

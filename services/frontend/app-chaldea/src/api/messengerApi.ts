@@ -79,6 +79,15 @@ export const uploadGroupAvatar = (conversationId: number, file: File) => {
   );
 };
 
+export const uploadChatImage = (file: File) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  return axios.post<{ image_url: string }>(
+    `${BASE_URL_DEFAULT}/photo/upload_chat_image`,
+    formData,
+  );
+};
+
 export const addParticipants = (conversationId: number, data: AddParticipantsPayload) =>
   axios.post<AddParticipantsResponse>(
     `${BASE_URL_DEFAULT}/notifications/messenger/conversations/${conversationId}/participants`,

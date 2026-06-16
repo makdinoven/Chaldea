@@ -66,6 +66,7 @@ export interface PrivateMessage {
   sender_avatar_frame: string | null;
   sender_chat_background: string | null;
   content: string;
+  image_url?: string | null;
   created_at: string;
   is_deleted: boolean;
   edited_at?: string | null;
@@ -182,6 +183,7 @@ export interface WsPrivateMessageData {
   sender_avatar_frame: string | null;
   sender_chat_background: string | null;
   content: string;
+  image_url?: string | null;
   created_at: string;
 }
 

@@ -1,9 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { X } from 'react-feather';
+import { X, Image as ImageIcon } from 'react-feather';
 import type { PrivateMessage } from '../../types/messenger';
+import { uploadChatImage } from '../../api/messengerApi';
+import toast from 'react-hot-toast';
 
 interface MessageInputProps {
-  onSend: (content: string) => void;
+  onSend: (content: string, imageUrl?: string | null) => void;
   onTyping?: () => void;
   disabled?: boolean;
   sending?: boolean;
@@ -41,9 +43,44 @@ const MessageInput = ({
 }: MessageInputProps) => {
   const [text, setText] = useState('');
   const [onCooldown, setOnCooldown] = useState(false);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const cooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingSentRef = useRef(0);
+
+  const clearImage = useCallback(() => {
+    setImagePreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setImageUrl(null);
+  }, []);
+
+  const handleImageChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file
+    if (!file) return;
+    setImagePreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(file);
+    });
+    setUploadingImage(true);
+    try {
+      const resp = await uploadChatImage(file);
+      setImageUrl(resp.data.image_url);
+    } catch {
+      toast.error('Не удалось загрузить изображение');
+      setImagePreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+      setImageUrl(null);
+    } finally {
+      setUploadingImage(false);
+    }
+  }, []);
 
   // Throttle "typing" signals to at most one per 3s while there is content.
   const handleChange = useCallback(
@@ -104,19 +141,21 @@ const MessageInput = ({
 
   const handleSubmit = useCallback(() => {
     const content = text.trim();
-    if (!content || disabled || sending) return;
+    if (disabled || sending || uploadingImage) return;
+    if (!content && !imageUrl) return; // need text or an image
     // Send is rate-limited; editing is not.
     if (!editingMessage && onCooldown) return;
 
     if (editingMessage) {
       onEditSubmit(editingMessage.id, content);
     } else {
-      onSend(content);
+      onSend(content, imageUrl);
       setOnCooldown(true);
       cooldownTimerRef.current = setTimeout(() => setOnCooldown(false), SEND_COOLDOWN_MS);
+      clearImage();
     }
     setText('');
-  }, [text, disabled, sending, editingMessage, onCooldown, onSend, onEditSubmit]);
+  }, [text, disabled, sending, uploadingImage, imageUrl, editingMessage, onCooldown, onSend, onEditSubmit, clearImage]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -187,6 +226,29 @@ const MessageInput = ({
         </div>
       )}
 
+      {/* Image preview */}
+      {imagePreview && !editingMessage && (
+        <div className="relative inline-block mb-2">
+          <img
+            src={imagePreview}
+            alt="Вложение"
+            className="max-h-32 rounded-lg border border-white/15 object-cover"
+          />
+          {uploadingImage && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-lg">
+              <div className="w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+            </div>
+          )}
+          <button
+            onClick={clearImage}
+            className="absolute -top-2 -right-2 bg-site-bg border border-white/20 rounded-full p-0.5 text-white/70 hover:text-white cursor-pointer"
+            aria-label="Убрать изображение"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
       <textarea
         ref={textareaRef}
         value={text}
@@ -200,15 +262,35 @@ const MessageInput = ({
       />
 
       <div className="flex items-center justify-between mt-2">
-        {/* Character count */}
-        <span className={`text-xs ${isOverLimit ? 'text-site-red' : 'text-white/30'}`}>
-          {text.length}/{MAX_LENGTH}
-        </span>
+        <div className="flex items-center gap-2">
+          {/* Attach image (not during editing) */}
+          {!editingMessage && (
+            <label
+              className={`p-1 text-white/50 hover:text-site-blue transition-colors duration-200 ease-site ${
+                disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+              }`}
+              title="Прикрепить изображение"
+            >
+              <ImageIcon size={18} />
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleImageChange}
+                disabled={disabled}
+                className="hidden"
+              />
+            </label>
+          )}
+          {/* Character count */}
+          <span className={`text-xs ${isOverLimit ? 'text-site-red' : 'text-white/30'}`}>
+            {text.length}/{MAX_LENGTH}
+          </span>
+        </div>
 
         {/* Send / Save button */}
         <button
           onClick={handleSubmit}
-          disabled={!text.trim() || disabled || sending || isOverLimit || (!editingMessage && onCooldown)}
+          disabled={(!text.trim() && !imageUrl) || disabled || sending || uploadingImage || isOverLimit || (!editingMessage && onCooldown)}
           className="btn-blue !px-3 !py-1.5 !text-sm disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {sending

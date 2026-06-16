@@ -146,9 +146,25 @@ const MessageBubble = ({ message, isOwn, onDelete, onReply, onEdit, onReact }: M
               : 'rounded-lg rounded-tl-none'
           }${isSending ? ' opacity-60' : ''}`}
         >
-          <p className="text-white text-sm break-words whitespace-pre-wrap">
-            {message.content}
-          </p>
+          {message.image_url && (
+            <a
+              href={message.image_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <img
+                src={message.image_url}
+                alt="Изображение"
+                className={`max-h-60 max-w-full rounded-md object-cover cursor-pointer ${message.content ? 'mb-1' : ''}`}
+              />
+            </a>
+          )}
+          {message.content && (
+            <p className="text-white text-sm break-words whitespace-pre-wrap">
+              {message.content}
+            </p>
+          )}
         </div>
 
         {/* Reactions */}

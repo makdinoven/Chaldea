@@ -54,7 +54,9 @@ const ConversationItem = ({ conversation, isActive, onClick, onTogglePin }: Conv
   const frameSlug = isGroup ? null : (participant?.avatar_frame ?? null);
 
   const lastMessageTime = conversation.last_message?.created_at;
-  const lastMessagePreview = conversation.last_message?.content ?? '';
+  const lastMessagePreview = conversation.last_message
+    ? (conversation.last_message.content || '📷 Изображение')
+    : '';
 
   return (
     <div className={`relative group ${isActive ? 'bg-white/[0.08]' : 'hover:bg-white/[0.04]'}`}>
