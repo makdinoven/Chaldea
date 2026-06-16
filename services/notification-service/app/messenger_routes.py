@@ -29,7 +29,7 @@ from messenger_schemas import (
     UnreadCountResponse,
 )
 import messenger_crud
-from ws_manager import send_to_user
+from ws_manager import send_to_user, is_online
 
 logger = logging.getLogger(__name__)
 
@@ -797,6 +797,19 @@ def unpin_conversation(
     current_user: UserRead = Depends(get_current_user_via_http),
 ):
     return _set_pin(conversation_id, False, db, current_user)
+
+
+# ---------------------------------------------------------------------------
+# GET /messenger/presence/{user_id} — Online status
+# ---------------------------------------------------------------------------
+
+@messenger_router.get("/presence/{user_id}")
+def get_presence(
+    user_id: int,
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Whether the given user currently has an active WebSocket connection."""
+    return {"user_id": user_id, "online": is_online(user_id)}
 
 
 # ---------------------------------------------------------------------------

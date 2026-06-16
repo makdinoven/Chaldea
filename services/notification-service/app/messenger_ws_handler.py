@@ -43,6 +43,41 @@ def _error(action: str, detail: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# messenger_typing — ephemeral "user is typing" relay (no DB writes)
+# ---------------------------------------------------------------------------
+
+def handle_messenger_typing(user_id: int, data: dict) -> None:
+    """Relay a typing signal to the other participants. Ephemeral — nothing is
+    persisted and nothing is echoed back to the sender."""
+    db = SessionLocal()
+    try:
+        conversation_id = data.get("conversation_id")
+        if not conversation_id:
+            return
+
+        if not messenger_crud.is_participant(db, conversation_id, user_id):
+            return
+
+        profile = _fetch_user_profile(user_id)
+        participant_ids = messenger_crud.get_participant_ids(db, conversation_id)
+        event = {
+            "type": "messenger_typing",
+            "data": {
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "username": profile.get("username"),
+            },
+        }
+        for pid in participant_ids:
+            if pid != user_id:
+                send_to_user(pid, event)
+    except Exception as e:
+        logger.warning("handle_messenger_typing error for user %d: %s", user_id, e)
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
 # messenger_send
 # ---------------------------------------------------------------------------
 

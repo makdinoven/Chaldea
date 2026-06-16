@@ -906,3 +906,73 @@ class TestPinning:
                 f"/notifications/messenger/conversations/{conv.id}/pin"
             )
             assert resp.status_code == 403
+
+
+# ===========================================================================
+# Typing relay + presence (FEAT-132)
+# ===========================================================================
+
+
+class TestTypingAndPresence:
+
+    def test_typing_relays_to_other_participants_only(self, db_session):
+        from messenger_ws_handler import handle_messenger_typing
+        from messenger_models import Conversation, ConversationParticipant
+
+        conv = Conversation(type="direct", created_by=1)
+        db_session.add(conv)
+        db_session.flush()
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=1))
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=2))
+        db_session.commit()
+
+        with patch("messenger_ws_handler.send_to_user") as mock_send, \
+                patch("messenger_ws_handler._fetch_user_profile",
+                      return_value={"username": "player1", "avatar": None,
+                                    "avatar_frame": None, "chat_background": None}), \
+                patch("messenger_ws_handler.SessionLocal", return_value=db_session):
+            handle_messenger_typing(1, {"conversation_id": conv.id})
+
+        # Relayed to the other participant only (not the sender).
+        mock_send.assert_called_once()
+        target_id, payload = mock_send.call_args[0]
+        assert target_id == 2
+        assert payload["type"] == "messenger_typing"
+        assert payload["data"]["conversation_id"] == conv.id
+        assert payload["data"]["user_id"] == 1
+
+    def test_typing_non_participant_no_relay(self, db_session):
+        from messenger_ws_handler import handle_messenger_typing
+        from messenger_models import Conversation, ConversationParticipant
+
+        conv = Conversation(type="direct", created_by=2)
+        db_session.add(conv)
+        db_session.flush()
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=2))
+        db_session.add(ConversationParticipant(conversation_id=conv.id, user_id=3))
+        db_session.commit()
+
+        with patch("messenger_ws_handler.send_to_user") as mock_send, \
+                patch("messenger_ws_handler.SessionLocal", return_value=db_session):
+            # User 1 is not a participant → no relay.
+            handle_messenger_typing(1, {"conversation_id": conv.id})
+
+        mock_send.assert_not_called()
+
+    def test_presence_online(self, messenger_client):
+        import ws_manager
+        sentinel = object()
+        ws_manager.active_connections[2] = {sentinel}
+        try:
+            resp = messenger_client.get("/notifications/messenger/presence/2")
+            assert resp.status_code == 200
+            assert resp.json() == {"user_id": 2, "online": True}
+        finally:
+            ws_manager.active_connections.pop(2, None)
+
+    def test_presence_offline(self, messenger_client):
+        import ws_manager
+        ws_manager.active_connections.pop(4242, None)
+        resp = messenger_client.get("/notifications/messenger/presence/4242")
+        assert resp.status_code == 200
+        assert resp.json()["online"] is False

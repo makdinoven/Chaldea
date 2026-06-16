@@ -54,6 +54,11 @@ def _sockets_for(user_id: int) -> list[WebSocket]:
     return list(conns) if conns else []
 
 
+def is_online(user_id: int) -> bool:
+    """True if the user has at least one active WebSocket connection."""
+    return bool(active_connections.get(user_id))
+
+
 # ──────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────
