@@ -183,6 +183,8 @@ class ClassSkillTree(Base):
     tree_type: Mapped[str] = mapped_column(String(20), nullable=False, default="class")
     parent_tree_id: Mapped[int] = mapped_column(ForeignKey("class_skill_trees.id"), nullable=True)
     subclass_name: Mapped[str] = mapped_column(String(100), nullable=True)
+    # Stable identifier of the subclass this tree belongs to (see subclasses.py).
+    subclass_key: Mapped[str] = mapped_column(String(50), nullable=True)
     tree_image: Mapped[str] = mapped_column(Text, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
@@ -209,6 +211,8 @@ class TreeNode(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
     node_type: Mapped[str] = mapped_column(String(20), nullable=False, default="regular")
+    # For node_type='subclass_choice': which subclass this node opens (see subclasses.py).
+    subclass_key: Mapped[str] = mapped_column(String(50), nullable=True)
     icon_image: Mapped[str] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 

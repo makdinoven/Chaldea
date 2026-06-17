@@ -652,6 +652,15 @@ async def resolve_character_skill(
 # ====================================================================
 
 async def create_class_tree(db: AsyncSession, data: schemas.ClassSkillTreeCreate) -> models.ClassSkillTree:
+    # A class is allowed exactly one 'class' tree — guard against duplicates that
+    # would otherwise break the public player endpoint (it expects a single tree).
+    if data.tree_type == "class":
+        existing = await get_class_tree_by_class_id(db, data.class_id, tree_type="class")
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail="Для этого класса уже существует дерево класса",
+            )
     tree = models.ClassSkillTree(**data.dict())
     db.add(tree)
     await db.commit()
@@ -735,6 +744,7 @@ async def get_full_class_tree(db: AsyncSession, tree_id: int) -> dict | None:
             "name": node.name,
             "description": node.description,
             "node_type": node.node_type,
+            "subclass_key": node.subclass_key,
             "icon_image": node.icon_image,
             "sort_order": node.sort_order,
             "skills": skills_data,
@@ -756,6 +766,7 @@ async def get_full_class_tree(db: AsyncSession, tree_id: int) -> dict | None:
         "tree_type": tree.tree_type,
         "parent_tree_id": tree.parent_tree_id,
         "subclass_name": tree.subclass_name,
+        "subclass_key": tree.subclass_key,
         "tree_image": tree.tree_image,
         "nodes": nodes_data,
         "connections": connections_data,
@@ -794,6 +805,7 @@ async def save_full_class_tree(
     tree.tree_type = data.tree_type
     tree.parent_tree_id = data.parent_tree_id
     tree.subclass_name = data.subclass_name
+    tree.subclass_key = data.subclass_key
     tree.tree_image = data.tree_image
 
     # 3. Build old nodes map
@@ -827,6 +839,7 @@ async def save_full_class_tree(
             name=node_data.name,
             description=node_data.description,
             node_type=node_data.node_type,
+            subclass_key=node_data.subclass_key,
             icon_image=node_data.icon_image,
             sort_order=node_data.sort_order,
         )
@@ -847,6 +860,7 @@ async def save_full_class_tree(
         node_obj.name = node_data.name
         node_obj.description = node_data.description
         node_obj.node_type = node_data.node_type
+        node_obj.subclass_key = node_data.subclass_key
         node_obj.icon_image = node_data.icon_image
         node_obj.sort_order = node_data.sort_order
         existing_ids.append(node_data.id)
@@ -1160,14 +1174,20 @@ async def get_skills_for_nodes(db: AsyncSession, node_ids: list[int]) -> list[in
 async def get_class_tree_by_class_id(
     db: AsyncSession, class_id: int, tree_type: str = "class"
 ) -> models.ClassSkillTree | None:
-    """Find a class_skill_tree by class_id and tree_type."""
+    """Find a class_skill_tree by class_id and tree_type.
+
+    A class is meant to have a single 'class' tree, but nothing enforces that at the
+    DB level. Pick the oldest match deterministically (.first()) instead of
+    scalar_one_or_none(), so a stray duplicate never 500s the public player page.
+    """
     stmt = (
         select(models.ClassSkillTree)
         .where(
             models.ClassSkillTree.class_id == class_id,
             models.ClassSkillTree.tree_type == tree_type,
         )
+        .order_by(models.ClassSkillTree.id)
     )
     result = await db.execute(stmt)
-    return result.scalar_one_or_none()
+    return result.scalars().first()
 

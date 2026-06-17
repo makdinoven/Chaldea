@@ -246,6 +246,16 @@ class MultipleSkillsAssignRequest(BaseModel):
 
 # --- Class Skill Tree ---
 
+class SubclassRead(BaseModel):
+    key: str
+    class_id: int
+    name: str
+    description: str
+
+    class Config:
+        orm_mode = True
+
+
 class ClassSkillTreeBase(BaseModel):
     class_id: int
     name: str
@@ -253,6 +263,7 @@ class ClassSkillTreeBase(BaseModel):
     tree_type: str = "class"
     parent_tree_id: Optional[int] = None
     subclass_name: Optional[str] = None
+    subclass_key: Optional[str] = None
     tree_image: Optional[str] = None
 
 
@@ -280,6 +291,7 @@ class TreeNodeBase(BaseModel):
     name: str
     description: Optional[str] = None
     node_type: str = "regular"
+    subclass_key: Optional[str] = None
     icon_image: Optional[str] = None
     sort_order: int = 0
 
@@ -334,6 +346,7 @@ class TreeNodeInTree(BaseModel):
     name: str
     description: Optional[str] = None
     node_type: str = "regular"
+    subclass_key: Optional[str] = None
     icon_image: Optional[str] = None
     sort_order: int = 0
     skills: List[TreeNodeSkillEntry] = []
@@ -348,6 +361,7 @@ class TreeNodeInTreeResponse(BaseModel):
     name: str
     description: Optional[str] = None
     node_type: str
+    subclass_key: Optional[str] = None
     icon_image: Optional[str] = None
     sort_order: int
     skills: List[TreeNodeSkillRead] = []
@@ -366,6 +380,7 @@ class FullClassTreeResponse(BaseModel):
     tree_type: str
     parent_tree_id: Optional[int] = None
     subclass_name: Optional[str] = None
+    subclass_key: Optional[str] = None
     tree_image: Optional[str] = None
     nodes: List[TreeNodeInTreeResponse] = []
     connections: List[TreeNodeConnectionInTree] = []
@@ -382,6 +397,7 @@ class FullClassTreeUpdateRequest(BaseModel):
     tree_type: str = "class"
     parent_tree_id: Optional[int] = None
     subclass_name: Optional[str] = None
+    subclass_key: Optional[str] = None
     tree_image: Optional[str] = None
     nodes: List[TreeNodeInTree] = []
     connections: List[TreeNodeConnectionInTree] = []

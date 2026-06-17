@@ -15,6 +15,7 @@ import httpx
 import models
 import schemas
 import crud
+import subclasses as subclass_registry
 from rabbitmq_consumer import start_consumer
 from auth_http import get_admin_user, get_current_user_via_http, require_permission, allow_jwt_or_service_token
 
@@ -334,6 +335,21 @@ async def list_skills_for_character(
 ):
     rows = await crud.list_character_skills_for_character(db, character_id)
     return [crud.serialize_character_skill(cs) for cs in rows]
+
+
+# -----------------------------------------------------------
+# 6a) Public: subclass registry
+# Registered BEFORE "/{skill_id}" so "/subclasses" is not swallowed by it.
+# -----------------------------------------------------------
+@router.get("/subclasses", response_model=List[schemas.SubclassRead])
+async def list_subclasses(class_id: Optional[int] = None):
+    """Public reference: hardcoded subclass registry, optionally filtered by class."""
+    items = (
+        subclass_registry.subclasses_for_class(class_id)
+        if class_id is not None
+        else subclass_registry.SUBCLASSES
+    )
+    return items
 
 
 # -----------------------------------------------------------
