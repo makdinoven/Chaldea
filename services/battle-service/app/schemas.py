@@ -32,6 +32,10 @@ class SkillSelection(BaseModel):
 class ActionRequest(BaseModel):
     participant_id: int
     skills: SkillSelection
+    # Whom the offensive part of this action hits. Must be an alive enemy
+    # participant. Optional for backward compat / NPCs: when omitted the server
+    # auto-targets the first alive enemy.
+    target_id: int | None = None
 
 
 class BattleRewardItem(BaseModel):

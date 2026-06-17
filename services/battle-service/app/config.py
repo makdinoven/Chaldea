@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     MONGO_URI: str = os.getenv("MONGO_URI", "mongodb://mongo:27017")
     TURN_TIMEOUT_HOURS: int = int(os.getenv("TURN_TIMEOUT_HOURS", 24))
+    # Max participants allowed per team. Product target is 3v3; ceiling 5v5.
+    # Engine itself is N-agnostic — this is just a create-time guard.
+    BATTLE_MAX_TEAM_SIZE: int = int(os.getenv("BATTLE_MAX_TEAM_SIZE", 5))
     CHARACTER_SERVICE_URL: str = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8005")
     SKILLS_URL: str = os.getenv("SKILLS_SERVICE_URL", "http://skills-service:8003")
     INVENTORY_URL: str = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")

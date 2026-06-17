@@ -703,3 +703,154 @@ class TestEffectsNotDuplicated:
             if c[0][1] == 2
         ]
         assert len(enemy_effect_calls) == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Test Group 4: Group battles — targeting, team win condition, dead-skip (Phase 1)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _make_group_state(specs, next_actor=1, turn_order=None):
+    """Build a battle state for N participants.
+
+    specs: list of (participant_id, character_id, team, hp).
+    Actor in these tests is participant 1 / character 10 (owned by user 5,
+    matching the mocked auth identity).
+    """
+    participants = {}
+    order = []
+    for pid, cid, team, hp in specs:
+        participants[str(pid)] = {
+            "character_id": cid, "team": team, "hp": hp,
+            "mana": 50, "energy": 50, "stamina": 50,
+            "max_hp": 100, "max_mana": 100, "max_energy": 100, "max_stamina": 100,
+            "cooldowns": {}, "fast_slots": [],
+        }
+        order.append(pid)
+    return {
+        "turn_number": 1, "next_actor": next_actor, "first_actor": 1,
+        "turn_order": turn_order or order, "total_turns": 0, "last_turn": None,
+        "deadline_at": "2026-01-01T00:00:00",
+        "participants": participants, "active_effects": {},
+    }
+
+
+def _attack_rank(amount=10):
+    return {
+        "id": 1,
+        "damage_entries": [{"damage_type": "physical", "amount": amount, "chance": 100}],
+        "effects": [],
+        "cooldown": 0,
+        "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
+    }
+
+
+def _attack_payload(target_id=None):
+    payload = {
+        "participant_id": 1,
+        "skills": {
+            "attack_skill_id": 1, "defense_skill_id": None,
+            "support_skill_id": None, "item_id": None,
+        },
+    }
+    if target_id is not None:
+        payload["target_id"] = target_id
+    return payload
+
+
+class TestGroupTargeting:
+    """target_id resolution: explicit/auto target, ally/dead/missing guards."""
+
+    def test_explicit_target_takes_the_hit(self):
+        # team0: p1. team1: p2, p3 — both full HP. Attack p3 explicitly.
+        state = _make_group_state([(1, 10, 0, 100), (2, 20, 1, 100), (3, 30, 1, 100)])
+        patches = _build_common_patches(
+            state, _attack_rank(10),
+            damage_result=(10.0, {"damage_type": "physical", "final": 10.0}),
+        )
+        response, _ = _run_action(patches, _attack_payload(target_id=3))
+        assert response.status_code == 200
+        dmg = [e for e in response.json()["events"] if e["event"] == "damage"]
+        assert dmg and dmg[0]["target"] == 3
+        assert response.json().get("battle_finished") is None  # p2 still alive
+
+    def test_auto_target_when_omitted(self):
+        # Backward compat: no target_id -> first alive enemy is hit.
+        state = _make_group_state([(1, 10, 0, 100), (2, 20, 1, 100)])
+        patches = _build_common_patches(
+            state, _attack_rank(10),
+            damage_result=(10.0, {"damage_type": "physical", "final": 10.0}),
+        )
+        response, _ = _run_action(patches, _attack_payload())
+        assert response.status_code == 200
+        dmg = [e for e in response.json()["events"] if e["event"] == "damage"]
+        assert dmg and dmg[0]["target"] == 2
+
+    def test_cannot_target_ally(self):
+        state = _make_group_state([(1, 10, 0, 100), (4, 40, 0, 100), (2, 20, 1, 100)])
+        patches = _build_common_patches(state, _attack_rank())
+        response, _ = _run_action(patches, _attack_payload(target_id=4))
+        assert response.status_code == 400
+        assert "союзник" in response.json()["detail"].lower()
+
+    def test_cannot_target_dead(self):
+        state = _make_group_state([(1, 10, 0, 100), (2, 20, 1, 0), (3, 30, 1, 100)])
+        patches = _build_common_patches(state, _attack_rank())
+        response, _ = _run_action(patches, _attack_payload(target_id=2))
+        assert response.status_code == 400
+        assert "поверж" in response.json()["detail"].lower()
+
+    def test_unknown_target_rejected(self):
+        state = _make_group_state([(1, 10, 0, 100), (2, 20, 1, 100)])
+        patches = _build_common_patches(state, _attack_rank())
+        response, _ = _run_action(patches, _attack_payload(target_id=999))
+        assert response.status_code == 400
+        assert "не найдена" in response.json()["detail"].lower()
+
+
+class TestTeamWinCondition:
+    """Battle ends only when an entire team is down."""
+
+    def test_killing_one_of_two_enemies_continues(self):
+        # team1 has p2 (about to die) and p3 (healthy) -> battle goes on.
+        state = _make_group_state([(1, 10, 0, 100), (2, 20, 1, 5), (3, 30, 1, 100)])
+        patches = _build_common_patches(
+            state, _attack_rank(10),
+            damage_result=(10.0, {"damage_type": "physical", "final": 10.0}),
+        )
+        response, _ = _run_action(patches, _attack_payload(target_id=2))
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("battle_finished") is None
+        defeated = [e for e in data["events"] if e["event"] == "participant_defeated"]
+        assert defeated and defeated[0]["who"] == 2
+
+    def test_killing_last_enemy_finishes_with_team_winner(self):
+        state = _make_group_state([(1, 10, 0, 100), (2, 20, 1, 5)])
+        patches = _build_common_patches(
+            state, _attack_rank(10),
+            damage_result=(10.0, {"damage_type": "physical", "final": 10.0}),
+        )
+        response, _ = _run_action(patches, _attack_payload(target_id=2))
+        assert response.status_code == 200
+        data = response.json()
+        assert data["battle_finished"] is True
+        assert data["winner_team"] == 0
+
+
+class TestDeadSkip:
+    """The dead never become the next actor."""
+
+    def test_next_actor_skips_dead(self):
+        # order [1,2,3]; p2 already dead. After p1 acts, next alive is p3.
+        state = _make_group_state(
+            [(1, 10, 0, 100), (2, 20, 1, 0), (3, 30, 1, 100)],
+            turn_order=[1, 2, 3],
+        )
+        patches = _build_common_patches(
+            state, _attack_rank(5),
+            damage_result=(5.0, {"damage_type": "physical", "final": 5.0}),
+        )
+        response, _ = _run_action(patches, _attack_payload(target_id=3))
+        assert response.status_code == 200
+        assert response.json()["next_actor"] == 3

@@ -65,9 +65,17 @@ app.add_middleware(
 
 router = APIRouter(prefix="/battles", tags=["battles"])
 
-def next_pid_after(cur, order):            # order = [id,id,…]
+def next_pid_after(cur, order, participants=None):   # order = [id,id,…]
+    """Next participant after `cur` in turn order. When a participants map is
+    given, skip the dead (hp <= 0) so the 'next up' preview never points at a
+    corpse in group battles."""
     idx = order.index(cur)
-    return order[(idx + 1) % len(order)]
+    n = len(order)
+    for step in range(1, n + 1):
+        cand = order[(idx + step) % n]
+        if participants is None or participants.get(str(cand), {}).get("hp", 1) > 0:
+            return cand
+    return order[(idx + 1) % n]
 
 def _ensure_not_on_cooldown(state: Dict, pid: int, skill_ids: list[int]) -> None:
     """
@@ -567,6 +575,16 @@ async def create_battle_endpoint(
     if len(battle_in.players) < 2:
         raise HTTPException(400, "Нужно минимум два участника")
 
+    # 1.1. Per-team size cap (group battles). Engine is N-agnostic; this is a guard.
+    team_sizes: dict[int, int] = {}
+    for t in teams:
+        team_sizes[t] = team_sizes.get(t, 0) + 1
+    if any(size > settings.BATTLE_MAX_TEAM_SIZE for size in team_sizes.values()):
+        raise HTTPException(
+            400,
+            f"В одной команде не может быть больше {settings.BATTLE_MAX_TEAM_SIZE} участников",
+        )
+
     # 1.5. Same-location check: every participant must share current_location_id
     locations: set = set()
     for cid in player_ids:
@@ -699,7 +717,7 @@ async def get_state_internal(battle_id: int):
         "turn_number": state["turn_number"],
         "deadline_at": state["deadline_at"],
         "current_actor": state["next_actor"],
-        "next_actor": next_pid_after(state["next_actor"], state["turn_order"]),
+        "next_actor": next_pid_after(state["next_actor"], state["turn_order"], state["participants"]),
         "first_actor": state["first_actor"],
         "turn_order": state["turn_order"],
         "total_turns": state["total_turns"],
@@ -788,7 +806,7 @@ async def get_state(
                "turn_number": state["turn_number"],
                "deadline_at": state["deadline_at"],
                "current_actor": state["next_actor"],
-               "next_actor": next_pid_after(state["next_actor"], state["turn_order"]),
+               "next_actor": next_pid_after(state["next_actor"], state["turn_order"], state["participants"]),
                "first_actor": state["first_actor"],
                "turn_order": state["turn_order"],
                "total_turns": state["total_turns"],
@@ -870,7 +888,7 @@ async def spectate_battle(
         "turn_number": state["turn_number"],
         "deadline_at": state["deadline_at"],
         "current_actor": state["next_actor"],
-        "next_actor": next_pid_after(state["next_actor"], state["turn_order"]),
+        "next_actor": next_pid_after(state["next_actor"], state["turn_order"], state["participants"]),
         "first_actor": state["first_actor"],
         "turn_order": state["turn_order"],
         "total_turns": state["total_turns"],
@@ -1134,12 +1152,29 @@ async def _make_action_core(
     # События этого хода копим в список
     turn_events: List[Dict] = []
 
-    participant_ids = list(battle_state["participants"].keys())
-    defender_pid = int(
-        participant_ids[(participant_ids.index(str(request.participant_id)) + 1)
-                        % len(participant_ids)]
-    )
-    defender_info = battle_state["participants"][str(defender_pid)]
+    # --- Resolve the action's target (replaces the 1v1 round-robin) ---
+    # The "defender" is whoever the offensive part of this action hits: the
+    # client-chosen target_id, or (backward compat / NPC) the first alive enemy.
+    participants_map = battle_state["participants"]
+    attacker_team = participant_info.get("team")
+    alive_enemies = [
+        int(pid) for pid, pdata in participants_map.items()
+        if pdata.get("team") != attacker_team and pdata.get("hp", 0) > 0
+    ]
+    if request.target_id is not None:
+        target = participants_map.get(str(request.target_id))
+        if target is None:
+            raise HTTPException(400, "Цель не найдена в этом бою")
+        if target.get("team") == attacker_team:
+            raise HTTPException(400, "Нельзя атаковать союзника")
+        if target.get("hp", 0) <= 0:
+            raise HTTPException(400, "Цель уже повержена")
+        defender_pid = int(request.target_id)
+    elif alive_enemies:
+        defender_pid = alive_enemies[0]
+    else:
+        raise HTTPException(400, "Нет живых целей")
+    defender_info = participants_map[str(defender_pid)]
     defender_character_id = defender_info["character_id"]
 
     base_defender_attributes = await attrs(defender_character_id)
@@ -1455,25 +1490,26 @@ async def _make_action_core(
     # ------------------------------------------------------------------------------
     # 9.5. Проверка HP <= 0 — завершение боя при гибели участника
     # ------------------------------------------------------------------------------
-    battle_finished = False
-    winner_team = None
-
+    # Mark & log each newly-defeated participant exactly once (so group battles
+    # don't re-log the same corpse every turn).
     for pid_str, pdata in battle_state["participants"].items():
-        if pdata["hp"] <= 0:
-            battle_finished = True
-            # The losing team is this participant's team; winner is the other team
-            losing_team = pdata["team"]
-            # Find the winning team (any team that is not the losing one)
-            for other_pid_str, other_pdata in battle_state["participants"].items():
-                if other_pdata["team"] != losing_team:
-                    winner_team = other_pdata["team"]
-                    break
+        if pdata["hp"] <= 0 and not pdata.get("defeated"):
+            pdata["defeated"] = True
             turn_events.append({
                 "event": "participant_defeated",
                 "who": int(pid_str),
                 "hp": pdata["hp"],
             })
-            break
+
+    # Team-based victory: a team survives while ANY member has hp > 0. The battle
+    # ends only when at most one team still has a living member.
+    teams_alive = {
+        pdata.get("team")
+        for pdata in battle_state["participants"].values()
+        if pdata["hp"] > 0
+    }
+    battle_finished = len(teams_alive) <= 1
+    winner_team = next(iter(teams_alive)) if (battle_finished and teams_alive) else None
 
     # ------------------------------------------------------------------------------
     # 10. Записываем ход в БД
@@ -1804,9 +1840,14 @@ async def _make_action_core(
     # ------------------------------------------------------------------------------
     participant_ids: List[str] = list(battle_state["participants"].keys())
     current_index = participant_ids.index(str(request.participant_id))
-    next_actor_participant_id = int(
-        participant_ids[(current_index + 1) % len(participant_ids)]
-    )
+    # Advance to the next ALIVE participant — the dead don't take turns.
+    next_actor_participant_id = request.participant_id
+    total = len(participant_ids)
+    for step in range(1, total + 1):
+        cand = participant_ids[(current_index + step) % total]
+        if battle_state["participants"][cand]["hp"] > 0:
+            next_actor_participant_id = int(cand)
+            break
 
     battle_state["turn_number"] = new_turn_number
     battle_state["next_actor"] = next_actor_participant_id
@@ -2740,7 +2781,7 @@ async def admin_get_battle_state(
             "turn_number": state["turn_number"],
             "deadline_at": state["deadline_at"],
             "current_actor": state["next_actor"],
-            "next_actor": next_pid_after(state["next_actor"], state["turn_order"]),
+            "next_actor": next_pid_after(state["next_actor"], state["turn_order"], state["participants"]),
             "first_actor": state["first_actor"],
             "turn_order": state["turn_order"],
             "total_turns": state.get("total_turns", 0),
@@ -3502,7 +3543,7 @@ def _build_runtime(state: dict) -> dict:
         "turn_number": state["turn_number"],
         "deadline_at": state["deadline_at"],
         "current_actor": state["next_actor"],
-        "next_actor": next_pid_after(state["next_actor"], state["turn_order"]),
+        "next_actor": next_pid_after(state["next_actor"], state["turn_order"], state["participants"]),
         "first_actor": state["first_actor"],
         "turn_order": state["turn_order"],
         "total_turns": state.get("total_turns", 0),
