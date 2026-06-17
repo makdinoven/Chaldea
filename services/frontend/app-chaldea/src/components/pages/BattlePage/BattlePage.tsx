@@ -143,6 +143,11 @@ const BattlePage = () => {
 
   const [myData, setMyData] = useState<CharacterData>({});
   const [opponentData, setOpponentData] = useState<CharacterData | null>(null);
+  // Group battles: every participant on the viewer's team / the enemy team(s).
+  const [myTeamData, setMyTeamData] = useState<CharacterData[]>([]);
+  const [enemyTeamData, setEnemyTeamData] = useState<CharacterData[]>([]);
+  // Which enemy participant the next attack will hit.
+  const [selectedTargetId, setSelectedTargetId] = useState<number | null>(null);
 
   const [turnData, setTurnData] = useState<TurnDataState>({
     [SKILLS_KEYS.attack]: null,
@@ -222,124 +227,79 @@ const BattlePage = () => {
     },
   ];
 
-  // Process raw state (snapshot + runtime) into component state variables
+  // Process raw state (snapshot + runtime) into component state variables.
+  // Group-battle aware: splits participants into the viewer's team and enemies.
   const processState = useCallback(
     (snapshot: ParticipantSnapshot[], runtime: RuntimeState) => {
       setSnapshotData(snapshot);
       setRuntimeData(runtime);
       setError(null);
 
-      if (isSpectateMode) {
-        // In spectate mode: pick first team-0 as left side, first team-1 as right side
-        const team0Snapshot = snapshot.find((p) => {
-          const pid = p.participant_id;
-          return runtime.participants[pid]?.team === 0;
-        });
-        const team1Snapshot = snapshot.find((p) => {
-          const pid = p.participant_id;
-          return runtime.participants[pid]?.team === 1;
-        });
+      const teamOf = (pid: number) => runtime.participants[pid]?.team;
+      const build = (p: ParticipantSnapshot): CharacterData => ({
+        character_id: p.character_id,
+        participant_id: p.participant_id,
+        name: p.name,
+        avatar: p.avatar,
+        skills: p.skills,
+        attributes: p.attributes,
+        items: runtime.participants[p.participant_id]?.fast_slots,
+        resources: getResources(p, runtime, p.participant_id),
+      });
 
-        if (team0Snapshot) {
-          const pid = team0Snapshot.participant_id;
-          setMyData({
-            character_id: team0Snapshot.character_id,
-            participant_id: pid,
-            name: team0Snapshot.name,
-            avatar: team0Snapshot.avatar,
-            skills: team0Snapshot.skills,
-            attributes: team0Snapshot.attributes,
-            items: runtime.participants[pid].fast_slots,
-            resources: getResources(team0Snapshot, runtime, pid),
-          });
-        }
+      // Viewer's own participant (participant mode). In spectate there is no
+      // "me", so anchor the left side on the lowest team number.
+      const mySnapshot = isSpectateMode
+        ? undefined
+        : snapshot.find((p) => p.character_id === character.id);
+      if (!isSpectateMode && !mySnapshot) return;
 
-        if (team1Snapshot) {
-          const pid = team1Snapshot.participant_id;
-          setOpponentData({
-            character_id: team1Snapshot.character_id,
-            participant_id: pid,
-            name: team1Snapshot.name,
-            avatar: team1Snapshot.avatar,
-            skills: team1Snapshot.skills,
-            attributes: team1Snapshot.attributes,
-            items: runtime.participants[pid].fast_slots,
-            resources: getResources(team1Snapshot, runtime, pid),
-          });
-        }
+      const viewerTeam = mySnapshot
+        ? teamOf(mySnapshot.participant_id)
+        : Math.min(...snapshot.map((p) => teamOf(p.participant_id) ?? 0));
 
-        // Set turn info for spectate
-        const currentActorSnapshot = snapshot.find(
-          (p) => p.participant_id === runtime.current_actor,
-        );
-        const now = Date.now();
-        const turnEnd = new Date(runtime.deadline_at).getTime();
-        const timeLeft = Math.max(0, turnEnd - now);
+      const myTeamSnaps = snapshot.filter(
+        (p) => teamOf(p.participant_id) === viewerTeam,
+      );
+      const enemySnaps = snapshot.filter(
+        (p) => teamOf(p.participant_id) !== viewerTeam,
+      );
 
-        setCurrentTurn({
-          currentCharacterParticipant: {
-            id: runtime.current_actor,
-            characterName: currentActorSnapshot?.name ?? "",
-          },
-          turn_number: runtime.turn_number,
-          isOpponentTurn: true,
-          endsAt: timeLeft,
-        });
-      } else {
-        // Participant mode
-        const mySnapshot = snapshot.find(
-          (p: ParticipantSnapshot) => p.character_id === character.id,
-        );
-        const oppSnapshot = snapshot.find(
-          (p: ParticipantSnapshot) => p.character_id !== character.id,
-        );
+      // Viewer's own card comes first within their team.
+      const orderedMyTeam = mySnapshot
+        ? [
+            mySnapshot,
+            ...myTeamSnaps.filter(
+              (p) => p.participant_id !== mySnapshot.participant_id,
+            ),
+          ]
+        : myTeamSnaps;
 
-        if (!mySnapshot || !oppSnapshot) return;
+      setMyTeamData(orderedMyTeam.map(build));
+      setEnemyTeamData(enemySnaps.map(build));
 
-        const myParticipantId = mySnapshot.participant_id;
-        const oppParticipantId = oppSnapshot.participant_id;
+      const ownSnap = mySnapshot ?? orderedMyTeam[0];
+      setMyData(ownSnap ? build(ownSnap) : {});
+      setOpponentData(enemySnaps.length ? build(enemySnaps[0]) : null);
 
-        setMyData({
-          character_id: character.id,
-          participant_id: myParticipantId,
-          name: mySnapshot.name,
-          avatar: mySnapshot.avatar,
-          skills: mySnapshot.skills,
-          attributes: mySnapshot.attributes,
-          items: runtime.participants[myParticipantId].fast_slots,
-          resources: getResources(mySnapshot, runtime, myParticipantId),
-        });
+      const now = Date.now();
+      const turnEnd = new Date(runtime.deadline_at).getTime();
+      const timeLeft = Math.max(0, turnEnd - now);
+      const currentActorSnapshot = snapshot.find(
+        (p) => p.participant_id === runtime.current_actor,
+      );
 
-        setOpponentData({
-          character_id: oppSnapshot.character_id,
-          participant_id: oppParticipantId,
-          name: oppSnapshot.name,
-          avatar: oppSnapshot.avatar,
-          skills: oppSnapshot.skills,
-          attributes: oppSnapshot.attributes,
-          items: runtime.participants[oppParticipantId].fast_slots,
-          resources: getResources(oppSnapshot, runtime, oppParticipantId),
-        });
-
-        const now = Date.now();
-        const turnEnd = new Date(runtime.deadline_at).getTime();
-        const timeLeft = Math.max(0, turnEnd - now);
-
-        const currentActorSnapshot = snapshot.find(
-          (p: ParticipantSnapshot) =>
-            p.participant_id === runtime.current_actor,
-        );
-
-        setCurrentTurn({
-          currentCharacterParticipant: {
-            id: runtime.current_actor,
-            characterName: currentActorSnapshot?.name ?? "",
-          },
-          turn_number: runtime.turn_number,
-          isOpponentTurn: runtime.current_actor !== myParticipantId,
-          endsAt: timeLeft,
-        });
-      }
+      setCurrentTurn({
+        currentCharacterParticipant: {
+          id: runtime.current_actor,
+          characterName: currentActorSnapshot?.name ?? "",
+        },
+        turn_number: runtime.turn_number,
+        isOpponentTurn: isSpectateMode
+          ? true
+          : runtime.current_actor !== ownSnap?.participant_id,
+        endsAt: timeLeft,
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [isSpectateMode, character],
@@ -474,36 +434,53 @@ const BattlePage = () => {
   }, [battleId, character, battleResult, isSpectateMode, wsConnected, fallbackToPolling, wsReconnecting]);
 
   useEffect(() => {
-    // Battle result detection only in participant mode
+    // Battle result detection (participant mode). Team-aware: a side loses only
+    // when ALL of its members are down.
     if (isSpectateMode) return;
     if (battleResultSetRef.current) return;
-    if (opponentData?.resources && myData?.resources) {
-      const oppHealth = (opponentData.resources[0] as { health: ResourceEntry })
-        .health.current;
-      const myHealth = (myData.resources[0] as { health: ResourceEntry }).health
-        .current;
+    if (!runtimeData || myData.participant_id == null) return;
 
-      if (myHealth <= 0) {
-        battleResultSetRef.current = true;
-        setBattleResult({ winner: opponentData.name ?? "", isLose: true });
-      } else if (oppHealth <= 0) {
-        battleResultSetRef.current = true;
-        setBattleResult({ winner: myData.name ?? "", isLose: false });
+    const myTeam = runtimeData.participants[myData.participant_id]?.team;
+    const all = Object.values(runtimeData.participants);
+    const myTeamAlive = all.some((p) => p.team === myTeam && p.hp > 0);
+    const enemyAlive = all.some((p) => p.team !== myTeam && p.hp > 0);
 
-        // Use rewards from action response, or fall back to state (autobattle)
-        const rewards = pveRewards ?? runtimeData?.rewards ?? null;
-        if (rewards) {
-          setPveRewards(rewards);
-          setShowRewardsModal(true);
-        }
+    if (!myTeamAlive) {
+      battleResultSetRef.current = true;
+      setBattleResult({ winner: opponentData?.name ?? "", isLose: true });
+    } else if (!enemyAlive) {
+      battleResultSetRef.current = true;
+      setBattleResult({ winner: myData.name ?? "", isLose: false });
+      const rewards = pveRewards ?? runtimeData?.rewards ?? null;
+      if (rewards) {
+        setPveRewards(rewards);
+        setShowRewardsModal(true);
       }
     }
-  }, [opponentData, myData, pveRewards, runtimeData, isSpectateMode]);
+  }, [runtimeData, myData, opponentData, pveRewards, isSpectateMode]);
+
+  // Keep a valid attack target selected: default to the first alive enemy and
+  // reset if the current target dies or leaves.
+  useEffect(() => {
+    if (!runtimeData || isSpectateMode) return;
+    const aliveEnemies = enemyTeamData.filter(
+      (e) =>
+        e.participant_id != null &&
+        (runtimeData.participants[e.participant_id]?.hp ?? 0) > 0,
+    );
+    const stillValid =
+      selectedTargetId != null &&
+      aliveEnemies.some((e) => e.participant_id === selectedTargetId);
+    if (!stillValid) {
+      setSelectedTargetId(aliveEnemies[0]?.participant_id ?? null);
+    }
+  }, [enemyTeamData, runtimeData, selectedTargetId, isSpectateMode]);
 
   const handleSendTurn = async () => {
     if (!runtimeData || isSpectateMode || isPaused) return;
     const turnDataApi = {
       participant_id: myData.participant_id!,
+      target_id: selectedTargetId,
       skills: {
         attack_skill_id: turnData.attack ? (turnData.attack as SkillSlot).id ?? null : null,
         defense_skill_id: turnData.defense ? (turnData.defense as SkillSlot).id ?? null : null,
@@ -654,12 +631,23 @@ const BattlePage = () => {
         )}
 
         <div className="grid grid-cols-[minmax(0,1fr)_240px_minmax(0,1fr)] sm:grid-cols-[minmax(0,1fr)_300px_minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_380px_minmax(0,1fr)] gap-2 sm:gap-4 text-white">
-          <CharacterSide
-            characterData={myData}
-            isOpponent={false}
-            setTurnData={isSpectateMode ? undefined : setTurnData}
-            runtimeData={runtimeData}
-          />
+          {/* Viewer's team (own card first) */}
+          <div className="flex flex-col gap-4 sm:gap-6">
+            {myTeamData.map((c) => (
+              <CharacterSide
+                key={c.participant_id}
+                characterData={c}
+                isOpponent={false}
+                setTurnData={
+                  !isSpectateMode && c.participant_id === myData.participant_id
+                    ? setTurnData
+                    : undefined
+                }
+                runtimeData={runtimeData}
+              />
+            ))}
+          </div>
+
           {!isSpectateMode && currentTurn && (
             <BattlePageBar
               battleId={battleId}
@@ -690,11 +678,40 @@ const BattlePage = () => {
               </div>
             </div>
           )}
-          <CharacterSide
-            runtimeData={runtimeData}
-            characterData={opponentData}
-            isOpponent={true}
-          />
+
+          {/* Enemy team — tap a card to make it the attack target */}
+          <div className="flex flex-col gap-4 sm:gap-6">
+            {enemyTeamData.map((c) => {
+              const pid = c.participant_id as number;
+              const isDead = (runtimeData.participants[pid]?.hp ?? 0) <= 0;
+              const isTarget = !isSpectateMode && selectedTargetId === pid;
+              const selectable = !isSpectateMode && !isDead;
+              return (
+                <div
+                  key={pid}
+                  onClick={() => selectable && setSelectedTargetId(pid)}
+                  className={`relative rounded-card transition-all duration-200 ${
+                    selectable ? "cursor-pointer hover:opacity-90" : ""
+                  } ${
+                    isTarget
+                      ? "ring-2 ring-site-red shadow-[0_0_16px_rgba(239,68,68,0.45)]"
+                      : ""
+                  } ${isDead ? "opacity-40 grayscale" : ""}`}
+                >
+                  {isTarget && (
+                    <span className="absolute -top-2 right-2 z-10 rounded-full bg-site-red px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                      Цель
+                    </span>
+                  )}
+                  <CharacterSide
+                    characterData={c}
+                    isOpponent={true}
+                    runtimeData={runtimeData}
+                  />
+                </div>
+              );
+            })}
+          </div>
 
           {/* Battle result modal — standard win/lose (participant mode only) */}
           {!isSpectateMode && battleResult && !showRewardsModal && (

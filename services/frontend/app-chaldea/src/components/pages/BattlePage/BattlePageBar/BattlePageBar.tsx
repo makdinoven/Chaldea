@@ -677,12 +677,17 @@ const BattlePageBar = ({
                 runtimeData.turn_order[
                   activeTurnIndex % runtimeData.turn_order.length
                 ];
-
-              if (currentParticipantId === myData.participant_id) {
-                return myData.name;
-              } else if (currentParticipantId === opponentData?.participant_id) {
-                return opponentData.name;
-              }
+              // Resolve the acting participant's name from the full snapshot so
+              // any teammate / enemy in a group battle is named correctly.
+              const actor = snapshotData?.find(
+                (p) => p.participant_id === currentParticipantId,
+              );
+              return (
+                actor?.name ??
+                (currentParticipantId === myData.participant_id
+                  ? myData.name
+                  : "")
+              );
             })()}
           </span>
         </div>
