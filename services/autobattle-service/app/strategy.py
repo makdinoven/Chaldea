@@ -50,6 +50,24 @@ class Strategy:
         choice  = self._pick_best(weights, avail, feats)
         return choice["skills"], choice["item_id"]
 
+    def select_target(self, ctx: Dict[str, Any]) -> int | None:
+        """Pick the attack target: the lowest-HP alive enemy on an opposing
+        team (finish off wounded foes first). Returns None when no enemy is
+        alive — the battle is effectively over and the backend will handle it."""
+        rt = ctx["runtime"]
+        pid = int(rt["current_actor"])
+        participants = rt["participants"]
+        my_team = (participants.get(str(pid)) or {}).get("team")
+        enemies = [
+            (int(p_id), p)
+            for p_id, p in participants.items()
+            if p.get("team") != my_team and p.get("hp", 0) > 0
+        ]
+        if not enemies:
+            return None
+        target_pid, _ = min(enemies, key=lambda kv: kv[1].get("hp", 0))
+        return target_pid
+
     # ───────────── helpers ─────────────
     # ------------------------------------------------------------------
     def _filter_available(self, ctx: Dict[str, Any]) -> Dict[str, Any]:

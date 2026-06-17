@@ -254,3 +254,62 @@ class TestCalcWeightsCaseNormalization:
 
         # With same random seed, noise is identical, so weights must be equal
         assert w_lower == w_upper == w_cap
+
+
+# ---------------------------------------------------------------------------
+# Tests for select_target() — NPC group-battle targeting
+# ---------------------------------------------------------------------------
+
+class TestSelectTarget:
+    """NPC picks the lowest-HP alive enemy on an opposing team."""
+
+    @staticmethod
+    def _ctx(participants, current_actor):
+        return {"runtime": {"current_actor": current_actor, "participants": participants}}
+
+    def test_picks_lowest_hp_alive_enemy(self):
+        s = Strategy()
+        ctx = self._ctx(
+            {
+                "1": {"team": 0, "hp": 100},
+                "2": {"team": 1, "hp": 80},
+                "3": {"team": 1, "hp": 30},
+            },
+            current_actor=1,
+        )
+        assert s.select_target(ctx) == 3
+
+    def test_ignores_allies(self):
+        s = Strategy()
+        ctx = self._ctx(
+            {
+                "1": {"team": 0, "hp": 50},
+                "2": {"team": 0, "hp": 10},  # ally with low HP — must be ignored
+                "3": {"team": 1, "hp": 90},
+            },
+            current_actor=1,
+        )
+        assert s.select_target(ctx) == 3
+
+    def test_ignores_dead_enemies(self):
+        s = Strategy()
+        ctx = self._ctx(
+            {
+                "1": {"team": 0, "hp": 100},
+                "2": {"team": 1, "hp": 0},   # dead — skip
+                "3": {"team": 1, "hp": 70},
+            },
+            current_actor=1,
+        )
+        assert s.select_target(ctx) == 3
+
+    def test_none_when_no_enemy_alive(self):
+        s = Strategy()
+        ctx = self._ctx(
+            {
+                "1": {"team": 0, "hp": 100},
+                "2": {"team": 1, "hp": 0},
+            },
+            current_actor=1,
+        )
+        assert s.select_target(ctx) is None

@@ -297,7 +297,9 @@ async def handle_turn(bid: int, pid: int) -> None:
 
             # ---------- стратегия ----------
             skills, item_id = strategy.select_actions(ctx)
-            log.info("battle=%s pid=%s strategy chose: skills=%s item=%s", bid, pid, skills, item_id)
+            target_id = strategy.select_target(ctx)
+            log.info("battle=%s pid=%s strategy chose: skills=%s item=%s target=%s",
+                     bid, pid, skills, item_id, target_id)
 
             # Debug: log available skills
             snap = next(s for s in ctx["snapshot"] if s["participant_id"] == pid)
@@ -313,6 +315,8 @@ async def handle_turn(bid: int, pid: int) -> None:
             payload = {"participant_id": pid, "skills": skills}
             if item_id:
                 payload["skills"]["item_id"] = item_id
+            if target_id is not None:
+                payload["target_id"] = target_id
 
             # ---------- POST /action ----------
             res = await post_battle_action(bid, payload)
