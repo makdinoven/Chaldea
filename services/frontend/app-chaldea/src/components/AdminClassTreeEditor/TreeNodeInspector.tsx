@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import type { Node } from 'reactflow';
-import type { TreeNodeInTreeResponse, TreeNodeSkillRead } from './types';
+import type { TreeNodeInTreeResponse, TreeNodeSkillRead, Subclass } from './types';
 import { LEVEL_RING_OPTIONS, NODE_TYPE_OPTIONS } from './types';
 import TreeSkillPicker from './TreeSkillPicker';
 import { X, Plus, Trash2 } from 'react-feather';
 
 interface TreeNodeInspectorProps {
   node: Node | null;
+  subclasses: Subclass[];
   onUpdateField: (nodeId: string, field: string, value: unknown) => void;
   onRemoveNode: (nodeId: string) => void;
   onAddSkill: (nodeId: string, skill: { skill_id: number; skill_name: string; skill_type: string; skill_image: string | null }) => void;
@@ -16,6 +17,7 @@ interface TreeNodeInspectorProps {
 
 const TreeNodeInspector = ({
   node,
+  subclasses,
   onUpdateField,
   onRemoveNode,
   onAddSkill,
@@ -28,6 +30,17 @@ const TreeNodeInspector = ({
 
   const data = node.data as TreeNodeInTreeResponse;
   const skills: TreeNodeSkillRead[] = data.skills ?? [];
+
+  // Picking a subclass is the link (subclass_key) AND autofills name/description
+  // straight from the registry, so the player preview always matches.
+  const handleSubclassChange = (key: string) => {
+    const sub = subclasses.find((s) => s.key === key);
+    onUpdateField(node.id, 'subclass_key', key || null);
+    if (sub) {
+      onUpdateField(node.id, 'name', sub.name);
+      onUpdateField(node.id, 'description', sub.description);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -108,6 +121,39 @@ const TreeNodeInspector = ({
             ))}
           </select>
         </div>
+
+        {/* Subclass picker — only for subclass_choice nodes */}
+        {data.node_type === 'subclass_choice' && (
+          <div>
+            <label className="text-white/60 text-xs font-medium uppercase tracking-wider mb-1 block">
+              Подкласс
+            </label>
+            <select
+              value={data.subclass_key ?? ''}
+              onChange={(e) => handleSubclassChange(e.target.value)}
+              className="input-underline w-full bg-transparent"
+            >
+              <option value="" className="bg-site-dark text-white">
+                — выберите подкласс —
+              </option>
+              {subclasses.map((s) => (
+                <option key={s.key} value={s.key} className="bg-site-dark text-white">
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            {!data.subclass_key && (
+              <p className="text-site-red/70 text-xs mt-1">
+                Узел выбора подкласса должен ссылаться на подкласс.
+              </p>
+            )}
+            {subclasses.length === 0 && (
+              <p className="text-white/30 text-xs mt-1 italic">
+                Нет подклассов для этого класса.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Sort order */}
         <div>

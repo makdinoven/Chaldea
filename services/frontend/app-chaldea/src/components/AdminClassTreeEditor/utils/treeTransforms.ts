@@ -49,6 +49,7 @@ export const reactFlowToApi = (
     tree_type: string;
     parent_tree_id: number | null;
     subclass_name: string | null;
+    subclass_key: string | null;
     tree_image: string | null;
   }
 ): FullClassTreeUpdateRequest => {
@@ -67,6 +68,7 @@ export const reactFlowToApi = (
       name: data.name,
       description: data.description ?? null,
       node_type: data.node_type,
+      subclass_key: data.node_type === 'subclass_choice' ? (data.subclass_key ?? null) : null,
       icon_image: data.icon_image ?? null,
       sort_order: data.sort_order ?? 0,
       skills,

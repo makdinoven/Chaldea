@@ -92,13 +92,15 @@ const SkillTreePage = () => {
         return;
       }
       const chosenNode = classTree.nodes.find((n) => n.id === subclassNodeId);
-      const nodeName = chosenNode?.name?.toLowerCase() ?? '';
-      let matchedTree = subclassTrees.find(
-        (st) => st.subclass_name?.toLowerCase() === nodeName || st.name?.toLowerCase().includes(nodeName)
-      );
-      if (!matchedTree && subclassTrees.length > 0) matchedTree = subclassTrees[0];
+      const subclassKey = chosenNode?.subclass_key ?? null;
+      if (!subclassKey) {
+        toast.error('У этого узла не задан подкласс');
+        return;
+      }
+      // Deterministic link: node.subclass_key === tree.subclass_key. No name guessing.
+      const matchedTree = subclassTrees.find((st) => st.subclass_key === subclassKey);
       if (!matchedTree) {
-        toast.error('Дерево подкласса не найдено');
+        toast.error('Дерево этого подкласса ещё не создано');
         return;
       }
       setSubclassLoading(true);

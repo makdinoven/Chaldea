@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
@@ -19,6 +20,7 @@ import {
   TREE_TYPE_OPTIONS,
   type ClassSkillTreeRead,
   type ClassSkillTreeCreate,
+  type Subclass,
 } from './types';
 import { Plus, Trash2, ChevronRight, Search } from 'react-feather';
 
@@ -39,11 +41,26 @@ const AdminClassTreePage = () => {
     subclass_name: null,
   });
 
+  const [allSubclasses, setAllSubclasses] = useState<Subclass[]>([]);
+
   const editor = useClassTreeEditor(selectedFullTree);
 
   useEffect(() => {
     dispatch(fetchClassTrees());
   }, [dispatch]);
+
+  // Hardcoded subclass registry (skills-service) — drives node + create-form dropdowns.
+  useEffect(() => {
+    axios
+      .get<Subclass[]>('/skills/subclasses')
+      .then((res) => setAllSubclasses(res.data))
+      .catch(() => toast.error('Не удалось загрузить список подклассов'));
+  }, []);
+
+  const inspectorSubclasses = allSubclasses.filter(
+    (s) => s.class_id === selectedFullTree?.class_id
+  );
+  const createFormSubclasses = allSubclasses.filter((s) => s.class_id === newTree.class_id);
 
   // Group trees by class
   const groupedTrees = CLASS_OPTIONS.reduce(
@@ -77,8 +94,8 @@ const AdminClassTreePage = () => {
       setShowCreateForm(false);
       setNewTree({ class_id: 1, name: '', tree_type: 'class', parent_tree_id: null, subclass_name: null });
       toast.success('Дерево создано');
-    } catch {
-      toast.error('Ошибка при создании дерева');
+    } catch (err) {
+      toast.error(typeof err === 'string' ? err : 'Ошибка при создании дерева');
     }
   };
 
@@ -223,13 +240,25 @@ const AdminClassTreePage = () => {
                         </option>
                       ))}
                     </select>
-                    <input
-                      type="text"
-                      placeholder="Название подкласса"
-                      value={newTree.subclass_name ?? ''}
-                      onChange={(e) => setNewTree({ ...newTree, subclass_name: e.target.value || null })}
-                      className="input-underline w-full text-sm"
-                    />
+                    <select
+                      value={newTree.subclass_key ?? ''}
+                      onChange={(e) => {
+                        const sub = createFormSubclasses.find((s) => s.key === e.target.value);
+                        setNewTree({
+                          ...newTree,
+                          subclass_key: e.target.value || null,
+                          subclass_name: sub?.name ?? null,
+                        });
+                      }}
+                      className="input-underline w-full text-sm bg-transparent"
+                    >
+                      <option value="" className="bg-site-dark">Подкласс...</option>
+                      {createFormSubclasses.map((s) => (
+                        <option key={s.key} value={s.key} className="bg-site-dark">
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
                   </>
                 )}
 
@@ -358,6 +387,7 @@ const AdminClassTreePage = () => {
             >
               <TreeNodeInspector
                 node={editor.selectedNode}
+                subclasses={inspectorSubclasses}
                 onUpdateField={editor.updateNodeData}
                 onRemoveNode={editor.removeNode}
                 onAddSkill={editor.addSkillToNode}

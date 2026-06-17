@@ -26,6 +26,7 @@ export interface TreeNodeInTree {
   name: string;
   description: string | null;
   node_type: string; // 'regular' | 'root' | 'subclass_choice'
+  subclass_key: string | null; // set only for subclass_choice nodes
   icon_image: string | null;
   sort_order: number;
   skills: TreeNodeSkillEntry[];
@@ -40,9 +41,19 @@ export interface TreeNodeInTreeResponse {
   name: string;
   description: string | null;
   node_type: string;
+  subclass_key: string | null;
   icon_image: string | null;
   sort_order: number;
   skills: TreeNodeSkillRead[];
+}
+
+// --- Subclass (hardcoded registry from skills-service) ---
+
+export interface Subclass {
+  key: string;
+  class_id: number;
+  name: string;
+  description: string;
 }
 
 // --- Connection ---
@@ -63,6 +74,7 @@ export interface ClassSkillTreeRead {
   tree_type: string;
   parent_tree_id: number | null;
   subclass_name: string | null;
+  subclass_key: string | null;
   tree_image: string | null;
 }
 
@@ -73,6 +85,7 @@ export interface ClassSkillTreeCreate {
   tree_type?: string;
   parent_tree_id?: number | null;
   subclass_name?: string | null;
+  subclass_key?: string | null;
   tree_image?: string | null;
 }
 
@@ -86,6 +99,7 @@ export interface FullClassTreeResponse {
   tree_type: string;
   parent_tree_id: number | null;
   subclass_name: string | null;
+  subclass_key: string | null;
   tree_image: string | null;
   nodes: TreeNodeInTreeResponse[];
   connections: TreeNodeConnectionInTree[];
@@ -99,6 +113,7 @@ export interface FullClassTreeUpdateRequest {
   tree_type: string;
   parent_tree_id: number | null;
   subclass_name: string | null;
+  subclass_key: string | null;
   tree_image: string | null;
   nodes: TreeNodeInTree[];
   connections: TreeNodeConnectionInTree[];

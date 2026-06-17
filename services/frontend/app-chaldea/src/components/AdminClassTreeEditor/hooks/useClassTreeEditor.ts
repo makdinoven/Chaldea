@@ -89,6 +89,7 @@ export const useClassTreeEditor = (fullTree: FullClassTreeResponse | null) => {
         name: 'Новый узел',
         description: null,
         node_type: 'regular',
+        subclass_key: null,
         icon_image: null,
         sort_order: 0,
         skills: [],
@@ -199,6 +200,7 @@ export const useClassTreeEditor = (fullTree: FullClassTreeResponse | null) => {
       tree_type: fullTree.tree_type,
       parent_tree_id: fullTree.parent_tree_id,
       subclass_name: fullTree.subclass_name,
+      subclass_key: fullTree.subclass_key,
       tree_image: fullTree.tree_image,
     });
   }, [fullTree, nodes, edges, treeName, treeDescription]);
