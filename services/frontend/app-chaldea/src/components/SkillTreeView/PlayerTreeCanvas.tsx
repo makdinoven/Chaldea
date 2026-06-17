@@ -173,8 +173,11 @@ const PlayerTreeCanvas = ({
       const bothChosen = sourceChosen && targetChosen;
       const oneChosen = sourceChosen || targetChosen;
 
-      let colors: [string, string] = ['rgba(255,255,255,0.06)', 'rgba(255,255,255,0.03)'];
-      let strokeWidth = 1;
+      // Unchosen connections must still read on the dark class art — the old
+      // 0.06/0.03 white was effectively invisible. Keep a clear tier:
+      // none chosen -> visible neutral, one -> dim class color, both -> bright.
+      let colors: [string, string] = ['rgba(255,255,255,0.32)', 'rgba(255,255,255,0.2)'];
+      let strokeWidth = 1.5;
       let glowing = false;
 
       if (bothChosen) {

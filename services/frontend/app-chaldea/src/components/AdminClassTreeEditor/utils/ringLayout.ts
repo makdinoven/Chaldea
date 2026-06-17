@@ -80,9 +80,11 @@ export const autoLayoutRings = (
 
 
 /**
- * Auto-align nodes in horizontal rows by level_ring.
- * Bottom-up: lays out the bottom row evenly, then each parent row
- * centers each parent over its children.
+ * Auto-align nodes in horizontal rows by level_ring (one row per ring,
+ * lowest ring on top). Within each row the order is decided top-down by the
+ * barycenter (average order) of each node's parents, so children sit under
+ * their parents and edges don't cross. Nodes with several parents land between
+ * them; orphan nodes keep a stable position by id.
  *
  * Accepts ReactFlow edges (source/target may be parent→child or child→parent;
  * direction is determined by comparing level_ring values).
@@ -96,101 +98,67 @@ export const autoAlignRows = (
 ): Node[] => {
   if (nodes.length === 0) return nodes;
 
-  // --- helpers ---
   type Ring = number;
   const ringOf = (id: string): Ring => {
     const n = nodes.find((nd) => nd.id === id);
     return (n?.data as { level_ring: number })?.level_ring ?? 0;
   };
+  const byId = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
 
-  // Group nodes by ring
+  // Group nodes by ring (top-most ring first)
   const groups = new Map<Ring, Node[]>();
   for (const node of nodes) {
     const r = ringOf(node.id);
     if (!groups.has(r)) groups.set(r, []);
     groups.get(r)!.push(node);
   }
-  const sortedRings = [...groups.keys()].sort((a, b) => a - b); // root first
+  const sortedRings = [...groups.keys()].sort((a, b) => a - b);
 
-  // Build parent→children map (parent = lower ring)
-  const childrenOf = new Map<string, Set<string>>();
+  // child → parents (parent = lower ring)
+  const parentsOf = new Map<string, string[]>();
   for (const e of edges) {
     const sr = ringOf(e.source);
     const tr = ringOf(e.target);
     if (sr === tr) continue; // same-ring edge, skip
     const [pid, cid] = sr < tr ? [e.source, e.target] : [e.target, e.source];
-    if (!childrenOf.has(pid)) childrenOf.set(pid, new Set());
-    childrenOf.get(pid)!.add(cid);
+    if (!parentsOf.has(cid)) parentsOf.set(cid, []);
+    parentsOf.get(cid)!.push(pid);
   }
 
-  // --- layout bottom-up ---
-  const posX = new Map<string, number>(); // node id → x
-
-  const reversedRings = [...sortedRings].reverse(); // leaves first
-
-  for (const ring of reversedRings) {
+  // Decide each row's order top-down using parents' barycenter.
+  const orderIndex = new Map<string, number>(); // node id → index within its row
+  sortedRings.forEach((ring, rowIdx) => {
     const row = groups.get(ring)!;
-
-    // Separate nodes that have positioned children vs those that don't
-    const withKids: { node: Node; avgX: number }[] = [];
-    const noKids: Node[] = [];
-
-    for (const node of row) {
-      const kids = childrenOf.get(node.id);
-      if (kids && kids.size > 0) {
-        const kidXs = [...kids].map((k) => posX.get(k)).filter((x) => x !== undefined) as number[];
-        if (kidXs.length > 0) {
-          withKids.push({ node, avgX: kidXs.reduce((a, b) => a + b, 0) / kidXs.length });
-          continue;
-        }
-      }
-      noKids.push(node);
-    }
-
-    if (withKids.length === 0 && noKids.length > 0) {
-      // Pure leaf row — spread evenly
-      const w = (noKids.length - 1) * nodeGap;
-      noKids.forEach((node, i) => {
-        posX.set(node.id, -w / 2 + i * nodeGap);
-      });
+    let ordered: Node[];
+    if (rowIdx === 0) {
+      // Top row (roots): keep current left-to-right order, stable by id.
+      ordered = [...row].sort((a, b) => a.position.x - b.position.x || byId(a.id, b.id));
     } else {
-      // Sort parents by their children's center
-      withKids.sort((a, b) => a.avgX - b.avgX);
-
-      // Fix overlaps
-      for (let i = 1; i < withKids.length; i++) {
-        if (withKids[i].avgX - withKids[i - 1].avgX < nodeGap) {
-          withKids[i].avgX = withKids[i - 1].avgX + nodeGap;
-        }
-      }
-
-      for (const { node, avgX } of withKids) {
-        posX.set(node.id, avgX);
-      }
-
-      // Place orphan nodes (no kids) filling gaps or at the end
-      if (noKids.length > 0) {
-        const placedXs = withKids.map((w) => w.avgX);
-        const minPlaced = Math.min(...placedXs);
-        const maxPlaced = Math.max(...placedXs);
-        // Place before or after
-        noKids.forEach((node, i) => {
-          if (i % 2 === 0) {
-            posX.set(node.id, maxPlaced + (Math.floor(i / 2) + 1) * nodeGap);
-          } else {
-            posX.set(node.id, minPlaced - (Math.floor(i / 2) + 1) * nodeGap);
-          }
-        });
-      }
+      const barycenter = (n: Node): number => {
+        const idxs = (parentsOf.get(n.id) ?? [])
+          .map((p) => orderIndex.get(p))
+          .filter((x): x is number => x !== undefined);
+        // Parentless nodes sink to the right but stay deterministic.
+        return idxs.length ? idxs.reduce((a, b) => a + b, 0) / idxs.length : Number.MAX_SAFE_INTEGER;
+      };
+      ordered = [...row].sort((a, b) => barycenter(a) - barycenter(b) || byId(a.id, b.id));
     }
+    ordered.forEach((n, i) => orderIndex.set(n.id, i));
+  });
+
+  // Assign x per row, each row centered around 0 by its order.
+  const posX = new Map<string, number>();
+  for (const ring of sortedRings) {
+    const ordered = [...groups.get(ring)!].sort(
+      (a, b) => orderIndex.get(a.id)! - orderIndex.get(b.id)!,
+    );
+    const width = (ordered.length - 1) * nodeGap;
+    ordered.forEach((n, i) => posX.set(n.id, -width / 2 + i * nodeGap));
   }
 
-  // --- shift so leftmost node starts at x=200 ---
-  const allXs = [...posX.values()];
-  const minX = Math.min(...allXs);
-  const offsetX = 200 - minX;
+  // Shift so the leftmost node starts at x=200.
+  const offsetX = 200 - Math.min(...posX.values());
 
-  // --- build final positions ---
   return nodes.map((node) => {
     const x = posX.get(node.id);
     if (x === undefined) return node;

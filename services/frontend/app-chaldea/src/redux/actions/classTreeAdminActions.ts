@@ -72,8 +72,10 @@ export const createClassTree = createAsyncThunk<
       const res = await axios.post(`${BASE_URL}/admin/class_trees/`, data);
       return res.data;
     } catch (err: unknown) {
-      const error = err as { response?: { data?: string }; message?: string };
-      return rejectWithValue(error.response?.data as string || error.message || 'Ошибка создания дерева');
+      const error = err as { response?: { data?: { detail?: string } }; message?: string };
+      return rejectWithValue(
+        error.response?.data?.detail || error.message || 'Ошибка создания дерева'
+      );
     }
   }
 );
