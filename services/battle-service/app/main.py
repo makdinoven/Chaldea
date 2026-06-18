@@ -7,7 +7,7 @@ import asyncio
 from fastapi import FastAPI, Depends, HTTPException, APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
+from sqlalchemy import text, select
 
 from crud import create_battle, write_turn, get_logs_for_turn, finish_battle, get_battle, get_active_battle_for_character
 from schemas import (
@@ -24,8 +24,11 @@ from schemas import (
     SpectateStateResponse,
     JoinRequestCreate, JoinRequestResponse, JoinRequestListItem, JoinRequestListResponse,
     AdminJoinRequestItem, AdminJoinRequestListResponse, AdminJoinRequestActionResponse,
+    PartyCreateRequest, PartyInviteRequest, PartyRespondRequest,
+    PartyMemberOut, PartyStateResponse, IncomingPartyInvite,
+    IncomingPartyInvitesResponse, PartyStartResponse, PartyActionResponse,
 )
-from models import BattleType, BattleHistory, BattleResult, PvpInvitation, PvpInvitationStatus, BattleStatus, BattleJoinRequest, JoinRequestStatus, BattleParticipant
+from models import BattleType, BattleHistory, BattleResult, PvpInvitation, PvpInvitationStatus, BattleStatus, BattleJoinRequest, JoinRequestStatus, BattleParticipant, BattleParty, BattlePartyMember, BattlePartyStatus, PartyMemberStatus
 from rabbitmq_publisher import publish_notification
 from auth_http import get_current_user_via_http, UserRead, require_permission, authenticate_websocket
 import ws_manager
@@ -534,6 +537,88 @@ async def _track_cumulative_stats(
                         logger.warning(f"[QUEST] Auto-progress error for char {char_id}: {e}")
 
 
+async def _assemble_battle(db, player_ids, teams, battle_type, location_id):
+    """Create the Battle + participants, init Redis state, register NPCs.
+
+    Shared by the public create endpoint and the party-start flow. Validation
+    (ownership, location, team sizes) is the caller's responsibility.
+    Returns (battle_obj, participant_objs, first_actor_pid, deadline).
+    """
+    battle_obj, participant_objs = await create_battle(
+        db, player_ids, teams, battle_type=battle_type, location_id=location_id
+    )
+
+    first_actor_pid = participant_objs[0].id
+    moscow_tz = timezone(timedelta(hours=3))
+    deadline = datetime.now(timezone.utc).astimezone(moscow_tz) + timedelta(
+        hours=settings.TURN_TIMEOUT_HOURS
+    )
+
+    participants_info = []
+    for p in participant_objs:
+        participants_info.append(await build_participant_info(p.character_id, p.id))
+
+    participants_payload = []
+    for snap in participants_info:
+        participants_payload.append({
+            "participant_id": snap["participant_id"],
+            "character_id": snap["character_id"],
+            "team": next(
+                pl.team for pl in participant_objs
+                if pl.id == snap["participant_id"]
+            ),
+            "hp": snap["attributes"]["current_health"],
+            "mana": snap["attributes"]["current_mana"],
+            "energy": snap["attributes"]["current_energy"],
+            "stamina": snap["attributes"]["current_stamina"],
+            "max_hp": snap["attributes"]["max_health"],
+            "max_mana": snap["attributes"]["max_mana"],
+            "max_energy": snap["attributes"]["max_energy"],
+            "max_stamina": snap["attributes"]["max_stamina"],
+            "fast_slots": snap["fast_slots"],
+            "equipment_durability": snap.get("equipment_durability", {}),
+        })
+
+    await save_snapshot(battle_obj.id, participants_info)
+    rds = await get_redis_client()
+    await cache_snapshot(rds, battle_obj.id, participants_info)
+
+    await init_battle_state(
+        battle_id=battle_obj.id,
+        participants_payload=participants_payload,
+        first_actor_participant_id=first_actor_pid,
+        deadline_at=deadline,
+    )
+    await rds.zadd(KEY_BATTLE_TURNS.format(id=battle_obj.id), {"0": 1})
+
+    # Auto-register NPC/mob participants with autobattle-service
+    for p in participant_objs:
+        try:
+            result = await db.execute(
+                text("SELECT is_npc FROM characters WHERE id = :cid"),
+                {"cid": p.character_id},
+            )
+            row = result.fetchone()
+            if row and row[0]:
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        reg_resp = await client.post(
+                            f"{settings.AUTOBATTLE_SERVICE_URL}/internal/register",
+                            json={"participant_id": p.id, "battle_id": battle_obj.id},
+                        )
+                        if reg_resp.status_code != 200:
+                            logger.warning(
+                                f"Не удалось зарегистрировать моба в autobattle: "
+                                f"{reg_resp.status_code} - {reg_resp.text}"
+                            )
+                except httpx.RequestError as e:
+                    logger.error(f"Ошибка при регистрации моба в autobattle: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка при проверке NPC для participant {p.id}: {e}")
+
+    return battle_obj, participant_objs, first_actor_pid, deadline
+
+
 @router.post("/", response_model=BattleCreated, status_code=201)
 async def create_battle_endpoint(
     battle_in: BattleCreate,
@@ -600,91 +685,11 @@ async def create_battle_endpoint(
         raise HTTPException(400, "Все участники боя должны находиться в одной локации")
     battle_location_id = locations.pop()
 
-    # 2. CRUD-создание записи в БД + участников
+    # 2-5. Assemble the battle (DB rows, Redis state, NPC registration)
     bt = battle_in.battle_type or "pve"
-    battle_obj, participant_objs = await create_battle(
-        db, player_ids, teams, battle_type=bt, location_id=battle_location_id
+    battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
+        db, player_ids, teams, bt, battle_location_id
     )
-
-    # 3. Кто ходит первым (первый в списке → team-логика может быть иной)
-    first_actor_pid = participant_objs[0].id
-    moscow_tz = timezone(timedelta(hours=3))
-    deadline = datetime.now(timezone.utc).astimezone(moscow_tz) + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
-
-    participants_info = []
-    for p in participant_objs:
-        participants_info.append(
-            await build_participant_info(p.character_id, p.id)
-        )
-
-    # 4. Собираем payload для Redis
-    participants_payload = []
-    for snap in participants_info:  # каждый snap = build_participant_info(...)
-        participants_payload.append({
-            "participant_id": snap["participant_id"],
-            "character_id": snap["character_id"],
-            "team": next(
-                pl.team for pl in participant_objs
-                if pl.id == snap["participant_id"]
-            ),
-            # реальные цифры
-            "hp": snap["attributes"]["current_health"],
-            "mana": snap["attributes"]["current_mana"],
-            "energy": snap["attributes"]["current_energy"],
-            "stamina": snap["attributes"]["current_stamina"],
-            # если хотите — max_*
-            "max_hp": snap["attributes"]["max_health"],
-            "max_mana": snap["attributes"]["max_mana"],
-            "max_energy": snap["attributes"]["max_energy"],
-            "max_stamina": snap["attributes"]["max_stamina"],
-            "fast_slots": snap["fast_slots"],
-            "equipment_durability": snap.get("equipment_durability", {}),
-        })
-    await save_snapshot(battle_obj.id, participants_info)
-    rds = await get_redis_client()
-    await cache_snapshot(rds, battle_obj.id, participants_info)
-
-    await init_battle_state(
-        battle_id=battle_obj.id,
-        participants_payload=participants_payload,
-        first_actor_participant_id=first_actor_pid,
-        deadline_at=deadline,
-    )
-    await rds.zadd(KEY_BATTLE_TURNS.format(id=battle_obj.id), {"0": 1})
-
-    # 5. Auto-register NPC/mob participants with autobattle-service
-    for p in participant_objs:
-        try:
-            result = await db.execute(
-                text("SELECT is_npc FROM characters WHERE id = :cid"),
-                {"cid": p.character_id},
-            )
-            row = result.fetchone()
-            if row and row[0]:
-                # This is an NPC — register with autobattle-service (internal endpoint, no auth)
-                try:
-                    async with httpx.AsyncClient(timeout=5.0) as client:
-                        reg_resp = await client.post(
-                            f"{settings.AUTOBATTLE_SERVICE_URL}/internal/register",
-                            json={
-                                "participant_id": p.id,
-                                "battle_id": battle_obj.id,
-                            },
-                        )
-                        if reg_resp.status_code == 200:
-                            logger.info(
-                                f"Моб participant_id={p.id} (char={p.character_id}) "
-                                f"зарегистрирован в autobattle для боя {battle_obj.id}"
-                            )
-                        else:
-                            logger.warning(
-                                f"Не удалось зарегистрировать моба в autobattle: "
-                                f"{reg_resp.status_code} - {reg_resp.text}"
-                            )
-                except httpx.RequestError as e:
-                    logger.error(f"Ошибка при регистрации моба в autobattle: {e}")
-        except Exception as e:
-            logger.error(f"Ошибка при проверке NPC для participant {p.id}: {e}")
 
     # 6. Возвращаем ответ
     return BattleCreated(
@@ -3640,6 +3645,439 @@ async def feat125_flush_battle_state() -> None:
         )
     except Exception as exc:
         logger.error("FEAT-125 BATTLE_RESET_ON_BOOT flush failed: %s", exc)
+
+
+# ===========================================================================
+# Party (pre-battle lobby) — assemble a group battle by inviting players
+# ===========================================================================
+PARTY_EXPIRY_HOURS = 2
+
+
+def _enum_val(v):
+    return v.value if hasattr(v, "value") else v
+
+
+async def _party_members(db: AsyncSession, party_id: int):
+    res = await db.execute(
+        select(BattlePartyMember)
+        .where(BattlePartyMember.party_id == party_id)
+        .order_by(BattlePartyMember.team, BattlePartyMember.id)
+    )
+    return res.scalars().all()
+
+
+async def _build_party_state(db: AsyncSession, party: BattleParty) -> PartyStateResponse:
+    members = await _party_members(db, party.id)
+    member_outs = []
+    for m in members:
+        prof = await _get_character_profile_info(db, m.character_id)
+        member_outs.append(PartyMemberOut(
+            character_id=m.character_id,
+            character_name=prof.get("name") or f"Персонаж #{m.character_id}",
+            character_level=prof.get("level") or 0,
+            character_avatar=prof.get("avatar"),
+            team=m.team,
+            status=_enum_val(m.status),
+            is_leader=m.is_leader,
+        ))
+    return PartyStateResponse(
+        id=party.id,
+        leader_character_id=party.leader_character_id,
+        location_id=party.location_id,
+        battle_type=_enum_val(party.battle_type),
+        status=_enum_val(party.status),
+        battle_id=party.battle_id,
+        expires_at=party.expires_at,
+        members=member_outs,
+    )
+
+
+async def _prune_party_by_location(db: AsyncSession, party: BattleParty) -> bool:
+    """Drop members who left the party's location. If the leader left, cancel the
+    whole party. Returns True if the party is still active, False if cancelled."""
+    if party.status != BattlePartyStatus.forming:
+        return party.status == BattlePartyStatus.forming
+
+    members = await _party_members(db, party.id)
+    leader_left = False
+    removed = False
+    for m in members:
+        info = await _get_character_info(db, m.character_id)
+        if not info or info["current_location_id"] != party.location_id:
+            if m.is_leader:
+                leader_left = True
+            await db.delete(m)
+            removed = True
+            await publish_notification(
+                target_user_id=m.user_id,
+                message="Вы покинули группу, сменив локацию.",
+                ws_type="party_left",
+                ws_data={"party_id": party.id},
+            )
+
+    if leader_left:
+        party.status = BattlePartyStatus.cancelled
+        await db.commit()
+        for m in await _party_members(db, party.id):
+            await publish_notification(
+                target_user_id=m.user_id,
+                message="Группа распущена: лидер покинул локацию.",
+                ws_type="party_disbanded",
+                ws_data={"party_id": party.id},
+            )
+        return False
+
+    if removed:
+        await db.commit()
+    return True
+
+
+@router.post("/pvp/party", response_model=PartyStateResponse, status_code=201)
+async def create_party(
+    req: PartyCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Create a party lobby. The leader joins team 0 as an accepted member."""
+    if req.battle_type not in ("pvp_training", "pvp_death"):
+        raise HTTPException(400, "Недопустимый тип боя")
+
+    leader = await _get_character_info(db, req.leader_character_id)
+    if not leader:
+        raise HTTPException(404, "Персонаж не найден")
+    if leader["user_id"] != current_user.id:
+        raise HTTPException(403, "Вы должны использовать своего персонажа")
+    if leader["current_location_id"] is None:
+        raise HTTPException(400, "Персонаж не находится в локации")
+    if await get_active_battle_for_character(db, req.leader_character_id):
+        raise HTTPException(400, "Персонаж уже в бою")
+
+    # Return the existing forming party if the leader already has one.
+    existing = await db.execute(
+        select(BattleParty).where(
+            BattleParty.leader_character_id == req.leader_character_id,
+            BattleParty.status == BattlePartyStatus.forming,
+        )
+    )
+    party = existing.scalars().first()
+    if party:
+        return await _build_party_state(db, party)
+
+    party = BattleParty(
+        leader_character_id=req.leader_character_id,
+        location_id=leader["current_location_id"],
+        battle_type=req.battle_type,
+        status=BattlePartyStatus.forming,
+        expires_at=datetime.utcnow() + timedelta(hours=PARTY_EXPIRY_HOURS),
+    )
+    db.add(party)
+    await db.flush()
+    db.add(BattlePartyMember(
+        party_id=party.id,
+        character_id=req.leader_character_id,
+        user_id=current_user.id,
+        team=0,
+        status=PartyMemberStatus.accepted,
+        is_leader=True,
+        responded_at=datetime.utcnow(),
+    ))
+    await db.commit()
+    await db.refresh(party)
+    return await _build_party_state(db, party)
+
+
+async def _get_party_for_leader(db, party_id, current_user) -> BattleParty:
+    res = await db.execute(select(BattleParty).where(BattleParty.id == party_id))
+    party = res.scalars().first()
+    if not party:
+        raise HTTPException(404, "Группа не найдена")
+    if party.status != BattlePartyStatus.forming:
+        raise HTTPException(400, "Группа уже не собирается")
+    leader = await _get_character_info(db, party.leader_character_id)
+    if not leader or leader["user_id"] != current_user.id:
+        raise HTTPException(403, "Только лидер может управлять группой")
+    return party
+
+
+@router.post("/pvp/party/{party_id}/invite", response_model=PartyStateResponse)
+async def invite_to_party(
+    party_id: int,
+    req: PartyInviteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    party = await _get_party_for_leader(db, party_id, current_user)
+
+    target = await _get_character_info(db, req.character_id)
+    if not target:
+        raise HTTPException(404, "Целевой персонаж не найден")
+    if target["current_location_id"] != party.location_id:
+        raise HTTPException(400, "Игрок должен быть в той же локации")
+    if await get_active_battle_for_character(db, req.character_id):
+        raise HTTPException(400, "Игрок уже в бою")
+
+    members = await _party_members(db, party.id)
+    if any(m.character_id == req.character_id for m in members):
+        raise HTTPException(409, "Игрок уже в группе")
+    team_count = sum(
+        1 for m in members
+        if m.team == req.team and m.status != PartyMemberStatus.declined
+    )
+    if team_count >= settings.BATTLE_MAX_TEAM_SIZE:
+        raise HTTPException(400, f"В команде максимум {settings.BATTLE_MAX_TEAM_SIZE} участников")
+
+    db.add(BattlePartyMember(
+        party_id=party.id,
+        character_id=req.character_id,
+        user_id=target["user_id"],
+        team=req.team,
+        status=PartyMemberStatus.invited,
+    ))
+    await db.commit()
+
+    leader_name = await _get_character_name(db, party.leader_character_id)
+    await publish_notification(
+        target_user_id=target["user_id"],
+        message=f"{leader_name} приглашает вас в группу для боя!",
+        ws_type="party_invitation",
+        ws_data={"party_id": party.id, "leader_name": leader_name, "team": req.team},
+    )
+    await db.refresh(party)
+    return await _build_party_state(db, party)
+
+
+@router.post("/pvp/party/{party_id}/respond", response_model=PartyStateResponse)
+async def respond_to_party(
+    party_id: int,
+    req: PartyRespondRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    if req.action not in ("accept", "decline"):
+        raise HTTPException(400, "Действие должно быть 'accept' или 'decline'")
+
+    res = await db.execute(select(BattleParty).where(BattleParty.id == party_id))
+    party = res.scalars().first()
+    if not party or party.status != BattlePartyStatus.forming:
+        raise HTTPException(404, "Группа не найдена или уже не собирается")
+
+    char = await _get_character_info(db, req.character_id)
+    if not char or char["user_id"] != current_user.id:
+        raise HTTPException(403, "Вы должны использовать своего персонажа")
+
+    res = await db.execute(
+        select(BattlePartyMember).where(
+            BattlePartyMember.party_id == party_id,
+            BattlePartyMember.character_id == req.character_id,
+        )
+    )
+    member = res.scalars().first()
+    if not member:
+        raise HTTPException(404, "Вас не приглашали в эту группу")
+    if member.is_leader:
+        raise HTTPException(400, "Лидер не отвечает на собственное приглашение")
+
+    if req.action == "accept":
+        if char["current_location_id"] != party.location_id:
+            raise HTTPException(400, "Вы должны быть в локации группы")
+        if await get_active_battle_for_character(db, req.character_id):
+            raise HTTPException(400, "Вы уже в бою")
+        member.status = PartyMemberStatus.accepted
+    else:
+        member.status = PartyMemberStatus.declined
+    member.responded_at = datetime.utcnow()
+    await db.commit()
+
+    char_name = await _get_character_name(db, req.character_id)
+    leader = await _get_character_info(db, party.leader_character_id)
+    verb = "принял" if req.action == "accept" else "отклонил"
+    if leader:
+        await publish_notification(
+            target_user_id=leader["user_id"],
+            message=f"{char_name} {verb} приглашение в группу.",
+            ws_type="party_response",
+            ws_data={"party_id": party.id, "accepted": req.action == "accept"},
+        )
+    await db.refresh(party)
+    return await _build_party_state(db, party)
+
+
+@router.post("/pvp/party/{party_id}/leave", response_model=PartyActionResponse)
+async def leave_party(
+    party_id: int,
+    character_id: int = Query(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Leave the party (self) or, if the caller is the leader, kick a member.
+    The leader leaving disbands the party."""
+    res = await db.execute(select(BattleParty).where(BattleParty.id == party_id))
+    party = res.scalars().first()
+    if not party or party.status != BattlePartyStatus.forming:
+        raise HTTPException(404, "Группа не найдена или уже не собирается")
+
+    leader = await _get_character_info(db, party.leader_character_id)
+    is_leader_call = leader and leader["user_id"] == current_user.id
+
+    target = await _get_character_info(db, character_id)
+    if not target:
+        raise HTTPException(404, "Персонаж не найден")
+    # You may remove yourself, or (as leader) anyone.
+    if target["user_id"] != current_user.id and not is_leader_call:
+        raise HTTPException(403, "Можно убрать только себя")
+
+    res = await db.execute(
+        select(BattlePartyMember).where(
+            BattlePartyMember.party_id == party_id,
+            BattlePartyMember.character_id == character_id,
+        )
+    )
+    member = res.scalars().first()
+    if not member:
+        raise HTTPException(404, "Участник не найден в группе")
+
+    if member.is_leader:
+        # Leader leaves -> disband.
+        party.status = BattlePartyStatus.cancelled
+        await db.commit()
+        for m in await _party_members(db, party.id):
+            if not m.is_leader:
+                await publish_notification(
+                    target_user_id=m.user_id,
+                    message="Группа распущена лидером.",
+                    ws_type="party_disbanded",
+                    ws_data={"party_id": party.id},
+                )
+        return PartyActionResponse(ok=True, party_id=party.id, message="Группа распущена")
+
+    kicked_user = member.user_id
+    await db.delete(member)
+    await db.commit()
+    if kicked_user != current_user.id:
+        await publish_notification(
+            target_user_id=kicked_user,
+            message="Вас убрали из группы.",
+            ws_type="party_kicked",
+            ws_data={"party_id": party.id},
+        )
+    return PartyActionResponse(ok=True, party_id=party.id, message="Вы покинули группу")
+
+
+@router.post("/pvp/party/{party_id}/start", response_model=PartyStartResponse)
+async def start_party_battle(
+    party_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    party = await _get_party_for_leader(db, party_id, current_user)
+
+    # Drop anyone who wandered off; bail if the leader left.
+    if not await _prune_party_by_location(db, party):
+        raise HTTPException(400, "Группа распущена")
+
+    members = [m for m in await _party_members(db, party.id)
+               if m.status == PartyMemberStatus.accepted]
+    if len(members) < 2:
+        raise HTTPException(400, "Нужно минимум два подтверждённых участника")
+    teams_present = {m.team for m in members}
+    if len(teams_present) < 2:
+        raise HTTPException(400, "Должны быть заполнены минимум две команды")
+    for t in teams_present:
+        if sum(1 for m in members if m.team == t) > settings.BATTLE_MAX_TEAM_SIZE:
+            raise HTTPException(400, f"В команде максимум {settings.BATTLE_MAX_TEAM_SIZE} участников")
+    for m in members:
+        if await get_active_battle_for_character(db, m.character_id):
+            raise HTTPException(400, "Один из участников уже в бою")
+
+    player_ids = [m.character_id for m in members]
+    teams = [m.team for m in members]
+    battle_obj, participant_objs, first_actor_pid, _deadline = await _assemble_battle(
+        db, player_ids, teams, _enum_val(party.battle_type), party.location_id
+    )
+
+    party.status = BattlePartyStatus.started
+    party.battle_id = battle_obj.id
+    await db.commit()
+
+    battle_url = f"/location/{party.location_id}/battle/{battle_obj.id}"
+    for m in members:
+        await publish_notification(
+            target_user_id=m.user_id,
+            message="Бой начинается!",
+            ws_type="party_started",
+            ws_data={
+                "party_id": party.id,
+                "battle_id": battle_obj.id,
+                "location_id": party.location_id,
+                "battle_url": battle_url,
+            },
+        )
+    return PartyStartResponse(ok=True, battle_id=battle_obj.id, battle_url=battle_url)
+
+
+@router.get("/pvp/party/{party_id}", response_model=PartyStateResponse)
+async def get_party(
+    party_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    res = await db.execute(select(BattleParty).where(BattleParty.id == party_id))
+    party = res.scalars().first()
+    if not party:
+        raise HTTPException(404, "Группа не найдена")
+    if party.status == BattlePartyStatus.forming:
+        await _prune_party_by_location(db, party)
+        await db.refresh(party)
+    return await _build_party_state(db, party)
+
+
+@router.get("/pvp/parties/incoming", response_model=IncomingPartyInvitesResponse)
+async def incoming_party_invites(
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Forming parties where the current user has a pending (invited) member row."""
+    res = await db.execute(
+        select(BattleParty, BattlePartyMember)
+        .join(BattlePartyMember, BattlePartyMember.party_id == BattleParty.id)
+        .where(
+            BattlePartyMember.user_id == current_user.id,
+            BattlePartyMember.status == PartyMemberStatus.invited,
+            BattleParty.status == BattlePartyStatus.forming,
+        )
+    )
+    invites = []
+    for party, member in res.all():
+        leader_name = await _get_character_name(db, party.leader_character_id)
+        member_count = len(await _party_members(db, party.id))
+        invites.append(IncomingPartyInvite(
+            party_id=party.id,
+            leader_character_id=party.leader_character_id,
+            leader_name=leader_name,
+            battle_type=_enum_val(party.battle_type),
+            team=member.team,
+            member_count=member_count,
+            created_at=party.created_at,
+            expires_at=party.expires_at,
+        ))
+    return IncomingPartyInvitesResponse(invites=invites)
+
+
+@router.post("/internal/party/leave-on-move")
+async def party_leave_on_move(character_id: int = Query(...), db: AsyncSession = Depends(get_db)):
+    """Internal: called when a character changes location — remove them from any
+    forming party (disbanding it if they were the leader). Best-effort, no auth."""
+    res = await db.execute(
+        select(BattleParty)
+        .join(BattlePartyMember, BattlePartyMember.party_id == BattleParty.id)
+        .where(
+            BattlePartyMember.character_id == character_id,
+            BattleParty.status == BattlePartyStatus.forming,
+        )
+    )
+    for party in res.scalars().unique().all():
+        await _prune_party_by_location(db, party)
+    return {"ok": True}
 
 
 app.include_router(router)

@@ -307,3 +307,68 @@ class AdminJoinRequestActionResponse(BaseModel):
     ok: bool
     request_id: int
     message: str
+
+
+# --- Party (pre-battle lobby) schemas ---
+
+class PartyCreateRequest(BaseModel):
+    leader_character_id: int
+    battle_type: str  # "pvp_training" | "pvp_death"
+
+
+class PartyInviteRequest(BaseModel):
+    character_id: int     # whom to invite
+    team: int             # which team they join
+
+
+class PartyRespondRequest(BaseModel):
+    character_id: int     # the responding character (must be the invitee)
+    action: str           # "accept" | "decline"
+
+
+class PartyMemberOut(BaseModel):
+    character_id: int
+    character_name: str
+    character_level: int
+    character_avatar: Optional[str] = None
+    team: int
+    status: str
+    is_leader: bool
+
+
+class PartyStateResponse(BaseModel):
+    id: int
+    leader_character_id: int
+    location_id: int
+    battle_type: str
+    status: str
+    battle_id: Optional[int] = None
+    expires_at: datetime
+    members: List[PartyMemberOut]
+
+
+class IncomingPartyInvite(BaseModel):
+    party_id: int
+    leader_character_id: int
+    leader_name: str
+    battle_type: str
+    team: int
+    member_count: int
+    created_at: datetime
+    expires_at: datetime
+
+
+class IncomingPartyInvitesResponse(BaseModel):
+    invites: List[IncomingPartyInvite]
+
+
+class PartyStartResponse(BaseModel):
+    ok: bool
+    battle_id: int
+    battle_url: str
+
+
+class PartyActionResponse(BaseModel):
+    ok: bool
+    party_id: int
+    message: str

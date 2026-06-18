@@ -199,3 +199,66 @@ class BattleJoinRequest(Base):
             'battle_id', 'character_id', name='uq_bjr_battle_character'
         ),
     )
+
+
+class BattlePartyStatus(str, Enum):
+    forming = "forming"
+    started = "started"
+    cancelled = "cancelled"
+    expired = "expired"
+
+
+class PartyMemberStatus(str, Enum):
+    invited = "invited"
+    accepted = "accepted"
+    declined = "declined"
+
+
+class BattleParty(Base):
+    """
+    A pre-battle lobby. The leader assembles teams and invites players (all on
+    the same location). Members accept/decline; the leader starts the battle,
+    which creates a real Battle with everyone's team assignment.
+    """
+    __tablename__ = "battle_parties"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    leader_character_id: Mapped[int] = mapped_column(Integer, index=True)
+    location_id: Mapped[int] = mapped_column(Integer, index=True)
+    battle_type: Mapped[BattleType] = mapped_column(
+        SQLEnum(BattleType), default=BattleType.pvp_training
+    )
+    status: Mapped[BattlePartyStatus] = mapped_column(
+        SQLEnum(BattlePartyStatus), default=BattlePartyStatus.forming
+    )
+    battle_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+    members = relationship(
+        "BattlePartyMember", back_populates="party", cascade="all, delete-orphan"
+    )
+
+
+class BattlePartyMember(Base):
+    __tablename__ = "battle_party_members"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    party_id: Mapped[int] = mapped_column(
+        ForeignKey("battle_parties.id"), index=True
+    )
+    character_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    team: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[PartyMemberStatus] = mapped_column(
+        SQLEnum(PartyMemberStatus), default=PartyMemberStatus.invited
+    )
+    is_leader: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    party = relationship("BattleParty", back_populates="members")
+
+    __table_args__ = (
+        UniqueConstraint("party_id", "character_id", name="uq_party_member"),
+    )
