@@ -1029,6 +1029,18 @@ async def move_and_post(
         except Exception:
             pass  # fire-and-forget, must not block movement
 
+    # 7.6. Fire-and-forget: a pre-battle party is location-bound, so leaving the
+    # location leaves the party (the leader leaving disbands it).
+    if actually_moving:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    f"{settings.BATTLE_SERVICE_URL}/battles/internal/party/leave-on-move",
+                    params={"character_id": movement.character_id},
+                )
+        except Exception:
+            pass  # fire-and-forget, must not block movement
+
     # 8. Уведомляем пользователей, добавивших локацию в избранное
     dest_result = await session.execute(
         select(models.Location).where(models.Location.id == destination_location_id)
@@ -1216,6 +1228,17 @@ async def quick_move(
         update_resp = await client.put(update_url, json={"new_location_id": destination_location_id})
         if update_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
+
+    # 6.1. Fire-and-forget: a pre-battle party is location-bound, so quick-moving
+    # away leaves the party (the leader leaving disbands it).
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{settings.BATTLE_SERVICE_URL}/battles/internal/party/leave-on-move",
+                params={"character_id": body.character_id},
+            )
+    except Exception:
+        pass  # fire-and-forget, must not block movement
 
     # 6.5. Устанавливаем кулдаун перемещения (base energy_cost, NOT doubled)
     if base_energy_cost > 0:
