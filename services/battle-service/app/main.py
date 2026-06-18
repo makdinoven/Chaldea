@@ -824,6 +824,8 @@ async def get_state(
                             "stamina": state["participants"][pid]["stamina"],
                             "cooldowns": state["participants"][pid]["cooldowns"],
                             "fast_slots": state["participants"][pid].get("fast_slots", []),
+                            "team": state["participants"][pid]["team"],
+                            "character_id": state["participants"][pid]["character_id"],
                         }
                             for pid in state["participants"]
                     },

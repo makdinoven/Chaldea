@@ -442,6 +442,11 @@ const BattlePage = () => {
 
     const myTeam = runtimeData.participants[myData.participant_id]?.team;
     const all = Object.values(runtimeData.participants);
+    // Don't decide a winner until real multi-team data is present — guards against
+    // an initial state frame that lacks team info (would otherwise read "no enemies"
+    // and declare an instant false victory).
+    if (myTeam === undefined) return;
+    if (new Set(all.map((p) => p.team)).size < 2) return;
     const myTeamAlive = all.some((p) => p.team === myTeam && p.hp > 0);
     const enemyAlive = all.some((p) => p.team !== myTeam && p.hp > 0);
 
