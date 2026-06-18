@@ -15,6 +15,7 @@ import PostCreateForm from './PostCreateForm';
 import NeighborsSection from './NeighborsSection';
 import LootSection from './LootSection';
 import PendingInvitationsPanel from './PendingInvitationsPanel';
+import PendingPartyInvitesPanel from './PendingPartyInvitesPanel';
 import LocationMobs from '../../LocationMobs';
 import BattlesSection from './BattlesSection';
 import useBattleLock from '../../../hooks/useBattleLock';
@@ -508,6 +509,7 @@ const LocationPage = () => {
           locationId={location.id}
           characterId={character?.id ?? null}
           inBattle={inBattle}
+          players={location.players}
         />
 
         {/* Resource gathering — shown only when nodes exist on the location.
@@ -534,6 +536,11 @@ const LocationPage = () => {
         {/* PvP Invitations & Trade requests — hidden when empty */}
         {isCharacterHere && character?.id && (
           <PendingInvitationsPanel locationId={location.id} />
+        )}
+
+        {/* Party invitations — hidden when empty */}
+        {isCharacterHere && character?.id && (
+          <PendingPartyInvitesPanel characterId={character.id} locationId={location.id} />
         )}
 
         {/* Loot — only shown when items exist */}

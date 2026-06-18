@@ -5,11 +5,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import { fetchBattlesByLocation, fetchJoinRequests } from '../../../api/battles';
 import type { LocationBattleItem, JoinRequestListItem } from '../../../api/battles';
 import JoinRequestModal from './JoinRequestModal';
+import PartyLobbyModal, { type PartyPlayer } from './PartyLobbyModal';
 
 interface BattlesSectionProps {
   locationId: number;
   characterId: number | null;
   inBattle: boolean;
+  players: PartyPlayer[];
 }
 
 const POLL_INTERVAL = 10_000;
@@ -33,7 +35,7 @@ const BATTLE_TYPE_CONFIG: Record<string, { label: string; classes: string }> = {
   },
 };
 
-const BattlesSection = ({ locationId, characterId, inBattle }: BattlesSectionProps) => {
+const BattlesSection = ({ locationId, characterId, inBattle, players }: BattlesSectionProps) => {
   const navigate = useNavigate();
   const [battles, setBattles] = useState<LocationBattleItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,6 +44,7 @@ const BattlesSection = ({ locationId, characterId, inBattle }: BattlesSectionPro
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [modalBattleId, setModalBattleId] = useState<number | null>(null);
   const [requestedBattleIds, setRequestedBattleIds] = useState<Set<number>>(new Set());
+  const [partyOpen, setPartyOpen] = useState(false);
 
   const checkExistingRequests = useCallback(
     async (battleList: LocationBattleItem[]) => {
@@ -151,6 +154,15 @@ const BattlesSection = ({ locationId, characterId, inBattle }: BattlesSectionPro
             className="overflow-hidden"
           >
             <div className="px-4 sm:px-6 pb-4 flex flex-col gap-3">
+              {/* Assemble a group battle */}
+              <button
+                onClick={() => setPartyOpen(true)}
+                disabled={inBattle || !characterId}
+                className="btn-blue text-xs sm:text-sm px-4 py-2 self-start disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                + Собрать группу
+              </button>
+
               {error ? (
                 <>
                   <p className="text-site-red text-sm">{error}</p>
@@ -272,6 +284,16 @@ const BattlesSection = ({ locationId, characterId, inBattle }: BattlesSectionPro
           );
         })()}
       </AnimatePresence>
+
+      {/* Party lobby */}
+      {partyOpen && characterId && (
+        <PartyLobbyModal
+          characterId={characterId}
+          locationId={locationId}
+          players={players}
+          onClose={() => setPartyOpen(false)}
+        />
+      )}
     </section>
   );
 };

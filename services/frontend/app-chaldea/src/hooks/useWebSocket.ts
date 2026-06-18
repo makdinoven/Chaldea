@@ -210,6 +210,29 @@ const useWebSocket = (): UseWebSocketReturn => {
               } as NotificationItem));
               break;
             }
+            case 'party_invitation': {
+              const inv = parsed.data as { leader_name?: string };
+              toast(`${inv.leader_name ?? 'Игрок'} приглашает вас в группу`, {
+                duration: 7000,
+              });
+              break;
+            }
+            case 'party_started': {
+              const ps = parsed.data as {
+                battle_id: number;
+                battle_url?: string;
+              };
+              toast.success(`Бой #${ps.battle_id} начинается!`, { duration: 6000 });
+              dispatch(addNotification({
+                id: Date.now(),
+                user_id: 0,
+                message: `Бой #${ps.battle_id} начинается!`,
+                status: 'unread',
+                created_at: new Date().toISOString(),
+                link: ps.battle_url ?? `/battle/${ps.battle_id}`,
+              } as NotificationItem));
+              break;
+            }
             case 'private_message': {
               const pm = parsed.data as WsPrivateMessageData;
               dispatch(receivePrivateMessage(pm));
