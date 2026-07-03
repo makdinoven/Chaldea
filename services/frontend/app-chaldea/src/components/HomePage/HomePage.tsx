@@ -1,7 +1,7 @@
-import React from "react";
 import Button from "./Button/Button";
 import Slider from "./Slider/Slider";
 import Stats from "./Stats/Stats";
+import LatestRoleplayPosts from "./LatestRoleplayPosts/LatestRoleplayPosts";
 
 import styles from "./HomePage.module.css";
 
@@ -16,8 +16,43 @@ import sliderImg1 from "../../assets/sliderimg1.png";
 import statsBg from "../../assets/stats_bg.png";
 import statsUserImg from "../../assets/stats_user_img.png";
 
+interface ButtonLink {
+  name: string;
+  link: string;
+}
+
+interface ButtonData {
+  id: number;
+  titleName: string;
+  titleLink: string;
+  img: string;
+  links?: ButtonLink[];
+  type: "large" | "small";
+}
+
+interface SliderPage {
+  index: number;
+  title: string;
+  description: string;
+  link: string;
+  img: string;
+  tag: string;
+}
+
+interface StatsUser {
+  name: string;
+  points: number;
+  avatar: string;
+}
+
+interface StatsData {
+  img: string;
+  title: string;
+  sections: { sectionName: string; users: StatsUser[] }[];
+}
+
 export default function HomePage() {
-  const buttonsData = [
+  const buttonsData: ButtonData[] = [
     {
       id: 1,
       titleName: "Игровой мир",
@@ -84,7 +119,7 @@ export default function HomePage() {
     },
   ];
 
-  const sliderData = [
+  const sliderData: SliderPage[] = [
     {
       index: 1,
       title: "Мы открываемся!",
@@ -119,7 +154,7 @@ export default function HomePage() {
     },
   ];
 
-  const statsData = {
+  const statsData: StatsData = {
     img: statsBg,
     title: "Статистика",
     sections: [
@@ -169,6 +204,8 @@ export default function HomePage() {
             ))}
         </div>
       </section>
+
+      <LatestRoleplayPosts />
 
       <Stats statsData={statsData} />
     </>
