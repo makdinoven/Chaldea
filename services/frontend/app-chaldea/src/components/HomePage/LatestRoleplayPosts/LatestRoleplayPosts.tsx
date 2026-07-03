@@ -207,7 +207,7 @@ const LatestRoleplayPosts = () => {
   };
 
   return (
-    <section className="w-full max-w-3xl mx-auto px-3 sm:px-4 mt-6 sm:mt-10">
+    <section className="w-full">
       <div className="flex items-center justify-between mb-3 sm:mb-4">
         <h2 className="gold-text text-base sm:text-lg font-semibold">
           Последние ролевые посты

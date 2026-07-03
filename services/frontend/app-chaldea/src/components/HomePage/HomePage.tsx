@@ -3,8 +3,6 @@ import Slider from "./Slider/Slider";
 import Stats from "./Stats/Stats";
 import LatestRoleplayPosts from "./LatestRoleplayPosts/LatestRoleplayPosts";
 
-import styles from "./HomePage.module.css";
-
 import button1img from "../../assets/homepagebutton1.png";
 import button2img from "../../assets/homepagebutton2.png";
 import button3img from "../../assets/homepagebutton3.png";
@@ -185,27 +183,49 @@ export default function HomePage() {
     ],
   };
 
+  const largeButtons = buttonsData.filter((button) => button.type === "large");
+  const smallButtons = buttonsData.filter((button) => button.type === "small");
+
   return (
     <>
-      <section className={styles.main}>
-        {buttonsData
-          .filter((button) => button.type === "large")
-          .map((buttonData) => (
-            <Button key={buttonData.id} data={buttonData} />
+      {/*
+        Main grid: left column = large navigation cards, right column = the
+        promo slider with the latest-posts feed tucked underneath it.
+        Each card sits in a fixed-height block wrapper that force-sizes its
+        direct child (`[&>*]:h-full [&>*]:w-full`). Because the wrapper is a
+        plain block (not a grid), the legacy `grid-column` / `grid-row` rules
+        baked into the Button/Slider SCSS are inert, and each child fills the
+        wrapper via `height:100%` against its fixed height.
+      */}
+      <section className="grid grid-cols-1 lg:grid-cols-[40%_55%] gap-8 lg:gap-x-[5%] lg:gap-y-[60px] lg:items-start mb-12 lg:mb-16">
+        {/* Left column: large navigation cards */}
+        <div className="flex flex-col gap-8 lg:gap-[60px]">
+          {largeButtons.map((buttonData) => (
+            <div
+              key={buttonData.id}
+              className="h-[150px] sm:h-[185px] [&>*]:h-full [&>*]:w-full"
+            >
+              <Button data={buttonData} />
+            </div>
           ))}
+        </div>
 
-        <Slider pages={sliderData} />
+        {/* Right column: promo slider + latest roleplay posts feed */}
+        <div className="flex flex-col gap-8 lg:gap-[60px]">
+          <div className="h-[280px] sm:h-[360px] lg:h-[430px] [&>*]:h-full [&>*]:w-full">
+            <Slider pages={sliderData} />
+          </div>
 
-        <div className={styles.small_buttons}>
-          {buttonsData
-            .filter((button) => button.type === "small")
-            .map((buttonData) => (
-              <Button key={buttonData.id} data={buttonData} />
-            ))}
+          <LatestRoleplayPosts />
         </div>
       </section>
 
-      <LatestRoleplayPosts />
+      {/* Secondary navigation: full-width row of small cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6 auto-rows-[80px] sm:auto-rows-[90px] mb-16 lg:mb-24">
+        {smallButtons.map((buttonData) => (
+          <Button key={buttonData.id} data={buttonData} />
+        ))}
+      </div>
 
       <Stats statsData={statsData} />
     </>
