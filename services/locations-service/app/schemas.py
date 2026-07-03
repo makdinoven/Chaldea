@@ -501,6 +501,14 @@ class ClientPost(BaseModel):
     likes_count: int = 0
     liked_by: List[int] = []
 
+class LatestPostResponse(ClientPost):
+    """A recent roleplay post enriched with its location, for the homepage
+    activity widget. Extends ClientPost with location info so the client can
+    render a location plate and link straight to the location."""
+    location_id: int
+    location_name: str
+
+
 class LocationLootDrop(BaseModel):
     character_id: int
     item_id: int

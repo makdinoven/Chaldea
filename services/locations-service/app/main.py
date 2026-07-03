@@ -689,6 +689,20 @@ async def create_new_post(
 
     return result
 
+@router.get("/posts/latest", response_model=List[schemas.LatestPostResponse])
+async def get_latest_posts(
+    limit: int = 5,
+    session: AsyncSession = Depends(get_db),
+):
+    """Latest roleplay posts across all locations for the homepage activity
+    widget. Ordered newest-first, each enriched with its location so the client
+    can render a location plate and link to it. Public read (no auth), same as
+    the per-location posts endpoint below."""
+    # Clamp to a sane range so the widget can't ask for an unbounded feed.
+    limit = max(1, min(limit, 20))
+    return await crud.get_latest_posts_details(session, limit)
+
+
 @router.get("/{location_id}/posts/", response_model=List[schemas.PostResponse])
 async def get_posts_in_location(location_id: int, session: AsyncSession = Depends(get_db)):
     return await crud.get_posts_by_location(session, location_id)

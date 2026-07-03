@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import random
@@ -859,6 +860,54 @@ async def create_post(session: AsyncSession, post_data: PostCreate) -> Post:
 async def get_posts_by_location(session: AsyncSession, location_id: int) -> list:
     result = await session.execute(select(Post).where(Post.location_id == location_id).order_by(Post.id.desc()))
     return result.scalars().all()
+
+
+async def get_latest_posts_details(session: AsyncSession, limit: int = 5) -> List[dict]:
+    """Return the N most recent roleplay posts across ALL locations, newest
+    first, enriched for the homepage activity widget.
+
+    Each entry is a ClientPost dict plus ``location_id`` / ``location_name``.
+    Author profiles are fetched concurrently (one Character-service call per
+    post — there is no batch endpoint), which is fine for the small ``limit``
+    the widget uses.
+
+    NOTE (access model): today every location is public, so this is an
+    unfiltered ``created_at DESC`` query. When hidden / password-protected
+    locations (e.g. player homes) are introduced, add the visibility filter to
+    the ``WHERE`` clause below — e.g. ``.where(Location.is_hidden.is_(False))``
+    — so those posts never surface on the public homepage feed.
+    """
+    if limit < 1:
+        return []
+
+    result = await session.execute(
+        select(Post, Location.name)
+        .join(Location, Post.location_id == Location.id)
+        # --- future access-model filter goes here (see docstring) ---
+        .order_by(Post.created_at.desc(), Post.id.desc())
+        .limit(limit)
+    )
+    rows = result.all()
+    if not rows:
+        return []
+
+    posts = [row[0] for row in rows]
+    location_names = {row[0].id: row[1] for row in rows}
+
+    # Enrich author profiles concurrently (bounded by `limit`).
+    detailed_posts = list(await asyncio.gather(*(get_post_details(p) for p in posts)))
+
+    # Batch-fetch likes for all surfaced posts.
+    post_ids = [d["post_id"] for d in detailed_posts]
+    likes_map = await get_likes_for_posts(session, post_ids)
+
+    for detailed, post in zip(detailed_posts, posts):
+        detailed["location_id"] = post.location_id
+        detailed["location_name"] = location_names.get(post.id, "")
+        detailed["likes_count"] = likes_map.get(post.id, {}).get("likes_count", 0)
+        detailed["liked_by"] = likes_map.get(post.id, {}).get("liked_by", [])
+
+    return detailed_posts
 
 
 async def get_character_post_stats(session: AsyncSession, character_ids: List[int]) -> Dict[str, dict]:
