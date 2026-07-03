@@ -197,8 +197,12 @@ export default function HomePage() {
         baked into the Button/Slider SCSS are inert, and each child fills the
         wrapper via `height:100%` against its fixed height.
       */}
-      <section className="grid grid-cols-1 lg:grid-cols-[40%_55%] gap-8 lg:gap-x-[5%] lg:gap-y-[60px] lg:items-start mb-12 lg:mb-16">
-        {/* Left column: large navigation cards */}
+      <section className="grid grid-cols-1 lg:grid-cols-[40%_55%] gap-8 lg:gap-x-[5%] lg:gap-y-[60px] lg:items-stretch mb-16 lg:mb-24">
+        {/* Left column: large navigation cards + the small nav cards stacked
+            beneath them. The small-cards group grows (`flex-1`) to consume the
+            leftover height so that, when the grid stretches this column to match
+            the taller right column, the bottom of the last small card lines up
+            with the bottom of the last post in the feed. */}
         <div className="flex flex-col gap-8 lg:gap-[60px]">
           {largeButtons.map((buttonData) => (
             <div
@@ -208,6 +212,17 @@ export default function HomePage() {
               <Button data={buttonData} />
             </div>
           ))}
+
+          <div className="flex flex-col gap-4 sm:gap-6 flex-1">
+            {smallButtons.map((buttonData) => (
+              <div
+                key={buttonData.id}
+                className="flex-1 min-h-[70px] sm:min-h-[80px] [&>*]:h-full [&>*]:w-full"
+              >
+                <Button data={buttonData} />
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Right column: promo slider + latest roleplay posts feed */}
@@ -219,13 +234,6 @@ export default function HomePage() {
           <LatestRoleplayPosts />
         </div>
       </section>
-
-      {/* Secondary navigation: full-width row of small cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6 auto-rows-[80px] sm:auto-rows-[90px] mb-16 lg:mb-24">
-        {smallButtons.map((buttonData) => (
-          <Button key={buttonData.id} data={buttonData} />
-        ))}
-      </div>
 
       <Stats statsData={statsData} />
     </>
