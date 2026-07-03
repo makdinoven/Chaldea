@@ -1,5 +1,6 @@
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import BulletList from "@tiptap/extension-bullet-list";
 import Underline from "@tiptap/extension-underline";
 import TextAlign from "@tiptap/extension-text-align";
 import TextStyle from "@tiptap/extension-text-style";
@@ -24,6 +25,34 @@ import {
 } from "react-feather";
 import ColorPicker from "../../common/ColorPicker";
 import { fetchArticles, type ArchiveArticleListItem } from "../../../api/archive";
+
+/* ── Extensions ── */
+
+/**
+ * Bullet list that keeps the toolbar toggle but drops the markdown-style input
+ * rule. With the default StarterKit rule, typing "- " (or "* " / "+ ") at the
+ * start of a line auto-converts the paragraph into a bullet list — unwanted in
+ * a prose/roleplay editor where players start lines with a dash for dialogue.
+ */
+const BulletListNoInputRule = BulletList.extend({
+  addInputRules() {
+    return [];
+  },
+});
+
+/* ── Dash options (for direct speech) ── */
+
+interface DashOption {
+  char: string;
+  name: string;
+  hint: string;
+}
+
+const DASH_OPTIONS: DashOption[] = [
+  { char: "—", name: "Длинное тире", hint: "Прямая речь · U+2014" },
+  { char: "–", name: "Среднее тире", hint: "Диапазоны · U+2013" },
+  { char: "―", name: "Горизонтальная черта", hint: "Диалог · U+2015" },
+];
 
 /* ── Types ── */
 
@@ -154,6 +183,42 @@ const UrlPopover = ({ onSubmit, onClose, placeholder, submitLabel, initialValue 
   );
 };
 
+/* ── Dash Picker Popover ── */
+
+interface DashPopoverProps {
+  onSelect: (char: string) => void;
+  onClose: () => void;
+}
+
+const DashPopover = ({ onSelect, onClose }: DashPopoverProps) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useClickOutside(ref, onClose);
+
+  return (
+    <div
+      ref={ref}
+      className="absolute top-full left-0 mt-1 z-50 bg-site-bg border border-white/10 rounded-card p-1.5 shadow-dropdown min-w-[220px]"
+    >
+      {DASH_OPTIONS.map((opt) => (
+        <button
+          key={opt.char}
+          type="button"
+          onClick={() => onSelect(opt.char)}
+          className="w-full flex items-center gap-3 px-2 py-1.5 rounded text-left hover:bg-white/[0.07] transition-colors duration-150"
+        >
+          <span className="w-6 shrink-0 text-center text-white text-lg leading-none">
+            {opt.char}
+          </span>
+          <span className="flex flex-col">
+            <span className="text-sm text-white/80">{opt.name}</span>
+            <span className="text-xs text-white/40">{opt.hint}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+};
+
 /* ── Archive Link Search Popover ── */
 
 interface ArchiveLinkPopoverProps {
@@ -253,16 +318,21 @@ const WysiwygEditor = ({ content, onChange, enableArchiveLinks = false }: Wysiwy
   const [showImageUrl, setShowImageUrl] = useState(false);
   const [showLinkUrl, setShowLinkUrl] = useState(false);
   const [showArchiveLink, setShowArchiveLink] = useState(false);
+  const [showDash, setShowDash] = useState(false);
 
   const textColorRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLDivElement>(null);
   const linkRef = useRef<HTMLDivElement>(null);
   const archiveLinkRef = useRef<HTMLDivElement>(null);
+  const dashRef = useRef<HTMLDivElement>(null);
 
   const editor = useEditor({
     extensions: [
-      StarterKit,
+      // Drop StarterKit's own bullet list so we can re-add one without the
+      // "- " → list markdown input rule (see BulletListNoInputRule).
+      StarterKit.configure({ bulletList: false }),
+      BulletListNoInputRule,
       Underline,
       ResizableImage,
       TextAlign.configure({
@@ -289,7 +359,7 @@ const WysiwygEditor = ({ content, onChange, enableArchiveLinks = false }: Wysiwy
 
   const togglePopover = useCallback(
     (setter: React.Dispatch<React.SetStateAction<boolean>>) => {
-      const setters = [setShowTextColor, setShowHighlight, setShowImageUrl, setShowLinkUrl, setShowArchiveLink];
+      const setters = [setShowTextColor, setShowHighlight, setShowImageUrl, setShowLinkUrl, setShowArchiveLink, setShowDash];
       setters.forEach((s) => {
         if (s === setter) {
           s((prev) => !prev);
@@ -492,6 +562,25 @@ const WysiwygEditor = ({ content, onChange, enableArchiveLinks = false }: Wysiwy
           onClick={() => editor.chain().focus().toggleBlockquote().run()}
           title="Цитата"
         />
+
+        {/* Dash picker (em / en dash for direct speech) */}
+        <div className="relative" ref={dashRef}>
+          <ToolbarBtn
+            label="—"
+            isActive={showDash}
+            onClick={() => togglePopover(setShowDash)}
+            title="Вставить тире"
+          />
+          {showDash && (
+            <DashPopover
+              onSelect={(char) => {
+                editor.chain().focus().insertContent(char).run();
+                setShowDash(false);
+              }}
+              onClose={() => setShowDash(false)}
+            />
+          )}
+        </div>
 
         <Separator />
 
