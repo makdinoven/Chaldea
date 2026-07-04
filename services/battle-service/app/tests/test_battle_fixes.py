@@ -854,3 +854,107 @@ class TestDeadSkip:
         response, _ = _run_action(patches, _attack_payload(target_id=3))
         assert response.status_code == 200
         assert response.json()["next_actor"] == 3
+
+
+class TestAllyTargeting:
+    """FEAT-143: support/defense/attack effects with target_side 'ally' apply to
+    the chosen teammate (self allowed / default)."""
+
+    _SUPPORT_ALLY_RANK = {
+        "id": 1,
+        "damage_entries": [],
+        "cooldown": 0,
+        "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
+        "effects": [{
+            "target_side": "ally", "effect_type": "buff",
+            "attribute": "strength", "amount": 5, "duration": 2, "chance": 100,
+        }],
+    }
+
+    @staticmethod
+    def _support_payload(ally_target_id=None):
+        p = {
+            "participant_id": 1,
+            "skills": {
+                "attack_skill_id": None, "defense_skill_id": None,
+                "support_skill_id": 1, "item_id": None,
+            },
+            "target_id": 2,  # enemy still resolved for the offensive side
+        }
+        if ally_target_id is not None:
+            p["ally_target_id"] = ally_target_id
+        return p
+
+    def test_ally_effect_applies_to_chosen_teammate(self):
+        # team0: p1 (actor), p4 (ally). team1: p2 (enemy). Buff p4.
+        state = _make_group_state([(1, 10, 0, 100), (4, 40, 0, 100), (2, 20, 1, 100)])
+        patches = _build_common_patches(state, _attack_rank())
+        patches["main.get_resolved_skill"] = AsyncMock(return_value=self._SUPPORT_ALLY_RANK)
+        mock_apply = MagicMock()
+        patches["main.apply_new_effects"] = mock_apply
+        response, _ = _run_action(patches, self._support_payload(ally_target_id=4))
+        assert response.status_code == 200
+        ally_calls = [
+            c for c in mock_apply.call_args_list
+            if c[0][1] == 4 and c[0][2] and c[0][2][0].get("target_side") == "ally"
+        ]
+        assert len(ally_calls) == 1
+
+    def test_ally_effect_defaults_to_self_when_no_target(self):
+        state = _make_group_state([(1, 10, 0, 100), (4, 40, 0, 100), (2, 20, 1, 100)])
+        patches = _build_common_patches(state, _attack_rank())
+        patches["main.get_resolved_skill"] = AsyncMock(return_value=self._SUPPORT_ALLY_RANK)
+        mock_apply = MagicMock()
+        patches["main.apply_new_effects"] = mock_apply
+        response, _ = _run_action(patches, self._support_payload())  # no ally_target_id
+        assert response.status_code == 200
+        self_calls = [
+            c for c in mock_apply.call_args_list
+            if c[0][1] == 1 and c[0][2] and c[0][2][0].get("target_side") == "ally"
+        ]
+        assert len(self_calls) == 1
+
+    def test_ally_effect_falls_back_to_self_for_enemy_target(self):
+        # Passing an enemy as ally_target_id is rejected -> falls back to self.
+        state = _make_group_state([(1, 10, 0, 100), (4, 40, 0, 100), (2, 20, 1, 100)])
+        patches = _build_common_patches(state, _attack_rank())
+        patches["main.get_resolved_skill"] = AsyncMock(return_value=self._SUPPORT_ALLY_RANK)
+        mock_apply = MagicMock()
+        patches["main.apply_new_effects"] = mock_apply
+        response, _ = _run_action(patches, self._support_payload(ally_target_id=2))
+        assert response.status_code == 200
+        self_calls = [c for c in mock_apply.call_args_list if c[0][1] == 1]
+        enemy_ally_calls = [
+            c for c in mock_apply.call_args_list
+            if c[0][1] == 2 and c[0][2] and c[0][2][0].get("target_side") == "ally"
+        ]
+        assert len(self_calls) >= 1 and len(enemy_ally_calls) == 0
+
+    _SUPPORT_ALL_ALLIES_RANK = {
+        "id": 1,
+        "damage_entries": [],
+        "cooldown": 0,
+        "cost_energy": 0, "cost_mana": 0, "cost_stamina": 0,
+        "effects": [{
+            "target_side": "all_allies", "effect_type": "buff",
+            "attribute": "strength", "amount": 5, "duration": 2, "chance": 100,
+        }],
+    }
+
+    def test_all_allies_effect_hits_every_living_teammate(self):
+        # team0: p1 (actor), p4 (alive ally), p5 (DEAD ally). team1: p2 (enemy).
+        state = _make_group_state(
+            [(1, 10, 0, 100), (4, 40, 0, 100), (5, 50, 0, 0), (2, 20, 1, 100)]
+        )
+        patches = _build_common_patches(state, _attack_rank())
+        patches["main.get_resolved_skill"] = AsyncMock(return_value=self._SUPPORT_ALL_ALLIES_RANK)
+        mock_apply = MagicMock()
+        patches["main.apply_new_effects"] = mock_apply
+        response, _ = _run_action(patches, self._support_payload())
+        assert response.status_code == 200
+        targeted = {
+            c[0][1] for c in mock_apply.call_args_list
+            if c[0][2] and c[0][2][0].get("target_side") == "all_allies"
+        }
+        # self + alive ally only; dead teammate and enemy excluded
+        assert targeted == {1, 4}

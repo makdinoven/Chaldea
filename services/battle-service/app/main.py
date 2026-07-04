@@ -1258,6 +1258,23 @@ async def _make_action_core(
     defender_info = participants_map[str(defender_pid)]
     defender_character_id = defender_info["character_id"]
 
+    # --- Resolve the ALLY target for support "ally" effects (FEAT-143) ---
+    # A chosen living teammate (self allowed). Falls back to self when none/invalid
+    # is supplied, so a support skill never fails for lack of an ally target.
+    ally_target_pid = request.participant_id
+    _ally_req = getattr(request, "ally_target_id", None)
+    if _ally_req is not None:
+        _at = participants_map.get(str(_ally_req))
+        if _at is not None and _at.get("team") == attacker_team and _at.get("hp", 0) > 0:
+            ally_target_pid = int(_ally_req)
+
+    # All living teammates (self included) — target set for "all_allies" mass
+    # buffs/heals (FEAT-143 step 2).
+    alive_allies = [
+        int(pid) for pid, pdata in participants_map.items()
+        if pdata.get("team") == attacker_team and pdata.get("hp", 0) > 0
+    ]
+
     base_defender_attributes = await attrs(defender_character_id)
     defender_buff_modifiers = aggregate_modifiers(
         battle_state.get("active_effects", {}).get(str(defender_pid), [])
@@ -1304,6 +1321,33 @@ async def _make_action_core(
                 "kind": "support", "effects": [_normalize_effect(e) for e in enemy_effects],
             })
 
+        # ally-эффекты — баф/лечение выбранного союзника (FEAT-143 ally targeting)
+        ally_effects = [e for e in support_rank.get("effects", [])
+                        if e.get("target_side") == "ally"]
+        if ally_effects:
+            apply_new_effects(
+                battle_state, ally_target_pid, ally_effects,
+                owner_pid=request.participant_id,
+            )
+            turn_events.append({
+                "event": "apply_effects", "who": ally_target_pid,
+                "kind": "support", "effects": [_normalize_effect(e) for e in ally_effects],
+            })
+
+        # all-allies эффекты — масс-баф/лечение на всю живую команду (FEAT-143 step 2)
+        all_allies_effects = [e for e in support_rank.get("effects", [])
+                              if e.get("target_side") == "all_allies"]
+        if all_allies_effects:
+            for _ally_pid in alive_allies:
+                apply_new_effects(
+                    battle_state, _ally_pid, [dict(e) for e in all_allies_effects],
+                    owner_pid=request.participant_id,
+                )
+                turn_events.append({
+                    "event": "apply_effects", "who": _ally_pid, "kind": "support",
+                    "effects": [_normalize_effect(e) for e in all_allies_effects],
+                })
+
     # ------------------------------------------------------------------------------
     # 7. DEFENSE-навык (баффы на self)
     # ------------------------------------------------------------------------------
@@ -1340,6 +1384,33 @@ async def _make_action_core(
                 "event": "apply_effects", "who": defender_pid,
                 "kind": "defense", "effects": [_normalize_effect(e) for e in enemy_effects],
             })
+
+        # ally-эффекты — на выбранного союзника (FEAT-143 ally targeting)
+        ally_effects = [e for e in defense_rank.get("effects", [])
+                        if e.get("target_side") == "ally"]
+        if ally_effects:
+            apply_new_effects(
+                battle_state, ally_target_pid, ally_effects,
+                owner_pid=request.participant_id,
+            )
+            turn_events.append({
+                "event": "apply_effects", "who": ally_target_pid,
+                "kind": "defense", "effects": [_normalize_effect(e) for e in ally_effects],
+            })
+
+        # all-allies эффекты — на всю живую команду (FEAT-143 step 2)
+        all_allies_effects = [e for e in defense_rank.get("effects", [])
+                              if e.get("target_side") == "all_allies"]
+        if all_allies_effects:
+            for _ally_pid in alive_allies:
+                apply_new_effects(
+                    battle_state, _ally_pid, [dict(e) for e in all_allies_effects],
+                    owner_pid=request.participant_id,
+                )
+                turn_events.append({
+                    "event": "apply_effects", "who": _ally_pid, "kind": "defense",
+                    "effects": [_normalize_effect(e) for e in all_allies_effects],
+                })
 
     # ------------------------------------------------------------------------------
     # 8. Использование предмета из fast-слота (одноразовое)
@@ -1448,6 +1519,34 @@ async def _make_action_core(
                 "kind": "attack",
                 "effects": [_normalize_effect(e) for e in attack_enemy_effects],
             })
+
+        # ── 9.0c. Attack ally-effects — buff a chosen teammate (FEAT-143).
+        attack_ally_effects = [e for e in attack_rank.get("effects", [])
+                               if e.get("target_side") == "ally"]
+        if attack_ally_effects:
+            apply_new_effects(
+                battle_state, ally_target_pid, attack_ally_effects,
+                owner_pid=request.participant_id,
+            )
+            turn_events.append({
+                "event": "apply_effects", "who": ally_target_pid,
+                "kind": "attack",
+                "effects": [_normalize_effect(e) for e in attack_ally_effects],
+            })
+
+        # ── 9.0d. Attack all-allies effects — mass buff the whole team (FEAT-143 step 2).
+        attack_all_allies_effects = [e for e in attack_rank.get("effects", [])
+                                     if e.get("target_side") == "all_allies"]
+        if attack_all_allies_effects:
+            for _ally_pid in alive_allies:
+                apply_new_effects(
+                    battle_state, _ally_pid, [dict(e) for e in attack_all_allies_effects],
+                    owner_pid=request.participant_id,
+                )
+                turn_events.append({
+                    "event": "apply_effects", "who": _ally_pid, "kind": "attack",
+                    "effects": [_normalize_effect(e) for e in attack_all_allies_effects],
+                })
 
         attacker_buff_modifiers = aggregate_modifiers(
             battle_state.get("active_effects", {}).get(str(request.participant_id), [])

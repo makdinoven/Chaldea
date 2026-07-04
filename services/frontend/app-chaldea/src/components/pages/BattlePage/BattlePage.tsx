@@ -151,6 +151,8 @@ const BattlePage = () => {
   const [enemyTeamData, setEnemyTeamData] = useState<CharacterData[]>([]);
   // Which enemy participant the next attack will hit.
   const [selectedTargetId, setSelectedTargetId] = useState<number | null>(null);
+  // Which ally a support/defense "ally" skill will buff/heal (self allowed).
+  const [selectedAllyId, setSelectedAllyId] = useState<number | null>(null);
 
   const [turnData, setTurnData] = useState<TurnDataState>({
     [SKILLS_KEYS.attack]: null,
@@ -547,11 +549,20 @@ const BattlePage = () => {
     }
   }, [enemyTeamData, runtimeData, selectedTargetId, isSpectateMode]);
 
+  // A skill flagged targets_ally (has an "ally" effect) lets the player pick a
+  // teammate — self included — to buff/heal (FEAT-143 ally targeting).
+  const needsAllyTarget = [turnData.attack, turnData.defense, turnData.support].some(
+    (s) => s && (s as { targets_ally?: boolean }).targets_ally,
+  );
+
   const handleSendTurn = async () => {
     if (!runtimeData || isSpectateMode || isPaused) return;
     const turnDataApi = {
       participant_id: myData.participant_id!,
       target_id: selectedTargetId,
+      ally_target_id: needsAllyTarget
+        ? selectedAllyId ?? myData.participant_id ?? null
+        : null,
       skills: {
         attack_skill_id: turnData.attack ? (turnData.attack as SkillSlot).id ?? null : null,
         defense_skill_id: turnData.defense ? (turnData.defense as SkillSlot).id ?? null : null,
@@ -733,21 +744,39 @@ const BattlePage = () => {
         )}
 
         <div className="grid grid-cols-[minmax(0,1fr)_240px_minmax(0,1fr)] sm:grid-cols-[minmax(0,1fr)_300px_minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_380px_minmax(0,1fr)] gap-2 sm:gap-4 text-white">
-          {/* Viewer's team (own card first) */}
+          {/* Viewer's team (own card first). When a support/ally skill is queued,
+              tap a teammate (self included) to choose who it buffs/heals. */}
           <div className="flex flex-col gap-4 sm:gap-6">
             {myTeamData.map((c) => {
+              const pid = c.participant_id as number;
               const isActingNow =
                 c.participant_id != null &&
                 runtimeData.current_actor === c.participant_id;
+              const isDead = (runtimeData.participants[pid]?.hp ?? 0) <= 0;
+              const allySelectable = needsAllyTarget && !isDead;
+              const effectiveAlly = selectedAllyId ?? myData.participant_id;
+              const isAllyTarget = needsAllyTarget && effectiveAlly === pid;
               return (
                 <div
                   key={c.participant_id}
+                  onClick={() => allySelectable && setSelectedAllyId(pid)}
                   className={`relative rounded-card p-2 sm:p-3 transition-all duration-300 ${
+                    allySelectable ? "cursor-pointer hover:opacity-90" : ""
+                  } ${
                     isActingNow
                       ? "bg-gold/10 gold-outline"
                       : "bg-white/[0.03]"
-                  }`}
+                  } ${
+                    isAllyTarget
+                      ? "ring-2 ring-emerald-400 shadow-[0_0_16px_rgba(52,211,153,0.45)]"
+                      : ""
+                  } ${isDead ? "opacity-40 grayscale" : ""}`}
                 >
+                  {isAllyTarget && (
+                    <span className="absolute -top-2 right-2 z-10 rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                      Поддержка
+                    </span>
+                  )}
                   <CharacterSide
                     characterData={c}
                     isOpponent={false}

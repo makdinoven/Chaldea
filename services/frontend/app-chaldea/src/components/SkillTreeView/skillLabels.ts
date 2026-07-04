@@ -48,6 +48,8 @@ const TARGET_SIDE_CARD_RU: Record<string, string> = {
   enemies: 'На всех врагов',
   ally: 'На союзника',
   allies: 'На всех союзников',
+  all_allies: 'На всю команду',
+  all_enemies: 'На всех врагов',
   all: 'На всех',
 };
 

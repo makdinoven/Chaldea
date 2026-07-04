@@ -96,15 +96,26 @@ const TargetSideToggle = ({
   onChange,
 }: {
   side: string | null;
-  onChange: (s: 'self' | 'enemy') => void;
+  onChange: (s: 'self' | 'enemy' | 'ally' | 'all_allies') => void;
 }) => {
-  const current = side === 'self' ? 'self' : 'enemy';
+  const current =
+    side === 'self'
+      ? 'self'
+      : side === 'ally'
+        ? 'ally'
+        : side === 'all_allies'
+          ? 'all_allies'
+          : 'enemy';
   return (
     <div className="flex flex-col gap-1 shrink-0">
       <span className={labelClass}>Цель:</span>
       <div className="inline-flex rounded-sm overflow-hidden border border-white/15">
-        {(['self', 'enemy'] as const).map((s) => {
+        {(['self', 'enemy', 'ally', 'all_allies'] as const).map((s) => {
           const active = current === s;
+          const label = {
+            self: 'На себя', enemy: 'На врага',
+            ally: 'На союзника', all_allies: 'На всю команду',
+          }[s];
           return (
             <button
               key={s}
@@ -116,7 +127,7 @@ const TargetSideToggle = ({
                   : 'bg-white/[0.03] text-white/60 hover:bg-white/[0.08]'
               }`}
             >
-              {s === 'self' ? 'На себя' : 'На врага'}
+              {label}
             </button>
           );
         })}

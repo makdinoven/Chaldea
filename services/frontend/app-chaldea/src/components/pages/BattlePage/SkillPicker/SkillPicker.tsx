@@ -248,7 +248,12 @@ const SkillPicker = ({
                       type="button"
                       disabled={onCd}
                       onClick={() => {
-                        onSelectSkill(s);
+                        // Flag whether this skill buffs/heals a chosen ally, so
+                        // the battle screen knows to offer an ally target (FEAT-143).
+                        const targetsAlly = !!resolved?.effects?.some(
+                          (e) => e.target_side === "ally",
+                        );
+                        onSelectSkill({ ...s, targets_ally: targetsAlly });
                         onClose();
                       }}
                       className={`flex-1 flex items-center gap-3 p-2.5 rounded-card border text-left transition-all duration-200 ease-site ${

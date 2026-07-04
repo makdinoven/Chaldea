@@ -31,8 +31,12 @@ const EffectEditor = ({ effect, onChange, onDelete }: EffectEditorProps) => {
       <div className="flex flex-col gap-1">
         <label className="text-white/60 text-[11px]">Цель:</label>
         <div className="inline-flex rounded-sm overflow-hidden border border-white/15 w-fit">
-          {(['self', 'enemy'] as const).map((side) => {
+          {(['self', 'enemy', 'ally', 'all_allies'] as const).map((side) => {
             const active = (effect.target_side ?? 'self') === side;
+            const label = {
+              self: 'На себя', enemy: 'На врага',
+              ally: 'На союзника', all_allies: 'На всю команду',
+            }[side];
             return (
               <button
                 key={side}
@@ -44,7 +48,7 @@ const EffectEditor = ({ effect, onChange, onDelete }: EffectEditorProps) => {
                     : 'bg-white/[0.03] text-white/60 hover:bg-white/[0.08]'
                 }`}
               >
-                {side === 'self' ? 'На себя' : 'На врага'}
+                {label}
               </button>
             );
           })}

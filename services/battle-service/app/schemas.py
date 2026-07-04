@@ -36,6 +36,9 @@ class ActionRequest(BaseModel):
     # participant. Optional for backward compat / NPCs: when omitted the server
     # auto-targets the first alive enemy.
     target_id: int | None = None
+    # Whom support/defense/attack "ally" effects (buffs/heals) apply to — a living
+    # teammate (self allowed). Optional; falls back to self (FEAT-143).
+    ally_target_id: int | None = None
 
 
 class BattleRewardItem(BaseModel):
