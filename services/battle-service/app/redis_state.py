@@ -50,6 +50,60 @@ def state_key(battle_id: int) -> str:
 ZSET_DEADLINES: str = "battle:deadlines"      # один ZSET на все бои
 
 
+# ---------- очередь ходов --------------------------------------------------
+def build_hybrid_turn_order(
+    participants_payload: List[Dict],
+    first_actor_participant_id: int,
+) -> List[int]:
+    """Hybrid initiative order, fixed once at battle start (FEAT-143).
+
+    Rules:
+      * the initiator (``first_actor_participant_id``) always takes slot 1;
+      * teams alternate, starting with the initiator's team;
+      * inside a team members act by DESCENDING agility (ловкость), ties broken
+        by participant creation order (payload order, stable sort);
+      * computed once and never recomputed mid-battle — stat buffs do not
+        reshuffle the queue, and dead members simply skip their slot.
+
+    ``participants_payload`` entries must carry ``participant_id``, ``team`` and
+    ``agility``. Returns an ordered list of ``participant_id``; ``order[0]`` is
+    always ``first_actor_participant_id``.
+    """
+    teams: Dict[int, List[int]] = {}
+    team_of: Dict[int, int] = {}
+    agility_of: Dict[int, float] = {}
+    for p in participants_payload:
+        pid = p["participant_id"]
+        team = p.get("team", 0)
+        teams.setdefault(team, []).append(pid)
+        team_of[pid] = team
+        agility_of[pid] = p.get("agility", 0)
+
+    # Sort each team by agility desc; stable sort keeps creation order on ties.
+    for pids in teams.values():
+        pids.sort(key=lambda pid: agility_of[pid], reverse=True)
+
+    # The initiator always leads, regardless of their own agility.
+    init_team = team_of.get(first_actor_participant_id)
+    if init_team is not None:
+        init_queue = teams[init_team]
+        if first_actor_participant_id in init_queue:
+            init_queue.remove(first_actor_participant_id)
+            init_queue.insert(0, first_actor_participant_id)
+        ordered_team_ids = [init_team] + sorted(t for t in teams if t != init_team)
+    else:
+        ordered_team_ids = sorted(teams)
+
+    # Round-robin interleave across teams; uneven teams contribute fewer members.
+    queues = [list(teams[t]) for t in ordered_team_ids]
+    order: List[int] = []
+    while any(queues):
+        for q in queues:
+            if q:
+                order.append(q.pop(0))
+    return order
+
+
 # ---------- инициализация --------------------------------------------------
 async def init_battle_state(
     battle_id: int,
@@ -65,13 +119,19 @@ async def init_battle_state(
     """
     redis_client = await get_redis_client()
 
+    # Hybrid initiative order (FEAT-143). Both turn advancement and the "next up"
+    # preview read this single list, so they can never disagree.
+    turn_order = build_hybrid_turn_order(
+        participants_payload, first_actor_participant_id
+    )
+
     # cформируем JSON-словарь состояния
     battle_state: Dict = {
         "turn_number": 0,
         "deadline_at": deadline_at.isoformat(),
         "next_actor": first_actor_participant_id,
         "first_actor": first_actor_participant_id,  # ← кто начинает
-        "turn_order": [p["participant_id"] for p in participants_payload],
+        "turn_order": turn_order,
         "active_effects": {},
         "participants": {
         str(p["participant_id"]): {

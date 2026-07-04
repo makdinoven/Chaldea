@@ -38,8 +38,8 @@ from battle_engine import decrement_cooldowns, set_cooldown
 from inventory_client import get_fast_slots, consume_item, get_equipment_durability, update_durability
 from character_client import get_character_profile
 from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, build_percent_damage_buffs, \
-    build_percent_resist_buffs
-from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, fetch_weapons, compute_damage_with_rolls, roll_chance
+    build_percent_resist_buffs, _normalize_effect, tick_periodic_effects, evaluate_control
+from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, fetch_weapons, compute_damage_with_rolls, roll_chance, roll_dodge
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
     get_cached_snapshot, KEY_BATTLE_TURNS, state_key
 from config import settings
@@ -577,6 +577,8 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id):
             "max_stamina": snap["attributes"]["max_stamina"],
             "fast_slots": snap["fast_slots"],
             "equipment_durability": snap.get("equipment_durability", {}),
+            # agility (ловкость) drives the hybrid turn order (FEAT-143)
+            "agility": snap["attributes"].get("agility", 0),
         })
 
     await save_snapshot(battle_obj.id, participants_info)
@@ -1159,6 +1161,50 @@ async def _make_action_core(
     # События этого хода копим в список
     turn_events: List[Dict] = []
 
+    # --- Control effects (FEAT-143 group B), checked at the START of the turn ---
+    # Stun / Poison-paralysis neutralize the whole action; Knockdown / Windburn
+    # block a specific skill type. Nulling the skills here means everything
+    # downstream (skill_use log, costs, damage, effects) simply does nothing.
+    _full_skip, _blocked_types = evaluate_control(
+        battle_state.get("active_effects", {}).get(str(request.participant_id), [])
+    )
+    if _full_skip:
+        request.skills.attack_skill_id = None
+        request.skills.defense_skill_id = None
+        request.skills.support_skill_id = None
+        request.skills.item_id = None
+        turn_events.append({
+            "event": "control_skip",
+            "who": request.participant_id,
+            "control": _full_skip,
+        })
+    else:
+        for _bt in _blocked_types:
+            _field = f"{_bt}_skill_id"
+            if getattr(request.skills, _field, None):
+                setattr(request.skills, _field, None)
+                turn_events.append({
+                    "event": "control_block",
+                    "who": request.participant_id,
+                    "skill_type": _bt,
+                })
+
+    # Record which skills the actor used this turn (FEAT-143 log readability).
+    # The frontend resolves skill_id -> name from the battle snapshot, so we only
+    # need to emit the id + kind here. Items are already logged via item_use.
+    for _kind, _sid in (
+        ("attack", request.skills.attack_skill_id),
+        ("defense", request.skills.defense_skill_id),
+        ("support", request.skills.support_skill_id),
+    ):
+        if _sid and _sid > 0:
+            turn_events.append({
+                "event": "skill_use",
+                "who": request.participant_id,
+                "skill_id": _sid,
+                "kind": _kind,
+            })
+
     # --- Resolve the action's target (replaces the 1v1 round-robin) ---
     # The "defender" is whoever the offensive part of this action hits: the
     # client-chosen target_id, or (backward compat / NPC) the first alive enemy.
@@ -1209,7 +1255,7 @@ async def _make_action_core(
             )
             turn_events.append({
                 "event": "apply_effects", "who": request.participant_id,
-                "kind": "support", "effects": [e["effect_name"] for e in self_effects],
+                "kind": "support", "effects": [_normalize_effect(e) for e in self_effects],
             })
 
         # enemy-эффекты (with luck-based proc chance)
@@ -1227,7 +1273,7 @@ async def _make_action_core(
             )
             turn_events.append({
                 "event": "apply_effects", "who": defender_pid,
-                "kind": "support", "effects": [e["effect_name"] for e in enemy_effects],
+                "kind": "support", "effects": [_normalize_effect(e) for e in enemy_effects],
             })
 
     # ------------------------------------------------------------------------------
@@ -1246,7 +1292,7 @@ async def _make_action_core(
             )
             turn_events.append({
                 "event": "apply_effects", "who": request.participant_id,
-                "kind": "defense", "effects": [e["effect_name"] for e in self_effects],
+                "kind": "defense", "effects": [_normalize_effect(e) for e in self_effects],
             })
 
         # enemy-эффекты (with luck-based proc chance)
@@ -1264,7 +1310,7 @@ async def _make_action_core(
             )
             turn_events.append({
                 "event": "apply_effects", "who": defender_pid,
-                "kind": "defense", "effects": [e["effect_name"] for e in enemy_effects],
+                "kind": "defense", "effects": [_normalize_effect(e) for e in enemy_effects],
             })
 
     # ------------------------------------------------------------------------------
@@ -1352,7 +1398,7 @@ async def _make_action_core(
             turn_events.append({
                 "event": "apply_effects", "who": request.participant_id,
                 "kind": "attack",
-                "effects": [e["effect_name"] for e in attack_self_effects],
+                "effects": [_normalize_effect(e) for e in attack_self_effects],
             })
 
         # ── 9.0b. Apply attack enemy-effects BEFORE damage so debuffs (e.g.
@@ -1372,7 +1418,7 @@ async def _make_action_core(
             turn_events.append({
                 "event": "apply_effects", "who": defender_pid,
                 "kind": "attack",
-                "effects": [e["effect_name"] for e in attack_enemy_effects],
+                "effects": [_normalize_effect(e) for e in attack_enemy_effects],
             })
 
         attacker_buff_modifiers = aggregate_modifiers(
@@ -1394,8 +1440,17 @@ async def _make_action_core(
             base_defender_attributes, defender_buff_modifiers
         )
 
+        # Dodge is rolled ONCE for the whole attack (not per damage_entry): a
+        # dodge avoids every entry, so the log can't show "dodged" next to a hit.
+        attack_dodged = roll_dodge(defender_attributes.get("dodge", 0))
+        if attack_dodged:
+            turn_events.append({
+                "event": "damage", "source": request.participant_id,
+                "target": defender_pid, "dodged": True, "final": 0,
+            })
+
         # damage_entries
-        for dmg in attack_rank.get("damage_entries", []):
+        for dmg in ([] if attack_dodged else attack_rank.get("damage_entries", [])):
             dealt, log = await compute_damage_with_rolls(
                 damage_entry=dmg,
                 attacker_attr=attacker_attributes,
@@ -1404,6 +1459,7 @@ async def _make_action_core(
                 defender_attr=defender_attributes,
                 percent_resists=defender_percent_resists,
                 class_id=attacker_class_id,
+                apply_dodge=False,
             )
             battle_state["participants"][str(defender_pid)]["hp"] -= dealt
             # Accumulate damage stats for cumulative tracking
@@ -1485,6 +1541,20 @@ async def _make_action_core(
         {"event": "resource_spend", "who": request.participant_id, **spend}
     )
     logger.debug("[EVENTS] turn_events=%s", turn_events)
+
+    # ------------------------------------------------------------------------------
+    # 9.4a. Периодический урон (DoT: кровотечение/ожог/яд) от эффектов, которые
+    # НАЛОЖИЛ атакующий — тикает в конце его хода, ДО декремента длительности
+    # (чтобы свеженаложенные не били в этот же ход). Урон может добить цель —
+    # проверка гибели ниже это учтёт.
+    # ------------------------------------------------------------------------------
+    periodic_events = tick_periodic_effects(battle_state, request.participant_id)
+    if periodic_events:
+        attacker_p = battle_state["participants"][str(request.participant_id)]
+        attacker_p["total_damage_dealt"] = attacker_p.get("total_damage_dealt", 0) + sum(
+            ev["amount"] for ev in periodic_events
+        )
+        turn_events.extend(periodic_events)
 
     # ------------------------------------------------------------------------------
     # 9.4. Тик длительности эффектов АТАКУЮЩЕГО (конец его хода).
@@ -1845,15 +1915,16 @@ async def _make_action_core(
     # ------------------------------------------------------------------------------
     # 11. Обновляем Redis-state (turn_number, next_actor, дедлайн)
     # ------------------------------------------------------------------------------
-    participant_ids: List[str] = list(battle_state["participants"].keys())
-    current_index = participant_ids.index(str(request.participant_id))
-    # Advance to the next ALIVE participant — the dead don't take turns.
+    # Advance along the fixed turn_order (FEAT-143) — the same list the "next up"
+    # preview uses — so the two never disagree. Skip the dead.
+    turn_order: List[int] = [int(pid) for pid in battle_state["turn_order"]]
+    current_index = turn_order.index(request.participant_id)
     next_actor_participant_id = request.participant_id
-    total = len(participant_ids)
+    total = len(turn_order)
     for step in range(1, total + 1):
-        cand = participant_ids[(current_index + step) % total]
-        if battle_state["participants"][cand]["hp"] > 0:
-            next_actor_participant_id = int(cand)
+        cand = turn_order[(current_index + step) % total]
+        if battle_state["participants"][str(cand)]["hp"] > 0:
+            next_actor_participant_id = cand
             break
 
     battle_state["turn_number"] = new_turn_number
@@ -2239,6 +2310,8 @@ async def respond_to_pvp_invitation(
             "max_stamina": snap["attributes"]["max_stamina"],
             "fast_slots": snap["fast_slots"],
             "equipment_durability": snap.get("equipment_durability", {}),
+            # agility (ловкость) drives the hybrid turn order (FEAT-143)
+            "agility": snap["attributes"].get("agility", 0),
         })
 
     await save_snapshot(battle_obj.id, participants_info)
@@ -2530,6 +2603,8 @@ async def pvp_attack(
             "max_stamina": snap["attributes"]["max_stamina"],
             "fast_slots": snap["fast_slots"],
             "equipment_durability": snap.get("equipment_durability", {}),
+            # agility (ловкость) drives the hybrid turn order (FEAT-143)
+            "agility": snap["attributes"].get("agility", 0),
         })
 
     await save_snapshot(battle_obj.id, participants_info)

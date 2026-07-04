@@ -77,13 +77,14 @@ engine_mock.fetch_full_attributes = AsyncMock(return_value={})
 engine_mock.apply_flat_modifiers = MagicMock(return_value={})
 engine_mock.fetch_main_weapon = AsyncMock(return_value={})
 engine_mock.compute_damage_with_rolls = AsyncMock(return_value=(0, {}))
+engine_mock.roll_dodge = MagicMock(return_value=False)  # FEAT-143: deterministic no-dodge
 
 # Configure buffs mock
 buffs_mock = sys.modules["buffs"]
 buffs_mock.decrement_durations = MagicMock()
 buffs_mock.aggregate_modifiers = MagicMock(return_value={})
 buffs_mock.apply_new_effects = MagicMock()
-buffs_mock.build_percent_damage_buffs = MagicMock(return_value={})
+buffs_mock.evaluate_control = MagicMock(return_value=(None, set()))  # FEAT-143: no control by defaultbuffs_mock.build_percent_damage_buffs = MagicMock(return_value={})
 buffs_mock.build_percent_resist_buffs = MagicMock(return_value={})
 
 # Configure skills_client mock

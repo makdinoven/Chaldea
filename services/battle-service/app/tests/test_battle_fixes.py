@@ -63,7 +63,7 @@ buffs_mock = sys.modules["buffs"]
 buffs_mock.decrement_durations = MagicMock()
 buffs_mock.aggregate_modifiers = MagicMock(return_value={})
 buffs_mock.apply_new_effects = MagicMock()
-buffs_mock.build_percent_damage_buffs = MagicMock(return_value={})
+buffs_mock.evaluate_control = MagicMock(return_value=(None, set()))  # FEAT-143: no control by defaultbuffs_mock.build_percent_damage_buffs = MagicMock(return_value={})
 buffs_mock.build_percent_resist_buffs = MagicMock(return_value={})
 
 # Configure skills_client mock

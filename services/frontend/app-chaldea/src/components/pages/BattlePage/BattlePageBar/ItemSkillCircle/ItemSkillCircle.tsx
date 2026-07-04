@@ -18,6 +18,7 @@ interface ItemSkillCircleProps {
   onDropItem: (item: SkillSlot) => void;
   choosedItem: SkillSlot | null;
   onClear?: () => void;
+  onOpen?: () => void;
 }
 
 const ItemSkillCircle = ({
@@ -25,7 +26,7 @@ const ItemSkillCircle = ({
   type,
   onDropItem,
   choosedItem,
-  onClear,
+  onOpen,
 }: ItemSkillCircleProps) => {
   const typeIcon =
     type === SKILLS_KEYS.item ? <ItemIcon /> : <SkillIcon />;
@@ -46,8 +47,8 @@ const ItemSkillCircle = ({
   };
 
   const handleClick = () => {
-    if (isClosed || !choosedItem || !onClear) return;
-    onClear();
+    if (isClosed) return;
+    onOpen?.();
   };
 
   return (

@@ -18,6 +18,7 @@ import type { BattleRewards } from "../../../api/mobs";
 import { fetchBattleSpectateState } from "../../../api/battles";
 import { checkActiveSession } from "../../../api/dungeons";
 import useBattleWebSocket from "../../../hooks/useBattleWebSocket";
+import { evaluateControl, type EffectLike } from "./battleEffects";
 
 // --- Types ---
 
@@ -65,6 +66,7 @@ interface RuntimeState {
   is_paused?: boolean;
   paused_reason?: string | null;
   rewards?: BattleRewards | null;
+  active_effects?: Record<number, EffectLike[]>;
 }
 
 interface CharacterData {
@@ -186,6 +188,14 @@ const BattlePage = () => {
   // Pause state
   const isPaused = runtimeData?.is_paused === true;
 
+  // Control status of the viewer on their OWN turn (FEAT-143 group B): stun /
+  // paralysis skip the turn, knockdown / windburn block a skill type.
+  const isMyTurn = currentTurn ? !currentTurn.isOpponentTurn : false;
+  const myControl =
+    !isSpectateMode && isMyTurn && myData.participant_id != null
+      ? evaluateControl(runtimeData?.active_effects?.[myData.participant_id])
+      : { fullSkip: null as string | null, blocked: [] as string[] };
+
   // --- WebSocket integration ---
   const token = localStorage.getItem("accessToken");
   const {
@@ -196,6 +206,9 @@ const BattlePage = () => {
     battleFinished: wsBattleFinished,
   } = useBattleWebSocket(battleId ?? "", token);
 
+  // Stamina (выносливость) is intentionally omitted in battle — it only matters
+  // for map travel / activities, not combat (FEAT-143). Health, mana and energy
+  // are the combat-relevant resources.
   const getResources = (
     snapshot: ParticipantSnapshot,
     runtime: RuntimeState,
@@ -211,12 +224,6 @@ const BattlePage = () => {
       mana: {
         current: runtime.participants[id].mana,
         max: snapshot.attributes.max_mana,
-      },
-    },
-    {
-      stamina: {
-        current: runtime.participants[id].stamina,
-        max: snapshot.attributes.max_stamina,
       },
     },
     {
@@ -305,14 +312,72 @@ const BattlePage = () => {
     [isSpectateMode, character],
   );
 
+  // --- Turn pacing (FEAT-143) ---
+  // Rapid successive state updates (esp. when passing the turn to an autobattle
+  // mob) used to flash by, so you couldn't follow the flow. We space applied
+  // states by a minimum gap: bursts are shown one turn at a time, while the very
+  // first load and idle updates apply immediately.
+  const MIN_TURN_GAP_MS = 1100;
+  const pendingStatesRef = useRef<
+    Array<{ snapshot: ParticipantSnapshot[]; runtime: RuntimeState }>
+  >([]);
+  const lastAppliedAtRef = useRef(0);
+  const drainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const drainStates = useCallback(() => {
+    drainTimerRef.current = null;
+    const next = pendingStatesRef.current.shift();
+    if (!next) return;
+    processState(next.snapshot, next.runtime);
+    setLoading(false);
+    lastAppliedAtRef.current = Date.now();
+    if (pendingStatesRef.current.length > 0) {
+      drainTimerRef.current = setTimeout(drainStates, MIN_TURN_GAP_MS);
+    }
+  }, [processState]);
+
+  const enqueueState = useCallback(
+    (snapshot: ParticipantSnapshot[], runtime: RuntimeState) => {
+      const now = Date.now();
+      const sinceLast = now - lastAppliedAtRef.current;
+      const nothingPending =
+        pendingStatesRef.current.length === 0 && !drainTimerRef.current;
+      // Apply immediately on first load, or when enough time has passed since the
+      // last visible update (nothing to pace).
+      if (
+        lastAppliedAtRef.current === 0 ||
+        (nothingPending && sinceLast >= MIN_TURN_GAP_MS)
+      ) {
+        processState(snapshot, runtime);
+        setLoading(false);
+        lastAppliedAtRef.current = now;
+        return;
+      }
+      pendingStatesRef.current.push({ snapshot, runtime });
+      if (!drainTimerRef.current) {
+        drainTimerRef.current = setTimeout(
+          drainStates,
+          Math.max(0, MIN_TURN_GAP_MS - sinceLast),
+        );
+      }
+    },
+    [processState, drainStates],
+  );
+
+  // Clear any pending drain timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (drainTimerRef.current) clearTimeout(drainTimerRef.current);
+    };
+  }, []);
+
   // Process WS state updates
   useEffect(() => {
     if (!wsState) return;
     const snapshot = wsState.snapshot as unknown as ParticipantSnapshot[];
     const runtime = wsState.runtime as unknown as RuntimeState;
-    processState(snapshot, runtime);
-    setLoading(false);
-  }, [wsState, processState]);
+    enqueueState(snapshot, runtime);
+  }, [wsState, enqueueState]);
 
   // Handle WS battle_finished event
   useEffect(() => {
@@ -377,7 +442,7 @@ const BattlePage = () => {
         runtime = response.runtime;
       }
 
-      processState(snapshot, runtime);
+      enqueueState(snapshot, runtime);
     } catch (e) {
       const err = e as { response?: { status?: number; data?: { detail?: string } } };
       const msg = err?.response?.data?.detail || "Не удалось загрузить состояние боя";
@@ -635,22 +700,48 @@ const BattlePage = () => {
           </div>
         )}
 
+        {/* Control banner — the viewer is stunned / restricted this turn */}
+        {(myControl.fullSkip || myControl.blocked.length > 0) && (
+          <div className="relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center bg-site-bg border border-site-red/50">
+            <p className="text-site-red text-sm sm:text-base font-medium">
+              {myControl.fullSkip
+                ? `${myControl.fullSkip === "Poison" ? "Паралич" : "Оглушение"} — ваш ход будет пропущен`
+                : `Заблокировано: ${myControl.blocked
+                    .map(
+                      (t) =>
+                        ({ attack: "Атака", defense: "Защита", support: "Поддержка" }[
+                          t
+                        ] ?? t),
+                    )
+                    .join(", ")}`}
+            </p>
+          </div>
+        )}
+
         <div className="grid grid-cols-[minmax(0,1fr)_240px_minmax(0,1fr)] sm:grid-cols-[minmax(0,1fr)_300px_minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_380px_minmax(0,1fr)] gap-2 sm:gap-4 text-white">
           {/* Viewer's team (own card first) */}
           <div className="flex flex-col gap-4 sm:gap-6">
-            {myTeamData.map((c) => (
-              <CharacterSide
-                key={c.participant_id}
-                characterData={c}
-                isOpponent={false}
-                setTurnData={
-                  !isSpectateMode && c.participant_id === myData.participant_id
-                    ? setTurnData
-                    : undefined
-                }
-                runtimeData={runtimeData}
-              />
-            ))}
+            {myTeamData.map((c) => {
+              const isActingNow =
+                c.participant_id != null &&
+                runtimeData.current_actor === c.participant_id;
+              return (
+                <div
+                  key={c.participant_id}
+                  className={`relative rounded-card p-2 sm:p-3 transition-all duration-300 ${
+                    isActingNow
+                      ? "bg-gold/10 gold-outline"
+                      : "bg-white/[0.03]"
+                  }`}
+                >
+                  <CharacterSide
+                    characterData={c}
+                    isOpponent={false}
+                    runtimeData={runtimeData}
+                  />
+                </div>
+              );
+            })}
           </div>
 
           {!isSpectateMode && currentTurn && (
@@ -669,6 +760,7 @@ const BattlePage = () => {
               snapshotData={snapshotData}
               runtimeData={runtimeData}
               isPaused={isPaused}
+              controlFullSkip={myControl.fullSkip}
             />
           )}
           {isSpectateMode && currentTurn && (
@@ -690,17 +782,20 @@ const BattlePage = () => {
               const pid = c.participant_id as number;
               const isDead = (runtimeData.participants[pid]?.hp ?? 0) <= 0;
               const isTarget = !isSpectateMode && selectedTargetId === pid;
+              const isActingNow = runtimeData.current_actor === pid;
               const selectable = !isSpectateMode && !isDead;
               return (
                 <div
                   key={pid}
                   onClick={() => selectable && setSelectedTargetId(pid)}
-                  className={`relative rounded-card transition-all duration-200 ${
+                  className={`relative rounded-card p-2 sm:p-3 transition-all duration-300 ${
                     selectable ? "cursor-pointer hover:opacity-90" : ""
                   } ${
                     isTarget
                       ? "ring-2 ring-site-red shadow-[0_0_16px_rgba(239,68,68,0.45)]"
-                      : ""
+                      : isActingNow
+                        ? "bg-gold/10 gold-outline"
+                        : "bg-white/[0.03]"
                   } ${isDead ? "opacity-40 grayscale" : ""}`}
                 >
                   {isTarget && (

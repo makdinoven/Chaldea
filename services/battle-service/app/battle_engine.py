@@ -141,6 +141,7 @@ async def compute_damage_with_rolls(
     defender_attr: Dict,
     percent_resists: Dict[str, float],
     class_id: int = 1,
+    apply_dodge: bool = True,
 ) -> Tuple[float, Dict]:
     """
     • roll_dodge, roll_chance, roll_crit
@@ -174,11 +175,13 @@ async def compute_damage_with_rolls(
     attacker_luck = attacker_attr.get("luck", 0)
     luck_bonus = attacker_luck * 0.1
 
-    # dodge
-    if roll_dodge(defender_attr["dodge"]):
-        log["dodged"] = True
-        return 0.0, log
-    log["dodged"] = False
+    # dodge — optional here so the caller can roll it ONCE per attack instead of
+    # per damage_entry (avoids "dodged" + a landed hit in the same attack).
+    if apply_dodge:
+        if roll_dodge(defender_attr["dodge"]):
+            log["dodged"] = True
+            return 0.0, log
+        log["dodged"] = False
 
     # hit chance (luck improves hit chance for attacker)
     if not roll_chance(damage_entry["chance"] + luck_bonus):

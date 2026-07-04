@@ -1,6 +1,6 @@
 import CountdownTimer from "./CountdownTimer/CountdownTimer";
 import ItemSkillCircle from "./ItemSkillCircle/ItemSkillCircle";
-import { useEffect, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import AutobattleModeIcon from "../../../../assets/IconComponents/AutobattleModeIcon";
 import Tooltip from "../../../CommonComponents/Tooltip/Tooltip";
 import {
@@ -12,7 +12,11 @@ import toast from "react-hot-toast";
 import { BASE_URL_BATTLES, postAutobattleSpeed } from "../../../../api/api";
 import { formatDateTime } from "../../../../helpers/helpers";
 import { DAMAGE_TYPES } from "../../../AdminSkillsPage/skillConstants";
-import { getDamageLabel } from "../CharacterSide/CharacterInventory/InventoryItem/InventoryItem";
+import { describeEffect, type EffectLike } from "../battleEffects";
+import SkillPicker, {
+  type BattleSkill,
+  type BattleItem,
+} from "../SkillPicker/SkillPicker";
 
 // --- Types ---
 
@@ -93,9 +97,15 @@ interface BattleEvent {
   who?: number;
   source?: number;
   target?: number;
-  effects?: string[];
+  effects?: EffectLike[];
   item_name?: string;
   recovery?: Record<string, number>;
+  skill_id?: number;
+  kind?: string;
+  effect?: string;
+  amount?: number;
+  control?: string;
+  skill_type?: string;
   damage_type?: string;
   base_attack?: number;
   entry_amount?: number;
@@ -121,17 +131,6 @@ interface TurnLogsResponse {
   logs: TurnLog[];
 }
 
-interface TurnEntry {
-  my?: boolean;
-  isActive?: boolean;
-  waiting: boolean;
-  turnIndex: number;
-}
-
-interface TurnPair {
-  pair: TurnEntry[];
-}
-
 interface BattlePageBarProps {
   battleId: string | undefined;
   turn: TurnInfo;
@@ -147,6 +146,7 @@ interface BattlePageBarProps {
   myData: CharacterData;
   opponentData: CharacterData | null;
   isPaused?: boolean;
+  controlFullSkip?: string | null;
 }
 
 // --- Constants ---
@@ -175,6 +175,88 @@ const MODE_STROKE_COLORS: Record<string, string> = {
   defence: "#76a6bd",
 };
 
+// --- Damage-type icons (FEAT-143): emoji keep the log readable and self-contained ---
+const DAMAGE_TYPE_ICONS: Record<string, string> = {
+  all: "\u{1F300}",          // 🌀 общий
+  physical: "⚔️",  // ⚔️ физический
+  catting: "\u{1F5E1}️",// 🗡️ режущий
+  crushing: "\u{1F528}",     // 🔨 дробящий
+  piercing: "\u{1F3F9}",     // 🏹 колюще-пронзающий
+  magic: "\u{1F52E}",        // 🔮 магический
+  fire: "\u{1F525}",         // 🔥 огонь
+  ice: "❄️",       // ❄️ лёд
+  watering: "\u{1F4A7}",     // 💧 вода
+  electricity: "⚡",     // ⚡ электричество
+  wind: "\u{1F4A8}",         // 💨 ветер
+  sainting: "☀️",  // ☀️ святой
+  damning: "\u{1F480}",      // 💀 проклятие
+};
+
+// --- Kind labels for skill_use events ---
+const SKILL_KIND_LABELS: Record<string, string> = {
+  attack: "Атака",
+  defense: "Защита",
+  support: "Поддержка",
+};
+
+// --- Round avatar used by the turn queue and history circles ---
+interface AvatarCircleProps {
+  avatar?: string | null;
+  name?: string;
+  size?: number;
+  badge?: ReactNode;
+  active?: boolean;
+  side?: "ally" | "enemy";
+  dim?: boolean;
+  onClick?: () => void;
+  title?: string;
+}
+
+const AvatarCircle = ({
+  avatar,
+  name,
+  size = 40,
+  badge,
+  active,
+  side,
+  dim,
+  onClick,
+  title,
+}: AvatarCircleProps) => {
+  const ring = active
+    ? "ring-2 ring-gold shadow-[0_0_10px_rgba(240,217,92,0.55)]"
+    : side === "enemy"
+      ? "ring-1 ring-site-red/50"
+      : "ring-1 ring-white/25";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      style={{ width: size, height: size }}
+      className={`relative shrink-0 transition-transform duration-200 ease-site ${
+        onClick ? "cursor-pointer hover:scale-105" : "cursor-default"
+      } ${dim ? "opacity-45" : ""} ${active ? "scale-105" : ""}`}
+    >
+      <span
+        className={`flex w-full h-full items-center justify-center rounded-full bg-center bg-cover bg-site-bg overflow-hidden ${ring}`}
+        style={avatar ? { backgroundImage: `url("${avatar}")` } : undefined}
+      >
+        {!avatar && (
+          <span className="text-xs font-medium text-white/70">
+            {name?.trim()?.[0]?.toUpperCase() ?? "?"}
+          </span>
+        )}
+      </span>
+      {badge != null && (
+        <span className="absolute -bottom-1 -right-1 min-w-[16px] h-4 px-1 flex items-center justify-center rounded-full bg-site-bg text-[10px] font-medium leading-none text-white ring-1 ring-white/30">
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+};
+
 // --- Component ---
 
 const BattlePageBar = ({
@@ -192,17 +274,78 @@ const BattlePageBar = ({
   myData,
   opponentData,
   isPaused = false,
+  controlFullSkip = null,
 }: BattlePageBarProps) => {
   const [isTurnLikeTextShown, setIsTurnLikeTextShown] = useState(true);
   const [isAllTurnsOpen, setIsAllTurnsOpen] = useState(false);
   const [turnLogs, setTurnLogs] = useState<TurnLogsResponse | null>(null);
-  const [turns, setTurns] = useState<TurnPair[]>([]);
   const isOpponentTurn = turn.isOpponentTurn || isPaused;
+  // The viewer is stunned/paralysed this turn — lock the skill slots; the turn
+  // can still be submitted (it just passes) so relabel the button.
+  const controlled = Boolean(controlFullSkip);
   const [activeTurnIndex, setActiveTurnIndex] = useState(
     runtimeData.turn_number - 1,
   );
+  // Whether the history view auto-follows the newest turn. Set to false the
+  // moment the user pins an older turn, so live updates stop yanking them back
+  // to the last turn (FEAT-143). Re-enabled when they click the newest turn.
+  const followLatestRef = useRef(true);
   const [autobattleSpeed, setAutobattleSpeed] = useState<"fast" | "slow">("fast");
   const [speedLoading, setSpeedLoading] = useState(false);
+  // Which slot's picker is open (attack/defense/support/item), or null (FEAT-143).
+  const [pickerType, setPickerType] = useState<
+    "attack" | "defense" | "support" | "item" | null
+  >(null);
+
+  // participant_id -> { avatar, name } from the snapshot, for avatar circles.
+  const participantById = useMemo(() => {
+    const m = new Map<number, { avatar: string | null; name: string }>();
+    snapshotData?.forEach((p) =>
+      m.set(p.participant_id, { avatar: p.avatar, name: p.name }),
+    );
+    return m;
+  }, [snapshotData]);
+
+  // skill_id -> display name, resolved from every participant's snapshot skills.
+  const skillNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    snapshotData?.forEach((p) => {
+      const skills = p.skills as
+        | Array<{ skill_id?: number; id?: number; skill_name?: string }>
+        | undefined;
+      skills?.forEach((sk) => {
+        const id = sk.skill_id ?? sk.id;
+        if (id != null && sk.skill_name) m.set(Number(id), sk.skill_name);
+      });
+    });
+    return m;
+  }, [snapshotData]);
+
+  const totalTurns = runtimeData.turn_number; // completed turns that have logs
+  const viewerTeam =
+    myData.participant_id != null
+      ? runtimeData.participants[myData.participant_id]?.team
+      : undefined;
+  const sideOf = (pid: number): "ally" | "enemy" =>
+    runtimeData.participants[pid]?.team === viewerTeam ? "ally" : "enemy";
+  // Show a shortcut back to the newest turn while an older turn is pinned.
+  const showJumpToLatest = totalTurns > 0 && activeTurnIndex < totalTurns - 1;
+
+  // Live upcoming order: current actor first, then the next alive participants
+  // for one full cycle along the fixed turn_order (FEAT-143 hybrid order).
+  const turnQueue = useMemo(() => {
+    const order = runtimeData.turn_order ?? [];
+    if (!order.length) return [] as number[];
+    const startIdx = Math.max(0, order.indexOf(runtimeData.current_actor));
+    const isAlive = (pid: number) =>
+      (runtimeData.participants[pid]?.hp ?? 0) > 0;
+    const queue: number[] = [];
+    for (let step = 0; step < order.length; step++) {
+      const pid = order[(startIdx + step) % order.length];
+      if (pid === runtimeData.current_actor || isAlive(pid)) queue.push(pid);
+    }
+    return queue;
+  }, [runtimeData]);
 
   useEffect(() => {
     if (!isAutoBattleOn) {
@@ -228,48 +371,25 @@ const BattlePageBar = ({
     setIsAllTurnsOpen(!isAllTurnsOpen);
   };
 
+  // Auto-advance to the newest turn ONLY while the user is following the latest.
+  // If they've pinned an older turn to read it, leave their view alone.
   useEffect(() => {
-    if (!runtimeData || !myData) return;
-
-    const { turn_order, total_turns, first_actor } = runtimeData;
-    const myId = myData.participant_id;
-    const generatedTurns: TurnPair[] = [];
-
-    for (let i = 0; i < total_turns; i += 2) {
-      let first: TurnEntry;
-      if (i < total_turns - 1) {
-        first = {
-          my: first_actor === myId,
-          isActive: i === total_turns - 2,
-          waiting: false,
-          turnIndex: i,
-        };
-      } else {
-        first = { waiting: true, turnIndex: i };
-      }
-
-      let second: TurnEntry | null;
-      if (i + 1 < total_turns - 1) {
-        const secondActorId = turn_order[(i + 1) % turn_order.length];
-        second = {
-          my: secondActorId === myId,
-          isActive: i + 1 === total_turns - 2,
-          waiting: false,
-          turnIndex: i + 1,
-        };
-      } else if (i + 1 === total_turns - 1) {
-        second = { waiting: true, turnIndex: i + 1 };
-      } else {
-        second = null;
-      }
-
-      const pair = second ? [first, second] : [first];
-      generatedTurns.push({ pair });
+    if (!runtimeData) return;
+    if (followLatestRef.current) {
+      setActiveTurnIndex(runtimeData.turn_number - 1);
     }
+  }, [runtimeData]);
 
-    setTurns(generatedTurns);
-    setActiveTurnIndex(runtimeData.turn_number - 1);
-  }, [runtimeData, myData]);
+  const selectTurn = (turnIndex: number) => {
+    setActiveTurnIndex(turnIndex);
+    // Following resumes only when the user jumps back to the newest turn.
+    followLatestRef.current = turnIndex >= totalTurns - 1;
+  };
+
+  const jumpToLatest = () => {
+    followLatestRef.current = true;
+    setActiveTurnIndex(totalTurns - 1);
+  };
 
   useEffect(() => {
     if (activeTurnIndex !== null && activeTurnIndex !== undefined) {
@@ -295,6 +415,19 @@ const BattlePageBar = ({
     DAMAGE_TYPES.map(({ value, label }: { value: string; label: string }) => [value, label]),
   );
 
+  // Damage type as an icon (with the readable name on hover) instead of a word.
+  const damageIcon = (dtype?: string): ReactNode => {
+    const label = DAMAGE_TYPES_MAP[dtype ?? ""] || dtype || "";
+    const icon = DAMAGE_TYPE_ICONS[dtype ?? ""];
+    return icon ? (
+      <span title={label} aria-label={label} className="text-sm leading-none">
+        {icon}
+      </span>
+    ) : (
+      <span className="text-white/60">{label}</span>
+    );
+  };
+
   const formatBattleEvent = (
     event: BattleEvent,
     snapshotData: ParticipantSnapshot[],
@@ -305,179 +438,208 @@ const BattlePageBar = ({
       return name ? <span className="gold-text text-xs">{name}</span> : null;
     };
 
-    const formatValue = (value: unknown): ReactNode => {
-      if (typeof value === "number" || typeof value === "boolean") {
-        return <span className="text-site-blue">{String(value)}</span>;
-      }
-      return <span className="text-white">{String(value)}</span>;
-    };
-
-    const bold = (
-      label: string,
-      value: unknown,
-      isPercent?: boolean,
-      percentSign?: boolean,
-    ): ReactNode =>
-      value !== undefined ? (
-        <div className="ml-2.5">
-          {" "}
-          <span className="text-white/50">{label ? label : ""}</span>
-          <span className={`${value === 0 ? "text-site-red" : ""}`}>
-            {isPercent ? formatValue((value as number) / 100) : formatValue(value)}
-            {percentSign ? <span className="text-site-blue">%</span> : ""}
+    // Which skill(s) the actor used this turn — resolved to a human name.
+    if (event.event === "skill_use") {
+      const skillName =
+        event.skill_id != null
+          ? skillNameById.get(Number(event.skill_id))
+          : undefined;
+      const kind = SKILL_KIND_LABELS[(event.kind as string) ?? ""] ?? "";
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.who)}
+          <span className="text-white/60">применяет</span>
+          <span className="text-site-blue">
+            {skillName ? `«${skillName}»` : "навык"}
           </span>
-        </div>
-      ) : null;
-
-    const action =
-      BATTLE_EVENTS_TRANSLATE[event.event as keyof typeof BATTLE_EVENTS_TRANSLATE] || event.event;
+          {kind && <span className="text-white/40 text-[11px]">· {kind}</span>}
+        </span>
+      );
+    }
 
     if (event.event === "apply_effects") {
+      const effects = event.effects ?? [];
+      if (effects.length === 0) return null;
       return (
-        <>
-          {getName(event.who)} {action}
-          {event.effects?.map((effect: string, i: number) => (
-            <span key={i}>
-              {getEffectData(effect)}{" "}
-              {i !== 0 || (i !== (event.effects?.length ?? 0) - 1 && ", ")}
-            </span>
-          ))}
-        </>
+        <span className="flex flex-wrap items-center gap-x-1.5">
+          {getName(event.who)}
+          <span className="text-white/60">получает:</span>
+          {effects.map((effect, i) => {
+            const d = describeEffect(effect);
+            return (
+              <span key={i} className="text-white/85">
+                {d.label}
+                {d.detail && (
+                  <span className="text-white/45"> ({d.detail})</span>
+                )}
+                {i < effects.length - 1 ? "," : ""}
+              </span>
+            );
+          })}
+        </span>
       );
     }
 
     if (event.event === "item_use") {
+      const rec = event.recovery ?? {};
+      const parts: string[] = [];
+      if (rec.health) parts.push(`+${rec.health} здоровья`);
+      if (rec.mana) parts.push(`+${rec.mana} маны`);
+      if (rec.energy) parts.push(`+${rec.energy} энергии`);
       return (
-        <>
-          {getName(event.who)} {action} {event.item_name}
-          {event.recovery?.health && (
-            <span> и восстанавливает {event.recovery.health} здоровья</span>
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.who)}
+          <span className="text-white/60">использует</span>
+          <span className="text-site-blue">{event.item_name}</span>
+          {parts.length > 0 && (
+            <span className="text-green-400/80">({parts.join(", ")})</span>
           )}
-          {event.recovery?.mana && (
-            <span>и восстанавливает {event.recovery.mana} маны</span>
-          )}
-          {event.recovery?.energy && (
-            <span>и восстанавливает {event.recovery.energy} энергии</span>
-          )}
-          {event.recovery?.stamina && (
-            <span>и восстанавливает {event.recovery.stamina} выносливости</span>
-          )}
-        </>
+        </span>
+      );
+    }
+
+    if (event.event === "control_skip") {
+      const label =
+        event.control === "Poison"
+          ? "Паралич"
+          : describeEffect({ name: event.control }).label;
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.who)}
+          <span className="text-site-red">{label} — ход пропущен</span>
+        </span>
+      );
+    }
+
+    if (event.event === "control_block") {
+      const kind = SKILL_KIND_LABELS[event.skill_type ?? ""] ?? event.skill_type;
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.who)}
+          <span className="text-site-red">{kind}: навык заблокирован</span>
+        </span>
+      );
+    }
+
+    if (event.event === "effect_tick") {
+      // Periodic damage from a lingering effect (bleeding / burn / poison).
+      const label = describeEffect({ name: event.effect }).label;
+      const amount = Math.round(Number(event.amount ?? 0));
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.target)}
+          <span className="text-white/60">{label}</span>
+          <span className="font-medium text-site-red">−{amount}</span>
+        </span>
       );
     }
 
     if (event.event === "damage") {
-      const attacker = snapshotData.find(
-        (p) => p.participant_id === event.source,
-      );
-      const critChance = attacker?.attributes?.critical_hit_chance;
-      const critDamage = attacker?.attributes?.critical_damage;
-
+      // Misses: two distinct cases. Show ONLY on a miss — no "попал" on a hit.
+      if (event.dodged) {
+        return (
+          <span className="flex flex-wrap items-center gap-1">
+            {getName(event.target)}
+            <span className="text-site-red">уклонился от удара</span>
+            {getName(event.source)}
+          </span>
+        );
+      }
+      if (event.hit_chance_failed) {
+        return (
+          <span className="flex flex-wrap items-center gap-1">
+            {getName(event.source)}
+            <span className="text-site-red">промахнулся по</span>
+            {getName(event.target)}
+          </span>
+        );
+      }
+      // Hit: compact source → target, damage icon, final amount, crit marker.
+      const finalDmg = Math.round(Number(event.final ?? 0));
       return (
-        <>
-          {getName(event.source)} {action} {getName(event.target)}
-          {bold(
-            "Тип урона: ",
-            DAMAGE_TYPES_MAP[event.damage_type ?? ""] || event.damage_type,
-          )}
-          {bold("Базовая атака: ", event.base_attack)}
-          {bold("Входящий урон: ", event.entry_amount)}
-          {!!event.buff_pct &&
-            bold("Бонус от баффов: ", event.buff_pct, false, true)}
-          {!!event.after_buffs && bold("После баффов: ", event.after_buffs)}
-          {event.dodged ? (
-            <>
-              <span className="text-white/50">{getName(event.target)}</span>{" "}
-              <span className="text-site-red">уклонился. </span>
-            </>
-          ) : null}
-          {event.hit_chance_failed ? (
-            <>
-              {" "}
-              <span className="text-white/50">{getName(event.source)}</span>{" "}
-              <span className="text-site-red">промахнулся. </span>
-            </>
-          ) : (
-            <>
-              {" "}
-              <span className="text-white/50">{getName(event.source)}</span>{" "}
-              <span className="text-site-blue">попал.</span>
-            </>
-          )}
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.source)}
+          <span className="text-white/40">→</span>
+          {getName(event.target)}
+          {damageIcon(event.damage_type)}
+          <span className="font-medium text-site-red">−{finalDmg}</span>
           {event.critical && (
-            <>
-              {bold("С шансом ", critChance, false, true)}
-              {bold(
-                "нанесен критический урон (множитель) ",
-                critDamage,
-                true,
-                true,
-              )}
-            </>
+            <span className="text-gold text-[11px] uppercase font-medium">
+              крит
+            </span>
           )}
-          {!!event.resist_pct && bold("Сопротивление (%) ", event.resist_pct)}
-          {bold("Финальный урон: ", event.final)}
-        </>
+        </span>
       );
     }
 
     if (event.event === "resource_spend") {
-      if (event.energy === 0 && event.mana === 0 && event.stamina === 0) {
-        return null;
-      }
-
+      // Stamina is not shown in battle (FEAT-143). Muted, de-emphasized line.
+      const parts: string[] = [];
+      if (event.energy) parts.push(`${event.energy} энергии`);
+      if (event.mana) parts.push(`${event.mana} маны`);
+      if (parts.length === 0) return null;
       return (
-        <>
-          {getName(event.who)} {action}
-          {!!event.energy && bold("Энергия: ", event.energy)}
-          {!!event.mana && bold("Мана: ", event.mana)}
-          {!!event.stamina && bold("Выносливость: ", event.stamina)}
-        </>
+        <span className="text-white/35 text-[11px]">
+          Расход: {parts.join(", ")}
+        </span>
       );
     }
 
+    // Unknown event — keep it minimal instead of dumping raw fields.
     return (
-      <>
-        {getName(event.who) || getName(event.source)} {action}{" "}
+      <span className="flex flex-wrap items-center gap-1">
+        {getName(event.who) || getName(event.source)}
+        <span className="text-white/60">
+          {BATTLE_EVENTS_TRANSLATE[
+            event.event as keyof typeof BATTLE_EVENTS_TRANSLATE
+          ] || event.event}
+        </span>
         {getName(event.target)}
-        {Object.entries(event).map(([key, value]) => {
-          if (["event", "who", "source", "target"].includes(key)) return null;
-          return bold(
-            key,
-            typeof value === "object" ? JSON.stringify(value) : value,
-          );
-        })}
-      </>
-    );
-  };
-
-  const getEffectData = (effectName: string): ReactNode => {
-    const isStatMod = effectName.includes("StatModifier");
-    const isResist = effectName.includes("Resist");
-    const isBuff = effectName.includes("Buff");
-
-    const title = isStatMod
-      ? "Модификатор"
-      : getDamageLabel(effectName.replace(/^(Resist|Buff): /, ""));
-
-    return (
-      <span>
-        {isBuff && `Изменение урона (${title})`}
-        {isResist && `Изменение защиты (${title})`}
-        {isStatMod && `${title}`}
       </span>
     );
   };
 
   return (
     <div className="w-full flex flex-col gap-[15px] font-medium">
-      {/* Battle bar top */}
-      <div className="p-5 flex flex-col items-center gap-2.5 gray-bg min-h-[160px]">
-        <CountdownTimer startMilliseconds={turn.endsAt} />
+      {/* Turn timer — its own small block on top (FEAT-143) */}
+      <div className="flex justify-center">
+        <div className="gray-bg px-6 py-1.5 text-lg font-medium tracking-wide">
+          <CountdownTimer startMilliseconds={turn.endsAt} />
+        </div>
+      </div>
+
+      {/* Current actor + live turn queue + skill slots */}
+      <div className="p-5 flex flex-col items-center gap-3 gray-bg min-h-[160px]">
         <h3 className="gold-text text-lg font-medium uppercase">{turn.currentCharacterParticipant.characterName}</h3>
         {isOpponentTurn && (
-          <p className="text-base uppercase">Ход противника</p>
+          <p className="text-sm uppercase text-white/70">Ход противника</p>
         )}
+
+        {/* Turn queue — who acts next, in order, updating live (FEAT-143) */}
+        {turnQueue.length > 0 && (
+          <div className="w-full flex items-center justify-center gap-1 overflow-x-auto gold-scrollbar py-1">
+            {turnQueue.map((pid, i) => {
+              const p = participantById.get(pid);
+              const isCurrent = pid === runtimeData.current_actor;
+              return (
+                <div key={`${pid}-${i}`} className="flex items-center gap-1">
+                  <AvatarCircle
+                    avatar={p?.avatar}
+                    name={p?.name}
+                    size={isCurrent ? 44 : 34}
+                    active={isCurrent}
+                    side={sideOf(pid)}
+                    title={p?.name}
+                  />
+                  {i < turnQueue.length - 1 && (
+                    <span className="text-white/25 text-xs">{"›"}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <div className="flex gap-[18px] items-center flex-wrap justify-center">
           {SKILLS_BTNS.map((btn) => (
             <ItemSkillCircle
@@ -494,8 +656,11 @@ const BattlePageBar = ({
                   [SKILLS_KEYS[btn.type as keyof typeof SKILLS_KEYS]]: null,
                 }));
               }}
+              onOpen={() =>
+                setPickerType(btn.type as "attack" | "defense" | "support")
+              }
               key={btn.type}
-              isClosed={isOpponentTurn}
+              isClosed={isOpponentTurn || controlled}
               type={btn.type}
             />
           ))}
@@ -516,8 +681,9 @@ const BattlePageBar = ({
                 [SKILLS_KEYS.item]: null,
               }));
             }}
+            onOpen={() => setPickerType("item")}
             type={SKILLS_KEYS.item}
-            isClosed={isOpponentTurn}
+            isClosed={isOpponentTurn || controlled}
           />
           {!isOpponentTurn && Object.values(turnData).some(Boolean) && (
             <button
@@ -602,62 +768,61 @@ const BattlePageBar = ({
         </button>
       </div>
 
-      {/* Turn history */}
+      {/* Turn history — flat circles carrying the acting avatar (FEAT-143) */}
       <div
-        className={`gray-bg overflow-hidden flex flex-col gap-5 px-[30px] py-[35px] uppercase transition-all duration-300 ease-in-out ${
-          isAllTurnsOpen ? "max-h-[286px]" : "max-h-[140px]"
+        className={`gray-bg overflow-hidden flex flex-col gap-4 px-[30px] py-[25px] transition-all duration-300 ease-in-out ${
+          isAllTurnsOpen ? "max-h-[320px]" : "max-h-[150px]"
         }`}
       >
-        <div className="flex justify-between items-center">
+        <div className="flex justify-between items-center uppercase">
           <span>История ходов</span>
-          {turns.length > 5 && (
-            <button
-              onClick={toggleAllTurnsVisibility}
-              className="text-white hover:text-site-blue transition-colors duration-200 ease-site"
-            >
-              {isAllTurnsOpen ? "Скрыть" : "Показать все"}
-            </button>
-          )}
+          <div className="flex items-center gap-3 normal-case">
+            {showJumpToLatest && (
+              <button
+                onClick={jumpToLatest}
+                className="text-site-blue hover:text-gold transition-colors duration-200 ease-site"
+              >
+                К последнему
+              </button>
+            )}
+            {totalTurns > 10 && (
+              <button
+                onClick={toggleAllTurnsVisibility}
+                className="uppercase text-white hover:text-site-blue transition-colors duration-200 ease-site"
+              >
+                {isAllTurnsOpen ? "Скрыть" : "Показать все"}
+              </button>
+            )}
+          </div>
         </div>
-        {turns.length > 0 && (
+        {totalTurns > 0 && (
           <ul
-            className={`grid grid-cols-5 gap-x-2.5 gap-y-10 items-center justify-items-center ${
+            className={`flex flex-wrap gap-x-3 gap-y-4 items-center pr-1 ${
               isAllTurnsOpen ? "overflow-y-auto overflow-x-hidden gold-scrollbar" : ""
             }`}
           >
-            {turns.map((turnPair, index) => (
-              <li
-                key={index}
-                className="relative flex w-full justify-start items-start gap-[5px]"
-              >
-                {turnPair.pair.map((turnEntry, i) => (
-                  <div
-                    key={i}
-                    className={`
-                      flex items-center justify-center text-sm font-medium relative
-                      w-[30px] h-[30px] rounded-full
-                      ${turnEntry.waiting
-                        ? "bg-white/40 cursor-default"
-                        : turnEntry.my
-                          ? "bg-white text-site-blue cursor-pointer"
-                          : "bg-site-blue cursor-pointer"
-                      }
-                      ${turnEntry.turnIndex === activeTurnIndex
-                        ? "gold-outline gold-outline-thick"
-                        : ""
-                      }
-                    `}
-                    onClick={() => {
-                      if (!turnEntry.waiting) {
-                        setActiveTurnIndex(turnEntry.turnIndex);
-                      }
-                    }}
-                  >
-                    {turnEntry.turnIndex + 1}
-                  </div>
-                ))}
-              </li>
-            ))}
+            {Array.from({ length: totalTurns }, (_, idx) => {
+              const order = runtimeData.turn_order ?? [];
+              const actorPid = order.length
+                ? order[idx % order.length]
+                : undefined;
+              const p =
+                actorPid != null ? participantById.get(actorPid) : undefined;
+              return (
+                <li key={idx}>
+                  <AvatarCircle
+                    avatar={p?.avatar}
+                    name={p?.name}
+                    size={34}
+                    badge={idx + 1}
+                    active={idx === activeTurnIndex}
+                    side={actorPid != null ? sideOf(actorPid) : undefined}
+                    onClick={() => selectTurn(idx)}
+                    title={`Ход ${idx + 1}${p?.name ? ` · ${p.name}` : ""}`}
+                  />
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -770,8 +935,66 @@ const BattlePageBar = ({
             : "hover:gold-text"
         }`}
       >
-        Передать ход
+        {controlled ? "Пропустить ход" : "Передать ход"}
       </button>
+
+      {/* Skill / item picker (FEAT-143) — opened from a slot */}
+      {pickerType &&
+        !isOpponentTurn &&
+        (() => {
+          const allSkills = (myData.skills as BattleSkill[] | undefined) ?? [];
+          const allItems = (myData.items as BattleItem[] | undefined) ?? [];
+          const isItem = pickerType === "item";
+          const typeSkills = isItem
+            ? []
+            : allSkills.filter(
+                (s) =>
+                  (s.skill_type ?? s.skill?.skill_type ?? "").toLowerCase() ===
+                  pickerType,
+              );
+          const pid = myData.participant_id;
+          const cooldowns =
+            pid != null
+              ? ((
+                  runtimeData.participants[pid] as {
+                    cooldowns?: Record<string, number>;
+                  }
+                )?.cooldowns ?? {})
+              : {};
+          const slotKey = isItem
+            ? SKILLS_KEYS.item
+            : SKILLS_KEYS[pickerType as keyof typeof SKILLS_KEYS];
+          const current = turnData[slotKey];
+          const selectedId = isItem
+            ? ((current as { item_id?: number } | null)?.item_id ?? null)
+            : ((current as { id?: number } | null)?.id ?? null);
+          return (
+            <SkillPicker
+              type={pickerType}
+              skills={typeSkills}
+              items={allItems}
+              cooldowns={cooldowns}
+              characterId={myData.character_id ?? 0}
+              selectedId={selectedId}
+              onSelectSkill={(skill) =>
+                setTurnData((prev) => ({
+                  ...prev,
+                  [slotKey]: skill as unknown as SkillSlot,
+                }))
+              }
+              onSelectItem={(item) =>
+                setTurnData((prev) => ({
+                  ...prev,
+                  [SKILLS_KEYS.item]: item as unknown as SkillSlot,
+                }))
+              }
+              onClear={() =>
+                setTurnData((prev) => ({ ...prev, [slotKey]: null }))
+              }
+              onClose={() => setPickerType(null)}
+            />
+          );
+        })()}
     </div>
   );
 };
