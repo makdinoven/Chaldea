@@ -28,14 +28,28 @@ const STAT_ICONS: Record<string, string> = {
 };
 
 const DerivedStatsSection = ({ attributes, classId, mainWeaponDamageModifier }: DerivedStatsSectionProps) => {
-  // Calculate damage based on class main attribute + weapon damage modifier
+  // Damage shown exactly as the battle engine computes the base: class main
+  // attribute + the flat `damage` stat (where perk/item bonuses live) + weapon
+  // modifier. Previously the flat `damage` was dropped, so perk damage bonuses
+  // were invisible here while battle used them (FEAT-143).
   const getDisplayDamage = (): number => {
-    if (classId == null) return attributes.damage ?? 0;
-    const mainAttrKey = CLASS_MAIN_ATTRIBUTE[classId];
-    if (!mainAttrKey) return attributes.damage ?? 0;
-    const mainAttrValue = (attributes[mainAttrKey as keyof CharacterAttributes] as number) ?? 0;
-    return mainAttrValue + mainWeaponDamageModifier;
+    const damageBonus = Number(attributes.damage ?? 0);
+    const mainAttrKey =
+      (classId != null && CLASS_MAIN_ATTRIBUTE[classId]) || "strength";
+    const mainAttrValue = Number(
+      attributes[mainAttrKey as keyof CharacterAttributes] ?? 0,
+    );
+    return mainAttrValue + damageBonus + mainWeaponDamageModifier;
   };
+
+  // Initiative (FEAT-143): agility ×1.0 + (strength + intelligence) ×0.75.
+  // Drives turn order in battle after the initiator.
+  const agility = Number(attributes.agility ?? 0);
+  const strength = Number(attributes.strength ?? 0);
+  const intelligence = Number(attributes.intelligence ?? 0);
+  const initiative = agility * 1.0 + (strength + intelligence) * 0.75;
+  const initiativeText =
+    initiative % 1 === 0 ? String(initiative) : initiative.toFixed(2);
 
   return (
     <div>
@@ -68,6 +82,20 @@ const DerivedStatsSection = ({ attributes, classId, mainWeaponDamageModifier }: 
             </div>
           );
         })}
+      </div>
+
+      {/* Initiative — highlighted, drives the battle turn order (FEAT-143) */}
+      <div className="mt-3 flex items-center gap-2 py-2 px-3 rounded-lg bg-gold/5 border border-gold/20">
+        <span className="text-base w-6 text-center flex-shrink-0">{'🏃'}</span>
+        <span className="text-gold/90 text-sm flex-1 min-w-0 truncate font-medium">
+          Инициатива
+        </span>
+        <span
+          className="text-gold text-sm font-medium font-mono flex-shrink-0"
+          title="Ловкость ×1.0 + (Сила + Интеллект) ×0.75 — определяет очередь хода в бою"
+        >
+          {initiativeText}
+        </span>
       </div>
     </div>
   );

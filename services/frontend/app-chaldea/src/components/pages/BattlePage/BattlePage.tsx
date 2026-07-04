@@ -67,6 +67,7 @@ interface RuntimeState {
   paused_reason?: string | null;
   rewards?: BattleRewards | null;
   active_effects?: Record<number, EffectLike[]>;
+  first_cycle?: boolean;
 }
 
 interface CharacterData {
@@ -168,7 +169,7 @@ const BattlePage = () => {
   // Navigate back: to dungeon session if in dungeon, otherwise to location
   const navigateAfterBattle = useCallback(() => {
     const charId = character?.id;
-    const goToLocation = () => navigate(`/locations/${locationId}`);
+    const goToLocation = () => navigate(`/location/${locationId}`);
     if (!charId) {
       goToLocation();
       return;
@@ -599,8 +600,8 @@ const BattlePage = () => {
 
   const toggleAutoBattle = async () => {
     if (isAutoBattleOn) {
-      await postAutoBattleOff();
-      setIsAutoBattleOn(false);
+      const ok = await postAutoBattleOff();
+      if (ok) setIsAutoBattleOn(false);
     } else {
       const success = await postAutoBattleOn();
       if (success) {
@@ -622,13 +623,16 @@ const BattlePage = () => {
     }
   };
 
-  const postAutoBattleOff = async () => {
+  const postAutoBattleOff = async (): Promise<boolean> => {
     try {
       await axios.post(`${BASE_URL_AUTOBATTLES}/unregister`, {
         participant_id: myData.participant_id,
       });
-    } catch {
-      // silently handled — autobattle is optional
+      return true;
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      toast.error(err?.response?.data?.detail || "Не удалось выключить автобой");
+      return false;
     }
   };
 
@@ -696,6 +700,16 @@ const BattlePage = () => {
           <div className="relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center bg-site-bg border border-gold-dark/50">
             <p className="text-gold text-sm sm:text-base font-medium">
               Бой приостановлен — рассматриваются заявки на присоединение
+            </p>
+          </div>
+        )}
+
+        {/* First-cycle banner — only one skill type per turn until the round
+            comes back to the initiator */}
+        {runtimeData.first_cycle && isMyTurn && !myControl.fullSkip && (
+          <div className="relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center bg-site-bg border border-gold-dark/50">
+            <p className="text-gold text-sm sm:text-base font-medium">
+              Первый круг — можно использовать только один тип навыка за ход
             </p>
           </div>
         )}
@@ -791,11 +805,11 @@ const BattlePage = () => {
                   className={`relative rounded-card p-2 sm:p-3 transition-all duration-300 ${
                     selectable ? "cursor-pointer hover:opacity-90" : ""
                   } ${
+                    isActingNow ? "bg-gold/10 gold-outline" : "bg-white/[0.03]"
+                  } ${
                     isTarget
                       ? "ring-2 ring-site-red shadow-[0_0_16px_rgba(239,68,68,0.45)]"
-                      : isActingNow
-                        ? "bg-gold/10 gold-outline"
-                        : "bg-white/[0.03]"
+                      : ""
                   } ${isDead ? "opacity-40 grayscale" : ""}`}
                 >
                   {isTarget && (

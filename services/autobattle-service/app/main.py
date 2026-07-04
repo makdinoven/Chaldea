@@ -162,6 +162,8 @@ def unregister(participant_id: int = Body(..., embed=True), user: UserRead = Dep
     ALLOWED.discard(participant_id)
     OWNER.pop(participant_id, None)
     SPEED.pop(participant_id, None)
+    log.info("unregister pid=%s by user=%s — ALLOWED now=%s",
+             participant_id, user.id, list(ALLOWED))
     return {"ok": True, "allowed": list(ALLOWED)}
 
 
@@ -283,11 +285,20 @@ MAX_RETRIES = 3
 
 async def handle_turn(bid: int, pid: int) -> None:
     """Один авто-ход с retry логикой."""
+    # Autobattle may have been switched off between scheduling and running this
+    # task (esp. in a tight loop) — bail out so a stopped participant never acts.
+    if pid not in ALLOWED:
+        return
     if SPEED.get(pid) == "slow":
         await asyncio.sleep(settings.AUTOBATTLE_SLOW_DELAY)
     for attempt in range(MAX_RETRIES + 1):
         try:
+            # Re-check after every await — unregister could have landed meanwhile.
+            if pid not in ALLOWED:
+                return
             ctx = await get_battle_state(bid)
+            if pid not in ALLOWED:
+                return
             if ctx["runtime"]["current_actor"] != pid:
                 return                              # чужой ход (или уже обработан)
 

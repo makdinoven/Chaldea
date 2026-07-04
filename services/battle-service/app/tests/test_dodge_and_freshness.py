@@ -39,6 +39,7 @@ _REAL_apply = buffs.apply_new_effects
 _REAL_tick = buffs.tick_periodic_effects
 _REAL_aggregate = buffs.aggregate_modifiers
 _REAL_control = buffs.evaluate_control
+_REAL_limit = buffs.first_cycle_limit_skills
 
 assert not isinstance(_REAL_compute, MagicMock)
 assert not isinstance(_REAL_decrement, MagicMock)
@@ -257,3 +258,19 @@ class TestControlEffects:
     def test_multiple_blocks_accumulate(self):
         _, blocked = _REAL_control([_eff("Knockdown", "attack"), _eff("Windburn", "defense")])
         assert blocked == {"attack", "defense"}
+
+
+# --- First cycle: one skill type per turn ----------------------------------
+
+class TestFirstCycleLimit:
+    def test_keeps_single_skill(self):
+        assert _REAL_limit(None, 5, None) == (None, 5, None)
+
+    def test_priority_attack_over_others(self):
+        assert _REAL_limit(1, 2, 3) == (1, None, None)
+
+    def test_priority_defense_over_support(self):
+        assert _REAL_limit(None, 2, 3) == (None, 2, None)
+
+    def test_nothing_selected(self):
+        assert _REAL_limit(None, None, None) == (None, None, None)

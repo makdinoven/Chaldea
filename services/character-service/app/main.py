@@ -1334,6 +1334,17 @@ async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
         except Exception as e:
             logger.warning(f"Ошибка при оценке титулов после повышения уровня для персонажа {character_id}: {e}")
 
+        # Re-evaluate perks — leveling up can meet character_level conditions
+        # (FEAT-143 dynamic perks). Non-fatal.
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{settings.ATTRIBUTES_SERVICE_URL}internal/{character_id}/reconcile-perks",
+                    timeout=5.0,
+                )
+        except Exception as e:
+            logger.warning(f"Ошибка reconcile-perks после левелапа для персонажа {character_id}: {e}")
+
     # Получаем атрибуты персонажа из attributes-service
     try:
         async with httpx.AsyncClient() as client:

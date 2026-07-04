@@ -523,11 +523,16 @@ def build_perk_modifiers_dict(perk, negative: bool = False) -> dict:
     return result
 
 
-def _apply_modifiers_internal(db: Session, character_id: int, modifiers: dict):
+def _apply_modifiers_internal(db: Session, character_id: int, modifiers: dict, propagate_derived: bool = True):
     """
     Apply modifiers to character attributes. Internal version that works
     directly with the DB session instead of making an HTTP call.
     Same logic as the apply_modifiers endpoint in main.py.
+
+    propagate_derived: when True (default) a primary-attribute bonus also grants
+    its derived effects (resists / dodge / crit / res_effects). Set False to add
+    ONLY the raw values — used by the migration to undo legacy perk bonuses that
+    were applied before derived propagation existed.
     """
     from constants import HEALTH_MULTIPLIER, MANA_MULTIPLIER, ENERGY_MULTIPLIER, STAMINA_MULTIPLIER
 
@@ -583,6 +588,33 @@ def _apply_modifiers_internal(db: Session, character_id: int, modifiers: dict):
         if key in modifiers and modifiers[key] != 0:
             old_val = getattr(attr, key, 0)
             setattr(attr, key, old_val + modifiers[key])
+
+    # Propagate the DERIVED effects of primary-attribute bonuses, exactly like
+    # the stat-upgrade endpoint — so a perk granting +N strength also grants the
+    # physical resistances (etc.) those points normally give, not just the raw
+    # stat. Modifier signs carry through, so perk revoke (negative modifiers)
+    # reverses these cleanly too.
+    if propagate_derived:
+        b = STAT_BONUS_PER_POINT
+        str_delta = modifiers.get("strength", 0)
+        if str_delta:
+            for field in PHYSICAL_RESISTANCE_FIELDS:
+                setattr(attr, field, getattr(attr, field) + str_delta * b)
+        int_delta = modifiers.get("intelligence", 0)
+        if int_delta:
+            for field in MAGICAL_RESISTANCE_FIELDS:
+                setattr(attr, field, getattr(attr, field) + int_delta * b)
+        agi_delta = modifiers.get("agility", 0)
+        if agi_delta:
+            attr.dodge += agi_delta * b
+        end_delta = modifiers.get("endurance", 0)
+        if end_delta:
+            attr.res_effects += end_delta * ENDURANCE_RES_EFFECTS_MULTIPLIER
+        luck_delta = modifiers.get("luck", 0)
+        if luck_delta:
+            attr.dodge += luck_delta * b
+            attr.critical_hit_chance += luck_delta * b
+            attr.res_effects += luck_delta * b
 
     db.flush()
     return True
@@ -655,6 +687,15 @@ def get_character_perks(db: Session, character_id: int):
 
             if cond_type == "cumulative_stat" and stat_name:
                 current_value = cumulative_dict.get(stat_name, 0)
+                # Freeze the shown progress at the threshold (e.g. 1000/1000)
+                # once reached — the underlying cumulative stat keeps growing, so
+                # a different perk with a higher threshold still counts up on its
+                # own required value (FEAT-143 bug 2).
+                if required_value is not None:
+                    try:
+                        current_value = min(current_value, required_value)
+                    except TypeError:
+                        pass
                 progress[stat_name] = {
                     "current": current_value,
                     "required": required_value,

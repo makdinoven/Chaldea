@@ -354,6 +354,21 @@ def _track_cumulative_stats(character_id: int, increments: dict, set_max: dict =
         logger.warning(f"Cumulative stats tracking error for char {character_id}: {e}")
 
 
+def _reconcile_perks(character_id: int):
+    """
+    Fire-and-forget: re-evaluate perks after a stat-affecting change (equip /
+    unequip) so attribute-condition perks activate/deactivate (FEAT-143).
+    Non-fatal — errors are logged but do not affect the main operation.
+    """
+    try:
+        url = f"{settings.ATTRIBUTES_SERVICE_URL}internal/{character_id}/reconcile-perks"
+        resp = httpx.post(url, timeout=5.0)
+        if resp.status_code != 200:
+            logger.warning(f"Perk reconcile failed for char {character_id}: {resp.text}")
+    except Exception as e:
+        logger.warning(f"Perk reconcile error for char {character_id}: {e}")
+
+
 async def recover_in_attributes_service(character_id: int, recovery: dict):
     """
     Для восстановления ресурсов (health_recovery, mana_recovery и т.д.).
@@ -505,8 +520,15 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
     crud.recalc_fast_slots(db, character_id)
     # ---------------------------------------
 
-    # Track cumulative stats for equip (non-fatal)
-    _track_cumulative_stats(character_id, {"items_equipped": 1})
+    # Track cumulative stats for equip (non-fatal). Only real equipment slots
+    # count toward "items equipped" — quick/fast slots (potions/consumables) must
+    # NOT (FEAT-143 bug 4). Re-equip abuse of the same item is a known limitation
+    # of a cumulative counter (needs a distinct/current-count redesign).
+    if not str(getattr(slot, "slot_type", "")).startswith("fast_slot_"):
+        _track_cumulative_stats(character_id, {"items_equipped": 1})
+
+    # Re-evaluate perks — equipping changed attributes (FEAT-143 dynamic perks).
+    _reconcile_perks(character_id)
 
     # Trigger title evaluation after equip (non-fatal)
     try:
@@ -605,6 +627,10 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
 
     # 5) После коммита пересчитываем быстрые слоты
     crud.recalc_fast_slots(db, character_id)
+
+    # Re-evaluate perks — unequipping changed attributes; attribute-condition
+    # perks may need to deactivate (FEAT-143 dynamic perks).
+    _reconcile_perks(character_id)
 
     # Trigger title evaluation after unequip (non-fatal)
     try:

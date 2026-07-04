@@ -38,10 +38,11 @@ from battle_engine import decrement_cooldowns, set_cooldown
 from inventory_client import get_fast_slots, consume_item, get_equipment_durability, update_durability
 from character_client import get_character_profile
 from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, build_percent_damage_buffs, \
-    build_percent_resist_buffs, _normalize_effect, tick_periodic_effects, evaluate_control
+    build_percent_resist_buffs, _normalize_effect, tick_periodic_effects, evaluate_control, \
+    first_cycle_limit_skills
 from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, fetch_weapons, compute_damage_with_rolls, roll_chance, roll_dodge
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
-    get_cached_snapshot, KEY_BATTLE_TURNS, state_key
+    get_cached_snapshot, KEY_BATTLE_TURNS, state_key, compute_initiative
 from config import settings
 from mongo_helpers import save_snapshot, load_snapshot
 from tasks import save_log
@@ -577,8 +578,10 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id):
             "max_stamina": snap["attributes"]["max_stamina"],
             "fast_slots": snap["fast_slots"],
             "equipment_durability": snap.get("equipment_durability", {}),
-            # agility (ловкость) drives the hybrid turn order (FEAT-143)
+            # Initiative + agility drive the turn order (FEAT-143). Agility is
+            # kept for tie-breaks; initiative is the weighted stat sum.
             "agility": snap["attributes"].get("agility", 0),
+            "initiative": compute_initiative(snap["attributes"]),
         })
 
     await save_snapshot(battle_obj.id, participants_info)
@@ -727,6 +730,7 @@ async def get_state_internal(battle_id: int):
         "next_actor": next_pid_after(state["next_actor"], state["turn_order"], state["participants"]),
         "first_actor": state["first_actor"],
         "turn_order": state["turn_order"],
+        "first_cycle": state.get("first_cycle", False),
         "total_turns": state["total_turns"],
         "last_turn": state["last_turn"],
         "participants": {
@@ -816,6 +820,7 @@ async def get_state(
                "next_actor": next_pid_after(state["next_actor"], state["turn_order"], state["participants"]),
                "first_actor": state["first_actor"],
                "turn_order": state["turn_order"],
+        "first_cycle": state.get("first_cycle", False),
                "total_turns": state["total_turns"],
                "last_turn": state["last_turn"],
                "participants": {
@@ -900,6 +905,7 @@ async def spectate_battle(
         "next_actor": next_pid_after(state["next_actor"], state["turn_order"], state["participants"]),
         "first_actor": state["first_actor"],
         "turn_order": state["turn_order"],
+        "first_cycle": state.get("first_cycle", False),
         "total_turns": state["total_turns"],
         "last_turn": state["last_turn"],
         "participants": {
@@ -1188,6 +1194,28 @@ async def _make_action_core(
                     "who": request.participant_id,
                     "skill_type": _bt,
                 })
+
+    # --- First cycle (FEAT-143): one skill type per turn until the turn comes
+    # back to the initiator. Unlock the moment the initiator starts their 2nd turn.
+    _first_actor = battle_state.get("first_actor")
+    if request.participant_id == _first_actor:
+        if battle_state.get("initiator_acted_once"):
+            battle_state["first_cycle"] = False  # 2nd initiator turn → full kit
+        else:
+            battle_state["initiator_acted_once"] = True  # 1st initiator turn
+    if battle_state.get("first_cycle", False):
+        # Only ONE of attack/defense/support this turn (items are not restricted).
+        # The frontend enforces this too; this is the safety net for malformed /
+        # NPC requests.
+        (
+            request.skills.attack_skill_id,
+            request.skills.defense_skill_id,
+            request.skills.support_skill_id,
+        ) = first_cycle_limit_skills(
+            request.skills.attack_skill_id,
+            request.skills.defense_skill_id,
+            request.skills.support_skill_id,
+        )
 
     # Record which skills the actor used this turn (FEAT-143 log readability).
     # The frontend resolves skill_id -> name from the battle snapshot, so we only
@@ -2310,8 +2338,10 @@ async def respond_to_pvp_invitation(
             "max_stamina": snap["attributes"]["max_stamina"],
             "fast_slots": snap["fast_slots"],
             "equipment_durability": snap.get("equipment_durability", {}),
-            # agility (ловкость) drives the hybrid turn order (FEAT-143)
+            # Initiative + agility drive the turn order (FEAT-143). Agility is
+            # kept for tie-breaks; initiative is the weighted stat sum.
             "agility": snap["attributes"].get("agility", 0),
+            "initiative": compute_initiative(snap["attributes"]),
         })
 
     await save_snapshot(battle_obj.id, participants_info)
@@ -2334,6 +2364,7 @@ async def respond_to_pvp_invitation(
         ws_type="pvp_battle_start",
         ws_data={
             "battle_id": battle_obj.id,
+            "location_id": pvp_location_id,
             "opponent_name": target_name,
             "battle_type": inv_battle_type,
         },
@@ -2345,6 +2376,7 @@ async def respond_to_pvp_invitation(
         ws_type="pvp_battle_start",
         ws_data={
             "battle_id": battle_obj.id,
+            "location_id": pvp_location_id,
             "opponent_name": initiator_name,
             "battle_type": inv_battle_type,
         },
@@ -2603,8 +2635,10 @@ async def pvp_attack(
             "max_stamina": snap["attributes"]["max_stamina"],
             "fast_slots": snap["fast_slots"],
             "equipment_durability": snap.get("equipment_durability", {}),
-            # agility (ловкость) drives the hybrid turn order (FEAT-143)
+            # Initiative + agility drive the turn order (FEAT-143). Agility is
+            # kept for tie-breaks; initiative is the weighted stat sum.
             "agility": snap["attributes"].get("agility", 0),
+            "initiative": compute_initiative(snap["attributes"]),
         })
 
     await save_snapshot(battle_obj.id, participants_info)
@@ -2627,6 +2661,7 @@ async def pvp_attack(
         ws_type="pvp_battle_start",
         ws_data={
             "battle_id": battle_obj.id,
+            "location_id": attack_location_id,
             "attacker_name": attacker_name,
             "battle_type": "pvp_attack",
         },
@@ -2866,6 +2901,7 @@ async def admin_get_battle_state(
             "next_actor": next_pid_after(state["next_actor"], state["turn_order"], state["participants"]),
             "first_actor": state["first_actor"],
             "turn_order": state["turn_order"],
+        "first_cycle": state.get("first_cycle", False),
             "total_turns": state.get("total_turns", 0),
             "last_turn": state.get("last_turn", 0),
             "participants": {
@@ -3628,6 +3664,7 @@ def _build_runtime(state: dict) -> dict:
         "next_actor": next_pid_after(state["next_actor"], state["turn_order"], state["participants"]),
         "first_actor": state["first_actor"],
         "turn_order": state["turn_order"],
+        "first_cycle": state.get("first_cycle", False),
         "total_turns": state.get("total_turns", 0),
         "last_turn": state.get("last_turn", 0),
         "participants": {

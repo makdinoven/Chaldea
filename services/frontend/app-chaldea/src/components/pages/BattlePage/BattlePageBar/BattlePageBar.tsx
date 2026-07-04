@@ -47,6 +47,7 @@ interface RuntimeState {
   total_turns: number;
   first_actor: number;
   deadline_at: string;
+  first_cycle?: boolean;
 }
 
 interface ResourceEntry {
@@ -283,6 +284,16 @@ const BattlePageBar = ({
   // The viewer is stunned/paralysed this turn — lock the skill slots; the turn
   // can still be submitted (it just passes) so relabel the button.
   const controlled = Boolean(controlFullSkip);
+  // First cycle (FEAT-143): only one skill type allowed. Once one is chosen,
+  // the other skill slots lock (items stay free).
+  const firstCycle = runtimeData.first_cycle === true;
+  const selectedSkillKey = [
+    SKILLS_KEYS.attack,
+    SKILLS_KEYS.defense,
+    SKILLS_KEYS.support,
+  ].find((k) => turnData[k]);
+  const skillLockedByCycle = (slotType: string) =>
+    firstCycle && selectedSkillKey != null && selectedSkillKey !== slotType;
   const [activeTurnIndex, setActiveTurnIndex] = useState(
     runtimeData.turn_number - 1,
   );
@@ -660,7 +671,9 @@ const BattlePageBar = ({
                 setPickerType(btn.type as "attack" | "defense" | "support")
               }
               key={btn.type}
-              isClosed={isOpponentTurn || controlled}
+              isClosed={
+                isOpponentTurn || controlled || skillLockedByCycle(btn.type)
+              }
               type={btn.type}
             />
           ))}

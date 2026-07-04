@@ -463,6 +463,14 @@ async def upgrade_attributes(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to upgrade attributes")
 
+    # Re-evaluate perks — upgrading stats can meet/unmeet attribute conditions
+    # (FEAT-143 dynamic perks). Non-fatal.
+    try:
+        from perk_evaluator import reconcile_perks
+        reconcile_perks(db, character_id)
+    except Exception as e:
+        logger.error(f"Ошибка reconcile-perks после апгрейда {character_id}: {e}")
+
     updated_attributes = {
         "strength": attr.strength,
         "agility": attr.agility,
@@ -1101,11 +1109,12 @@ def increment_cumulative_stats(
         logger.error(f"Ошибка при обновлении кумулятивной статистики: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при обновлении статистики")
 
-    # Evaluate perks after stat update — auto-unlock if conditions met
+    # Reconcile perks after stat update — activate/deactivate by current
+    # conditions (FEAT-143 dynamic perks).
     newly_unlocked = []
     try:
-        from perk_evaluator import evaluate_perks
-        newly_unlocked = evaluate_perks(db, payload.character_id)
+        from perk_evaluator import reconcile_perks
+        newly_unlocked = reconcile_perks(db, payload.character_id).get("granted", [])
     except Exception as e:
         logger.error(f"Ошибка при проверке перков для персонажа {payload.character_id}: {e}")
         # Non-fatal: stats are already updated, perks will be checked next time
@@ -1121,6 +1130,20 @@ def increment_cumulative_stats(
         logger.error(f"Title evaluation error for character {payload.character_id}: {e}")
 
     return {"detail": "Stats updated", "newly_unlocked_perks": newly_unlocked}
+
+
+@router.post("/internal/{character_id}/reconcile-perks")
+def reconcile_perks_endpoint(character_id: int, db: Session = Depends(get_db)):
+    """Internal (service-to-service): re-evaluate all perks for a character —
+    activate those whose conditions now hold, deactivate those that no longer
+    do (FEAT-143 dynamic perks). Called on gear change, level-up, etc."""
+    try:
+        from perk_evaluator import reconcile_perks
+        result = reconcile_perks(db, character_id)
+        return {"detail": "Perks reconciled", **result}
+    except Exception as e:
+        logger.error(f"Ошибка reconcile-perks для персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Perk reconcile failed")
 
 
 app.include_router(router)

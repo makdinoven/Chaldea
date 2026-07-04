@@ -187,6 +187,7 @@ const useWebSocket = (): UseWebSocketReturn => {
             case 'pvp_battle_start': {
               const pvpData = parsed.data as {
                 battle_id: number;
+                location_id?: number;
                 attacker_name?: string;
                 battle_type?: string;
                 notification_id?: number;
@@ -206,7 +207,11 @@ const useWebSocket = (): UseWebSocketReturn => {
                 message: pvpMessage,
                 status: 'unread',
                 created_at: new Date().toISOString(),
-                link: `/battle/${pvpData.battle_id}`,
+                // Route needs both ids (location/:locationId/battle/:battleId);
+                // fall back gracefully if location_id is somehow absent.
+                link: pvpData.location_id != null
+                  ? `/location/${pvpData.location_id}/battle/${pvpData.battle_id}`
+                  : undefined,
               } as NotificationItem));
               break;
             }

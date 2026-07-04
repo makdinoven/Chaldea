@@ -868,3 +868,160 @@ class TestSecurityPerks:
         resp = admin_client.post("/attributes/admin/perks", json=payload)
         # Should accept the input (sanitization is frontend concern) or reject it, not 500
         assert resp.status_code in (201, 400)
+
+
+class TestPerkStatDerivedPropagation:
+    """FEAT-143: a perk that grants a primary attribute must also grant that
+    attribute's derived effects (resists / dodge / crit / res_effects), exactly
+    like a normal stat upgrade — and reverse them on revoke."""
+
+    def _b(self):
+        from constants import STAT_BONUS_PER_POINT
+        return STAT_BONUS_PER_POINT
+
+    def test_strength_propagates_to_physical_resists(self, db_session):
+        from constants import PHYSICAL_RESISTANCE_FIELDS
+        attr = _create_attributes(db_session, character_id=201, strength=10)
+        before = {f: getattr(attr, f) for f in PHYSICAL_RESISTANCE_FIELDS}
+        crud._apply_modifiers_internal(db_session, 201, {"strength": 5})
+        db_session.refresh(attr)
+        assert attr.strength == 15
+        for f in PHYSICAL_RESISTANCE_FIELDS:
+            assert getattr(attr, f) == pytest.approx(before[f] + 5 * self._b())
+
+    def test_intelligence_propagates_to_magical_resists(self, db_session):
+        from constants import MAGICAL_RESISTANCE_FIELDS
+        attr = _create_attributes(db_session, character_id=202, intelligence=10)
+        before = {f: getattr(attr, f) for f in MAGICAL_RESISTANCE_FIELDS}
+        crud._apply_modifiers_internal(db_session, 202, {"intelligence": 4})
+        db_session.refresh(attr)
+        assert attr.intelligence == 14
+        for f in MAGICAL_RESISTANCE_FIELDS:
+            assert getattr(attr, f) == pytest.approx(before[f] + 4 * self._b())
+
+    def test_agility_propagates_to_dodge(self, db_session):
+        attr = _create_attributes(db_session, character_id=203, agility=10)
+        dodge_before = attr.dodge
+        crud._apply_modifiers_internal(db_session, 203, {"agility": 6})
+        db_session.refresh(attr)
+        assert attr.agility == 16
+        assert attr.dodge == pytest.approx(dodge_before + 6 * self._b())
+
+    def test_endurance_propagates_to_res_effects(self, db_session):
+        from constants import ENDURANCE_RES_EFFECTS_MULTIPLIER
+        attr = _create_attributes(db_session, character_id=204, endurance=10)
+        re_before = attr.res_effects
+        crud._apply_modifiers_internal(db_session, 204, {"endurance": 5})
+        db_session.refresh(attr)
+        assert attr.endurance == 15
+        assert attr.res_effects == pytest.approx(
+            re_before + 5 * ENDURANCE_RES_EFFECTS_MULTIPLIER
+        )
+
+    def test_luck_propagates_to_dodge_crit_res_effects(self, db_session):
+        attr = _create_attributes(db_session, character_id=205, luck=1)
+        d0, c0, r0 = attr.dodge, attr.critical_hit_chance, attr.res_effects
+        crud._apply_modifiers_internal(db_session, 205, {"luck": 3})
+        db_session.refresh(attr)
+        assert attr.luck == 4
+        assert attr.dodge == pytest.approx(d0 + 3 * self._b())
+        assert attr.critical_hit_chance == pytest.approx(c0 + 3 * self._b())
+        assert attr.res_effects == pytest.approx(r0 + 3 * self._b())
+
+    def test_negative_modifiers_reverse_derived(self, db_session):
+        from constants import PHYSICAL_RESISTANCE_FIELDS
+        attr = _create_attributes(db_session, character_id=206, strength=10)
+        before = {f: getattr(attr, f) for f in PHYSICAL_RESISTANCE_FIELDS}
+        crud._apply_modifiers_internal(db_session, 206, {"strength": 5})
+        crud._apply_modifiers_internal(db_session, 206, {"strength": -5})
+        db_session.refresh(attr)
+        assert attr.strength == 10
+        for f in PHYSICAL_RESISTANCE_FIELDS:
+            assert getattr(attr, f) == pytest.approx(before[f])
+
+    def test_direct_resist_bonus_still_added(self, db_session):
+        # A perk can also bonus a resist directly; that must stack independently
+        # of the strength-derived contribution.
+        attr = _create_attributes(db_session, character_id=207, strength=10)
+        rp0 = attr.res_physical
+        crud._apply_modifiers_internal(
+            db_session, 207, {"strength": 5, "res_physical": 2}
+        )
+        db_session.refresh(attr)
+        # +2 direct  +  5*b from strength
+        assert attr.res_physical == pytest.approx(rp0 + 2 + 5 * self._b())
+
+
+class TestReconcilePerks:
+    """FEAT-143 dynamic perks: active iff conditions currently met; bonuses
+    applied on grant and reversed on revoke; admin perks untouched."""
+
+    _ATTR_COND = [{"type": "attribute", "stat": "strength", "operator": ">=", "value": 15}]
+    _BONUS = {"flat": {"damage": 3}, "percent": {}, "contextual": {}, "passive": {}}
+
+    def test_grants_when_condition_met(self, db_session):
+        from perk_evaluator import reconcile_perks
+        _create_attributes(db_session, character_id=301, strength=20, damage=0)
+        _create_cumulative_stats(db_session, character_id=301)
+        perk = _create_perk_in_db(db_session, conditions=self._ATTR_COND, bonuses=self._BONUS)
+        res = reconcile_perks(db_session, 301)
+        assert perk.id in [g["id"] for g in res["granted"]]
+        cp = db_session.query(models.CharacterPerk).filter_by(character_id=301, perk_id=perk.id).first()
+        assert cp is not None
+        attr = db_session.query(models.CharacterAttributes).filter_by(character_id=301).first()
+        assert attr.damage == 3
+
+    def test_revokes_when_condition_no_longer_met(self, db_session):
+        from perk_evaluator import reconcile_perks
+        attr = _create_attributes(db_session, character_id=302, strength=20, damage=0)
+        _create_cumulative_stats(db_session, character_id=302)
+        perk = _create_perk_in_db(db_session, conditions=self._ATTR_COND, bonuses=self._BONUS)
+        reconcile_perks(db_session, 302)  # grant
+        attr.strength = 10  # simulate unequipping the gear
+        db_session.commit()
+        res = reconcile_perks(db_session, 302)
+        assert perk.id in [r["id"] for r in res["revoked"]]
+        assert db_session.query(models.CharacterPerk).filter_by(character_id=302, perk_id=perk.id).first() is None
+        db_session.refresh(attr)
+        assert attr.damage == 0  # bonus reversed
+
+    def test_cumulative_perk_stays_active(self, db_session):
+        from perk_evaluator import reconcile_perks
+        _create_attributes(db_session, character_id=303)
+        _create_cumulative_stats(db_session, character_id=303, pvp_wins=10)
+        perk = _create_perk_in_db(
+            db_session,
+            conditions=[{"type": "cumulative_stat", "stat": "pvp_wins", "operator": ">=", "value": 10}],
+            bonuses=self._BONUS,
+        )
+        reconcile_perks(db_session, 303)
+        res = reconcile_perks(db_session, 303)  # second pass — must not flip
+        assert res["revoked"] == []
+        assert db_session.query(models.CharacterPerk).filter_by(character_id=303, perk_id=perk.id).first() is not None
+
+    def test_admin_perk_not_auto_revoked(self, db_session):
+        from perk_evaluator import reconcile_perks
+        _create_attributes(db_session, character_id=304, strength=5)
+        _create_cumulative_stats(db_session, character_id=304)
+        perk = _create_perk_in_db(
+            db_session,
+            conditions=[{"type": "attribute", "stat": "strength", "operator": ">=", "value": 100}],
+            bonuses=self._BONUS,
+        )
+        db_session.add(models.CharacterPerk(character_id=304, perk_id=perk.id, is_custom=True))
+        db_session.commit()
+        res = reconcile_perks(db_session, 304)
+        assert res["revoked"] == []
+        assert db_session.query(models.CharacterPerk).filter_by(character_id=304, perk_id=perk.id).first() is not None
+
+    def test_not_granted_when_condition_unmet(self, db_session):
+        from perk_evaluator import reconcile_perks
+        _create_attributes(db_session, character_id=305, strength=5)
+        _create_cumulative_stats(db_session, character_id=305)
+        _create_perk_in_db(
+            db_session,
+            conditions=[{"type": "attribute", "stat": "strength", "operator": ">=", "value": 50}],
+            bonuses=self._BONUS,
+        )
+        res = reconcile_perks(db_session, 305)
+        assert res["granted"] == []

@@ -55,53 +55,54 @@ def build_hybrid_turn_order(
     participants_payload: List[Dict],
     first_actor_participant_id: int,
 ) -> List[int]:
-    """Hybrid initiative order, fixed once at battle start (FEAT-143).
+    """Initiative-based turn order, fixed once at battle start (FEAT-143).
 
     Rules:
-      * the initiator (``first_actor_participant_id``) always takes slot 1;
-      * teams alternate, starting with the initiator's team;
-      * inside a team members act by DESCENDING agility (ловкость), ties broken
-        by participant creation order (payload order, stable sort);
+      * the initiator (``first_actor_participant_id``, whoever started the fight)
+        always takes slot 1, regardless of stats;
+      * everyone else is ordered by DESCENDING initiative (a weighted stat sum:
+        agility×1.0 + strength/intelligence/endurance×0.75 — so agile builds are
+        naturally faster, but a high-total-stat bruiser can still out-tempo them);
+      * ties break by agility, then by participant creation order (payload order);
+      * teams do NOT alternate — a fast side may act several times in a row (the
+        first-cycle one-skill restriction keeps that from snowballing);
       * computed once and never recomputed mid-battle — stat buffs do not
         reshuffle the queue, and dead members simply skip their slot.
 
-    ``participants_payload`` entries must carry ``participant_id``, ``team`` and
-    ``agility``. Returns an ordered list of ``participant_id``; ``order[0]`` is
-    always ``first_actor_participant_id``.
+    ``participants_payload`` entries must carry ``participant_id`` plus a
+    precomputed ``initiative`` (and ``agility`` for tie-breaks). Returns an
+    ordered list of ``participant_id``; ``order[0]`` is always the initiator.
     """
-    teams: Dict[int, List[int]] = {}
-    team_of: Dict[int, int] = {}
+    initiative_of: Dict[int, float] = {}
     agility_of: Dict[int, float] = {}
-    for p in participants_payload:
+    creation_index: Dict[int, int] = {}
+    all_pids: List[int] = []
+    for i, p in enumerate(participants_payload):
         pid = p["participant_id"]
-        team = p.get("team", 0)
-        teams.setdefault(team, []).append(pid)
-        team_of[pid] = team
+        all_pids.append(pid)
+        initiative_of[pid] = p.get("initiative", 0)
         agility_of[pid] = p.get("agility", 0)
+        creation_index[pid] = i
 
-    # Sort each team by agility desc; stable sort keeps creation order on ties.
-    for pids in teams.values():
-        pids.sort(key=lambda pid: agility_of[pid], reverse=True)
+    rest = [pid for pid in all_pids if pid != first_actor_participant_id]
+    rest.sort(
+        key=lambda pid: (-initiative_of[pid], -agility_of[pid], creation_index[pid])
+    )
+    lead = [first_actor_participant_id] if first_actor_participant_id in initiative_of else []
+    return lead + rest
 
-    # The initiator always leads, regardless of their own agility.
-    init_team = team_of.get(first_actor_participant_id)
-    if init_team is not None:
-        init_queue = teams[init_team]
-        if first_actor_participant_id in init_queue:
-            init_queue.remove(first_actor_participant_id)
-            init_queue.insert(0, first_actor_participant_id)
-        ordered_team_ids = [init_team] + sorted(t for t in teams if t != init_team)
-    else:
-        ordered_team_ids = sorted(teams)
 
-    # Round-robin interleave across teams; uneven teams contribute fewer members.
-    queues = [list(teams[t]) for t in ordered_team_ids]
-    order: List[int] = []
-    while any(queues):
-        for q in queues:
-            if q:
-                order.append(q.pop(0))
-    return order
+def compute_initiative(attributes: Dict) -> float:
+    """Initiative score from a character's attributes (FEAT-143).
+
+    Agility counts full (×1.0); strength and intelligence count at ×0.75.
+    Endurance / luck / charisma do NOT contribute. So agility builds lead by
+    default, but a warrior/mage with a much larger str/int pool can still
+    out-initiative a rogue.
+    """
+    agi = attributes.get("agility", 0) or 0
+    other = (attributes.get("strength", 0) or 0) + (attributes.get("intelligence", 0) or 0)
+    return agi * 1.0 + other * 0.75
 
 
 # ---------- инициализация --------------------------------------------------
@@ -132,6 +133,11 @@ async def init_battle_state(
         "next_actor": first_actor_participant_id,
         "first_actor": first_actor_participant_id,  # ← кто начинает
         "turn_order": turn_order,
+        # First cycle (FEAT-143): from the initiator's first turn until their
+        # next turn, everyone may use only ONE skill type per turn. Unlocks once
+        # the turn returns to the initiator.
+        "first_cycle": True,
+        "initiator_acted_once": False,
         "active_effects": {},
         "participants": {
         str(p["participant_id"]): {

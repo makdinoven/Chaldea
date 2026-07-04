@@ -244,54 +244,78 @@ class TestInitBattleStateStorage:
 # Hybrid turn order (FEAT-143)
 # ---------------------------------------------------------------------------
 
-def _p(pid, team, agility):
-    """Minimal payload entry for build_hybrid_turn_order()."""
-    return {"participant_id": pid, "team": team, "agility": agility}
+def _p(pid, team, agility, initiative=None):
+    """Minimal payload entry. Initiative defaults to agility for the simple
+    cases (only agility matters); pass it explicitly to test the weighting."""
+    return {
+        "participant_id": pid,
+        "team": team,
+        "agility": agility,
+        "initiative": agility if initiative is None else initiative,
+    }
 
 
 class TestBuildHybridTurnOrder:
-    """Hybrid initiative order: teams alternate, agility decides within a team,
-    initiator always leads, order is a stable permutation of all participants."""
+    """Initiative order (FEAT-143): initiator first, then everyone by descending
+    initiative (ties: agility, then creation order); teams do NOT alternate."""
 
-    def test_2v2_interleaves_teams_by_agility(self):
-        # Team 0: A1(init, agi12), A2(agi28). Team 1: B1(agi20), B2(agi8).
+    def test_rest_ordered_by_initiative(self):
+        # Initiator=1; the rest sort purely by initiative, ignoring team.
         payload = [_p(1, 0, 12), _p(2, 0, 28), _p(3, 1, 20), _p(4, 1, 8)]
         order = redis_state.build_hybrid_turn_order(payload, first_actor_participant_id=1)
-        # Alice(init) -> Grim(faster enemy) -> Bran -> Wolf
-        assert order == [1, 3, 2, 4]
+        assert order == [1, 2, 3, 4]  # init, then 28 > 20 > 8
 
     def test_initiator_always_first_even_if_slowest(self):
-        # Initiator has the lowest agility on the whole field, still acts first.
+        # Initiator has the lowest initiative on the field, still acts first.
         payload = [_p(1, 0, 1), _p(2, 0, 99), _p(3, 1, 50)]
         order = redis_state.build_hybrid_turn_order(payload, first_actor_participant_id=1)
         assert order[0] == 1
 
     def test_uneven_teams_everyone_acts_once(self):
-        # 3 vs 1 — the lone enemy just fills fewer slots, no one acts twice.
         payload = [_p(1, 0, 30), _p(2, 0, 20), _p(3, 0, 10), _p(4, 1, 99)]
         order = redis_state.build_hybrid_turn_order(payload, first_actor_participant_id=1)
-        assert order == [1, 4, 2, 3]
+        assert order == [1, 4, 2, 3]  # init, then 99 > 20 > 10
 
-    def test_ties_broken_by_creation_order(self):
-        # Two allies with equal agility keep their payload (creation) order.
-        payload = [_p(1, 0, 10), _p(2, 0, 10), _p(3, 1, 5)]
+    def test_ties_broken_by_agility_then_creation_order(self):
+        # Equal initiative -> higher agility, then payload (creation) order.
+        payload = [
+            _p(1, 0, 10, initiative=50),
+            _p(2, 0, 10, initiative=50),
+            _p(3, 1, 5, initiative=5),
+        ]
         order = redis_state.build_hybrid_turn_order(payload, first_actor_participant_id=3)
         assert order == [3, 1, 2]
+
+    def test_high_total_stat_bruiser_can_outrun_a_rogue(self):
+        # Rogue: agility 40 -> initiative 40. Warrior: str/end heavy -> 50.
+        rogue = {"participant_id": 2, "team": 1, "agility": 40, "initiative": 40}
+        warrior = {"participant_id": 3, "team": 1, "agility": 5, "initiative": 50}
+        payload = [_p(1, 0, 10), rogue, warrior]
+        order = redis_state.build_hybrid_turn_order(payload, first_actor_participant_id=1)
+        assert order == [1, 3, 2]  # warrior (50) before rogue (40)
 
     def test_order_is_permutation_of_all_participants(self):
         payload = [_p(1, 0, 12), _p(2, 0, 28), _p(3, 1, 20), _p(4, 1, 8)]
         order = redis_state.build_hybrid_turn_order(payload, first_actor_participant_id=1)
         assert sorted(order) == [1, 2, 3, 4]
 
-    def test_missing_agility_defaults_to_creation_order(self):
-        # No agility field -> defaults to 0, so within-team order is creation order.
+    def test_missing_initiative_defaults_to_creation_order(self):
         payload = [
             {"participant_id": 1, "team": 0},
             {"participant_id": 2, "team": 0},
             {"participant_id": 3, "team": 1},
         ]
         order = redis_state.build_hybrid_turn_order(payload, first_actor_participant_id=1)
-        assert order == [1, 3, 2]
+        assert order == [1, 2, 3]
+
+    def test_compute_initiative_weights(self):
+        # agility ×1.0, strength/intelligence ×0.75; endurance ignored.
+        assert redis_state.compute_initiative({"agility": 10}) == 10
+        assert redis_state.compute_initiative({"strength": 4}) == 3.0
+        assert redis_state.compute_initiative({"endurance": 100}) == 0
+        assert redis_state.compute_initiative(
+            {"agility": 10, "strength": 4, "intelligence": 4, "endurance": 100}
+        ) == 10 + 6.0
 
     @pytest.mark.asyncio
     async def test_init_battle_state_persists_hybrid_turn_order(self):
@@ -318,4 +342,4 @@ class TestBuildHybridTurnOrder:
 
         saved_json = mock_redis.set.call_args_list[0].args[1]
         state = json.loads(saved_json)
-        assert state["turn_order"] == [1, 3, 2, 4]
+        assert state["turn_order"] == [1, 2, 3, 4]

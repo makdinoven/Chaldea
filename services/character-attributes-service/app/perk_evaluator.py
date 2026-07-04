@@ -321,3 +321,106 @@ def evaluate_perks(db: Session, character_id: int) -> list[dict]:
         db.commit()
 
     return newly_unlocked
+
+
+def reconcile_perks(db: Session, character_id: int) -> dict:
+    """
+    Dynamic perk reconciliation (FEAT-143).
+
+    A perk is ACTIVE iff ALL of its conditions are currently met. Auto-earned
+    perks (is_custom=False) are GRANTED when their conditions hold and REVOKED
+    when they stop holding — with flat bonuses applied / reversed on each flip
+    (via _apply_modifiers_internal, so derived effects follow too).
+
+    Monotonic conditions (cumulative_stat, character_level, quest) only ever grow,
+    so once met the perk stays active. State conditions (attribute from gear,
+    gold_balance) flip the perk on/off. Admin-granted perks (is_custom=True) and
+    admin_grant-only perks are left untouched.
+
+    Returns {"granted": [...], "revoked": [...]}.
+    """
+    all_perks = (
+        db.query(models.Perk).filter(models.Perk.is_active == True).all()
+    )
+    if not all_perks:
+        return {"granted": [], "revoked": []}
+
+    char_perks = {
+        cp.perk_id: cp
+        for cp in db.query(models.CharacterPerk)
+        .filter(models.CharacterPerk.character_id == character_id)
+        .all()
+    }
+
+    cumulative_stats = crud.get_cumulative_stats(db, character_id)
+    attributes = (
+        db.query(models.CharacterAttributes)
+        .filter(models.CharacterAttributes.character_id == character_id)
+        .first()
+    )
+    needs_level = any(
+        any(
+            (c.get("type") if isinstance(c, dict) else None) == "character_level"
+            for c in (perk.conditions or [])
+        )
+        for perk in all_perks
+    )
+    character_level = _fetch_character_level(character_id) if needs_level else None
+
+    granted: list[dict] = []
+    revoked: list[dict] = []
+
+    for perk in all_perks:
+        conditions = perk.conditions or []
+        if not conditions:
+            continue
+        condition_types = {
+            (c.get("type") if isinstance(c, dict) else None) for c in conditions
+        }
+        if condition_types == {"admin_grant"}:
+            continue  # admin-only perks are never auto-managed
+
+        held_cp = char_perks.get(perk.id)
+        # Never auto-touch an admin-granted perk.
+        if held_cp is not None and held_cp.is_custom:
+            continue
+
+        all_met = all(
+            check_condition(
+                c,
+                cumulative_stats,
+                attributes,
+                character_level,
+                character_id=character_id,
+                db=db,
+            )
+            for c in conditions
+        )
+
+        if all_met and held_cp is None:
+            cp = models.CharacterPerk(
+                character_id=character_id, perk_id=perk.id, is_custom=False
+            )
+            db.add(cp)
+            db.flush()
+            modifiers = crud.build_perk_modifiers_dict(perk, negative=False)
+            if modifiers:
+                crud._apply_modifiers_internal(db, character_id, modifiers)
+            granted.append({"id": perk.id, "name": perk.name})
+            logger.info(
+                f"Перк '{perk.name}' (id={perk.id}) активирован для персонажа {character_id}"
+            )
+        elif not all_met and held_cp is not None:
+            modifiers = crud.build_perk_modifiers_dict(perk, negative=True)
+            if modifiers:
+                crud._apply_modifiers_internal(db, character_id, modifiers)
+            db.delete(held_cp)
+            revoked.append({"id": perk.id, "name": perk.name})
+            logger.info(
+                f"Перк '{perk.name}' (id={perk.id}) деактивирован для персонажа {character_id}"
+            )
+
+    if granted or revoked:
+        db.commit()
+
+    return {"granted": granted, "revoked": revoked}

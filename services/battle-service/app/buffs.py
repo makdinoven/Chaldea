@@ -114,6 +114,21 @@ def evaluate_control(actor_effects: List[Dict]) -> tuple:
     return full_skip, blocked
 
 
+def first_cycle_limit_skills(attack_id, defense_id, support_id) -> tuple:
+    """First cycle (FEAT-143): only ONE skill type may be used per turn. Keeps
+    the first present one in priority order attack > defense > support and nulls
+    the rest. Returns (attack_id, defense_id, support_id)."""
+    kept = False
+    out = []
+    for sid in (attack_id, defense_id, support_id):
+        if sid and not kept:
+            kept = True
+            out.append(sid)
+        else:
+            out.append(None)
+    return tuple(out)
+
+
 def tick_periodic_effects(state: Dict, participant_id: int | None = None) -> List[Dict]:
     """Apply periodic HP damage (bleeding / burn / periodic poison) for effects
     OWNED by `participant_id` — same ownership model as decrement_durations, so a
