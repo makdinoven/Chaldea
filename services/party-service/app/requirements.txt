@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+sqlalchemy
+pymysql
+alembic
+pydantic<2.0.0
+requests
+httpx
+pytest
+pytest-asyncio
+cryptography
