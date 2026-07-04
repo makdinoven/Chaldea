@@ -1086,8 +1086,8 @@ async def move_and_post(
         _try_spawn_mob, destination_location_id, movement.character_id
     )
 
-    # Track cumulative stats: total_posts + transition (if actually moved)
-    move_increments = {"total_posts": 1}
+    # Cumulative stats: track transitions only — moving is NOT a written post (FEAT-143)
+    move_increments = {}
     move_set_max = {}
     if current_location is not None and int(current_location) != destination_location_id:
         move_increments["total_transitions"] = 1
@@ -1304,8 +1304,8 @@ async def quick_move(
         _try_spawn_mob, destination_location_id, body.character_id
     )
 
-    # 10. Cumulative stats: total_posts + transition
-    move_increments = {"total_posts": 1}
+    # Cumulative stats: track transitions only — moving is NOT a written post (FEAT-143)
+    move_increments = {}
     move_set_max = {}
     if current_location is not None and int(current_location) != destination_location_id:
         move_increments["total_transitions"] = 1

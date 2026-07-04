@@ -306,6 +306,15 @@ def get_character_perks(character_id: int, db: Session = Depends(get_db)):
     Returns all active perks merged with character unlock status and progress data.
     Public endpoint (no auth required — matches existing pattern for /attributes/{id}).
     """
+    # Self-heal on view (FEAT-143 dynamic perks): reconcile so stale unlocks whose
+    # conditions no longer hold are deactivated and newly-met ones activated
+    # before we render the list. Non-fatal.
+    try:
+        from perk_evaluator import reconcile_perks
+        reconcile_perks(db, character_id)
+    except Exception as e:
+        logger.error(f"Ошибка reconcile-perks при просмотре перков {character_id}: {e}")
+
     perks_list = crud.get_character_perks(db, character_id)
     return {
         "character_id": character_id,

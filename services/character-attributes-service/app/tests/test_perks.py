@@ -655,8 +655,9 @@ class TestPlayerPerksEndpoint:
         perk2 = _create_perk_in_db(db_session, name="Perk B")
         _create_attributes(db_session, character_id=1)
 
-        # Grant perk1 to character 1
-        cp = models.CharacterPerk(character_id=1, perk_id=perk1.id, is_custom=False)
+        # Grant perk1 to character 1. Admin-granted (is_custom=True) so the
+        # dynamic reconcile-on-view keeps it even though its condition is unmet.
+        cp = models.CharacterPerk(character_id=1, perk_id=perk1.id, is_custom=True)
         db_session.add(cp)
         db_session.commit()
 
