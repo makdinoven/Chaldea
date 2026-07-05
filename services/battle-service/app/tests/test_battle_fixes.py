@@ -1072,3 +1072,37 @@ class TestMobAttackGate:
         r = self._run(patches, {"character_id": 5, "mob_character_id": 99})
         assert r.status_code == 403
         assert "боевой пост" in r.json()["detail"].lower()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Forced PvP gate + admin request (FEAT-145 §7)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestForcedPvpGate:
+    def _run(self, patches, payload):
+        mock_db = _make_mock_db()
+        async def _fake_get_db():
+            yield mock_db
+        with _PatchContext(patches):
+            app.dependency_overrides[get_db] = _fake_get_db
+            try:
+                with TestClient(app) as client:
+                    return client.post("/battles/pvp/forced-request", json=payload,
+                                       headers={"Authorization": "Bearer x"})
+            finally:
+                app.dependency_overrides.pop(get_db, None)
+
+    def test_forced_request_rejected_without_pvp_gate(self):
+        async def _ginfo(db, cid):
+            return {"user_id": 5 if cid == 5 else 999,
+                    "current_location_id": 100, "character_id": cid}
+        patches = {
+            "auth_http.requests.get": MagicMock(return_value=_mock_response(
+                200, {"id": 5, "username": "p", "role": "user", "permissions": []})),
+            "main._get_character_info": AsyncMock(side_effect=_ginfo),
+            "main.get_active_battle_for_character": AsyncMock(return_value=None),
+            "main._consume_pvp_gate": AsyncMock(return_value=False),
+        }
+        r = self._run(patches, {"attacker_character_id": 5, "victim_character_id": 99})
+        assert r.status_code == 403
+        assert "pvp-пост" in r.json()["detail"].lower()

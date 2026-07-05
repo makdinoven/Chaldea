@@ -91,16 +91,15 @@ const PlayerActionsMenu = ({
   const handleAttack = async () => {
     setAttacking(true);
     try {
-      const result = await attackPlayer(currentCharacterId, targetCharacterId);
-      toast.success(`Бой с ${targetName} начинается!`);
+      await attackPlayer(currentCharacterId, targetCharacterId);
+      toast.success(`Заявка на нападение на ${targetName} отправлена — ждём одобрения администратора`);
       setOpen(false);
       onActionComplete?.();
-      navigate(`/location/${locationId}/battle/${result.battle_id}`);
     } catch (err) {
       const message =
         axios.isAxiosError(err) && err.response?.data?.detail
           ? err.response.data.detail
-          : 'Не удалось начать бой';
+          : 'Не удалось подать заявку на нападение';
       toast.error(message);
     } finally {
       setAttacking(false);

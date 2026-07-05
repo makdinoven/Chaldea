@@ -197,3 +197,29 @@ export const rejectJoinRequest = async (
   );
   return data;
 };
+
+// Forced-PvP admin approval (FEAT-145 §7)
+export interface PvpRequest {
+  id: number;
+  attacker_character_id: number;
+  victim_character_id: number;
+  attacker_name?: string;
+  victim_name?: string;
+  location_id: number;
+  battle_type?: string;
+}
+
+export const listPvpRequests = async (): Promise<PvpRequest[]> => {
+  const { data } = await axios.get<PvpRequest[]>('/battles/admin/pvp-requests');
+  return data;
+};
+
+export const approvePvpRequest = async (requestId: number): Promise<{ battle_id: number }> => {
+  const { data } = await axios.post(`/battles/admin/pvp-requests/${requestId}/approve`);
+  return data;
+};
+
+export const rejectPvpRequest = async (requestId: number): Promise<{ detail: string }> => {
+  const { data } = await axios.post(`/battles/admin/pvp-requests/${requestId}/reject`);
+  return data;
+};

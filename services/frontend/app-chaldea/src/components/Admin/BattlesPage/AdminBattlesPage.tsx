@@ -9,6 +9,7 @@ import {
   rejectJoinRequest,
 } from '../../../api/battles';
 import type { AdminJoinRequestItem } from '../../../api/battles';
+import PvpRequestsPanel from './PvpRequestsPanel';
 
 // --- Types ---
 
@@ -83,7 +84,7 @@ interface BattleStateResponse {
   has_redis_state: boolean;
 }
 
-type TabKey = 'battles' | 'join-requests';
+type TabKey = 'battles' | 'join-requests' | 'pvp-requests';
 
 // --- Constants ---
 
@@ -782,6 +783,7 @@ const AdminBattlesPage = () => {
   const TABS: { key: TabKey; label: string }[] = [
     { key: 'battles', label: 'Активные бои' },
     { key: 'join-requests', label: 'Заявки на вступление' },
+    { key: 'pvp-requests', label: 'Заявки на PvP' },
   ];
 
   return (
@@ -967,8 +969,10 @@ const AdminBattlesPage = () => {
             </div>
           )}
         </>
-      ) : (
+      ) : activeTab === 'join-requests' ? (
         <AdminJoinRequestsSection />
+      ) : (
+        <PvpRequestsPanel />
       )}
     </div>
   );

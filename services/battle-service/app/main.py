@@ -893,6 +893,149 @@ async def party_mob_attack(
     )
 
 
+# ---------------------------------------------------------------------------
+# Forced PvP with admin approval (FEAT-145 §7). Needs a "pvp" intent post naming
+# the victim; the request waits in Redis until an admin approves it into a battle.
+# ---------------------------------------------------------------------------
+async def _consume_pvp_gate(character_id: int, location_id: int, victim_character_id: int) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/action-gate/consume",
+                json={
+                    "character_id": character_id, "location_id": location_id,
+                    "action_type": "pvp", "target_ref": victim_character_id,
+                },
+            )
+            if resp.status_code == 200:
+                return bool(resp.json().get("consumed"))
+    except Exception as e:
+        logger.warning(f"pvp gate consume failed: {e}")
+    return False
+
+
+def _rd(v):
+    return v.decode() if isinstance(v, (bytes, bytearray)) else v
+
+
+async def _pvp_req_create(data: dict) -> int:
+    rds = await get_redis_client()
+    rid = int(await rds.incr("pvp:forced_request:next_id"))
+    await rds.hset("pvp:forced_requests", str(rid), json.dumps(data))
+    return rid
+
+
+async def _pvp_req_list() -> list:
+    rds = await get_redis_client()
+    raw = await rds.hgetall("pvp:forced_requests")
+    out = []
+    for k, v in (raw or {}).items():
+        try:
+            d = json.loads(_rd(v))
+            d["id"] = int(_rd(k))
+            out.append(d)
+        except Exception:
+            pass
+    return sorted(out, key=lambda d: d["id"])
+
+
+async def _pvp_req_get(rid: int) -> dict:
+    rds = await get_redis_client()
+    v = await rds.hget("pvp:forced_requests", str(rid))
+    return json.loads(_rd(v)) if v else None
+
+
+async def _pvp_req_delete(rid: int) -> None:
+    rds = await get_redis_client()
+    await rds.hdel("pvp:forced_requests", str(rid))
+
+
+@router.post("/pvp/forced-request")
+async def pvp_forced_request(
+    req: PvpAttackRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Request a no-consent PvP attack. Requires a "pvp" intent post naming the
+    victim; creates a pending request an admin must approve (FEAT-145 §7)."""
+    if req.attacker_character_id == req.victim_character_id:
+        raise HTTPException(400, "Нельзя напасть на самого себя")
+    attacker = await _get_character_info(db, req.attacker_character_id)
+    if not attacker:
+        raise HTTPException(404, "Персонаж не найден")
+    if attacker["user_id"] != current_user.id:
+        raise HTTPException(403, "Используйте своего персонажа")
+    victim = await _get_character_info(db, req.victim_character_id)
+    if not victim:
+        raise HTTPException(404, "Целевой персонаж не найден")
+    loc = attacker["current_location_id"]
+    if loc is None or loc != victim["current_location_id"]:
+        raise HTTPException(400, "Персонажи должны находиться в одной локации")
+    loc_row = (await db.execute(
+        text("SELECT marker_type FROM Locations WHERE id = :lid"), {"lid": loc},
+    )).fetchone()
+    if loc_row and loc_row[0] == "safe":
+        raise HTTPException(400, "Нападение невозможно на безопасной локации")
+    if await get_active_battle_for_character(db, req.attacker_character_id):
+        raise HTTPException(400, "Персонаж уже в бою")
+    if await get_active_battle_for_character(db, req.victim_character_id):
+        raise HTTPException(400, "Целевой персонаж уже в бою")
+    if not await _consume_pvp_gate(req.attacker_character_id, loc, req.victim_character_id):
+        raise HTTPException(403, "Нужен PvP-пост с этой целью, чтобы подать заявку на нападение")
+
+    rid = await _pvp_req_create({
+        "attacker_character_id": req.attacker_character_id,
+        "victim_character_id": req.victim_character_id,
+        "battle_type": getattr(req, "battle_type", None) or "pvp_death",
+        "location_id": loc,
+        "attacker_name": await _get_character_name(db, req.attacker_character_id),
+        "victim_name": await _get_character_name(db, req.victim_character_id),
+    })
+    return {"request_id": rid, "status": "pending_admin"}
+
+
+@router.get("/admin/pvp-requests")
+async def admin_list_pvp_requests(
+    _admin: UserRead = Depends(require_permission("battles:manage")),
+):
+    return await _pvp_req_list()
+
+
+@router.post("/admin/pvp-requests/{request_id}/approve")
+async def admin_approve_pvp_request(
+    request_id: int,
+    db: AsyncSession = Depends(get_db),
+    _admin: UserRead = Depends(require_permission("battles:manage")),
+):
+    r = await _pvp_req_get(request_id)
+    if not r:
+        raise HTTPException(404, "Заявка не найдена")
+    if (await get_active_battle_for_character(db, r["attacker_character_id"])
+            or await get_active_battle_for_character(db, r["victim_character_id"])):
+        await _pvp_req_delete(request_id)
+        raise HTTPException(400, "Один из участников уже в бою")
+    loc = r["location_id"]
+    team0 = await _pvp_side_roster(db, r["attacker_character_id"], loc)
+    team1 = await _pvp_side_roster(db, r["victim_character_id"], loc)
+    battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
+        db, team0 + team1, [0] * len(team0) + [1] * len(team1),
+        BattleType(r.get("battle_type", "pvp_death")), loc,
+    )
+    await _pvp_req_delete(request_id)
+    return {"battle_id": battle_obj.id, "detail": "approved"}
+
+
+@router.post("/admin/pvp-requests/{request_id}/reject")
+async def admin_reject_pvp_request(
+    request_id: int,
+    _admin: UserRead = Depends(require_permission("battles:manage")),
+):
+    if not await _pvp_req_get(request_id):
+        raise HTTPException(404, "Заявка не найдена")
+    await _pvp_req_delete(request_id)
+    return {"detail": "rejected"}
+
+
 # -----------------------------------------------------------
 # Internal endpoints (no auth, for service-to-service calls)
 # -----------------------------------------------------------

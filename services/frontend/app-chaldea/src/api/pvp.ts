@@ -97,11 +97,18 @@ export const cancelInvitation = async (
   return data;
 };
 
+export interface ForcedAttackResult {
+  request_id: number;
+  status: string;
+}
+
+// Forced PvP now goes through admin approval (FEAT-145): this files a request
+// (requires a "pvp" intent post naming the victim) rather than starting a battle.
 export const attackPlayer = async (
   attackerCharacterId: number,
   victimCharacterId: number,
-): Promise<AttackResult> => {
-  const { data } = await axios.post<AttackResult>('/battles/pvp/attack', {
+): Promise<ForcedAttackResult> => {
+  const { data } = await axios.post<ForcedAttackResult>('/battles/pvp/forced-request', {
     attacker_character_id: attackerCharacterId,
     victim_character_id: victimCharacterId,
   });
