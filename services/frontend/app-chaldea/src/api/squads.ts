@@ -66,6 +66,21 @@ export interface PlayerOnLocation {
   level?: number;
 }
 
+export interface PartyOnLocationMember {
+  character_id: number;
+  name: string | null;
+  avatar: string | null;
+  is_leader: boolean;
+}
+
+export interface PartyOnLocation {
+  id: number;
+  name: string;
+  avatar: string | null;
+  leader_character_id: number;
+  members: PartyOnLocationMember[];
+}
+
 /* ── Calls ── */
 
 export const getMyParty = async (characterId: number): Promise<Party | null> => {
@@ -130,5 +145,12 @@ export const getPlayersOnLocation = async (
   locationId: number,
 ): Promise<PlayerOnLocation[]> => {
   const { data } = await charClient.get("/by_location", { params: { location_id: locationId } });
+  return data ?? [];
+};
+
+export const getPartiesOnLocation = async (
+  locationId: number,
+): Promise<PartyOnLocation[]> => {
+  const { data } = await partyClient.get("/by-location", { params: { location_id: locationId } });
   return data ?? [];
 };

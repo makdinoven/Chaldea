@@ -17,6 +17,7 @@ import LootSection from './LootSection';
 import PendingInvitationsPanel from './PendingInvitationsPanel';
 import PendingPartyInvitesPanel from './PendingPartyInvitesPanel';
 import LocationMobs from '../../LocationMobs';
+import PartiesOnLocation from './PartiesOnLocation';
 import BattlesSection from './BattlesSection';
 import useBattleLock from '../../../hooks/useBattleLock';
 import BattleLockBanner from '../../CommonComponents/BattleLockBanner';
@@ -511,6 +512,9 @@ const LocationPage = () => {
           inBattle={inBattle}
           players={location.players}
         />
+
+        {/* Squads present on this location (FEAT-144 Ф5) */}
+        <PartiesOnLocation locationId={location.id} />
 
         {/* Resource gathering — shown only when nodes exist on the location.
             Hidden by GatheringSection itself when the array is empty. */}

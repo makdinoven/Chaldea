@@ -55,6 +55,18 @@ def get_characters_map(db: Session, character_ids: list) -> dict:
 # ---------------------------------------------------------------------------
 # Party queries
 # ---------------------------------------------------------------------------
+def get_character_ids_at_location(db: Session, location_id: int) -> list:
+    """Player character ids currently on a location (excludes NPCs/mobs)."""
+    rows = db.execute(
+        text(
+            "SELECT id FROM characters "
+            "WHERE current_location_id = :loc AND (is_npc = 0 OR is_npc IS NULL)"
+        ),
+        {"loc": location_id},
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
 def get_accepted_membership(db: Session, character_id: int) -> Optional[models.PartyMember]:
     """The single party a character actually belongs to (accepted)."""
     return (

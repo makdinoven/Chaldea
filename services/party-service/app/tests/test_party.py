@@ -43,6 +43,10 @@ def _setup(monkeypatch):
         lambda db, ids: {cid: CHARS[cid] for cid in ids if cid in CHARS},
     )
     monkeypatch.setattr(main, "_award_passive_xp", lambda cid, amt: AWARDS.append((cid, amt)))
+    monkeypatch.setattr(
+        crud, "get_character_ids_at_location",
+        lambda db, loc: [cid for cid, c in CHARS.items() if c["current_location_id"] == loc],
+    )
     CHARS.clear()
     AWARDS.clear()
     yield
@@ -240,3 +244,19 @@ def test_active_members_no_party():
     d = _client(1).get("/party/internal/active-members",
                        params={"character_id": 1, "location_id": 1}).json()
     assert d["party_id"] is None and d["member_character_ids"] == []
+
+
+def test_parties_by_location_shows_only_colocated():
+    _reg(1, 10, loc=1); _reg(2, 20, loc=1); _reg(3, 30, loc=2)  # char3 elsewhere
+    _make_party(1, [2, 3])
+    data = _client(1).get("/party/by-location", params={"location_id": 1}).json()
+    assert len(data) == 1
+    p = data[0]
+    assert p["leader_character_id"] == 1
+    shown = {m["character_id"] for m in p["members"]}
+    assert shown == {1, 2}  # only members on location 1; char3 hidden
+
+
+def test_parties_by_location_empty():
+    _reg(1, 10, loc=5)  # solo, not in a party
+    assert _client(1).get("/party/by-location", params={"location_id": 5}).json() == []

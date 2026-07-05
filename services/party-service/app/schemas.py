@@ -86,3 +86,19 @@ class ActiveMembersResult(BaseModel):
     leader_character_id: Optional[int] = None
     member_character_ids: List[int] = []  # includes the queried character if co-located
 
+
+class PartyOnLocationMember(BaseModel):
+    character_id: int
+    name: Optional[str] = None
+    avatar: Optional[str] = None
+    is_leader: bool
+
+
+class PartyOnLocation(BaseModel):
+    """A squad visible on a location — only its co-located members are shown (Ф5)."""
+    id: int
+    name: str
+    avatar: Optional[str] = None
+    leader_character_id: int
+    members: List[PartyOnLocationMember] = []
+

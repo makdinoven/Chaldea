@@ -178,6 +178,51 @@ def active_members(character_id: int, location_id: int, db: Session = Depends(ge
     )
 
 
+@router.get("/by-location", response_model=List[schemas.PartyOnLocation])
+def parties_by_location(location_id: int, db: Session = Depends(get_db)):
+    """Public: squads present on a location, each with ONLY its co-located
+    members (FEAT-144 Ф5). Lets others see who's grouped up here."""
+    char_ids = crud.get_character_ids_at_location(db, location_id)
+    if not char_ids:
+        return []
+    memberships = (
+        db.query(models.PartyMember)
+        .filter(
+            models.PartyMember.character_id.in_(char_ids),
+            models.PartyMember.status == models.MemberStatus.accepted,
+        )
+        .all()
+    )
+    if not memberships:
+        return []
+    info = crud.get_characters_map(db, char_ids)
+    by_party: dict = {}
+    for m in memberships:
+        by_party.setdefault(m.party_id, []).append(m)
+
+    out = []
+    for party_id, mems in by_party.items():
+        party = crud.get_party(db, party_id)
+        if not party:
+            continue
+        out.append(schemas.PartyOnLocation(
+            id=party.id,
+            name=party.name,
+            avatar=party.avatar,
+            leader_character_id=party.leader_character_id,
+            members=[
+                schemas.PartyOnLocationMember(
+                    character_id=m.character_id,
+                    name=info.get(m.character_id, {}).get("name"),
+                    avatar=info.get(m.character_id, {}).get("avatar"),
+                    is_leader=m.is_leader,
+                )
+                for m in mems
+            ],
+        ))
+    return out
+
+
 @router.get("/mine", response_model=Optional[schemas.PartyOut])
 def my_party(
     character_id: int,
