@@ -942,6 +942,19 @@ async def consume_action_gate(session, character_id, location_id, action_type, t
     return True
 
 
+async def open_gate_types(session, character_id: int, location_id: int) -> list:
+    """Action types the character currently has an open gate for on a location
+    (FEAT-145) — the frontend uses this to enable gated actions."""
+    res = await session.execute(
+        text(
+            "SELECT DISTINCT action_type FROM action_gates "
+            "WHERE character_id = :c AND location_id = :l AND status = 'open'"
+        ),
+        {"c": character_id, "l": location_id},
+    )
+    return [r[0] for r in res.fetchall()]
+
+
 async def expire_action_gates(session, character_id: int, location_id: int) -> None:
     """Expire a character's open gates on a location when they leave it (FEAT-145)."""
     await session.execute(

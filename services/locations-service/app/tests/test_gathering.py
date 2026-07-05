@@ -81,8 +81,10 @@ def _clear_overrides() -> None:
 
 @pytest.fixture(autouse=True)
 def _restore_overrides_after_test():
-    """Make sure each test starts and ends with a clean auth override slate."""
-    yield
+    """Clean auth overrides; let the FEAT-145 gathering gate pass by default."""
+    with patch("crud.check_action_gate", new_callable=AsyncMock, return_value=True), \
+         patch("crud.consume_action_gate", new_callable=AsyncMock, return_value=True):
+        yield
     _clear_overrides()
 
 

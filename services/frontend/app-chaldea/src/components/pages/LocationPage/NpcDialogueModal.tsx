@@ -47,7 +47,10 @@ const NpcDialogueModal = ({ npcId, npcName, npcAvatar, onClose }: NpcDialogueMod
   const startDialogue = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await axios.get<DialogueNode>(`${BASE_URL}/locations/npcs/${npcId}/dialogue`);
+      const res = await axios.get<DialogueNode>(
+        `${BASE_URL}/locations/npcs/${npcId}/dialogue`,
+        characterId ? { params: { character_id: characterId } } : undefined,
+      );
       setCurrentNode(res.data);
       setTimeout(() => setFadeIn(true), 50);
     } catch {

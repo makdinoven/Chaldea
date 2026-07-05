@@ -642,6 +642,18 @@ async def enter_dungeon(
             detail="В группе должен быть хотя бы один участник",
         )
 
+    # 3.5. GATE (FEAT-145): entering needs a "dungeon" intent post on the
+    # dungeon's location. Consumed by the leader.
+    dungeon = (
+        await db.execute(select(Dungeon).where(Dungeon.id == session_obj.dungeon_id))
+    ).scalar_one_or_none()
+    if dungeon and dungeon.location_id is not None:
+        if not await http_clients.consume_dungeon_gate(character_id, dungeon.location_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Нужен пост-намерение «Данж», чтобы войти в подземелье",
+            )
+
     # 4. Find entrance room
     stmt = select(DungeonRoom).where(
         DungeonRoom.dungeon_id == session_obj.dungeon_id,

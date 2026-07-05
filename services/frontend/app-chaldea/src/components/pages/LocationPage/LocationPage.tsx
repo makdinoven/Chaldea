@@ -320,6 +320,24 @@ const LocationPage = () => {
     };
   }, [locationId]);
 
+  // Which gated actions the character can currently do here (FEAT-145).
+  const [gateStatus, setGateStatus] = useState<Record<string, boolean>>({});
+  const refetchGates = useCallback(() => {
+    if (!character?.id) {
+      setGateStatus({});
+      return;
+    }
+    axios
+      .get(`${BASE_URL}/locations/action-gate/status`, {
+        params: { character_id: character.id, location_id: locationId },
+      })
+      .then((r) => setGateStatus(r.data || {}))
+      .catch(() => setGateStatus({}));
+  }, [character?.id, locationId]);
+  useEffect(() => {
+    refetchGates();
+  }, [refetchGates]);
+
   const handleSubmitPost = useCallback(
     async (content: string, postType: string = 'regular', targets: number[] = []) => {
       try {
@@ -341,6 +359,7 @@ const LocationPage = () => {
         }
         toast.success('Пост отправлен');
         await fetchLocationData();
+        refetchGates();
       } catch (err) {
         const message =
           axios.isAxiosError(err) && err.response?.data?.detail
@@ -517,6 +536,7 @@ const LocationPage = () => {
           locationId={location.id}
           locationMarkerType={location.marker_type}
           isCharacterHere={isCharacterHere}
+          canTalkToNpc={userIsStaff || gateStatus.npc_dialogue === true}
         />
 
         {/* Neighbors */}

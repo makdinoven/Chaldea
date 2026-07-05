@@ -2069,12 +2069,31 @@ async def delete_dialogue_tree(
 @router.get("/npcs/{npc_id}/dialogue", response_model=schemas.DialogueNodeResponse)
 async def get_npc_dialogue(
     npc_id: int,
+    character_id: int = None,
     session: AsyncSession = Depends(get_db),
 ):
-    """Get the active dialogue root node for an NPC."""
+    """Get the active dialogue root node for an NPC.
+
+    FEAT-145: when a character_id is supplied, opening the dialogue requires an
+    `npc_dialogue` intent post on the NPC's location (checked, not consumed — one
+    post lets you talk to NPCs here until you leave)."""
     node_data = await crud.get_active_dialogue_for_npc(session, npc_id)
     if not node_data:
         raise HTTPException(status_code=404, detail="У этого NPC нет активного диалога")
+
+    if character_id is not None:
+        npc_row = (await session.execute(
+            text("SELECT current_location_id FROM characters WHERE id = :id"),
+            {"id": npc_id},
+        )).fetchone()
+        npc_loc = npc_row[0] if npc_row else None
+        if npc_loc is not None and not await crud.check_action_gate(
+            session, character_id, int(npc_loc), "npc_dialogue"
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Нужен пост-намерение «Диалог с НПС», чтобы заговорить",
+            )
     return node_data
 
 
@@ -3224,6 +3243,10 @@ async def start_gathering_route(
       * INSERT в gathering_sessions с снапшотом эффективных бонусов,
       * авто-пост о начале добычи (best-effort).
     """
+    # GATE (FEAT-145): gathering needs a "gathering" intent post on this location.
+    if not await crud.check_action_gate(session, body.character_id, location_id, "gathering"):
+        raise HTTPException(status_code=403, detail="Нужен пост-намерение «Сбор», чтобы начать добычу")
+
     payload = await crud.start_gathering(
         session,
         location_id=location_id,
@@ -3232,6 +3255,7 @@ async def start_gathering_route(
         tool_inventory_item_id=body.tool_inventory_item_id,
         current_user_id=current_user.id,
     )
+    await crud.consume_action_gate(session, body.character_id, location_id, "gathering")
     return schemas.StartGatheringResponse(**payload)
 
 
@@ -3269,6 +3293,19 @@ async def consume_action_gate_internal(
         session, body.character_id, body.location_id, body.action_type, body.target_ref,
     )
     return {"consumed": consumed}
+
+
+@router.get("/action-gate/status")
+async def action_gate_status(
+    character_id: int,
+    location_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Public (FEAT-145): which action-gate types the character currently holds
+    on a location — the client uses it to enable gated actions (e.g. make NPC
+    cards clickable, show the gather/dungeon buttons)."""
+    types = await crud.open_gate_types(session, character_id, location_id)
+    return {t: True for t in types}
 
 
 # --------------------------------------------------------------------

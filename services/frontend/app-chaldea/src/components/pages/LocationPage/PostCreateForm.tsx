@@ -37,14 +37,17 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
   const [editorKey, setEditorKey] = useState(0);
   const [npcMode, setNpcMode] = useState(false);
   const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
-  const [combatMode, setCombatMode] = useState(false);
+  const [postType, setPostType] = useState('regular');
   const [selectedTargets, setSelectedTargets] = useState<number[]>([]);
   const formRef = useRef<HTMLDivElement>(null);
   const spellCheck = useSpellCheck();
 
+  const isGated = postType !== 'regular';
+  const isCombat = postType === 'combat';
   const charCount = useMemo(() => stripHtmlTags(content).length, [content]);
-  // Combat posts (FEAT-145) need ≥500 chars and unlock ⌊chars/200⌋ mob targets.
-  const effectiveMin = combatMode ? MIN_COMBAT_POST_LENGTH : MIN_POST_LENGTH;
+  // Intent posts (FEAT-145) need ≥500 chars; a combat post unlocks ⌊chars/200⌋
+  // mob targets.
+  const effectiveMin = isGated ? MIN_COMBAT_POST_LENGTH : MIN_POST_LENGTH;
   const meetsMinLength = charCount >= effectiveMin;
   const maxTargets = Math.floor(charCount / SYMBOLS_PER_TARGET);
   const xpPreview = charCount >= MIN_POST_LENGTH ? Math.round(charCount / 100) : 0;
@@ -90,10 +93,10 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
     }
 
     if (!meetsMinLength) {
-      toast.error(`Минимальная длина ${combatMode ? 'боевого ' : ''}поста — ${effectiveMin} символов (сейчас: ${charCount})`);
+      toast.error(`Минимальная длина ${isGated ? 'поста-намерения' : 'поста'} — ${effectiveMin} символов (сейчас: ${charCount})`);
       return;
     }
-    if (combatMode) {
+    if (isCombat) {
       if (selectedTargets.length === 0) {
         toast.error('Выберите хотя бы одну цель для боевого поста');
         return;
@@ -106,11 +109,11 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
 
     setSubmitting(true);
     try {
-      await onSubmit(content, combatMode ? 'combat' : 'regular', combatMode ? selectedTargets : []);
+      await onSubmit(content, postType, isCombat ? selectedTargets : []);
       setContent('');
       setEditorKey((k) => k + 1);
       setIsEditorOpen(false);
-      setCombatMode(false);
+      setPostType('regular');
       setSelectedTargets([]);
     } finally {
       setSubmitting(false);
@@ -142,7 +145,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
     setEditorKey((k) => k + 1);
     setNpcMode(false);
     setSelectedNpcId(null);
-    setCombatMode(false);
+    setPostType('regular');
     setSelectedTargets([]);
     spellCheck.reset();
   };
@@ -152,7 +155,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
   const isSubmitDisabled = npcMode
     ? submitting || isContentEmpty(content) || !selectedNpcId
     : submitting || isContentEmpty(content) || !meetsMinLength ||
-      (combatMode && selectedTargets.length === 0);
+      (isCombat && selectedTargets.length === 0);
 
   return (
     <div ref={formRef}>
@@ -226,22 +229,33 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
               </div>
             )}
 
-            {/* Combat post (FEAT-145): unlocks attacking the chosen mobs */}
-            {!npcMode && combatTargets.length > 0 && (
+            {/* Post intent (FEAT-145): a non-regular post gates the matching action */}
+            {!npcMode && (
               <div className="flex flex-col gap-2">
-                <label className="flex items-center gap-2 cursor-pointer text-sm text-white/70">
-                  <input
-                    type="checkbox"
-                    checked={combatMode}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm text-white/70">Тип поста:</span>
+                  <select
+                    value={postType}
                     onChange={(e) => {
-                      setCombatMode(e.target.checked);
-                      if (!e.target.checked) setSelectedTargets([]);
+                      setPostType(e.target.value);
+                      setSelectedTargets([]);
                     }}
-                    className="accent-site-red w-4 h-4"
-                  />
-                  Боевой пост (открывает атаку на мобов)
-                </label>
-                {combatMode && (
+                    className="bg-black/60 border border-white/20 text-white text-sm rounded px-2 py-1
+                               focus:border-gold focus:outline-none transition-colors"
+                  >
+                    <option value="regular">Обычный</option>
+                    {combatTargets.length > 0 && <option value="combat">Боевой (атака)</option>}
+                    <option value="gathering">Сбор</option>
+                    <option value="dungeon">Данж</option>
+                    <option value="npc_dialogue">Диалог с НПС</option>
+                  </select>
+                </div>
+                {isGated && !isCombat && (
+                  <p className="text-white/40 text-xs">
+                    Пост-намерение открывает действие на этой локации. Минимум 500 символов.
+                  </p>
+                )}
+                {isCombat && (
                   <div className="flex flex-col gap-1.5 bg-white/[0.03] rounded-lg p-3">
                     <p className="text-white/50 text-xs">
                       Мин. 500 символов. Целей: {selectedTargets.length}/{maxTargets}{' '}

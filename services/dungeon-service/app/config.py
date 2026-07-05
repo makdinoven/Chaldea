@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     INVENTORY_SERVICE_URL: str = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
     USER_SERVICE_URL: str = os.getenv("USER_SERVICE_URL", "http://user-service:8000")
     PARTY_SERVICE_URL: str = os.getenv("PARTY_SERVICE_URL", "http://party-service:8014")
+    LOCATIONS_SERVICE_URL: str = os.getenv("LOCATIONS_SERVICE_URL", "http://locations-service:8006")
 
     class Config:
         env_file = ".env"

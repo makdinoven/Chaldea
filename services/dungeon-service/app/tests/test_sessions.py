@@ -164,6 +164,9 @@ def patch_externals():
         mock_ws.broadcast_to_session = AsyncMock()
         mock_ws.cleanup_session = AsyncMock()
 
+        # FEAT-145: let the dungeon entry gate pass by default.
+        mock_http.consume_dungeon_gate = AsyncMock(return_value=True)
+
         # Set default return values for http_clients
         mock_http.get_character_profile = AsyncMock(return_value={
             "id": 10,
@@ -776,14 +779,17 @@ class TestEnterDungeon:
                 mock_result.scalars.return_value.all.return_value = [leader]
                 return mock_result
             elif call_count == 3:
+                # dungeon lookup for the entry gate (FEAT-145)
+                return _mock_db_execute_chain(MagicMock(location_id=100))
+            elif call_count == 4:
                 # find entrance room
                 return _mock_db_execute_chain(entrance_room)
-            elif call_count == 4:
+            elif call_count == 5:
                 # members query for Redis init
                 mock_result = MagicMock()
                 mock_result.scalars.return_value.all.return_value = [leader]
                 return mock_result
-            elif call_count == 5:
+            elif call_count == 6:
                 # existing_visit check (no existing visit)
                 return _mock_db_execute_chain(None)
             return _mock_db_execute_chain(None)

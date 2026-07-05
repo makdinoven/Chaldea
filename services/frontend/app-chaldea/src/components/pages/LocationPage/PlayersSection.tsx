@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import toast from 'react-hot-toast';
 import { Player, NpcInLocation } from './types';
 import { NPC_ROLE_LABELS, NPC_ROLE_ICONS } from '../../../constants/npc';
 import useNpcAttack from '../../../hooks/useNpcAttack';
@@ -14,6 +15,8 @@ interface PlayersSectionProps {
   locationId: number;
   locationMarkerType?: string;
   isCharacterHere?: boolean;
+  // FEAT-145: NPC cards are interactable only with an "npc_dialogue" gate post.
+  canTalkToNpc?: boolean;
 }
 
 const getRarityColorClass = (rarity?: string): string => {
@@ -145,7 +148,7 @@ const NpcCard = ({ npc, onClick, currentCharacterId, isCharacterHere = false }: 
   );
 };
 
-const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, currentCharacterLevel = 0, locationId, locationMarkerType = 'safe', isCharacterHere = false }: PlayersSectionProps) => {
+const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, currentCharacterLevel = 0, locationId, locationMarkerType = 'safe', isCharacterHere = false, canTalkToNpc = false }: PlayersSectionProps) => {
   const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
 
   return (
@@ -204,7 +207,14 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
                 <NpcCard
                   key={npc.id}
                   npc={npc}
-                  onClick={() => setSelectedNpcId(npc.id)}
+                  onClick={() => {
+                    // FEAT-145: interacting with an NPC needs an npc_dialogue post.
+                    if (isCharacterHere && !canTalkToNpc) {
+                      toast.error('Нужен пост «Диалог с НПС», чтобы взаимодействовать');
+                      return;
+                    }
+                    setSelectedNpcId(npc.id);
+                  }}
                   currentCharacterId={currentCharacterId}
                   isCharacterHere={isCharacterHere}
                 />
