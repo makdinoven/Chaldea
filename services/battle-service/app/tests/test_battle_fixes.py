@@ -104,6 +104,7 @@ if isinstance(battle_engine, MagicMock):
 
 from battle_engine import decrement_cooldowns, set_cooldown  # noqa: E402
 from main import app  # noqa: E402
+import main  # noqa: E402
 from database import get_db  # noqa: E402
 
 # Clear startup handlers
@@ -1012,3 +1013,30 @@ class TestPartyMobAttack:
         r = _run_party_mob_attack(data, self._PAYLOAD)
         assert r.status_code == 403
         assert "лидер" in r.json()["detail"].lower()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Party-vs-party PvP roster (FEAT-144 Ф4)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestPvpSideRoster:
+    @pytest.mark.asyncio
+    async def test_solo_when_not_a_party_leader(self):
+        data = {"party_id": 1, "leader_character_id": 99, "member_character_ids": [5, 6]}
+        with patch("main._party_active_members_data", AsyncMock(return_value=data)):
+            roster = await main._pvp_side_roster(None, 5, 100)
+        assert roster == [5]  # char 5 isn't the leader → fights solo
+
+    @pytest.mark.asyncio
+    async def test_solo_when_no_party(self):
+        with patch("main._party_active_members_data", AsyncMock(return_value={})):
+            roster = await main._pvp_side_roster(None, 5, 100)
+        assert roster == [5]
+
+    @pytest.mark.asyncio
+    async def test_leader_brings_available_squad(self):
+        data = {"party_id": 1, "leader_character_id": 5, "member_character_ids": [5, 6, 7]}
+        with patch("main._party_active_members_data", AsyncMock(return_value=data)), \
+             patch("main._filter_available", AsyncMock(return_value=[6, 7])):
+            roster = await main._pvp_side_roster(None, 5, 100)
+        assert roster == [5, 6, 7]  # leader + co-located available mates

@@ -2419,6 +2419,60 @@ async def send_pvp_invitation(
 
 
 # ---------------------------------------------------------------------------
+# Party-vs-party helpers (FEAT-144 Ф4): a PvP side is the character's co-located
+# available squad when they lead a party, otherwise just the character.
+# ---------------------------------------------------------------------------
+async def _party_active_members_data(character_id: int, location_id: int) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{settings.PARTY_SERVICE_URL}/party/internal/active-members",
+                params={"character_id": character_id, "location_id": location_id},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception as e:
+        logger.warning(f"party active-members failed: {e}")
+    return {}
+
+
+async def _filter_available(db, character_ids: list) -> list:
+    """Drop characters who are busy — gathering (FEAT-144 Ф3) or already in a battle."""
+    gathering = set()
+    if character_ids:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                gresp = await client.post(
+                    f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/gathering-status",
+                    json={"character_ids": character_ids},
+                )
+                if gresp.status_code == 200:
+                    gathering = set(gresp.json().get("gathering_character_ids", []))
+        except Exception as e:
+            logger.warning(f"gathering-status check failed: {e}")
+    out = []
+    for cid in character_ids:
+        if cid in gathering:
+            continue
+        if await get_active_battle_for_character(db, cid):
+            continue
+        out.append(cid)
+    return out
+
+
+async def _pvp_side_roster(db, char_id: int, location_id: int) -> list:
+    """The battle side for `char_id`: their co-located available squad when they
+    are a party leader, otherwise a solo [char_id]."""
+    data = await _party_active_members_data(char_id, location_id)
+    if data.get("party_id") and data.get("leader_character_id") == char_id:
+        mates = await _filter_available(
+            db, [m for m in data.get("member_character_ids", []) if m != char_id]
+        )
+        return [char_id] + mates[: settings.BATTLE_MAX_TEAM_SIZE - 1]
+    return [char_id]
+
+
+# ---------------------------------------------------------------------------
 # PvP: Respond to invitation (Task 1.4)
 # ---------------------------------------------------------------------------
 @router.post("/pvp/invite/{invitation_id}/respond", response_model=PvpRespondAcceptResponse)
@@ -2508,13 +2562,17 @@ async def respond_to_pvp_invitation(
     )
     await db.commit()
 
-    # Create battle (derive location_id from initiator)
+    # Create battle (derive location_id from initiator). Party-vs-party (FEAT-144
+    # Ф4): each side expands to the character's co-located available squad when
+    # they lead a party, otherwise stays solo.
     pvp_location_id = initiator["current_location_id"] if initiator else None
     bt = BattleType(inv_battle_type)
+    team0 = await _pvp_side_roster(db, init_char_id, pvp_location_id)
+    team1 = await _pvp_side_roster(db, target_char_id, target["current_location_id"])
     battle_obj, participant_objs = await create_battle(
         db,
-        player_ids=[init_char_id, target_char_id],
-        teams=[0, 1],
+        player_ids=team0 + team1,
+        teams=[0] * len(team0) + [1] * len(team1),
         battle_type=bt,
         location_id=pvp_location_id,
     )
