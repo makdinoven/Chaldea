@@ -996,6 +996,26 @@ async def open_gate_types(session, character_id: int, location_id: int) -> list:
     return [r[0] for r in res.fetchall()]
 
 
+async def gates_for_posts(session, post_ids: list) -> dict:
+    """{post_id: {action_type: count}} for a set of posts (FEAT-145 item 7) — used
+    to show the intent-gate marks under each post."""
+    if not post_ids:
+        return {}
+    from sqlalchemy import bindparam
+    res = await session.execute(
+        text(
+            "SELECT post_id, action_type, COUNT(*) AS c FROM action_gates "
+            "WHERE post_id IN :ids GROUP BY post_id, action_type"
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"ids": list(post_ids)},
+    )
+    out: dict = {}
+    for pid, at, c in res.fetchall():
+        if pid is not None:
+            out.setdefault(int(pid), {})[at] = int(c)
+    return out
+
+
 async def expire_action_gates(session, character_id: int, location_id: int) -> None:
     """Expire a character's open gates on a location when they leave it (FEAT-145)."""
     await session.execute(
@@ -1568,10 +1588,12 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
     # 5. Batch-fetch likes for all posts
     post_ids = [p["post_id"] for p in detailed_posts]
     likes_map = await get_likes_for_posts(session, post_ids)
+    gates_map = await gates_for_posts(session, post_ids)
     for post_dict in detailed_posts:
         pid = post_dict["post_id"]
         post_dict["likes_count"] = likes_map.get(pid, {}).get("likes_count", 0)
         post_dict["liked_by"] = likes_map.get(pid, {}).get("liked_by", [])
+        post_dict["gates"] = gates_map.get(pid, {})
 
     # 6. Получаем лут в локации
     loot_items = await get_location_loot(session, location_id)

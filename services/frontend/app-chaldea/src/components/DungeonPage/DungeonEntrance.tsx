@@ -399,10 +399,10 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="gold-text text-lg font-medium uppercase mb-3">
-                Подтверждение
+                Войти в подземелье
               </h3>
               <p className="text-white/80 text-sm mb-5">
-                Создать группу для прохождения подземелья?
+                Как войти в подземелье?
               </p>
               <div className="flex flex-col gap-2">
                 {canPartyRun && (
@@ -417,7 +417,7 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
                   >
                     {partyRunLoading
                       ? 'Заходим...'
-                      : `Зайти отрядом (${coLocatedMates.length + 1})`}
+                      : `Отрядом (${coLocatedMates.length + 1})`}
                   </button>
                 )}
                 <div className="flex gap-3">
@@ -425,12 +425,12 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
                     onClick={() => {
                       const id = groupConfirmDungeonId;
                       setGroupConfirmDungeonId(null);
-                      handleCreateSession(id);
+                      if (id !== null) handleSoloEntry(id);
                     }}
                     disabled={sessionLoading}
-                    className="btn-line text-sm flex-1 py-2 disabled:opacity-50"
+                    className="btn-blue text-sm flex-1 py-2 disabled:opacity-50"
                   >
-                    {sessionLoading ? 'Создание...' : 'Собрать вручную'}
+                    {sessionLoading ? 'Вход...' : 'В соло'}
                   </button>
                   <button
                     onClick={() => setGroupConfirmDungeonId(null)}
@@ -666,24 +666,15 @@ const DungeonCard = ({
           </button>
         )}
 
-        {/* Solo / Group buttons — shown when no active session and no cooldown */}
+        {/* Single "Войти" button → solo / party choice (FEAT-144 fix) */}
         {!activeSessionId && !isActive && !isOnCooldown && currentCharacterId && (
-          <>
-            <button
-              onClick={() => onSoloClick(dungeon.id)}
-              disabled={sessionLoading}
-              className="btn-blue text-sm px-5 py-2 disabled:opacity-50"
-            >
-              {sessionLoading ? 'Вход...' : 'Зайти одному'}
-            </button>
-            <button
-              onClick={() => onGroupClick(dungeon.id)}
-              disabled={sessionLoading}
-              className="btn-blue text-sm px-5 py-2 disabled:opacity-50"
-            >
-              {sessionLoading ? 'Создание...' : 'Создать группу'}
-            </button>
-          </>
+          <button
+            onClick={() => onGroupClick(dungeon.id)}
+            disabled={sessionLoading}
+            className="btn-blue text-sm px-5 py-2 disabled:opacity-50"
+          >
+            {sessionLoading ? 'Вход...' : 'Войти'}
+          </button>
         )}
 
         {/* Enter dungeon button — shown when party is forming and user is leader */}

@@ -512,6 +512,8 @@ class ClientPost(BaseModel):
     created_at: datetime
     likes_count: int = 0
     liked_by: List[int] = []
+    # FEAT-145 item 7: intent gates declared in this post, {action_type: count}.
+    gates: dict = {}
 
 class LatestPostResponse(ClientPost):
     """A recent roleplay post enriched with its location, for the homepage

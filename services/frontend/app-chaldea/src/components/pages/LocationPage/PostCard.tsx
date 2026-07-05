@@ -267,6 +267,31 @@ const PostCard = ({
           />
         </ArchiveLinkPreview>
 
+        {/* FEAT-145 item 7: intent-gate marks declared in this post */}
+        {post.gates && Object.keys(post.gates).length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {Object.entries(post.gates).map(([at, count]) => {
+              const meta: Record<string, { icon: string; label: string }> = {
+                combat: { icon: '⚔', label: 'Нападение на мобов' },
+                npc_dialogue: { icon: '💬', label: 'Диалог с НПС' },
+                gathering: { icon: '⛏', label: 'Сбор' },
+                dungeon: { icon: '🏰', label: 'Вход в подземелье' },
+                pvp: { icon: '⚔', label: 'PvP' },
+              };
+              const m = meta[at] ?? { icon: '•', label: at };
+              return (
+                <span
+                  key={at}
+                  className="text-[11px] px-2 py-0.5 rounded-full bg-gold/10 text-gold/90 border border-gold/20"
+                >
+                  {m.icon} {m.label}
+                  {(count as number) > 1 ? ` ×${count}` : ''}
+                </span>
+              );
+            })}
+          </div>
+        )}
+
         {/* Actions row: like + tag + menu */}
       <div className="flex items-center gap-3">
         {/* Like button */}

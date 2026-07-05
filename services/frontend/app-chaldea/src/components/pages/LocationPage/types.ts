@@ -33,6 +33,8 @@ export interface Post {
   created_at: string;
   likes_count: number;
   liked_by: number[];
+  // FEAT-145 item 7: intent gates declared in this post, {action_type: count}.
+  gates?: Record<string, number>;
 }
 
 export interface LocationLootItem {
