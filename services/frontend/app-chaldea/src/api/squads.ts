@@ -154,3 +154,21 @@ export const getPartiesOnLocation = async (
   const { data } = await partyClient.get("/by-location", { params: { location_id: locationId } });
   return data ?? [];
 };
+
+// Upload a squad avatar image and get its URL (reuses the generic photo-service
+// image upload); the caller then saves it via updateParty.
+export const uploadSquadAvatar = async (file: File): Promise<string> => {
+  const form = new FormData();
+  form.append("file", file);
+  const { data } = await axios.post<{ image_url: string }>(
+    "/photo/upload_archive_image",
+    form,
+    {
+      headers: {
+        "Content-Type": "multipart/form-data",
+        Authorization: `Bearer ${localStorage.getItem("accessToken") || ""}`,
+      },
+    },
+  );
+  return data.image_url;
+};

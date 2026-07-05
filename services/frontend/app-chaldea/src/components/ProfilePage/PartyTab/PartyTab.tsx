@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { useAppSelector } from "../../../redux/store";
 import {
@@ -13,6 +13,8 @@ import {
   leaveParty,
   disbandParty,
   getPlayersOnLocation,
+  updateParty,
+  uploadSquadAvatar,
 } from "../../../api/squads";
 
 interface PartyTabProps {
@@ -30,6 +32,7 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isLeader = party?.leader_character_id === characterId;
 
@@ -73,6 +76,18 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !party) return;
+    guard(async () => {
+      const url = await uploadSquadAvatar(file);
+      await updateParty(party.id, { avatar: url });
+      toast.success("Аватар отряда обновлён");
+      await reload();
+    });
   };
 
   const handleCreate = () =>
@@ -130,7 +145,16 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
   );
 
   return (
-    <div className="max-w-2xl mx-auto flex flex-col gap-6">
+    <div className="max-w-2xl mx-auto gray-bg rounded-card p-4 sm:p-6 flex flex-col gap-6">
+      {/* Hidden file input for the squad avatar (leader only) */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleAvatarChange}
+      />
+
       {/* Incoming invites */}
       {invites.length > 0 && (
         <section className="flex flex-col gap-3">
@@ -202,13 +226,32 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
       {party && (
         <section className="flex flex-col gap-5">
           <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-lg bg-white/5 border border-gold/20 flex items-center justify-center overflow-hidden shrink-0">
-              {party.avatar ? (
-                <img src={party.avatar} alt="" className="w-full h-full object-cover" />
-              ) : (
-                <span className="text-gold text-xl">⚔</span>
-              )}
-            </div>
+            {isLeader ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => fileInputRef.current?.click()}
+                title="Сменить аватар отряда"
+                className="relative w-14 h-14 rounded-lg bg-white/5 border border-gold/20 flex items-center justify-center overflow-hidden shrink-0 group disabled:opacity-50"
+              >
+                {party.avatar ? (
+                  <img src={party.avatar} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-gold text-xl">⚔</span>
+                )}
+                <span className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-[10px] text-white leading-tight text-center">
+                  Сменить
+                </span>
+              </button>
+            ) : (
+              <div className="w-14 h-14 rounded-lg bg-white/5 border border-gold/20 flex items-center justify-center overflow-hidden shrink-0">
+                {party.avatar ? (
+                  <img src={party.avatar} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-gold text-xl">⚔</span>
+                )}
+              </div>
+            )}
             <div className="min-w-0">
               <h3 className="gold-text text-xl font-medium truncate">{party.name}</h3>
               <p className="text-white/50 text-xs">
