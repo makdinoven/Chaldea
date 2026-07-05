@@ -114,6 +114,10 @@ const LocationMobs = ({ locationId, characterId, gatedMobIds = [] }: LocationMob
 
   const mobCount = mobs.length;
 
+  // Hide the whole section when there are no monsters here (keep it visible on
+  // error so the failure is surfaced). Avoids an empty "Монстры" block.
+  if (mobCount === 0 && !error) return null;
+
   return (
     <section className="bg-black/60 rounded-card">
       {/* Collapsible header */}

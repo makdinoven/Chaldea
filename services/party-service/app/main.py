@@ -202,6 +202,10 @@ def parties_by_location(location_id: int, db: Session = Depends(get_db)):
 
     out = []
     for party_id, mems in by_party.items():
+        # Only surface squads that are actually grouped up HERE (2+ members
+        # co-located) — a lone member on the location isn't a "squad here".
+        if len(mems) < 2:
+            continue
         party = crud.get_party(db, party_id)
         if not party:
             continue

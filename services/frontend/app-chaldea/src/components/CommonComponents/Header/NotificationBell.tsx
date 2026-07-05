@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
@@ -10,6 +10,7 @@ import {
   closeDropdown,
   markAllAsRead,
 } from '../../../redux/slices/notificationSlice';
+import { getIncomingInvites, respondInvite, IncomingInvite } from '../../../api/squads';
 import toast from 'react-hot-toast';
 
 const NotificationBell = () => {
@@ -19,7 +20,44 @@ const NotificationBell = () => {
   const notifications = useAppSelector(selectNotifications);
   const dropdownOpen = useAppSelector(selectDropdownOpen);
   const userId = useAppSelector((state) => state.user.id);
+  const characterId = useAppSelector((state) => state.user.character?.id ?? null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // FEAT-144: live party invites shown at the top of the bell with accept/decline.
+  const [invites, setInvites] = useState<IncomingInvite[]>([]);
+  const [inviteBusy, setInviteBusy] = useState<number | null>(null);
+
+  const loadInvites = useCallback(async () => {
+    if (!characterId) {
+      setInvites([]);
+      return;
+    }
+    try {
+      setInvites(await getIncomingInvites(characterId));
+    } catch {
+      /* silent — invites are a non-critical bell extra */
+    }
+  }, [characterId]);
+
+  // Refresh on mount, when the dropdown opens, and whenever a new notification
+  // arrives (a party invite also pushes a text notification).
+  useEffect(() => {
+    loadInvites();
+  }, [loadInvites, dropdownOpen, notifications.length]);
+
+  const handleRespondInvite = async (partyId: number, accept: boolean) => {
+    if (!characterId || inviteBusy) return;
+    setInviteBusy(partyId);
+    try {
+      await respondInvite(partyId, characterId, accept);
+      toast.success(accept ? 'Вы вступили в отряд' : 'Приглашение отклонено');
+      await loadInvites();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Не удалось обработать приглашение');
+    } finally {
+      setInviteBusy(null);
+    }
+  };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -89,6 +127,38 @@ const NotificationBell = () => {
               Уведомления
             </span>
           </div>
+
+          {/* FEAT-144: actionable party invites */}
+          {invites.length > 0 && (
+            <div className="border-b border-white/10">
+              {invites.map((inv) => (
+                <div key={inv.party_id} className="px-4 py-3 bg-gold/[0.06]">
+                  <p className="text-white text-sm font-montserrat">
+                    <span className="gold-text">{inv.leader_name ?? 'Игрок'}</span>
+                    {' приглашает в отряд «'}
+                    {inv.party_name}
+                    {'»'}
+                  </p>
+                  <div className="flex gap-2 mt-2">
+                    <button
+                      disabled={inviteBusy === inv.party_id}
+                      onClick={() => handleRespondInvite(inv.party_id, true)}
+                      className="px-3 py-1 rounded-lg border border-emerald-400/40 text-emerald-300 text-xs hover:bg-emerald-400/10 transition disabled:opacity-50"
+                    >
+                      Принять
+                    </button>
+                    <button
+                      disabled={inviteBusy === inv.party_id}
+                      onClick={() => handleRespondInvite(inv.party_id, false)}
+                      className="px-3 py-1 rounded-lg border border-white/15 text-white/60 text-xs hover:bg-white/5 transition disabled:opacity-50"
+                    >
+                      Отклонить
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="overflow-y-auto max-h-[300px] gold-scrollbar">
             {notifications.length === 0 ? (
