@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     CHAR_ATTRS_SERVICE_URL: str = os.getenv("CHAR_ATTRS_SERVICE_URL", "http://character-attributes-service:8002")
     RABBITMQ_URL: str = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
     LOCATIONS_SERVICE_URL: str = os.getenv("LOCATIONS_SERVICE_URL", "http://locations-service:8006")
+    PARTY_SERVICE_URL: str = os.getenv("PARTY_SERVICE_URL", "http://party-service:8014")
 
     class Config:
         env_file = ".env"

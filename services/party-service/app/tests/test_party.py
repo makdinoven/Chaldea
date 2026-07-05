@@ -23,6 +23,8 @@ _TestSession = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
 
 # character_id -> {id, user_id, current_location_id, name, avatar}
 CHARS: dict = {}
+# recorded (character_id, amount) passive-XP awards during xp-bonus tests
+AWARDS: list = []
 
 
 def _reg(char_id, user_id, loc=1, name="Char"):
@@ -40,10 +42,33 @@ def _setup(monkeypatch):
         crud, "get_characters_map",
         lambda db, ids: {cid: CHARS[cid] for cid in ids if cid in CHARS},
     )
+    monkeypatch.setattr(main, "_award_passive_xp", lambda cid, amt: AWARDS.append((cid, amt)))
     CHARS.clear()
+    AWARDS.clear()
     yield
     main.app.dependency_overrides.clear()
     models.Base.metadata.drop_all(bind=_engine)
+
+
+def _make_party(leader_id, accepted_member_ids):
+    """Insert a party + accepted members straight into the DB for XP tests."""
+    db = _TestSession()
+    party = models.Party(name="Отряд", leader_character_id=leader_id)
+    db.add(party)
+    db.flush()
+    db.add(models.PartyMember(
+        party_id=party.id, character_id=leader_id, user_id=leader_id * 10,
+        is_leader=True, status=models.MemberStatus.accepted,
+    ))
+    for mid in accepted_member_ids:
+        db.add(models.PartyMember(
+            party_id=party.id, character_id=mid, user_id=mid * 10,
+            is_leader=False, status=models.MemberStatus.accepted,
+        ))
+    db.commit()
+    pid = party.id
+    db.close()
+    return pid
 
 
 def _client(user_id):
@@ -152,3 +177,50 @@ def test_leader_leave_transfers_leadership():
     assert out.status_code == 200 and out.json()["new_leader"] == 2
     mine = _client(20).get("/party/mine", params={"character_id": 2}).json()
     assert mine["leader_character_id"] == 2
+
+
+# ---------------------------------------------------------------------------
+# XP bonus (FEAT-144 Ф2)
+# ---------------------------------------------------------------------------
+
+def _xp(character_id, base_xp, source, location_id, participants):
+    return _client(character_id).post("/party/internal/xp-bonus", json={
+        "character_id": character_id, "base_xp": base_xp, "source": source,
+        "location_id": location_id, "participant_character_ids": participants,
+    })
+
+
+def test_xp_bonus_combat_self_and_trickle():
+    _reg(1, 10, loc=1); _reg(2, 20, loc=1); _reg(3, 30, loc=2)  # char3 elsewhere
+    _make_party(1, [2, 3])
+    d = _xp(1, 100, "combat", 1, [1]).json()
+    assert d["applied"] and d["self_bonus"] == 10
+    # actor self-bonus + trickle to green squadmate 2; red squadmate 3 gets nothing
+    assert set(AWARDS) == {(1, 10), (2, 10)}
+
+
+def test_xp_bonus_post_no_trickle():
+    _reg(1, 10, loc=1); _reg(2, 20, loc=1)
+    _make_party(1, [2])
+    assert _xp(1, 100, "post", 1, [1]).json()["applied"]
+    assert AWARDS == [(1, 10)]  # only the poster's self-bonus, no trickle
+
+
+def test_xp_bonus_alone_no_bonus():
+    _reg(1, 10, loc=1); _reg(2, 20, loc=2)  # squadmate not co-located
+    _make_party(1, [2])
+    assert _xp(1, 100, "combat", 1, [1]).json()["applied"] is False
+    assert AWARDS == []
+
+
+def test_xp_bonus_group_excludes_participants():
+    _reg(1, 10, loc=1); _reg(2, 20, loc=1)
+    _make_party(1, [2])
+    assert _xp(1, 100, "combat", 1, [1, 2]).json()["applied"]
+    assert AWARDS == [(1, 10)]  # char2 earned base in the group fight → no trickle
+
+
+def test_xp_bonus_no_party():
+    _reg(1, 10, loc=1)
+    assert _xp(1, 100, "combat", 1, [1]).json()["applied"] is False
+    assert AWARDS == []

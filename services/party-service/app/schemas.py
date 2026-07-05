@@ -59,3 +59,23 @@ class IncomingInvite(BaseModel):
     party_avatar: Optional[str] = None
     leader_character_id: int
     leader_name: Optional[str] = None
+
+
+class XpBonusRequest(BaseModel):
+    """Service-to-service: an XP-earning event by a party member (FEAT-144 §5)."""
+    character_id: int
+    base_xp: int
+    source: str  # "post" | "combat" | "dungeon"
+    location_id: Optional[int] = None
+    # Party members who already earned base XP from this same event (a group
+    # fight/dungeon). They are excluded from the passive trickle so they don't
+    # double-dip. For a solo kill this is just [character_id].
+    participant_character_ids: List[int] = []
+
+
+class XpBonusResult(BaseModel):
+    applied: bool = False
+    bonus_per_member: int = 0
+    self_bonus: int = 0
+    trickle: List[dict] = []
+

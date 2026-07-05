@@ -111,6 +111,7 @@ async def init_battle_state(
     participants_payload: List[Dict],   # [{participant_id, character_id, team}]
     first_actor_participant_id: int,
     deadline_at: datetime,
+    location_id: int = None,
 ) -> None:
     """
     Создаём начальное состояние боя:
@@ -133,6 +134,9 @@ async def init_battle_state(
         "next_actor": first_actor_participant_id,
         "first_actor": first_actor_participant_id,  # ← кто начинает
         "turn_order": turn_order,
+        # Location where the fight happens — used to resolve co-located squadmates
+        # for the party XP bonus (FEAT-144 Ф2).
+        "location_id": location_id,
         # First cycle (FEAT-143): from the initiator's first turn until their
         # next turn, everyone may use only ONE skill type per turn. Unlocks once
         # the turn returns to the initiator.

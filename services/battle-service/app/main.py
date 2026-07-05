@@ -277,6 +277,25 @@ async def _distribute_pve_rewards(
         except httpx.RequestError as e:
             logger.error(f"Ошибка при отправке наград для {winner_id}: {e}")
 
+        # Party XP bonus (FEAT-144 Ф2): self-bonus to the winner + trickle to
+        # co-located squadmates who weren't in the fight. winner_char_ids are the
+        # participants who already earned base XP (excluded from trickle).
+        if total_xp > 0:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    await client.post(
+                        f"{settings.PARTY_SERVICE_URL}/party/internal/xp-bonus",
+                        json={
+                            "character_id": winner_id,
+                            "base_xp": total_xp,
+                            "source": "combat",
+                            "location_id": battle_state.get("location_id"),
+                            "participant_character_ids": winner_char_ids,
+                        },
+                    )
+            except Exception as e:
+                logger.warning(f"party xp-bonus (combat) failed for {winner_id}: {e}")
+
         # Add dropped items to inventory
         for item in dropped_items:
             try:
@@ -593,6 +612,7 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id):
         participants_payload=participants_payload,
         first_actor_participant_id=first_actor_pid,
         deadline_at=deadline,
+        location_id=location_id,
     )
     await rds.zadd(KEY_BATTLE_TURNS.format(id=battle_obj.id), {"0": 1})
 
@@ -2452,6 +2472,7 @@ async def respond_to_pvp_invitation(
         participants_payload=participants_payload,
         first_actor_participant_id=first_actor_pid,
         deadline_at=deadline,
+        location_id=pvp_location_id,
     )
     await rds.zadd(KEY_BATTLE_TURNS.format(id=battle_obj.id), {"0": 1})
 
@@ -2749,6 +2770,7 @@ async def pvp_attack(
         participants_payload=participants_payload,
         first_actor_participant_id=first_actor_pid,
         deadline_at=deadline,
+        location_id=attack_location_id,
     )
     await rds.zadd(KEY_BATTLE_TURNS.format(id=battle_obj.id), {"0": 1})
 

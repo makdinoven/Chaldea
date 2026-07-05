@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     ATTRIBUTES_SERVICE_URL: str = "http://character-attributes-service:8002"
     INVENTORY_SERVICE_URL: str = "http://inventory-service:8004"
     BATTLE_SERVICE_URL: str = "http://battle-service:8010"
+    PARTY_SERVICE_URL: str = "http://party-service:8014"
     BATTLEPASS_SERVICE_URL: str = ""
 
 settings = Settings()

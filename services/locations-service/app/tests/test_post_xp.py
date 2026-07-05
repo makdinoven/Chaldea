@@ -200,6 +200,7 @@ class TestAwardPostXpAndLog:
         """When xp > 0, calls both attributes and character-service."""
         mock_settings.ATTRIBUTES_SERVICE_URL = "http://attrs:8002"
         mock_settings.CHARACTER_SERVICE_URL = "http://chars:8005"
+        mock_settings.PARTY_SERVICE_URL = "http://party:8014"
 
         mock_response = AsyncMock()
         mock_response.status_code = 200
@@ -227,8 +228,9 @@ class TestAwardPostXpAndLog:
                 json={"amount": 4},
             )
 
-            # Verify log creation call
-            mock_client.post.assert_called_once_with(
+            # Verify log creation call (post is now also used for the party
+            # xp-bonus, so use assert_any_call rather than once).
+            mock_client.post.assert_any_call(
                 "http://chars:8005/characters/1/logs",
                 json={
                     "event_type": "rp_post",
@@ -239,6 +241,18 @@ class TestAwardPostXpAndLog:
                         "xp_earned": 4,
                         "char_count": 350,
                     },
+                },
+            )
+
+            # Verify the party XP-bonus call (FEAT-144 Ф2)
+            mock_client.post.assert_any_call(
+                "http://party:8014/party/internal/xp-bonus",
+                json={
+                    "character_id": 1,
+                    "base_xp": 4,
+                    "source": "post",
+                    "location_id": 100,
+                    "participant_character_ids": [1],
                 },
             )
 

@@ -57,6 +57,20 @@ def _charge_active_xp(character_id: int, amount: int) -> None:
         logger.warning(f"Не удалось списать активный опыт у {character_id}: {e}")
 
 
+def _award_passive_xp(character_id: int, amount: int) -> None:
+    """Grant passive XP (the party bonus/trickle). Non-fatal."""
+    if amount == 0:
+        return
+    try:
+        httpx.put(
+            f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}/passive_experience",
+            json={"amount": amount},
+            timeout=5.0,
+        )
+    except Exception as e:
+        logger.warning(f"Не удалось начислить пассивный опыт {character_id}: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Endpoints (literal paths before parametric ones)
 # ---------------------------------------------------------------------------
@@ -88,6 +102,53 @@ def create_party(
     db.commit()
     db.refresh(party)
     return crud.build_party_out(db, party)
+
+
+@router.post("/internal/xp-bonus", response_model=schemas.XpBonusResult)
+def xp_bonus(req: schemas.XpBonusRequest, db: Session = Depends(get_db)):
+    """Internal (service-to-service): distribute the party XP bonus for an
+    XP-earning event (FEAT-144 §5).
+
+    - self-bonus +N% to the actor (any source), but only when at least one
+      squadmate is co-located (green);
+    - trickle +N% to each other green squadmate for combat/dungeon (not posts),
+      excluding those who already earned base XP from the same event.
+    """
+    if req.base_xp <= 0 or req.location_id is None:
+        return schemas.XpBonusResult(applied=False)
+    membership = crud.get_accepted_membership(db, req.character_id)
+    if not membership:
+        return schemas.XpBonusResult(applied=False)
+
+    others = [
+        m for m in crud.get_members(db, membership.party_id)
+        if m.status == models.MemberStatus.accepted and m.character_id != req.character_id
+    ]
+    info = crud.get_characters_map(db, [m.character_id for m in others])
+    green_others = [
+        m.character_id for m in others
+        if info.get(m.character_id, {}).get("current_location_id") == req.location_id
+    ]
+    if not green_others:
+        # Actor is alone on the location — no party bonus at all.
+        return schemas.XpBonusResult(applied=False)
+
+    bonus = round(req.base_xp * settings.PARTY_XP_BONUS_PCT / 100)
+    if bonus <= 0:
+        return schemas.XpBonusResult(applied=False)
+
+    _award_passive_xp(req.character_id, bonus)
+    result = schemas.XpBonusResult(
+        applied=True, bonus_per_member=bonus, self_bonus=bonus, trickle=[],
+    )
+    if req.source in ("combat", "dungeon"):
+        participants = set(req.participant_character_ids)
+        for cid in green_others:
+            if cid in participants:
+                continue
+            _award_passive_xp(cid, bonus)
+            result.trickle.append({"character_id": cid, "amount": bonus})
+    return result
 
 
 @router.get("/mine", response_model=Optional[schemas.PartyOut])

@@ -57,6 +57,21 @@ async def award_post_xp_and_log(
                     f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{character_id}/passive_experience",
                     json={"amount": xp},
                 )
+                # Party self-bonus (FEAT-144 Ф2): posts grant the poster +10% when
+                # a squadmate is co-located. Posts do NOT trickle to others.
+                try:
+                    await client.post(
+                        f"{settings.PARTY_SERVICE_URL}/party/internal/xp-bonus",
+                        json={
+                            "character_id": character_id,
+                            "base_xp": xp,
+                            "source": "post",
+                            "location_id": location_id,
+                            "participant_character_ids": [character_id],
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"party xp-bonus (post) failed for {character_id}: {e}")
             description = f"Написал пост в {location_name}, получил {xp} XP"
             await client.post(
                 f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/logs",
