@@ -9,32 +9,51 @@ import { replaceWordInHtml } from '../../../api/spellcheck';
 import { NpcInLocation } from './types';
 
 const MIN_POST_LENGTH = 300;
+const MIN_COMBAT_POST_LENGTH = 500; // FEAT-145
+const SYMBOLS_PER_TARGET = 200;
+
+interface CombatTarget {
+  character_id: number;
+  name: string;
+}
 
 interface PostCreateFormProps {
-  onSubmit: (content: string) => Promise<void>;
+  onSubmit: (content: string, postType?: string, targets?: number[]) => Promise<void>;
   onSubmitAsNpc?: (npcId: number, content: string) => Promise<void>;
   disabled?: boolean;
   isStaff?: boolean;
   npcs?: NpcInLocation[];
+  combatTargets?: CombatTarget[];
 }
 
 const stripHtmlTags = (html: string) => html.replace(/<[^>]*>/g, '').trim();
 
 const isContentEmpty = (html: string) => stripHtmlTags(html).length === 0;
 
-const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] }: PostCreateFormProps) => {
+const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [], combatTargets = [] }: PostCreateFormProps) => {
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
   const [npcMode, setNpcMode] = useState(false);
   const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
+  const [combatMode, setCombatMode] = useState(false);
+  const [selectedTargets, setSelectedTargets] = useState<number[]>([]);
   const formRef = useRef<HTMLDivElement>(null);
   const spellCheck = useSpellCheck();
 
   const charCount = useMemo(() => stripHtmlTags(content).length, [content]);
-  const meetsMinLength = charCount >= MIN_POST_LENGTH;
-  const xpPreview = meetsMinLength ? Math.round(charCount / 100) : 0;
+  // Combat posts (FEAT-145) need ≥500 chars and unlock ⌊chars/200⌋ mob targets.
+  const effectiveMin = combatMode ? MIN_COMBAT_POST_LENGTH : MIN_POST_LENGTH;
+  const meetsMinLength = charCount >= effectiveMin;
+  const maxTargets = Math.floor(charCount / SYMBOLS_PER_TARGET);
+  const xpPreview = charCount >= MIN_POST_LENGTH ? Math.round(charCount / 100) : 0;
+
+  const toggleTarget = (cid: number) => {
+    setSelectedTargets((prev) =>
+      prev.includes(cid) ? prev.filter((t) => t !== cid) : [...prev, cid],
+    );
+  };
 
   useEffect(() => {
     if (!isEditorOpen) return;
@@ -71,16 +90,28 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
     }
 
     if (!meetsMinLength) {
-      toast.error(`Минимальная длина поста — ${MIN_POST_LENGTH} символов (сейчас: ${charCount})`);
+      toast.error(`Минимальная длина ${combatMode ? 'боевого ' : ''}поста — ${effectiveMin} символов (сейчас: ${charCount})`);
       return;
+    }
+    if (combatMode) {
+      if (selectedTargets.length === 0) {
+        toast.error('Выберите хотя бы одну цель для боевого поста');
+        return;
+      }
+      if (selectedTargets.length > maxTargets) {
+        toast.error(`Можно выбрать не больше ${maxTargets} целей на ${charCount} символов`);
+        return;
+      }
     }
 
     setSubmitting(true);
     try {
-      await onSubmit(content);
+      await onSubmit(content, combatMode ? 'combat' : 'regular', combatMode ? selectedTargets : []);
       setContent('');
       setEditorKey((k) => k + 1);
       setIsEditorOpen(false);
+      setCombatMode(false);
+      setSelectedTargets([]);
     } finally {
       setSubmitting(false);
     }
@@ -111,6 +142,8 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
     setEditorKey((k) => k + 1);
     setNpcMode(false);
     setSelectedNpcId(null);
+    setCombatMode(false);
+    setSelectedTargets([]);
     spellCheck.reset();
   };
 
@@ -118,7 +151,8 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
 
   const isSubmitDisabled = npcMode
     ? submitting || isContentEmpty(content) || !selectedNpcId
-    : submitting || isContentEmpty(content) || !meetsMinLength;
+    : submitting || isContentEmpty(content) || !meetsMinLength ||
+      (combatMode && selectedTargets.length === 0);
 
   return (
     <div ref={formRef}>
@@ -192,6 +226,53 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
               </div>
             )}
 
+            {/* Combat post (FEAT-145): unlocks attacking the chosen mobs */}
+            {!npcMode && combatTargets.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <label className="flex items-center gap-2 cursor-pointer text-sm text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={combatMode}
+                    onChange={(e) => {
+                      setCombatMode(e.target.checked);
+                      if (!e.target.checked) setSelectedTargets([]);
+                    }}
+                    className="accent-site-red w-4 h-4"
+                  />
+                  Боевой пост (открывает атаку на мобов)
+                </label>
+                {combatMode && (
+                  <div className="flex flex-col gap-1.5 bg-white/[0.03] rounded-lg p-3">
+                    <p className="text-white/50 text-xs">
+                      Мин. 500 символов. Целей: {selectedTargets.length}/{maxTargets}{' '}
+                      (1 цель на 200 символов).
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {combatTargets.map((t) => {
+                        const on = selectedTargets.includes(t.character_id);
+                        const reachedMax = !on && selectedTargets.length >= maxTargets;
+                        return (
+                          <button
+                            key={t.character_id}
+                            type="button"
+                            disabled={reachedMax}
+                            onClick={() => toggleTarget(t.character_id)}
+                            className={`text-xs px-2.5 py-1 rounded-full border transition ${
+                              on
+                                ? 'border-site-red bg-site-red/20 text-site-red'
+                                : 'border-white/20 text-white/70 hover:bg-white/5'
+                            } ${reachedMax ? 'opacity-40 cursor-not-allowed' : ''}`}
+                          >
+                            {t.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <WysiwygEditor
               key={editorKey}
               content={content}
@@ -212,12 +293,12 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
             {!npcMode && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs sm:text-sm">
                 <span className={meetsMinLength ? 'text-stat-energy' : 'text-site-red'}>
-                  {charCount} / {MIN_POST_LENGTH} символов
+                  {charCount} / {effectiveMin} символов
                 </span>
                 <span className="text-white/50">
                   {meetsMinLength
                     ? `~${xpPreview} XP`
-                    : `Минимум ${MIN_POST_LENGTH} символов`}
+                    : `Минимум ${effectiveMin} символов`}
                 </span>
               </div>
             )}
@@ -226,7 +307,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [] 
               {/* Min length hint on mobile when submit is blocked */}
               {!npcMode && !meetsMinLength && charCount > 0 && (
                 <span className="text-xs text-site-red sm:hidden">
-                  Ещё {MIN_POST_LENGTH - charCount} символов до минимума
+                  Ещё {effectiveMin - charCount} символов до минимума
                 </span>
               )}
               <div className="flex flex-wrap justify-end gap-3 sm:ml-auto">

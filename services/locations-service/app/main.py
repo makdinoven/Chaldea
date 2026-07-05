@@ -606,6 +606,28 @@ async def update_location_neighbors(
 # --------------------------------------------------------------------
 # POSTS
 # --------------------------------------------------------------------
+def _validate_intent_post(char_count: int, post_type: str, targets: list) -> None:
+    """FEAT-145: validate a non-regular intent post (min length + combat targets)."""
+    if post_type == "regular":
+        return
+    if post_type not in crud.GATED_POST_TYPES:
+        raise HTTPException(status_code=400, detail="Неизвестный тип поста")
+    if char_count < crud.MIN_ACTION_POST_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Пост-намерение требует минимум {crud.MIN_ACTION_POST_LENGTH} символов (сейчас: {char_count})",
+        )
+    if post_type == "combat":
+        max_targets = char_count // crud.SYMBOLS_PER_COMBAT_TARGET
+        if not targets:
+            raise HTTPException(status_code=400, detail="Выберите хотя бы одну цель для боевого поста")
+        if len(targets) > max_targets:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Можно выбрать не больше {max_targets} целей на {char_count} символов",
+            )
+
+
 @router.post("/posts/", response_model=schemas.PostResponse)
 async def create_new_post(
     post_data: schemas.PostCreate,
@@ -638,27 +660,10 @@ async def create_new_post(
             detail=f"Минимальная длина поста — {crud.MIN_POST_LENGTH} символов (сейчас: {char_count})",
         )
 
-    # FEAT-145: an intent post (combat/pvp/gathering/dungeon/npc) needs ≥500
-    # chars; a combat post unlocks ⌊chars/200⌋ mob targets.
+    # FEAT-145 intent-post validation (combat/pvp/gathering/dungeon/npc).
     post_type = getattr(post_data, "post_type", "regular") or "regular"
     targets = getattr(post_data, "targets", []) or []
-    if post_type != "regular":
-        if post_type not in crud.GATED_POST_TYPES:
-            raise HTTPException(status_code=400, detail="Неизвестный тип поста")
-        if char_count < crud.MIN_ACTION_POST_LENGTH:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Пост-намерение требует минимум {crud.MIN_ACTION_POST_LENGTH} символов (сейчас: {char_count})",
-            )
-        if post_type == "combat":
-            max_targets = char_count // crud.SYMBOLS_PER_COMBAT_TARGET
-            if not targets:
-                raise HTTPException(status_code=400, detail="Выберите хотя бы одну цель для боевого поста")
-            if len(targets) > max_targets:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Можно выбрать не больше {max_targets} целей на {char_count} символов",
-                )
+    _validate_intent_post(char_count, post_type, targets)
 
     result = await crud.create_post(session, post_data)
 
@@ -1023,12 +1028,19 @@ async def move_and_post(
             detail=f"Минимальная длина поста — {crud.MIN_POST_LENGTH} символов (сейчас: {plain_char_count})",
         )
 
+    # FEAT-145 intent-post validation (shared with /posts/).
+    mp_post_type = getattr(movement, "post_type", "regular") or "regular"
+    mp_targets = getattr(movement, "targets", []) or []
+    _validate_intent_post(plain_char_count, mp_post_type, mp_targets)
+
     # 5. Создаём пост для новой локации (destination_location_id)
     # use the path parameter
     payload = {
         "character_id": movement.character_id,
         "location_id": destination_location_id,
-        "content": movement.content
+        "content": movement.content,
+        "post_type": mp_post_type,
+        "targets": mp_targets,
     }
 
     # обернуть в Pydantic-модель
@@ -1036,6 +1048,16 @@ async def move_and_post(
 
     # и передать уже её
     new_post = await crud.create_post(session, post_in)
+
+    # Grant the action gates this intent post unlocks (FEAT-145).
+    if mp_post_type != "regular":
+        try:
+            await crud.create_action_gates(
+                session, movement.character_id, destination_location_id,
+                new_post.id, mp_post_type, mp_targets,
+            )
+        except Exception as e:
+            logger.warning(f"create_action_gates failed for post {new_post.id}: {e}")
 
     # 6. Обновляем текущую локацию персонажа через Character‑service
     async with httpx.AsyncClient(timeout=5.0) as client:

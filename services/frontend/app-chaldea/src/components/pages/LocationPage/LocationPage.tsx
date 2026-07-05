@@ -18,6 +18,7 @@ import PendingInvitationsPanel from './PendingInvitationsPanel';
 import PendingPartyInvitesPanel from './PendingPartyInvitesPanel';
 import LocationMobs from '../../LocationMobs';
 import PartiesOnLocation from './PartiesOnLocation';
+import { fetchMobsByLocation } from '../../../api/mobs';
 import BattlesSection from './BattlesSection';
 import useBattleLock from '../../../hooks/useBattleLock';
 import BattleLockBanner from '../../CommonComponents/BattleLockBanner';
@@ -297,13 +298,37 @@ const LocationPage = () => {
 
   // --- Post submit ---
 
+  // Mobs on this location — offered as targets for a combat post (FEAT-145).
+  const [combatTargets, setCombatTargets] = useState<{ character_id: number; name: string }[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchMobsByLocation(Number(locationId))
+      .then((mobs) => {
+        if (!cancelled) {
+          setCombatTargets(
+            mobs
+              .filter((m) => m.status !== 'in_battle')
+              .map((m) => ({ character_id: m.character_id, name: m.name })),
+          );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCombatTargets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [locationId]);
+
   const handleSubmitPost = useCallback(
-    async (content: string) => {
+    async (content: string, postType: string = 'regular', targets: number[] = []) => {
       try {
         await axios.post(`${BASE_URL}/locations/${locationId}/move_and_post`, {
           character_id: character?.id,
           location_id: locationId,
           content,
+          post_type: postType,
+          targets,
         });
         // If character moved to this location, update Redux state + refresh cooldown
         if (character?.current_location?.id !== Number(locationId) && location) {
@@ -641,6 +666,7 @@ const LocationPage = () => {
                 <PostCreateForm
                   onSubmit={handleSubmitPost}
                   onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
+                  combatTargets={combatTargets}
                   disabled={actionsLocked || (!isCharacterHere && !isNeighborLocation && !userIsStaff)}
                   isStaff={userIsStaff}
                   npcs={location.npcs ?? []}

@@ -563,6 +563,9 @@ class LocationClientDetails(BaseModel):
 class MovementPostRequest(BaseModel):
     character_id: int
     content: str
+    # FEAT-145 RP gating (same as PostCreate).
+    post_type: str = "regular"
+    targets: List[int] = []
 
 class QuickMoveRequest(BaseModel):
     character_id: int
