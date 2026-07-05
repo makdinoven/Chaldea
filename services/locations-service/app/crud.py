@@ -5328,6 +5328,49 @@ async def _count_active_sessions_on_node(
     return int(val or 0)
 
 
+async def _gatherers_on_node(session: AsyncSession, node_id: int) -> List[int]:
+    """character_ids currently gathering a node (active, not overdue)."""
+    result = await session.execute(
+        text(
+            "SELECT character_id FROM gathering_sessions "
+            "WHERE node_id = :nid AND status = 'active' AND complete_at > NOW()"
+        ),
+        {"nid": node_id},
+    )
+    return [int(r[0]) for r in result.fetchall()]
+
+
+async def active_gatherers_among(session: AsyncSession, character_ids: List[int]) -> List[int]:
+    """Which of the given character_ids are actively gathering (FEAT-144 Ф3) —
+    used to keep busy squadmates out of a group mob fight."""
+    from sqlalchemy import bindparam
+    if not character_ids:
+        return []
+    result = await session.execute(
+        text(
+            "SELECT DISTINCT character_id FROM gathering_sessions "
+            "WHERE character_id IN :ids AND status = 'active' AND complete_at > NOW()"
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"ids": list(character_ids)},
+    )
+    return [int(r[0]) for r in result.fetchall()]
+
+
+async def _party_active_member_ids(character_id: int, location_id: int) -> set:
+    """Co-located accepted squadmates of a character, via party-service (Ф3)."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{settings.PARTY_SERVICE_URL}/party/internal/active-members",
+                params={"character_id": character_id, "location_id": location_id},
+            )
+            if resp.status_code == 200:
+                return set(resp.json().get("member_character_ids", []))
+    except Exception as exc:
+        logger.warning("party active-members failed for %s: %s", character_id, exc)
+    return set()
+
+
 async def _load_tool_for_gathering(
     session: AsyncSession,
     tool_inventory_item_id: int,
@@ -5682,12 +5725,17 @@ async def start_gathering(
     # 8. Concurrency guard: if the node disallows concurrent gathering, refuse
     # if any other active (non-overdue) session exists.
     if not bool(node.allow_concurrent_gather):
-        active_count = await _count_active_sessions_on_node(db, int(node.id))
-        if active_count > 0:
-            raise HTTPException(
-                status_code=409,
-                detail="Нода занята другим персонажем",
-            )
+        gatherers = await _gatherers_on_node(db, int(node.id))
+        others = [g for g in gatherers if g != character_id]
+        if others:
+            # Squadmates may gather the same node together (FEAT-144 Ф3): allow
+            # only when every current gatherer is an accepted co-located squadmate.
+            mates = await _party_active_member_ids(character_id, location_id)
+            if not set(others).issubset(mates):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Нода занята другим персонажем",
+                )
 
     # 9. Tool validation (if provided). Reads from shared DB inside the same
     # transaction as the FOR UPDATE on the node.

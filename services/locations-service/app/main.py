@@ -3171,6 +3171,17 @@ async def start_gathering_route(
     return schemas.StartGatheringResponse(**payload)
 
 
+@router.post("/internal/gathering-status", response_model=schemas.GatheringStatusResponse)
+async def gathering_status_internal(
+    body: schemas.GatheringStatusRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    """Internal (service-to-service): which of the given characters are actively
+    gathering — battle-service keeps them out of a group mob fight (FEAT-144 Ф3)."""
+    busy = await crud.active_gatherers_among(session, body.character_ids)
+    return schemas.GatheringStatusResponse(gathering_character_ids=busy)
+
+
 # --------------------------------------------------------------------
 # FEAT-128 task #15 — cancel gathering (player-facing manual + internal)
 # --------------------------------------------------------------------

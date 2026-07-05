@@ -1497,6 +1497,16 @@ LocationClientDetails.update_forward_refs(GatheringNodeClient=GatheringNodeClien
 # -------------------------------
 #   GATHERING — START SESSION SCHEMAS (FEAT-128 task #14)
 # -------------------------------
+class GatheringStatusRequest(BaseModel):
+    """Internal batch check (FEAT-144 Ф3): which of these characters are busy
+    gathering (so they aren't pulled into a group fight)."""
+    character_ids: List[int] = []
+
+
+class GatheringStatusResponse(BaseModel):
+    gathering_character_ids: List[int] = []
+
+
 class StartGatheringRequest(BaseModel):
     """Player-facing request body for POST /gathering-nodes/{node_id}/start.
 

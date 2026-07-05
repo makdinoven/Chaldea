@@ -777,15 +777,36 @@ async def party_mob_attack(
     if mob_row[0] != loc:
         raise HTTPException(400, "Моб находится в другой локации")
 
-    if len(members) > settings.BATTLE_MAX_TEAM_SIZE:
-        raise HTTPException(400, f"В команде максимум {settings.BATTLE_MAX_TEAM_SIZE} участников")
+    # Exclude squadmates who are busy — actively gathering (FEAT-144 Ф3) or
+    # already in a battle. The fight proceeds with whoever is free; a gatherer
+    # simply won't be pulled in. The leader must be free.
+    gathering = set()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            gresp = await client.post(
+                f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/gathering-status",
+                json={"character_ids": members},
+            )
+            if gresp.status_code == 200:
+                gathering = set(gresp.json().get("gathering_character_ids", []))
+    except Exception as e:
+        logger.warning(f"gathering-status check failed: {e}")
 
-    player_ids = list(members) + [req.mob_character_id]
-    for cid in player_ids:
+    available = []
+    for cid in members:
+        if cid in gathering:
+            continue
         if await get_active_battle_for_character(db, cid):
-            raise HTTPException(400, "Кто-то из участников уже в бою")
+            continue
+        available.append(cid)
 
-    teams = [0] * len(members) + [1]
+    if req.leader_character_id not in available:
+        raise HTTPException(400, "Вы сейчас заняты (сбор или бой)")
+    if len(available) > settings.BATTLE_MAX_TEAM_SIZE:
+        available = available[: settings.BATTLE_MAX_TEAM_SIZE]
+
+    player_ids = available + [req.mob_character_id]
+    teams = [0] * len(available) + [1]
     battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
         db, player_ids, teams, "pve", loc
     )
