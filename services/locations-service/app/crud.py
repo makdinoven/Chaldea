@@ -18,6 +18,9 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 MIN_POST_LENGTH = 300  # characters after stripping HTML
+MIN_ACTION_POST_LENGTH = 500       # non-regular (intent) posts (FEAT-145)
+SYMBOLS_PER_COMBAT_TARGET = 200     # 1 mob target unlocked per 200 chars
+GATED_POST_TYPES = {"combat", "pvp", "gathering", "dungeon", "npc_dialogue"}
 
 
 def strip_html_tags(html: str) -> str:
@@ -865,12 +868,91 @@ async def create_post(session: AsyncSession, post_data: PostCreate) -> Post:
     new_post = Post(
         character_id=post_data.character_id,
         location_id=post_data.location_id,
-        content=post_data.content
+        content=post_data.content,
+        post_type=getattr(post_data, "post_type", "regular") or "regular",
     )
     session.add(new_post)
     await session.commit()
     await session.refresh(new_post)
     return new_post
+
+async def create_action_gates(
+    session: AsyncSession, character_id: int, location_id: int,
+    post_id: int, post_type: str, targets: list,
+) -> int:
+    """Create open action gates for a non-regular post (FEAT-145). Combat posts
+    grant one gate per chosen mob target; other intents grant a single gate
+    (optionally bound to one target). Returns the number of gates created."""
+    from models import ActionGate
+    if post_type not in GATED_POST_TYPES:
+        return 0
+    gates = []
+    if post_type == "combat":
+        for tref in targets:
+            gates.append(ActionGate(
+                character_id=character_id, location_id=location_id, post_id=post_id,
+                action_type="combat", target_ref=tref, status="open",
+            ))
+    else:
+        gates.append(ActionGate(
+            character_id=character_id, location_id=location_id, post_id=post_id,
+            action_type=post_type, target_ref=(targets[0] if targets else None),
+            status="open",
+        ))
+    for g in gates:
+        session.add(g)
+    await session.commit()
+    return len(gates)
+
+
+def _gate_match_clause(character_id, location_id, action_type, target_ref):
+    from models import ActionGate
+    q = select(ActionGate).where(
+        ActionGate.character_id == character_id,
+        ActionGate.location_id == location_id,
+        ActionGate.action_type == action_type,
+        ActionGate.status == "open",
+    )
+    if target_ref is not None:
+        q = q.where(
+            (ActionGate.target_ref == target_ref) | (ActionGate.target_ref.is_(None))
+        )
+    return q
+
+
+async def check_action_gate(session, character_id, location_id, action_type, target_ref=None) -> bool:
+    """Is there an open gate for this action (and target)? (FEAT-145)"""
+    res = await session.execute(
+        _gate_match_clause(character_id, location_id, action_type, target_ref).limit(1)
+    )
+    return res.scalars().first() is not None
+
+
+async def consume_action_gate(session, character_id, location_id, action_type, target_ref=None) -> bool:
+    """Consume one matching open gate. Returns True if one was consumed."""
+    res = await session.execute(
+        _gate_match_clause(character_id, location_id, action_type, target_ref).limit(1)
+    )
+    gate = res.scalars().first()
+    if not gate:
+        return False
+    gate.status = "consumed"
+    gate.consumed_at = datetime.utcnow()
+    await session.commit()
+    return True
+
+
+async def expire_action_gates(session, character_id: int, location_id: int) -> None:
+    """Expire a character's open gates on a location when they leave it (FEAT-145)."""
+    await session.execute(
+        text(
+            "UPDATE action_gates SET status='expired' "
+            "WHERE character_id = :c AND location_id = :l AND status = 'open'"
+        ),
+        {"c": character_id, "l": location_id},
+    )
+    await session.commit()
+
 
 async def get_posts_by_location(session: AsyncSession, location_id: int) -> list:
     result = await session.execute(select(Post).where(Post.location_id == location_id).order_by(Post.id.desc()))

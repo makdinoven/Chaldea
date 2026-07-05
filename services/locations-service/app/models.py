@@ -156,10 +156,34 @@ class Post(Base):
     character_id = Column(Integer, nullable=False)
     location_id = Column(BigInteger, ForeignKey("Locations.id", ondelete="CASCADE"), nullable=False)
     content = Column(Text, nullable=False)
+    # Declared intent of the post (FEAT-145): regular | combat | pvp | gathering |
+    # dungeon | npc_dialogue. Non-regular posts gate the matching action.
+    post_type = Column(String(20), server_default='regular', nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
 
     __table_args__ = (
         Index('idx_posts_character_id', 'character_id'),
+    )
+
+
+class ActionGate(Base):
+    """A right, granted by an intent post, to perform an action on a location
+    (FEAT-145). Consumed when the action fires; expired when the character leaves
+    the location."""
+    __tablename__ = "action_gates"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    location_id = Column(BigInteger, ForeignKey("Locations.id", ondelete="CASCADE"), nullable=False)
+    post_id = Column(Integer, ForeignKey("posts.id", ondelete="SET NULL"), nullable=True)
+    action_type = Column(String(20), nullable=False)   # combat | pvp | gathering | dungeon | npc_dialogue
+    target_ref = Column(Integer, nullable=True)        # mob/player character_id, node_id, npc_id, ...
+    status = Column(String(12), server_default='open', nullable=False)  # open | consumed | expired
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    consumed_at = Column(TIMESTAMP, nullable=True)
+
+    __table_args__ = (
+        Index('idx_action_gates_lookup', 'character_id', 'location_id', 'action_type', 'status'),
     )
 
 

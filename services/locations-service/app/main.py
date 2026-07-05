@@ -638,7 +638,39 @@ async def create_new_post(
             detail=f"Минимальная длина поста — {crud.MIN_POST_LENGTH} символов (сейчас: {char_count})",
         )
 
+    # FEAT-145: an intent post (combat/pvp/gathering/dungeon/npc) needs ≥500
+    # chars; a combat post unlocks ⌊chars/200⌋ mob targets.
+    post_type = getattr(post_data, "post_type", "regular") or "regular"
+    targets = getattr(post_data, "targets", []) or []
+    if post_type != "regular":
+        if post_type not in crud.GATED_POST_TYPES:
+            raise HTTPException(status_code=400, detail="Неизвестный тип поста")
+        if char_count < crud.MIN_ACTION_POST_LENGTH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Пост-намерение требует минимум {crud.MIN_ACTION_POST_LENGTH} символов (сейчас: {char_count})",
+            )
+        if post_type == "combat":
+            max_targets = char_count // crud.SYMBOLS_PER_COMBAT_TARGET
+            if not targets:
+                raise HTTPException(status_code=400, detail="Выберите хотя бы одну цель для боевого поста")
+            if len(targets) > max_targets:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Можно выбрать не больше {max_targets} целей на {char_count} символов",
+                )
+
     result = await crud.create_post(session, post_data)
+
+    # Grant the action gates this intent post unlocks (FEAT-145).
+    if post_type != "regular":
+        try:
+            await crud.create_action_gates(
+                session, post_data.character_id, post_data.location_id,
+                result.id, post_type, targets,
+            )
+        except Exception as e:
+            logger.warning(f"create_action_gates failed for post {result.id}: {e}")
 
     # Calculate XP and schedule background award + log
     char_count, xp = crud.calculate_post_xp(post_data.content)
@@ -1091,6 +1123,11 @@ async def move_and_post(
     move_set_max = {}
     if current_location is not None and int(current_location) != destination_location_id:
         move_increments["total_transitions"] = 1
+        # Leaving a location expires the character's open action gates there (FEAT-145).
+        try:
+            await crud.expire_action_gates(session, movement.character_id, int(current_location))
+        except Exception as e:
+            logger.warning(f"expire_action_gates failed for {movement.character_id}: {e}")
         # Count unique locations visited (by posts) and use set_max
         unique_count = await _count_unique_locations(session, movement.character_id)
         if unique_count > 0:
@@ -1309,6 +1346,11 @@ async def quick_move(
     move_set_max = {}
     if current_location is not None and int(current_location) != destination_location_id:
         move_increments["total_transitions"] = 1
+        # Leaving a location expires the character's open action gates there (FEAT-145).
+        try:
+            await crud.expire_action_gates(session, body.character_id, int(current_location))
+        except Exception as e:
+            logger.warning(f"expire_action_gates failed for {body.character_id}: {e}")
         unique_count = await _count_unique_locations(session, body.character_id)
         if unique_count > 0:
             move_set_max["locations_visited"] = unique_count
@@ -3180,6 +3222,31 @@ async def gathering_status_internal(
     gathering — battle-service keeps them out of a group mob fight (FEAT-144 Ф3)."""
     busy = await crud.active_gatherers_among(session, body.character_ids)
     return schemas.GatheringStatusResponse(gathering_character_ids=busy)
+
+
+@router.get("/internal/action-gate")
+async def check_action_gate_internal(
+    character_id: int,
+    location_id: int,
+    action_type: str,
+    target_ref: int = None,
+    session: AsyncSession = Depends(get_db),
+):
+    """Internal (FEAT-145): does the character hold an open gate for this action?"""
+    ok = await crud.check_action_gate(session, character_id, location_id, action_type, target_ref)
+    return {"open": ok}
+
+
+@router.post("/internal/action-gate/consume")
+async def consume_action_gate_internal(
+    body: schemas.ActionGateConsume,
+    session: AsyncSession = Depends(get_db),
+):
+    """Internal (FEAT-145): consume one matching open gate before the action fires."""
+    consumed = await crud.consume_action_gate(
+        session, body.character_id, body.location_id, body.action_type, body.target_ref,
+    )
+    return {"consumed": consumed}
 
 
 # --------------------------------------------------------------------

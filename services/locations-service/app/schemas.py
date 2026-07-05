@@ -296,6 +296,10 @@ class PostCreate(BaseModel):
     character_id: int
     location_id: int
     content: str
+    # FEAT-145 RP gating: intent of the post and, for combat/pvp, the chosen
+    # targets (mob/player character_ids). Defaults keep normal posts unchanged.
+    post_type: str = "regular"
+    targets: List[int] = []
 
 class PostResponse(BaseModel):
     id: int
@@ -1505,6 +1509,14 @@ class GatheringStatusRequest(BaseModel):
 
 class GatheringStatusResponse(BaseModel):
     gathering_character_ids: List[int] = []
+
+
+class ActionGateConsume(BaseModel):
+    """Internal (FEAT-145): consume an action gate before an action fires."""
+    character_id: int
+    location_id: int
+    action_type: str
+    target_ref: Optional[int] = None
 
 
 class StartGatheringRequest(BaseModel):
