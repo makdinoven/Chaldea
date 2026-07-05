@@ -41,6 +41,13 @@ class ActionRequest(BaseModel):
     ally_target_id: int | None = None
 
 
+class PartyMobAttack(BaseModel):
+    """Leader-initiated group fight against a mob (FEAT-144 Ф3). Team 0 = the
+    leader's co-located squadmates, team 1 = the mob."""
+    leader_character_id: int
+    mob_character_id: int
+
+
 class BattleRewardItem(BaseModel):
     item_id: int
     item_name: Optional[str] = None

@@ -79,3 +79,10 @@ class XpBonusResult(BaseModel):
     self_bonus: int = 0
     trickle: List[dict] = []
 
+
+class ActiveMembersResult(BaseModel):
+    """Co-located accepted squadmates — the roster for a party activity (Ф3)."""
+    party_id: Optional[int] = None
+    leader_character_id: Optional[int] = None
+    member_character_ids: List[int] = []  # includes the queried character if co-located
+

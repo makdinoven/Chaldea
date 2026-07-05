@@ -151,6 +151,33 @@ def xp_bonus(req: schemas.XpBonusRequest, db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/internal/active-members", response_model=schemas.ActiveMembersResult)
+def active_members(character_id: int, location_id: int, db: Session = Depends(get_db)):
+    """Internal: accepted squadmates of `character_id` that are co-located at
+    `location_id` (green) — the roster for a party activity (FEAT-144 Ф3).
+    Includes the queried character when they are on that location."""
+    membership = crud.get_accepted_membership(db, character_id)
+    if not membership:
+        return schemas.ActiveMembersResult()
+    party = crud.get_party(db, membership.party_id)
+    if not party:
+        return schemas.ActiveMembersResult()
+    accepted = [
+        m for m in crud.get_members(db, membership.party_id)
+        if m.status == models.MemberStatus.accepted
+    ]
+    info = crud.get_characters_map(db, [m.character_id for m in accepted])
+    active = [
+        m.character_id for m in accepted
+        if info.get(m.character_id, {}).get("current_location_id") == location_id
+    ]
+    return schemas.ActiveMembersResult(
+        party_id=party.id,
+        leader_character_id=party.leader_character_id,
+        member_character_ids=active,
+    )
+
+
 @router.get("/mine", response_model=Optional[schemas.PartyOut])
 def my_party(
     character_id: int,

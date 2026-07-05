@@ -159,6 +159,19 @@ export const createBattle = async (
   return data;
 };
 
+// Group fight: the party leader pulls co-located squadmates onto team 0 vs the
+// mob (FEAT-144 Ф3).
+export const createPartyMobBattle = async (
+  leaderCharacterId: number,
+  mobCharacterId: number,
+): Promise<{ battle_id: number }> => {
+  const { data } = await axios.post('/battles/party/mob-attack', {
+    leader_character_id: leaderCharacterId,
+    mob_character_id: mobCharacterId,
+  });
+  return data;
+};
+
 // --- Admin API calls ---
 
 export const fetchMobTemplates = async (params: {

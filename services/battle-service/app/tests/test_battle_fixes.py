@@ -958,3 +958,57 @@ class TestAllyTargeting:
         }
         # self + alive ally only; dead teammate and enemy excluded
         assert targeted == {1, 4}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Party group mob-attack (FEAT-144 Ф3)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _httpx_active_members(data):
+    """Mock main.httpx.AsyncClient so the active-members GET returns `data`."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json = MagicMock(return_value=data)
+    client = AsyncMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    client.get = AsyncMock(return_value=resp)
+    return MagicMock(return_value=client)
+
+
+def _run_party_mob_attack(active_members_data, payload):
+    patches = {
+        "auth_http.requests.get": MagicMock(return_value=_mock_response(
+            200, {"id": 5, "username": "p", "role": "user", "permissions": []})),
+        "main._get_character_info": AsyncMock(return_value={
+            "user_id": 5, "current_location_id": 100, "character_id": 5}),
+        "main.httpx.AsyncClient": _httpx_active_members(active_members_data),
+    }
+    async def _fake_get_db():
+        yield AsyncMock()
+    with _PatchContext(patches):
+        app.dependency_overrides[get_db] = _fake_get_db
+        try:
+            with TestClient(app) as client:
+                return client.post(
+                    "/battles/party/mob-attack", json=payload,
+                    headers={"Authorization": "Bearer x"},
+                )
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+
+
+class TestPartyMobAttack:
+    _PAYLOAD = {"leader_character_id": 5, "mob_character_id": 99}
+
+    def test_not_in_party_rejected(self):
+        r = _run_party_mob_attack({"party_id": None, "member_character_ids": []}, self._PAYLOAD)
+        assert r.status_code == 400
+        assert "отряд" in r.json()["detail"].lower()
+
+    def test_non_leader_rejected(self):
+        # active-members reports a different leader → initiator is not the leader
+        data = {"party_id": 1, "leader_character_id": 99, "member_character_ids": [5, 6]}
+        r = _run_party_mob_attack(data, self._PAYLOAD)
+        assert r.status_code == 403
+        assert "лидер" in r.json()["detail"].lower()

@@ -224,3 +224,19 @@ def test_xp_bonus_no_party():
     _reg(1, 10, loc=1)
     assert _xp(1, 100, "combat", 1, [1]).json()["applied"] is False
     assert AWARDS == []
+
+
+def test_active_members_co_located_only():
+    _reg(1, 10, loc=1); _reg(2, 20, loc=1); _reg(3, 30, loc=2)  # char3 elsewhere
+    _make_party(1, [2, 3])
+    d = _client(1).get("/party/internal/active-members",
+                       params={"character_id": 1, "location_id": 1}).json()
+    assert d["party_id"] is not None and d["leader_character_id"] == 1
+    assert set(d["member_character_ids"]) == {1, 2}  # leader + co-located char2
+
+
+def test_active_members_no_party():
+    _reg(1, 10, loc=1)
+    d = _client(1).get("/party/internal/active-members",
+                       params={"character_id": 1, "location_id": 1}).json()
+    assert d["party_id"] is None and d["member_character_ids"] == []

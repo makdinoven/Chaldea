@@ -12,7 +12,7 @@ from sqlalchemy import text, select
 from crud import create_battle, write_turn, get_logs_for_turn, finish_battle, get_battle, get_active_battle_for_character
 from schemas import (
     BattleCreated, BattleCreate, ActionResponse, ActionRequest, LogResponse,
-    BattleRewards, BattleRewardItem,
+    BattleRewards, BattleRewardItem, PartyMobAttack,
     PvpInviteRequest, PvpInviteResponse, PvpRespondRequest, PvpRespondAcceptResponse,
     PendingInvitationsResponse, IncomingInvitation, OutgoingInvitation,
     CancelInvitationResponse, InBattleResponse,
@@ -717,6 +717,78 @@ async def create_battle_endpoint(
     )
 
     # 6. Возвращаем ответ
+    return BattleCreated(
+        battle_id=battle_obj.id,
+        participants=[p.id for p in participant_objs],
+        next_actor=first_actor_pid,
+        deadline_at=deadline,
+    )
+
+
+@router.post("/party/mob-attack", response_model=BattleCreated, status_code=201)
+async def party_mob_attack(
+    req: PartyMobAttack,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Group fight vs a mob (FEAT-144 Ф3). The party leader pulls their co-located
+    squadmates onto team 0; the mob is team 1. Party membership is the consent —
+    members don't approve each fight. Non-leaders cannot start a group fight."""
+    leader = await _get_character_info(db, req.leader_character_id)
+    if not leader:
+        raise HTTPException(404, "Персонаж не найден")
+    if leader["user_id"] != current_user.id:
+        raise HTTPException(403, "Используйте своего персонажа")
+    loc = leader["current_location_id"]
+    if loc is None:
+        raise HTTPException(400, "Персонаж не находится в локации")
+
+    # Co-located squad roster from party-service.
+    data = {}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{settings.PARTY_SERVICE_URL}/party/internal/active-members",
+                params={"character_id": req.leader_character_id, "location_id": loc},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+    except Exception as e:
+        logger.error(f"party active-members failed: {e}")
+        raise HTTPException(503, "Сервис отрядов недоступен")
+
+    if not data.get("party_id"):
+        raise HTTPException(400, "Вы не состоите в отряде")
+    if data.get("leader_character_id") != req.leader_character_id:
+        raise HTTPException(403, "Групповой бой начинает только лидер отряда")
+    members = data.get("member_character_ids", [])
+    if not members:
+        raise HTTPException(400, "Нет соотрядцев на этой локации")
+
+    # Validate the mob: it must be an NPC on the leader's location.
+    mob_row = (await db.execute(
+        text("SELECT current_location_id, is_npc FROM characters WHERE id = :cid"),
+        {"cid": req.mob_character_id},
+    )).fetchone()
+    if not mob_row:
+        raise HTTPException(404, "Моб не найден")
+    if not mob_row[1]:
+        raise HTTPException(400, "Групповая атака доступна только по мобам")
+    if mob_row[0] != loc:
+        raise HTTPException(400, "Моб находится в другой локации")
+
+    if len(members) > settings.BATTLE_MAX_TEAM_SIZE:
+        raise HTTPException(400, f"В команде максимум {settings.BATTLE_MAX_TEAM_SIZE} участников")
+
+    player_ids = list(members) + [req.mob_character_id]
+    for cid in player_ids:
+        if await get_active_battle_for_character(db, cid):
+            raise HTTPException(400, "Кто-то из участников уже в бою")
+
+    teams = [0] * len(members) + [1]
+    battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
+        db, player_ids, teams, "pve", loc
+    )
     return BattleCreated(
         battle_id=battle_obj.id,
         participants=[p.id for p in participant_objs],

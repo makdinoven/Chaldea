@@ -2,8 +2,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
-import { fetchMobsByLocation, createBattle } from '../api/mobs';
+import { fetchMobsByLocation, createBattle, createPartyMobBattle } from '../api/mobs';
 import type { MobInLocation } from '../api/mobs';
+import { getMyParty, type Party } from '../api/squads';
 
 interface LocationMobsProps {
   locationId: number;
@@ -40,6 +41,27 @@ const LocationMobs = ({ locationId, characterId }: LocationMobsProps) => {
   const [error, setError] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [attackingMobId, setAttackingMobId] = useState<number | null>(null);
+  const [party, setParty] = useState<Party | null>(null);
+  const [choosingMobId, setChoosingMobId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!characterId) {
+      setParty(null);
+      return;
+    }
+    getMyParty(characterId).then(setParty).catch(() => setParty(null));
+  }, [characterId]);
+
+  // The leader can start a group fight when at least one accepted squadmate is
+  // co-located on this location (FEAT-144 Ф3).
+  const coLocatedMates = (party?.members ?? []).filter(
+    (m) =>
+      m.status === 'accepted' &&
+      m.character_id !== characterId &&
+      m.current_location_id === locationId,
+  );
+  const canGroup =
+    !!party && party.leader_character_id === characterId && coLocatedMates.length >= 1;
 
   const loadMobs = useCallback(async () => {
     setLoading(true);
@@ -60,7 +82,7 @@ const LocationMobs = ({ locationId, characterId }: LocationMobsProps) => {
     loadMobs();
   }, [loadMobs]);
 
-  const handleAttack = async (mob: MobInLocation) => {
+  const handleAttack = async (mob: MobInLocation, group: boolean) => {
     if (!characterId) {
       toast.error('Выберите персонажа для начала боя');
       return;
@@ -70,10 +92,13 @@ const LocationMobs = ({ locationId, characterId }: LocationMobsProps) => {
       return;
     }
 
+    setChoosingMobId(null);
     setAttackingMobId(mob.active_mob_id);
     try {
-      const result = await createBattle(characterId, mob.character_id);
-      toast.success('Бой начинается!');
+      const result = group
+        ? await createPartyMobBattle(characterId, mob.character_id)
+        : await createBattle(characterId, mob.character_id);
+      toast.success(group ? 'Групповой бой начинается!' : 'Бой начинается!');
       navigate(`/location/${locationId}/battle/${result.battle_id}`);
     } catch (err) {
       const message =
@@ -214,22 +239,42 @@ const LocationMobs = ({ locationId, characterId }: LocationMobsProps) => {
                           </div>
                         </div>
 
-                        {/* Attack button — hidden when character is not at this location */}
+                        {/* Attack — hidden when character is not at this location.
+                            A party leader with co-located squadmates gets a
+                            group/solo choice (FEAT-144 Ф3). */}
                         {characterId && (
-                          <button
-                            onClick={() => handleAttack(mob)}
-                            disabled={
-                              mob.status === 'in_battle' ||
-                              isAttacking
-                            }
-                            className="btn-blue text-xs sm:text-sm px-3 py-1.5 sm:px-4 sm:py-2 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            {isAttacking ? (
-                              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            ) : (
-                              'Атаковать'
-                            )}
-                          </button>
+                          choosingMobId === mob.active_mob_id && !isAttacking ? (
+                            <div className="flex gap-1.5 shrink-0">
+                              <button
+                                onClick={() => handleAttack(mob, true)}
+                                className="btn-blue text-xs px-2.5 py-1.5"
+                              >
+                                Группой
+                              </button>
+                              <button
+                                onClick={() => handleAttack(mob, false)}
+                                className="text-xs px-2.5 py-1.5 rounded border border-white/20 text-white/70 hover:bg-white/5"
+                              >
+                                Соло
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() =>
+                                canGroup
+                                  ? setChoosingMobId(mob.active_mob_id)
+                                  : handleAttack(mob, false)
+                              }
+                              disabled={mob.status === 'in_battle' || isAttacking}
+                              className="btn-blue text-xs sm:text-sm px-3 py-1.5 sm:px-4 sm:py-2 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              {isAttacking ? (
+                                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              ) : (
+                                'Атаковать'
+                              )}
+                            </button>
+                          )
                         )}
                       </motion.div>
                     );
