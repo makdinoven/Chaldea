@@ -19,6 +19,7 @@ import PendingPartyInvitesPanel from './PendingPartyInvitesPanel';
 import LocationMobs from '../../LocationMobs';
 import PartiesOnLocation from './PartiesOnLocation';
 import { fetchMobsByLocation } from '../../../api/mobs';
+import { selectDungeonsAtLocation } from '../../../redux/slices/dungeonSlice';
 import BattlesSection from './BattlesSection';
 import useBattleLock from '../../../hooks/useBattleLock';
 import BattleLockBanner from '../../CommonComponents/BattleLockBanner';
@@ -321,7 +322,7 @@ const LocationPage = () => {
   }, [locationId]);
 
   // Which gated actions the character can currently do here (FEAT-145).
-  const [gateStatus, setGateStatus] = useState<Record<string, boolean>>({});
+  const [gateStatus, setGateStatus] = useState<Record<string, number[]>>({});
   const refetchGates = useCallback(() => {
     if (!character?.id) {
       setGateStatus({});
@@ -338,15 +339,27 @@ const LocationPage = () => {
     refetchGates();
   }, [refetchGates]);
 
+  // Gate targets available on this location for the post editor (FEAT-145 v2).
+  const gatheringNodes = useAppSelector((s) => s.gathering.currentNodeList);
+  const dungeonsAtLocation = useAppSelector(selectDungeonsAtLocation);
+  const gateOptions = useMemo(
+    () => ({
+      combat: combatTargets.map((m) => ({ id: m.character_id, name: m.name })),
+      npc_dialogue: (location?.npcs ?? []).map((n) => ({ id: n.id, name: n.name })),
+      gathering: (gatheringNodes ?? []).map((g) => ({ id: g.id, name: g.node_name })),
+      dungeon: (dungeonsAtLocation ?? []).map((d) => ({ id: d.id, name: d.name })),
+    }),
+    [combatTargets, location, gatheringNodes, dungeonsAtLocation],
+  );
+
   const handleSubmitPost = useCallback(
-    async (content: string, postType: string = 'regular', targets: number[] = []) => {
+    async (content: string, gates: { action_type: string; targets: number[] }[] = []) => {
       try {
         await axios.post(`${BASE_URL}/locations/${locationId}/move_and_post`, {
           character_id: character?.id,
           location_id: locationId,
           content,
-          post_type: postType,
-          targets,
+          gates,
         });
         // If character moved to this location, update Redux state + refresh cooldown
         if (character?.current_location?.id !== Number(locationId) && location) {
@@ -536,7 +549,8 @@ const LocationPage = () => {
           locationId={location.id}
           locationMarkerType={location.marker_type}
           isCharacterHere={isCharacterHere}
-          canTalkToNpc={userIsStaff || gateStatus.npc_dialogue === true}
+          talkableNpcIds={(gateStatus.npc_dialogue as number[]) ?? []}
+          npcGateStaff={userIsStaff}
         />
 
         {/* Neighbors */}
@@ -548,6 +562,7 @@ const LocationPage = () => {
         <LocationMobs
           locationId={location.id}
           characterId={isCharacterHere ? (character?.id ?? null) : null}
+          gatedMobIds={(gateStatus.combat as number[]) ?? []}
         />
 
         {/* Active battles */}
@@ -686,7 +701,7 @@ const LocationPage = () => {
                 <PostCreateForm
                   onSubmit={handleSubmitPost}
                   onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
-                  combatTargets={combatTargets}
+                  gateOptions={gateOptions}
                   disabled={actionsLocked || (!isCharacterHere && !isNeighborLocation && !userIsStaff)}
                   isStaff={userIsStaff}
                   npcs={location.npcs ?? []}

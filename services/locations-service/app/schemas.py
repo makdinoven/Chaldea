@@ -292,12 +292,20 @@ class LocationNeighbor(BaseModel):
         orm_mode = True
 
 
+class GateSpec(BaseModel):
+    """One intent gate in a post (FEAT-145 v2): action + its chosen targets
+    (mob/npc/player character_ids, gathering node_id, dungeon_id)."""
+    action_type: str
+    targets: List[int] = []
+
+
 class PostCreate(BaseModel):
     character_id: int
     location_id: int
     content: str
-    # FEAT-145 RP gating: intent of the post and, for combat/pvp, the chosen
-    # targets (mob/player character_ids). Defaults keep normal posts unchanged.
+    # FEAT-145: a post may declare multiple intent gates. Legacy single
+    # post_type/targets are still accepted and normalised to one gate.
+    gates: List[GateSpec] = []
     post_type: str = "regular"
     targets: List[int] = []
 
@@ -563,7 +571,8 @@ class LocationClientDetails(BaseModel):
 class MovementPostRequest(BaseModel):
     character_id: int
     content: str
-    # FEAT-145 RP gating (same as PostCreate).
+    # FEAT-145 gating (same as PostCreate).
+    gates: List[GateSpec] = []
     post_type: str = "regular"
     targets: List[int] = []
 

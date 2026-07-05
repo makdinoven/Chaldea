@@ -17,10 +17,40 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-MIN_POST_LENGTH = 300  # characters after stripping HTML
-MIN_ACTION_POST_LENGTH = 500       # non-regular (intent) posts (FEAT-145)
-SYMBOLS_PER_COMBAT_TARGET = 200     # 1 mob target unlocked per 200 chars
+MIN_POST_LENGTH = 300  # characters after stripping HTML (general minimum)
 GATED_POST_TYPES = {"combat", "pvp", "gathering", "dungeon", "npc_dialogue"}
+# Symbol cost per gate TARGET (FEAT-145 v2): combat is cheap (1 mob / 200 chars);
+# other intents cost 500 per target. A post's required length is the sum across
+# all its gate targets, floored at the general 300-char minimum.
+GATE_SYMBOL_COST = {
+    "combat": 200, "pvp": 500, "gathering": 500, "dungeon": 500, "npc_dialogue": 500,
+}
+
+
+def normalize_gates(post_type, targets, gates) -> list:
+    """Build a list of {"action_type", "targets"} from either the multi-gate
+    `gates` payload (v2) or the legacy single post_type/targets pair."""
+    out = []
+    if gates:
+        for g in gates:
+            at = g.get("action_type") if isinstance(g, dict) else getattr(g, "action_type", None)
+            tg = g.get("targets") if isinstance(g, dict) else getattr(g, "targets", [])
+            if at in GATED_POST_TYPES:
+                out.append({"action_type": at, "targets": [int(t) for t in (tg or [])]})
+        return out
+    if post_type and post_type != "regular" and post_type in GATED_POST_TYPES:
+        out.append({"action_type": post_type, "targets": [int(t) for t in (targets or [])]})
+    return out
+
+
+def required_symbols_for_gates(gate_list) -> int:
+    """Required post length for a set of gates (FEAT-145 v2). Sum of per-target
+    costs, floored at the general minimum."""
+    total = 0
+    for g in gate_list:
+        cost = GATE_SYMBOL_COST.get(g["action_type"], 500)
+        total += cost * max(1, len(g["targets"]))
+    return max(MIN_POST_LENGTH, total)
 
 
 def strip_html_tags(html: str) -> str:
@@ -878,31 +908,42 @@ async def create_post(session: AsyncSession, post_data: PostCreate) -> Post:
 
 async def create_action_gates(
     session: AsyncSession, character_id: int, location_id: int,
-    post_id: int, post_type: str, targets: list,
+    post_id: int, gate_list: list,
 ) -> int:
-    """Create open action gates for a non-regular post (FEAT-145). Combat posts
-    grant one gate per chosen mob target; other intents grant a single gate
-    (optionally bound to one target). Returns the number of gates created."""
+    """Create open action gates for an intent post (FEAT-145 v2). One gate per
+    (action_type, target). Returns the number of gates created."""
     from models import ActionGate
-    if post_type not in GATED_POST_TYPES:
-        return 0
     gates = []
-    if post_type == "combat":
-        for tref in targets:
+    for g in gate_list:
+        at = g["action_type"]
+        if at not in GATED_POST_TYPES:
+            continue
+        for tref in (g["targets"] or [None]):
             gates.append(ActionGate(
                 character_id=character_id, location_id=location_id, post_id=post_id,
-                action_type="combat", target_ref=tref, status="open",
+                action_type=at, target_ref=tref, status="open",
             ))
-    else:
-        gates.append(ActionGate(
-            character_id=character_id, location_id=location_id, post_id=post_id,
-            action_type=post_type, target_ref=(targets[0] if targets else None),
-            status="open",
-        ))
     for g in gates:
         session.add(g)
-    await session.commit()
+    if gates:
+        await session.commit()
     return len(gates)
+
+
+async def open_gates_detail(session, character_id: int, location_id: int) -> dict:
+    """Open gates grouped as {action_type: [target_ref, ...]} for a character on a
+    location (FEAT-145 v2) — drives per-target UI (attackable mobs, talkable NPCs)."""
+    res = await session.execute(
+        text(
+            "SELECT action_type, target_ref FROM action_gates "
+            "WHERE character_id = :c AND location_id = :l AND status = 'open'"
+        ),
+        {"c": character_id, "l": location_id},
+    )
+    out: dict = {}
+    for at, tref in res.fetchall():
+        out.setdefault(at, []).append(tref)
+    return out
 
 
 def _gate_match_clause(character_id, location_id, action_type, target_ref):

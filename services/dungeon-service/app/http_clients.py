@@ -64,15 +64,15 @@ async def get_party_active_members(character_id: int, location_id: int) -> dict:
     return {}
 
 
-async def consume_dungeon_gate(character_id: int, location_id: int) -> bool:
-    """Consume a 'dungeon' action-gate on the dungeon's location (FEAT-145).
+async def consume_dungeon_gate(character_id: int, location_id: int, dungeon_id: int) -> bool:
+    """Consume a 'dungeon' action-gate naming THIS dungeon (FEAT-145 v2).
     Returns True if a gate was consumed (entry allowed)."""
     url = f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/action-gate/consume"
     try:
         async with _client() as client:
             resp = await client.post(url, json={
                 "character_id": character_id, "location_id": location_id,
-                "action_type": "dungeon", "target_ref": None,
+                "action_type": "dungeon", "target_ref": dungeon_id,
             })
             if resp.status_code == 200:
                 return bool(resp.json().get("consumed"))

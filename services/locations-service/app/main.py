@@ -606,26 +606,43 @@ async def update_location_neighbors(
 # --------------------------------------------------------------------
 # POSTS
 # --------------------------------------------------------------------
-def _validate_intent_post(char_count: int, post_type: str, targets: list) -> None:
-    """FEAT-145: validate a non-regular intent post (min length + combat targets)."""
-    if post_type == "regular":
-        return
-    if post_type not in crud.GATED_POST_TYPES:
-        raise HTTPException(status_code=400, detail="Неизвестный тип поста")
-    if char_count < crud.MIN_ACTION_POST_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Пост-намерение требует минимум {crud.MIN_ACTION_POST_LENGTH} символов (сейчас: {char_count})",
-        )
-    if post_type == "combat":
-        max_targets = char_count // crud.SYMBOLS_PER_COMBAT_TARGET
-        if not targets:
-            raise HTTPException(status_code=400, detail="Выберите хотя бы одну цель для боевого поста")
-        if len(targets) > max_targets:
+def _validate_intent_post(char_count: int, gate_list: list) -> None:
+    """FEAT-145 v2: every gate needs at least one target, and the post must be
+    long enough for the summed per-target cost (floored at the 300 minimum)."""
+    _labels = {
+        "combat": "нападения на мобов", "npc_dialogue": "диалога с НПС",
+        "gathering": "сбора", "dungeon": "входа в подземелье", "pvp": "PvP",
+    }
+    for g in gate_list:
+        if g["action_type"] not in crud.GATED_POST_TYPES:
+            raise HTTPException(status_code=400, detail="Неизвестный тип гейта")
+        if not g["targets"]:
             raise HTTPException(
                 status_code=400,
-                detail=f"Можно выбрать не больше {max_targets} целей на {char_count} символов",
+                detail=f"Для {_labels.get(g['action_type'], g['action_type'])} выберите цель в посте",
             )
+    required = crud.required_symbols_for_gates(gate_list)
+    if char_count < required:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Для выбранных действий нужно минимум {required} символов (сейчас: {char_count})",
+        )
+
+
+async def _require_npc_gate(session, character_id: int, npc_id: int) -> None:
+    """FEAT-145: interacting with an NPC (dialogue / shop) needs an npc_dialogue
+    post naming THAT NPC."""
+    npc_row = (await session.execute(
+        text("SELECT current_location_id FROM characters WHERE id = :id"), {"id": npc_id},
+    )).fetchone()
+    npc_loc = npc_row[0] if npc_row else None
+    if npc_loc is not None and not await crud.check_action_gate(
+        session, character_id, int(npc_loc), "npc_dialogue", npc_id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Нужен пост-намерение «Диалог с НПС» с этим персонажем",
+        )
 
 
 @router.post("/posts/", response_model=schemas.PostResponse)
@@ -660,19 +677,22 @@ async def create_new_post(
             detail=f"Минимальная длина поста — {crud.MIN_POST_LENGTH} символов (сейчас: {char_count})",
         )
 
-    # FEAT-145 intent-post validation (combat/pvp/gathering/dungeon/npc).
-    post_type = getattr(post_data, "post_type", "regular") or "regular"
-    targets = getattr(post_data, "targets", []) or []
-    _validate_intent_post(char_count, post_type, targets)
+    # FEAT-145 v2 intent-post validation (multi-gate).
+    gate_list = crud.normalize_gates(
+        getattr(post_data, "post_type", "regular"),
+        getattr(post_data, "targets", []),
+        getattr(post_data, "gates", []),
+    )
+    _validate_intent_post(char_count, gate_list)
 
     result = await crud.create_post(session, post_data)
 
     # Grant the action gates this intent post unlocks (FEAT-145).
-    if post_type != "regular":
+    if gate_list:
         try:
             await crud.create_action_gates(
                 session, post_data.character_id, post_data.location_id,
-                result.id, post_type, targets,
+                result.id, gate_list,
             )
         except Exception as e:
             logger.warning(f"create_action_gates failed for post {result.id}: {e}")
@@ -1028,33 +1048,30 @@ async def move_and_post(
             detail=f"Минимальная длина поста — {crud.MIN_POST_LENGTH} символов (сейчас: {plain_char_count})",
         )
 
-    # FEAT-145 intent-post validation (shared with /posts/).
-    mp_post_type = getattr(movement, "post_type", "regular") or "regular"
-    mp_targets = getattr(movement, "targets", []) or []
-    _validate_intent_post(plain_char_count, mp_post_type, mp_targets)
+    # FEAT-145 v2 intent-post validation (shared with /posts/).
+    mp_gates = crud.normalize_gates(
+        getattr(movement, "post_type", "regular"),
+        getattr(movement, "targets", []),
+        getattr(movement, "gates", []),
+    )
+    _validate_intent_post(plain_char_count, mp_gates)
 
     # 5. Создаём пост для новой локации (destination_location_id)
-    # use the path parameter
     payload = {
         "character_id": movement.character_id,
         "location_id": destination_location_id,
         "content": movement.content,
-        "post_type": mp_post_type,
-        "targets": mp_targets,
+        "post_type": "gated" if mp_gates else "regular",
     }
-
-    # обернуть в Pydantic-модель
     post_in = schemas.PostCreate(**payload)
-
-    # и передать уже её
     new_post = await crud.create_post(session, post_in)
 
     # Grant the action gates this intent post unlocks (FEAT-145).
-    if mp_post_type != "regular":
+    if mp_gates:
         try:
             await crud.create_action_gates(
                 session, movement.character_id, destination_location_id,
-                new_post.id, mp_post_type, mp_targets,
+                new_post.id, mp_gates,
             )
         except Exception as e:
             logger.warning(f"create_action_gates failed for post {new_post.id}: {e}")
@@ -2088,11 +2105,11 @@ async def get_npc_dialogue(
         )).fetchone()
         npc_loc = npc_row[0] if npc_row else None
         if npc_loc is not None and not await crud.check_action_gate(
-            session, character_id, int(npc_loc), "npc_dialogue"
+            session, character_id, int(npc_loc), "npc_dialogue", npc_id
         ):
             raise HTTPException(
                 status_code=403,
-                detail="Нужен пост-намерение «Диалог с НПС», чтобы заговорить",
+                detail="Нужен пост-намерение «Диалог с НПС» с этим персонажем, чтобы заговорить",
             )
     return node_data
 
@@ -2310,6 +2327,7 @@ async def buy_from_npc(
     """
     Buy an item from NPC's shop.
     Flow:
+    0. FEAT-145: require an npc_dialogue post naming this NPC
     1. Verify character ownership
     2. Verify character is at NPC's location
     3. Check stock (if limited)
@@ -2320,6 +2338,9 @@ async def buy_from_npc(
     """
     # 1. Verify ownership
     await verify_character_ownership(session, body.character_id, current_user.id)
+
+    # 0/FEAT-145: gate NPC trading behind an npc_dialogue post naming this NPC
+    await _require_npc_gate(session, body.character_id, npc_id)
 
     # 2. Verify character is at NPC's location
     char_location = await crud.get_character_location(session, body.character_id)
@@ -2440,6 +2461,9 @@ async def sell_to_npc(
     """
     # 1. Verify ownership
     await verify_character_ownership(session, body.character_id, current_user.id)
+
+    # 0/FEAT-145: gate NPC trading behind an npc_dialogue post naming this NPC
+    await _require_npc_gate(session, body.character_id, npc_id)
 
     # 2. Verify character is at NPC's location
     char_location = await crud.get_character_location(session, body.character_id)
@@ -3243,9 +3267,9 @@ async def start_gathering_route(
       * INSERT в gathering_sessions с снапшотом эффективных бонусов,
       * авто-пост о начале добычи (best-effort).
     """
-    # GATE (FEAT-145): gathering needs a "gathering" intent post on this location.
-    if not await crud.check_action_gate(session, body.character_id, location_id, "gathering"):
-        raise HTTPException(status_code=403, detail="Нужен пост-намерение «Сбор», чтобы начать добычу")
+    # GATE (FEAT-145 v2): gathering needs a "gathering" post naming THIS node.
+    if not await crud.check_action_gate(session, body.character_id, location_id, "gathering", node_id):
+        raise HTTPException(status_code=403, detail="Нужен пост-намерение «Сбор» с этим узлом, чтобы начать добычу")
 
     payload = await crud.start_gathering(
         session,
@@ -3255,7 +3279,7 @@ async def start_gathering_route(
         tool_inventory_item_id=body.tool_inventory_item_id,
         current_user_id=current_user.id,
     )
-    await crud.consume_action_gate(session, body.character_id, location_id, "gathering")
+    await crud.consume_action_gate(session, body.character_id, location_id, "gathering", node_id)
     return schemas.StartGatheringResponse(**payload)
 
 
@@ -3301,11 +3325,10 @@ async def action_gate_status(
     location_id: int,
     session: AsyncSession = Depends(get_db),
 ):
-    """Public (FEAT-145): which action-gate types the character currently holds
-    on a location — the client uses it to enable gated actions (e.g. make NPC
-    cards clickable, show the gather/dungeon buttons)."""
-    types = await crud.open_gate_types(session, character_id, location_id)
-    return {t: True for t in types}
+    """Public (FEAT-145 v2): open gates as {action_type: [target_ref, ...]} — the
+    client uses the per-target lists to show attack buttons only on named mobs,
+    make only named NPC cards clickable, etc."""
+    return await crud.open_gates_detail(session, character_id, location_id)
 
 
 # --------------------------------------------------------------------

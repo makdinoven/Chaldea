@@ -15,8 +15,10 @@ interface PlayersSectionProps {
   locationId: number;
   locationMarkerType?: string;
   isCharacterHere?: boolean;
-  // FEAT-145: NPC cards are interactable only with an "npc_dialogue" gate post.
-  canTalkToNpc?: boolean;
+  // FEAT-145 v2: NPC ids the player may interact with (npc_dialogue gate posts).
+  // Staff bypass the gate entirely.
+  talkableNpcIds?: number[];
+  npcGateStaff?: boolean;
 }
 
 const getRarityColorClass = (rarity?: string): string => {
@@ -148,7 +150,7 @@ const NpcCard = ({ npc, onClick, currentCharacterId, isCharacterHere = false }: 
   );
 };
 
-const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, currentCharacterLevel = 0, locationId, locationMarkerType = 'safe', isCharacterHere = false, canTalkToNpc = false }: PlayersSectionProps) => {
+const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, currentCharacterLevel = 0, locationId, locationMarkerType = 'safe', isCharacterHere = false, talkableNpcIds = [], npcGateStaff = false }: PlayersSectionProps) => {
   const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
 
   return (
@@ -208,9 +210,9 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
                   key={npc.id}
                   npc={npc}
                   onClick={() => {
-                    // FEAT-145: interacting with an NPC needs an npc_dialogue post.
-                    if (isCharacterHere && !canTalkToNpc) {
-                      toast.error('Нужен пост «Диалог с НПС», чтобы взаимодействовать');
+                    // FEAT-145 v2: interacting needs an npc_dialogue post naming THIS npc.
+                    if (isCharacterHere && !npcGateStaff && !talkableNpcIds.includes(npc.id)) {
+                      toast.error('Нужен пост «Диалог с НПС» с этим персонажем');
                       return;
                     }
                     setSelectedNpcId(npc.id);

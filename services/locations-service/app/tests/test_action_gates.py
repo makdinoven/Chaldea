@@ -27,15 +27,37 @@ def _post(client, content, post_type, targets):
     })
 
 
-def test_combat_post_requires_500_chars(client):
+def test_combat_symbols_scale_with_targets(client):
+    # v2: 2 mob targets need 400 chars (200 each); 300 is not enough.
     _admin()
     with patch("main.verify_character_ownership", new_callable=AsyncMock), \
          patch("main.check_not_in_battle", new_callable=AsyncMock), \
          patch("main.check_not_gathering", new_callable=AsyncMock):
-        r = _post(client, "x" * 400, "combat", [99])  # 400 chars: passes 300, fails 500
+        r = _post(client, "x" * 300, "combat", [1, 2])
     _clear()
     assert r.status_code == 400
-    assert "500" in r.json()["detail"]
+    assert "400" in r.json()["detail"]
+
+
+def _post_gates(client, content, gates):
+    return client.post("/locations/posts/", json={
+        "character_id": 1, "location_id": 1, "content": content, "gates": gates,
+    })
+
+
+def test_multi_gate_symbols_sum(client):
+    # v2 item 8: npc (500) + gathering (500) → needs 1000 chars.
+    _admin()
+    with patch("main.verify_character_ownership", new_callable=AsyncMock), \
+         patch("main.check_not_in_battle", new_callable=AsyncMock), \
+         patch("main.check_not_gathering", new_callable=AsyncMock):
+        r = _post_gates(client, "x" * 700, [
+            {"action_type": "npc_dialogue", "targets": [10]},
+            {"action_type": "gathering", "targets": [20]},
+        ])
+    _clear()
+    assert r.status_code == 400
+    assert "1000" in r.json()["detail"]
 
 
 def test_combat_post_target_limit(client):

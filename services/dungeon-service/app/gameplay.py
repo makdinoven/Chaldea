@@ -648,10 +648,12 @@ async def enter_dungeon(
         await db.execute(select(Dungeon).where(Dungeon.id == session_obj.dungeon_id))
     ).scalar_one_or_none()
     if dungeon and dungeon.location_id is not None:
-        if not await http_clients.consume_dungeon_gate(character_id, dungeon.location_id):
+        if not await http_clients.consume_dungeon_gate(
+            character_id, dungeon.location_id, session_obj.dungeon_id
+        ):
             raise HTTPException(
                 status_code=403,
-                detail="Нужен пост-намерение «Данж», чтобы войти в подземелье",
+                detail="Нужен пост-намерение «Данж» с этим подземельем, чтобы войти",
             )
 
     # 4. Find entrance room

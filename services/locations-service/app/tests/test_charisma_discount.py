@@ -16,6 +16,14 @@ import pytest
 from auth_http import get_current_user_via_http, UserRead
 
 
+@pytest.fixture(autouse=True)
+def _bypass_npc_gate():
+    """FEAT-145: NPC trading is gated by an npc_dialogue post; bypass it here so
+    the charisma-discount buy flow can be tested in isolation."""
+    with patch("main._require_npc_gate", new_callable=AsyncMock):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

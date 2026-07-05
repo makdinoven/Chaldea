@@ -9,6 +9,8 @@ import { getMyParty, type Party } from '../api/squads';
 interface LocationMobsProps {
   locationId: number;
   characterId: number | null;
+  // Mob character_ids the player may attack (from combat gate posts, FEAT-145 v2).
+  gatedMobIds?: number[];
 }
 
 const TIER_CONFIG: Record<
@@ -34,7 +36,7 @@ const STATUS_CONFIG: Record<string, { label: string; dotClass: string }> = {
   in_battle: { label: 'В бою', dotClass: 'bg-orange-400' },
 };
 
-const LocationMobs = ({ locationId, characterId }: LocationMobsProps) => {
+const LocationMobs = ({ locationId, characterId, gatedMobIds = [] }: LocationMobsProps) => {
   const navigate = useNavigate();
   const [mobs, setMobs] = useState<MobInLocation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -244,7 +246,11 @@ const LocationMobs = ({ locationId, characterId }: LocationMobsProps) => {
                             A party leader with co-located squadmates gets a
                             group/solo choice (FEAT-144 Ф3). */}
                         {characterId && (
-                          choosingMobId === mob.active_mob_id && !isAttacking ? (
+                          !gatedMobIds.includes(mob.character_id) ? (
+                            <span className="text-white/30 text-[10px] sm:text-xs shrink-0 text-right max-w-[96px] leading-tight">
+                              Нужен боевой пост
+                            </span>
+                          ) : choosingMobId === mob.active_mob_id && !isAttacking ? (
                             <div className="flex gap-1.5 shrink-0">
                               <button
                                 onClick={() => handleAttack(mob, true)}

@@ -9,53 +9,75 @@ import { replaceWordInHtml } from '../../../api/spellcheck';
 import { NpcInLocation } from './types';
 
 const MIN_POST_LENGTH = 300;
-const MIN_COMBAT_POST_LENGTH = 500; // FEAT-145
-const SYMBOLS_PER_TARGET = 200;
+// FEAT-145 v2: symbol cost per gate target.
+const GATE_COST: Record<string, number> = {
+  combat: 200,
+  npc_dialogue: 500,
+  gathering: 500,
+  dungeon: 500,
+};
+const GATE_LABEL: Record<string, string> = {
+  combat: 'Нападение на мобов',
+  npc_dialogue: 'Диалог с НПС',
+  gathering: 'Сбор',
+  dungeon: 'Вход в подземелье',
+};
+const GATE_ORDER = ['combat', 'npc_dialogue', 'gathering', 'dungeon'] as const;
 
-interface CombatTarget {
-  character_id: number;
+export interface GateOption {
+  id: number;
   name: string;
+}
+export type GateOptions = Partial<Record<string, GateOption[]>>;
+
+export interface PostGate {
+  action_type: string;
+  targets: number[];
 }
 
 interface PostCreateFormProps {
-  onSubmit: (content: string, postType?: string, targets?: number[]) => Promise<void>;
+  onSubmit: (content: string, gates?: PostGate[]) => Promise<void>;
   onSubmitAsNpc?: (npcId: number, content: string) => Promise<void>;
   disabled?: boolean;
   isStaff?: boolean;
   npcs?: NpcInLocation[];
-  combatTargets?: CombatTarget[];
+  // Available gate targets on this location, keyed by action_type.
+  gateOptions?: GateOptions;
 }
 
 const stripHtmlTags = (html: string) => html.replace(/<[^>]*>/g, '').trim();
 
 const isContentEmpty = (html: string) => stripHtmlTags(html).length === 0;
 
-const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [], combatTargets = [] }: PostCreateFormProps) => {
+const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [], gateOptions = {} }: PostCreateFormProps) => {
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
   const [npcMode, setNpcMode] = useState(false);
   const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
-  const [postType, setPostType] = useState('regular');
-  const [selectedTargets, setSelectedTargets] = useState<number[]>([]);
+  // FEAT-145 v2: multiple intent gates — action_type → chosen target ids.
+  const [selectedGates, setSelectedGates] = useState<Record<string, number[]>>({});
   const formRef = useRef<HTMLDivElement>(null);
   const spellCheck = useSpellCheck();
 
-  const isGated = postType !== 'regular';
-  const isCombat = postType === 'combat';
   const charCount = useMemo(() => stripHtmlTags(content).length, [content]);
-  // Intent posts (FEAT-145) need ≥500 chars; a combat post unlocks ⌊chars/200⌋
-  // mob targets.
-  const effectiveMin = isGated ? MIN_COMBAT_POST_LENGTH : MIN_POST_LENGTH;
-  const meetsMinLength = charCount >= effectiveMin;
-  const maxTargets = Math.floor(charCount / SYMBOLS_PER_TARGET);
+  const activeGates: PostGate[] = GATE_ORDER
+    .filter((t) => (selectedGates[t]?.length ?? 0) > 0)
+    .map((t) => ({ action_type: t, targets: selectedGates[t] }));
+  const requiredSymbols = Math.max(
+    MIN_POST_LENGTH,
+    activeGates.reduce((sum, g) => sum + GATE_COST[g.action_type] * g.targets.length, 0),
+  );
+  const meetsMinLength = charCount >= requiredSymbols;
   const xpPreview = charCount >= MIN_POST_LENGTH ? Math.round(charCount / 100) : 0;
 
-  const toggleTarget = (cid: number) => {
-    setSelectedTargets((prev) =>
-      prev.includes(cid) ? prev.filter((t) => t !== cid) : [...prev, cid],
-    );
+  const toggleGateTarget = (actionType: string, id: number) => {
+    setSelectedGates((prev) => {
+      const cur = prev[actionType] ?? [];
+      const next = cur.includes(id) ? cur.filter((t) => t !== id) : [...cur, id];
+      return { ...prev, [actionType]: next };
+    });
   };
 
   useEffect(() => {
@@ -93,28 +115,17 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
     }
 
     if (!meetsMinLength) {
-      toast.error(`Минимальная длина ${isGated ? 'поста-намерения' : 'поста'} — ${effectiveMin} символов (сейчас: ${charCount})`);
+      toast.error(`Для выбранных действий нужно минимум ${requiredSymbols} символов (сейчас: ${charCount})`);
       return;
-    }
-    if (isCombat) {
-      if (selectedTargets.length === 0) {
-        toast.error('Выберите хотя бы одну цель для боевого поста');
-        return;
-      }
-      if (selectedTargets.length > maxTargets) {
-        toast.error(`Можно выбрать не больше ${maxTargets} целей на ${charCount} символов`);
-        return;
-      }
     }
 
     setSubmitting(true);
     try {
-      await onSubmit(content, postType, isCombat ? selectedTargets : []);
+      await onSubmit(content, activeGates);
       setContent('');
       setEditorKey((k) => k + 1);
       setIsEditorOpen(false);
-      setPostType('regular');
-      setSelectedTargets([]);
+      setSelectedGates({});
     } finally {
       setSubmitting(false);
     }
@@ -145,8 +156,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
     setEditorKey((k) => k + 1);
     setNpcMode(false);
     setSelectedNpcId(null);
-    setPostType('regular');
-    setSelectedTargets([]);
+    setSelectedGates({});
     spellCheck.reset();
   };
 
@@ -154,8 +164,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
 
   const isSubmitDisabled = npcMode
     ? submitting || isContentEmpty(content) || !selectedNpcId
-    : submitting || isContentEmpty(content) || !meetsMinLength ||
-      (isCombat && selectedTargets.length === 0);
+    : submitting || isContentEmpty(content) || !meetsMinLength;
 
   return (
     <div ref={formRef}>
@@ -229,61 +238,45 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
               </div>
             )}
 
-            {/* Post intent (FEAT-145): a non-regular post gates the matching action */}
-            {!npcMode && (
+            {/* FEAT-145 v2: declare intent gates — pick targets per action. Each
+                selected target adds to the required post length. */}
+            {!npcMode && GATE_ORDER.some((t) => (gateOptions[t]?.length ?? 0) > 0) && (
               <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm text-white/70">Тип поста:</span>
-                  <select
-                    value={postType}
-                    onChange={(e) => {
-                      setPostType(e.target.value);
-                      setSelectedTargets([]);
-                    }}
-                    className="bg-black/60 border border-white/20 text-white text-sm rounded px-2 py-1
-                               focus:border-gold focus:outline-none transition-colors"
-                  >
-                    <option value="regular">Обычный</option>
-                    {combatTargets.length > 0 && <option value="combat">Боевой (атака)</option>}
-                    <option value="gathering">Сбор</option>
-                    <option value="dungeon">Данж</option>
-                    <option value="npc_dialogue">Диалог с НПС</option>
-                  </select>
-                </div>
-                {isGated && !isCombat && (
-                  <p className="text-white/40 text-xs">
-                    Пост-намерение открывает действие на этой локации. Минимум 500 символов.
-                  </p>
-                )}
-                {isCombat && (
-                  <div className="flex flex-col gap-1.5 bg-white/[0.03] rounded-lg p-3">
-                    <p className="text-white/50 text-xs">
-                      Мин. 500 символов. Целей: {selectedTargets.length}/{maxTargets}{' '}
-                      (1 цель на 200 символов).
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {combatTargets.map((t) => {
-                        const on = selectedTargets.includes(t.character_id);
-                        const reachedMax = !on && selectedTargets.length >= maxTargets;
-                        return (
-                          <button
-                            key={t.character_id}
-                            type="button"
-                            disabled={reachedMax}
-                            onClick={() => toggleTarget(t.character_id)}
-                            className={`text-xs px-2.5 py-1 rounded-full border transition ${
-                              on
-                                ? 'border-site-red bg-site-red/20 text-site-red'
-                                : 'border-white/20 text-white/70 hover:bg-white/5'
-                            } ${reachedMax ? 'opacity-40 cursor-not-allowed' : ''}`}
-                          >
-                            {t.name}
-                          </button>
-                        );
-                      })}
+                <span className="text-sm text-white/70">
+                  Действия в этом посту (по желанию):
+                </span>
+                {GATE_ORDER.map((at) => {
+                  const opts = gateOptions[at] ?? [];
+                  if (opts.length === 0) return null;
+                  const sel = selectedGates[at] ?? [];
+                  return (
+                    <div key={at} className="bg-white/[0.03] rounded-lg p-3 flex flex-col gap-1.5">
+                      <span className="text-white/80 text-xs font-medium">
+                        {GATE_LABEL[at]}{' '}
+                        <span className="text-white/40">· {GATE_COST[at]} симв./цель</span>
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {opts.map((o) => {
+                          const on = sel.includes(o.id);
+                          return (
+                            <button
+                              key={o.id}
+                              type="button"
+                              onClick={() => toggleGateTarget(at, o.id)}
+                              className={`text-xs px-2.5 py-1 rounded-full border transition ${
+                                on
+                                  ? 'border-gold bg-gold/20 text-gold'
+                                  : 'border-white/20 text-white/70 hover:bg-white/5'
+                              }`}
+                            >
+                              {o.name}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })}
               </div>
             )}
 
@@ -307,12 +300,12 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
             {!npcMode && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs sm:text-sm">
                 <span className={meetsMinLength ? 'text-stat-energy' : 'text-site-red'}>
-                  {charCount} / {effectiveMin} символов
+                  {charCount} / {requiredSymbols} символов
                 </span>
                 <span className="text-white/50">
                   {meetsMinLength
                     ? `~${xpPreview} XP`
-                    : `Минимум ${effectiveMin} символов`}
+                    : `Минимум ${requiredSymbols} символов`}
                 </span>
               </div>
             )}
@@ -321,7 +314,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
               {/* Min length hint on mobile when submit is blocked */}
               {!npcMode && !meetsMinLength && charCount > 0 && (
                 <span className="text-xs text-site-red sm:hidden">
-                  Ещё {effectiveMin - charCount} символов до минимума
+                  Ещё {requiredSymbols - charCount} символов до минимума
                 </span>
               )}
               <div className="flex flex-wrap justify-end gap-3 sm:ml-auto">
