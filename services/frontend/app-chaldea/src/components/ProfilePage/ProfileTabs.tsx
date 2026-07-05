@@ -9,6 +9,7 @@ const TABS: Tab[] = [
   { key: 'character', label: 'Персонаж' },
   { key: 'skills', label: 'Навыки' },
   { key: 'perks', label: 'Перки' },
+  { key: 'party', label: 'Отряд' },
   { key: 'gathering', label: 'Сбор' },
   { key: 'quests', label: 'Задания' },
   { key: 'battles', label: 'Бои' },

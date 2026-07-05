@@ -12,6 +12,7 @@ import PlaceholderTab from './PlaceholderTab';
 import CharacterTab from './CharacterTab/CharacterTab';
 import SkillsTab from './SkillsTab/SkillsTab';
 import PerksTab from './PerksTab/PerksTab';
+import PartyTab from './PartyTab/PartyTab';
 import GatheringTab from './GatheringTab/GatheringTab';
 import QuestLogTab from './QuestLogTab';
 import BattlesTab from './BattlesTab/BattlesTab';
@@ -67,6 +68,8 @@ const ProfilePage = () => {
         return <SkillsTab characterId={characterId} />;
       case 'perks':
         return <PerksTab characterId={characterId} />;
+      case 'party':
+        return <PartyTab characterId={characterId} />;
       case 'gathering':
         return (
           <ErrorBoundary>
