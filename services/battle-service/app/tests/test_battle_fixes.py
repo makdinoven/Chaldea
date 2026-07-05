@@ -1106,3 +1106,42 @@ class TestForcedPvpGate:
         r = self._run(patches, {"attacker_character_id": 5, "victim_character_id": 99})
         assert r.status_code == 403
         assert "pvp-пост" in r.json()["detail"].lower()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FEAT-146 — AoE attack target resolution
+# ══════════════════════════════════════════════════════════════════════════════
+class TestAoeTargets:
+    def test_single(self):
+        assert main.resolve_aoe_targets("single", 1, [1, 2, 3]) == [(1, 1.0)]
+
+    def test_all_hits_everyone_with_falloff(self):
+        r = main.resolve_aoe_targets("all", 2, [1, 2, 3], falloff_pct=50)
+        assert r[0] == (2, 1.0)                      # primary full
+        assert {p for p, _ in r} == {1, 2, 3}
+        assert all(m == 0.5 for p, m in r if p != 2)  # others at falloff
+
+    def test_splash_hits_both_neighbours(self):
+        r = main.resolve_aoe_targets("splash", 2, [1, 2, 3], falloff_pct=50)
+        assert (2, 1.0) in r and (1, 0.5) in r and (3, 0.5) in r
+        assert len(r) == 3
+
+    def test_splash_at_edge_hits_one_neighbour(self):
+        r = main.resolve_aoe_targets("splash", 1, [1, 2, 3], falloff_pct=40)
+        assert (1, 1.0) in r and (2, 0.4) in r
+        assert len(r) == 2
+
+    def test_cleave_hits_next_only(self):
+        r = main.resolve_aoe_targets("cleave", 1, [1, 2, 3])
+        assert (1, 1.0) in r and (2, 0.5) in r
+        assert len(r) == 2
+
+    def test_random_n_capped(self):
+        r = main.resolve_aoe_targets("random_n", 1, [1, 2, 3, 4], falloff_pct=50, max_targets=3)
+        assert r[0] == (1, 1.0)
+        assert len(r) == 3                            # primary + 2 random
+        assert all(m == 0.5 for p, m in r if p != 1)
+        assert all(p in {1, 2, 3, 4} for p, _ in r)
+
+    def test_falls_back_to_single_when_alone(self):
+        assert main.resolve_aoe_targets("all", 1, [1]) == [(1, 1.0)]

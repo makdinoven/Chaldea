@@ -89,6 +89,10 @@ def _damage_to_dict(d) -> dict:
         "chance": d.chance,
         "target_side": d.target_side,
         "weapon_slot": d.weapon_slot,
+        # AoE (FEAT-146) — consumed by the battle engine.
+        "aoe_shape": getattr(d, "aoe_shape", "single") or "single",
+        "aoe_falloff": getattr(d, "aoe_falloff", 50) if getattr(d, "aoe_falloff", 50) is not None else 50,
+        "aoe_max_targets": getattr(d, "aoe_max_targets", 3) if getattr(d, "aoe_max_targets", 3) is not None else 3,
     }
 
 

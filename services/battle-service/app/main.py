@@ -81,6 +81,39 @@ def next_pid_after(cur, order, participants=None):   # order = [id,id,…]
             return cand
     return order[(idx + 1) % n]
 
+
+def resolve_aoe_targets(shape, primary_pid, alive_enemy_list, falloff_pct=50, max_targets=3):
+    """FEAT-146: resolve an attack damage entry's target set from its AoE shape.
+
+    Returns a list of (pid, multiplier). The primary (chosen) target always takes
+    full damage; secondary targets take `falloff_pct`%. Adjacency (splash/cleave)
+    is by position in the live enemy lineup (as shown in the battle).
+    """
+    import random as _rng
+    shape = (shape or "single").lower()
+    lineup = [int(p) for p in alive_enemy_list]
+    if shape == "single" or primary_pid not in lineup or len(lineup) <= 1:
+        return [(primary_pid, 1.0)]
+    mult = max(0.0, min(1.0, (50 if falloff_pct is None else falloff_pct) / 100.0))
+    idx = lineup.index(primary_pid)
+    out = [(primary_pid, 1.0)]
+    if shape == "all":
+        out += [(p, mult) for p in lineup if p != primary_pid]
+    elif shape == "cleave":
+        if idx + 1 < len(lineup):
+            out.append((lineup[idx + 1], mult))
+    elif shape == "splash":
+        if idx - 1 >= 0:
+            out.append((lineup[idx - 1], mult))
+        if idx + 1 < len(lineup):
+            out.append((lineup[idx + 1], mult))
+    elif shape == "random_n":
+        others = [p for p in lineup if p != primary_pid]
+        n = max(0, (max_targets or 1) - 1)
+        picks = others if n >= len(others) else _rng.sample(others, n)
+        out += [(p, mult) for p in picks]
+    return out
+
 def _ensure_not_on_cooldown(state: Dict, pid: int, skill_ids: list[int]) -> None:
     """
     FEAT-125: cooldowns are keyed by skill_id (was rank_id).
@@ -1677,6 +1710,28 @@ async def _make_action_core(
                     "effects": [_normalize_effect(e) for e in all_allies_effects],
                 })
 
+        # all-enemies эффекты — масс-дебафф на всех живых врагов (FEAT-146),
+        # с независимым броском шанса по стойкости каждого.
+        all_enemies_effects = [e for e in support_rank.get("effects", [])
+                               if e.get("target_side") == "all_enemies"]
+        if all_enemies_effects:
+            for _enemy_pid in alive_enemies:
+                _epd = participants_map[str(_enemy_pid)]
+                _eff = _filter_effects_by_chance(
+                    all_enemies_effects, attacker_luck_bonus,
+                    (await attrs(_epd["character_id"])).get("endurance", 0),
+                )
+                if not _eff:
+                    continue
+                apply_new_effects(
+                    battle_state, _enemy_pid, [dict(e) for e in _eff], is_enemy=True,
+                    owner_pid=request.participant_id,
+                )
+                turn_events.append({
+                    "event": "apply_effects", "who": _enemy_pid, "kind": "support",
+                    "effects": [_normalize_effect(e) for e in _eff],
+                })
+
     # ------------------------------------------------------------------------------
     # 7. DEFENSE-навык (баффы на self)
     # ------------------------------------------------------------------------------
@@ -1739,6 +1794,27 @@ async def _make_action_core(
                 turn_events.append({
                     "event": "apply_effects", "who": _ally_pid, "kind": "defense",
                     "effects": [_normalize_effect(e) for e in all_allies_effects],
+                })
+
+        # all-enemies эффекты — масс-дебафф на всех живых врагов (FEAT-146)
+        all_enemies_effects = [e for e in defense_rank.get("effects", [])
+                               if e.get("target_side") == "all_enemies"]
+        if all_enemies_effects:
+            for _enemy_pid in alive_enemies:
+                _epd = participants_map[str(_enemy_pid)]
+                _eff = _filter_effects_by_chance(
+                    all_enemies_effects, attacker_luck_bonus,
+                    (await attrs(_epd["character_id"])).get("endurance", 0),
+                )
+                if not _eff:
+                    continue
+                apply_new_effects(
+                    battle_state, _enemy_pid, [dict(e) for e in _eff], is_enemy=True,
+                    owner_pid=request.participant_id,
+                )
+                turn_events.append({
+                    "event": "apply_effects", "who": _enemy_pid, "kind": "defense",
+                    "effects": [_normalize_effect(e) for e in _eff],
                 })
 
     # ------------------------------------------------------------------------------
@@ -1877,6 +1953,28 @@ async def _make_action_core(
                     "effects": [_normalize_effect(e) for e in attack_all_allies_effects],
                 })
 
+        # ── 9.0e. Attack all-enemies effects — mass debuff every enemy (FEAT-146),
+        # applied BEFORE damage so debuffs (e.g. resist-down) affect this hit.
+        attack_all_enemies_effects = [e for e in attack_rank.get("effects", [])
+                                      if e.get("target_side") == "all_enemies"]
+        if attack_all_enemies_effects:
+            for _enemy_pid in alive_enemies:
+                _epd = participants_map[str(_enemy_pid)]
+                _eff = _filter_effects_by_chance(
+                    attack_all_enemies_effects, attacker_luck_bonus,
+                    (await attrs(_epd["character_id"])).get("endurance", 0),
+                )
+                if not _eff:
+                    continue
+                apply_new_effects(
+                    battle_state, _enemy_pid, [dict(e) for e in _eff], is_enemy=True,
+                    owner_pid=request.participant_id,
+                )
+                turn_events.append({
+                    "event": "apply_effects", "who": _enemy_pid, "kind": "attack",
+                    "effects": [_normalize_effect(e) for e in _eff],
+                })
+
         attacker_buff_modifiers = aggregate_modifiers(
             battle_state.get("active_effects", {}).get(str(request.participant_id), [])
         )
@@ -1896,39 +1994,73 @@ async def _make_action_core(
             base_defender_attributes, defender_buff_modifiers
         )
 
-        # Dodge is rolled ONCE for the whole attack (not per damage_entry): a
-        # dodge avoids every entry, so the log can't show "dodged" next to a hit.
-        attack_dodged = roll_dodge(defender_attributes.get("dodge", 0))
-        if attack_dodged:
-            turn_events.append({
-                "event": "damage", "source": request.participant_id,
-                "target": defender_pid, "dodged": True, "final": 0,
-            })
+        # Per-target combat context (attrs / resists / dodge) for this attack.
+        # Dodge is rolled once per target (cached), so an AoE that hits a target
+        # via several entries can't show "dodged" next to a landed hit. Seed the
+        # primary with its already-computed context.
+        _atk_ctx = {
+            defender_pid: {
+                "attrs": defender_attributes,
+                "resists": defender_percent_resists,
+                "dodged": roll_dodge(defender_attributes.get("dodge", 0)),
+            }
+        }
+        _dodge_logged: set = set()
 
-        # damage_entries
-        for dmg in ([] if attack_dodged else attack_rank.get("damage_entries", [])):
-            dealt, log = await compute_damage_with_rolls(
-                damage_entry=dmg,
-                attacker_attr=attacker_attributes,
-                weapon=attacker_weapons.get(dmg.get("weapon_slot", "main_weapon")),
-                percent_buffs=percent_damage_buffs,
-                defender_attr=defender_attributes,
-                percent_resists=defender_percent_resists,
-                class_id=attacker_class_id,
-                apply_dodge=False,
+        async def _ctx_for(pid: int):
+            if pid not in _atk_ctx:
+                _pd = participants_map[str(pid)]
+                _mods = aggregate_modifiers(
+                    battle_state.get("active_effects", {}).get(str(pid), [])
+                )
+                _tattrs = apply_flat_modifiers(await attrs(_pd["character_id"]), _mods)
+                _atk_ctx[pid] = {
+                    "attrs": _tattrs,
+                    "resists": build_percent_resist_buffs(_mods),
+                    "dodged": roll_dodge(_tattrs.get("dodge", 0)),
+                }
+            return _atk_ctx[pid]
+
+        # damage_entries — each entry resolves its own AoE target set (FEAT-146).
+        for dmg in attack_rank.get("damage_entries", []):
+            aoe_targets = resolve_aoe_targets(
+                dmg.get("aoe_shape", "single"), defender_pid, alive_enemies,
+                dmg.get("aoe_falloff", 50), dmg.get("aoe_max_targets", 3),
             )
-            battle_state["participants"][str(defender_pid)]["hp"] -= dealt
-            # Accumulate damage stats for cumulative tracking
-            dealt_int = int(round(dealt))
-            attacker_p = battle_state["participants"][str(request.participant_id)]
-            attacker_p["total_damage_dealt"] = attacker_p.get("total_damage_dealt", 0) + dealt_int
-            battle_state["participants"][str(defender_pid)]["total_damage_received"] = (
-                battle_state["participants"][str(defender_pid)].get("total_damage_received", 0) + dealt_int
-            )
-            turn_events.append({
-                "event": "damage", "source": request.participant_id,
-                "target": defender_pid, **log
-            })
+            for _tpid, _tmult in aoe_targets:
+                _ctx = await _ctx_for(_tpid)
+                if _ctx["dodged"]:
+                    if _tpid not in _dodge_logged:
+                        _dodge_logged.add(_tpid)
+                        turn_events.append({
+                            "event": "damage", "source": request.participant_id,
+                            "target": _tpid, "dodged": True, "final": 0,
+                        })
+                    continue
+                dealt, log = await compute_damage_with_rolls(
+                    damage_entry=dmg,
+                    attacker_attr=attacker_attributes,
+                    weapon=attacker_weapons.get(dmg.get("weapon_slot", "main_weapon")),
+                    percent_buffs=percent_damage_buffs,
+                    defender_attr=_ctx["attrs"],
+                    percent_resists=_ctx["resists"],
+                    class_id=attacker_class_id,
+                    apply_dodge=False,
+                )
+                if _tmult != 1.0:
+                    dealt *= _tmult
+                    log = {**log, "final": round(dealt, 2), "aoe_falloff": _tmult}
+                battle_state["participants"][str(_tpid)]["hp"] -= dealt
+                dealt_int = int(round(dealt))
+                attacker_p = battle_state["participants"][str(request.participant_id)]
+                attacker_p["total_damage_dealt"] = attacker_p.get("total_damage_dealt", 0) + dealt_int
+                battle_state["participants"][str(_tpid)]["total_damage_received"] = (
+                    battle_state["participants"][str(_tpid)].get("total_damage_received", 0) + dealt_int
+                )
+                turn_events.append({
+                    "event": "damage", "source": request.participant_id,
+                    "target": _tpid, **log
+                })
 
     # ------------------------------------------------------------------------------
     # 9.1. Equipment durability loss (10% chance per hit to lose 1 durability)

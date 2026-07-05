@@ -44,6 +44,11 @@ class SkillBaseDamage(Base):
     weapon_slot = Column(String(20), default="main_weapon")
     target_side: Mapped[str] = mapped_column(String(10), nullable=False, default="self")
     chance: Mapped[int] = mapped_column(Integer, default=100)
+    # AoE shape (FEAT-146): single | splash | cleave | all | random_n. Secondary
+    # targets take aoe_falloff% of the damage; aoe_max_targets caps random_n.
+    aoe_shape: Mapped[str] = mapped_column(String(12), nullable=False, default="single")
+    aoe_falloff: Mapped[int] = mapped_column(Integer, default=50)
+    aoe_max_targets: Mapped[int] = mapped_column(Integer, default=3)
 
     skill = relationship("Skill", back_populates="base_damage")
 
@@ -98,6 +103,10 @@ class SkillPerkDamage(Base):
     weapon_slot = Column(String(20), default="main_weapon")
     target_side: Mapped[str] = mapped_column(String(10), nullable=False, default="self")
     chance: Mapped[int] = mapped_column(Integer, default=100)
+    # AoE shape (FEAT-146) — see SkillBaseDamage.
+    aoe_shape: Mapped[str] = mapped_column(String(12), nullable=False, default="single")
+    aoe_falloff: Mapped[int] = mapped_column(Integer, default=50)
+    aoe_max_targets: Mapped[int] = mapped_column(Integer, default=3)
 
     perk = relationship("SkillPerk", back_populates="damage_entries")
 

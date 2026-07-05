@@ -51,6 +51,62 @@ const DamageEditor = ({ damage, onChange, onDelete }: DamageEditorProps) => {
         </div>
       </div>
 
+      {(damage.target_side ?? 'enemy') === 'enemy' && (
+        <div className="flex flex-col gap-1">
+          <label className="text-white/60 text-[11px]">Форма АоЕ:</label>
+          <div className="inline-flex flex-wrap rounded-sm overflow-hidden border border-white/15 w-fit">
+            {([
+              ['single', 'Одна цель'],
+              ['splash', 'Соседи'],
+              ['cleave', 'Пробой'],
+              ['all', 'Все враги'],
+              ['random_n', 'Случайные'],
+            ] as const).map(([shape, label]) => {
+              const active = (damage.aoe_shape ?? 'single') === shape;
+              return (
+                <button
+                  key={shape}
+                  type="button"
+                  onClick={() => handleField('aoe_shape', shape)}
+                  className={`px-3 py-1 text-xs transition-colors ${
+                    active ? 'bg-gold/20 text-gold' : 'bg-white/[0.03] text-white/60 hover:bg-white/[0.08]'
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          {(damage.aoe_shape ?? 'single') !== 'single' && (
+            <div className="flex flex-wrap gap-3 mt-1">
+              <label className="text-white/60 text-[11px] flex items-center gap-1">
+                Урон соседям, %:
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={damage.aoe_falloff ?? 50}
+                  onChange={(e) => handleField('aoe_falloff', Number(e.target.value))}
+                  className="gray-bg rounded-sm px-2 py-1 text-white text-sm w-16"
+                />
+              </label>
+              {(damage.aoe_shape ?? 'single') === 'random_n' && (
+                <label className="text-white/60 text-[11px] flex items-center gap-1">
+                  Всего целей:
+                  <input
+                    type="number"
+                    min={1}
+                    value={damage.aoe_max_targets ?? 3}
+                    onChange={(e) => handleField('aoe_max_targets', Number(e.target.value))}
+                    className="gray-bg rounded-sm px-2 py-1 text-white text-sm w-16"
+                  />
+                </label>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex flex-col gap-1">
         <label className="text-white/60 text-[11px]">Тип урона:</label>
         <select

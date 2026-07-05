@@ -14,6 +14,9 @@ class DamageEntryRead(BaseModel):
     chance: int = 100
     target_side: str = "self"
     weapon_slot: Optional[str] = "main_weapon"
+    aoe_shape: str = "single"
+    aoe_falloff: int = 50
+    aoe_max_targets: int = 3
 
     class Config:
         orm_mode = True
@@ -40,6 +43,9 @@ class DamageEntryWrite(BaseModel):
     chance: int = 100
     target_side: str = "self"
     weapon_slot: Optional[str] = "main_weapon"
+    aoe_shape: str = "single"
+    aoe_falloff: int = 50
+    aoe_max_targets: int = 3
 
 
 class EffectEntryWrite(BaseModel):

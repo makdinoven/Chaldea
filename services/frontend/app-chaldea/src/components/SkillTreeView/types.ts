@@ -44,6 +44,10 @@ export interface DamageEntry {
   target_side: string | null;
   weapon_slot: string | null;
   description?: string | null;
+  // AoE (FEAT-146): single | splash | cleave | all | random_n
+  aoe_shape?: string | null;
+  aoe_falloff?: number | null;
+  aoe_max_targets?: number | null;
 }
 
 export interface EffectEntry {
