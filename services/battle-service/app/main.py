@@ -12,7 +12,7 @@ from sqlalchemy import text, select
 from crud import create_battle, write_turn, get_logs_for_turn, finish_battle, get_battle, get_active_battle_for_character
 from schemas import (
     BattleCreated, BattleCreate, ActionResponse, ActionRequest, LogResponse,
-    BattleRewards, BattleRewardItem, PartyMobAttack,
+    BattleRewards, BattleRewardItem, PartyMobAttack, MobAttack,
     PvpInviteRequest, PvpInviteResponse, PvpRespondRequest, PvpRespondAcceptResponse,
     PendingInvitationsResponse, IncomingInvitation, OutgoingInvitation,
     CancelInvitationResponse, InBattleResponse,
@@ -725,6 +725,77 @@ async def create_battle_endpoint(
     )
 
 
+async def _consume_combat_gate(character_id: int, location_id: int, mob_character_id: int) -> bool:
+    """Consume the attacker's combat action-gate for this mob (FEAT-145). Returns
+    True if a gate was consumed (attack allowed)."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/action-gate/consume",
+                json={
+                    "character_id": character_id,
+                    "location_id": location_id,
+                    "action_type": "combat",
+                    "target_ref": mob_character_id,
+                },
+            )
+            if resp.status_code == 200:
+                return bool(resp.json().get("consumed"))
+    except Exception as e:
+        logger.warning(f"combat gate consume failed: {e}")
+    return False
+
+
+async def _validate_location_mob(db, mob_character_id: int, location_id: int):
+    """Assert a character id is an NPC/mob on the given location."""
+    row = (await db.execute(
+        text("SELECT current_location_id, is_npc FROM characters WHERE id = :cid"),
+        {"cid": mob_character_id},
+    )).fetchone()
+    if not row:
+        raise HTTPException(404, "Моб не найден")
+    if not row[1]:
+        raise HTTPException(400, "Это не моб")
+    if row[0] != location_id:
+        raise HTTPException(400, "Моб находится в другой локации")
+
+
+@router.post("/mob-attack", response_model=BattleCreated, status_code=201)
+async def mob_attack(
+    req: MobAttack,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Solo attack on a location mob (FEAT-145): requires a combat post that named
+    this mob as a target. The gate is consumed on engage."""
+    attacker = await _get_character_info(db, req.character_id)
+    if not attacker:
+        raise HTTPException(404, "Персонаж не найден")
+    if attacker["user_id"] != current_user.id:
+        raise HTTPException(403, "Используйте своего персонажа")
+    loc = attacker["current_location_id"]
+    if loc is None:
+        raise HTTPException(400, "Персонаж не находится в локации")
+    await _validate_location_mob(db, req.mob_character_id, loc)
+    if await get_active_battle_for_character(db, req.character_id):
+        raise HTTPException(400, "Персонаж уже в бою")
+    if await get_active_battle_for_character(db, req.mob_character_id):
+        raise HTTPException(400, "Этот моб уже в бою")
+
+    if not await _consume_combat_gate(req.character_id, loc, req.mob_character_id):
+        raise HTTPException(403, "Нужен боевой пост с этой целью, чтобы напасть")
+
+    battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
+        db, [req.character_id, req.mob_character_id], [0, 1], "pve", loc
+    )
+    return BattleCreated(
+        battle_id=battle_obj.id,
+        participants=[p.id for p in participant_objs],
+        next_actor=first_actor_pid,
+        deadline_at=deadline,
+    )
+
+
 @router.post("/party/mob-attack", response_model=BattleCreated, status_code=201)
 async def party_mob_attack(
     req: PartyMobAttack,
@@ -804,6 +875,10 @@ async def party_mob_attack(
         raise HTTPException(400, "Вы сейчас заняты (сбор или бой)")
     if len(available) > settings.BATTLE_MAX_TEAM_SIZE:
         available = available[: settings.BATTLE_MAX_TEAM_SIZE]
+
+    # GATE (FEAT-145): the initiator's combat post must have named this mob.
+    if not await _consume_combat_gate(req.leader_character_id, loc, req.mob_character_id):
+        raise HTTPException(403, "Нужен боевой пост с этой целью, чтобы напасть группой")
 
     player_ids = available + [req.mob_character_id]
     teams = [0] * len(available) + [1]

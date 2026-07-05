@@ -48,6 +48,12 @@ class PartyMobAttack(BaseModel):
     mob_character_id: int
 
 
+class MobAttack(BaseModel):
+    """Solo attack on a location mob (FEAT-145), gated by a combat post."""
+    character_id: int
+    mob_character_id: int
+
+
 class BattleRewardItem(BaseModel):
     item_id: int
     item_name: Optional[str] = None

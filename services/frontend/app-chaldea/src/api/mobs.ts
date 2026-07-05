@@ -146,15 +146,15 @@ export const fetchMobsByLocation = async (locationId: number): Promise<MobInLoca
   return data;
 };
 
+// Solo attack on a location mob. Goes through the gated endpoint (FEAT-145):
+// requires a combat post that named this mob.
 export const createBattle = async (
   playerCharacterId: number,
   mobCharacterId: number,
 ): Promise<{ battle_id: number }> => {
-  const { data } = await axios.post('/battles/', {
-    players: [
-      { character_id: playerCharacterId, team: 0 },
-      { character_id: mobCharacterId, team: 1 },
-    ],
+  const { data } = await axios.post('/battles/mob-attack', {
+    character_id: playerCharacterId,
+    mob_character_id: mobCharacterId,
   });
   return data;
 };

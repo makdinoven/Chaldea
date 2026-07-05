@@ -1040,3 +1040,35 @@ class TestPvpSideRoster:
              patch("main._filter_available", AsyncMock(return_value=[6, 7])):
             roster = await main._pvp_side_roster(None, 5, 100)
         assert roster == [5, 6, 7]  # leader + co-located available mates
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Mob-attack combat gate (FEAT-145)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestMobAttackGate:
+    def _run(self, patches, payload):
+        async def _fake_get_db():
+            yield AsyncMock()
+        with _PatchContext(patches):
+            app.dependency_overrides[get_db] = _fake_get_db
+            try:
+                with TestClient(app) as client:
+                    return client.post("/battles/mob-attack", json=payload,
+                                       headers={"Authorization": "Bearer x"})
+            finally:
+                app.dependency_overrides.pop(get_db, None)
+
+    def test_attack_rejected_without_combat_gate(self):
+        patches = {
+            "auth_http.requests.get": MagicMock(return_value=_mock_response(
+                200, {"id": 5, "username": "p", "role": "user", "permissions": []})),
+            "main._get_character_info": AsyncMock(return_value={
+                "user_id": 5, "current_location_id": 100, "character_id": 5}),
+            "main._validate_location_mob": AsyncMock(return_value=None),
+            "main.get_active_battle_for_character": AsyncMock(return_value=None),
+            "main._consume_combat_gate": AsyncMock(return_value=False),
+        }
+        r = self._run(patches, {"character_id": 5, "mob_character_id": 99})
+        assert r.status_code == 403
+        assert "боевой пост" in r.json()["detail"].lower()
