@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     CHAR_ATTRS_SERVICE_URL: str = os.getenv("CHAR_ATTRS_SERVICE_URL", "http://character-attributes-service:8002")
     INVENTORY_SERVICE_URL: str = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
     USER_SERVICE_URL: str = os.getenv("USER_SERVICE_URL", "http://user-service:8000")
+    PARTY_SERVICE_URL: str = os.getenv("PARTY_SERVICE_URL", "http://party-service:8014")
 
     class Config:
         env_file = ".env"

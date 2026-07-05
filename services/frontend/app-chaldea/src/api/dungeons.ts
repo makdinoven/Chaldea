@@ -348,6 +348,19 @@ export const createSession = async (dungeonId: number, characterId: number): Pro
   return data;
 };
 
+// Start a dungeon run straight from the leader's squad (FEAT-144 Ф3-3) — members
+// come from the party, no separate invite phase; the run activates immediately.
+export const partyRunDungeon = async (
+  dungeonId: number,
+  characterId: number,
+): Promise<{ session_id: number }> => {
+  const { data } = await axios.post<{ session_id: number }>(
+    `/dungeons/${dungeonId}/party-run`,
+    { character_id: characterId },
+  );
+  return data;
+};
+
 export const inviteMember = async (sessionId: number, characterId: number): Promise<SessionCreateResponse> => {
   const { data } = await axios.post<SessionCreateResponse>(
     `/dungeons/sessions/${sessionId}/invite`,

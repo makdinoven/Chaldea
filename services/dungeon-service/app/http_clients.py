@@ -48,6 +48,22 @@ async def get_character_profile(character_id: int) -> dict:
         raise HTTPException(status_code=503, detail="Сервис персонажей недоступен")
 
 
+async def get_party_active_members(character_id: int, location_id: int) -> dict:
+    """GET party-service /party/internal/active-members — the character's
+    co-located accepted squad (FEAT-144 Ф3). Returns {} on failure (solo)."""
+    url = f"{settings.PARTY_SERVICE_URL}/party/internal/active-members"
+    try:
+        async with _client() as client:
+            resp = await client.get(
+                url, params={"character_id": character_id, "location_id": location_id},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+    except httpx.RequestError as e:
+        logger.warning("party active-members failed for %d: %s", character_id, e)
+    return {}
+
+
 async def get_characters_at_location(location_id: int) -> list:
     """
     GET /characters/by_location?location_id={id}

@@ -18,7 +18,8 @@ import {
   updateSessionMembers,
 } from '../../redux/slices/dungeonSlice';
 import type { DungeonAtLocation, SessionState, SessionCreateResponse } from '../../api/dungeons';
-import { checkActiveSession } from '../../api/dungeons';
+import { checkActiveSession, partyRunDungeon } from '../../api/dungeons';
+import { getMyParty, type Party } from '../../api/squads';
 import type { Player } from '../pages/LocationPage/types';
 import type { DungeonWsMessage } from '../../hooks/useDungeonWebSocket';
 import useDungeonWebSocket from '../../hooks/useDungeonWebSocket';
@@ -221,6 +222,45 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
     [dispatch, currentCharacterId, navigate],
   );
 
+  // Dungeon-from-party (FEAT-144 Ф3-3): a leader with co-located squadmates
+  // starts the run with the whole squad in one step (no invite phase).
+  const [party, setParty] = useState<Party | null>(null);
+  const [partyRunLoading, setPartyRunLoading] = useState(false);
+
+  useEffect(() => {
+    if (!currentCharacterId) {
+      setParty(null);
+      return;
+    }
+    getMyParty(currentCharacterId).then(setParty).catch(() => setParty(null));
+  }, [currentCharacterId]);
+
+  const coLocatedMates = (party?.members ?? []).filter(
+    (m) =>
+      m.status === 'accepted' &&
+      m.character_id !== currentCharacterId &&
+      m.current_location_id === locationId,
+  );
+  const canPartyRun =
+    !!party && party.leader_character_id === currentCharacterId && coLocatedMates.length >= 1;
+
+  const handlePartyRun = useCallback(
+    (dungeonId: number) => {
+      if (!currentCharacterId) {
+        toast.error('Выберите персонажа');
+        return;
+      }
+      setPartyRunLoading(true);
+      partyRunDungeon(dungeonId, currentCharacterId)
+        .then((res) => navigate(`/dungeon-session/${res.session_id}`))
+        .catch((e) =>
+          toast.error(e instanceof Error ? e.message : 'Не удалось зайти отрядом'),
+        )
+        .finally(() => setPartyRunLoading(false));
+    },
+    [currentCharacterId, navigate],
+  );
+
   const handleInvite = useCallback(
     (targetCharacterId: number) => {
       if (!currentSession) return;
@@ -364,24 +404,41 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
               <p className="text-white/80 text-sm mb-5">
                 Создать группу для прохождения подземелья?
               </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    const id = groupConfirmDungeonId;
-                    setGroupConfirmDungeonId(null);
-                    handleCreateSession(id);
-                  }}
-                  disabled={sessionLoading}
-                  className="btn-blue text-sm flex-1 py-2 disabled:opacity-50"
-                >
-                  {sessionLoading ? 'Создание...' : 'Да, создать'}
-                </button>
-                <button
-                  onClick={() => setGroupConfirmDungeonId(null)}
-                  className="btn-line text-sm flex-1 py-2"
-                >
-                  Отмена
-                </button>
+              <div className="flex flex-col gap-2">
+                {canPartyRun && (
+                  <button
+                    onClick={() => {
+                      const id = groupConfirmDungeonId;
+                      setGroupConfirmDungeonId(null);
+                      if (id !== null) handlePartyRun(id);
+                    }}
+                    disabled={partyRunLoading}
+                    className="btn-blue text-sm w-full py-2 disabled:opacity-50"
+                  >
+                    {partyRunLoading
+                      ? 'Заходим...'
+                      : `Зайти отрядом (${coLocatedMates.length + 1})`}
+                  </button>
+                )}
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      const id = groupConfirmDungeonId;
+                      setGroupConfirmDungeonId(null);
+                      handleCreateSession(id);
+                    }}
+                    disabled={sessionLoading}
+                    className="btn-line text-sm flex-1 py-2 disabled:opacity-50"
+                  >
+                    {sessionLoading ? 'Создание...' : 'Собрать вручную'}
+                  </button>
+                  <button
+                    onClick={() => setGroupConfirmDungeonId(null)}
+                    className="btn-line text-sm flex-1 py-2"
+                  >
+                    Отмена
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>

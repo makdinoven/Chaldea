@@ -392,6 +392,27 @@ async def create_session(
 
 
 @app.post(
+    "/dungeons/{dungeon_id}/party-run",
+    response_model=SessionStateResponse,
+    status_code=201,
+)
+async def party_run(
+    dungeon_id: int,
+    data: SessionCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserRead = Depends(get_current_user_via_http),
+):
+    """Start a dungeon run from the leader's squad in one step (FEAT-144 Ф3-3):
+    members come from the party, no separate invite phase."""
+    return await gameplay.create_party_run(
+        db=db,
+        character_id=data.character_id,
+        dungeon_id=dungeon_id,
+        user_id=user.id,
+    )
+
+
+@app.post(
     "/dungeons/sessions/{session_id}/invite",
     response_model=SessionResponse,
 )

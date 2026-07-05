@@ -744,6 +744,77 @@ async def enter_dungeon(
     return state_response
 
 
+async def create_party_run(
+    db: AsyncSession,
+    character_id: int,
+    dungeon_id: int,
+    user_id: int,
+) -> SessionStateResponse:
+    """Start a dungeon run from the leader's squad in one step (FEAT-144 Ф3-3).
+
+    Members come from the existing party (co-located accepted squadmates) instead
+    of a separate invite phase. Party membership is the consent. Squadmates already
+    in another dungeon session are skipped. The run activates immediately.
+    """
+    dungeon = (
+        await db.execute(select(Dungeon).where(Dungeon.id == dungeon_id))
+    ).scalar_one_or_none()
+    if not dungeon:
+        raise HTTPException(status_code=404, detail="Подземелье не найдено")
+    if not dungeon.is_active:
+        raise HTTPException(status_code=400, detail="Подземелье неактивно")
+
+    on_cd, remaining = await session_state.check_dungeon_cooldown(dungeon_id)
+    if on_cd:
+        h, m = remaining // 3600, (remaining % 3600) // 60
+        raise HTTPException(
+            status_code=403,
+            detail=f"Подземелье на кулдауне. Восстановится через {h}ч {m}мин",
+        )
+
+    profile = await http_clients.get_character_profile(character_id)
+    if profile.get("current_location_id") != dungeon.location_id:
+        raise HTTPException(status_code=400, detail="Персонаж должен находиться на локации подземелья")
+    if profile.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Этот персонаж не принадлежит вам")
+    if await session_state.get_character_active_session(character_id) is not None:
+        raise HTTPException(status_code=409, detail="Персонаж уже участвует в другой сессии подземелья")
+
+    party = await http_clients.get_party_active_members(character_id, dungeon.location_id)
+    if not party.get("party_id") or party.get("leader_character_id") != character_id:
+        raise HTTPException(status_code=400, detail="Групповой заход доступен только лидеру отряда")
+
+    # Available squadmates: co-located and not already in another dungeon session.
+    available = [character_id]
+    for cid in party.get("member_character_ids", []):
+        if cid == character_id:
+            continue
+        if await session_state.get_character_active_session(cid) is None:
+            available.append(cid)
+
+    session_obj = DungeonSession(
+        dungeon_id=dungeon_id, leader_character_id=character_id, status="forming",
+    )
+    db.add(session_obj)
+    await db.flush()
+
+    for cid in available:
+        prof = profile if cid == character_id else await http_clients.get_character_profile(cid)
+        db.add(DungeonSessionMember(
+            session_id=session_obj.id,
+            character_id=cid,
+            user_id=prof.get("user_id"),
+            status="alive",
+        ))
+    await db.commit()
+
+    for cid in available:
+        await session_state.set_character_active_session(cid, session_obj.id)
+
+    # Activate the run right away (reuses the standard enter flow).
+    return await enter_dungeon(db, session_obj.id, character_id)
+
+
 async def get_session_state(
     db: AsyncSession,
     session_id: int,
