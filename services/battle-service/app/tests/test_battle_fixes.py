@@ -1007,12 +1007,12 @@ class TestPartyMobAttack:
         assert r.status_code == 400
         assert "отряд" in r.json()["detail"].lower()
 
-    def test_non_leader_rejected(self):
-        # active-members reports a different leader → initiator is not the leader
-        data = {"party_id": 1, "leader_character_id": 99, "member_character_ids": [5, 6]}
+    def test_no_squadmates_here_rejected(self):
+        # In a party but no co-located members available → nothing to group with.
+        data = {"party_id": 1, "leader_character_id": 5, "member_character_ids": []}
         r = _run_party_mob_attack(data, self._PAYLOAD)
-        assert r.status_code == 403
-        assert "лидер" in r.json()["detail"].lower()
+        assert r.status_code == 400
+        assert "соотрядц" in r.json()["detail"].lower()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

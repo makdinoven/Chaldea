@@ -6,6 +6,7 @@ alembic
 pydantic<2.0.0
 requests
 httpx
+pika
 pytest
 pytest-asyncio
 cryptography

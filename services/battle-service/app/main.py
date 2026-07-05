@@ -830,8 +830,6 @@ async def party_mob_attack(
 
     if not data.get("party_id"):
         raise HTTPException(400, "Вы не состоите в отряде")
-    if data.get("leader_character_id") != req.leader_character_id:
-        raise HTTPException(403, "Групповой бой начинает только лидер отряда")
     members = data.get("member_character_ids", [])
     if not members:
         raise HTTPException(400, "Нет соотрядцев на этой локации")

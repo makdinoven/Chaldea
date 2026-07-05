@@ -60,8 +60,9 @@ const LocationMobs = ({ locationId, characterId }: LocationMobsProps) => {
       m.character_id !== characterId &&
       m.current_location_id === locationId,
   );
-  const canGroup =
-    !!party && party.leader_character_id === characterId && coLocatedMates.length >= 1;
+  // Any co-located squad member can start a group fight (party membership is the
+  // consent) — not just the leader (FEAT-144 fix).
+  const canGroup = !!party && coLocatedMates.length >= 1;
 
   const loadMobs = useCallback(async () => {
     setLoading(true);

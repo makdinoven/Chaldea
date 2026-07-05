@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     PARTY_XP_BONUS_PCT: int = 10      # +10% (used from Ф2)
 
     CORS_ORIGINS: str = "*"
+    RABBITMQ_URL: str = "amqp://guest:guest@rabbitmq:5672/"
 
 
 settings = Settings()

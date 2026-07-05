@@ -312,6 +312,20 @@ def invite_member(
     ))
     db.commit()
     db.refresh(party)
+
+    # Notify the invited player (bell + WS).
+    try:
+        from notifications import publish_notification
+        leader_name = leader.get("name") or "Лидер"
+        publish_notification(
+            target["user_id"],
+            f"{leader_name} приглашает вас в отряд «{party.name}»",
+            ws_type="party_invitation",
+            ws_data={"party_id": party.id, "party_name": party.name},
+        )
+    except Exception as e:
+        logger.warning(f"party invite notification failed: {e}")
+
     return crud.build_party_out(db, party)
 
 
