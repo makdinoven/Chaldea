@@ -340,16 +340,15 @@ const LocationPage = () => {
   }, [refetchGates]);
 
   // Gate targets available on this location for the post editor (FEAT-145 v2).
-  const gatheringNodes = useAppSelector((s) => s.gathering.currentNodeList);
   const dungeonsAtLocation = useAppSelector(selectDungeonsAtLocation);
   const gateOptions = useMemo(
     () => ({
       combat: combatTargets.map((m) => ({ id: m.character_id, name: m.name })),
       npc_dialogue: (location?.npcs ?? []).map((n) => ({ id: n.id, name: n.name })),
-      gathering: (gatheringNodes ?? []).map((g) => ({ id: g.id, name: g.node_name })),
+      gathering: (location?.gathering_nodes ?? []).map((g) => ({ id: g.id, name: g.node_name })),
       dungeon: (dungeonsAtLocation ?? []).map((d) => ({ id: d.id, name: d.name })),
     }),
-    [combatTargets, location, gatheringNodes, dungeonsAtLocation],
+    [combatTargets, location, dungeonsAtLocation],
   );
 
   const handleSubmitPost = useCallback(
@@ -550,7 +549,6 @@ const LocationPage = () => {
           locationMarkerType={location.marker_type}
           isCharacterHere={isCharacterHere}
           talkableNpcIds={(gateStatus.npc_dialogue as number[]) ?? []}
-          npcGateStaff={userIsStaff}
         />
 
         {/* Neighbors */}
