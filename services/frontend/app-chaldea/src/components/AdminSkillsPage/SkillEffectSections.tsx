@@ -247,6 +247,64 @@ const DamageQuantitySection = ({
               className={inputClass}
             />
           </div>
+          {/* AoE shape (FEAT-146) — only enemy-targeted damage can splash. */}
+          {(row.target_side ?? 'enemy') === 'enemy' && (
+            <div className="basis-full flex flex-col gap-1">
+              <label className={labelClass}>Форма АоЕ:</label>
+              <div className="inline-flex flex-wrap rounded-sm overflow-hidden border border-white/15 w-fit">
+                {([
+                  ['single', 'Одна цель'],
+                  ['splash', 'Соседи'],
+                  ['cleave', 'Пробой'],
+                  ['all', 'Все враги'],
+                  ['random_n', 'Случайные'],
+                ] as const).map(([shape, label]) => {
+                  const active = (row.aoe_shape ?? 'single') === shape;
+                  return (
+                    <button
+                      key={shape}
+                      type="button"
+                      onClick={() => patch(row, { aoe_shape: shape })}
+                      className={`px-2 py-1 text-[11px] transition-colors ${
+                        active
+                          ? 'bg-gold/20 text-gold'
+                          : 'bg-white/[0.03] text-white/60 hover:bg-white/[0.08]'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              {(row.aoe_shape ?? 'single') !== 'single' && (
+                <div className="flex flex-wrap gap-2 mt-1">
+                  <label className="flex flex-col gap-1 min-w-[110px]">
+                    <span className={labelClass}>Урон соседям, %:</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={row.aoe_falloff ?? 50}
+                      onChange={(e) => patch(row, { aoe_falloff: Number(e.target.value) })}
+                      className={inputClass}
+                    />
+                  </label>
+                  {(row.aoe_shape ?? 'single') === 'random_n' && (
+                    <label className="flex flex-col gap-1 min-w-[110px]">
+                      <span className={labelClass}>Всего целей:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={row.aoe_max_targets ?? 3}
+                        onChange={(e) => patch(row, { aoe_max_targets: Number(e.target.value) })}
+                        className={inputClass}
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <button type="button" onClick={() => del(row)} className={delBtnClass}>
             Удалить
           </button>
