@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import {
@@ -86,6 +86,7 @@ const AdminMobPacks = () => {
   // Placement modal
   const [placingPack, setPlacingPack] = useState<MobPackListItem | null>(null);
   const [placeLocationId, setPlaceLocationId] = useState<number | ''>('');
+  const [locationSearch, setLocationSearch] = useState('');
   const [placing, setPlacing] = useState(false);
 
   const loadPacks = useCallback(async () => {
@@ -227,6 +228,16 @@ const AdminMobPacks = () => {
   const availableTemplates = templates.filter(
     (t) => !form.members.some((m) => m.mob_template_id === t.id),
   );
+
+  // Client-side location search for the placement modal — all locations are
+  // already loaded, so we just filter and cap the rendered list (1500+ items).
+  const locationResults = useMemo(() => {
+    const q = locationSearch.trim().toLowerCase();
+    const matched = q
+      ? locations.filter((l) => l.name.toLowerCase().includes(q))
+      : locations;
+    return { shown: matched.slice(0, 100), total: matched.length };
+  }, [locations, locationSearch]);
 
   const handleSave = async () => {
     if (!form.name.trim()) {
@@ -394,7 +405,11 @@ const AdminMobPacks = () => {
                   </div>
                   <div className="flex gap-2 flex-wrap">
                     <button
-                      onClick={() => setPlacingPack(p)}
+                      onClick={() => {
+                        setPlacingPack(p);
+                        setPlaceLocationId('');
+                        setLocationSearch('');
+                      }}
                       className="btn-blue text-xs px-3 py-1.5"
                     >
                       Разместить
@@ -640,23 +655,43 @@ const AdminMobPacks = () => {
             <h2 className="gold-text text-xl font-medium mb-4">
               Разместить «{placingPack.name}»
             </h2>
-            <label className="flex flex-col gap-1 mb-6">
+            <div className="flex flex-col gap-2 mb-6">
               <span className="text-white/60 text-xs uppercase">Локация</span>
-              <select
+              <input
+                type="text"
+                value={locationSearch}
+                onChange={(e) => setLocationSearch(e.target.value)}
+                placeholder="Найти локацию по названию..."
                 className="input-underline"
-                value={placeLocationId}
-                onChange={(e) => setPlaceLocationId(e.target.value === '' ? '' : Number(e.target.value))}
-              >
-                <option value="" className="bg-site-dark text-white">
-                  Выберите локацию...
-                </option>
-                {locations.map((l) => (
-                  <option key={l.id} value={l.id} className="bg-site-dark text-white">
-                    {l.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+              />
+              <div className="max-h-56 overflow-y-auto rounded-card border border-white/10 divide-y divide-white/5">
+                {locationResults.shown.length === 0 ? (
+                  <p className="text-white/40 text-xs p-3">
+                    {locationSearch.trim() ? 'Локации не найдены' : 'Нет доступных локаций'}
+                  </p>
+                ) : (
+                  locationResults.shown.map((l) => (
+                    <button
+                      key={l.id}
+                      type="button"
+                      onClick={() => setPlaceLocationId(l.id)}
+                      className={`w-full text-left px-3 py-2 text-sm truncate transition-colors ${
+                        placeLocationId === l.id
+                          ? 'bg-gold/20 text-gold'
+                          : 'text-white hover:bg-white/5'
+                      }`}
+                    >
+                      {l.name}
+                    </button>
+                  ))
+                )}
+              </div>
+              {locationResults.total > locationResults.shown.length && (
+                <span className="text-white/40 text-[10px]">
+                  Показаны первые {locationResults.shown.length} из {locationResults.total} — уточните поиск
+                </span>
+              )}
+            </div>
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setPlacingPack(null)}
