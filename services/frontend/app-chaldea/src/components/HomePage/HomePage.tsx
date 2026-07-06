@@ -11,8 +11,6 @@ import smallbuttonimg2 from "../../assets/smallhomebutton2.png";
 import smallbuttonimg3 from "../../assets/smallhomebutton3.png";
 import smallbuttonimg4 from "../../assets/smallhomebutton4.png";
 import sliderImg1 from "../../assets/sliderimg1.png";
-import statsBg from "../../assets/stats_bg.png";
-import statsUserImg from "../../assets/stats_user_img.png";
 
 interface ButtonLink {
   name: string;
@@ -35,18 +33,6 @@ interface SliderPage {
   link: string;
   img: string;
   tag: string;
-}
-
-interface StatsUser {
-  name: string;
-  points: number;
-  avatar: string;
-}
-
-interface StatsData {
-  img: string;
-  title: string;
-  sections: { sectionName: string; users: StatsUser[] }[];
 }
 
 export default function HomePage() {
@@ -152,37 +138,6 @@ export default function HomePage() {
     },
   ];
 
-  const statsData: StatsData = {
-    img: statsBg,
-    title: "Статистика",
-    sections: [
-      {
-        sectionName: "Лучшие ролевики",
-        users: [
-          { name: "Фармила", points: 895, avatar: statsUserImg },
-          { name: "Сгущенка", points: 654, avatar: statsUserImg },
-          { name: "Тушенка", points: 432, avatar: statsUserImg },
-        ],
-      },
-      {
-        sectionName: "Лучшие боевики",
-        users: [
-          { name: "Бэбрик Йохансон", points: 545, avatar: statsUserImg },
-          { name: "Чебурашка", points: 322, avatar: statsUserImg },
-          { name: "Сгущенка", points: 212, avatar: statsUserImg },
-        ],
-      },
-      {
-        sectionName: "Лучшие писатели",
-        users: [
-          { name: "Фармила", points: 8495, avatar: statsUserImg },
-          { name: "Сгущенка", points: 654, avatar: statsUserImg },
-          { name: "Тушенка", points: 432, avatar: statsUserImg },
-        ],
-      },
-    ],
-  };
-
   const largeButtons = buttonsData.filter((button) => button.type === "large");
   const smallButtons = buttonsData.filter((button) => button.type === "small");
 
@@ -235,7 +190,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      <Stats statsData={statsData} />
+      <Stats />
     </>
   );
 }

@@ -122,6 +122,7 @@ class CharacterCumulativeStats(Base):
     total_damage_dealt = Column(BigInteger, server_default="0")
     total_damage_received = Column(BigInteger, server_default="0")
     pve_kills = Column(Integer, server_default="0")
+    pve_points = Column(Integer, server_default="0")  # level-weighted PvE score (sum of defeated mob levels)
     pvp_wins = Column(Integer, server_default="0")
     pvp_losses = Column(Integer, server_default="0")
     total_battles = Column(Integer, server_default="0")

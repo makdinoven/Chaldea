@@ -124,6 +124,32 @@ def _mock_db_is_npc(npc_char_ids: set):
     return mock_session
 
 
+def _mock_db_npc_levels(npc_levels: dict):
+    """
+    Mock AsyncSession where each character's row is (is_npc, level).
+    npc_levels maps character_id -> level for NPCs; any id not present is a
+    non-NPC player. Supports both `SELECT is_npc` (row[0]) and
+    `SELECT is_npc, level` (row[0], row[1]).
+    """
+    mock_session = AsyncMock()
+
+    async def _execute(query, params=None):
+        result = MagicMock()
+        if params and "cid" in params:
+            cid = params["cid"]
+            is_npc = cid in npc_levels
+            level = npc_levels.get(cid, 1)
+            row = MagicMock()
+            row.__getitem__ = lambda self, idx: is_npc if idx == 0 else level
+            result.fetchone = MagicMock(return_value=row)
+        else:
+            result.fetchone = MagicMock(return_value=None)
+        return result
+
+    mock_session.execute = _execute
+    return mock_session
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Tests: _track_cumulative_stats
 # ──────────────────────────────────────────────────────────────────────────────
@@ -265,8 +291,8 @@ async def test_pvp_wins_losses_set_correctly():
 
 
 @pytest.mark.asyncio
-async def test_wins_losses_tracked_for_pve_battle():
-    """Wins/losses are now tracked for ALL battles (including PvE)."""
+async def test_pvp_wins_not_tracked_for_pve_battle():
+    """PvP wins/losses are NOT tracked in PvE battles — only in real PvP."""
     battle_state = _make_battle_state({
         "1": _make_participant(character_id=10, team=1, hp=50, total_damage_dealt=100),
     })
@@ -299,8 +325,50 @@ async def test_wins_losses_tracked_for_pve_battle():
         )
 
     assert len(payloads) == 1
-    # Wins are now tracked for all battles (NPCs are full characters)
-    assert payloads[0]["increments"].get("pvp_wins") == 1
+    # PvE battle → no pvp_wins/losses (was a bug that counted them before).
+    assert "pvp_wins" not in payloads[0]["increments"]
+    assert "pvp_losses" not in payloads[0]["increments"]
+
+
+@pytest.mark.asyncio
+async def test_pve_points_level_weighted():
+    """PvE points = sum of defeated mob levels (lvl-5 mob + lvl-25 mob = 30)."""
+    battle_state = _make_battle_state({
+        "1": _make_participant(character_id=10, team=1, hp=50, total_damage_dealt=200),
+        "2": _make_participant(character_id=20, team=2, hp=0, total_damage_dealt=10),  # NPC lvl 5
+        "3": _make_participant(character_id=30, team=2, hp=0, total_damage_dealt=5),   # NPC lvl 25
+    })
+    db_session = _mock_db_npc_levels(npc_levels={20: 5, 30: 25})
+
+    payloads = []
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = "ok"
+
+    with patch("main.httpx.AsyncClient") as MockClient:
+        mock_client_inst = AsyncMock()
+
+        async def _capture_post(url, json=None):
+            if "cumulative_stats" in str(url):
+                payloads.append(json)
+            return mock_response
+
+        mock_client_inst.post = _capture_post
+        mock_client_inst.__aenter__ = AsyncMock(return_value=mock_client_inst)
+        mock_client_inst.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = mock_client_inst
+
+        await _track_cumulative_stats(
+            battle_state=battle_state,
+            winner_team=1,
+            battle_type="pve",
+            turn_number=4,
+            db_session=db_session,
+        )
+
+    winner = next(p for p in payloads if p["character_id"] == 10)
+    assert winner["increments"].get("pve_points") == 30
+    assert winner["increments"].get("pve_kills") == 2
 
 
 @pytest.mark.asyncio

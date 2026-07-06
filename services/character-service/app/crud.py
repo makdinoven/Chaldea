@@ -2695,3 +2695,78 @@ def purge_teleport_links_for_npc(db: Session, npc_id: int):
     db.query(TeleportLink).filter(
         (TeleportLink.from_npc_id == npc_id) | (TeleportLink.to_npc_id == npc_id)
     ).delete(synchronize_session=False)
+
+
+def get_home_leaderboards(db: Session, limit: int = 3) -> dict:
+    """
+    Top-N players for the home-page mini-stats block, three boards:
+      - symbols_daily: characters written in roleplay posts in the last 24h
+        (summed from character_logs.metadata.char_count, event_type='rp_post').
+      - pvp: PvP wins all-time (character_cumulative_stats.pvp_wins).
+      - pve: PvE points all-time = sum of defeated mob levels
+        (character_cumulative_stats.pve_points).
+
+    NPCs are excluded. Rows with a zero/empty value are omitted so the board only
+    shows real activity. character_cumulative_stats is owned by
+    character-attributes-service but lives in the same MySQL DB — read directly
+    here to keep this a single query per board (no cross-service HTTP fan-out).
+    """
+    # 1. Symbols written in the last 24h. Portable SQL (runs on MySQL prod and
+    #    SQLite tests): `json_extract` + `+ 0` coerces the JSON number in both
+    #    dialects; the window bound is passed as a param (assumes app and DB
+    #    share a clock — both run UTC in this deployment).
+    from datetime import datetime, timedelta
+
+    since = datetime.utcnow() - timedelta(hours=24)
+    symbols_rows = db.execute(
+        sa_text("""
+            SELECT cl.character_id,
+                   c.name,
+                   c.avatar,
+                   SUM(json_extract(cl.metadata, '$.char_count') + 0) AS value
+            FROM character_logs cl
+            JOIN characters c ON c.id = cl.character_id
+            WHERE cl.event_type = 'rp_post'
+              AND cl.created_at >= :since
+              AND c.is_npc = 0
+            GROUP BY cl.character_id, c.name, c.avatar
+            HAVING value > 0
+            ORDER BY value DESC
+            LIMIT :limit
+        """),
+        {"since": since, "limit": limit},
+    ).fetchall()
+
+    def _stat_board(metric_column: str):
+        # metric_column is a fixed literal (not user input) — safe to interpolate.
+        return db.execute(
+            sa_text(f"""
+                SELECT s.character_id, c.name, c.avatar, s.{metric_column} AS value
+                FROM character_cumulative_stats s
+                JOIN characters c ON c.id = s.character_id
+                WHERE c.is_npc = 0 AND s.{metric_column} > 0
+                ORDER BY s.{metric_column} DESC
+                LIMIT :limit
+            """),
+            {"limit": limit},
+        ).fetchall()
+
+    pvp_rows = _stat_board("pvp_wins")
+    pve_rows = _stat_board("pve_points")
+
+    def _to_entries(rows):
+        return [
+            {
+                "character_id": r[0],
+                "name": r[1],
+                "avatar": r[2] or "",
+                "value": int(r[3] or 0),
+            }
+            for r in rows
+        ]
+
+    return {
+        "symbols_daily": _to_entries(symbols_rows),
+        "pvp": _to_entries(pvp_rows),
+        "pve": _to_entries(pve_rows),
+    }

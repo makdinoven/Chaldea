@@ -424,8 +424,9 @@ async def _track_cumulative_stats(
     """
     is_pvp = battle_type in ("pvp_training", "pvp_death")
 
-    # Collect defeated enemy info (for pve_kills + quest auto-progress)
+    # Collect defeated enemy info (for pve_kills / pve_points + quest auto-progress)
     defeated_npc_count = 0
+    defeated_npc_level_sum = 0  # sum of levels of defeated NPC/mob enemies → pve_points
     defeated_enemies: list[dict] = []  # [{character_id, is_npc, mob_template_id, tier}, ...]
     if winner_team is not None:
         for pid_str, pdata in battle_state["participants"].items():
@@ -434,13 +435,15 @@ async def _track_cumulative_stats(
                 enemy_info = {"character_id": enemy_char_id, "is_npc": False, "mob_template_id": None, "tier": None}
                 try:
                     row = await db_session.execute(
-                        text("SELECT is_npc FROM characters WHERE id = :cid"),
+                        text("SELECT is_npc, level FROM characters WHERE id = :cid"),
                         {"cid": enemy_char_id},
                     )
                     r = row.fetchone()
                     if r and r[0]:
                         enemy_info["is_npc"] = True
                         defeated_npc_count += 1
+                        # PvE points are level-weighted: a lvl-25 mob is worth 25.
+                        defeated_npc_level_sum += (r[1] or 0)
                         # Check if this NPC is a mob (has active_mobs entry)
                         mob_row = await db_session.execute(
                             text("""
@@ -495,14 +498,19 @@ async def _track_cumulative_stats(
             "total_rounds_survived": turn_number,
         }
 
-        if is_winner:
-            increments["pvp_wins"] = 1
-        elif is_loser:
-            increments["pvp_losses"] = 1
+        # PvP wins/losses count ONLY in real PvP battles (was previously
+        # incremented for every battle, including PvE — see is_pvp above).
+        if is_pvp:
+            if is_winner:
+                increments["pvp_wins"] = 1
+            elif is_loser:
+                increments["pvp_losses"] = 1
 
-        # PvE kills: only for winners
+        # PvE kills (count) + PvE points (level-weighted): only for winners
         if is_winner and defeated_npc_count > 0:
             increments["pve_kills"] = defeated_npc_count
+        if is_winner and defeated_npc_level_sum > 0:
+            increments["pve_points"] = defeated_npc_level_sum
 
         # Low HP win: winner's HP was < 10% of max at battle end
         if is_winner:

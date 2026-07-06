@@ -287,6 +287,7 @@ class CumulativeStatsResponse(BaseModel):
     total_damage_dealt: int = 0
     total_damage_received: int = 0
     pve_kills: int = 0
+    pve_points: int = 0
     pvp_wins: int = 0
     pvp_losses: int = 0
     total_battles: int = 0

@@ -2565,6 +2565,21 @@ def get_mobs_by_location(
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
+@router.get("/home-leaderboards", response_model=schemas.HomeLeaderboardsResponse)
+def get_home_leaderboards(
+    limit: int = Query(3, ge=1, le=10, description="Сколько игроков в каждом топе"),
+    db: Session = Depends(get_db),
+):
+    """Public: top players for the home-page mini-stats block — characters
+    written in the last 24h, PvP wins, and PvE points (sum of defeated mob
+    levels), each as a top-N list with name/avatar."""
+    try:
+        return crud.get_home_leaderboards(db, limit=limit)
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении статистики для главной: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
 # ============================================================
 # Mob Packs (FEAT-147)
 # ============================================================

@@ -1176,3 +1176,17 @@ class PostHistoryResponse(BaseModel):
 
 class SetTravelCooldownRequest(BaseModel):
     minutes: int
+
+
+# ── Home page mini-stats leaderboards ──
+class LeaderboardEntry(BaseModel):
+    character_id: int
+    name: str
+    avatar: str
+    value: int
+
+
+class HomeLeaderboardsResponse(BaseModel):
+    symbols_daily: List[LeaderboardEntry]  # characters written in the last 24h
+    pvp: List[LeaderboardEntry]            # PvP wins (all-time)
+    pve: List[LeaderboardEntry]            # PvE points = sum of defeated mob levels (all-time)
