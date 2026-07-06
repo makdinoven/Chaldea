@@ -70,8 +70,11 @@ const AdminMobPacks = () => {
   const [activeLoading, setActiveLoading] = useState(false);
   const [activeError, setActiveError] = useState<string | null>(null);
 
-  // Shared: mob templates (for the composer) + locations (for placement)
+  // Composer: searchable mob-template picker + locations (for placement)
   const [templates, setTemplates] = useState<MobTemplateListItem[]>([]);
+  const [mobSearch, setMobSearch] = useState('');
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [locations, setLocations] = useState<LocationOption[]>([]);
 
   // Form modal
@@ -124,21 +127,39 @@ const AdminMobPacks = () => {
     if (tab === 'active') loadActivePacks();
   }, [tab, loadActivePacks]);
 
-  // Load templates + locations once (needed by form/placement)
+  // Load locations once (needed for placement)
   useEffect(() => {
-    fetchMobTemplates({ page_size: 200 })
-      .then((d) => setTemplates(d.items))
-      .catch(() => setTemplates([]));
     axios
       .get<LocationOption[]>('/locations/locations/lookup')
       .then((r) => setLocations(r.data))
       .catch(() => setLocations([]));
   }, []);
 
+  // Load mob templates for the composer — only while the form is open, with a
+  // debounced server-side search. page_size stays within the backend cap (le=100),
+  // otherwise the request 422s and the picker shows nothing.
+  useEffect(() => {
+    if (!formOpen) return;
+    setTemplatesLoading(true);
+    setTemplatesError(null);
+    const t = setTimeout(() => {
+      fetchMobTemplates({ q: mobSearch.trim() || undefined, page_size: 100 })
+        .then((d) => setTemplates(d.items))
+        .catch(() => {
+          setTemplates([]);
+          setTemplatesError('Не удалось загрузить список мобов');
+          toast.error('Не удалось загрузить список мобов');
+        })
+        .finally(() => setTemplatesLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [formOpen, mobSearch]);
+
   // ── Form handlers ──
   const openCreate = () => {
     setEditingId(null);
     setForm(EMPTY_FORM);
+    setMobSearch('');
     setFormOpen(true);
   };
 
@@ -158,6 +179,7 @@ const AdminMobPacks = () => {
           tier: m.template_tier || 'normal',
         })),
       });
+      setMobSearch('');
       setFormOpen(true);
     } catch {
       toast.error('Не удалось загрузить стаю');
@@ -200,6 +222,11 @@ const AdminMobPacks = () => {
 
   const totalMobs = form.members.reduce((sum, m) => sum + m.quantity, 0);
   const overCap = totalMobs > BATTLE_MAX_TEAM_SIZE;
+
+  // Templates not yet in the composition — offered in the picker.
+  const availableTemplates = templates.filter(
+    (t) => !form.members.some((m) => m.mob_template_id === t.id),
+  );
 
   const handleSave = async () => {
     if (!form.name.trim()) {
@@ -541,25 +568,45 @@ const AdminMobPacks = () => {
                   </div>
                 )}
 
-                <select
-                  className="input-underline"
-                  defaultValue=""
-                  onChange={(e) => {
-                    addMember(Number(e.target.value));
-                    e.target.value = '';
-                  }}
-                >
-                  <option value="" className="bg-site-dark text-white">
-                    Добавить моба...
-                  </option>
-                  {templates
-                    .filter((t) => !form.members.some((m) => m.mob_template_id === t.id))
-                    .map((t) => (
-                      <option key={t.id} value={t.id} className="bg-site-dark text-white">
-                        {t.name} ({TIER_LABELS[t.tier] || t.tier}, ур. {t.level})
-                      </option>
-                    ))}
-                </select>
+                {/* Searchable mob picker */}
+                <div className="flex flex-col gap-2">
+                  <input
+                    type="text"
+                    value={mobSearch}
+                    onChange={(e) => setMobSearch(e.target.value)}
+                    placeholder="Найти моба по имени..."
+                    className="input-underline"
+                  />
+                  <div className="max-h-56 overflow-y-auto rounded-card border border-white/10 divide-y divide-white/5">
+                    {templatesLoading ? (
+                      <p className="text-white/40 text-xs p-3">Загрузка мобов...</p>
+                    ) : templatesError ? (
+                      <p className="text-site-red text-xs p-3">{templatesError}</p>
+                    ) : availableTemplates.length === 0 ? (
+                      <p className="text-white/40 text-xs p-3">
+                        {mobSearch.trim()
+                          ? 'Мобы не найдены'
+                          : form.members.length > 0
+                            ? 'Все доступные мобы уже добавлены'
+                            : 'Нет доступных мобов'}
+                      </p>
+                    ) : (
+                      availableTemplates.map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => addMember(t.id)}
+                          className="w-full text-left px-3 py-2 flex items-center justify-between gap-2 hover:bg-white/5 transition-colors"
+                        >
+                          <span className="text-white text-sm truncate">{t.name}</span>
+                          <span className="text-white/40 text-[10px] whitespace-nowrap">
+                            {TIER_LABELS[t.tier] || t.tier} · ур. {t.level}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
