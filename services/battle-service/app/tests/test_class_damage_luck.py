@@ -309,6 +309,34 @@ class TestComputeDamageClassAware:
         assert final == 50.0
 
     @pytest.mark.asyncio
+    async def test_no_weapon_is_attribute_only(self):
+        """'Без оружия' (weapon=None): damage is computed from attributes only —
+        the equipped weapon's damage_modifier is excluded. main.py maps the
+        weapon_slot value "no_weapon" to None before calling this."""
+        _restore_real_engine()
+        attacker = _base_attacker_attrs(strength=20, agility=5, intelligence=5)
+        defender = _base_defender_attrs()
+        entry = _simple_damage_entry(amount=0)
+        weapon = {"damage_modifier": 15, "primary_damage_type": "physical"}
+
+        with patch.object(_be_mod, "roll_dodge", return_value=False), \
+             patch.object(_be_mod, "roll_chance", return_value=True), \
+             patch.object(_be_mod, "roll_crit", return_value=False):
+            with_weapon, _ = await _REAL_compute_damage_with_rolls(
+                entry, attacker, weapon, {}, defender, {}, class_id=1
+            )
+            no_weapon, log = await _REAL_compute_damage_with_rolls(
+                entry, attacker, None, {}, defender, {}, class_id=1
+            )
+
+        # with weapon: strength(20) + damage(5) + weapon(15) = 40
+        # no weapon:   strength(20) + damage(5)             = 25
+        assert with_weapon == 40.0
+        assert no_weapon == 25.0
+        assert log["base"] == 25
+        assert with_weapon - no_weapon == 15.0  # exactly the weapon modifier
+
+    @pytest.mark.asyncio
     async def test_class_damage_with_buffs_and_resists(self):
         """Buffs and resists apply correctly on top of class-based damage."""
         _restore_real_engine()

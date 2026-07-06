@@ -2207,7 +2207,13 @@ async def _make_action_core(
                 dealt, log = await compute_damage_with_rolls(
                     damage_entry=dmg,
                     attacker_attr=attacker_attributes,
-                    weapon=attacker_weapons.get(dmg.get("weapon_slot", "main_weapon")),
+                    # "no_weapon": damage from attributes only, ignoring any equipped
+                    # weapon's modifier. Any unknown slot also resolves to None (unarmed).
+                    weapon=(
+                        None
+                        if dmg.get("weapon_slot") == "no_weapon"
+                        else attacker_weapons.get(dmg.get("weapon_slot", "main_weapon"))
+                    ),
                     percent_buffs=percent_damage_buffs,
                     defender_attr=_ctx["attrs"],
                     percent_resists=_ctx["resists"],

@@ -171,6 +171,9 @@ export const DAMAGE_TYPES: SelectOption[] = [
 export const WEAPON_SLOTS: SelectOption[] = [
   { label: "Основное оружие", value: "main_weapon" },
   { label: "Доп. оружие", value: "additional_weapons" },
+  // "Без оружия": damage is computed from attributes only, ignoring any equipped
+  // weapon's modifier (battle-service treats "no_weapon" as unarmed).
+  { label: "Без оружия", value: "no_weapon" },
 ];
 
 export const STAT_MODIFIERS: StatModifierOption[] = [
