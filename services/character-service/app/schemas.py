@@ -829,6 +829,126 @@ class MobInLocation(BaseModel):
     status: str
 
 
+# ============================================================
+# Mob Packs (FEAT-147)
+# ============================================================
+
+class MobPackMemberInput(BaseModel):
+    mob_template_id: int
+    quantity: int = 1
+
+    @validator("quantity")
+    def validate_quantity(cls, v):
+        if v < 1 or v > 50:
+            raise ValueError("Количество мобов в стае должно быть от 1 до 50")
+        return v
+
+
+class MobPackMemberResponse(BaseModel):
+    mob_template_id: int
+    quantity: int
+    template_name: Optional[str] = None
+    template_tier: Optional[str] = None
+    template_level: Optional[int] = None
+    template_avatar: Optional[str] = None
+
+
+class MobPackCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    avatar: Optional[str] = None
+    respawn_enabled: bool = False
+    respawn_seconds: Optional[int] = None
+    members: List[MobPackMemberInput] = []
+
+
+class MobPackUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    avatar: Optional[str] = None
+    respawn_enabled: Optional[bool] = None
+    respawn_seconds: Optional[int] = None
+    members: Optional[List[MobPackMemberInput]] = None
+
+
+class MobPackListItem(BaseModel):
+    id: int
+    name: str
+    avatar: Optional[str] = None
+    respawn_enabled: bool
+    respawn_seconds: Optional[int] = None
+    member_count: int = 0
+    total_mobs: int = 0
+
+
+class MobPackListResponse(BaseModel):
+    items: List[MobPackListItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class MobPackDetailResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    avatar: Optional[str] = None
+    respawn_enabled: bool
+    respawn_seconds: Optional[int] = None
+    members: List[MobPackMemberResponse] = []
+
+
+class PlacePackRequest(BaseModel):
+    pack_id: int
+    location_id: int
+
+
+class ActiveMobPackResponse(BaseModel):
+    id: int
+    pack_id: int
+    location_id: int
+    status: str
+    pack_name: Optional[str] = None
+    alive_count: int = 0
+    total_count: int = 0
+    spawned_at: Optional[datetime] = None
+    killed_at: Optional[datetime] = None
+    respawn_at: Optional[datetime] = None
+
+
+class ActiveMobPackListResponse(BaseModel):
+    items: List[ActiveMobPackResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class PackMemberInLocation(BaseModel):
+    name: str
+    tier: str
+    level: int
+    avatar: Optional[str] = None
+    count: int = 1
+
+
+class MobPackInLocation(BaseModel):
+    active_pack_id: int
+    name: str
+    avatar: Optional[str] = None
+    status: str
+    # Smallest living member character_id — the combat-gate handle (FEAT-145).
+    lead_character_id: int
+    members: List[PackMemberInLocation] = []
+
+
+class MobPackRosterResponse(BaseModel):
+    active_pack_id: int
+    location_id: int
+    status: str
+    member_character_ids: List[int] = []
+    lead_character_id: Optional[int] = None
+
+
 class AddRewardsRequest(BaseModel):
     xp: int = 0
     gold: int = 0

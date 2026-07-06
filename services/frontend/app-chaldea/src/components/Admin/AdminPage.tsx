@@ -33,6 +33,7 @@ const sections: AdminSection[] = [
   { label: 'НПС', path: '/admin/npcs', description: 'Управление НПС: создание, редактирование, размещение на локациях', module: 'npcs' },
   { label: 'Мобы', path: '/admin/mobs', description: 'Управление шаблонами мобов: создание, навыки, лут, спавн', module: 'mobs' },
   { label: 'Активные мобы', path: '/admin/active-mobs', description: 'Мониторинг активных мобов, ручное размещение и удаление', module: 'mobs' },
+  { label: 'Стаи мобов', path: '/admin/mob-packs', description: 'Сборка стай из разных мобов и размещение на локациях', module: 'mobs' },
   { label: 'Бои', path: '/admin/battles', description: 'Мониторинг активных боёв, принудительное завершение', module: 'battles' },
   { label: 'Архив', path: '/admin/archive', description: 'Управление статьями и категориями архива', module: 'archive' },
   { label: 'Перки', path: '/admin/perks', description: 'Управление перками персонажей', module: 'perks' },

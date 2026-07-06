@@ -54,6 +54,20 @@ class MobAttack(BaseModel):
     mob_character_id: int
 
 
+class PackAttack(BaseModel):
+    """Solo attack on a whole mob pack (FEAT-147). Team 0 = the player,
+    team 1 = all living pack members (truncated to the team cap)."""
+    character_id: int
+    active_pack_id: int
+
+
+class PartyPackAttack(BaseModel):
+    """Group fight against a whole mob pack (FEAT-147). Team 0 = the leader's
+    co-located squadmates, team 1 = all living pack members."""
+    leader_character_id: int
+    active_pack_id: int
+
+
 class BattleRewardItem(BaseModel):
     item_id: int
     item_name: Optional[str] = None

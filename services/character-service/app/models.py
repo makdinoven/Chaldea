@@ -235,6 +235,8 @@ class ActiveMob(Base):
     status = Column(Enum('alive', 'in_battle', 'dead'), nullable=False, default='alive')
     battle_id = Column(Integer, nullable=True)
     spawn_type = Column(Enum('random', 'manual', 'dungeon'), nullable=False, default='random')
+    # When set, this mob belongs to a spawned pack (FEAT-147). NULL = standalone mob.
+    pack_group_id = Column(Integer, ForeignKey("active_mob_packs.id", ondelete="SET NULL"), nullable=True, index=True)
     spawned_at = Column(TIMESTAMP, server_default=func.now())
     killed_at = Column(TIMESTAMP, nullable=True)
     respawn_at = Column(TIMESTAMP, nullable=True)
@@ -260,6 +262,57 @@ class MobKill(Base):
     )
 
     mob_template = relationship("MobTemplate")
+
+
+# ============================================================
+# Mob Packs (FEAT-147) — named heterogeneous groups of mobs
+# ============================================================
+
+class MobPack(Base):
+    __tablename__ = "mob_packs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    avatar = Column(String(255), nullable=True)
+    # Optional pack-wide respawn: the whole pack respawns once all members die.
+    respawn_enabled = Column(Boolean, nullable=False, default=False)
+    respawn_seconds = Column(Integer, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    members = relationship("MobPackMember", back_populates="pack", cascade="all, delete-orphan")
+
+
+class MobPackMember(Base):
+    __tablename__ = "mob_pack_members"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pack_id = Column(Integer, ForeignKey("mob_packs.id", ondelete="CASCADE"), nullable=False, index=True)
+    mob_template_id = Column(Integer, ForeignKey("mob_templates.id", ondelete="CASCADE"), nullable=False)
+    quantity = Column(Integer, nullable=False, default=1)
+
+    pack = relationship("MobPack", back_populates="members")
+    mob_template = relationship("MobTemplate")
+
+
+class ActiveMobPack(Base):
+    __tablename__ = "active_mob_packs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pack_id = Column(Integer, ForeignKey("mob_packs.id", ondelete="CASCADE"), nullable=False)
+    location_id = Column(BigInteger, nullable=False, index=True)
+    status = Column(Enum('alive', 'in_battle', 'dead'), nullable=False, default='alive')
+    spawned_at = Column(TIMESTAMP, server_default=func.now())
+    killed_at = Column(TIMESTAMP, nullable=True)
+    respawn_at = Column(TIMESTAMP, nullable=True)
+
+    __table_args__ = (
+        Index('idx_active_mob_packs_location', 'location_id', 'status'),
+        Index('idx_active_mob_packs_respawn', 'respawn_at', 'status'),
+    )
+
+    pack = relationship("MobPack")
 
 
 class CharacterLog(Base):

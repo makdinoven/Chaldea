@@ -13,6 +13,7 @@ from crud import create_battle, write_turn, get_logs_for_turn, finish_battle, ge
 from schemas import (
     BattleCreated, BattleCreate, ActionResponse, ActionRequest, LogResponse,
     BattleRewards, BattleRewardItem, PartyMobAttack, MobAttack,
+    PackAttack, PartyPackAttack,
     PvpInviteRequest, PvpInviteResponse, PvpRespondRequest, PvpRespondAcceptResponse,
     PendingInvitationsResponse, IncomingInvitation, OutgoingInvitation,
     CancelInvitationResponse, InBattleResponse,
@@ -913,6 +914,172 @@ async def party_mob_attack(
 
     player_ids = available + [req.mob_character_id]
     teams = [0] * len(available) + [1]
+    battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
+        db, player_ids, teams, "pve", loc
+    )
+    return BattleCreated(
+        battle_id=battle_obj.id,
+        participants=[p.id for p in participant_objs],
+        next_actor=first_actor_pid,
+        deadline_at=deadline,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mob pack attacks (FEAT-147): a player / party fights a whole pack (team 1 = all
+# living pack members). Pack roster comes from character-service.
+# ---------------------------------------------------------------------------
+async def _get_pack_roster(active_pack_id: int) -> dict | None:
+    """Fetch a spawned pack's living roster from character-service."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{settings.CHARACTER_SERVICE_URL}/characters/internal/mob-pack/{active_pack_id}"
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code == 404:
+                return None
+    except httpx.RequestError as e:
+        logger.error(f"pack roster fetch failed: {e}")
+        raise HTTPException(503, "Сервис персонажей недоступен")
+    return None
+
+
+@router.post("/pack-attack", response_model=BattleCreated, status_code=201)
+async def pack_attack(
+    req: PackAttack,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Solo attack on a whole mob pack (FEAT-147). Team 0 = the player, team 1 =
+    all living pack members (truncated to the team cap; the lead is always kept)."""
+    attacker = await _get_character_info(db, req.character_id)
+    if not attacker:
+        raise HTTPException(404, "Персонаж не найден")
+    if attacker["user_id"] != current_user.id:
+        raise HTTPException(403, "Используйте своего персонажа")
+    loc = attacker["current_location_id"]
+    if loc is None:
+        raise HTTPException(400, "Персонаж не находится в локации")
+
+    roster = await _get_pack_roster(req.active_pack_id)
+    if not roster:
+        raise HTTPException(404, "Стая не найдена")
+    if roster["location_id"] != loc:
+        raise HTTPException(400, "Стая находится в другой локации")
+    mob_ids = roster.get("member_character_ids") or []
+    if not mob_ids:
+        raise HTTPException(400, "В стае не осталось живых мобов")
+
+    if await get_active_battle_for_character(db, req.character_id):
+        raise HTTPException(400, "Персонаж уже в бою")
+    lead_id = roster.get("lead_character_id") or mob_ids[0]
+    if await get_active_battle_for_character(db, lead_id):
+        raise HTTPException(400, "Эта стая уже в бою")
+
+    # GATE (FEAT-145): the combat post must have named this pack (via its lead mob).
+    if not await _consume_combat_gate(req.character_id, loc, lead_id):
+        raise HTTPException(403, "Нужен боевой пост с этой стаей, чтобы напасть")
+
+    # Team cap: mob side truncated to the cap; the lead (first, smallest id) is kept.
+    mob_ids = mob_ids[: settings.BATTLE_MAX_TEAM_SIZE]
+
+    player_ids = [req.character_id] + mob_ids
+    teams = [0] + [1] * len(mob_ids)
+    battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
+        db, player_ids, teams, "pve", loc
+    )
+    return BattleCreated(
+        battle_id=battle_obj.id,
+        participants=[p.id for p in participant_objs],
+        next_actor=first_actor_pid,
+        deadline_at=deadline,
+    )
+
+
+@router.post("/party/pack-attack", response_model=BattleCreated, status_code=201)
+async def party_pack_attack(
+    req: PartyPackAttack,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Group fight vs a whole mob pack (FEAT-147). Team 0 = co-located squadmates,
+    team 1 = all living pack members. Both sides are truncated to the team cap."""
+    leader = await _get_character_info(db, req.leader_character_id)
+    if not leader:
+        raise HTTPException(404, "Персонаж не найден")
+    if leader["user_id"] != current_user.id:
+        raise HTTPException(403, "Используйте своего персонажа")
+    loc = leader["current_location_id"]
+    if loc is None:
+        raise HTTPException(400, "Персонаж не находится в локации")
+
+    roster = await _get_pack_roster(req.active_pack_id)
+    if not roster:
+        raise HTTPException(404, "Стая не найдена")
+    if roster["location_id"] != loc:
+        raise HTTPException(400, "Стая находится в другой локации")
+    mob_ids = roster.get("member_character_ids") or []
+    if not mob_ids:
+        raise HTTPException(400, "В стае не осталось живых мобов")
+    lead_id = roster.get("lead_character_id") or mob_ids[0]
+    if await get_active_battle_for_character(db, lead_id):
+        raise HTTPException(400, "Эта стая уже в бою")
+
+    # Co-located squad roster from party-service.
+    data = {}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{settings.PARTY_SERVICE_URL}/party/internal/active-members",
+                params={"character_id": req.leader_character_id, "location_id": loc},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+    except Exception as e:
+        logger.error(f"party active-members failed: {e}")
+        raise HTTPException(503, "Сервис отрядов недоступен")
+
+    if not data.get("party_id"):
+        raise HTTPException(400, "Вы не состоите в отряде")
+    members = data.get("member_character_ids", [])
+    if not members:
+        raise HTTPException(400, "Нет соотрядцев на этой локации")
+
+    # Exclude busy squadmates (gathering or already in battle); the leader must be free.
+    gathering = set()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            gresp = await client.post(
+                f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/gathering-status",
+                json={"character_ids": members},
+            )
+            if gresp.status_code == 200:
+                gathering = set(gresp.json().get("gathering_character_ids", []))
+    except Exception as e:
+        logger.warning(f"gathering-status check failed: {e}")
+
+    available = []
+    for cid in members:
+        if cid in gathering:
+            continue
+        if await get_active_battle_for_character(db, cid):
+            continue
+        available.append(cid)
+
+    if req.leader_character_id not in available:
+        raise HTTPException(400, "Вы сейчас заняты (сбор или бой)")
+    if len(available) > settings.BATTLE_MAX_TEAM_SIZE:
+        available = available[: settings.BATTLE_MAX_TEAM_SIZE]
+
+    # GATE (FEAT-145): the initiator's combat post must have named this pack.
+    if not await _consume_combat_gate(req.leader_character_id, loc, lead_id):
+        raise HTTPException(403, "Нужен боевой пост с этой стаей, чтобы напасть группой")
+
+    mob_ids = mob_ids[: settings.BATTLE_MAX_TEAM_SIZE]
+    player_ids = available + mob_ids
+    teams = [0] * len(available) + [1] * len(mob_ids)
     battle_obj, participant_objs, first_actor_pid, deadline = await _assemble_battle(
         db, player_ids, teams, "pve", loc
     )

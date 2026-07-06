@@ -2566,6 +2566,185 @@ def get_mobs_by_location(
 
 
 # ============================================================
+# Mob Packs (FEAT-147)
+# ============================================================
+
+@router.get("/admin/mob-packs", response_model=schemas.MobPackListResponse)
+def admin_list_mob_packs(
+    q: str = Query("", description="Поиск по имени стаи"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Paginated list of mob pack templates. Admin only."""
+    try:
+        items, total = crud.get_mob_packs(db, q=q, page=page, page_size=page_size)
+        return schemas.MobPackListResponse(items=items, total=total, page=page, page_size=page_size)
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении списка стай: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.post("/admin/mob-packs", status_code=201, response_model=schemas.MobPackDetailResponse)
+def admin_create_mob_pack(
+    data: schemas.MobPackCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Create a mob pack template (name + heterogeneous members). Admin only."""
+    try:
+        pack = crud.create_mob_pack(db, data)
+        return crud.get_mob_pack_detail(db, pack.id)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при создании стаи: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при создании стаи")
+
+
+@router.get("/admin/mob-packs/{pack_id}", response_model=schemas.MobPackDetailResponse)
+def admin_get_mob_pack(
+    pack_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Get a mob pack template with its members. Admin only."""
+    detail = crud.get_mob_pack_detail(db, pack_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Стая не найдена")
+    return detail
+
+
+@router.put("/admin/mob-packs/{pack_id}", response_model=schemas.MobPackDetailResponse)
+def admin_update_mob_pack(
+    pack_id: int,
+    data: schemas.MobPackUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Update a mob pack template. Admin only."""
+    pack = db.query(models.MobPack).filter(models.MobPack.id == pack_id).first()
+    if not pack:
+        raise HTTPException(status_code=404, detail="Стая не найдена")
+    try:
+        crud.update_mob_pack(db, pack, data)
+        return crud.get_mob_pack_detail(db, pack_id)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении стаи {pack_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении стаи")
+
+
+@router.delete("/admin/mob-packs/{pack_id}")
+def admin_delete_mob_pack(
+    pack_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Delete a mob pack template (and any spawned instances). Admin only."""
+    pack = db.query(models.MobPack).filter(models.MobPack.id == pack_id).first()
+    if not pack:
+        raise HTTPException(status_code=404, detail="Стая не найдена")
+    try:
+        crud.delete_mob_pack(db, pack)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при удалении стаи {pack_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при удалении стаи")
+    return {"detail": "Стая удалена"}
+
+
+@router.post("/admin/mob-packs/place", status_code=201)
+def admin_place_pack(
+    data: schemas.PlacePackRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Manually place a pack on a location — spawns all its members. Admin only."""
+    try:
+        active_pack, created = crud.place_pack_on_location(db, data.pack_id, data.location_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ошибка при размещении стаи {data.pack_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при размещении стаи")
+    return {
+        "id": active_pack.id,
+        "pack_id": active_pack.pack_id,
+        "location_id": active_pack.location_id,
+        "status": active_pack.status,
+        "spawned_mobs": created,
+    }
+
+
+@router.get("/admin/active-mob-packs", response_model=schemas.ActiveMobPackListResponse)
+def admin_list_active_mob_packs(
+    location_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    pack_id: Optional[int] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """List spawned pack instances. Admin only."""
+    try:
+        items, total = crud.get_active_mob_packs(
+            db, location_id=location_id, status=status,
+            pack_id=pack_id, page=page, page_size=page_size,
+        )
+        return schemas.ActiveMobPackListResponse(items=items, total=total, page=page, page_size=page_size)
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении активных стай: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.delete("/admin/active-mob-packs/{active_pack_id}")
+def admin_delete_active_mob_pack(
+    active_pack_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("mobs:manage")),
+):
+    """Remove a spawned pack and all its mobs. Admin only."""
+    active_pack = crud.get_active_mob_pack_by_id(db, active_pack_id)
+    if not active_pack:
+        raise HTTPException(status_code=404, detail="Активная стая не найдена")
+    try:
+        crud.delete_active_mob_pack(db, active_pack)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при удалении активной стаи {active_pack_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при удалении стаи")
+    return {"detail": "Стая удалена с локации"}
+
+
+@router.get("/mob-packs/by_location", response_model=List[schemas.MobPackInLocation])
+def get_mob_packs_by_location(
+    location_id: int = Query(..., description="ID локации"),
+    db: Session = Depends(get_db),
+):
+    """Public: alive/in_battle packs at a location, one entry per pack."""
+    try:
+        return crud.get_packs_at_location(db, location_id)
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении стай на локации {location_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.get("/internal/mob-pack/{active_pack_id}", response_model=schemas.MobPackRosterResponse)
+def internal_get_pack_roster(
+    active_pack_id: int,
+    db: Session = Depends(get_db),
+):
+    """Internal (battle-service): living member character_ids of a spawned pack."""
+    roster = crud.get_pack_roster(db, active_pack_id)
+    if roster is None:
+        raise HTTPException(status_code=404, detail="Активная стая не найдена")
+    return roster
+
+
+# ============================================================
 # Rewards & Internal Mob Endpoints (Phase 4)
 # ============================================================
 

@@ -17,8 +17,10 @@ import LootSection from './LootSection';
 import PendingInvitationsPanel from './PendingInvitationsPanel';
 import PendingPartyInvitesPanel from './PendingPartyInvitesPanel';
 import LocationMobs from '../../LocationMobs';
+import LocationMobPacks from '../../LocationMobPacks';
 import PartiesOnLocation from './PartiesOnLocation';
 import { fetchMobsByLocation } from '../../../api/mobs';
+import { fetchMobPacksByLocation } from '../../../api/mobPacks';
 import { selectDungeonsAtLocation } from '../../../redux/slices/dungeonSlice';
 import BattlesSection from './BattlesSection';
 import useBattleLock from '../../../hooks/useBattleLock';
@@ -303,15 +305,21 @@ const LocationPage = () => {
   const [combatTargets, setCombatTargets] = useState<{ character_id: number; name: string }[]>([]);
   useEffect(() => {
     let cancelled = false;
-    fetchMobsByLocation(Number(locationId))
-      .then((mobs) => {
-        if (!cancelled) {
-          setCombatTargets(
-            mobs
-              .filter((m) => m.status !== 'in_battle')
-              .map((m) => ({ character_id: m.character_id, name: m.name })),
-          );
-        }
+    // Standalone mobs + packs (a pack is named via its lead mob, FEAT-147) are both
+    // offered as combat-post targets.
+    Promise.all([
+      fetchMobsByLocation(Number(locationId)).catch(() => []),
+      fetchMobPacksByLocation(Number(locationId)).catch(() => []),
+    ])
+      .then(([mobs, packs]) => {
+        if (cancelled) return;
+        const mobTargets = mobs
+          .filter((m) => m.status !== 'in_battle')
+          .map((m) => ({ character_id: m.character_id, name: m.name }));
+        const packTargets = packs
+          .filter((p) => p.status !== 'in_battle')
+          .map((p) => ({ character_id: p.lead_character_id, name: `Стая: ${p.name}` }));
+        setCombatTargets([...mobTargets, ...packTargets]);
       })
       .catch(() => {
         if (!cancelled) setCombatTargets([]);
@@ -558,6 +566,13 @@ const LocationPage = () => {
 
         {/* Mobs / Enemies */}
         <LocationMobs
+          locationId={location.id}
+          characterId={isCharacterHere ? (character?.id ?? null) : null}
+          gatedMobIds={(gateStatus.combat as number[]) ?? []}
+        />
+
+        {/* Mob packs (FEAT-147) */}
+        <LocationMobPacks
           locationId={location.id}
           characterId={isCharacterHere ? (character?.id ?? null) : null}
           gatedMobIds={(gateStatus.combat as number[]) ?? []}

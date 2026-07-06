@@ -11,6 +11,7 @@ from models import (
     CharacterRequest, Race, Subrace, Class, Character, LevelThreshold,
     MobTemplate, MobTemplateSkill, MobLootTable, LocationMobSpawn, ActiveMob,
     MobKill, CharacterLog, GoldTransaction, TeleportLink,
+    MobPack, MobPackMember, ActiveMobPack,
 )
 from datetime import datetime, timedelta
 from fastapi import HTTPException
@@ -1094,10 +1095,12 @@ def get_mobs_at_location(db: Session, location_id: int):
     if dead_mobs:
         db.commit()
 
-    # 2. Original query (unchanged)
+    # 2. Standalone mobs only — pack members are shown via the pack card (FEAT-147),
+    #    never as individual mobs.
     active_mobs = db.query(ActiveMob).filter(
         ActiveMob.location_id == location_id,
         ActiveMob.status.in_(["alive", "in_battle"]),
+        ActiveMob.pack_group_id == None,  # noqa: E711
     ).all()
 
     result = []
@@ -1115,6 +1118,288 @@ def get_mobs_at_location(db: Session, location_id: int):
                 "status": am.status,
             })
     return result
+
+
+# ============================================================
+# Mob Packs (FEAT-147)
+# ============================================================
+
+def get_mob_packs(db: Session, q: str = "", page: int = 1, page_size: int = 20):
+    """Paginated list of mob pack templates with member counts."""
+    query = db.query(MobPack)
+    if q:
+        query = query.filter(MobPack.name.ilike(f"%{q}%"))
+    total = query.count()
+    offset = (page - 1) * page_size
+    items = query.order_by(MobPack.id.desc()).offset(offset).limit(page_size).all()
+
+    result = []
+    for p in items:
+        members = db.query(MobPackMember).filter(MobPackMember.pack_id == p.id).all()
+        result.append({
+            "id": p.id,
+            "name": p.name,
+            "avatar": p.avatar,
+            "respawn_enabled": p.respawn_enabled,
+            "respawn_seconds": p.respawn_seconds,
+            "member_count": len(members),
+            "total_mobs": sum(m.quantity for m in members),
+        })
+    return result, total
+
+
+def get_mob_pack_detail(db: Session, pack_id: int):
+    """Full pack template with resolved member template info."""
+    p = db.query(MobPack).filter(MobPack.id == pack_id).first()
+    if not p:
+        return None
+    members = []
+    for m in db.query(MobPackMember).filter(MobPackMember.pack_id == pack_id).all():
+        tmpl = db.query(MobTemplate).filter(MobTemplate.id == m.mob_template_id).first()
+        members.append({
+            "mob_template_id": m.mob_template_id,
+            "quantity": m.quantity,
+            "template_name": tmpl.name if tmpl else None,
+            "template_tier": tmpl.tier if tmpl else None,
+            "template_level": tmpl.level if tmpl else None,
+            "template_avatar": tmpl.avatar if tmpl else None,
+        })
+    return {
+        "id": p.id,
+        "name": p.name,
+        "description": p.description,
+        "avatar": p.avatar,
+        "respawn_enabled": p.respawn_enabled,
+        "respawn_seconds": p.respawn_seconds,
+        "members": members,
+    }
+
+
+def create_mob_pack(db: Session, data: schemas.MobPackCreate):
+    pack = MobPack(
+        name=data.name,
+        description=data.description,
+        avatar=data.avatar,
+        respawn_enabled=data.respawn_enabled,
+        respawn_seconds=data.respawn_seconds,
+    )
+    db.add(pack)
+    db.flush()
+    for m in (data.members or []):
+        db.add(MobPackMember(pack_id=pack.id, mob_template_id=m.mob_template_id, quantity=m.quantity))
+    db.commit()
+    db.refresh(pack)
+    return pack
+
+
+def update_mob_pack(db: Session, pack: MobPack, data: schemas.MobPackUpdate):
+    upd = data.dict(exclude_unset=True)
+    for field in ("name", "description", "avatar", "respawn_enabled", "respawn_seconds"):
+        if field in upd:
+            setattr(pack, field, upd[field])
+    if data.members is not None:
+        db.query(MobPackMember).filter(MobPackMember.pack_id == pack.id).delete()
+        db.flush()
+        for m in data.members:
+            db.add(MobPackMember(pack_id=pack.id, mob_template_id=m.mob_template_id, quantity=m.quantity))
+    db.commit()
+    db.refresh(pack)
+    return pack
+
+
+def delete_active_mob_pack(db: Session, active_pack: ActiveMobPack):
+    """Remove a spawned pack instance and all its member mobs + Character records."""
+    members = db.query(ActiveMob).filter(ActiveMob.pack_group_id == active_pack.id).all()
+    for m in members:
+        cid = m.character_id
+        db.delete(m)
+        db.flush()
+        character = db.query(Character).filter(Character.id == cid).first()
+        if character:
+            db.delete(character)
+    db.flush()
+    db.delete(active_pack)
+    db.commit()
+    logger.info(f"ActiveMobPack ID {active_pack.id} и {len(members)} мобов удалены")
+
+
+def delete_mob_pack(db: Session, pack: MobPack):
+    """Delete a pack template. First tears down any spawned instances so their
+    mobs don't leak onto locations as standalone (pack_group_id would be nulled)."""
+    active = db.query(ActiveMobPack).filter(ActiveMobPack.pack_id == pack.id).all()
+    for ap in active:
+        delete_active_mob_pack(db, ap)
+    db.delete(pack)
+    db.commit()
+
+
+def place_pack_on_location(db: Session, pack_id: int, location_id: int):
+    """Spawn every member of a pack (template × quantity) on a location, tagged
+    with a shared active_mob_packs id. Returns (active_pack, created_count)."""
+    pack = db.query(MobPack).filter(MobPack.id == pack_id).first()
+    if not pack:
+        raise ValueError(f"MobPack {pack_id} не найден")
+    members = db.query(MobPackMember).filter(MobPackMember.pack_id == pack_id).all()
+    if not members:
+        raise ValueError("Стая пуста — нельзя разместить")
+
+    active_pack = ActiveMobPack(pack_id=pack_id, location_id=location_id, status="alive")
+    db.add(active_pack)
+    db.commit()
+    db.refresh(active_pack)
+
+    created = 0
+    for m in members:
+        for _ in range(m.quantity):
+            active_mob, _character = spawn_mob_from_template(db, m.mob_template_id, location_id, "manual")
+            active_mob.pack_group_id = active_pack.id
+            created += 1
+    db.commit()
+    logger.info(f"Стая {pack.name} размещена на локации {location_id}: {created} мобов")
+    return active_pack, created
+
+
+def get_active_mob_packs(db: Session, location_id: int = None, status: str = None,
+                         pack_id: int = None, page: int = 1, page_size: int = 20):
+    """Paginated list of spawned pack instances (admin monitor)."""
+    query = db.query(ActiveMobPack)
+    if location_id is not None:
+        query = query.filter(ActiveMobPack.location_id == location_id)
+    if status is not None:
+        query = query.filter(ActiveMobPack.status == status)
+    if pack_id is not None:
+        query = query.filter(ActiveMobPack.pack_id == pack_id)
+
+    total = query.count()
+    offset = (page - 1) * page_size
+    items = query.order_by(ActiveMobPack.id.desc()).offset(offset).limit(page_size).all()
+
+    result = []
+    for ap in items:
+        pack = db.query(MobPack).filter(MobPack.id == ap.pack_id).first()
+        members = db.query(ActiveMob).filter(ActiveMob.pack_group_id == ap.id).all()
+        alive = sum(1 for m in members if m.status in ("alive", "in_battle"))
+        result.append({
+            "id": ap.id,
+            "pack_id": ap.pack_id,
+            "location_id": ap.location_id,
+            "status": ap.status,
+            "pack_name": pack.name if pack else None,
+            "alive_count": alive,
+            "total_count": len(members),
+            "spawned_at": ap.spawned_at,
+            "killed_at": ap.killed_at,
+            "respawn_at": ap.respawn_at,
+        })
+    return result, total
+
+
+def get_active_mob_pack_by_id(db: Session, active_pack_id: int):
+    return db.query(ActiveMobPack).filter(ActiveMobPack.id == active_pack_id).first()
+
+
+def _respawn_pack(db: Session, active_pack: ActiveMobPack):
+    """Recreate a dead pack's members from its template and reset it to alive."""
+    old_members = db.query(ActiveMob).filter(ActiveMob.pack_group_id == active_pack.id).all()
+    for m in old_members:
+        cid = m.character_id
+        db.delete(m)
+        db.flush()
+        character = db.query(Character).filter(Character.id == cid).first()
+        if character:
+            db.delete(character)
+    db.flush()
+
+    pack_members = db.query(MobPackMember).filter(MobPackMember.pack_id == active_pack.pack_id).all()
+    for pm in pack_members:
+        for _ in range(pm.quantity):
+            active_mob, _character = spawn_mob_from_template(db, pm.mob_template_id, active_pack.location_id, "manual")
+            active_mob.pack_group_id = active_pack.id
+
+    active_pack.status = "alive"
+    active_pack.killed_at = None
+    active_pack.respawn_at = None
+    active_pack.spawned_at = datetime.utcnow()
+    db.commit()
+    logger.info(f"Стая (active_pack {active_pack.id}) возрождена на локации {active_pack.location_id}")
+
+
+def get_packs_at_location(db: Session, location_id: int):
+    """Public: alive/in_battle packs at a location, with lazy pack-level respawn."""
+    now = datetime.utcnow()
+
+    dead_packs = db.query(ActiveMobPack).filter(
+        ActiveMobPack.location_id == location_id,
+        ActiveMobPack.status == "dead",
+        ActiveMobPack.respawn_at != None,  # noqa: E711
+        ActiveMobPack.respawn_at <= now,
+    ).all()
+    for ap in dead_packs:
+        try:
+            _respawn_pack(db, ap)
+        except Exception as e:
+            logger.error(f"Не удалось возродить стаю {ap.id}: {e}")
+            db.rollback()
+
+    packs = db.query(ActiveMobPack).filter(
+        ActiveMobPack.location_id == location_id,
+        ActiveMobPack.status.in_(["alive", "in_battle"]),
+    ).all()
+
+    result = []
+    for ap in packs:
+        members = db.query(ActiveMob).filter(
+            ActiveMob.pack_group_id == ap.id,
+            ActiveMob.status.in_(["alive", "in_battle"]),
+        ).all()
+        if not members:
+            continue
+        pack = db.query(MobPack).filter(MobPack.id == ap.pack_id).first()
+        lead = min(members, key=lambda m: m.character_id)
+
+        comp: dict = {}
+        for m in members:
+            tmpl = db.query(MobTemplate).filter(MobTemplate.id == m.mob_template_id).first()
+            character = db.query(Character).filter(Character.id == m.character_id).first()
+            key = m.mob_template_id
+            if key not in comp:
+                comp[key] = {
+                    "name": (tmpl.name if tmpl else None) or (character.name if character else "Моб"),
+                    "tier": tmpl.tier if tmpl else "normal",
+                    "level": (tmpl.level if tmpl else None) or (character.level if character else 1),
+                    "avatar": (character.avatar if character else None) or (tmpl.avatar if tmpl else None),
+                    "count": 0,
+                }
+            comp[key]["count"] += 1
+
+        result.append({
+            "active_pack_id": ap.id,
+            "name": pack.name if pack else "Стая",
+            "avatar": pack.avatar if pack else None,
+            "status": ap.status,
+            "lead_character_id": lead.character_id,
+            "members": list(comp.values()),
+        })
+    return result
+
+
+def get_pack_roster(db: Session, active_pack_id: int):
+    """Internal (battle-service): living member character_ids of a spawned pack."""
+    ap = db.query(ActiveMobPack).filter(ActiveMobPack.id == active_pack_id).first()
+    if not ap:
+        return None
+    members = db.query(ActiveMob).filter(
+        ActiveMob.pack_group_id == active_pack_id,
+        ActiveMob.status.in_(["alive", "in_battle"]),
+    ).order_by(ActiveMob.character_id.asc()).all()
+    ids = [m.character_id for m in members]
+    return {
+        "active_pack_id": ap.id,
+        "location_id": ap.location_id,
+        "status": ap.status,
+        "member_character_ids": ids,
+        "lead_character_id": ids[0] if ids else None,
+    }
 
 
 # ============================================================
@@ -1267,13 +1552,48 @@ def update_active_mob_status(db: Session, character_id: int, new_status: str):
     active_mob.status = new_status
     if new_status == 'dead':
         active_mob.killed_at = datetime.utcnow()
-        # If respawn enabled, set respawn_at
-        template = db.query(MobTemplate).filter(MobTemplate.id == active_mob.mob_template_id).first()
-        if template and template.respawn_enabled and template.respawn_seconds:
-            active_mob.respawn_at = datetime.utcnow() + timedelta(seconds=template.respawn_seconds)
+        # Individual respawn only for standalone mobs. Pack members respawn at the
+        # pack level (all-dead rollup below), never individually.
+        if active_mob.pack_group_id is None:
+            template = db.query(MobTemplate).filter(MobTemplate.id == active_mob.mob_template_id).first()
+            if template and template.respawn_enabled and template.respawn_seconds:
+                active_mob.respawn_at = datetime.utcnow() + timedelta(seconds=template.respawn_seconds)
+
+    # Pack rollup (FEAT-147): recompute the parent pack's status from its members.
+    if active_mob.pack_group_id is not None:
+        _rollup_pack_status(db, active_mob.pack_group_id)
+
     db.commit()
     db.refresh(active_mob)
     return active_mob
+
+
+def _rollup_pack_status(db: Session, active_pack_id: int):
+    """Recompute an active pack's status from its member mobs (FEAT-147).
+
+    All members dead -> pack dead (+killed_at, +respawn_at if the pack template
+    enables respawn). Any member in battle -> in_battle. Otherwise -> alive.
+    Does not commit — the caller owns the transaction.
+    """
+    pack = db.query(ActiveMobPack).filter(ActiveMobPack.id == active_pack_id).first()
+    if not pack:
+        return
+    members = db.query(ActiveMob).filter(ActiveMob.pack_group_id == active_pack_id).all()
+    if not members:
+        return
+
+    statuses = {m.status for m in members}
+    if statuses <= {'dead'}:
+        if pack.status != 'dead':
+            pack.status = 'dead'
+            pack.killed_at = datetime.utcnow()
+            template = db.query(MobPack).filter(MobPack.id == pack.pack_id).first()
+            if template and template.respawn_enabled and template.respawn_seconds:
+                pack.respawn_at = datetime.utcnow() + timedelta(seconds=template.respawn_seconds)
+    elif 'in_battle' in statuses:
+        pack.status = 'in_battle'
+    else:
+        pack.status = 'alive'
 
 
 # ============================================================
