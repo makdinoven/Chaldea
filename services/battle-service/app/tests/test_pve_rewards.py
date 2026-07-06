@@ -64,7 +64,7 @@ redis_state_mock.state_key = MagicMock(return_value="battle:1:state")
 redis_state_mock.init_battle_state = AsyncMock()
 redis_state_mock.load_state = AsyncMock(return_value=None)
 redis_state_mock.save_state = AsyncMock()
-redis_state_mock.get_redis_client = AsyncMock(return_value=MagicMock())
+redis_state_mock.get_redis_client = AsyncMock(return_value=AsyncMock())
 redis_state_mock.cache_snapshot = AsyncMock()
 redis_state_mock.get_cached_snapshot = AsyncMock(return_value=None)
 

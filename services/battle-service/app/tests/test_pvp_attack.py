@@ -98,6 +98,7 @@ rmq_mock = sys.modules["rabbitmq_publisher"]
 rmq_mock.publish_notification = AsyncMock()
 
 # Now import main safely
+import main  # noqa: E402
 from main import app  # noqa: E402
 from database import get_db  # noqa: E402
 from auth_http import get_current_user_via_http, UserRead  # noqa: E402
@@ -106,6 +107,16 @@ from auth_http import get_current_user_via_http, UserRead  # noqa: E402
 app.router.on_startup.clear()
 
 from fastapi.testclient import TestClient  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _ensure_async_redis():
+    """`main` binds `get_redis_client` by name at import (main.py:45), so once
+    another test module imports main first with a non-async redis mock, that
+    binding sticks and `await rds.zadd(...)` breaks here. Rebind per test to a
+    proper AsyncMock so these tests are immune to import/collection order."""
+    main.get_redis_client = AsyncMock(return_value=AsyncMock())
+    yield
 
 
 # ---------------------------------------------------------------------------
