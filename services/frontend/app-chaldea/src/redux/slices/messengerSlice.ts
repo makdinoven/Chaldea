@@ -120,7 +120,10 @@ export const fetchConversations = createAsyncThunk<
   'messenger/fetchConversations',
   async (params, thunkAPI) => {
     try {
-      const response = await messengerApi.getConversations(params ?? {});
+      // `void` in ThunkArg (needed for zero-arg dispatch) is not erased by `??` — cast is safe: a void arg is undefined at runtime.
+      const response = await messengerApi.getConversations(
+        (params ?? {}) as { page?: number; page_size?: number },
+      );
       return response.data;
     } catch (error: unknown) {
       if (axios.isAxiosError(error) && error.response?.data?.detail) {

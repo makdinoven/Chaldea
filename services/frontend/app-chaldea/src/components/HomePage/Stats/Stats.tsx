@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import {
   fetchHomeLeaderboards,
+  HOME_LEADERBOARDS_LIMIT,
   type HomeLeaderboards,
-  type LeaderboardEntry,
 } from '../../../api/homeStats';
 import statsBg from '../../../assets/stats_bg.png';
-import statsUserImg from '../../../assets/stats_user_img.png';
+import Podium from './Podium';
+import RankRow from './RankRow';
 
 interface BoardConfig {
   key: keyof HomeLeaderboards;
@@ -18,52 +19,23 @@ const BOARDS: BoardConfig[] = [
   { key: 'pve', title: 'PvE-очки' },
 ];
 
-const formatValue = (value: number) => value.toLocaleString('ru-RU');
+const PODIUM_SIZE = 3;
 
-const UserRow = ({ entry, rank }: { entry: LeaderboardEntry; rank: number }) => (
-  <div className="flex items-center gap-3">
-    <span className="text-white/40 text-sm w-4 shrink-0 text-right tabular-nums">{rank}</span>
-    <img
-      src={entry.avatar || statsUserImg}
-      onError={(e) => {
-        (e.currentTarget as HTMLImageElement).src = statsUserImg;
-      }}
-      alt={entry.name}
-      className="w-10 h-10 rounded-full object-cover shrink-0 bg-white/5"
-    />
-    <div className="flex flex-col min-w-0">
-      <span className="text-gold text-base leading-tight truncate">{entry.name}</span>
-      <span className="gold-text text-base leading-tight tabular-nums">
-        {formatValue(entry.value)}
-      </span>
-    </div>
-  </div>
-);
-
-const Board = ({ title, entries }: { title: string; entries: LeaderboardEntry[] }) => (
-  <div className="flex flex-col items-center gap-6">
-    <h3 className="text-gold text-lg sm:text-xl font-normal text-center">{title}</h3>
-    {entries.length === 0 ? (
-      <p className="text-white/40 text-sm">Пока пусто</p>
-    ) : (
-      <div className="flex flex-col gap-5 w-full max-w-[220px]">
-        {entries.map((entry, i) => (
-          <UserRow key={entry.character_id} entry={entry} rank={i + 1} />
-        ))}
-      </div>
-    )}
-  </div>
-);
-
+/**
+ * Hall of Fame («Зал славы») card: banner with the active-board title and pill
+ * tabs, podium for the top-3 and a list for the remaining ranks.
+ * Single fetch (all 3 boards, limit 6); tab switching is client-side.
+ */
 const Stats = () => {
   const [data, setData] = useState<HomeLeaderboards | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeKey, setActiveKey] = useState<keyof HomeLeaderboards>('symbols_daily');
 
   const load = () => {
     setLoading(true);
     setError(null);
-    fetchHomeLeaderboards(3)
+    fetchHomeLeaderboards(HOME_LEADERBOARDS_LIMIT)
       .then(setData)
       .catch(() => setError('Не удалось загрузить статистику'))
       .finally(() => setLoading(false));
@@ -71,38 +43,72 @@ const Stats = () => {
 
   useEffect(load, []);
 
+  const activeBoard = BOARDS.find((b) => b.key === activeKey) ?? BOARDS[0];
+  const entries = data?.[activeBoard.key] ?? [];
+  const podiumEntries = entries.slice(0, PODIUM_SIZE);
+  const restEntries = entries.slice(PODIUM_SIZE);
+
   return (
     <div className="gray-bg rounded-card overflow-hidden">
-      {/* Gilded header */}
+      {/* Banner: background image + active board title + pill tabs */}
       <div
         style={{ backgroundImage: `url(${statsBg})` }}
-        className="relative flex items-center justify-center py-8 bg-cover bg-center bg-no-repeat"
+        className="relative bg-cover bg-[center_top] bg-no-repeat px-4 pt-7 sm:px-8"
       >
-        <div className="absolute inset-0 bg-black/60" />
-        <h2 className="relative z-[1] gold-text text-3xl sm:text-4xl font-medium tracking-[0.02em] text-center">
-          Статистика
-        </h2>
+        <div className="absolute inset-0 bg-gradient-to-b from-black/55 to-site-bg" />
+        <div className="relative flex flex-col items-center gap-5">
+          <h2 className="gold-text text-center text-3xl font-medium tracking-[0.02em] sm:text-4xl">
+            {activeBoard.title}
+          </h2>
+          <div className="flex flex-wrap justify-center gap-2" role="tablist">
+            {BOARDS.map((board) => {
+              const isActive = board.key === activeBoard.key;
+              return (
+                <button
+                  key={board.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setActiveKey(board.key)}
+                  className={`rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.06em] transition-all duration-200 ease-site sm:px-5 ${
+                    isActive
+                      ? 'border-gold/50 bg-gradient-to-b from-gold/20 to-gold/5 text-gold-light'
+                      : 'border-white/10 bg-white/5 text-white/60 hover:text-site-blue'
+                  }`}
+                >
+                  {board.title}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
-      {/* Body */}
-      <div className="px-5 sm:px-8 py-6 sm:py-8">
-        {loading ? (
-          <p className="text-white/50 text-sm text-center py-6">Загрузка...</p>
-        ) : error ? (
-          <div className="flex flex-col items-center gap-3 py-6">
-            <p className="text-site-red text-sm">{error}</p>
-            <button onClick={load} className="btn-blue text-sm px-5 py-2">
-              Повторить
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-10 sm:gap-6">
-            {BOARDS.map((board) => (
-              <Board key={board.key} title={board.title} entries={data?.[board.key] ?? []} />
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Body: loading / error / empty / podium + rest list */}
+      {loading ? (
+        <p className="py-12 text-center text-sm text-white/50">Загрузка...</p>
+      ) : error ? (
+        <div className="flex flex-col items-center gap-3 py-12">
+          <p className="text-sm text-site-red">{error}</p>
+          <button onClick={load} className="btn-blue px-5 py-2 text-sm">
+            Повторить
+          </button>
+        </div>
+      ) : entries.length === 0 ? (
+        <p className="py-12 text-center text-sm text-white/40">Пока пусто</p>
+      ) : (
+        <>
+          <Podium entries={podiumEntries} />
+          {restEntries.length > 0 && (
+            <div className="mx-auto flex w-full max-w-[760px] flex-col gap-0.5 px-3 pb-6 pt-2 sm:px-6">
+              {restEntries.map((entry, i) => (
+                <RankRow key={entry.character_id} entry={entry} rank={PODIUM_SIZE + i + 1} />
+              ))}
+            </div>
+          )}
+          {restEntries.length === 0 && <div className="pb-6" />}
+        </>
+      )}
     </div>
   );
 };

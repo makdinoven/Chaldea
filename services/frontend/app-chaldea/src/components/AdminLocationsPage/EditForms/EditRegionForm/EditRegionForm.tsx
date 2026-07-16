@@ -243,7 +243,6 @@ const EditRegionForm = ({
               name="entrance_location_id"
               value={formData.entrance_location_id}
               onChange={handleChange}
-              countryId={formData.country_id}
               locations={allLocations}
             />
           </div>

@@ -30,7 +30,7 @@ const RulesPage = () => {
 
   if (loading) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto">
+      <div className="w-full max-w-container mx-auto">
         <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em] mb-8">
           Правила
         </h1>
@@ -41,7 +41,7 @@ const RulesPage = () => {
 
   if (error) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto">
+      <div className="w-full max-w-container mx-auto">
         <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em] mb-8">
           Правила
         </h1>
@@ -51,7 +51,7 @@ const RulesPage = () => {
   }
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto">
+    <div className="w-full max-w-container mx-auto">
       <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em] mb-8">
         Правила
       </h1>

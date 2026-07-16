@@ -114,7 +114,7 @@ const EditDistrictForm = ({
 
   const handleEntranceLocationSelect = (eOrValue: React.ChangeEvent<HTMLSelectElement> | string | number) => {
     let newValue: string | number;
-    if (eOrValue && typeof eOrValue === 'object' && 'target' in eOrValue) {
+    if (typeof eOrValue === 'object' && 'target' in eOrValue) {
       newValue = eOrValue.target.value;
     } else {
       newValue = eOrValue;

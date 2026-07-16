@@ -338,7 +338,7 @@ const ProfessionsAdminPage = () => {
 
   if (showingForm) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto">
+      <div className="w-full max-w-container mx-auto">
         <form className="gray-bg p-6 flex flex-col gap-6" onSubmit={handleProfessionSubmit}>
           <h2 className="gold-text text-2xl font-medium uppercase tracking-[0.06em]">
             {editingProfession ? "Редактирование профессии" : "Создание профессии"}
@@ -550,7 +550,7 @@ const ProfessionsAdminPage = () => {
   /* ── Render: Main list ── */
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-5">
+    <div className="w-full max-w-container mx-auto flex flex-col gap-5">
       <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em]">
         Профессии
       </h1>

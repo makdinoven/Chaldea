@@ -16,7 +16,7 @@ const AdminTitlesPage = () => {
   };
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto" key={refreshKey}>
+    <div className="w-full max-w-container mx-auto" key={refreshKey}>
       {!editingId && !creating && (
         <TitleList
           onSelect={(id: number) => setEditingId(id)}

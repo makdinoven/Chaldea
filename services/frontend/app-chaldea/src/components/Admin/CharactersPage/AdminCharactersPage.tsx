@@ -120,7 +120,7 @@ const AdminCharactersPage = () => {
   }
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto">
+    <div className="w-full max-w-container mx-auto">
       <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em] mb-8">
         Персонажи
       </h1>

@@ -64,7 +64,10 @@ export const fetchMyTickets = createAsyncThunk<
   'tickets/fetchMyTickets',
   async (params, thunkAPI) => {
     try {
-      const response = await ticketApi.getMyTickets(params ?? {});
+      // `void` in ThunkArg (needed for zero-arg dispatch) is not erased by `??` — cast is safe: a void arg is undefined at runtime.
+      const response = await ticketApi.getMyTickets(
+        (params ?? {}) as { page?: number; status?: TicketStatus },
+      );
       return response.data;
     } catch (error: unknown) {
       if (axios.isAxiosError(error) && error.response?.data?.detail) {
@@ -182,7 +185,10 @@ export const fetchAdminTickets = createAsyncThunk<
   'tickets/fetchAdminTickets',
   async (params, thunkAPI) => {
     try {
-      const response = await ticketApi.getAdminTickets(params ?? {});
+      // Same `void`-in-ThunkArg cast as fetchMyTickets above.
+      const response = await ticketApi.getAdminTickets(
+        (params ?? {}) as { page?: number; status?: TicketStatus; category?: TicketCategory },
+      );
       return response.data;
     } catch (error: unknown) {
       if (axios.isAxiosError(error) && error.response?.data?.detail) {

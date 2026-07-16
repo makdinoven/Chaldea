@@ -8,6 +8,9 @@ interface CharacterData {
   id: number;
   name: string;
   avatar?: string | null;
+  level?: number | null;
+  /** Character gold (FEAT-148); null/undefined until backend exposes it */
+  currency_balance?: number | null;
   current_location?: {
     id: number;
     name: string;

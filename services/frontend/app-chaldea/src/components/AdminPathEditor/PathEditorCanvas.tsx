@@ -40,7 +40,7 @@ interface DistrictData {
   name: string;
   x: number | null;
   y: number | null;
-  locations: { id: number; name: string; map_x: number | null; map_y: number | null }[];
+  locations: { id: number; name: string; map_x?: number | null; map_y?: number | null }[];
 }
 
 type EditorMode = 'draw' | 'edit' | 'delete';

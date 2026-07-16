@@ -7,7 +7,7 @@ import {
 } from '../../../api/api';
 
 /** How many recent posts to surface, and how often to silently refresh. */
-const POSTS_LIMIT = 5;
+const POSTS_LIMIT = 6;
 const REFRESH_INTERVAL_MS = 30_000;
 
 const formatRelativeTime = (dateStr: string): string => {
@@ -64,12 +64,12 @@ const RoleplayPostCard = ({ post, onOpen }: CardProps) => {
       onClick={() => onOpen(post.location_id)}
       className="
         w-full text-left bg-black/60 hover:bg-black/70 rounded-card
-        p-3 sm:p-4 flex gap-3 sm:gap-4 transition-colors
+        p-3 sm:p-4 flex gap-3 sm:gap-4 min-h-[150px] transition-colors
         hover-gold-overlay focus:outline-none focus:ring-1 focus:ring-gold/50
       "
     >
       {/* Left: avatar panel */}
-      <div className="flex flex-col items-center gap-1 shrink-0 w-[60px] sm:w-[72px]">
+      <div className="flex flex-col items-center gap-1 shrink-0 w-[72px] sm:w-[96px]">
         {post.character_title ? (
           <span
             className={`${getRarityColorClass(
@@ -84,7 +84,7 @@ const RoleplayPostCard = ({ post, onOpen }: CardProps) => {
           </span>
         )}
 
-        <div className="gold-outline relative w-11 h-11 sm:w-14 sm:h-14 rounded-full overflow-hidden bg-black/40">
+        <div className="gold-outline relative w-11 h-11 sm:w-[52px] sm:h-[52px] rounded-full overflow-hidden bg-black/40">
           {post.character_photo ? (
             <img
               src={post.character_photo}
@@ -207,23 +207,13 @@ const LatestRoleplayPosts = () => {
   };
 
   return (
-    <section className="w-full">
-      <div className="flex items-center justify-between mb-3 sm:mb-4">
-        <h2 className="gold-text text-base sm:text-lg font-semibold">
-          Последние ролевые посты
-        </h2>
-        <span className="flex items-center gap-1.5 text-white/40 text-[10px] sm:text-xs">
-          <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-          Онлайн-лента
-        </span>
-      </div>
-
+    <div className="w-full">
       {loading ? (
-        <div className="flex flex-col gap-2 sm:gap-3">
-          {Array.from({ length: 3 }).map((_, i) => (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {Array.from({ length: 4 }).map((_, i) => (
             <div
               key={i}
-              className="bg-black/40 rounded-card h-20 sm:h-24 animate-pulse"
+              className="bg-black/40 rounded-card h-[150px] animate-pulse"
             />
           ))}
         </div>
@@ -243,7 +233,7 @@ const LatestRoleplayPosts = () => {
           Пока никто ничего не написал. Будь первым!
         </div>
       ) : (
-        <div className="flex flex-col gap-2 sm:gap-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {posts.map((post) => (
             <RoleplayPostCard
               key={post.post_id}
@@ -253,7 +243,7 @@ const LatestRoleplayPosts = () => {
           ))}
         </div>
       )}
-    </section>
+    </div>
   );
 };
 

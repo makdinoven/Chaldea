@@ -13,7 +13,12 @@ export interface HomeLeaderboards {
   pve: LeaderboardEntry[]; // PvE points = sum of defeated mob levels (all-time)
 }
 
-export const fetchHomeLeaderboards = async (limit = 3): Promise<HomeLeaderboards> => {
+/** Hall of Fame shows a top-3 podium + ranks 4-6 list (API supports limit up to 10). */
+export const HOME_LEADERBOARDS_LIMIT = 6;
+
+export const fetchHomeLeaderboards = async (
+  limit = HOME_LEADERBOARDS_LIMIT
+): Promise<HomeLeaderboards> => {
   const { data } = await axios.get<HomeLeaderboards>('/characters/home-leaderboards', {
     params: { limit },
   });

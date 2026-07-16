@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Montserrat',sans-serif; color:#fff; background:#000; }
+  a, a:link, a:visited { color:#fff; text-decoration:none; transition:color .2s ease-in-out; }
+  a:hover { color:#76a6bd; }
+  ::selection { background:rgba(240,217,92,.3); }
+  @keyframes fog-drift { 0%{transform:translateX(0)} 100%{transform:translateX(-40px)} }
+  @keyframes livePulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+  @keyframes cardRise { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+  .om-scroll::-webkit-scrollbar { width:6px; }
+  .om-scroll::-webkit-scrollbar-track { background:transparent; }
+  .om-scroll::-webkit-scrollbar-thumb { background:linear-gradient(180deg,#fff9b8,#bcab4c); border-radius:6px; }
+
+  @media (max-width:760px){
+    .hdr{ display:none !important; }
+    .hdr-m{ display:flex !important; }
+    .m-grid{ grid-template-columns:1fr !important; row-gap:34px; }
+    .ql-grid{ grid-template-columns:1fr 1fr !important; }
+    .feed-grid{ grid-template-columns:1fr !important; }
+    .podium{ gap:8px !important; padding:28px 6px 8px !important; }
+    .chat-panel{ width:100% !important; max-width:100% !important; }
+  }
+  @media (max-width:420px){
+    .ql-grid{ grid-template-columns:1fr !important; }
+  }
+</style>
+</helmet>
+
+<div style="min-height:100vh;width:100%;background-color:#05060a;background-image:linear-gradient(180deg,rgba(5,6,10,.35) 0%,rgba(5,6,10,.55) 60%,rgba(5,6,10,.92) 100%),url('services/frontend/app-chaldea/src/assets/background-main.png');background-size:cover;background-position:center top;background-attachment:fixed;background-repeat:no-repeat;padding:0 20px 100px;position:relative;overflow-x:hidden">
+
+  <!-- ===================== HEADER ===================== -->
+  <header class="hdr" style="position:relative;z-index:40;max-width:1360px;margin:20px auto 0;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:12px 22px;background:rgba(6,7,12,.55);border:1px solid rgba(240,217,92,.14);border-radius:16px;backdrop-filter:blur(10px);box-shadow:0 10px 30px rgba(0,0,0,.45)">
+
+    <!-- Left: chat + logo + nav -->
+    <div class="hdr-l" style="display:flex;align-items:center;gap:18px;flex-shrink:0">
+      <!-- CHAT ICON (top-left, opens chat panel) -->
+      <button onClick="{{ toggleChat }}" title="Открыть чат" style="position:relative;flex-shrink:0;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:12px;background:linear-gradient(180deg,rgba(240,217,92,.14),rgba(240,217,92,.04));border:1px solid rgba(240,217,92,.35);color:#f0d95c;cursor:pointer;transition:all .2s ease-in-out" style-hover="background:linear-gradient(180deg,rgba(240,217,92,.28),rgba(240,217,92,.1));color:#fff9b8">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+        <sc-if value="{{ showChatBadge }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 4px;display:flex;align-items:center;justify-content:center;background:#F37753;color:#fff;font-size:10px;font-weight:700;border-radius:9px;box-shadow:0 0 0 2px rgba(6,7,12,.9)">3</span></sc-if>
+      </button>
+
+      <a href="#" style="flex-shrink:0;display:flex;align-items:center">
+        <img src="services/frontend/app-chaldea/src/assets/logo_fog.png" alt="Fall of Gods" style="height:52px;width:auto;object-fit:contain;filter:drop-shadow(0 2px 6px rgba(0,0,0,.6))">
+      </a>
+
+      <nav class="hdr-nav" style="display:flex;align-items:center;gap:24px;flex-shrink:0;white-space:nowrap">
+        <div onMouseEnter="{{ openMega }}" onMouseLeave="{{ closeMega }}" style="position:relative;padding:10px 0">
+          <a href="#" style="font-size:14px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#f0d95c">Главная</a>
+          <sc-if value="{{ mega }}" hint-placeholder-val="{{ false }}">
+            <div style="position:absolute;top:100%;left:-16px;padding-top:14px;z-index:60">
+              <div style="display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:26px;padding:22px 26px;background:rgba(6,7,12,.92);border:1px solid rgba(240,217,92,.18);border-radius:16px;backdrop-filter:blur(14px);box-shadow:0 18px 44px rgba(0,0,0,.6);animation:cardRise .18s ease-out">
+                <sc-for list="{{ megaCats }}" as="cat" hint-placeholder-count="5">
+                  <div>
+                    <h4 style="font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;margin-bottom:12px;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">{{ cat.title }}</h4>
+                    <ul style="display:flex;flex-direction:column;gap:9px;list-style:none">
+                      <sc-for list="{{ cat.links }}" as="l" hint-placeholder-count="4">
+                        <li><a href="#" style="font-size:13px;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,255,255,.82)">{{ l }}</a></li>
+                      </sc-for>
+                    </ul>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+        <a href="#" style="font-size:14px;font-weight:500;letter-spacing:.1em;text-transform:uppercase">Правила</a>
+        <a href="#" style="font-size:14px;font-weight:500;letter-spacing:.1em;text-transform:uppercase">События</a>
+        <a href="#" style="font-size:14px;font-weight:500;letter-spacing:.1em;text-transform:uppercase">Тикет</a>
+      </nav>
+    </div>
+
+    <!-- Right: search + character strip + avatars + icons -->
+    <div class="hdr-r" style="display:flex;align-items:center;gap:14px;flex-shrink:0">
+      <div class="hdr-search" style="display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(255,255,255,.35);padding-bottom:5px;width:150px;flex-shrink:0">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.75)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="ПОИСК" style="flex:1;min-width:0;background:transparent;border:none;outline:none;color:#fff;font-family:inherit;font-size:12px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">
+      </div>
+
+      <!-- Character quick-status chip -->
+      <div class="hdr-chip" style="display:flex;align-items:center;gap:11px;padding:6px 12px 6px 6px;border:1px solid rgba(240,217,92,.22);border-radius:999px;background:rgba(0,0,0,.28);display:{{ chipDisplay }}">
+        <div style="position:relative;width:40px;height:40px;border-radius:50%;padding:2px;background:linear-gradient(180deg,#fff9b8,#bcab4c);flex-shrink:0">
+          <div style="width:100%;height:100%;border-radius:50%;background:#12131a;display:flex;align-items:center;justify-content:center;overflow:hidden">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.6"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;width:118px">
+          <span style="font-size:12px;font-weight:600;color:#fff;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Кайден</span>
+          <div style="display:flex;align-items:center;gap:5px">
+            <div style="flex:1;height:5px;border-radius:5px;background:rgba(255,255,255,.14);overflow:hidden"><div style="width:72%;height:100%;background:#E94545"></div></div>
+            <div style="flex:1;height:5px;border-radius:5px;background:rgba(255,255,255,.14);overflow:hidden"><div style="width:55%;height:100%;background:#76A6BD"></div></div>
+          </div>
+          <a href="#" title="Перейти в локацию" style="display:flex;align-items:center;gap:4px;color:#76a6bd;line-height:1" style-hover="color:#f0d95c">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <span style="font-size:10.5px;font-weight:500;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Тёмный лес</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Notification bell -->
+      <button title="Уведомления" style="position:relative;padding:5px;color:#fff;background:none;border:none;cursor:pointer;transition:color .2s" style-hover="color:#76a6bd">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        <span style="position:absolute;top:-3px;right:-3px;min-width:17px;height:17px;padding:0 4px;display:flex;align-items:center;justify-content:center;background:#F37753;color:#fff;font-size:10px;font-weight:700;border-radius:9px;box-shadow:0 0 0 2px rgba(6,7,12,.9)">5</span>
+      </button>
+
+      <!-- Messages (inbox, distinct from live chat) -->
+      <a href="#" title="Сообщения" style="position:relative;padding:5px;color:#fff;display:flex" style-hover="color:#76a6bd">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </a>
+
+      <!-- User avatar -->
+      <div style="width:44px;height:44px;border-radius:50%;padding:2px;background:linear-gradient(180deg,#fff9b8,#bcab4c);flex-shrink:0;cursor:pointer">
+        <div style="width:100%;height:100%;border-radius:50%;background:#12131a;display:flex;align-items:center;justify-content:center;overflow:hidden">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.6"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================== MOBILE HEADER ===================== -->
+  <header class="hdr-m" style="display:none;position:relative;z-index:50;max-width:1360px;margin:14px auto 0;flex-direction:column;background:rgba(6,7,12,.72);border:1px solid rgba(240,217,92,.14);border-radius:16px;backdrop-filter:blur(10px);box-shadow:0 10px 30px rgba(0,0,0,.45);overflow:hidden">
+    <!-- top bar: burger · logo · chat · avatar -->
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px">
+      <button onClick="{{ toggleMenu }}" title="Меню" style="position:relative;flex-shrink:0;width:42px;height:42px;display:flex;align-items:center;justify-content:center;border-radius:11px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);color:#f0d95c;cursor:pointer">
+        <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></sc-if>
+        <sc-if value="{{ menuClosed }}" hint-placeholder-val="{{ true }}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></sc-if>
+        <sc-if value="{{ showMenuBadge }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 4px;display:flex;align-items:center;justify-content:center;background:#F37753;color:#fff;font-size:10px;font-weight:700;border-radius:9px;box-shadow:0 0 0 2px rgba(6,7,12,.95)">{{ menuUnread }}</span></sc-if>
+      </button>
+      <a href="#" style="flex-shrink:0"><img src="services/frontend/app-chaldea/src/assets/logo_fog.png" alt="Fall of Gods" style="height:40px;width:auto;object-fit:contain;filter:drop-shadow(0 2px 6px rgba(0,0,0,.6))"></a>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+        <button onClick="{{ toggleChat }}" title="Чат" style="position:relative;width:42px;height:42px;display:flex;align-items:center;justify-content:center;border-radius:11px;background:linear-gradient(180deg,rgba(240,217,92,.14),rgba(240,217,92,.04));border:1px solid rgba(240,217,92,.35);color:#f0d95c;cursor:pointer">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+          <sc-if value="{{ showChatBadge }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;padding:0 4px;display:flex;align-items:center;justify-content:center;background:#F37753;color:#fff;font-size:10px;font-weight:700;border-radius:9px;box-shadow:0 0 0 2px rgba(6,7,12,.9)">3</span></sc-if>
+        </button>
+        <div style="width:42px;height:42px;border-radius:50%;padding:2px;background:linear-gradient(180deg,#fff9b8,#bcab4c);flex-shrink:0;cursor:pointer"><div style="width:100%;height:100%;border-radius:50%;background:#12131a;display:flex;align-items:center;justify-content:center;overflow:hidden"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.6"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></div></div>
+      </div>
+    </div>
+
+    <!-- character + location strip -->
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.22)">
+      <div style="width:38px;height:38px;border-radius:50%;padding:2px;background:linear-gradient(180deg,#fff9b8,#bcab4c);flex-shrink:0"><div style="width:100%;height:100%;border-radius:50%;background:#12131a;display:flex;align-items:center;justify-content:center;overflow:hidden"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.6"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></div></div>
+      <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <span style="font-size:13px;font-weight:600;color:#fff;line-height:1">Кайден</span>
+          <a href="#" title="Перейти в локацию" style="display:flex;align-items:center;gap:4px;color:#76a6bd;line-height:1" style-hover="color:#f0d95c"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg><span style="font-size:11px;font-weight:500">Тёмный лес</span></a>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <div style="flex:1;height:5px;border-radius:5px;background:rgba(255,255,255,.14);overflow:hidden"><div style="width:72%;height:100%;background:#E94545"></div></div>
+          <div style="flex:1;height:5px;border-radius:5px;background:rgba(255,255,255,.14);overflow:hidden"><div style="width:55%;height:100%;background:#76A6BD"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- collapsible menu -->
+    <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;flex-direction:column;padding:8px 14px 14px;border-top:1px solid rgba(240,217,92,.12);animation:cardRise .18s ease-out">
+        <div style="display:flex;align-items:center;gap:8px;margin:8px 0 4px;padding:9px 12px;border-radius:11px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.6)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" placeholder="ПОИСК ПО МИРУ" style="flex:1;min-width:0;background:transparent;border:none;outline:none;color:#fff;font-family:inherit;font-size:12px;font-weight:500;letter-spacing:.06em;text-transform:uppercase">
+        </div>
+        <sc-for list="{{ mobileNav }}" as="sec" hint-placeholder-count="5">
+          <div style="border-bottom:1px solid rgba(255,255,255,.06)">
+            <button onClick="{{ sec.toggle }}" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 4px;background:none;border:none;cursor:pointer;font-family:inherit;font-size:14px;font-weight:{{ sec.weight }};letter-spacing:.08em;text-transform:uppercase;color:{{ sec.color }}">
+              <span>{{ sec.title }}</span>
+              <sc-if value="{{ sec.hasChildren }}" hint-placeholder-val="{{ true }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;transition:transform .2s;transform:rotate({{ sec.chevron }})"><polyline points="6 9 12 15 18 9"/></svg></sc-if>
+            </button>
+            <sc-if value="{{ sec.expanded }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;padding:2px 4px 12px 14px;animation:cardRise .16s ease-out">
+                <sc-for list="{{ sec.links }}" as="l" hint-placeholder-count="3">
+                  <a href="#" style="padding:9px 0;font-size:12.5px;font-weight:400;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,255,255,.72)" style-hover="color:#f0d95c">{{ l }}</a>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+        <div style="display:flex;gap:10px;margin-top:12px">
+          <a href="#" style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;gap:8px;padding:11px;border-radius:11px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>Уведомления<span style="position:absolute;top:-7px;right:-7px;min-width:18px;height:18px;padding:0 4px;display:flex;align-items:center;justify-content:center;background:#F37753;color:#fff;font-size:10px;font-weight:700;border-radius:9px;box-shadow:0 0 0 2px rgba(6,7,12,.95)">{{ notifCount }}</span></a>
+          <a href="#" style="position:relative;flex:1;display:flex;align-items:center;justify-content:center;gap:8px;padding:11px;border-radius:11px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Сообщения<span style="position:absolute;top:-7px;right:-7px;min-width:18px;height:18px;padding:0 4px;display:flex;align-items:center;justify-content:center;background:#F37753;color:#fff;font-size:10px;font-weight:700;border-radius:9px;box-shadow:0 0 0 2px rgba(6,7,12,.95)">{{ msgCount }}</span></a>
+        </div>
+      </div>
+    </sc-if>
+  </header>
+
+  <!-- ===================== MAIN (top region) ===================== -->
+  <main class="m-grid" style="max-width:1360px;margin:44px auto 0;display:grid;grid-template-columns:38% 1fr;column-gap:44px;align-items:stretch">
+    <!-- LEFT: navigation cards -->
+    <section style="display:flex;flex-direction:column;gap:18px">
+      <div style="display:flex;align-items:center;gap:16px">
+        <span style="font-size:13px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Куда отправимся</span>
+        <span style="flex:1;height:1px;background:linear-gradient(90deg,rgba(240,217,92,.5),rgba(255,255,255,0))"></span>
+      </div>
+      <a href="#" style="position:relative;display:block;flex:1;min-height:122px;border-radius:16px;overflow:hidden;background:#000;background-image:url('services/frontend/app-chaldea/src/assets/homepagebutton1.png');background-size:cover;background-position:center;box-shadow:4px 6px 14px rgba(0,0,0,.45);border:1px solid rgba(240,217,92,.12)" style-hover="border-color:rgba(240,217,92,.4)">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 30%,#0c1012 100%);display:flex;flex-direction:column;justify-content:flex-end">
+          <h3 style="text-align:center;font-size:30px;font-weight:500;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Игровой мир</h3>
+          <div style="position:relative;margin-top:8px;display:flex;justify-content:space-between">
+            <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);width:73%;height:1px;background:linear-gradient(90deg,rgba(255,255,255,0),#f0d95c 50%,rgba(255,255,255,0))"></div>
+            <span style="flex:1;padding:9px 4px 12px;text-align:center;font-size:13px;font-weight:400;letter-spacing:.06em;text-transform:uppercase;color:#fff" style-hover="color:#76a6bd">Персонажи</span>
+            <span style="flex:1;padding:9px 4px 12px;text-align:center;font-size:13px;font-weight:400;letter-spacing:.06em;text-transform:uppercase;color:#fff" style-hover="color:#76a6bd">Навыки</span>
+            <span style="flex:1;padding:9px 4px 12px;text-align:center;font-size:13px;font-weight:400;letter-spacing:.06em;text-transform:uppercase;color:#fff" style-hover="color:#76a6bd">Аукцион</span>
+          </div>
+        </div>
+      </a>
+      <a href="#" style="position:relative;display:block;flex:1;min-height:122px;border-radius:16px;overflow:hidden;background:#000;background-image:url('services/frontend/app-chaldea/src/assets/homepagebutton2.png');background-size:cover;background-position:center;box-shadow:4px 6px 14px rgba(0,0,0,.45);border:1px solid rgba(240,217,92,.12)" style-hover="border-color:rgba(240,217,92,.4)">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 30%,#0c1012 100%);display:flex;flex-direction:column;justify-content:flex-end">
+          <h3 style="text-align:center;font-size:30px;font-weight:500;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Руководство</h3>
+          <div style="position:relative;margin-top:8px;display:flex;justify-content:space-between">
+            <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);width:73%;height:1px;background:linear-gradient(90deg,rgba(255,255,255,0),#f0d95c 50%,rgba(255,255,255,0))"></div>
+            <span style="flex:1;padding:9px 4px 12px;text-align:center;font-size:13px;font-weight:400;letter-spacing:.06em;text-transform:uppercase;color:#fff" style-hover="color:#76a6bd">Обучение</span>
+            <span style="flex:1;padding:9px 4px 12px;text-align:center;font-size:13px;font-weight:400;letter-spacing:.06em;text-transform:uppercase;color:#fff" style-hover="color:#76a6bd">Консультант</span>
+            <span style="flex:1;padding:9px 4px 12px;text-align:center;font-size:13px;font-weight:400;letter-spacing:.06em;text-transform:uppercase;color:#fff" style-hover="color:#76a6bd">Архив</span>
+          </div>
+        </div>
+      </a>
+      <a href="#" style="position:relative;display:block;flex:1;min-height:122px;border-radius:16px;overflow:hidden;background:#000;background-image:url('services/frontend/app-chaldea/src/assets/homepagebutton3.png');background-size:cover;background-position:center;box-shadow:4px 6px 14px rgba(0,0,0,.45);border:1px solid rgba(240,217,92,.12)" style-hover="border-color:rgba(240,217,92,.4)">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 30%,#0c1012 100%);display:flex;flex-direction:column;justify-content:flex-end">
+          <h3 style="text-align:center;font-size:30px;font-weight:500;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Магазин</h3>
+          <div style="position:relative;margin-top:8px;display:flex;justify-content:space-between">
+            <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);width:73%;height:1px;background:linear-gradient(90deg,rgba(255,255,255,0),#f0d95c 50%,rgba(255,255,255,0))"></div>
+            <span style="flex:1;padding:9px 4px 12px;text-align:center;font-size:13px;font-weight:400;letter-spacing:.06em;text-transform:uppercase;color:#fff" style-hover="color:#76a6bd">Рулетка</span>
+            <span style="flex:1;padding:9px 4px 12px;text-align:center;font-size:13px;font-weight:400;letter-spacing:.06em;text-transform:uppercase;color:#fff" style-hover="color:#76a6bd">События</span>
+            <span style="flex:1;padding:9px 4px 12px;text-align:center;font-size:13px;font-weight:400;letter-spacing:.06em;text-transform:uppercase;color:#fff" style-hover="color:#76a6bd">Валюта</span>
+          </div>
+        </div>
+      </a>
+    </section>
+    <!-- RIGHT: hero slider -->
+    <section style="display:flex;flex-direction:column;gap:18px;min-width:0">
+      <div style="display:flex;align-items:center;gap:16px">
+        <span style="font-size:13px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Главное сейчас</span>
+        <span style="flex:1;height:1px;background:linear-gradient(90deg,rgba(240,217,92,.5),rgba(255,255,255,0))"></span>
+      </div>
+      <div style="position:relative;flex:1;min-height:440px;border-radius:18px;overflow:hidden;background:#000;background-image:url('services/frontend/app-chaldea/src/assets/sliderimg1.png');background-size:cover;background-position:center;box-shadow:0 14px 40px rgba(0,0,0,.55);border:1px solid rgba(240,217,92,.16)">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(4,5,9,.15) 0%,rgba(4,5,9,.05) 40%,rgba(4,5,9,.85) 100%)"></div>
+        <div style="position:absolute;top:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:22px 26px">
+          <div style="display:flex;align-items:center;gap:14px">
+            <button onClick="{{ prevSlide }}" style="width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.25);color:#fff;cursor:pointer" style-hover="border-color:#f0d95c;color:#f0d95c"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <div style="display:flex;gap:9px"><sc-for list="{{ dots }}" as="d" hint-placeholder-count="4"><button onClick="{{ d.on }}" style="width:10px;height:10px;border-radius:50%;border:none;cursor:pointer;transition:all .2s;background:{{ d.bg }};box-shadow:{{ d.glow }}"></button></sc-for></div>
+            <button onClick="{{ nextSlide }}" style="width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.25);color:#fff;cursor:pointer" style-hover="border-color:#f0d95c;color:#f0d95c"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+          </div>
+          <span style="font-style:italic;font-weight:700;font-size:13px;letter-spacing:.1em;text-transform:uppercase;background:linear-gradient(180deg,#f6eea6,#b6a530);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">{{ curSlide.tag }}</span>
+        </div>
+        <div style="position:absolute;left:0;right:0;bottom:0;padding:34px 40px;display:flex;flex-direction:column;gap:12px">
+          <h2 style="font-family:'Cormorant Garamond',serif;font-size:44px;font-weight:600;line-height:1.05;color:#fff;text-shadow:0 4px 18px rgba(0,0,0,.7)">{{ curSlide.title }}</h2>
+          <p style="max-width:560px;font-size:15px;font-weight:300;letter-spacing:.02em;color:rgba(255,255,255,.85)">{{ curSlide.desc }}</p>
+          <span style="margin-top:6px;display:inline-flex;align-items:center;gap:8px;width:fit-content;font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#f0d95c;cursor:pointer" style-hover="color:#fff9b8">Читать <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===================== QUICK LINKS (full width) ===================== -->
+  <section style="max-width:1360px;margin:32px auto 0">
+    <div class="ql-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:18px">
+      <a href="#" style="position:relative;display:flex;align-items:center;justify-content:center;height:100px;border-radius:14px;overflow:hidden;background:#000;background-image:url('services/frontend/app-chaldea/src/assets/smallhomebutton1.png');background-size:cover;background-position:center;box-shadow:4px 6px 10px rgba(0,0,0,.4);border:1px solid rgba(240,217,92,.1)" style-hover="border-color:rgba(240,217,92,.4)">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.15),rgba(0,0,0,.55))"></div>
+        <span style="position:relative;font-size:16px;font-weight:600;line-height:1.1;padding:0 12px;width:100%;white-space:normal;word-break:break-word;text-transform:uppercase;text-align:center;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Предложения</span>
+      </a>
+      <a href="#" style="position:relative;display:flex;align-items:center;justify-content:center;height:100px;border-radius:14px;overflow:hidden;background:#000;background-image:url('services/frontend/app-chaldea/src/assets/smallhomebutton2.png');background-size:cover;background-position:center;box-shadow:4px 6px 10px rgba(0,0,0,.4);border:1px solid rgba(240,217,92,.1)" style-hover="border-color:rgba(240,217,92,.4)">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.15),rgba(0,0,0,.55))"></div>
+        <span style="position:relative;font-size:16px;font-weight:600;line-height:1.1;padding:0 12px;width:100%;white-space:normal;word-break:break-word;text-transform:uppercase;text-align:center;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Администрация</span>
+      </a>
+      <a href="#" style="position:relative;display:flex;align-items:center;justify-content:center;height:100px;border-radius:14px;overflow:hidden;background:#000;background-image:url('services/frontend/app-chaldea/src/assets/smallhomebutton3.png');background-size:cover;background-position:center;box-shadow:4px 6px 10px rgba(0,0,0,.4);border:1px solid rgba(240,217,92,.1)" style-hover="border-color:rgba(240,217,92,.4)">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.15),rgba(0,0,0,.55))"></div>
+        <span style="position:relative;font-size:16px;font-weight:600;line-height:1.1;padding:0 12px;width:100%;white-space:normal;word-break:break-word;text-transform:uppercase;text-align:center;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Бестиарий</span>
+      </a>
+      <a href="#" style="position:relative;display:flex;align-items:center;justify-content:center;height:100px;border-radius:14px;overflow:hidden;background:#000;background-image:url('services/frontend/app-chaldea/src/assets/smallhomebutton4.png');background-size:cover;background-position:center;box-shadow:4px 6px 10px rgba(0,0,0,.4);border:1px solid rgba(240,217,92,.1)" style-hover="border-color:rgba(240,217,92,.4)">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.15),rgba(0,0,0,.55))"></div>
+        <span style="position:relative;font-size:16px;font-weight:600;line-height:1.1;padding:0 12px;width:100%;white-space:normal;word-break:break-word;text-transform:uppercase;text-align:center;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Поиск игрока</span>
+      </a>
+    </div>
+  </section>
+
+  <!-- ===================== LIVE FEED (full width) ===================== -->
+  <section style="max-width:1360px;margin:52px auto 0;display:{{ feedDisplay }}">
+    <div style="display:flex;align-items:center;gap:16px">
+        <span style="font-size:13px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Живая лента</span>
+        <span style="flex:1;height:1px;background:linear-gradient(90deg,rgba(240,217,92,.5),rgba(255,255,255,0))"></span>
+        <span style="display:flex;align-items:center;gap:7px;font-size:11px;letter-spacing:.08em;color:rgba(255,255,255,.5)"><span style="width:7px;height:7px;border-radius:50%;background:#88B332;animation:livePulse 1.6s ease-in-out infinite"></span>Онлайн</span>
+      </div>
+    <div class="feed-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px">
+      <sc-for list="{{ posts }}" as="p" hint-placeholder-count="6">
+        <a href="#" style="display:flex;gap:16px;padding:16px;min-height:150px;border-radius:14px;background:rgba(6,7,12,.5);border:1px solid rgba(255,255,255,.06);transition:all .2s" style-hover="background:rgba(6,7,12,.75);border-color:rgba(240,217,92,.28)">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;width:96px;flex-shrink:0">
+            <span style="font-size:9px;text-align:center;line-height:1.1;color:{{ p.titleColor }}">{{ p.title }}</span>
+            <div style="width:52px;height:52px;border-radius:50%;padding:2px;background:linear-gradient(180deg,#fff9b8,#bcab4c)"><div style="width:100%;height:100%;border-radius:50%;background:#12131a;display:flex;align-items:center;justify-content:center;overflow:hidden"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="1.4"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></div></div>
+            <span style="font-size:11px;font-weight:600;color:#fff;line-height:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:96px">{{ p.name }}</span>
+            <span style="font-size:9px;font-weight:600;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">LVL {{ p.lvl }}</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px;flex:1;min-width:0">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+              <span style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;color:#76a6bd;min-width:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.location }}</span></span>
+              <span style="font-size:11px;color:rgba(255,255,255,.4);flex-shrink:0">{{ p.time }}</span>
+            </div>
+            <p style="font-size:13.5px;line-height:1.55;color:rgba(255,255,255,.8);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">{{ p.text }}</p>
+            <div style="display:flex;align-items:center;gap:6px;margin-top:auto;font-size:11px;color:rgba(255,255,255,.45)"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg><span>{{ p.likes }}</span></div>
+          </div>
+        </a>
+      </sc-for>
+    </div>
+  </section>
+
+  <!-- ===================== HALL OF FAME (redesigned ratings) ===================== -->
+  <section style="max-width:1360px;margin:56px auto 0">
+    <div style="display:flex;align-items:center;gap:16px">
+        <span style="font-size:13px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Зал славы</span>
+        <span style="flex:1;height:1px;background:linear-gradient(90deg,rgba(240,217,92,.5),rgba(255,255,255,0))"></span>
+      </div>
+    <div style="position:relative;margin-top:18px;border-radius:20px;overflow:hidden;background:linear-gradient(180deg,rgba(24,24,31,.92),rgba(12,13,18,.96));border:1px solid rgba(240,217,92,.18);box-shadow:0 18px 50px rgba(0,0,0,.5)">
+      <!-- banner + tabs -->
+      <div style="position:relative;padding:26px 30px 0;background-image:url('services/frontend/app-chaldea/src/assets/stats_bg.png');background-size:cover;background-position:center top">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(4,5,9,.55),rgba(12,13,18,.96))"></div>
+        <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:20px">
+          <h2 style="font-family:'Cormorant Garamond',serif;font-size:40px;font-weight:600;letter-spacing:.02em;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">{{ activeBoardTitle }}</h2>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+            <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="3">
+              <button onClick="{{ t.on }}" style="padding:9px 22px;font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;border-radius:999px;cursor:pointer;transition:all .2s;background:{{ t.bg }};border:1px solid {{ t.border }};color:{{ t.color }}">{{ t.name }}</button>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+      <!-- podium -->
+      <div class="podium" style="position:relative;display:flex;justify-content:center;align-items:flex-end;gap:22px;padding:40px 30px 8px;max-width:760px;margin:0 auto">
+        <sc-for list="{{ podium }}" as="p" hint-placeholder-count="3">
+          <div style="flex:1;max-width:220px;display:flex;flex-direction:column;align-items:center">
+            <div style="height:26px;color:#f0d95c"><sc-if value="{{ p.isFirst }}" hint-placeholder-val="{{ false }}"><svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><path d="M3 7l4 4 5-7 5 7 4-4-2 12H5L3 7z"/></svg></sc-if></div>
+            <div style="width:{{ p.avatar }};height:{{ p.avatar }};border-radius:50%;padding:3px;background:{{ p.ring }};box-shadow:{{ p.glow }}"><div style="width:100%;height:100%;border-radius:50%;background:{{ p.avatarBg }};display:flex;align-items:center;justify-content:center;font-weight:700;color:#0c0d12;font-size:{{ p.initialSize }}">{{ p.initial }}</div></div>
+            <span style="margin-top:12px;font-size:15px;font-weight:600;color:#fff;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">{{ p.name }}</span>
+            <span style="margin-top:2px;font-size:15px;font-weight:700;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">{{ p.value }}</span>
+            <div style="margin-top:14px;width:100%;height:{{ p.ped }};border-radius:12px 12px 0 0;background:linear-gradient(180deg,rgba(240,217,92,.16),rgba(240,217,92,.02));border:1px solid rgba(240,217,92,.28);border-bottom:none;display:flex;align-items:flex-start;justify-content:center;padding-top:12px"><span style="font-family:'Montserrat',sans-serif;font-size:38px;font-weight:700;color:{{ p.medal }}">{{ p.rank }}</span></div>
+          </div>
+        </sc-for>
+      </div>
+      <!-- remaining ranks -->
+      <div style="padding:8px 26px 26px;max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:2px">
+        <sc-for list="{{ rest }}" as="r" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:16px;padding:12px 16px;border-radius:10px;transition:background .2s" style-hover="background:rgba(255,255,255,.05)">
+            <span style="width:22px;text-align:center;font-size:15px;font-weight:600;color:rgba(255,255,255,.4)">{{ r.rank }}</span>
+            <div style="width:38px;height:38px;border-radius:50%;flex-shrink:0;background:{{ r.avatarBg }};display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#0c0d12">{{ r.initial }}</div>
+            <span style="flex:1;font-size:15px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.name }}</span>
+            <span style="font-size:15px;font-weight:600;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">{{ r.value }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== FOOTER ===================== -->
+  <footer style="max-width:1360px;margin:40px auto 0;padding:20px 0;text-align:center;font-size:13px;color:rgba(255,255,255,.55)">
+    <span>Наёмников: </span><a href="#" style="font-weight:600;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">4 812</a>
+    <span style="margin:0 10px;color:rgba(255,255,255,.25)">|</span>
+    <span>В мире сейчас: </span><a href="#" style="font-weight:600;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">327</a>
+  </footer>
+
+  <!-- ===================== CHAT PANEL ===================== -->
+  <div onClick="{{ closeChat }}" style="position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.5);backdrop-filter:blur(2px);transition:opacity .25s;opacity:{{ chatOverlayOpacity }};pointer-events:{{ chatPointer }}"></div>
+
+  <aside class="chat-panel" style="position:fixed;top:0;left:0;z-index:80;width:400px;max-width:92vw;height:100vh;display:flex;flex-direction:column;background:rgba(9,10,16,.97);border-right:1px solid rgba(240,217,92,.22);box-shadow:14px 0 46px rgba(0,0,0,.6);transform:translateX({{ chatShift }});transition:transform .28s ease">
+    <!-- chat header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 22px;border-bottom:1px solid rgba(240,217,92,.14)">
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:linear-gradient(180deg,rgba(240,217,92,.16),rgba(240,217,92,.04));border:1px solid rgba(240,217,92,.3);color:#f0d95c">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+        </span>
+        <h3 style="font-size:17px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Чат</h3>
+      </div>
+      <button onClick="{{ closeChat }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:9px;background:none;border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.7);cursor:pointer" style-hover="border-color:#F37753;color:#F37753">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+
+    <!-- channel tabs -->
+    <div style="display:flex;gap:4px;padding:14px 16px 0">
+      <sc-for list="{{ channels }}" as="c" hint-placeholder-count="4">
+        <button onClick="{{ c.on }}" style="flex:1;padding:9px 4px;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;background:none;border:none;border-bottom:2px solid {{ c.border }};color:{{ c.color }};cursor:pointer;transition:all .2s">{{ c.name }}</button>
+      </sc-for>
+    </div>
+
+    <!-- messages -->
+    <div class="om-scroll" style="flex:1;overflow-y:auto;padding:18px 18px;display:flex;flex-direction:column;gap:16px">
+      <sc-for list="{{ messages }}" as="m" hint-placeholder-count="6">
+        <div style="display:flex;gap:11px">
+          <div style="width:36px;height:36px;border-radius:50%;flex-shrink:0;background:{{ m.avatarBg }};display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#0c0d12">{{ m.initial }}</div>
+          <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
+            <div style="display:flex;align-items:baseline;gap:8px">
+              <span style="font-size:13px;font-weight:600;color:{{ m.nameColor }}">{{ m.name }}</span>
+              <span style="font-size:10px;color:rgba(255,255,255,.35)">{{ m.time }}</span>
+            </div>
+            <p style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.85)">{{ m.text }}</p>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <!-- input -->
+    <div style="padding:14px 16px;border-top:1px solid rgba(240,217,92,.14)">
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 8px 8px 16px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1)">
+        <input type="text" placeholder="Написать сообщение…" style="flex:1;min-width:0;background:transparent;border:none;outline:none;color:#fff;font-family:inherit;font-size:13.5px">
+        <button style="width:38px;height:38px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:9px;background:linear-gradient(90deg,#2e353e,#537895);border:none;color:#fff;cursor:pointer" style-hover="filter:brightness(1.15)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:1400},&quot;showCharacterChip&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Хедер&quot;},&quot;showChatBadge&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Хедер&quot;},&quot;showLiveFeed&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Контент&quot;}}">
+class Component extends DCLogic {
+  state = { chatOpen: false, chatTab: 'Общий', slide: 0, mega: false, boardTab: 0, menuOpen: false, openSection: 'Игровой мир' };
+
+  renderVals() {
+    const { chatOpen, chatTab, slide, mega, boardTab, menuOpen, openSection } = this.state;
+
+    const slides = [
+      { tag: 'Технобук',   title: 'Мы открываемся!',        desc: 'Всё, что нужно знать о запуске проекта: серверы, регистрация и первые шаги в мире.' },
+      { tag: 'Анонс',      title: 'Сезон Затмения',         desc: 'Новый регион, три древних босса и легендарный лут ждут отважных наёмников.' },
+      { tag: 'Ивент',      title: 'Ночь Падающих Звёзд',    desc: 'Ограниченное событие с уникальными наградами. Успей до конца недели.' },
+      { tag: 'Обновление', title: 'Патч 1.4 «Клинки»',      desc: 'Ребаланс классов, новая ветка навыков и переработанный аукцион.' },
+    ];
+    const cur = slides[slide];
+    const dots = slides.map((_, i) => ({
+      on: () => this.setState({ slide: i }),
+      bg: i === slide ? '#f0d95c' : 'rgba(255,255,255,.35)',
+      glow: i === slide ? '0 0 8px rgba(240,217,92,.8)' : 'none',
+    }));
+
+    const posts = [
+      { title: 'Страж Рассвета', titleColor: '#F0D95C', name: 'Аэлин',   lvl: 42, location: 'Тёмный лес',      time: '2 мин. назад', likes: 14, text: 'Костёр почти погас, но её глаза всё ещё горели решимостью. «Мы идём дальше», — прошептала она сквозь стиснутые зубы.' },
+      { title: 'Наёмник',        titleColor: '#76A6BD', name: 'Кассий',   lvl: 37, location: 'Врата Аркана',    time: '11 мин. назад', likes: 8,  text: 'Клинок со свистом рассёк воздух. Стражник даже не успел поднять тревогу — тень скользнула во двор замка.' },
+      { title: 'Хранитель',      titleColor: '#FFFFFF', name: 'Мираэль',  lvl: 51, location: 'Храм Луны',       time: '24 мин. назад', likes: 27, text: 'Древние руны вспыхнули под её ладонью. Что-то пробуждалось в глубине святилища — и это было голодным.' },
+      { title: 'Скиталец',       titleColor: '#FFFFFF', name: 'Дориан',   lvl: 29, location: 'Пепельные пустоши', time: '38 мин. назад', likes: 5, text: 'Ветер нёс запах серы. На горизонте, там где раньше стоял город, теперь виднелись лишь чёрные шпили.' },
+      { title: 'Легенда',        titleColor: '#F0D95C', name: 'Вальтор',  lvl: 60, location: 'Цитадель Королей', time: '1 ч. назад',   likes: 63, text: 'Он опустился на колено перед троном. «Корона пала, мой лорд. Боги больше не смотрят на нас с небес».' },
+      { title: 'Странница',      titleColor: '#B875BD', name: 'Сорана',   lvl: 45, location: 'Озеро Теней',     time: '1 ч. назад',   likes: 19, text: 'Вода была неподвижна, как чёрное зеркало. И всё же в её глубине что-то смотрело в ответ — терпеливо и голодно.' },
+    ];
+
+    const boardTabsNames = ['Символов за сутки', 'PvP-очки', 'PvE-очки'];
+    const gRing = 'linear-gradient(180deg,#fff9b8,#bcab4c)';
+    const sRing = 'linear-gradient(180deg,#e8e8e8,#9a9a9a)';
+    const cRing = 'linear-gradient(180deg,#e0a869,#a5662f)';
+    const avatarPalette = [gRing, sRing, cRing, 'linear-gradient(180deg,#9fc3d4,#5f8494)', 'linear-gradient(180deg,#b89bd4,#6f4f94)', 'linear-gradient(180deg,#8fd4a8,#4f9468)'];
+    const medalColors = ['#f0d95c', '#dfe3e6', '#d69a5e'];
+    const boardData = [
+      [
+        { name: 'Мираэль', value: '48 210', initial: 'М' },
+        { name: 'Аэлин',   value: '41 933', initial: 'А' },
+        { name: 'Кассий',  value: '37 004', initial: 'К' },
+        { name: 'Дориан',  value: '33 118', initial: 'Д' },
+        { name: 'Сорана',  value: '29 640', initial: 'С' },
+        { name: 'Тобиас',  value: '26 902', initial: 'Т' },
+      ],
+      [
+        { name: 'Вальтор', value: '9 870', initial: 'В' },
+        { name: 'Дориан',  value: '8 542', initial: 'Д' },
+        { name: 'Сорана',  value: '7 218', initial: 'С' },
+        { name: 'Кайден',  value: '6 905', initial: 'К' },
+        { name: 'Аэлин',   value: '6 340', initial: 'А' },
+        { name: 'Ринальд', value: '5 977', initial: 'Р' },
+      ],
+      [
+        { name: 'Кайден',  value: '15 640', initial: 'К' },
+        { name: 'Лираэль', value: '14 100', initial: 'Л' },
+        { name: 'Тобиас',  value: '12 985', initial: 'Т' },
+        { name: 'Мираэль', value: '11 430', initial: 'М' },
+        { name: 'Вальтор', value: '10 880', initial: 'В' },
+        { name: 'Сорана',  value: '9 512',  initial: 'С' },
+      ],
+    ];
+    const active = boardData[boardTab].map((r, i) => ({ ...r, rank: i + 1, avatarBg: avatarPalette[i] }));
+    const podiumItem = (r, pos) => {
+      const isFirst = pos === 1;
+      return {
+        name: r.name, value: r.value, initial: r.initial, rank: r.rank, avatarBg: r.avatarBg, isFirst,
+        avatar: isFirst ? '104px' : (pos === 0 ? '82px' : '76px'),
+        initialSize: isFirst ? '34px' : '26px',
+        ring: isFirst ? gRing : (pos === 0 ? sRing : cRing),
+        glow: isFirst ? '0 0 26px rgba(240,217,92,.5)' : 'none',
+        ped: isFirst ? '132px' : (pos === 0 ? '96px' : '76px'),
+        medal: medalColors[r.rank - 1] || '#f0d95c',
+      };
+    };
+    const podium = [podiumItem(active[1], 0), podiumItem(active[0], 1), podiumItem(active[2], 2)];
+    const rest = active.slice(3);
+    const tabs = boardTabsNames.map((t, i) => ({
+      name: t,
+      on: () => this.setState({ boardTab: i }),
+      bg: i === boardTab ? 'linear-gradient(180deg,rgba(240,217,92,.22),rgba(240,217,92,.06))' : 'rgba(255,255,255,.04)',
+      border: i === boardTab ? 'rgba(240,217,92,.5)' : 'rgba(255,255,255,.12)',
+      color: i === boardTab ? '#fff9b8' : 'rgba(255,255,255,.6)',
+    }));
+    const activeBoardTitle = boardTabsNames[boardTab];
+
+    const megaCats = [
+      { title: 'Общее',   links: ['Поиск соигрока', 'Администрация', 'Предложения', 'Архив'] },
+      { title: 'Новости', links: ['Обновления', 'Технобук', 'Анонсы', 'Ивенты'] },
+      { title: 'Игровой мир', links: ['Персонажи', 'Карта мира', 'Вестник'] },
+      { title: 'Прокачка', links: ['Предметы', 'Аукцион', 'Навыки'] },
+      { title: 'Магазин',  links: ['Персонаж', 'Рулетки', 'Валюта', 'Гачи'] },
+    ];
+
+    const channelNames = ['Общий', 'Локация', 'Отряд', 'Торговля'];
+    const channels = channelNames.map((c) => ({
+      name: c,
+      on: () => this.setState({ chatTab: c }),
+      color: c === chatTab ? '#f0d95c' : 'rgba(255,255,255,.5)',
+      border: c === chatTab ? '#f0d95c' : 'transparent',
+    }));
+
+    const g = 'linear-gradient(180deg,#fff9b8,#bcab4c)';
+    const s = 'linear-gradient(180deg,#cfcfcf,#8f8f8f)';
+    const c = 'linear-gradient(180deg,#c9915a,#8a5a2b)';
+    const b = 'linear-gradient(180deg,#9fc3d4,#5f8494)';
+    const allMsgs = {
+      'Общий': [
+        { name: 'Аэлин',   initial: 'А', avatarBg: g, nameColor: '#f0d95c', time: '21:02', text: 'Кто идёт в Тёмный лес? Нужен хилер, собираем отряд из 4.' },
+        { name: 'Кассий',  initial: 'К', avatarBg: c, nameColor: '#fff',    time: '21:04', text: 'Могу пойти танком, у меня 37 лвл. Через 5 минут буду у врат.' },
+        { name: 'Мираэль', initial: 'М', avatarBg: b, nameColor: '#76a6bd', time: '21:05', text: 'Возьмите мага) есть контроль и неплохой бёрст.' },
+        { name: 'Вальтор', initial: 'В', avatarBg: s, nameColor: '#fff',    time: '21:07', text: 'Осторожнее там, ночью спавнятся элитные волки. Уже двоих положили.' },
+        { name: 'Аэлин',   initial: 'А', avatarBg: g, nameColor: '#f0d95c', time: '21:08', text: 'Отлично, тогда стартуем. Кидаю приглашения в отряд.' },
+      ],
+      'Локация': [
+        { name: 'Дориан',  initial: 'Д', avatarBg: s, nameColor: '#fff',    time: '20:51', text: 'Кто-нибудь видел торговца на Пепельных пустошах? Не могу найти.' },
+        { name: 'Сорана',  initial: 'С', avatarBg: b, nameColor: '#76a6bd', time: '20:55', text: 'Он у восточного костра, за разрушенной башней.' },
+        { name: 'Тобиас',  initial: 'Т', avatarBg: c, nameColor: '#fff',    time: '20:58', text: 'Спасибо! Бегу туда.' },
+      ],
+      'Отряд': [
+        { name: 'Кайден',  initial: 'К', avatarBg: g, nameColor: '#f0d95c', time: '21:10', text: 'Все готовы? Захожу в подземелье.' },
+        { name: 'Лираэль', initial: 'Л', avatarBg: b, nameColor: '#76a6bd', time: '21:10', text: 'Мана полная, баффы навешаны. Погнали!' },
+      ],
+      'Торговля': [
+        { name: 'Вальтор', initial: 'В', avatarBg: s, nameColor: '#fff',    time: '20:40', text: 'Продаю легендарный клинок «Рассвет», 2500 золотых. Пишите в лс.' },
+        { name: 'Мираэль', initial: 'М', avatarBg: b, nameColor: '#76a6bd', time: '20:44', text: 'Куплю руны эпического качества, любое количество.' },
+        { name: 'Дориан',  initial: 'Д', avatarBg: c, nameColor: '#fff',    time: '20:47', text: 'Обмен: зелья маны на зелья здоровья 1 к 1.' },
+      ],
+    };
+
+    const showChatBadge = this.props.showChatBadge ?? true;
+    const showCharacterChip = this.props.showCharacterChip ?? true;
+    const showLiveFeed = this.props.showLiveFeed ?? true;
+
+    return {
+      showChatBadge,
+      chipDisplay: showCharacterChip ? 'flex' : 'none',
+      feedDisplay: showLiveFeed ? 'block' : 'none',
+      slides, curSlide: cur, dots,
+      posts, megaCats, channels,
+      tabs, podium, rest, activeBoardTitle,
+      messages: allMsgs[chatTab] || [],
+      mega,
+      menuOpen,
+      menuClosed: !menuOpen,
+      notifCount: 5,
+      msgCount: 3,
+      menuUnread: 8,
+      showMenuBadge: !menuOpen,
+      mobileNav: [
+        { title: 'Главная', links: null, direct: true },
+        { title: 'Игровой мир', links: ['Персонажи', 'Карта мира', 'Навыки', 'Аукцион', 'Вестник'] },
+        { title: 'Руководство', links: ['Обучение', 'Консультант', 'Архив', 'Правила'] },
+        { title: 'Магазин', links: ['Рулетка', 'События', 'Валюта', 'Гачи'] },
+        { title: 'Сообщество', links: ['Поиск игрока', 'Администрация', 'Предложения', 'Бестиарий'] },
+      ].map((s) => {
+        const expanded = !s.direct && openSection === s.title;
+        return {
+          title: s.title,
+          links: s.links || [],
+          hasChildren: !s.direct,
+          expanded,
+          toggle: () => s.direct ? null : this.setState((st) => ({ openSection: st.openSection === s.title ? null : s.title })),
+          chevron: expanded ? '180deg' : '0deg',
+          color: (s.direct || expanded) ? '#f0d95c' : '#fff',
+          weight: s.direct ? 600 : 500,
+        };
+      }),
+      toggleMenu: () => this.setState((st) => ({ menuOpen: !st.menuOpen })),
+      toggleChat: () => this.setState((st) => ({ chatOpen: !st.chatOpen, menuOpen: false })),
+      closeChat: () => this.setState({ chatOpen: false }),
+      prevSlide: () => this.setState((st) => ({ slide: (st.slide - 1 + slides.length) % slides.length })),
+      nextSlide: () => this.setState((st) => ({ slide: (st.slide + 1) % slides.length })),
+      openMega: () => this.setState({ mega: true }),
+      closeMega: () => this.setState({ mega: false }),
+      chatShift: chatOpen ? '0' : '-100%',
+      chatOverlayOpacity: chatOpen ? '1' : '0',
+      chatPointer: chatOpen ? 'auto' : 'none',
+    };
+  }
+}
+</script>
+</body>
+</html>

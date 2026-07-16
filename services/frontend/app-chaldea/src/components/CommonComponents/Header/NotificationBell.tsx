@@ -112,7 +112,7 @@ const NotificationBell = () => {
         className="relative p-1 text-white hover:text-site-blue transition-colors duration-200 ease-site"
         aria-label="Уведомления"
       >
-        <Bell size={32} strokeWidth={2} />
+        <Bell size={26} strokeWidth={2} />
         {unreadCount > 0 && (
           <span className="absolute -top-1 -right-1 bg-site-red text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
             {unreadCount > 99 ? '99+' : unreadCount}

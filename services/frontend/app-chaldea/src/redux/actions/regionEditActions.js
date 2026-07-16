@@ -27,6 +27,7 @@ export const updateRegion = createAsyncThunk(
 
 export const fetchRegionDetails = createAsyncThunk(
     'regionEdit/fetchDetails',
+    /** @param {number | string} regionId */
     async (regionId, { rejectWithValue }) => {
         try {
             const response = await axios.get(`/locations/regions/${regionId}/details`);
@@ -87,6 +88,7 @@ export const uploadRegionMap = createAsyncThunk(
 
 export const deleteRegion = createAsyncThunk(
     'regionEdit/deleteRegion',
+    /** @param {number | string} regionId */
     async (regionId, { rejectWithValue }) => {
         try {
             await axios.delete(`/locations/regions/${regionId}/delete`);

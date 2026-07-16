@@ -15,7 +15,7 @@ const RulesAdminPage = () => {
   };
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto" key={refreshKey}>
+    <div className="w-full max-w-container mx-auto" key={refreshKey}>
       {!editingRule && !creating && (
         <RuleList
           onEdit={(rule: GameRule) => setEditingRule(rule)}

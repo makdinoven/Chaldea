@@ -185,14 +185,14 @@ const AdminDungeonForm = () => {
 
   if (detailLoading) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto gray-bg p-6 flex items-center justify-center">
+      <div className="w-full max-w-container mx-auto gray-bg p-6 flex items-center justify-center">
         <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+    <div className="w-full max-w-container mx-auto flex flex-col gap-6">
       <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em]">
         {editingId ? 'Редактирование подземелья' : 'Создание подземелья'}
       </h1>

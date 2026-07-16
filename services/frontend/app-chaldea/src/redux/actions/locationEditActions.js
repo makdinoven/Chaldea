@@ -77,6 +77,7 @@ export const updateLocation = createAsyncThunk(
 
 export const fetchLocationDetails = createAsyncThunk(
     'locationEdit/fetchLocationDetails',
+    /** @param {number | string} locationId */
     async (locationId, { rejectWithValue }) => {
         try {
             const response = await axios.get(`/locations/${locationId}/details`);
@@ -149,6 +150,7 @@ export const updateLocationNeighbors = createAsyncThunk(
 
 export const fetchLocationsList = createAsyncThunk(
     'locationEdit/fetchLocationsList',
+    /** @param {number | string} districtId */
     async (districtId, { rejectWithValue }) => {
         try {
             const response = await axios.get(`/locations/districts/${districtId}/locations`);
@@ -185,6 +187,7 @@ export const fetchAllLocations = createAsyncThunk(
 
 export const deleteLocation = createAsyncThunk(
     'locationEdit/deleteLocation',
+    /** @param {number | string} locationId */
     async (locationId, { rejectWithValue }) => {
         try {
             // Вызов роутера FastAPI: DELETE /locations/{location_id}/delete
@@ -198,6 +201,7 @@ export const deleteLocation = createAsyncThunk(
 
 export const removeNeighbor = createAsyncThunk(
   'locationEdit/removeNeighbor',
+  /** @param {{ locationId: number | string, neighborId: number }} data */
   async ({ locationId, neighborId }, { rejectWithValue }) => {
     try {
       // Вызываем роут DELETE /locations/{locationId}/neighbors/{neighborId}

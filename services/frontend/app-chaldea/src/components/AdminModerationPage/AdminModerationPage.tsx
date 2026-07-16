@@ -130,7 +130,7 @@ const AdminModerationPage = () => {
   const isLoading = activeTab === 'deletions' ? loadingDeletions : loadingReports;
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto">
+    <div className="w-full max-w-container mx-auto">
       <h1 className="gold-text text-2xl sm:text-3xl font-semibold uppercase tracking-[0.06em] mb-6 sm:mb-8">
         Модерация постов
       </h1>

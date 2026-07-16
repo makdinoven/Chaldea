@@ -63,10 +63,11 @@ interface InventoryItemData {
 interface InventoryItemProps {
   type?: string;
   item: InventoryItemData;
-  isCooldown: boolean;
+  /* Optional: ItemSkillCircle renders a static preview without cooldown/turn wiring. */
+  isCooldown?: boolean;
   cooldownValue?: number;
   isDraggable: boolean;
-  setTurnData: Dispatch<SetStateAction<Record<string, unknown>>> | null;
+  setTurnData?: Dispatch<SetStateAction<Record<string, unknown>>> | null;
 }
 
 export const getDamageLabel = (value: string | undefined) =>

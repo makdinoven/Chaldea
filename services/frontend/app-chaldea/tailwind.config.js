@@ -10,6 +10,11 @@ export default {
         montserrat: ['Montserrat', 'sans-serif'],
         mono: ['Anonymous Pro', 'monospace'],
       },
+      maxWidth: {
+        // Site-wide content container width (FEAT-148). Use `max-w-container`
+        // instead of hardcoded pixel values for page/header wrappers.
+        container: '1360px',
+      },
       colors: {
         gold: {
           light: '#fff9b8',

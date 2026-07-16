@@ -91,9 +91,11 @@ interface TurnInfo {
   endsAt: number;
 }
 
+/* Keep structurally compatible with BattlePageBar/ItemSkillCircle's SkillSlot (index signature included). */
 interface SkillSlot {
   id?: number;
   item_id?: number;
+  [key: string]: unknown;
 }
 
 interface TurnDataState {

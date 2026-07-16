@@ -162,7 +162,7 @@ const StarterKitsPage = () => {
 
   if (loading) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto">
+      <div className="w-full max-w-container mx-auto">
         <span className="text-white text-lg">Загрузка...</span>
       </div>
     );
@@ -170,7 +170,7 @@ const StarterKitsPage = () => {
 
   if (error) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto flex flex-col items-center gap-4 mt-8">
+      <div className="w-full max-w-container mx-auto flex flex-col items-center gap-4 mt-8">
         <p className="text-site-red text-xl font-semibold">{error}</p>
         <button className="btn-blue" onClick={fetchData}>
           Повторить
@@ -180,7 +180,7 @@ const StarterKitsPage = () => {
   }
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto">
+    <div className="w-full max-w-container mx-auto">
       <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em] mb-8">
         Стартовые наборы
       </h1>

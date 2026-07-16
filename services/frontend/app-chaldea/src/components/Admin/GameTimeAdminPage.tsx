@@ -9,6 +9,7 @@ import {
   Award,
   Moon,
   Star,
+  Icon as FeatherIcon,
 } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import { selectGameTimeAdmin } from '../../redux/slices/gameTimeSlice';
@@ -18,7 +19,7 @@ import {
 } from '../../redux/actions/gameTimeActions';
 import { SEGMENT_LABELS, YEAR_SEGMENTS } from '../../utils/gameTime';
 
-const SEGMENT_ICON_MAP: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
+const SEGMENT_ICON_MAP: Record<string, FeatherIcon> = {
   spring: Droplet,
   summer: Sun,
   autumn: Wind,

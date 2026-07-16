@@ -65,6 +65,7 @@ class CharacterShort(BaseModel):
     race_name: Optional[str] = None
     class_name: Optional[str] = None
     subrace_name: Optional[str] = None
+    currency_balance: Optional[int] = None
 
 class ClearCurrentCharacterRequest(BaseModel):
     character_id: int

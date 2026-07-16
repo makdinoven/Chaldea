@@ -57,7 +57,7 @@ const ItemsAdminPage = ({ title, itemTypes, excludeTypes }: ItemsAdminPageProps)
   };
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto" key={refreshKey}>
+    <div className="w-full max-w-container mx-auto" key={refreshKey}>
       {!editingId && !creating && (
         <ItemList
           onSelect={(id: number) => setEditingId(id)}

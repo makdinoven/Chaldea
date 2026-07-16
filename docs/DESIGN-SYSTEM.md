@@ -227,6 +227,7 @@ Shows a subtle gold gradient on hover. Content needs `relative z-10` to stay abo
 
 ## 7. Spacing Conventions
 
+- **Content container**: `max-w-container` (1360px) — site-wide max width for the header and all page wrappers. Never hardcode `max-w-[1240px]` / `max-w-[1360px]`; the value lives in `tailwind.config.js` (`theme.extend.maxWidth.container`).
 - **Page padding**: `px-5` (20px sides), handled by `#root`
 - **Section gap**: `gap-[60px]` or `gap-[45px]`
 - **Component gap**: `gap-5` (20px) or `gap-[30px]`

@@ -558,7 +558,8 @@ const userProfileSlice = createSlice({
 
       // Cosmetics: sync avatar_frame / chat_background when equipped
       .addMatcher(
-        (action) => action.type === 'cosmetics/equipFrame/fulfilled',
+        (action): action is { type: string; payload: string | null } =>
+          action.type === 'cosmetics/equipFrame/fulfilled',
         (state, action) => {
           if (state.profile) {
             state.profile.avatar_frame = action.payload;
@@ -566,7 +567,8 @@ const userProfileSlice = createSlice({
         },
       )
       .addMatcher(
-        (action) => action.type === 'cosmetics/equipBackground/fulfilled',
+        (action): action is { type: string; payload: string | null } =>
+          action.type === 'cosmetics/equipBackground/fulfilled',
         (state, action) => {
           if (state.profile) {
             state.profile.chat_background = action.payload;

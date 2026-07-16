@@ -165,7 +165,7 @@ const AdminCosmeticsPage = () => {
   /* ── Render ── */
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+    <div className="w-full max-w-container mx-auto flex flex-col gap-6">
       <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em]">
         Косметика
       </h1>

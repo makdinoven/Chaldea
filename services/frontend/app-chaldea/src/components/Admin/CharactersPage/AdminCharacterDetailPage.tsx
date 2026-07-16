@@ -61,7 +61,7 @@ const AdminCharacterDetailPage = () => {
 
   if (!selectedCharacter) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto">
+      <div className="w-full max-w-container mx-auto">
         <Link
           to="/admin/characters"
           className="text-white/60 text-sm hover:text-site-blue transition-colors duration-200 mb-6 inline-block"
@@ -76,7 +76,7 @@ const AdminCharacterDetailPage = () => {
   }
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto">
+    <div className="w-full max-w-container mx-auto">
       {/* Back link */}
       <Link
         to="/admin/characters"

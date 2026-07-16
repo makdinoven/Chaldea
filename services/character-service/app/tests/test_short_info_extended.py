@@ -7,6 +7,7 @@ Covers:
 (c) Edge cases: character with race but no subrace
 (d) Character not found returns 404
 (e) Security: non-integer character ID does not crash
+(f) FEAT-148: currency_balance is exposed with the character's value
 """
 
 import sys
@@ -94,7 +95,7 @@ def _seed_reference_data(session):
 
 def _create_character(session, *, name="TestChar", race=None, cls=None,
                       subrace=None, level=5, avatar="avatar.webp",
-                      current_location_id=None):
+                      current_location_id=None, currency_balance=None):
     """Insert a character with a required character_request. Return Character ORM object."""
     char_req = models.CharacterRequest(
         name=name,
@@ -122,6 +123,8 @@ def _create_character(session, *, name="TestChar", race=None, cls=None,
         level=level,
         current_location_id=current_location_id,
     )
+    if currency_balance is not None:
+        char.currency_balance = currency_balance
     session.add(char)
     session.commit()
     return char
@@ -235,6 +238,58 @@ class TestShortInfoEdgeCases:
         assert data["race_name"] == "Эльф"
         assert data["class_name"] == "Воин"
         assert data["subrace_name"] is None
+
+
+# ===========================================================================
+# (f) FEAT-148 — currency_balance exposed in short_info
+# ===========================================================================
+
+class TestShortInfoCurrencyBalance:
+    """FEAT-148: short_info must include the character's currency_balance."""
+
+    def test_currency_balance_returned_with_character_value(self, client, db_session):
+        race, cls, subrace = _seed_reference_data(db_session)
+        char = _create_character(
+            db_session, race=race, cls=cls, subrace=subrace,
+            currency_balance=1500,
+        )
+
+        resp = client.get(f"/characters/{char.id}/short_info")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        assert "currency_balance" in data
+        assert data["currency_balance"] == 1500
+
+    def test_currency_balance_defaults_to_zero(self, client, db_session):
+        """Character created without explicit gold — model default is 0."""
+        race, cls, subrace = _seed_reference_data(db_session)
+        char = _create_character(db_session, race=race, cls=cls, subrace=subrace)
+
+        resp = client.get(f"/characters/{char.id}/short_info")
+        assert resp.status_code == 200
+        assert resp.json()["currency_balance"] == 0
+
+    def test_currency_balance_additive_existing_keys_untouched(self, client, db_session):
+        """Adding currency_balance must not remove any previously exposed key."""
+        race, cls, subrace = _seed_reference_data(db_session)
+        char = _create_character(
+            db_session, race=race, cls=cls, subrace=subrace,
+            currency_balance=42,
+        )
+
+        resp = client.get(f"/characters/{char.id}/short_info")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        expected_keys = [
+            "id", "name", "avatar", "level", "current_location_id",
+            "id_race", "id_class", "id_subrace",
+            "race_name", "class_name", "subrace_name",
+            "currency_balance",
+        ]
+        for key in expected_keys:
+            assert key in data, f"Missing field: {key}"
 
 
 # ===========================================================================

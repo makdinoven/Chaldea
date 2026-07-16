@@ -334,7 +334,7 @@ const AdminNpcsPage = () => {
 
   if (statsNpc) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
         <NpcStatsEditor
           npcId={statsNpc.id}
           npcName={statsNpc.name}
@@ -348,7 +348,7 @@ const AdminNpcsPage = () => {
 
   if (equipmentNpc) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
         <NpcEquipmentEditor
           npcId={equipmentNpc.id}
           npcName={equipmentNpc.name}
@@ -360,7 +360,7 @@ const AdminNpcsPage = () => {
 
   if (questNpc) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
         <QuestEditor
           npcId={questNpc.id}
           npcName={questNpc.name}
@@ -372,7 +372,7 @@ const AdminNpcsPage = () => {
 
   if (shopNpc) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
         <NpcShopEditor
           npcId={shopNpc.id}
           npcName={shopNpc.name}
@@ -384,7 +384,7 @@ const AdminNpcsPage = () => {
 
   if (dialogueNpc) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
         <DialogueEditor
           npcId={dialogueNpc.id}
           npcName={dialogueNpc.name}
@@ -395,7 +395,7 @@ const AdminNpcsPage = () => {
   }
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+    <div className="w-full max-w-container mx-auto flex flex-col gap-6">
       <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em]">
         Управление НПС
       </h1>

@@ -58,7 +58,7 @@ const AdminMobDetail = ({ templateId, onClose }: AdminMobDetailProps) => {
 
   if (loading) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
         <div className="flex items-center justify-center py-12">
           <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
         </div>
@@ -68,7 +68,7 @@ const AdminMobDetail = ({ templateId, onClose }: AdminMobDetailProps) => {
 
   if (error) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+      <div className="w-full max-w-container mx-auto flex flex-col gap-6">
         <div className="text-site-red text-sm">{error}</div>
         <button onClick={onClose} className="btn-line !w-auto !px-6">
           Назад
@@ -80,7 +80,7 @@ const AdminMobDetail = ({ templateId, onClose }: AdminMobDetailProps) => {
   if (!template) return null;
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-6">
+    <div className="w-full max-w-container mx-auto flex flex-col gap-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         <button

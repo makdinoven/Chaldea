@@ -261,7 +261,7 @@ const MessengerPage = () => {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="w-full max-w-[1240px] mx-auto px-4 sm:px-6"
+      className="w-full max-w-container mx-auto px-4 sm:px-6"
     >
       <div className="h-[calc(100vh-220px)] min-h-[400px] flex gap-3">
         {/* Left panel: Conversation list */}

@@ -36,11 +36,13 @@ import type { MapItem } from './RegionInteractiveMap/RegionInteractiveMap';
 
 type ViewLevel = 'world' | 'area' | 'country' | 'region';
 
-interface RouteParams {
+/* Type alias (not interface): type literals get an implicit index signature,
+   which useParams' `Record<string, string | undefined>` constraint requires. */
+type RouteParams = {
   areaId?: string;
   countryId?: string;
   regionId?: string;
-}
+};
 
 const WorldPage = () => {
   const dispatch = useAppDispatch();

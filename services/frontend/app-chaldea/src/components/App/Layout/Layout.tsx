@@ -49,7 +49,7 @@ const Layout = () => {
   return (
     <>
       <Header />
-      <div className="relative z-0 max-w-[1240px] mx-auto px-5 mb-[100px]">
+      <div className="relative z-0 max-w-container mx-auto px-5 mb-[100px]">
         <Outlet />
       </div>
       <Footer />

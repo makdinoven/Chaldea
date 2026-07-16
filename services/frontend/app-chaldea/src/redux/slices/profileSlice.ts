@@ -55,10 +55,11 @@ export interface InventoryItem {
   character_id: number;
   item_id: number;
   quantity: number;
-  is_identified: boolean;
+  /* Optional: bridge objects built from equipment/fast slots (EquipmentSlot, FastSlots) omit these. */
+  is_identified?: boolean;
   enhancement_points_spent?: number;
-  socketed_gems: string | null;
-  current_durability: number | null;
+  socketed_gems?: string | null;
+  current_durability?: number | null;
   item: ItemData;
 }
 
@@ -76,8 +77,9 @@ export interface EquipmentSlotData {
   item_id: number | null;
   is_enabled: boolean;
   enhancement_points_spent?: number;
-  socketed_gems: string | null;
-  current_durability: number | null;
+  /* Optional: synthetic empty-slot placeholders (EquipmentPanel, AvatarEquipmentGrid) omit these. */
+  socketed_gems?: string | null;
+  current_durability?: number | null;
   item: ItemData | null;
 }
 
@@ -206,6 +208,16 @@ export interface RepairItemResult {
   repair_kit_consumed: boolean;
 }
 
+/* Mirrors inventory-service schemas.SocketedItemDetail */
+export interface SocketedItemDetail {
+  slot_index: number;
+  item_id: number | null;
+  name: string | null;
+  image: string | null;
+  item_type: string | null;
+  modifiers: Record<string, number>;
+}
+
 export interface ItemDetailResponse {
   item: ItemData;
   current_durability: number | null;
@@ -213,6 +225,7 @@ export interface ItemDetailResponse {
   enhancement_points_spent: number;
   enhancement_bonuses: Record<string, number> | null;
   socketed_gems: (number | null)[] | null;
+  socketed_items?: SocketedItemDetail[];
   is_identified: boolean;
   source: string;
 }

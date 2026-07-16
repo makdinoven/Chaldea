@@ -15,7 +15,7 @@ const AdminMenu = ({ role }: AdminMenuProps) => {
       className="p-1 text-white hover:text-site-blue transition-colors duration-200 ease-site"
       aria-label="Админка"
     >
-      <Shield size={32} strokeWidth={2} />
+      <Shield size={26} strokeWidth={2} />
     </Link>
   );
 };

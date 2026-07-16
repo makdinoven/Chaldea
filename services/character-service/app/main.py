@@ -1599,6 +1599,7 @@ def get_short_info(character_id: int, db: Session = Depends(get_db)):
         "sex": ch.sex,
         "age": ch.age,
         "travel_cooldown_until": ch.travel_cooldown_until.isoformat() if ch.travel_cooldown_until else None,
+        "currency_balance": ch.currency_balance,
     }
 
 @router.get("/list")

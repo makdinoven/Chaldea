@@ -56,6 +56,7 @@ export const uploadDistrictImage = createAsyncThunk(
 
 export const fetchDistrictDetails = createAsyncThunk(
     'districtEdit/fetchDistrictDetails',
+    /** @param {number | string} districtId */
     async (districtId, { rejectWithValue }) => {
         try {
             console.log('Fetching district details:', districtId);
@@ -86,6 +87,7 @@ export const fetchLocationsList = createAsyncThunk(
 
 export const fetchDistrictLocations = createAsyncThunk(
     'districtEdit/fetchDistrictLocations',
+    /** @param {number | string} districtId */
     async (districtId, { rejectWithValue }) => {
         try {
             console.log('Fetching locations for district:', districtId);
@@ -107,6 +109,7 @@ export const fetchDistrictLocations = createAsyncThunk(
 
 export const deleteDistrict = createAsyncThunk(
     'districtEdit/deleteDistrict',
+    /** @param {number | string} districtId */
     async (districtId, { rejectWithValue }) => {
         try {
             // Вызов роутера FastAPI: DELETE /locations/districts/{district_id}/delete

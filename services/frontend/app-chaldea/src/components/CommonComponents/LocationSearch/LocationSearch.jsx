@@ -3,11 +3,23 @@ import { useDispatch, useSelector } from 'react-redux';
 import { fetchDistrictLocations } from '../../../redux/actions/locationEditActions';
 import s from './LocationSearch.module.scss';
 
-const LocationSearch = ({ 
-    name, 
-    value, 
-    onChange, 
-    districtId, 
+/**
+ * @param {{
+ *   name: string,
+ *   value?: string | number | null,
+ *   onChange: (event: unknown) => void,
+ *   districtId?: number | string,
+ *   regionId?: number | string,
+ *   placeholder?: string,
+ *   className?: string,
+ *   locations?: Array<{ id: number, name: string }>,
+ * }} props
+ */
+const LocationSearch = ({
+    name,
+    value,
+    onChange,
+    districtId,
     regionId,
     placeholder = "Выберите локацию",
     className = "",

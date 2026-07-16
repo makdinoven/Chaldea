@@ -2,7 +2,7 @@ import { Search } from 'react-feather';
 
 const SearchInput = () => {
   return (
-    <div className="flex items-center gap-2 border-b border-white w-[252px] pb-1">
+    <div className="flex items-center gap-2 border-b border-white w-[150px] xl:w-[200px] pb-1">
       <Search size={18} className="text-white flex-shrink-0" strokeWidth={2} />
       <input
         type="text"

@@ -341,7 +341,7 @@ const RecipesAdminPage = () => {
 
   if (showForm) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto">
+      <div className="w-full max-w-container mx-auto">
         <form className="gray-bg p-6 flex flex-col gap-6" onSubmit={handleSubmit}>
           <h2 className="gold-text text-2xl font-medium uppercase tracking-[0.06em]">
             {editingRecipe ? "Редактирование рецепта" : "Создание рецепта"}
@@ -633,7 +633,7 @@ const RecipesAdminPage = () => {
   /* ── Render: List ── */
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto flex flex-col gap-5">
+    <div className="w-full max-w-container mx-auto flex flex-col gap-5">
       <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em]">
         Рецепты
       </h1>

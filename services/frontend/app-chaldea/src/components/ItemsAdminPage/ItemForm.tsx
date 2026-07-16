@@ -144,7 +144,8 @@ interface ItemFormState {
   stamina_recovery: number;
   socket_count: number;
   whetstone_level: string;
-  max_durability: number;
+  /** Number initially; becomes a string after the user edits the input (handleChange stores raw values). */
+  max_durability: number | string;
   // Gathering tool fields (FEAT-128)
   tool_category: string | null;
   gather_double_chance_bonus: number;

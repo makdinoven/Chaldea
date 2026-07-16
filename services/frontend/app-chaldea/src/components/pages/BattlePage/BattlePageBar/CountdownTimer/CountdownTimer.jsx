@@ -2,6 +2,9 @@ import s from "./CountdownTimer.module.scss";
 import { useEffect, useRef, useState } from "react";
 import { formatTime } from "../../../../../helpers/helpers";
 
+/**
+ * @param {{ startMilliseconds: number, onComplete?: () => void }} props
+ */
 const CountdownTimer = ({ startMilliseconds, onComplete }) => {
   const [secondsLeft, setSecondsLeft] = useState(
     Math.floor(startMilliseconds / 1000),

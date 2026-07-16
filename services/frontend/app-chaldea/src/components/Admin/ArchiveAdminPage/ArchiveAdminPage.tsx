@@ -30,7 +30,7 @@ const ArchiveAdminPage = () => {
   // If editing or creating, show the form
   if (editingArticle || creating) {
     return (
-      <div className="w-full max-w-[1240px] mx-auto">
+      <div className="w-full max-w-container mx-auto">
         <ArchiveArticleForm
           article={editingArticle}
           onSuccess={closeForm}
@@ -41,7 +41,7 @@ const ArchiveAdminPage = () => {
   }
 
   return (
-    <div className="w-full max-w-[1240px] mx-auto" key={refreshKey}>
+    <div className="w-full max-w-container mx-auto" key={refreshKey}>
       <h1 className="gold-text text-3xl font-semibold uppercase tracking-[0.06em] mb-6">
         Архив
       </h1>

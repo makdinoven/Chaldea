@@ -386,7 +386,6 @@ const EditLocationForm = ({
               onChange={handleParentChange}
               locations={allLocations || []}
               placeholder="Выберите родительскую локацию (необязательно)"
-              allowClear
             />
           </div>
 

@@ -3,6 +3,7 @@ import axios from 'axios';
 
 export const deleteCountry = createAsyncThunk(
     'countryEdit/deleteCountry',
+    /** @param {number | string} countryId */
     async (countryId, { rejectWithValue }) => {
         try {
             await axios.delete(`/locations/countries/${countryId}/delete`);
@@ -15,6 +16,7 @@ export const deleteCountry = createAsyncThunk(
 
 export const createCountry = createAsyncThunk(
     'countryEdit/createCountry',
+    /** @param {Record<string, unknown>} countryData */
     async (countryData, { rejectWithValue }) => {
         try {
             const response = await axios.post('/locations/countries/create', countryData);
@@ -27,6 +29,7 @@ export const createCountry = createAsyncThunk(
 
 export const updateCountry = createAsyncThunk(
     'countryEdit/updateCountry',
+    /** @param {Record<string, unknown>} data */
     async ({ id, ...countryData }, { rejectWithValue }) => {
         try {
             const response = await axios.put(`/locations/countries/${id}/update`, countryData);

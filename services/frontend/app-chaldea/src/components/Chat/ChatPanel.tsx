@@ -24,9 +24,10 @@ import toast from 'react-hot-toast';
 interface ChatPanelProps {
   isAuthenticated: boolean;
   isBanned: boolean;
+  onClose: () => void;
 }
 
-const ChatPanel = ({ isAuthenticated, isBanned }: ChatPanelProps) => {
+const ChatPanel = ({ isAuthenticated, isBanned, onClose }: ChatPanelProps) => {
   const dispatch = useAppDispatch();
   const messages = useAppSelector(selectChatMessages);
   const activeChannel = useAppSelector(selectActiveChannel);
@@ -107,6 +108,7 @@ const ChatPanel = ({ isAuthenticated, isBanned }: ChatPanelProps) => {
       <ChatHeader
         activeChannel={activeChannel}
         onChannelChange={handleChannelChange}
+        onClose={onClose}
       />
       <ChatInput
         activeChannel={activeChannel}
