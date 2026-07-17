@@ -1554,6 +1554,38 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
     if not loc:
         return None
 
+    # 1b. (FEAT-152) Resolve breadcrumb names: District -> Region -> Country.
+    #     Standalone locations (district_id NULL, region_id set) resolve
+    #     Region -> Country only. Missing hierarchy rows leave fields None.
+    #     Nested districts: only the direct district name is used (no
+    #     parent-district chain walking) per FEAT-152 section 3.1.
+    country_id = None
+    country_name = None
+    region_name = None
+    district_name = None
+    breadcrumb_region_id = None
+    if loc.district_id is not None:
+        district_row = (await session.execute(
+            select(District.name, District.region_id).where(District.id == loc.district_id)
+        )).first()
+        if district_row:
+            district_name = district_row.name
+            breadcrumb_region_id = district_row.region_id
+    elif loc.region_id is not None:
+        breadcrumb_region_id = loc.region_id
+    if breadcrumb_region_id is not None:
+        region_row = (await session.execute(
+            select(Region.name, Region.country_id).where(Region.id == breadcrumb_region_id)
+        )).first()
+        if region_row:
+            region_name = region_row.name
+            country_row = (await session.execute(
+                select(Country.id, Country.name).where(Country.id == region_row.country_id)
+            )).first()
+            if country_row:
+                country_id = country_row.id
+                country_name = country_row.name
+
     # 2. Извлекаем соседей
     neighbors_result = await session.execute(
         select(LocationNeighbor).where(LocationNeighbor.location_id == location_id)
@@ -1640,6 +1672,10 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         "marker_type": loc.marker_type,
         "district_id": loc.district_id,
         "region_id": loc.region_id,
+        "country_id": country_id,
+        "country_name": country_name,
+        "region_name": region_name,
+        "district_name": district_name,
         "is_favorited": favorited,
         "neighbors": detailed_neighbors,
         "players": players,

@@ -559,6 +559,11 @@ class LocationClientDetails(BaseModel):
     marker_type: Optional[str] = None
     district_id: Optional[int] = None
     region_id: Optional[int] = None
+    # FEAT-152: breadcrumb names (Country / Region / District), additive & optional.
+    country_id: Optional[int] = None
+    country_name: Optional[str] = None
+    region_name: Optional[str] = None
+    district_name: Optional[str] = None
     is_favorited: bool = False
     neighbors: List[NeighborClient] = []
     players: List[PlayerInLocation] = []

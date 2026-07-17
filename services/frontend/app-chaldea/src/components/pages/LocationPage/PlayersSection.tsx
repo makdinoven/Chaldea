@@ -21,6 +21,8 @@ interface PlayersSectionProps {
   npcGateStaff?: boolean;
 }
 
+type WhoTab = 'players' | 'npcs';
+
 const getRarityColorClass = (rarity?: string): string => {
   switch (rarity) {
     case 'common': return 'text-rarity-common';
@@ -31,7 +33,7 @@ const getRarityColorClass = (rarity?: string): string => {
 };
 
 const AvatarCard = ({ avatar, name, level, title, titleRarity, actionsSlot }: { avatar: string | null; name: string; level?: number; title?: string; titleRarity?: string; actionsSlot?: ReactNode }) => (
-  <div className="flex flex-col items-center gap-2 p-2 rounded-card hover:bg-white/5 transition-colors">
+  <div className="flex flex-col items-center gap-2 p-2 rounded-card hover:bg-white/5 transition-colors duration-200">
     {title ? (
       <span className={`text-[10px] sm:text-xs text-center leading-tight break-words w-full ${getRarityColorClass(titleRarity)}`}>
         {title}
@@ -107,7 +109,7 @@ const NpcCard = ({ npc, onClick, currentCharacterId, isCharacterHere = false }: 
   const roleIcon = npc.npc_role ? (NPC_ROLE_ICONS[npc.npc_role] || null) : null;
 
   return (
-    <div className="flex flex-col items-center gap-2 p-2 rounded-card hover:bg-white/5 transition-colors">
+    <div className="flex flex-col items-center gap-2 p-2 rounded-card hover:bg-white/5 transition-colors duration-200">
       <button
         onClick={onClick}
         className="flex flex-col items-center gap-2 cursor-pointer bg-transparent border-0 w-full"
@@ -150,21 +152,58 @@ const NpcCard = ({ npc, onClick, currentCharacterId, isCharacterHere = false }: 
   );
 };
 
+/**
+ * «Кто здесь» — single card with Игроки/НПС tabs (FEAT-152 §3.5 mock style).
+ * Deliberately NOT dimmed while in battle (decision A10): the lists and
+ * profiles stay browsable, only the actions themselves are gated elsewhere.
+ */
 const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, currentCharacterLevel = 0, locationId, locationMarkerType = 'safe', isCharacterHere = false, talkableNpcIds = [], npcGateStaff = false }: PlayersSectionProps) => {
   const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<WhoTab>('players');
+
+  const tabs: { key: WhoTab; label: string; count: number }[] = [
+    { key: 'players', label: 'Игроки', count: players.length },
+    { key: 'npcs', label: 'НПС', count: npcs.length },
+  ];
 
   return (
     <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-        {/* Left: Players */}
-        <section className="bg-black/60 rounded-card p-4 sm:p-6 flex flex-col gap-4">
-          <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
-            Игроки в локации
+      <section className="bg-site-bg backdrop-blur-sm rounded-card border border-gold-dark/20 shadow-card overflow-hidden flex flex-col">
+        {/* Header: icon + title + tab switcher */}
+        <div className="flex items-center gap-2.5 px-4 sm:px-5 py-3 border-b border-white/[0.07] flex-wrap">
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px] text-gold shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
+          </svg>
+          <h2 className="gold-text text-[13px] font-medium uppercase tracking-[0.08em]">
+            Кто здесь
           </h2>
-          {players.length === 0 ? (
-            <p className="text-white/50 text-sm">На локации никого нет</p>
+          <div className="ml-auto flex gap-1 p-[3px] rounded-full bg-black/35 border border-white/10">
+            {tabs.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={`chip-outline ${activeTab === tab.key ? 'chip-outline-active' : ''} rounded-full px-3 py-1 text-[11px] font-medium flex items-center gap-1.5`}
+              >
+                {tab.label}
+                <span className={`text-[9px] font-bold px-1.5 py-px rounded-full ${
+                  activeTab === tab.key ? 'bg-black/30' : 'bg-white/10'
+                }`}>
+                  {tab.count}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Tab content */}
+        {activeTab === 'players' ? (
+          players.length === 0 ? (
+            <p className="text-white/50 text-sm p-4 sm:p-5">Здесь пока никого нет</p>
           ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 sm:gap-2 max-h-[380px] sm:max-h-[400px] overflow-y-auto gold-scrollbar pr-1">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 sm:gap-2 p-3 sm:p-4 max-h-[320px] lg:max-h-[400px] overflow-y-auto gold-scrollbar">
               {players.map((player) => (
                 <AvatarCard
                   key={player.id}
@@ -193,38 +232,30 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
                 />
               ))}
             </div>
-          )}
-        </section>
-
-        {/* Right: NPCs */}
-        <section className="bg-black/60 rounded-card p-4 sm:p-6 flex flex-col gap-4">
-          <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
-            НПС на локации
-          </h2>
-          {npcs.length === 0 ? (
-            <p className="text-white/50 text-sm">НПС отсутствуют на этой локации</p>
-          ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 sm:gap-2 max-h-[380px] sm:max-h-[400px] overflow-y-auto gold-scrollbar pr-1">
-              {npcs.map((npc) => (
-                <NpcCard
-                  key={npc.id}
-                  npc={npc}
-                  onClick={() => {
-                    // FEAT-145 v2: interacting needs an npc_dialogue post naming THIS npc.
-                    if (isCharacterHere && !npcGateStaff && !talkableNpcIds.includes(npc.id)) {
-                      toast.error('Нужен пост «Диалог с НПС» с этим персонажем');
-                      return;
-                    }
-                    setSelectedNpcId(npc.id);
-                  }}
-                  currentCharacterId={currentCharacterId}
-                  isCharacterHere={isCharacterHere}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-      </div>
+          )
+        ) : npcs.length === 0 ? (
+          <p className="text-white/50 text-sm p-4 sm:p-5">НПС отсутствуют на этой локации</p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 sm:gap-2 p-3 sm:p-4 max-h-[320px] lg:max-h-[400px] overflow-y-auto gold-scrollbar">
+            {npcs.map((npc) => (
+              <NpcCard
+                key={npc.id}
+                npc={npc}
+                onClick={() => {
+                  // FEAT-145 v2: interacting needs an npc_dialogue post naming THIS npc.
+                  if (isCharacterHere && !npcGateStaff && !talkableNpcIds.includes(npc.id)) {
+                    toast.error('Нужен пост «Диалог с НПС» с этим персонажем');
+                    return;
+                  }
+                  setSelectedNpcId(npc.id);
+                }}
+                currentCharacterId={currentCharacterId}
+                isCharacterHere={isCharacterHere}
+              />
+            ))}
+          </div>
+        )}
+      </section>
 
       {selectedNpcId !== null && (
         <NpcProfileModal

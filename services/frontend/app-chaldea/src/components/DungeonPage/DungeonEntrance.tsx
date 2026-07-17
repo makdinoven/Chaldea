@@ -317,12 +317,23 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
   }
 
   return (
-    <section className="bg-black/60 rounded-card p-4 sm:p-6 backdrop-blur-sm flex flex-col gap-4">
-      <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
-        Подземелья
-      </h2>
+    <section className="bg-site-bg backdrop-blur-sm rounded-card border border-gold-dark/20 shadow-card overflow-hidden">
+      {/* Section header (FEAT-152 card language) */}
+      <div className="flex items-center gap-2.5 px-4 sm:px-5 py-3.5 border-b border-white/[0.07]">
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px] text-gold shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 21V8a8 8 0 0116 0v13" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 21v-6a3 3 0 016 0v6" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2 21h20" />
+        </svg>
+        <h2 className="gold-text text-[13px] font-medium uppercase tracking-[0.08em]">
+          Подземелья
+        </h2>
+        <span className="bg-white/10 text-white/60 text-[10px] font-bold px-2 py-0.5 rounded-full min-w-[20px] text-center">
+          {dungeons.length}
+        </span>
+      </div>
 
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-3 px-3 sm:px-4 py-4">
         {dungeons.map((dungeon) => (
           <DungeonCard
             key={dungeon.id}
@@ -591,7 +602,7 @@ const DungeonCard = ({
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="bg-white/5 rounded-card p-4 flex flex-col gap-3"
+      className="bg-white/[0.04] border border-white/[0.08] rounded-card p-3 sm:p-4 flex flex-col gap-3"
     >
       {/* Header row */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-2">

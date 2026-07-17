@@ -66,6 +66,14 @@ export interface LocationData {
   description: string;
   type: string;
   recommended_level: number;
+  /**
+   * FEAT-152 breadcrumb (A1): resolved hierarchy names from locations-service.
+   * All optional/nullable — the UI hides missing segments.
+   */
+  country_id?: number | null;
+  country_name?: string | null;
+  region_name?: string | null;
+  district_name?: string | null;
   image_url: string | null;
   marker_type: string;
   no_quick_move?: boolean;

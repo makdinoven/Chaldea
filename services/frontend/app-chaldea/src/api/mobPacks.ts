@@ -82,6 +82,11 @@ export interface PackMemberInLocation {
   level: number;
   avatar: string | null;
   count: number;
+  // FEAT-152: SUMMED persisted HP across the group's LIVING members
+  // (members are aggregated by template — e.g. 30/60 for two mobs at 15/30).
+  // Null/absent when no attributes rows were found — the UI hides the bar.
+  current_hp?: number | null;
+  max_hp?: number | null;
 }
 
 export interface MobPackInLocation {

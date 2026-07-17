@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Montserrat',sans-serif; color:#fff; background:#05060a; }
+  a, a:link, a:visited { color:#f0d95c; text-decoration:none; transition:color .2s ease-in-out; }
+  a:hover { color:#fff9b8; }
+  ::selection { background:rgba(240,217,92,.3); }
+  @keyframes livePulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+  @keyframes cardRise { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes formGrow { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+  .om-scroll::-webkit-scrollbar { width:6px; height:6px; }
+  .om-scroll::-webkit-scrollbar-track { background:transparent; }
+  .om-scroll::-webkit-scrollbar-thumb { background:linear-gradient(180deg,#fff9b8,#bcab4c); border-radius:6px; }
+  .rp-editor:empty:before { content:attr(data-ph); color:rgba(255,255,255,.32); pointer-events:none; }
+  .rp-editor:focus { outline:none; }
+  .rp-editor b, .rp-editor strong { color:#fff9b8; }
+  .rp-editor blockquote, .rp-body blockquote { border-left:2px solid rgba(240,217,92,.5); padding-left:14px; margin:8px 0; font-style:italic; color:rgba(255,255,255,.75); }
+  .rp-body em { color:#cdb7e0; font-style:italic; }
+  @media (max-width:1000px){
+    .loc-grid{ grid-template-columns:1fr !important; }
+    .loc-row3{ grid-template-columns:1fr !important; }
+    .loc-hero{ height:300px !important; }
+    .loc-hero-title{ font-size:44px !important; }
+  }
+  @media (max-width:760px){
+    .hdr{ display:none !important; }
+    .hdr-m{ display:flex !important; }
+    .loc-page{ padding:0 14px 72px !important; background-attachment:scroll !important; }
+    .loc-battle{ padding:14px 16px !important; }
+    .battle-back{ flex:1 1 100% !important; justify-content:center !important; }
+  }
+  @media (max-width:560px){
+    .who-grid{ grid-template-columns:repeat(2,1fr) !important; }
+    .gate-grid{ grid-template-columns:1fr !important; }
+    .loc-page{ padding:0 11px 60px !important; }
+    .loc-hero{ height:auto !important; min-height:220px !important; }
+    .loc-hero-title{ font-size:32px !important; }
+    .loc-hero-body{ padding:0 16px 20px !important; }
+    .loc-row3 > section{ height:auto !important; }
+    .loc-row3 .who-grid, .loc-row3 .om-scroll{ max-height:320px !important; }
+  }
+</style>
+</helmet>
+
+<div class="loc-page" style="min-height:100vh;width:100%;background-color:#05060a;background-image:linear-gradient(180deg,rgba(5,6,10,.42) 0%,rgba(5,6,10,.6) 24%,rgba(5,6,10,.9) 56%,rgba(5,6,10,.97) 100%),url('services/frontend/app-chaldea/src/assets/homepagebutton1.png');background-size:cover;background-position:center top;background-attachment:fixed;background-repeat:no-repeat;padding:0 20px 90px;position:relative;overflow-x:hidden">
+
+  <div style="max-width:1300px;margin:0 auto">
+
+    <!-- ===================== DESKTOP HEADER ===================== -->
+    <header class="hdr" style="position:relative;z-index:40;margin:20px auto 0;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:12px 22px;background:rgba(6,7,12,.55);border:1px solid rgba(240,217,92,.14);border-radius:16px;backdrop-filter:blur(10px);box-shadow:0 10px 30px rgba(0,0,0,.45)">
+      <div style="display:flex;align-items:center;gap:18px;flex-shrink:0">
+        <button onClick="{{ toggleChat }}" title="Открыть чат" style="position:relative;flex-shrink:0;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:12px;background:linear-gradient(180deg,rgba(240,217,92,.14),rgba(240,217,92,.04));border:1px solid rgba(240,217,92,.35);color:#f0d95c;cursor:pointer;transition:all .2s ease-in-out" style-hover="background:linear-gradient(180deg,rgba(240,217,92,.28),rgba(240,217,92,.1));color:#fff9b8">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+          <span style="position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 4px;display:flex;align-items:center;justify-content:center;background:#F37753;color:#fff;font-size:10px;font-weight:700;border-radius:9px;box-shadow:0 0 0 2px rgba(6,7,12,.9)">3</span>
+        </button>
+        <a href="#" style="flex-shrink:0;display:flex;align-items:center"><img src="services/frontend/app-chaldea/src/assets/logo_fog.png" alt="Fall of Gods" style="height:52px;width:auto;object-fit:contain;filter:drop-shadow(0 2px 6px rgba(0,0,0,.6))"></a>
+        <nav style="display:flex;align-items:center;gap:24px;flex-shrink:0;white-space:nowrap">
+          <div onMouseEnter="{{ openMega }}" onMouseLeave="{{ closeMega }}" style="position:relative;padding:10px 0">
+            <a href="#" style="font-size:14px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#f0d95c">Главная</a>
+            <sc-if value="{{ mega }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;top:100%;left:-16px;padding-top:14px;z-index:60">
+                <div style="display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:26px;padding:22px 26px;background:rgba(6,7,12,.92);border:1px solid rgba(240,217,92,.18);border-radius:16px;backdrop-filter:blur(14px);box-shadow:0 18px 44px rgba(0,0,0,.6);animation:cardRise .18s ease-out">
+                  <sc-for list="{{ megaCats }}" as="cat" hint-placeholder-count="5">
+                    <div>
+                      <h4 style="font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;margin-bottom:12px;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">{{ cat.title }}</h4>
+                      <ul style="display:flex;flex-direction:column;gap:9px;list-style:none">
+                        <sc-for list="{{ cat.links }}" as="l" hint-placeholder-count="4"><li><a href="#" style="font-size:13px;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,255,255,.82)">{{ l }}</a></li></sc-for>
+                      </ul>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+          <a href="#" style="font-size:14px;font-weight:500;letter-spacing:.1em;text-transform:uppercase">Правила</a>
+          <a href="#" style="font-size:14px;font-weight:500;letter-spacing:.1em;text-transform:uppercase">События</a>
+          <a href="#" style="font-size:14px;font-weight:500;letter-spacing:.1em;text-transform:uppercase">Тикет</a>
+        </nav>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;flex-shrink:0">
+        <div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(255,255,255,.35);padding-bottom:5px;width:140px;flex-shrink:0">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.75)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" placeholder="ПОИСК" style="flex:1;min-width:0;background:transparent;border:none;outline:none;color:#fff;font-family:inherit;font-size:12px;font-weight:500;letter-spacing:.08em;text-transform:uppercase">
+        </div>
+        <div style="display:flex;align-items:center;gap:11px;padding:6px 12px 6px 6px;border:1px solid rgba(240,217,92,.22);border-radius:999px;background:rgba(0,0,0,.28)">
+          <div style="position:relative;width:40px;height:40px;border-radius:50%;padding:2px;background:linear-gradient(180deg,#fff9b8,#bcab4c);flex-shrink:0"><div style="width:100%;height:100%;border-radius:50%;background:#12131a;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#f0d95c">К</div></div>
+          <div style="display:flex;flex-direction:column;gap:4px;width:118px">
+            <span style="font-size:12px;font-weight:600;color:#fff;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Кайден</span>
+            <div style="display:flex;align-items:center;gap:5px">
+              <div style="flex:1;height:5px;border-radius:5px;background:rgba(255,255,255,.14);overflow:hidden"><div style="width:72%;height:100%;background:#E94545"></div></div>
+              <div style="flex:1;height:5px;border-radius:5px;background:rgba(255,255,255,.14);overflow:hidden"><div style="width:55%;height:100%;background:#76A6BD"></div></div>
+            </div>
+            <span style="display:flex;align-items:center;gap:4px;color:#f0d95c;line-height:1">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              <span style="font-size:10.5px;font-weight:600;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Тёмный лес</span>
+            </span>
+          </div>
+        </div>
+        <button title="Уведомления" style="position:relative;padding:5px;color:#fff;background:none;border:none;cursor:pointer;transition:color .2s" style-hover="color:#76a6bd">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span style="position:absolute;top:-3px;right:-3px;min-width:17px;height:17px;padding:0 4px;display:flex;align-items:center;justify-content:center;background:#F37753;color:#fff;font-size:10px;font-weight:700;border-radius:9px;box-shadow:0 0 0 2px rgba(6,7,12,.9)">5</span>
+        </button>
+        <a href="#" title="Сообщения" style="position:relative;padding:5px;color:#fff;display:flex" style-hover="color:#76a6bd"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></a>
+        <div style="width:44px;height:44px;border-radius:50%;padding:2px;background:linear-gradient(180deg,#fff9b8,#bcab4c);flex-shrink:0;cursor:pointer"><div style="width:100%;height:100%;border-radius:50%;background:#12131a;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#f0d95c">К</div></div>
+      </div>
+    </header>
+
+    <!-- ===================== MOBILE HEADER ===================== -->
+    <header class="hdr-m" style="display:none;position:relative;z-index:50;margin:14px auto 0;flex-direction:column;background:rgba(6,7,12,.72);border:1px solid rgba(240,217,92,.14);border-radius:16px;backdrop-filter:blur(10px);box-shadow:0 10px 30px rgba(0,0,0,.45);overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px">
+        <button onClick="{{ toggleMenu }}" title="Меню" style="position:relative;flex-shrink:0;width:42px;height:42px;display:flex;align-items:center;justify-content:center;border-radius:11px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);color:#f0d95c;cursor:pointer">
+          <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></sc-if>
+          <sc-if value="{{ menuClosed }}" hint-placeholder-val="{{ true }}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></sc-if>
+        </button>
+        <a href="#" style="flex-shrink:0"><img src="services/frontend/app-chaldea/src/assets/logo_fog.png" alt="Fall of Gods" style="height:40px;width:auto;object-fit:contain;filter:drop-shadow(0 2px 6px rgba(0,0,0,.6))"></a>
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+          <button onClick="{{ toggleChat }}" title="Чат" style="position:relative;width:42px;height:42px;display:flex;align-items:center;justify-content:center;border-radius:11px;background:linear-gradient(180deg,rgba(240,217,92,.14),rgba(240,217,92,.04));border:1px solid rgba(240,217,92,.35);color:#f0d95c;cursor:pointer"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></button>
+          <div style="width:42px;height:42px;border-radius:50%;padding:2px;background:linear-gradient(180deg,#fff9b8,#bcab4c);flex-shrink:0"><div style="width:100%;height:100%;border-radius:50%;background:#12131a;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#f0d95c">К</div></div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.22)">
+        <div style="width:38px;height:38px;border-radius:50%;padding:2px;background:linear-gradient(180deg,#fff9b8,#bcab4c);flex-shrink:0"><div style="width:100%;height:100%;border-radius:50%;background:#12131a;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#f0d95c">К</div></div>
+        <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:0">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <span style="font-size:13px;font-weight:600;color:#fff;line-height:1">Кайден</span>
+            <span style="display:flex;align-items:center;gap:4px;color:#f0d95c;line-height:1"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg><span style="font-size:11px;font-weight:600">Тёмный лес</span></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <div style="flex:1;height:5px;border-radius:5px;background:rgba(255,255,255,.14);overflow:hidden"><div style="width:72%;height:100%;background:#E94545"></div></div>
+            <div style="flex:1;height:5px;border-radius:5px;background:rgba(255,255,255,.14);overflow:hidden"><div style="width:55%;height:100%;background:#76A6BD"></div></div>
+          </div>
+        </div>
+      </div>
+      <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;padding:8px 14px 14px;border-top:1px solid rgba(240,217,92,.12);animation:cardRise .18s ease-out">
+          <sc-for list="{{ mobileNav }}" as="sec" hint-placeholder-count="5">
+            <div style="border-bottom:1px solid rgba(255,255,255,.06)">
+              <button onClick="{{ sec.toggle }}" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 4px;background:none;border:none;cursor:pointer;font-family:inherit;font-size:14px;font-weight:{{ sec.weight }};letter-spacing:.08em;text-transform:uppercase;color:{{ sec.color }}">
+                <span>{{ sec.title }}</span>
+                <sc-if value="{{ sec.hasChildren }}" hint-placeholder-val="{{ true }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;transition:transform .2s;transform:rotate({{ sec.chevron }})"><polyline points="6 9 12 15 18 9"/></svg></sc-if>
+              </button>
+              <sc-if value="{{ sec.expanded }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;flex-direction:column;padding:2px 4px 12px 14px;animation:cardRise .16s ease-out">
+                  <sc-for list="{{ sec.links }}" as="l" hint-placeholder-count="3"><a href="#" style="padding:9px 0;font-size:12.5px;font-weight:400;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,255,255,.72)" style-hover="color:#f0d95c">{{ l }}</a></sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+    </header>
+
+    <!-- ===== TOP BAR: back + breadcrumb + favorite ===== -->
+    <div class="loc-topbar" style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 2px 0;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:16px;min-width:0">
+        <a href="#" style="display:flex;align-items:center;gap:7px;flex-shrink:0;padding:8px 14px;border-radius:10px;background:rgba(6,7,12,.55);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.72);font-size:13px;font-weight:500" style-hover="border-color:rgba(240,217,92,.4);color:#fff">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          Назад
+        </a>
+        <nav style="display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.04em;color:rgba(255,255,255,.4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          <a href="#" style="color:rgba(255,255,255,.55)">Фолгард</a><span style="color:rgba(255,255,255,.25)">/</span>
+          <a href="#" style="color:rgba(255,255,255,.55)">Северные земли</a><span style="color:rgba(255,255,255,.25)">/</span>
+          <a href="#" style="color:rgba(255,255,255,.55)">Чащоба</a><span style="color:rgba(255,255,255,.25)">/</span>
+          <span style="color:#f0d95c;font-weight:600">Тёмный лес</span>
+        </nav>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap">
+        <button onClick="{{ toggleBattle }}" title="Переключить состояние боя" style="display:flex;align-items:center;gap:8px;padding:8px 15px;border-radius:10px;background:{{ battleBtnBg }};border:1px solid {{ battleBtnBorder }};color:{{ battleBtnColor }};cursor:pointer;font-size:13px;font-weight:600;transition:all .2s">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/></svg>
+          {{ battleBtnLabel }}
+        </button>
+        <button onClick="{{ toggleFav }}" title="{{ favTitle }}" style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding:8px 15px;border-radius:10px;background:rgba(6,7,12,.55);border:1px solid {{ favBorder }};color:{{ favColor }};cursor:pointer;font-size:13px;font-weight:500;transition:all .2s">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="{{ favFill }}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          {{ favLabel }}
+        </button>
+      </div>
+    </div>
+
+    <!-- ===== BATTLE LOCK BANNER ===== -->
+    <sc-if value="{{ showBattleLock }}" hint-placeholder-val="{{ false }}">
+      <div class="loc-battle" style="margin-top:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:16px 20px;border-radius:16px;background:linear-gradient(90deg,rgba(227,69,69,.24),rgba(227,69,69,.06));border:1px solid rgba(227,69,69,.45);box-shadow:0 12px 34px rgba(227,69,69,.18)">
+        <span style="width:46px;height:46px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:12px;background:rgba(227,69,69,.9);color:#fff;animation:livePulse 1.4s ease-in-out infinite"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/></svg></span>
+        <div style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1">
+          <span style="font-size:15px;font-weight:700;color:#fff">Вы в бою!</span>
+          <span style="font-size:12.5px;color:rgba(255,255,255,.7)">Пока бой не завершён, перемещение, добыча и написание постов недоступны.</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:9px;padding:8px 14px;border-radius:12px;background:rgba(6,7,12,.5);border:1px solid rgba(227,69,69,.3)">
+          <span style="width:34px;height:34px;flex-shrink:0;border-radius:9px;overflow:hidden;background:#000;background-image:url('services/frontend/app-chaldea/public/battle-img-3.png');background-size:cover;background-position:16% 42%"></span>
+          <div style="display:flex;flex-direction:column;gap:1px">
+            <span style="font-size:12.5px;font-weight:600;color:#fff">Теневой волк</span>
+            <span style="font-size:10px;color:rgba(255,255,255,.5)">Раунд 3 · ваш ход</span>
+          </div>
+        </div>
+        <button class="battle-back" style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding:11px 22px;border-radius:11px;background:rgba(227,69,69,.95);border:none;color:#fff;cursor:pointer;font-size:13px;font-weight:700;letter-spacing:.03em;transition:filter .2s" style-hover="filter:brightness(1.12)">
+          Вернуться к бою
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </button>
+      </div>
+    </sc-if>
+
+    <!-- ===== HERO (art banner + description) ===== -->
+    <div class="loc-hero" style="position:relative;margin-top:24px;height:360px;border-radius:22px;overflow:hidden;border:1px solid rgba(240,217,92,.18);box-shadow:0 20px 60px rgba(0,0,0,.6);background:#000;background-image:url('services/frontend/app-chaldea/src/assets/homepagebutton1.png');background-size:cover;background-position:center 42%;display:flex;flex-direction:column;justify-content:flex-end">
+      <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(4,5,9,.12) 0%,rgba(4,5,9,.08) 32%,rgba(4,5,9,.9) 100%);pointer-events:none"></div>
+      <div style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(4,5,9,.55) 0%,rgba(4,5,9,0) 60%);pointer-events:none"></div>
+
+      <!-- badges top-left -->
+      <div style="position:absolute;top:22px;left:26px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="display:flex;align-items:center;gap:7px;padding:6px 13px;border-radius:999px;background:rgba(227,69,69,.9);border:1px solid rgba(255,150,150,.5);color:#fff;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;box-shadow:0 4px 14px rgba(227,69,69,.4)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Опасная зона
+        </span>
+        <span style="padding:6px 13px;border-radius:999px;background:rgba(6,7,12,.6);border:1px solid rgba(240,217,92,.4);font-size:11px;font-weight:700;letter-spacing:.06em;background-clip:text;-webkit-background-clip:text;color:#f0d95c">25+ LVL</span>
+      </div>
+
+      <!-- title block bottom -->
+      <div class="loc-hero-body" style="position:relative;padding:0 34px 30px;display:flex;flex-direction:column;gap:12px">
+        <h1 class="loc-hero-title" style="font-family:'Cormorant Garamond',serif;font-size:62px;font-weight:700;line-height:.95;letter-spacing:.01em;color:#fff;text-shadow:0 6px 26px rgba(0,0,0,.8)">Тёмный лес</h1>
+        <p style="max-width:640px;font-size:14.5px;font-weight:300;line-height:1.6;color:rgba(255,255,255,.82);text-shadow:0 2px 10px rgba(0,0,0,.8)">Древние сосны глушат свет луны, а меж корней клубится туман, что помнит имена павших. Здесь охотятся не только звери — говорят, сама чаща выбирает, кому позволено уйти.</p>
+        <div style="display:flex;align-items:center;gap:22px;margin-top:4px;flex-wrap:wrap">
+          <span style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:rgba(255,255,255,.75)">
+            <span style="width:8px;height:8px;border-radius:50%;background:#88B332;box-shadow:0 0 8px #88B332;animation:livePulse 1.6s ease-in-out infinite"></span>
+            <b style="color:#fff;font-weight:600">{{ playerCount }}</b>&nbsp;игроков сейчас здесь
+          </span>
+          <span style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:rgba(255,255,255,.75)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#76a6bd" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <b style="color:#fff;font-weight:600">{{ postCount }}</b>&nbsp;постов
+          </span>
+          <span style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:rgba(255,255,255,.75)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#f0d95c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            Регион&nbsp;<b style="color:#fff;font-weight:600">Северные земли</b>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== UNDER-HERO ROW: who / neighbors / enemies ===== -->
+    <div class="loc-row3" style="display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:22px;margin-top:24px;align-items:stretch">
+
+      <!-- WHO'S HERE (players / npcs tabs) -->
+      <section style="height:460px;display:flex;flex-direction:column;border-radius:18px;background:rgba(6,7,12,.6);border:1px solid rgba(240,217,92,.14);backdrop-filter:blur(10px);box-shadow:0 14px 40px rgba(0,0,0,.4);overflow:hidden">
+        <div style="display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid rgba(255,255,255,.07)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f0d95c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <h3 style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Кто здесь</h3>
+          <div style="margin-left:auto;display:flex;gap:2px;padding:3px;border-radius:999px;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.08)">
+            <sc-for list="{{ whoTabs }}" as="w" hint-placeholder-count="2">
+              <button onClick="{{ w.on }}" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border-radius:999px;background:{{ w.bg }};border:none;cursor:pointer;font-size:11.5px;font-weight:600;letter-spacing:.02em;color:{{ w.color }};box-shadow:{{ w.shadow }};transition:all .2s">{{ w.name }} <span style="font-size:9.5px;font-weight:700;padding:0 6px;line-height:16px;border-radius:999px;background:{{ w.pillBg }};color:{{ w.pillColor }}">{{ w.count }}</span></button>
+            </sc-for>
+          </div>
+        </div>
+        <sc-if value="{{ showPlayers }}" hint-placeholder-val="{{ true }}">
+          <div class="who-grid om-scroll" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:18px;flex:1;min-height:0;overflow-y:auto">
+            <sc-for list="{{ players }}" as="pl" hint-placeholder-count="8">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 4px;border-radius:12px;cursor:pointer;transition:background .2s" style-hover="background:rgba(255,255,255,.05)">
+                <span style="width:88px;height:88px;border-radius:50%;padding:2px;background:{{ pl.ring }}"><span style="display:flex;width:100%;height:100%;border-radius:50%;background:#12131a;background-image:{{ pl.ring }};align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#0c0d12">{{ pl.initial }}</span></span>
+                <span style="font-size:12.5px;color:#fff;text-align:center;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ pl.name }}</span>
+                <span style="font-size:10px;font-weight:700;color:#f0d95c">LVL {{ pl.lvl }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{ showNpcs }}" hint-placeholder-val="{{ false }}">
+          <div class="who-grid om-scroll" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:18px;flex:1;min-height:0;overflow-y:auto">
+            <sc-for list="{{ npcs }}" as="n" hint-placeholder-count="3">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 4px;border-radius:12px;cursor:pointer;transition:background .2s" style-hover="background:rgba(255,255,255,.05)">
+                <span style="width:88px;height:88px;border-radius:50%;padding:2px;background:{{ n.ring }}"><span style="display:flex;width:100%;height:100%;border-radius:50%;background:#12131a;background-image:{{ n.ring }};align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#0c0d12">{{ n.initial }}</span></span>
+                <span style="font-size:12.5px;color:#fff;text-align:center;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ n.name }}</span>
+                <span style="font-size:10px;font-weight:600;padding:2px 9px;border-radius:999px;background:rgba(240,217,92,.14);color:#f0d95c">{{ n.role }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </section>
+
+      <!-- TRAVEL / NEIGHBORS -->
+      <section style="height:460px;display:flex;flex-direction:column;border-radius:18px;background:rgba(6,7,12,.6);border:1px solid rgba(240,217,92,.14);backdrop-filter:blur(10px);box-shadow:0 14px 40px rgba(0,0,0,.4);overflow:hidden;opacity:{{ lockOpacity }};pointer-events:{{ lockPointer }}">
+        <div style="display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid rgba(255,255,255,.07)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f0d95c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>
+          <h3 style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Соседние локации</h3>
+          <span style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.1);color:rgba(255,255,255,.6)">{{ neighborCount }}</span>
+        </div>
+        <div class="om-scroll" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px 16px;flex:1;min-height:0;overflow-y:auto;align-content:start">
+          <sc-for list="{{ neighbors }}" as="nb" hint-placeholder-count="3">
+            <a href="#" style="display:flex;flex-direction:column;border-radius:13px;overflow:hidden;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);transition:all .2s" style-hover="border-color:rgba(240,217,92,.3);background:rgba(255,255,255,.06)">
+              <span style="width:100%;height:104px;background:#000;background-image:url({{ nb.img }});background-size:cover;background-position:center"></span>
+              <div style="display:flex;flex-direction:column;gap:6px;padding:10px 12px 12px">
+                <span style="font-size:13.5px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ nb.name }}</span>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                  <span style="font-size:11px;font-weight:600;color:#f0d95c">{{ nb.lvl }}+ LVL</span>
+                  <span style="display:flex;align-items:center;gap:3px;font-size:11px;color:#88B332"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>{{ nb.cost }}</span>
+                </div>
+              </div>
+            </a>
+          </sc-for>
+        </div>
+      </section>
+
+      <!-- ENEMIES / MOBS (narrow, 2 per row) -->
+      <section style="height:460px;display:flex;flex-direction:column;border-radius:18px;background:rgba(6,7,12,.6);border:1px solid rgba(227,69,69,.2);backdrop-filter:blur(10px);box-shadow:0 14px 40px rgba(0,0,0,.4);overflow:hidden;opacity:{{ lockOpacity }};pointer-events:{{ lockPointer }}">
+        <div style="display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid rgba(255,255,255,.07)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#E94545" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/></svg>
+          <h3 style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#E94545">Противники</h3>
+        </div>
+        <div class="om-scroll" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:14px 16px;flex:1;min-height:0;overflow-y:auto;align-content:start">
+          <sc-for list="{{ mobs }}" as="m" hint-placeholder-count="2">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:11px 10px 13px;border-radius:13px;background:rgba(227,69,69,.06);border:1px solid rgba(227,69,69,.18)">
+              <span style="width:100%;height:72px;flex-shrink:0;border-radius:10px;overflow:hidden;background:#000;background-image:url({{ m.img }});background-size:cover;background-position:{{ m.pos }}"></span>
+              <div style="display:flex;flex-direction:column;align-items:center;gap:2px;width:100%">
+                <span style="font-size:13px;font-weight:600;color:#fff;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">{{ m.name }}</span>
+                <span style="font-size:9.5px;font-weight:700;color:rgba(255,255,255,.5)">LVL {{ m.lvl }}</span>
+              </div>
+              <div style="width:100%;height:5px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden"><div style="width:{{ m.hp }};height:100%;background:linear-gradient(90deg,#E94545,#ff8a6b)"></div></div>
+              <button style="width:100%;padding:8px;border-radius:9px;background:rgba(227,69,69,.9);border:none;color:#fff;cursor:pointer;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;transition:filter .2s" style-hover="filter:brightness(1.15)">Напасть</button>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===== BODY GRID ===== -->
+    <div class="loc-grid" style="display:grid;grid-template-columns:1fr 400px;gap:26px;margin-top:26px;align-items:start">
+
+      <!-- ========== LEFT: POSTS ========== -->
+      <div style="display:flex;flex-direction:column;gap:20px;min-width:0">
+
+        <!-- section head -->
+        <div style="display:flex;align-items:center;gap:16px">
+          <span style="font-size:13px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Хроника локации</span>
+          <span style="flex:1;height:1px;background:linear-gradient(90deg,rgba(240,217,92,.5),rgba(255,255,255,0))"></span>
+          <span style="font-size:11.5px;color:rgba(255,255,255,.4)">{{ postCount }} постов</span>
+        </div>
+
+        <!-- ===== POST CREATE FORM ===== -->
+        <div style="border-radius:18px;background:rgba(6,7,12,.6);border:1px solid rgba(240,217,92,.16);backdrop-filter:blur(10px);box-shadow:0 14px 40px rgba(0,0,0,.4);overflow:hidden">
+          <sc-if value="{{ showBattleLock }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:14px;padding:18px 22px">
+              <span style="width:44px;height:44px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:11px;background:rgba(227,69,69,.14);border:1px solid rgba(227,69,69,.35);color:#E94545"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/></svg></span>
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <span style="font-size:14px;font-weight:600;color:#E94545">Вы в бою</span>
+                <span style="font-size:12.5px;color:rgba(255,255,255,.55)">Написание постов будет доступно после завершения боя.</span>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ showOpenBtn }}" hint-placeholder-val="{{ true }}">
+            <button onClick="{{ openForm }}" style="width:100%;display:flex;align-items:center;gap:14px;padding:18px 22px;background:none;border:none;cursor:pointer;text-align:left;transition:background .2s" style-hover="background:rgba(255,255,255,.03)">
+              <span style="width:44px;height:44px;flex-shrink:0;border-radius:50%;padding:2px;background:linear-gradient(180deg,#fff9b8,#bcab4c)"><span style="display:flex;width:100%;height:100%;border-radius:50%;background:#12131a;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#f0d95c">К</span></span>
+              <span style="flex:1;font-size:14.5px;color:rgba(255,255,255,.4)">Опишите действия Кайдена в Тёмном лесу…</span>
+              <span style="display:flex;align-items:center;gap:7px;flex-shrink:0;padding:9px 18px;border-radius:10px;background:linear-gradient(90deg,#2e353e,#537895);color:#fff;font-size:12.5px;font-weight:600;letter-spacing:.03em">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                Написать пост
+              </span>
+            </button>
+          </sc-if>
+
+          <sc-if value="{{ showForm }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:20px 22px;display:flex;flex-direction:column;gap:16px;animation:formGrow .2s ease-out">
+              <div style="display:flex;align-items:center;gap:12px">
+                <span style="width:40px;height:40px;flex-shrink:0;border-radius:50%;padding:2px;background:linear-gradient(180deg,#fff9b8,#bcab4c)"><span style="display:flex;width:100%;height:100%;border-radius:50%;background:#12131a;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#f0d95c">К</span></span>
+                <div style="display:flex;flex-direction:column;gap:2px">
+                  <span style="font-size:14px;font-weight:600;color:#fff">Кайден</span>
+                  <span style="font-size:11px;color:#76a6bd;display:flex;align-items:center;gap:4px"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>пишет из «Тёмный лес»</span>
+                </div>
+              </div>
+
+              <!-- toolbar -->
+              <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,.08)">
+                <sc-for list="{{ tools }}" as="t" hint-placeholder-count="5">
+                  <button onClick="{{ t.on }}" title="{{ t.title }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.7);cursor:pointer;font-size:14px;transition:all .15s" style-hover="border-color:rgba(240,217,92,.4);color:#f0d95c">{{ t.glyph }}</button>
+                </sc-for>
+              </div>
+
+              <!-- editor -->
+              <div class="rp-editor om-scroll" contentEditable="true" data-ph="Начните отыгрыш… (минимум 300 символов)" onInput="{{ onEditorInput }}" ref="{{ editorRef }}" style="min-height:150px;max-height:340px;overflow-y:auto;font-size:14.5px;line-height:1.7;color:rgba(255,255,255,.9)"></div>
+
+              <!-- intent gates -->
+              <div style="display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:12px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.06)">
+                <span style="font-size:12px;font-weight:600;color:rgba(255,255,255,.7)">Заявить действие в посту <span style="color:rgba(255,255,255,.4);font-weight:400">— по желанию, увеличивает минимум символов</span></span>
+                <div class="gate-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <sc-for list="{{ gateGroups }}" as="g" hint-placeholder-count="4">
+                  <div style="display:flex;flex-direction:column;gap:7px;padding:10px;border-radius:10px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05)">
+                    <span style="font-size:11.5px;color:rgba(255,255,255,.78);display:flex;align-items:center;gap:7px">{{ g.glyph }} {{ g.label }} <span style="color:rgba(255,255,255,.35)">· {{ g.cost }} симв./цель</span></span>
+                    <div style="display:flex;flex-wrap:wrap;gap:7px">
+                      <sc-for list="{{ g.targets }}" as="t" hint-placeholder-count="2">
+                        <button onClick="{{ t.on }}" style="font-size:11.5px;padding:5px 12px;border-radius:999px;cursor:pointer;transition:all .15s;border:1px solid {{ t.border }};background:{{ t.bg }};color:{{ t.color }}">{{ t.name }}</button>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-for>
+                </div>
+              </div>
+
+              <!-- counter + xp -->
+              <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;font-size:12.5px">
+                <span style="color:{{ counterColor }};font-weight:600">{{ charCount }} / {{ requiredSymbols }} символов</span>
+                <span style="color:rgba(255,255,255,.5)">{{ xpHint }}</span>
+                <div style="flex:1;min-width:120px;height:5px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden"><div style="width:{{ progressW }};height:100%;background:{{ progressBg }};transition:width .2s"></div></div>
+              </div>
+
+              <!-- actions -->
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                <button style="display:flex;align-items:center;gap:7px;padding:9px 16px;border-radius:10px;background:none;border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.7);cursor:pointer;font-size:12.5px;font-weight:500;transition:all .2s" style-hover="border-color:#76a6bd;color:#76a6bd">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                  Проверить правописание
+                </button>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <button onClick="{{ closeForm }}" style="padding:9px 20px;border-radius:10px;background:none;border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.7);cursor:pointer;font-size:12.5px;font-weight:500;transition:all .2s" style-hover="border-color:#F37753;color:#F37753">Отмена</button>
+                  <button onClick="{{ submitPost }}" disabled="{{ submitDisabled }}" style="display:flex;align-items:center;gap:8px;padding:9px 24px;border-radius:10px;background:{{ submitBg }};border:none;color:{{ submitFg }};cursor:{{ submitCursor }};font-size:12.5px;font-weight:600;letter-spacing:.02em;transition:all .2s;opacity:{{ submitOpacity }}">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    Опубликовать
+                  </button>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+
+        <!-- ===== POSTS FEED ===== -->
+        <sc-for list="{{ posts }}" as="p" hint-placeholder-count="4">
+          <article style="border-radius:18px;background:rgba(6,7,12,.55);border:1px solid rgba(255,255,255,.07);backdrop-filter:blur(8px);padding:22px 24px;display:flex;flex-direction:column;gap:14px;transition:border-color .2s" style-hover="border-color:rgba(240,217,92,.22)">
+            <div style="display:flex;align-items:flex-start;gap:14px">
+              <span style="width:52px;height:52px;flex-shrink:0;border-radius:50%;padding:2px;background:{{ p.ring }}"><span style="display:flex;width:100%;height:100%;border-radius:50%;background:#12131a;align-items:center;justify-content:center;font-size:17px;font-weight:700;color:#0c0d12;background-image:{{ p.ring }}">{{ p.initial }}</span></span>
+              <div style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1">
+                <span style="font-size:10.5px;font-weight:600;letter-spacing:.04em;color:{{ p.titleColor }}">{{ p.title }}</span>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <span style="font-size:15px;font-weight:600;color:#fff">{{ p.name }}</span>
+                  <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:rgba(240,217,92,.14);color:#f0d95c">LVL {{ p.lvl }}</span>
+                  <span style="font-size:11.5px;color:rgba(255,255,255,.4)">{{ p.time }}</span>
+                </div>
+              </div>
+              <button style="width:32px;height:32px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:8px;background:none;border:none;color:rgba(255,255,255,.35);cursor:pointer;transition:color .2s" style-hover="color:#fff" title="Ещё">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>
+              </button>
+            </div>
+
+            <div class="rp-body" style="font-size:14.5px;line-height:1.72;color:rgba(255,255,255,.86)">{{ p.bodyEl }}</div>
+
+            <sc-if value="{{ p.hasGates }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-wrap:wrap;gap:8px">
+                <sc-for list="{{ p.gates }}" as="gt" hint-placeholder-count="1">
+                  <span style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:4px 11px;border-radius:999px;border:1px solid {{ gt.border }};background:{{ gt.bg }};color:{{ gt.color }}">{{ gt.glyph }} {{ gt.label }}</span>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <div style="display:flex;align-items:center;gap:18px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06)">
+              <button onClick="{{ p.toggleLike }}" style="display:flex;align-items:center;gap:8px;background:none;border:none;cursor:pointer;font-size:13px;font-weight:600;color:{{ p.likeColor }};transition:color .2s">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="{{ p.likeFill }}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                {{ p.likeCount }}
+              </button>
+              <button style="display:flex;align-items:center;gap:8px;background:none;border:none;cursor:pointer;font-size:13px;color:rgba(255,255,255,.5);transition:color .2s" style-hover="color:#76a6bd">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                Ответить
+              </button>
+              <span style="margin-left:auto;font-size:11.5px;color:rgba(255,255,255,.32)">{{ p.length }} симв.</span>
+            </div>
+          </article>
+        </sc-for>
+      </div>
+
+      <!-- ========== RIGHT: SIDEBAR ========== -->
+      <aside style="display:flex;flex-direction:column;gap:20px;min-width:0">
+
+        <!-- GATHERING -->
+        <section style="border-radius:18px;background:rgba(6,7,12,.6);border:1px solid rgba(136,179,50,.22);backdrop-filter:blur(10px);box-shadow:0 14px 40px rgba(0,0,0,.4);overflow:hidden;opacity:{{ lockOpacity }};pointer-events:{{ lockPointer }}">
+          <div style="display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid rgba(255,255,255,.07)">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#88B332" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/></svg>
+            <h3 style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#88B332">Добыча ресурсов</h3>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;padding:14px 16px">
+            <sc-for list="{{ nodes }}" as="nd" hint-placeholder-count="2">
+              <div style="display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:13px;background:rgba(136,179,50,.06);border:1px solid rgba(136,179,50,.18)">
+                <span style="width:44px;height:44px;flex-shrink:0;border-radius:11px;background:rgba(136,179,50,.12);display:flex;align-items:center;justify-content:center;font-size:22px">{{ nd.icon }}</span>
+                <div style="display:flex;flex-direction:column;gap:4px;min-width:0;flex:1">
+                  <span style="font-size:13px;font-weight:600;color:#fff">{{ nd.name }}</span>
+                  <span style="font-size:10.5px;color:rgba(255,255,255,.5)">Запас: {{ nd.bank }} · <span style="color:#FFF9B8">{{ nd.stamina }} стамины</span></span>
+                </div>
+                <button style="flex-shrink:0;padding:7px 13px;border-radius:9px;background:rgba(136,179,50,.85);border:none;color:#0c0d12;cursor:pointer;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;transition:filter .2s" style-hover="filter:brightness(1.1)">Собрать</button>
+              </div>
+            </sc-for>
+          </div>
+        </section>
+
+        <!-- LOOT -->
+        <section style="border-radius:18px;background:rgba(6,7,12,.6);border:1px solid rgba(240,217,92,.14);backdrop-filter:blur(10px);box-shadow:0 14px 40px rgba(0,0,0,.4);overflow:hidden">
+          <div style="display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid rgba(255,255,255,.07)">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f0d95c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12v10H4V12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>
+            <h3 style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">На земле</h3>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;padding:14px 16px">
+            <sc-for list="{{ loot }}" as="lt" hint-placeholder-count="2">
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid {{ lt.border }}">
+                <span style="width:40px;height:40px;flex-shrink:0;border-radius:10px;background:rgba(255,255,255,.05);display:flex;align-items:center;justify-content:center;font-size:20px">{{ lt.icon }}</span>
+                <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
+                  <span style="font-size:13px;font-weight:600;color:{{ lt.color }}">{{ lt.name }}</span>
+                  <span style="font-size:10.5px;color:rgba(255,255,255,.45)">×{{ lt.qty }} · выронил {{ lt.by }}</span>
+                </div>
+                <button style="flex-shrink:0;padding:7px 14px;border-radius:9px;background:none;border:1px solid rgba(240,217,92,.4);color:#f0d95c;cursor:pointer;font-size:11px;font-weight:600;transition:all .2s" style-hover="background:rgba(240,217,92,.15)">Подобрать</button>
+              </div>
+            </sc-for>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <!-- ===================== CHAT PANEL ===================== -->
+  <div onClick="{{ closeChat }}" style="position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.5);backdrop-filter:blur(2px);transition:opacity .25s;opacity:{{ chatOverlayOpacity }};pointer-events:{{ chatPointer }}"></div>
+  <aside class="chat-panel" style="position:fixed;top:0;left:0;z-index:80;width:400px;max-width:92vw;height:100vh;display:flex;flex-direction:column;background:rgba(9,10,16,.97);border-right:1px solid rgba(240,217,92,.22);box-shadow:14px 0 46px rgba(0,0,0,.6);transform:translateX({{ chatShift }});transition:transform .28s ease">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 22px;border-bottom:1px solid rgba(240,217,92,.14)">
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:linear-gradient(180deg,rgba(240,217,92,.16),rgba(240,217,92,.04));border:1px solid rgba(240,217,92,.3);color:#f0d95c"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span>
+        <h3 style="font-size:17px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;background:linear-gradient(180deg,#fff9b8,#bcab4c);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent">Чат</h3>
+      </div>
+      <button onClick="{{ closeChat }}" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:9px;background:none;border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.7);cursor:pointer" style-hover="border-color:#F37753;color:#F37753"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div style="display:flex;gap:4px;padding:14px 16px 0">
+      <sc-for list="{{ channels }}" as="c" hint-placeholder-count="4"><button onClick="{{ c.on }}" style="flex:1;padding:9px 4px;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;background:none;border:none;border-bottom:2px solid {{ c.border }};color:{{ c.color }};cursor:pointer;transition:all .2s">{{ c.name }}</button></sc-for>
+    </div>
+    <div class="om-scroll" style="flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:16px">
+      <sc-for list="{{ messages }}" as="m" hint-placeholder-count="6">
+        <div style="display:flex;gap:11px">
+          <div style="width:36px;height:36px;border-radius:50%;flex-shrink:0;background:{{ m.avatarBg }};display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#0c0d12">{{ m.initial }}</div>
+          <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
+            <div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:13px;font-weight:600;color:{{ m.nameColor }}">{{ m.name }}</span><span style="font-size:10px;color:rgba(255,255,255,.35)">{{ m.time }}</span></div>
+            <p style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.85)">{{ m.text }}</p>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+    <div style="padding:14px 16px;border-top:1px solid rgba(240,217,92,.14)">
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 8px 8px 16px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1)">
+        <input type="text" placeholder="Написать сообщение…" style="flex:1;min-width:0;background:transparent;border:none;outline:none;color:#fff;font-family:inherit;font-size:13.5px">
+        <button style="width:38px;height:38px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:9px;background:linear-gradient(90deg,#2e353e,#537895);border:none;color:#fff;cursor:pointer" style-hover="filter:brightness(1.15)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+      </div>
+    </div>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1300,&quot;height&quot;:1700},&quot;inBattle&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Состояние&quot;}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.editorRef = React.createRef();
+    this.state = {
+      isFav: false,
+      formOpen: false,
+      charCount: 0,
+      gates: { combat: [], npc_dialogue: [], gathering: [], dungeon: [] },
+      whoTab: 'players',
+      inBattle: props.inBattle ?? true,
+      chatOpen: false, chatTab: 'Локация', mega: false, menuOpen: false, openSection: 'Игровой мир',
+      likes: {
+        1: { liked: false, count: 14 },
+        2: { liked: true, count: 31 },
+        3: { liked: false, count: 8 },
+        4: { liked: false, count: 22 },
+      },
+    };
+  }
+
+  fmt(cmd) {
+    if (this.editorRef.current) this.editorRef.current.focus();
+    try { document.execCommand(cmd, false, null); } catch (e) {}
+  }
+
+  insertQuote() {
+    if (this.editorRef.current) this.editorRef.current.focus();
+    try { document.execCommand('formatBlock', false, 'blockquote'); } catch (e) {}
+  }
+
+  toggleGate(type, id) {
+    this.setState((s) => {
+      const cur = s.gates[type];
+      const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+      return { gates: { ...s.gates, [type]: next } };
+    });
+  }
+
+  renderVals() {
+    const { isFav, formOpen, charCount, gates, whoTab, likes, chatOpen, chatTab, mega, menuOpen, openSection, inBattle } = this.state;
+    const g = 'linear-gradient(180deg,#fff9b8,#bcab4c)';
+    const s = 'linear-gradient(180deg,#e8e8e8,#9a9a9a)';
+    const c = 'linear-gradient(180deg,#e0a869,#a5662f)';
+    const b = 'linear-gradient(180deg,#9fc3d4,#5f8494)';
+    const v = 'linear-gradient(180deg,#b89bd4,#6f4f94)';
+    const gr = 'linear-gradient(180deg,#8fd4a8,#4f9468)';
+
+    const GATE_COST = { combat: 200, npc_dialogue: 500, gathering: 500, dungeon: 500 };
+    const GATE_META = {
+      combat: { label: 'Нападение на мобов', glyph: '⚔️', color: '#E94545', bg: 'rgba(227,69,69,.14)', border: 'rgba(227,69,69,.4)' },
+      npc_dialogue: { label: 'Диалог с НПС', glyph: '💬', color: '#76a6bd', bg: 'rgba(118,166,189,.14)', border: 'rgba(118,166,189,.4)' },
+      gathering: { label: 'Сбор ресурсов', glyph: '🌿', color: '#88B332', bg: 'rgba(136,179,50,.14)', border: 'rgba(136,179,50,.4)' },
+      dungeon: { label: 'Вход в подземелье', glyph: '🏰', color: '#B875BD', bg: 'rgba(184,117,189,.14)', border: 'rgba(184,117,189,.4)' },
+    };
+    const gateTargets = {
+      combat: [{ id: 1, name: 'Теневой волк' }, { id: 2, name: 'Стая: Волчья свора' }],
+      npc_dialogue: [{ id: 3, name: 'Старый Ольгерд' }, { id: 4, name: 'Страж заставы' }],
+      gathering: [{ id: 5, name: 'Железная жила' }, { id: 6, name: 'Куст паутинника' }],
+      dungeon: [{ id: 7, name: 'Логово Матери-паучихи' }],
+    };
+    const GATE_ORDER = ['combat', 'npc_dialogue', 'gathering', 'dungeon'];
+
+    const gateGroups = GATE_ORDER.map((t) => ({
+      type: t, label: GATE_META[t].label, glyph: GATE_META[t].glyph, cost: GATE_COST[t],
+      targets: gateTargets[t].map((tg) => {
+        const on = gates[t].includes(tg.id);
+        return {
+          name: tg.name,
+          on: () => this.toggleGate(t, tg.id),
+          border: on ? GATE_META[t].border : 'rgba(255,255,255,.16)',
+          bg: on ? GATE_META[t].bg : 'transparent',
+          color: on ? GATE_META[t].color : 'rgba(255,255,255,.6)',
+        };
+      }),
+    }));
+
+    const MIN = 300;
+    const gatesTotal = GATE_ORDER.reduce((sum, t) => sum + GATE_COST[t] * gates[t].length, 0);
+    const requiredSymbols = Math.max(MIN, gatesTotal);
+    const meets = charCount >= requiredSymbols;
+    const xp = charCount >= MIN ? Math.round(charCount / 100) : 0;
+    const pct = Math.min(100, Math.round((charCount / requiredSymbols) * 100));
+
+    const tools = [
+      { glyph: 'Б', title: 'Жирный', on: () => this.fmt('bold') },
+      { glyph: 'К', title: 'Курсив', on: () => this.fmt('italic') },
+      { glyph: 'П', title: 'Подчёркнутый', on: () => this.fmt('underline') },
+      { glyph: '❝', title: 'Цитата / прямая речь', on: () => this.insertQuote() },
+      { glyph: '•', title: 'Список', on: () => this.fmt('insertUnorderedList') },
+    ];
+
+    const mkGateBadge = (t) => ({ glyph: GATE_META[t].glyph, label: GATE_META[t].label, color: GATE_META[t].color, bg: GATE_META[t].bg, border: GATE_META[t].border });
+
+    const postData = [
+      { id: 1, title: 'Страж Рассвета', titleColor: '#F0D95C', name: 'Аэлин', lvl: 42, time: '2 мин. назад', ring: g, initial: 'А', length: 512, gates: ['combat'],
+        html: 'Костёр почти погас, но её глаза всё ещё горели решимостью. Аэлин обнажила клинок и шагнула к кромке тумана, откуда доносился низкий рык. <blockquote>«Мы идём дальше. Лес не получит ещё одну душу этой ночью.»</blockquote> Она сжала рукоять — <b>Теневой волк</b> уже кружил среди сосен.' },
+      { id: 2, title: 'Хранитель', titleColor: '#FFFFFF', name: 'Мираэль', lvl: 51, time: '26 мин. назад', ring: v, initial: 'М', length: 634, gates: [],
+        html: 'Древние руны вспыхнули под её ладонью, когда она коснулась замшелого камня у тропы. <em>Что-то пробуждалось в глубине чащи</em> — и это было голодным. Мираэль прошептала слова защиты и двинулась вглубь, оставляя за собой тонкий след серебристого света.' },
+      { id: 3, title: 'Наёмник', titleColor: '#76A6BD', name: 'Кассий', lvl: 37, time: '1 ч. назад', ring: c, initial: 'К', length: 398, gates: ['npc_dialogue'],
+        html: 'Кассий опустился на одно колено перед торговцем у заставы. <blockquote>«Старик, мне нужны сведения о тропе к логову. И не говори, что не знаешь.»</blockquote> <b>Старый Ольгерд</b> лишь усмехнулся в седую бороду и протянул потрёпанную карту.' },
+      { id: 4, title: 'Странница', titleColor: '#B875BD', name: 'Сорана', lvl: 45, time: '3 ч. назад', ring: gr, initial: 'С', length: 471, gates: [],
+        html: 'Вода лесного ручья была неподвижна, как чёрное зеркало. И всё же в её глубине что-то смотрело в ответ — терпеливо и голодно. Сорана отступила, не сводя глаз с отражения, которого <em>не должно было быть</em>.' },
+    ];
+
+    const posts = postData.map((p) => {
+      const lk = likes[p.id];
+      return {
+        ...p,
+        bodyEl: React.createElement('div', { dangerouslySetInnerHTML: { __html: p.html } }),
+        hasGates: p.gates.length > 0,
+        gates: p.gates.map(mkGateBadge),
+        likeCount: lk.count,
+        likeColor: lk.liked ? '#F37753' : 'rgba(255,255,255,.5)',
+        likeFill: lk.liked ? '#F37753' : 'none',
+        toggleLike: () => this.setState((st) => {
+          const cur = st.likes[p.id];
+          return { likes: { ...st.likes, [p.id]: { liked: !cur.liked, count: cur.liked ? cur.count - 1 : cur.count + 1 } } };
+        }),
+      };
+    });
+
+    const players = [
+      { name: 'Аэлин', lvl: 42, ring: g, initial: 'А' },
+      { name: 'Мираэль', lvl: 51, ring: v, initial: 'М' },
+      { name: 'Кассий', lvl: 37, ring: c, initial: 'К' },
+      { name: 'Сорана', lvl: 45, ring: gr, initial: 'С' },
+      { name: 'Дориан', lvl: 29, ring: s, initial: 'Д' },
+      { name: 'Вальтор', lvl: 60, ring: g, initial: 'В' },
+      { name: 'Тобиас', lvl: 33, ring: b, initial: 'Т' },
+      { name: 'Лираэль', lvl: 40, ring: b, initial: 'Л' },
+      { name: 'Ринальд', lvl: 28, ring: c, initial: 'Р' },
+      { name: 'Изольда', lvl: 47, ring: v, initial: 'И' },
+      { name: 'Гаррет', lvl: 35, ring: s, initial: 'Г' },
+      { name: 'Ниа', lvl: 22, ring: gr, initial: 'Н' },
+      { name: 'Бран', lvl: 39, ring: g, initial: 'Б' },
+      { name: 'Эвелина', lvl: 53, ring: v, initial: 'Э' },
+      { name: 'Родрик', lvl: 31, ring: c, initial: 'Р' },
+      { name: 'Ксандр', lvl: 44, ring: b, initial: 'К' },
+    ];
+    const npcs = [
+      { name: 'Старый Ольгерд', role: 'Торговец', ring: c, initial: 'О' },
+      { name: 'Страж заставы', role: 'Охрана', ring: s, initial: 'С' },
+      { name: 'Ведьма Мор', role: 'Задания', ring: v, initial: 'М' },
+    ];
+    const neighbors = [
+      { name: 'Пепельные пустоши', lvl: 30, cost: 4, img: "'services/frontend/app-chaldea/src/assets/homepagebutton2.png'" },
+      { name: 'Храм Луны', lvl: 20, cost: 3, img: "'services/frontend/app-chaldea/src/assets/homepagebutton3.png'" },
+      { name: 'Врата крепости', lvl: 10, cost: 2, img: "'services/frontend/app-chaldea/src/assets/sliderimg1.png'" },
+      { name: 'Гнилое болото', lvl: 28, cost: 5, img: "'services/frontend/app-chaldea/src/assets/homepagebutton1.png'" },
+      { name: 'Опушка', lvl: 15, cost: 2, img: "'services/frontend/app-chaldea/src/assets/smallhomebutton2.png'" },
+      { name: 'Старая мельница', lvl: 18, cost: 3, img: "'services/frontend/app-chaldea/src/assets/smallhomebutton3.png'" },
+    ];
+    const mobs = [
+      { name: 'Теневой волк',    lvl: 27, hp: '78%',  img: "'services/frontend/app-chaldea/public/battle-img-3.png'", pos: '16% 42%' },
+      { name: 'Лесной упырь',    lvl: 24, hp: '100%', img: "'services/frontend/app-chaldea/public/battle-img.png'",   pos: '84% 42%' },
+      { name: 'Багровый латник', lvl: 31, hp: '64%',  img: "'services/frontend/app-chaldea/public/battle-img-3.png'", pos: '80% 40%' },
+      { name: 'Синий страж',     lvl: 26, hp: '90%',  img: "'services/frontend/app-chaldea/public/battle-img-2.png'", pos: '22% 40%' },
+      { name: 'Кровавый берсерк',lvl: 34, hp: '48%',  img: "'services/frontend/app-chaldea/public/battle-img-2.png'", pos: '82% 40%' },
+      { name: 'Тёмный рыцарь',   lvl: 29, hp: '100%', img: "'services/frontend/app-chaldea/public/battle-img.png'",   pos: '18% 44%' },
+    ];
+    const nodes = [
+      { name: 'Железная жила', bank: '12 / 20', stamina: 15, icon: '⛏️' },
+      { name: 'Куст паутинника', bank: '5 / 10', stamina: 10, icon: '🌿' },
+    ];
+    const loot = [
+      { name: 'Клык теневого волка', qty: 3, by: 'Аэлин', icon: '🦷', color: '#76A6BD', border: 'rgba(118,166,189,.3)' },
+      { name: 'Обломок руны', qty: 1, by: 'Мираэль', icon: '🔮', color: '#B875BD', border: 'rgba(184,117,189,.3)' },
+    ];
+
+    const mkWhoTab = (name, count, key) => {
+      const on = whoTab === key;
+      return {
+        name, count, on: () => this.setState({ whoTab: key }),
+        bg: on ? 'linear-gradient(180deg,#fff9b8,#bcab4c)' : 'transparent',
+        color: on ? '#0c0d12' : 'rgba(255,255,255,.6)',
+        shadow: on ? '0 2px 8px rgba(240,217,92,.35)' : 'none',
+        pillBg: on ? 'rgba(12,13,18,.25)' : 'rgba(255,255,255,.1)',
+        pillColor: on ? '#0c0d12' : 'rgba(255,255,255,.6)',
+      };
+    };
+    const whoTabs = [
+      mkWhoTab('Игроки', players.length, 'players'),
+      mkWhoTab('НПС', npcs.length, 'npcs'),
+    ];
+
+    // ===== Header data =====
+    const megaCats = [
+      { title: 'Общее', links: ['Поиск соигрока', 'Администрация', 'Предложения', 'Архив'] },
+      { title: 'Новости', links: ['Обновления', 'Технобук', 'Анонсы', 'Ивенты'] },
+      { title: 'Игровой мир', links: ['Персонажи', 'Карта мира', 'Вестник'] },
+      { title: 'Прокачка', links: ['Предметы', 'Аукцион', 'Навыки'] },
+      { title: 'Магазин', links: ['Персонаж', 'Рулетки', 'Валюта', 'Гачи'] },
+    ];
+    const channelNames = ['Общий', 'Локация', 'Отряд', 'Торговля'];
+    const channels = channelNames.map((cn) => ({
+      name: cn,
+      on: () => this.setState({ chatTab: cn }),
+      color: cn === chatTab ? '#f0d95c' : 'rgba(255,255,255,.5)',
+      border: cn === chatTab ? '#f0d95c' : 'transparent',
+    }));
+    const allMsgs = {
+      'Общий': [
+        { name: 'Аэлин', initial: 'А', avatarBg: g, nameColor: '#f0d95c', time: '21:02', text: 'Кто идёт в Тёмный лес? Нужен хилер, собираем отряд из 4.' },
+        { name: 'Кассий', initial: 'К', avatarBg: c, nameColor: '#fff', time: '21:04', text: 'Могу пойти танком, у меня 37 лвл. Через 5 минут буду у врат.' },
+        { name: 'Вальтор', initial: 'В', avatarBg: s, nameColor: '#fff', time: '21:07', text: 'Осторожнее там, ночью спавнятся элитные волки.' },
+      ],
+      'Локация': [
+        { name: 'Аэлин', initial: 'А', avatarBg: g, nameColor: '#f0d95c', time: '20:58', text: 'Теневой волк снова у восточной тропы. Кто со мной?' },
+        { name: 'Дориан', initial: 'Д', avatarBg: s, nameColor: '#fff', time: '21:01', text: 'Видел торговца Ольгерда у заставы — есть редкие руны.' },
+        { name: 'Сорана', initial: 'С', avatarBg: gr, nameColor: '#8fd4a8', time: '21:03', text: 'Не подходите к ручью в одиночку. Там что-то не так.' },
+      ],
+      'Отряд': [
+        { name: 'Кайден', initial: 'К', avatarBg: g, nameColor: '#f0d95c', time: '21:10', text: 'Все готовы? Заходим вглубь чащи.' },
+        { name: 'Лираэль', initial: 'Л', avatarBg: b, nameColor: '#76a6bd', time: '21:10', text: 'Баффы навешаны. Погнали!' },
+      ],
+      'Торговля': [
+        { name: 'Вальтор', initial: 'В', avatarBg: s, nameColor: '#fff', time: '20:40', text: 'Продаю клык теневого волка ×5, 300 золотых.' },
+        { name: 'Мираэль', initial: 'М', avatarBg: v, nameColor: '#b875bd', time: '20:44', text: 'Куплю обломки рун, любое количество.' },
+      ],
+    };
+    const mobileNav = [
+      { title: 'Главная', links: null, direct: true },
+      { title: 'Игровой мир', links: ['Персонажи', 'Карта мира', 'Навыки', 'Аукцион', 'Вестник'] },
+      { title: 'Руководство', links: ['Обучение', 'Консультант', 'Архив', 'Правила'] },
+      { title: 'Магазин', links: ['Рулетка', 'События', 'Валюта', 'Гачи'] },
+      { title: 'Сообщество', links: ['Поиск игрока', 'Администрация', 'Предложения', 'Бестиарий'] },
+    ].map((sec) => {
+      const expanded = !sec.direct && openSection === sec.title;
+      return {
+        title: sec.title,
+        links: sec.links || [],
+        hasChildren: !sec.direct,
+        expanded,
+        toggle: () => sec.direct ? null : this.setState((st) => ({ openSection: st.openSection === sec.title ? null : sec.title })),
+        chevron: expanded ? '180deg' : '0deg',
+        color: (sec.direct || expanded) ? '#f0d95c' : '#fff',
+        weight: sec.direct ? 600 : 500,
+      };
+    });
+
+    return {
+      // header
+      toggleChat: () => this.setState((st) => ({ chatOpen: !st.chatOpen, menuOpen: false })),
+      closeChat: () => this.setState({ chatOpen: false }),
+      chatShift: chatOpen ? '0' : '-100%',
+      chatOverlayOpacity: chatOpen ? '1' : '0',
+      chatPointer: chatOpen ? 'auto' : 'none',
+      channels,
+      messages: allMsgs[chatTab] || [],
+      mega,
+      openMega: () => this.setState({ mega: true }),
+      closeMega: () => this.setState({ mega: false }),
+      megaCats,
+      toggleMenu: () => this.setState((st) => ({ menuOpen: !st.menuOpen })),
+      menuOpen,
+      menuClosed: !menuOpen,
+      mobileNav,
+
+      inBattle,
+      showBattleLock: inBattle,
+      lockOpacity: inBattle ? '.45' : '1',
+      lockPointer: inBattle ? 'none' : 'auto',
+      toggleBattle: () => this.setState((st) => ({ inBattle: !st.inBattle, formOpen: false })),
+      battleBtnBg: inBattle ? 'rgba(227,69,69,.9)' : 'rgba(6,7,12,.55)',
+      battleBtnBorder: inBattle ? 'rgba(255,150,150,.5)' : 'rgba(255,255,255,.1)',
+      battleBtnColor: inBattle ? '#fff' : 'rgba(255,255,255,.7)',
+      battleBtnLabel: inBattle ? 'В бою' : 'Симуляция боя',
+
+      isFav,
+      favLabel: isFav ? 'В избранном' : 'В избранное',
+      favTitle: isFav ? 'Убрать из избранного' : 'Добавить в избранное',
+      favColor: isFav ? '#f0d95c' : 'rgba(255,255,255,.7)',
+      favFill: isFav ? '#f0d95c' : 'none',
+      favBorder: isFav ? 'rgba(240,217,92,.5)' : 'rgba(255,255,255,.1)',
+      toggleFav: () => this.setState((st) => ({ isFav: !st.isFav })),
+
+      playerCount: players.length,
+      postCount: postData.length,
+      neighborCount: neighbors.length,
+
+      formOpen,
+      formClosed: !formOpen,
+      showOpenBtn: !formOpen && !inBattle,
+      showForm: formOpen && !inBattle,
+      openForm: () => this.setState({ formOpen: true }),
+      closeForm: () => this.setState({ formOpen: false, charCount: 0, gates: { combat: [], npc_dialogue: [], gathering: [], dungeon: [] } }),
+      onEditorInput: (e) => this.setState({ charCount: (e.currentTarget.textContent || '').trim().length }),
+      editorRef: this.editorRef,
+      tools,
+      gateGroups,
+      charCount,
+      requiredSymbols,
+      counterColor: meets ? '#88B332' : '#F37753',
+      xpHint: meets ? ('≈ ' + xp + ' XP за пост') : ('Минимум ' + requiredSymbols + ' символов'),
+      progressW: pct + '%',
+      progressBg: meets ? 'linear-gradient(90deg,#88B332,#b7e05a)' : 'linear-gradient(90deg,#F37753,#f0d95c)',
+      submitDisabled: !meets,
+      submitBg: meets ? 'linear-gradient(90deg,#2e353e,#537895)' : 'rgba(255,255,255,.08)',
+      submitFg: meets ? '#fff' : 'rgba(255,255,255,.4)',
+      submitCursor: meets ? 'pointer' : 'not-allowed',
+      submitOpacity: meets ? '1' : '.7',
+      submitPost: () => { if (meets) this.setState({ formOpen: false, charCount: 0, gates: { combat: [], npc_dialogue: [], gathering: [], dungeon: [] } }); },
+
+      posts,
+      players, npcs, neighbors, mobs, nodes, loot,
+      whoTabs,
+      showPlayers: whoTab === 'players',
+      showNpcs: whoTab === 'npcs',
+    };
+  }
+}
+</script>
+</body>
+</html>

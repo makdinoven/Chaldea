@@ -1,9 +1,10 @@
 /**
- * GatheringLockBanner (FEAT-128).
+ * GatheringLockBanner (FEAT-128, restyled in FEAT-152).
  *
  * Top-of-page banner shown while the supplied character has an in-flight
- * resource-gathering session. Mirrors the visual language of
- * `BattleLockBanner` (Tailwind only, gold-outline + warning icon) and adds:
+ * resource-gathering session. Shares the visual language of the redesigned
+ * `BattleLockBanner` (icon block + title/subtitle + action button) with a
+ * green (stat-energy) accent, and keeps:
  *
  *  - a live MM:SS countdown driven by the client-side ticker in
  *    `useGatheringLock`
@@ -70,34 +71,42 @@ const GatheringLockBanner = ({ characterId }: GatheringLockBannerProps) => {
     <div
       role="status"
       aria-live="polite"
-      className="gold-outline rounded-card p-3 sm:p-4 bg-yellow-900/20 flex flex-col gap-2"
+      className="rounded-card border border-stat-energy/40 bg-gradient-to-r from-stat-energy/20 to-stat-energy/5 p-3.5 sm:p-4 flex flex-col gap-2"
     >
-      <div className="flex items-center gap-3 flex-wrap">
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          className="w-5 h-5 sm:w-6 sm:h-6 text-gold shrink-0"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"
-          />
-        </svg>
-
-        <span className="gold-text text-sm sm:text-base font-medium flex-1 min-w-0 break-words">
-          {`Идёт добыча: осталось ${formatMmSs(remainingSeconds)}`}
+      <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
+        {/* Pulsing pickaxe-style icon block */}
+        <span className="w-10 h-10 sm:w-11 sm:h-11 shrink-0 flex items-center justify-center rounded-card bg-stat-energy/80 text-white animate-pulse">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="w-5 h-5 sm:w-6 sm:h-6"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+            aria-hidden="true"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
         </span>
+
+        <div className="flex flex-col gap-0.5 flex-1 min-w-[180px]">
+          <span className="text-white text-sm sm:text-[15px] font-medium">
+            Идёт добыча ресурсов
+          </span>
+          <span className="text-white/70 text-xs sm:text-[12.5px]">
+            {`Осталось ${formatMmSs(remainingSeconds)} — до завершения действия заблокированы.`}
+          </span>
+        </div>
 
         <button
           type="button"
           onClick={handleCancel}
           disabled={isCancelling}
-          className="btn-line text-xs sm:text-sm px-3 py-1.5 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="btn-line text-xs sm:text-sm px-4 py-2 shrink-0 w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
           aria-label="Отменить добычу"
         >
           {isCancelling ? 'Отмена…' : 'Отменить'}
@@ -107,7 +116,7 @@ const GatheringLockBanner = ({ characterId }: GatheringLockBannerProps) => {
       {cancelError && (
         <div
           role="alert"
-          className="text-xs sm:text-sm text-red-400 break-words"
+          className="text-xs sm:text-sm text-site-red break-words"
         >
           {cancelError}
         </div>

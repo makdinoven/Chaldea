@@ -5,7 +5,7 @@
  * node name, the resulting item, the daily-bank counter, the cost summary
  * (stamina × time), and a status-specific call-to-action:
  *
- *  - available  → "Добыть" button (opens <ToolSelectionModal>)
+ *  - available  → "Собрать" button (opens <ToolSelectionModal>)
  *  - depleted   → live MM:SS countdown until restore_at
  *  - occupied   → "Занято: <name>" when single-gather slot is held
  *  - disabled   → "Недоступна" stub
@@ -162,65 +162,52 @@ const GatheringNodeCard = ({
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="bg-white/5 rounded-card p-3 sm:p-4 flex flex-col gap-3"
+      className="bg-stat-energy/[0.06] border border-stat-energy/[0.18] rounded-card p-3 sm:p-3.5 flex flex-col gap-2.5"
     >
-      {/* Header row: node name + result item summary */}
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
-        <div className="flex flex-col gap-1 min-w-0 flex-1">
-          <h3 className="gold-text text-base sm:text-lg font-medium truncate">
+      {/* Header row: result-item icon + node name + result summary (mock rows) */}
+      <div className="flex items-center gap-3">
+        <div className="w-11 h-11 shrink-0 rounded-[11px] bg-stat-energy/10 border border-stat-energy/20 overflow-hidden flex items-center justify-center">
+          {node.result_item_image ? (
+            <img
+              src={node.result_item_image}
+              alt={node.result_item_name}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <span className="text-white/25 text-lg">?</span>
+          )}
+        </div>
+        <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+          <h3 className="text-white text-[13px] font-medium truncate">
             {node.node_name}
           </h3>
-          <span className="text-white/50 text-xs">
-            Категория:{' '}
-            <span className="text-white/80">{CATEGORY_LABELS[node.category]}</span>
+          <span className="text-white/50 text-[10.5px] truncate">
+            {CATEGORY_LABELS[node.category]} ·{' '}
+            <span className="text-white/70">
+              +{node.result_quantity_per_gather} {node.result_item_name} за сбор
+            </span>
           </span>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="gold-outline relative w-10 h-10 sm:w-11 sm:h-11 rounded-card overflow-hidden bg-black/40 shrink-0">
-            {node.result_item_image ? (
-              <img
-                src={node.result_item_image}
-                alt={node.result_item_name}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-white/20 text-lg">
-                ?
-              </div>
-            )}
-          </div>
-          <div className="flex flex-col min-w-0">
-            <span className="text-white text-xs sm:text-sm font-medium truncate max-w-[160px]">
-              {node.result_item_name}
-            </span>
-            <span className="text-white/50 text-xs">
-              {`+${node.result_quantity_per_gather} за сбор`}
-            </span>
-          </div>
         </div>
       </div>
 
       {/* Bank + cost row */}
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-        <span className="text-white/50">
-          Осталось:{' '}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10.5px] text-white/50">
+        <span>
+          Запас:{' '}
           <span className="text-white/90 font-mono">
             {`${node.current_bank} / ${node.daily_bank_max}`}
           </span>
         </span>
-        <span className="text-white/50">
-          Стамина:{' '}
-          <span className="text-stat-stamina font-mono">
-            {node.stamina_per_gather}
-          </span>
+        <span>
+          <span className="text-stat-stamina font-mono">{node.stamina_per_gather}</span>
+          {' '}стамины
         </span>
-        <span className="text-white/50">
+        <span>
           Время:{' '}
           <span className="text-white/90 font-mono">{baseTimeLabel}</span>
         </span>
         {node.allow_concurrent_gather && (
-          <span className="text-site-blue text-[11px]">Совместная добыча</span>
+          <span className="text-site-blue">Совместная добыча</span>
         )}
       </div>
 
@@ -262,10 +249,10 @@ const GatheringNodeCard = ({
             type="button"
             onClick={handleStartClick}
             disabled={!canGather || isStarting || submitting}
-            className="btn-blue text-sm px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            aria-label={`Добыть ${node.result_item_name}`}
+            className="bg-stat-energy/[0.85] hover:brightness-110 text-black rounded-[9px] px-3.5 py-2 text-[11px] font-bold uppercase tracking-[0.04em] transition-all duration-200 ease-site disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label={`Собрать ${node.result_item_name}`}
           >
-            {isStarting || submitting ? 'Запуск…' : 'Добыть'}
+            {isStarting || submitting ? 'Запуск…' : 'Собрать'}
           </button>
         )}
 
@@ -295,7 +282,7 @@ const GatheringNodeCard = ({
         )}
 
         {vm.status === 'occupied' && (
-          <div className="flex items-center gap-2 text-yellow-300 text-sm font-medium">
+          <div className="flex items-center gap-2 text-gold text-sm font-medium">
             <span>Занято:</span>
             {vm.occupiedBy?.avatar && (
               <img

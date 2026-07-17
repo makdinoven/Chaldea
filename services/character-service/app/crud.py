@@ -1054,6 +1054,35 @@ def delete_active_mob(db: Session, active_mob: ActiveMob):
     logger.info(f"ActiveMob ID {active_mob.id} и персонаж ID {character_id} удалены")
 
 
+def _get_mob_hp_map(db: Session, character_ids):
+    """Batched read of persisted HP for mob characters (FEAT-152).
+
+    character_attributes belongs to character-attributes-service but shares
+    the same DB (established cross-table read pattern). Returns
+    {character_id: (current_health, max_health)}. Parameterized IN — one
+    named bind per id, no string interpolation of values.
+    Wrapped in try/except for test isolation (table may not exist).
+    """
+    ids = list(character_ids)
+    if not ids:
+        return {}
+    try:
+        placeholders = ", ".join(f":id{i}" for i in range(len(ids)))
+        params = {f"id{i}": cid for i, cid in enumerate(ids)}
+        rows = db.execute(
+            sa_text(
+                "SELECT character_id, current_health, max_health "
+                "FROM character_attributes "
+                f"WHERE character_id IN ({placeholders})"
+            ),
+            params,
+        ).fetchall()
+        return {row[0]: (row[1], row[2]) for row in rows}
+    except Exception:
+        logger.warning("Could not read HP from character_attributes (table may not exist)")
+        return {}
+
+
 def get_mobs_at_location(db: Session, location_id: int):
     """Get alive/in_battle mobs at a location. Respawn dead mobs if respawn_at has passed."""
     from datetime import datetime
@@ -1103,11 +1132,16 @@ def get_mobs_at_location(db: Session, location_id: int):
         ActiveMob.pack_group_id == None,  # noqa: E711
     ).all()
 
+    # FEAT-152: one batched query for persisted HP (after the lazy-respawn pass,
+    # so respawned mobs already have current_health = max_health).
+    hp_map = _get_mob_hp_map(db, [am.character_id for am in active_mobs])
+
     result = []
     for am in active_mobs:
         template = db.query(MobTemplate).filter(MobTemplate.id == am.mob_template_id).first()
         character = db.query(Character).filter(Character.id == am.character_id).first()
         if template and character:
+            hp = hp_map.get(am.character_id)
             result.append({
                 "active_mob_id": am.id,
                 "character_id": am.character_id,
@@ -1116,6 +1150,8 @@ def get_mobs_at_location(db: Session, location_id: int):
                 "tier": template.tier,
                 "avatar": character.avatar,
                 "status": am.status,
+                "current_hp": hp[0] if hp else None,
+                "max_hp": hp[1] if hp else None,
             })
     return result
 
@@ -1357,6 +1393,11 @@ def get_packs_at_location(db: Session, location_id: int):
         pack = db.query(MobPack).filter(MobPack.id == ap.pack_id).first()
         lead = min(members, key=lambda m: m.character_id)
 
+        # FEAT-152: batched persisted HP for this pack's living members.
+        # Members are aggregated by template, so the group carries the SUM of
+        # its members' HP; None when no attributes rows found for the group.
+        hp_map = _get_mob_hp_map(db, [m.character_id for m in members])
+
         comp: dict = {}
         for m in members:
             tmpl = db.query(MobTemplate).filter(MobTemplate.id == m.mob_template_id).first()
@@ -1369,8 +1410,14 @@ def get_packs_at_location(db: Session, location_id: int):
                     "level": (tmpl.level if tmpl else None) or (character.level if character else 1),
                     "avatar": (character.avatar if character else None) or (tmpl.avatar if tmpl else None),
                     "count": 0,
+                    "current_hp": None,
+                    "max_hp": None,
                 }
             comp[key]["count"] += 1
+            hp = hp_map.get(m.character_id)
+            if hp is not None and hp[0] is not None and hp[1] is not None:
+                comp[key]["current_hp"] = (comp[key]["current_hp"] or 0) + hp[0]
+                comp[key]["max_hp"] = (comp[key]["max_hp"] or 0) + hp[1]
 
         result.append({
             "active_pack_id": ap.id,

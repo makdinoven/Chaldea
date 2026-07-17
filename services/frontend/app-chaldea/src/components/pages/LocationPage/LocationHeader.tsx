@@ -2,8 +2,6 @@ import { LocationData, MarkerType } from './types';
 
 interface LocationHeaderProps {
   location: LocationData;
-  isFavorited: boolean;
-  onToggleFavorite: () => void;
 }
 
 const MARKER_LABELS: Record<MarkerType, string> = {
@@ -14,89 +12,166 @@ const MARKER_LABELS: Record<MarkerType, string> = {
 };
 
 const MARKER_COLORS: Record<MarkerType, string> = {
-  safe: 'bg-green-600/80 text-green-100',
-  dangerous: 'bg-red-600/80 text-red-100',
-  dungeon: 'bg-purple-600/80 text-purple-100',
-  farm: 'bg-orange-500/80 text-orange-100',
+  safe: 'bg-green-600/80 text-green-100 border-green-300/40',
+  dangerous: 'bg-red-600/80 text-red-100 border-red-300/40',
+  dungeon: 'bg-purple-600/80 text-purple-100 border-purple-300/40',
+  farm: 'bg-orange-500/80 text-orange-100 border-orange-300/40',
 };
 
-const LocationHeader = ({ location, isFavorited, onToggleFavorite }: LocationHeaderProps) => {
+/**
+ * Hero banner of the location page (FEAT-152): full-width location art with
+ * soft overlays (toned down vs the mock per business rules 2–3), marker +
+ * level badges, title, description and the meta row (players here / posts /
+ * region — A6). Favorite toggle moved to LocationTopBar (A8).
+ */
+const LocationHeader = ({ location }: LocationHeaderProps) => {
   const markerType = (location.marker_type || 'safe') as MarkerType;
   const markerLabel = MARKER_LABELS[markerType] ?? markerType;
-  const markerColor = MARKER_COLORS[markerType] ?? 'bg-white/20 text-white';
+  const markerColor =
+    MARKER_COLORS[markerType] ?? 'bg-white/20 text-white border-white/20';
+
+  const playersCount = location.players.length;
+  const postsCount = location.posts.length;
 
   return (
-    <section className="flex flex-col sm:flex-row gap-4 sm:gap-6 items-start">
-      {/* Location image — left */}
+    <section className="relative min-h-[220px] sm:min-h-[300px] lg:min-h-[360px] rounded-card-xl overflow-hidden border border-gold-dark/30 shadow-card bg-black/40 flex flex-col justify-end">
+      {/* Location art */}
+      {location.image_url ? (
+        <div
+          className="absolute inset-0 bg-cover bg-center"
+          style={{ backgroundImage: `url(${location.image_url})` }}
+          role="img"
+          aria-label={location.name}
+        />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center text-white/15">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="w-16 h-16 sm:w-20 sm:h-20"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={1}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+            />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </div>
+      )}
+
+      {/* Toned-down overlays (FEAT-152 §3.5 — softer than the mock) */}
       <div
-        className="gold-outline relative w-[120px] h-[120px] sm:w-[140px] sm:h-[140px] rounded-full overflow-hidden bg-black/40 shrink-0"
-      >
-        {location.image_url ? (
-          <img
-            src={location.image_url}
-            alt={location.name}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-white/20">
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-12 h-12 sm:w-16 sm:h-16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </div>
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            'linear-gradient(180deg, rgba(5,6,10,.10) 0%, rgba(5,6,10,.05) 35%, rgba(5,6,10,.65) 100%)',
+        }}
+      />
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            'linear-gradient(90deg, rgba(5,6,10,.30) 0%, transparent 55%)',
+        }}
+      />
+
+      {/* Badges — top left */}
+      <div className="absolute top-4 left-4 sm:top-5 sm:left-6 flex items-center gap-2.5 flex-wrap">
+        <span
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[11px] font-medium uppercase tracking-[0.06em] shadow-card ${markerColor}`}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="w-3.5 h-3.5 shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2.2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4m0 4h.01"
+            />
+          </svg>
+          {markerLabel}
+        </span>
+        {location.recommended_level > 0 && (
+          <span className="px-3 py-1.5 rounded-full bg-site-bg border border-gold-dark/60 text-gold text-[11px] font-medium tracking-[0.06em]">
+            {location.recommended_level}+ LVL
+          </span>
         )}
       </div>
 
-      {/* Right side: name, badges, description */}
-      <div className="flex flex-col gap-2 flex-1 min-w-0">
-        {/* Name + Favorite */}
-        <div className="flex items-center gap-2">
-          <h1 className="gold-text text-xl sm:text-2xl font-medium uppercase">
-            {location.name}
-          </h1>
-          <button
-            onClick={onToggleFavorite}
-            className="shrink-0 p-1 hover:scale-110 active:scale-95 transition-transform"
-            aria-label={isFavorited ? 'Убрать из избранного' : 'Добавить в избранное'}
-            title={isFavorited ? 'Убрать из избранного' : 'Добавить в избранное'}
+      {/* Title block — bottom */}
+      <div className="relative px-4 pb-5 pt-16 sm:px-8 sm:pb-7 flex flex-col gap-2.5 sm:gap-3">
+        <h1
+          className="text-white text-3xl sm:text-5xl font-medium uppercase leading-tight"
+          style={{ textShadow: '0 6px 26px rgba(0,0,0,.8)' }}
+        >
+          {location.name}
+        </h1>
+
+        {location.description && (
+          <p
+            className="max-w-2xl text-white/80 text-sm sm:text-[15px] font-light leading-relaxed break-words"
+            style={{ textShadow: '0 2px 10px rgba(0,0,0,.8)' }}
           >
+            {location.description}
+          </p>
+        )}
+
+        {/* Meta row (A6) */}
+        <div className="flex items-center gap-4 sm:gap-6 mt-1 flex-wrap text-xs sm:text-[12.5px] text-white/75">
+          <span className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-stat-energy shadow-[0_0_8px_#88B332] animate-pulse" />
+            <b className="text-white font-medium">{playersCount}</b>
+            {' '}игроков сейчас здесь
+          </span>
+          <span className="flex items-center gap-2">
             <svg
               xmlns="http://www.w3.org/2000/svg"
-              className={`w-5 h-5 sm:w-6 sm:h-6 ${
-                isFavorited ? 'text-gold' : 'text-white/40 hover:text-gold/70'
-              }`}
+              className="w-4 h-4 text-site-blue shrink-0"
+              fill="none"
               viewBox="0 0 24 24"
-              fill={isFavorited ? 'currentColor' : 'none'}
               stroke="currentColor"
               strokeWidth={2}
             >
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"
+                d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"
               />
             </svg>
-          </button>
-        </div>
-
-        {/* Badges */}
-        <div className="flex flex-wrap items-center gap-2">
-          {location.recommended_level > 0 && (
-            <span className="gold-text text-sm font-medium px-3 py-1 rounded-full border border-gold-dark/50">
-              {location.recommended_level}+ LVL
+            <b className="text-white font-medium">{postsCount}</b>
+            {' '}постов
+          </span>
+          {location.region_name && (
+            <span className="flex items-center gap-2">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="w-4 h-4 text-gold shrink-0"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"
+                />
+                <circle cx="12" cy="10" r="3" />
+              </svg>
+              Регион{' '}
+              <b className="text-white font-medium">{location.region_name}</b>
             </span>
           )}
-          <span className={`text-xs font-medium px-3 py-1 rounded-full ${markerColor}`}>
-            {markerLabel}
-          </span>
         </div>
-
-        {/* Description */}
-        {location.description && (
-          <p className="text-white/70 text-sm sm:text-base leading-relaxed break-words">
-            {location.description}
-          </p>
-        )}
       </div>
     </section>
   );

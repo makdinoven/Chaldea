@@ -122,6 +122,11 @@ export interface MobInLocation {
   tier: 'normal' | 'elite' | 'boss';
   avatar: string | null;
   status: 'alive' | 'in_battle';
+  // FEAT-152: last persisted HP from character_attributes. Null/absent when
+  // the attributes row is missing — the UI hides the HP bar in that case.
+  // For a mob with status "in_battle" this is the last saved value, not live.
+  current_hp?: number | null;
+  max_hp?: number | null;
 }
 
 export interface BattleRewardItem {

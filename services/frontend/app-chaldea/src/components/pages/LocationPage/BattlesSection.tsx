@@ -113,27 +113,34 @@ const BattlesSection = ({ locationId, characterId, inBattle, players }: BattlesS
   const battleCount = battles.length;
 
   return (
-    <section className="bg-black/60 rounded-card">
+    <section className="bg-site-bg backdrop-blur-sm rounded-card border border-gold-dark/20 shadow-card overflow-hidden">
       {/* Collapsible header */}
       <button
+        type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="w-full flex items-center justify-between py-3 px-4 sm:px-6 group cursor-pointer"
+        className={`w-full flex items-center gap-2.5 px-4 sm:px-5 py-3.5 group cursor-pointer ${
+          isOpen ? 'border-b border-white/[0.07]' : ''
+        }`}
       >
-        <div className="flex items-center gap-2">
-          <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
-            Бои на локации
-          </h2>
-          {!loading && battleCount > 0 && (
-            <span className="bg-site-red/60 text-white text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-full min-w-[20px] text-center">
-              {battleCount}
-            </span>
-          )}
-          {loading && (
-            <div className="w-4 h-4 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
-          )}
-        </div>
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px] text-gold shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M14.5 17.5L3 6V3h3l11.5 11.5" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 19l6-6" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16 16l4 4" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 21l2-2" />
+        </svg>
+        <h2 className="gold-text text-[13px] font-medium uppercase tracking-[0.08em]">
+          Бои на локации
+        </h2>
+        {!loading && battleCount > 0 && (
+          <span className="bg-site-red/60 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-[20px] text-center">
+            {battleCount}
+          </span>
+        )}
+        {loading && (
+          <div className="w-4 h-4 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
+        )}
         <svg
-          className={`w-5 h-5 text-gold transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+          className={`w-4 h-4 text-gold ml-auto shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -153,7 +160,7 @@ const BattlesSection = ({ locationId, characterId, inBattle, players }: BattlesS
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             className="overflow-hidden"
           >
-            <div className="px-4 sm:px-6 pb-4 flex flex-col gap-3">
+            <div className="px-4 sm:px-5 pb-4 pt-3 flex flex-col gap-3">
               {/* Assemble a group battle */}
               <button
                 onClick={() => setPartyOpen(true)}
@@ -196,7 +203,7 @@ const BattlesSection = ({ locationId, characterId, inBattle, players }: BattlesS
                           hidden: { opacity: 0, y: 10 },
                           visible: { opacity: 1, y: 0 },
                         }}
-                        className="flex flex-col gap-3 p-3 sm:p-4 rounded-card bg-white/10 hover:bg-white/15 transition-colors"
+                        className="flex flex-col gap-3 p-3 sm:p-4 rounded-card bg-white/[0.05] border border-white/[0.08] hover:border-gold-dark/30 transition-colors duration-200"
                       >
                         {/* Header: badges */}
                         <div className="flex items-center gap-2 flex-wrap">

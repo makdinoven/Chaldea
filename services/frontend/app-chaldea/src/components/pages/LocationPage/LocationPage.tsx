@@ -9,6 +9,7 @@ import { setCharacterLocation, getMe } from '../../../redux/slices/userSlice';
 import { isStaff } from '../../../utils/permissions';
 import { LocationData } from './types';
 import LocationHeader from './LocationHeader';
+import LocationTopBar from './LocationTopBar';
 import PlayersSection from './PlayersSection';
 import PostCard from './PostCard';
 import PostCreateForm from './PostCreateForm';
@@ -24,6 +25,7 @@ import { fetchMobPacksByLocation } from '../../../api/mobPacks';
 import { selectDungeonsAtLocation } from '../../../redux/slices/dungeonSlice';
 import BattlesSection from './BattlesSection';
 import useBattleLock from '../../../hooks/useBattleLock';
+import useBattlePreview from '../../../hooks/useBattlePreview';
 import BattleLockBanner from '../../CommonComponents/BattleLockBanner';
 import DungeonEntrance from '../../DungeonPage/DungeonEntrance';
 import useGatheringLock from '../../../hooks/useGatheringLock';
@@ -44,7 +46,10 @@ const LocationPage = () => {
   const userId = useAppSelector((state) => state.user.id);
   const userRole = useAppSelector((state) => state.user.role);
   const userIsStaff = isStaff(userRole);
-  const { inBattle } = useBattleLock(character?.id);
+  const { inBattle, battleId } = useBattleLock(character?.id);
+  // Enriched banner data (FEAT-152 A4): opponent, round, whose turn.
+  // Silent-fail — the banner degrades to its generic variant on error.
+  const { preview: battlePreview } = useBattlePreview(inBattle ? battleId : null);
   const { isGathering } = useGatheringLock(character?.id);
   // Combined "the character cannot take voluntary actions" flag — used to
   // gate the post form, quick-move button and neighbor links so that
@@ -497,220 +502,241 @@ const LocationPage = () => {
   // --- Error state ---
   if (error || !location) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <p className="text-white/60 text-lg">{error || 'Локация не найдена'}</p>
-        <button
-          onClick={() => navigate(-1)}
-          className="btn-blue text-sm px-6 py-2"
-        >
-          Назад
-        </button>
+      <div className="flex items-center justify-center min-h-[60vh] px-4">
+        <div className="bg-site-bg backdrop-blur-sm rounded-card border border-white/10 shadow-card p-6 sm:p-8 flex flex-col items-center gap-4 max-w-sm w-full text-center">
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-white/30" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          <p className="text-white/60 text-base">{error || 'Локация не найдена'}</p>
+          <button
+            onClick={() => navigate(-1)}
+            className="btn-blue text-sm px-6 py-2"
+          >
+            Назад
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 pb-10">
-      {/* Header block */}
-      <div className="bg-black/60 rounded-card p-4 sm:p-6 backdrop-blur-sm flex flex-col gap-4">
-        {/* Back button */}
-        <button
-          onClick={() => navigate(-1)}
-          className="self-start flex items-center gap-2 text-white/60 hover:text-white transition-colors text-sm"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
-          Назад
-        </button>
+      {/* Top bar: back, breadcrumb, labeled favorite (FEAT-152 A1/A8) */}
+      <LocationTopBar
+        location={location}
+        isFavorited={location.is_favorited ?? false}
+        onToggleFavorite={handleToggleFavorite}
+        onBack={() => navigate(-1)}
+      />
 
-        {/* Battle lock banner */}
-        {inBattle && (
-          <BattleLockBanner message="Вы в бою! Завершите бой, чтобы продолжить." />
-        )}
-
-        {/* Gathering lock banner — shown while a resource-gathering session
-            is active. Mirrors BattleLockBanner placement so the player
-            always sees what is blocking actions on this page. */}
-        {character?.id && isGathering && (
-          <GatheringLockBanner characterId={character.id} />
-        )}
-
-        {/* Header */}
-        <LocationHeader
-          location={location}
-          isFavorited={location.is_favorited ?? false}
-          onToggleFavorite={handleToggleFavorite}
-        />
-      </div>
-
-      {/* Content block */}
-      <div className="flex flex-col gap-4 sm:gap-6">
-        {/* Players + NPCs */}
-        <PlayersSection
-          players={location.players}
-          npcs={location.npcs ?? []}
-          currentUserId={userId}
+      {/* Battle lock banner — full mock version (A4): opponent, round,
+          whose turn, «Вернуться к бою»; degrades gracefully without preview */}
+      {inBattle && (
+        <BattleLockBanner
+          title="Вы в бою!"
+          message="Пока бой не завершён, перемещение, добыча и написание постов недоступны."
+          battleId={battleId}
+          preview={battlePreview}
           currentCharacterId={character?.id ?? null}
-          currentCharacterLevel={Number(character?.level) || 0}
-          locationId={location.id}
-          locationMarkerType={location.marker_type}
-          isCharacterHere={isCharacterHere}
-          talkableNpcIds={(gateStatus.npc_dialogue as number[]) ?? []}
+          fallbackLocationId={location.id}
         />
+      )}
+
+      {/* Gathering lock banner — shown while a resource-gathering session
+          is active. Mirrors BattleLockBanner placement so the player
+          always sees what is blocking actions on this page. */}
+      {character?.id && isGathering && (
+        <GatheringLockBanner characterId={character.id} />
+      )}
+
+      {/* Time-sensitive alerts next to banners (§3.5 B6) — hidden when empty */}
+      {isCharacterHere && character?.id && (
+        <PendingInvitationsPanel locationId={location.id} />
+      )}
+      {isCharacterHere && character?.id && (
+        <PendingPartyInvitesPanel characterId={character.id} locationId={location.id} />
+      )}
+
+      {/* Hero banner */}
+      <LocationHeader location={location} />
+
+      {/* 3-column row: who's here / neighbors / enemies (§3.5) */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_1fr_1fr] gap-4 sm:gap-6 items-start">
+        {/* Players + NPCs — NOT dimmed in battle (A10) */}
+        <div className="min-w-0">
+          <PlayersSection
+            players={location.players}
+            npcs={location.npcs ?? []}
+            currentUserId={userId}
+            currentCharacterId={character?.id ?? null}
+            currentCharacterLevel={Number(character?.level) || 0}
+            locationId={location.id}
+            locationMarkerType={location.marker_type}
+            isCharacterHere={isCharacterHere}
+            talkableNpcIds={(gateStatus.npc_dialogue as number[]) ?? []}
+          />
+        </div>
 
         {/* Neighbors */}
-        <div className={actionsLocked ? 'pointer-events-none opacity-50' : ''}>
+        <div className={`min-w-0 ${actionsLocked ? 'pointer-events-none opacity-50' : ''}`}>
           <NeighborsSection neighbors={location.neighbors} />
         </div>
 
-        {/* Mobs / Enemies */}
-        <LocationMobs
-          locationId={location.id}
-          characterId={isCharacterHere ? (character?.id ?? null) : null}
-          gatedMobIds={(gateStatus.combat as number[]) ?? []}
-        />
+        {/* Mobs / Enemies — dimmed while actions are locked (§3.5) */}
+        <div className={`min-w-0 ${actionsLocked ? 'pointer-events-none opacity-50' : ''}`}>
+          <LocationMobs
+            locationId={location.id}
+            characterId={isCharacterHere ? (character?.id ?? null) : null}
+            gatedMobIds={(gateStatus.combat as number[]) ?? []}
+          />
+        </div>
+      </div>
 
-        {/* Mob packs (FEAT-147) */}
-        <LocationMobPacks
-          locationId={location.id}
-          characterId={isCharacterHere ? (character?.id ?? null) : null}
-          gatedMobIds={(gateStatus.combat as number[]) ?? []}
-        />
+      {/* Mob packs (FEAT-147) — full width */}
+      <LocationMobPacks
+        locationId={location.id}
+        characterId={isCharacterHere ? (character?.id ?? null) : null}
+        gatedMobIds={(gateStatus.combat as number[]) ?? []}
+      />
 
-        {/* Active battles */}
-        <BattlesSection
+      {/* Active battles — full width */}
+      <BattlesSection
+        locationId={location.id}
+        characterId={character?.id ?? null}
+        inBattle={inBattle}
+        players={location.players}
+      />
+
+      {/* Dungeon entrance — shown when dungeons exist at this location */}
+      {isCharacterHere && !actionsLocked && (
+        <DungeonEntrance
           locationId={location.id}
-          characterId={character?.id ?? null}
-          inBattle={inBattle}
           players={location.players}
+          currentCharacterId={character?.id ?? null}
         />
+      )}
 
-        {/* Squads present on this location (FEAT-144 Ф5) */}
-        <PartiesOnLocation locationId={location.id} />
-
-        {/* Resource gathering — shown only when nodes exist on the location.
-            Hidden by GatheringSection itself when the array is empty. */}
-        <GatheringSection
-          locationId={location.id}
-          characterId={character?.id ?? null}
-          inventoryId={character?.id ?? null}
-          isCharacterHere={isCharacterHere}
-          actionsLocked={actionsLocked}
-          nodes={location.gathering_nodes ?? []}
-          onGatherSucceeded={fetchLocationData}
-        />
-
-        {/* Dungeon entrance — shown when dungeons exist at this location */}
-        {isCharacterHere && !actionsLocked && (
-          <DungeonEntrance
-            locationId={location.id}
-            players={location.players}
-            currentCharacterId={character?.id ?? null}
-          />
-        )}
-
-        {/* PvP Invitations & Trade requests — hidden when empty */}
-        {isCharacterHere && character?.id && (
-          <PendingInvitationsPanel locationId={location.id} />
-        )}
-
-        {/* Party invitations — hidden when empty */}
-        {isCharacterHere && character?.id && (
-          <PendingPartyInvitesPanel characterId={character.id} locationId={location.id} />
-        )}
-
-        {/* Loot — only shown when items exist */}
-        {(location.loot ?? []).length > 0 && (
-          <LootSection
-            loot={location.loot}
-            currentCharacterId={isCharacterHere ? (character?.id ?? null) : null}
-            locationId={location.id}
-            onPickup={handlePickupLoot}
-          />
-        )}
-
-        {/* Posts */}
-        <section className="bg-black/60 rounded-card p-4 sm:p-6 flex flex-col gap-4">
-          <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
-            Посты
-          </h2>
-
-          {/* Create form — shown if character exists or user is staff */}
-          {(character || userIsStaff) && (
-            <>
-              {inBattle && (
-                <p className="text-yellow-400 text-sm font-medium">Вы в бою</p>
-              )}
-              {!inBattle && isGathering && (
-                <p className="text-yellow-400 text-sm font-medium">Идёт добыча — действия заблокированы</p>
-              )}
-
-              {/* Movement choice UI for neighbor locations */}
-              {!isCharacterHere && isNeighborLocation && !actionsLocked && neighborEntry && (
-                isTravelOnCooldown ? (
-                  /* Cooldown timer */
-                  <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4 flex items-center gap-3">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-yellow-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+      {/* Body grid: chronicle (posts) + sidebar; sidebar above posts on <lg */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-4 sm:gap-6 items-start">
+        {/* LEFT: movement, chronicle heading, post form, posts feed */}
+        <div className="order-2 lg:order-1 flex flex-col gap-4 min-w-0">
+          {/* Movement choice UI for neighbor locations (B1) */}
+          {(character || userIsStaff) &&
+            !isCharacterHere && isNeighborLocation && !actionsLocked && neighborEntry && (
+            isTravelOnCooldown ? (
+              /* Cooldown timer */
+              <div className="bg-site-bg backdrop-blur-sm rounded-card border border-gold-dark/30 p-4 flex items-center gap-3.5">
+                <span className="w-10 h-10 shrink-0 flex items-center justify-center rounded-[10px] bg-gold/10 border border-gold-dark/30 text-gold">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </span>
+                <p className="text-gold-light text-sm">
+                  Перемещение будет доступно через{' '}
+                  <span className="font-mono font-bold">
+                    {cooldownMinutes > 0
+                      ? `${cooldownMinutes} мин ${String(cooldownSeconds).padStart(2, '0')} сек`
+                      : `${cooldownSeconds} сек`}
+                  </span>
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col sm:flex-row gap-3">
+                {/* Option 1: Write post to move */}
+                <button
+                  onClick={() => setShowPostForm(true)}
+                  className={`flex-1 bg-site-bg backdrop-blur-sm rounded-card border p-4 text-left transition-colors duration-200 ease-site ${
+                    showPostForm
+                      ? 'border-stat-energy bg-stat-energy/10'
+                      : 'border-white/10 hover:border-gold-dark/40'
+                  }`}
+                >
+                  <p className="text-white text-sm font-medium mb-1">
+                    Написать пост для перемещения
+                  </p>
+                  <p className="text-stat-energy text-xs flex items-center gap-1">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
                     </svg>
-                    <p className="text-yellow-300 text-sm">
-                      Перемещение будет доступно через{' '}
-                      <span className="font-mono font-bold">
-                        {cooldownMinutes > 0
-                          ? `${cooldownMinutes} мин ${String(cooldownSeconds).padStart(2, '0')} сек`
-                          : `${cooldownSeconds} сек`}
-                      </span>
+                    {neighborEntry.energy_cost} выносливости
+                  </p>
+                </button>
+
+                {/* Option 2: Quick move */}
+                {!location.no_quick_move && (
+                  <button
+                    onClick={handleQuickMove}
+                    disabled={quickMoving}
+                    className="flex-1 bg-site-bg backdrop-blur-sm rounded-card border border-white/10 hover:border-gold-dark/40 p-4 text-left transition-colors duration-200 ease-site disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <p className="text-white text-sm font-medium mb-1">
+                      {quickMoving ? 'Перемещение...' : 'Быстрое перемещение'}
                     </p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col sm:flex-row gap-3">
-                    {/* Option 1: Write post to move */}
-                    <button
-                      onClick={() => setShowPostForm(true)}
-                      className={`flex-1 rounded-lg border p-4 text-left transition-colors ${
-                        showPostForm
-                          ? 'border-stat-energy bg-stat-energy/10'
-                          : 'border-white/10 bg-white/5 hover:border-white/20'
-                      }`}
-                    >
-                      <p className="text-white text-sm font-medium mb-1">
-                        Написать пост для перемещения
-                      </p>
-                      <p className="text-stat-energy text-xs flex items-center gap-1">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                        {neighborEntry.energy_cost} выносливости
-                      </p>
-                    </button>
+                    <p className="text-stat-energy text-xs flex items-center gap-1">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      {neighborEntry.energy_cost * 2} выносливости
+                    </p>
+                    <p className="text-white/40 text-xs mt-1">Без написания поста</p>
+                  </button>
+                )}
+              </div>
+            )
+          )}
 
-                    {/* Option 2: Quick move */}
-                    {!location.no_quick_move && (
-                      <button
-                        onClick={handleQuickMove}
-                        disabled={quickMoving}
-                        className="flex-1 rounded-lg border border-white/10 bg-white/5 hover:border-white/20 p-4 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <p className="text-white text-sm font-medium mb-1">
-                          {quickMoving ? 'Перемещение...' : 'Быстрое перемещение'}
-                        </p>
-                        <p className="text-stat-energy text-xs flex items-center gap-1">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                          </svg>
-                          {neighborEntry.energy_cost * 2} выносливости
-                        </p>
-                        <p className="text-white/40 text-xs mt-1">Без написания поста</p>
-                      </button>
-                    )}
-                  </div>
-                )
-              )}
+          {/* Chronicle heading */}
+          <div className="flex items-center gap-3 sm:gap-4">
+            <span className="gold-text text-xs sm:text-sm font-medium uppercase tracking-[0.2em] shrink-0">
+              Хроника локации
+            </span>
+            <span className="flex-1 h-px bg-gradient-to-r from-gold-dark/50 to-transparent" />
+            <span className="text-white/40 text-xs shrink-0">
+              {location.posts.length} постов
+            </span>
+          </div>
 
-              {/* Post form: shown if at current location, staff (always), or user chose "write post" on a neighbor (not during cooldown).
-                  Hidden entirely while gathering — the player cannot post during a gather session. */}
-              {!isGathering && (isCharacterHere || userIsStaff || (isNeighborLocation && showPostForm && !isTravelOnCooldown)) && (
+          {/* Create form — shown if character exists or user is staff.
+              While the character is locked (battle / gathering), the form is
+              replaced by a mock-style hint card (B16). */}
+          {(character || userIsStaff) && (
+            inBattle ? (
+              <div className="bg-site-bg backdrop-blur-sm rounded-card border border-stat-hp/30 flex items-center gap-3.5 p-4 sm:px-5">
+                <span className="w-11 h-11 shrink-0 flex items-center justify-center rounded-[11px] bg-stat-hp/15 border border-stat-hp/35 text-stat-hp">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-[22px] h-[22px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.5 17.5 3 6V3h3l11.5 11.5" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m13 19 6-6" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m16 16 4 4" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m19 21 2-2" />
+                  </svg>
+                </span>
+                <div className="flex flex-col gap-0.5 min-w-0">
+                  <span className="text-stat-hp text-sm font-medium">Вы в бою</span>
+                  <span className="text-white/55 text-xs">
+                    Написание постов будет доступно после завершения боя.
+                  </span>
+                </div>
+              </div>
+            ) : isGathering ? (
+              <div className="bg-site-bg backdrop-blur-sm rounded-card border border-stat-energy/30 flex items-center gap-3.5 p-4 sm:px-5">
+                <span className="w-11 h-11 shrink-0 flex items-center justify-center rounded-[11px] bg-stat-energy/15 border border-stat-energy/35 text-stat-energy">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-[22px] h-[22px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11 20A7 7 0 019.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2 21c0-3 1.85-5.36 5.08-6" />
+                  </svg>
+                </span>
+                <div className="flex flex-col gap-0.5 min-w-0">
+                  <span className="text-stat-energy text-sm font-medium">Идёт добыча</span>
+                  <span className="text-white/55 text-xs">
+                    Написание постов будет доступно после завершения добычи.
+                  </span>
+                </div>
+              </div>
+            ) : (
+              /* Post form: shown if at current location, staff (always), or user
+                 chose "write post" on a neighbor (not during cooldown). */
+              (isCharacterHere || userIsStaff || (isNeighborLocation && showPostForm && !isTravelOnCooldown)) && (
                 <PostCreateForm
                   onSubmit={handleSubmitPost}
                   onSubmitAsNpc={userIsStaff ? handleSubmitNpcPost : undefined}
@@ -718,13 +744,19 @@ const LocationPage = () => {
                   disabled={actionsLocked || (!isCharacterHere && !isNeighborLocation && !userIsStaff)}
                   isStaff={userIsStaff}
                   npcs={location.npcs ?? []}
+                  locationName={location.name}
                 />
-              )}
-            </>
+              )
+            )
           )}
 
+          {/* Posts feed */}
           {location.posts.length === 0 ? (
-            <p className="text-white/50 text-sm">Пока нет постов</p>
+            <div className="bg-site-bg backdrop-blur-sm rounded-card border border-white/[0.07] p-6 text-center">
+              <p className="text-white/50 text-sm">
+                Здесь пока нет постов — станьте первым, кто опишет свои действия.
+              </p>
+            </div>
           ) : (
             <div className="flex flex-col gap-3">
               {location.posts.map((post) => (
@@ -747,8 +779,34 @@ const LocationPage = () => {
               ))}
             </div>
           )}
-        </section>
+        </div>
 
+        {/* RIGHT: sidebar (gathering, loot, squads) — above posts on <lg */}
+        <div className="order-1 lg:order-2 flex flex-col gap-4 sm:gap-6 min-w-0">
+          {/* Resource gathering — hidden by GatheringSection itself when empty */}
+          <GatheringSection
+            locationId={location.id}
+            characterId={character?.id ?? null}
+            inventoryId={character?.id ?? null}
+            isCharacterHere={isCharacterHere}
+            actionsLocked={actionsLocked}
+            nodes={location.gathering_nodes ?? []}
+            onGatherSucceeded={fetchLocationData}
+          />
+
+          {/* Loot — only shown when items exist */}
+          {(location.loot ?? []).length > 0 && (
+            <LootSection
+              loot={location.loot}
+              currentCharacterId={isCharacterHere ? (character?.id ?? null) : null}
+              locationId={location.id}
+              onPickup={handlePickupLoot}
+            />
+          )}
+
+          {/* Squads present on this location (FEAT-144 Ф5) */}
+          <PartiesOnLocation locationId={location.id} />
+        </div>
       </div>
     </div>
   );

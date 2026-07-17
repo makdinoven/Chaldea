@@ -827,6 +827,10 @@ class MobInLocation(BaseModel):
     tier: str
     avatar: Optional[str] = None
     status: str
+    # FEAT-152: last persisted HP from the shared character_attributes table.
+    # None when the attributes row is missing (frontend hides the HP bar).
+    current_hp: Optional[int] = None
+    max_hp: Optional[int] = None
 
 
 # ============================================================
@@ -929,6 +933,10 @@ class PackMemberInLocation(BaseModel):
     level: int
     avatar: Optional[str] = None
     count: int = 1
+    # FEAT-152: summed persisted HP of the group's living members
+    # (members are aggregated by template). None when no attributes rows found.
+    current_hp: Optional[int] = None
+    max_hp: Optional[int] = None
 
 
 class MobPackInLocation(BaseModel):

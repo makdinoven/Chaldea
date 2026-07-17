@@ -38,6 +38,15 @@
 
 ## HIGH
 
+### Баг: таймер кулдауна перемещения никогда не отображается — `/users/me` не отдаёт `travel_cooldown_until`
+**Сервис:** user-service (+ frontend consumer)
+**Файлы:**
+- `services/user-service/schemas.py` (класс `CharacterShort`, ~строка 66) — поле `travel_cooldown_until` отсутствует в схеме
+- `services/user-service/main.py:154` — значение собирается в dict, но затем срезается response_model
+- `services/frontend/app-chaldea/src/components/pages/LocationPage/LocationPage.tsx:59-90` — UI-таймер читает `character.travel_cooldown_until`, который никогда не приходит
+**Описание:** `MeResponse.character` типизирован как `CharacterShort`, в котором нет поля `travel_cooldown_until`. Pydantic отфильтровывает поле из ответа `/users/me`, хотя main.py его подставляет (и frontend-тип `userSlice.ts` его ожидает). В результате блок «Перемещение будет доступно через N мин M сек» на странице локации никогда не показывается, кулдаун виден только как ошибка при попытке перемещения. Баг существовал до FEAT-152 (обнаружен Reviewer при live-проверке FEAT-152, 2026-07-17). Фикс: добавить `travel_cooldown_until: Optional[datetime/str] = None` в `CharacterShort`.
+**Приоритет:** HIGH (нерабочая пользовательская функция)
+
 ### ~~Баг: locations-service миграция 004 падает на свежей БД (отсутствует таблица `permissions`)~~ DONE (2026-04-08)
 ~~**Сервис:** locations-service~~
 ~~**Файлы:** `services/locations-service/app/alembic/versions/004_game_time_config.py`~~

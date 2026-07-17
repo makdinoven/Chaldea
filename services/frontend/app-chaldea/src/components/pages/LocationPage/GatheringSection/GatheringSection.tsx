@@ -140,12 +140,22 @@ const GatheringSection = ({
   }
 
   return (
-    <section className="bg-black/60 rounded-card p-4 sm:p-6 backdrop-blur-sm flex flex-col gap-4">
-      <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
-        Ресурсы
-      </h2>
+    <section className="bg-site-bg backdrop-blur-sm rounded-card border border-stat-energy/20 shadow-card overflow-hidden">
+      {/* Header — green accent per mock («Добыча ресурсов») */}
+      <div className="flex items-center gap-2.5 px-4 sm:px-5 py-3.5 border-b border-white/[0.07]">
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px] text-stat-energy shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M11 20A7 7 0 019.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2 21c0-3 1.85-5.36 5.08-6" />
+        </svg>
+        <h2 className="text-stat-energy text-[13px] font-medium uppercase tracking-[0.08em]">
+          Добыча ресурсов
+        </h2>
+        <span className="bg-white/10 text-white/60 text-[10px] font-bold px-2 py-0.5 rounded-full min-w-[20px] text-center">
+          {nodes.length}
+        </span>
+      </div>
 
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2.5 p-3.5 sm:p-4">
         {nodes.map((node) => (
           <GatheringNodeCard
             key={node.id}

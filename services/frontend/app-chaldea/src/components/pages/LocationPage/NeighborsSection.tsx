@@ -7,29 +7,38 @@ interface NeighborsSectionProps {
   neighbors: NeighborLocation[];
 }
 
+/**
+ * «Соседние локации» — mock-style image cards in a 2-column grid
+ * (FEAT-152 §3.5). Collapsible behavior kept (decision B15); the parent
+ * dims this section via `actionsLocked` while in battle / gathering.
+ */
 const NeighborsSection = ({ neighbors }: NeighborsSectionProps) => {
   const navigate = useNavigate();
-  const [isOpen, setIsOpen] = useState(false);
-
-  if (neighbors.length === 0) return null;
+  const [isOpen, setIsOpen] = useState(true);
 
   return (
-    <section className="bg-black/60 rounded-card">
+    <section className="bg-site-bg backdrop-blur-sm rounded-card border border-gold-dark/20 shadow-card overflow-hidden">
       {/* Collapsible header */}
       <button
+        type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="w-full flex items-center justify-between py-3 px-4 sm:px-6 group cursor-pointer"
+        className={`w-full flex items-center gap-2.5 px-4 sm:px-5 py-3.5 cursor-pointer ${
+          isOpen ? 'border-b border-white/[0.07]' : ''
+        }`}
       >
-        <div className="flex items-center gap-2">
-          <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
-            Соседние локации
-          </h2>
-          <span className="bg-white/10 text-white/70 text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-full min-w-[20px] text-center">
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px] text-gold shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 11l19-9-9 19-2-8-8-2z" />
+        </svg>
+        <h2 className="gold-text text-[13px] font-medium uppercase tracking-[0.08em]">
+          Соседние локации
+        </h2>
+        {neighbors.length > 0 && (
+          <span className="bg-white/10 text-white/60 text-[10px] font-bold px-2 py-0.5 rounded-full min-w-[20px] text-center">
             {neighbors.length}
           </span>
-        </div>
+        )}
         <svg
-          className={`w-5 h-5 text-gold transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+          className={`w-4 h-4 text-gold ml-auto shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -49,16 +58,21 @@ const NeighborsSection = ({ neighbors }: NeighborsSectionProps) => {
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             className="overflow-hidden"
           >
-            <div className="px-4 sm:px-6 pb-4">
-              <div className="flex gap-2 sm:gap-3 overflow-x-auto pb-2 scrollbar-thin">
+            {neighbors.length === 0 ? (
+              <p className="text-white/50 text-sm px-4 sm:px-5 pb-4">
+                Нет соседних локаций
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2.5 px-3 sm:px-4 pb-4 pt-3 max-h-[320px] lg:max-h-[400px] overflow-y-auto gold-scrollbar content-start">
                 {neighbors.map((neighbor) => (
                   <button
                     key={neighbor.id}
+                    type="button"
                     onClick={() => navigate(`/location/${neighbor.id}`)}
-                    className="group flex-shrink-0 w-28 sm:w-36 bg-black/70 rounded-card overflow-hidden hover:bg-black/80 transition-colors text-left"
+                    className="group flex flex-col rounded-card overflow-hidden bg-white/[0.03] border border-white/[0.06] hover:border-gold-dark/40 hover:bg-white/[0.06] transition-all duration-200 ease-site text-left"
                   >
                     {/* Image */}
-                    <div className="w-full aspect-square bg-black/40 overflow-hidden">
+                    <div className="w-full h-[104px] bg-black/40 overflow-hidden shrink-0">
                       {neighbor.image_url ? (
                         <img
                           src={neighbor.image_url}
@@ -76,18 +90,20 @@ const NeighborsSection = ({ neighbors }: NeighborsSectionProps) => {
                     </div>
 
                     {/* Info */}
-                    <div className="p-2 sm:p-2.5 flex flex-col gap-1">
-                      <span className="text-white text-xs sm:text-sm font-medium truncate">
+                    <div className="flex flex-col gap-1.5 p-2.5 pb-3">
+                      <span className="text-white text-[13px] font-medium truncate">
                         {neighbor.name}
                       </span>
-                      <div className="flex items-center justify-between gap-1">
-                        {neighbor.recommended_level > 0 && (
-                          <span className="gold-text text-[10px] sm:text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        {neighbor.recommended_level > 0 ? (
+                          <span className="text-gold text-[11px] font-medium">
                             {neighbor.recommended_level}+ LVL
                           </span>
+                        ) : (
+                          <span />
                         )}
-                        <span className="text-stat-energy text-[10px] sm:text-xs flex items-center gap-1">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <span className="text-stat-energy text-[11px] flex items-center gap-1">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.4}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
                           </svg>
                           {neighbor.energy_cost}
@@ -97,7 +113,7 @@ const NeighborsSection = ({ neighbors }: NeighborsSectionProps) => {
                   </button>
                 ))}
               </div>
-            </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

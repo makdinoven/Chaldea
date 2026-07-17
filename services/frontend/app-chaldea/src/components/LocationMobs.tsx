@@ -31,17 +31,31 @@ const TIER_CONFIG: Record<
   },
 };
 
-const STATUS_CONFIG: Record<string, { label: string; dotClass: string }> = {
-  alive: { label: 'Готов к бою', dotClass: 'bg-green-500' },
-  in_battle: { label: 'В бою', dotClass: 'bg-orange-400' },
+/**
+ * HP bar (FEAT-152 A5): rendered only when the backend provided both fields.
+ * For a mob with status "in_battle" the value is the last persisted one —
+ * documented product behavior (§3.3), the «В бою» badge signals that.
+ */
+const MobHpBar = ({ current, max }: { current: number; max: number }) => {
+  const pct = Math.max(0, Math.min(100, (current / max) * 100));
+  return (
+    <div className="stat-bar" title={`HP ${current} / ${max}`}>
+      <div className="stat-bar-fill stat-bar-hp" style={{ width: `${pct}%` }} />
+    </div>
+  );
 };
 
+/**
+ * «Противники» — mock-style 2-column mob cards with HP bars (FEAT-152 §3.5).
+ * Collapsible kept (B15); combat-gate + solo/party attack logic unchanged;
+ * the parent dims the section via `actionsLocked` while in battle/gathering.
+ */
 const LocationMobs = ({ locationId, characterId, gatedMobIds = [] }: LocationMobsProps) => {
   const navigate = useNavigate();
   const [mobs, setMobs] = useState<MobInLocation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(true);
   const [attackingMobId, setAttackingMobId] = useState<number | null>(null);
   const [party, setParty] = useState<Party | null>(null);
   const [choosingMobId, setChoosingMobId] = useState<number | null>(null);
@@ -114,32 +128,35 @@ const LocationMobs = ({ locationId, characterId, gatedMobIds = [] }: LocationMob
 
   const mobCount = mobs.length;
 
-  // Hide the whole section when there are no monsters here (keep it visible on
-  // error so the failure is surfaced). Avoids an empty "Монстры" block.
-  if (mobCount === 0 && !error) return null;
-
   return (
-    <section className="bg-black/60 rounded-card">
+    <section className="bg-site-bg backdrop-blur-sm rounded-card border border-site-red/25 shadow-card overflow-hidden">
       {/* Collapsible header */}
       <button
+        type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="w-full flex items-center justify-between py-3 px-4 sm:px-6 group cursor-pointer"
+        className={`w-full flex items-center gap-2.5 px-4 sm:px-5 py-3.5 cursor-pointer ${
+          isOpen ? 'border-b border-white/[0.07]' : ''
+        }`}
       >
-        <div className="flex items-center gap-2">
-          <h2 className="gold-text text-lg sm:text-xl font-medium uppercase">
-            Монстры
-          </h2>
-          {!loading && mobCount > 0 && (
-            <span className="bg-site-red/60 text-white text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-full min-w-[20px] text-center">
-              {mobCount}
-            </span>
-          )}
-          {loading && (
-            <div className="w-4 h-4 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
-          )}
-        </div>
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px] text-stat-hp shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M14.5 17.5L3 6V3h3l11.5 11.5" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 19l6-6" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16 16l4 4" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 21l2-2" />
+        </svg>
+        <h2 className="text-stat-hp text-[13px] font-medium uppercase tracking-[0.08em]">
+          Противники
+        </h2>
+        {!loading && mobCount > 0 && (
+          <span className="bg-site-red/60 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-[20px] text-center">
+            {mobCount}
+          </span>
+        )}
+        {loading && (
+          <div className="w-4 h-4 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
+        )}
         <svg
-          className={`w-5 h-5 text-gold transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+          className={`w-4 h-4 text-gold ml-auto shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -159,140 +176,130 @@ const LocationMobs = ({ locationId, characterId, gatedMobIds = [] }: LocationMob
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             className="overflow-hidden"
           >
-            <div className="px-4 sm:px-6 pb-4 flex flex-col gap-3">
-              {error ? (
-                <>
-                  <p className="text-site-red text-sm">{error}</p>
-                  <button onClick={loadMobs} className="btn-blue text-sm px-4 py-2 self-start">
-                    Повторить
-                  </button>
-                </>
-              ) : mobCount === 0 ? (
-                <p className="text-white/50 text-sm">
-                  На этой локации нет врагов
-                </p>
-              ) : (
-                <motion.div
-                  initial="hidden"
-                  animate="visible"
-                  variants={{
-                    hidden: {},
-                    visible: { transition: { staggerChildren: 0.05 } },
-                  }}
-                  className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4"
-                >
-                  {mobs.map((mob) => {
-                    const tier = TIER_CONFIG[mob.tier] ?? TIER_CONFIG.normal;
-                    const status = STATUS_CONFIG[mob.status] ?? STATUS_CONFIG.alive;
-                    const isAttacking = attackingMobId === mob.active_mob_id;
+            {error ? (
+              <div className="flex flex-col gap-3 px-4 sm:px-5 pb-4 pt-3">
+                <p className="text-site-red text-sm">{error}</p>
+                <button onClick={loadMobs} className="btn-blue text-sm px-4 py-2 self-start">
+                  Повторить
+                </button>
+              </div>
+            ) : mobCount === 0 && !loading ? (
+              <p className="text-white/50 text-sm px-4 sm:px-5 pb-4">Противников нет</p>
+            ) : (
+              <motion.div
+                initial="hidden"
+                animate="visible"
+                variants={{
+                  hidden: {},
+                  visible: { transition: { staggerChildren: 0.05 } },
+                }}
+                className="grid grid-cols-2 gap-2 px-3 sm:px-4 pb-4 pt-3 max-h-[320px] lg:max-h-[400px] overflow-y-auto gold-scrollbar content-start"
+              >
+                {mobs.map((mob) => {
+                  const tier = TIER_CONFIG[mob.tier] ?? TIER_CONFIG.normal;
+                  const isAttacking = attackingMobId === mob.active_mob_id;
+                  const inBattleMob = mob.status === 'in_battle';
+                  const hasHp = mob.current_hp != null && mob.max_hp != null && mob.max_hp > 0;
 
-                    return (
-                      <motion.div
-                        key={mob.active_mob_id}
-                        variants={{
-                          hidden: { opacity: 0, y: 10 },
-                          visible: { opacity: 1, y: 0 },
-                        }}
-                        className="flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-card bg-white/10 hover:bg-white/15 transition-colors"
-                      >
-                        {/* Avatar */}
-                        <div className="gold-outline relative w-14 h-14 sm:w-16 sm:h-16 rounded-full overflow-hidden bg-black/40 shrink-0">
-                          {mob.avatar ? (
-                            <img
-                              src={mob.avatar}
-                              alt={mob.name}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-white/20">
-                              <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                className="w-8 h-8"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={1}
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="M12 6v6m0 0v6m0-6h6m-6 0H6"
-                                />
-                              </svg>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Info */}
-                        <div className="flex flex-col gap-1 flex-1 min-w-0">
-                          <span className="text-white text-sm sm:text-base font-medium truncate">
-                            {mob.name}
-                          </span>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="gold-text text-xs font-medium">
-                              Ур. {mob.level}
-                            </span>
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-medium ${tier.classes}`}
-                            >
-                              {tier.label}
-                            </span>
+                  return (
+                    <motion.div
+                      key={mob.active_mob_id}
+                      variants={{
+                        hidden: { opacity: 0, y: 10 },
+                        visible: { opacity: 1, y: 0 },
+                      }}
+                      className="flex flex-col items-center gap-2 p-2.5 pb-3 rounded-card bg-site-red/[0.06] border border-site-red/20"
+                    >
+                      {/* Image */}
+                      <div className="relative w-full h-[72px] rounded-[10px] overflow-hidden bg-black/40 shrink-0">
+                        {mob.avatar ? (
+                          <img
+                            src={mob.avatar}
+                            alt={mob.name}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-white/20">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M14.5 17.5L3 6V3h3l11.5 11.5" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M13 19l6-6" />
+                            </svg>
                           </div>
-                          <div className="flex items-center gap-1.5">
-                            <span className={`w-2 h-2 rounded-full ${status.dotClass}`} />
-                            <span className="text-white/50 text-[10px] sm:text-xs">
-                              {status.label}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Attack — hidden when character is not at this location.
-                            A party leader with co-located squadmates gets a
-                            group/solo choice (FEAT-144 Ф3). */}
-                        {characterId && (
-                          !gatedMobIds.includes(mob.character_id) ? (
-                            <span className="text-white/30 text-[10px] sm:text-xs shrink-0 text-right max-w-[96px] leading-tight">
-                              Нужен боевой пост
-                            </span>
-                          ) : choosingMobId === mob.active_mob_id && !isAttacking ? (
-                            <div className="flex gap-1.5 shrink-0">
-                              <button
-                                onClick={() => handleAttack(mob, true)}
-                                className="btn-blue text-xs px-2.5 py-1.5"
-                              >
-                                Группой
-                              </button>
-                              <button
-                                onClick={() => handleAttack(mob, false)}
-                                className="text-xs px-2.5 py-1.5 rounded border border-white/20 text-white/70 hover:bg-white/5"
-                              >
-                                Соло
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() =>
-                                canGroup
-                                  ? setChoosingMobId(mob.active_mob_id)
-                                  : handleAttack(mob, false)
-                              }
-                              disabled={mob.status === 'in_battle' || isAttacking}
-                              className="btn-blue text-xs sm:text-sm px-3 py-1.5 sm:px-4 sm:py-2 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                              {isAttacking ? (
-                                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                              ) : (
-                                'Атаковать'
-                              )}
-                            </button>
-                          )
                         )}
-                      </motion.div>
-                    );
-                  })}
-                </motion.div>
-              )}
-            </div>
+                        {/* In-battle badge — HP shown below is the last persisted value */}
+                        {inBattleMob && (
+                          <span className="absolute top-1.5 right-1.5 px-2 py-0.5 rounded-full bg-orange-500/80 text-white text-[9px] font-bold uppercase tracking-[0.04em]">
+                            В бою
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Name + level + tier */}
+                      <div className="flex flex-col items-center gap-1 w-full min-w-0">
+                        <span className="text-white text-[13px] font-medium text-center truncate w-full">
+                          {mob.name}
+                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                          <span className="text-white/50 text-[10px] font-bold">
+                            LVL {mob.level}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-medium ${tier.classes}`}>
+                            {tier.label}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* HP bar (A5) — hidden gracefully when data is null */}
+                      {hasHp && (
+                        <MobHpBar current={mob.current_hp as number} max={mob.max_hp as number} />
+                      )}
+
+                      {/* Attack — hidden when character is not at this location.
+                          A squad member with co-located mates gets a
+                          group/solo choice (FEAT-144 Ф3). */}
+                      {characterId && (
+                        !gatedMobIds.includes(mob.character_id) ? (
+                          <span className="text-white/35 text-[10px] text-center leading-tight">
+                            Нужен боевой пост
+                          </span>
+                        ) : choosingMobId === mob.active_mob_id && !isAttacking ? (
+                          <div className="flex gap-1.5 w-full">
+                            <button
+                              onClick={() => handleAttack(mob, true)}
+                              className="btn-blue text-[11px] px-2 py-1.5 flex-1"
+                            >
+                              Группой
+                            </button>
+                            <button
+                              onClick={() => handleAttack(mob, false)}
+                              className="text-[11px] px-2 py-1.5 flex-1 rounded-[9px] border border-white/20 text-white/70 hover:bg-white/5 transition-colors duration-200"
+                            >
+                              Соло
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() =>
+                              canGroup
+                                ? setChoosingMobId(mob.active_mob_id)
+                                : handleAttack(mob, false)
+                            }
+                            disabled={inBattleMob || isAttacking}
+                            className="w-full py-1.5 rounded-[9px] bg-site-red/90 text-white text-[11px] font-medium uppercase tracking-[0.04em] hover:brightness-110 transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center"
+                          >
+                            {isAttacking ? (
+                              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            ) : (
+                              'Напасть'
+                            )}
+                          </button>
+                        )
+                      )}
+                    </motion.div>
+                  );
+                })}
+              </motion.div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
