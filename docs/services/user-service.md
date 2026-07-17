@@ -29,7 +29,7 @@ user-service/
 |-------|------|----------|------|
 | POST | `/users/register` | Регистрация нового пользователя | Нет |
 | POST | `/users/login` | Логин (JWT access + refresh токены) | Нет |
-| POST | `/users/refresh` | Обновление access-токена | Нет |
+| POST | `/users/refresh` | Обновление пары токенов: JSON body `{refresh_token}` -> `{access_token, refresh_token, token_type}` (stateless-ротация refresh-токена) | Нет (refresh-токен в body и есть credential) |
 | GET | `/users/me` | Текущий пользователь + данные персонажа и локации | Да |
 | POST | `/users/upload-avatar/` | Загрузка аватара пользователя | Да |
 | PUT | `/users/{user_id}/update_character` | Установка текущего персонажа | Нет |
@@ -65,7 +65,9 @@ user-service/
 - **Secret key:** `"your-secret-key"` (ЗАХАРДКОЖЕН)
 - **Access token TTL:** 20 часов
 - **Refresh token TTL:** 7 дней
-- **Payload:** `{sub: email, role: string, current_character: int, exp: timestamp}`
+- **Payload:** `{sub: email, role: string, current_character: int, type: "access"|"refresh", exp: timestamp}`
+- **Claim `type`:** access-токены с `type=refresh` отклоняются в `get_current_user`; refresh-токены с `type=access` отклоняются в `/users/refresh`. Токены без claim (выданные до FEAT-150) принимаются везде (legacy, самоустраняется за 7 дней).
+- **`/users/refresh`:** принимает `{refresh_token}` в JSON body (не query — токен не попадает в логи Nginx), возвращает новую пару access (20ч) + refresh (7д), `current_character` перечитывается из БД. Все ошибки — единый ответ 401 «Недействительный или истёкший refresh-токен».
 - **Пароли:** bcrypt через passlib
 
 ## Коммуникация с другими сервисами

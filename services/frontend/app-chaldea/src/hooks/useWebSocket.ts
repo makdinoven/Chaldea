@@ -44,6 +44,7 @@ import type {
   WsAuctionExpiredData,
 } from '../types/auction';
 import type { ChatMessage, ChatChannel } from '../types/chat';
+import { getAccessToken, refreshAccessToken } from '../api/authToken';
 import toast from 'react-hot-toast';
 
 const MAX_RECONNECT_DELAY = 30000;
@@ -128,7 +129,9 @@ const useWebSocket = (): UseWebSocketReturn => {
     mountedRef.current = true;
 
     const connect = () => {
-      const token = localStorage.getItem('accessToken');
+      // Re-read on every (re)connect so a token refreshed by the HTTP layer
+      // (or another tab) is picked up instead of a stale captured one.
+      const token = getAccessToken();
       if (!token) {
         setConnected(false);
         return;
@@ -421,8 +424,15 @@ const useWebSocket = (): UseWebSocketReturn => {
         setConnected(false);
 
         if (event.code === WS_CLOSE_UNAUTHORIZED) {
-          // Token invalid/expired — use longer delay and re-read token
+          // Token invalid/expired — use longer delay, refresh the token first
+          // so the reconnect uses a fresh one instead of retrying a dead one.
+          // WS failures never clear tokens or trigger logout (FEAT-150):
+          // a fatal refresh is resolved by the HTTP layer's handleAuthFailure.
           reconnectDelayRef.current = UNAUTHORIZED_RECONNECT_DELAY;
+          void refreshAccessToken(token).finally(() => {
+            scheduleReconnect();
+          });
+          return;
         }
 
         scheduleReconnect();

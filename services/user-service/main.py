@@ -215,15 +215,20 @@ def login_user(data: Login, db: Session = Depends(get_db)):
     return {"access_token": access_token, "refresh_token": refresh_token}
 
 
-@router.post("/refresh")
-def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
+@router.post("/refresh", response_model=schemas.TokenResponse)
+def refresh_token(request: schemas.RefreshRequest, db: Session = Depends(get_db)):
+    # One generic error for every failure mode (no oracle about why it failed)
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
+        detail="Недействительный или истёкший refresh-токен",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(request.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        # Reject access tokens sent as refresh tokens.
+        # Tokens without a "type" claim are legacy and stay accepted.
+        if payload.get("type") == "access":
+            raise credentials_exception
         email: str = payload.get("sub")
         if email is None:
             raise credentials_exception
@@ -234,8 +239,18 @@ def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
     if user is None:
         raise credentials_exception
 
-    new_access_token = create_access_token(data={"sub": user.email}, role=user.role)
-    return {"access_token": new_access_token, "token_type": "bearer"}
+    # Rebuild token_data the same way login does (current_character re-read from DB)
+    token_data = {"sub": user.email}
+    if user.current_character is not None:
+        token_data["current_character"] = user.current_character
+
+    new_access_token = create_access_token(data=token_data, role=user.role)
+    new_refresh_token = create_refresh_token(data=token_data, role=user.role)  # D2: stateless rotation
+    return {
+        "access_token": new_access_token,
+        "refresh_token": new_refresh_token,
+        "token_type": "bearer",
+    }
 
 
 # ==================== CURRENT USER ====================

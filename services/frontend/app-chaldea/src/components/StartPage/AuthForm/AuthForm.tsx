@@ -1,5 +1,6 @@
 import { useState, useEffect, FormEvent, ChangeEvent } from 'react';
 import axios from 'axios';
+import { setTokens } from '../../../api/authToken';
 import Input from '../../CommonComponents/Input/Input';
 import FormButton from '../../CommonComponents/BlueGradientButton/BlueGradientButton';
 import useNavigateTo from '../../../hooks/useNavigateTo';
@@ -89,11 +90,8 @@ const AuthForm = ({ activeForm }: AuthFormProps) => {
       const response = await axios.post(url, data);
 
       if (response.status === 200) {
-        localStorage.setItem('accessToken', response.data.access_token);
-
-        if (response.data.refresh_token) {
-          localStorage.setItem('refreshToken', response.data.refresh_token);
-        }
+        // Single token writer (FEAT-150): keys unchanged, see authToken.ts.
+        setTokens(response.data.access_token, response.data.refresh_token);
 
         navigateTo('/home');
       } else {
@@ -102,7 +100,8 @@ const AuthForm = ({ activeForm }: AuthFormProps) => {
     } catch (err: unknown) {
       const message = extractErrorMessage(err);
       setError(message);
-      localStorage.removeItem('accessToken');
+      // No token cleanup here: deletion happens only in handleAuthFailure()
+      // (a failed login attempt must not destroy an existing valid session).
     }
   };
 

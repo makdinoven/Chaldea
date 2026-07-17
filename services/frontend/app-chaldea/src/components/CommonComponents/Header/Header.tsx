@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { MessageCircle, MessageSquare, User } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import { getMe, logout } from '../../../redux/slices/userSlice';
+import { clearTokens } from '../../../api/authToken';
 import { fetchUnreadCount, selectTotalUnread } from '../../../redux/slices/messengerSlice';
 import { toggleChat } from '../../../redux/slices/chatSlice';
 import NavLinks from './NavLinks';
@@ -38,7 +39,9 @@ const Header = () => {
   }, [dispatch]);
 
   const handleLogout = () => {
-    localStorage.removeItem('accessToken');
+    // Explicit user logout: clear BOTH tokens (FEAT-150) — a leftover
+    // refreshToken would let the refresh interceptor resurrect the session.
+    clearTokens();
     dispatch(logout());
     navigate('/');
   };

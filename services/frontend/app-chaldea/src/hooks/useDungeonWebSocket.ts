@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { getAccessToken, refreshAccessToken } from '../api/authToken';
 
 // --- Constants ---
 
@@ -79,8 +80,12 @@ const useDungeonWebSocket = (
 
       closeExistingConnection();
 
+      // Re-read the token on every (re)connect so a token refreshed by the
+      // HTTP layer (or another tab) is used instead of the captured prop.
+      const wsToken = getAccessToken() ?? token;
+
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/dungeons/ws/${sessionId}?token=${token}`;
+      const wsUrl = `${protocol}//${window.location.host}/dungeons/ws/${sessionId}?token=${wsToken}`;
 
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -125,7 +130,24 @@ const useDungeonWebSocket = (
           heartbeatRef.current = null;
         }
 
-        if (event.code === WS_CLOSE_UNAUTHORIZED || event.code === WS_CLOSE_NORMAL) {
+        if (event.code === WS_CLOSE_NORMAL) {
+          return;
+        }
+
+        // Unauthorized — the access token was rejected. Refresh it via the
+        // shared single-flight flow, then reconnect with the fresh token.
+        // WS failures never clear tokens or trigger logout (FEAT-150): on a
+        // fatal refresh we just stop reconnecting; logout is decided only by
+        // the HTTP layer's handleAuthFailure.
+        if (event.code === WS_CLOSE_UNAUTHORIZED) {
+          void refreshAccessToken(wsToken).then((result) => {
+            if (!mountedRef.current) return;
+            if (result.status === 'fatal') {
+              setReconnecting(false);
+              return;
+            }
+            scheduleReconnect();
+          });
           return;
         }
 

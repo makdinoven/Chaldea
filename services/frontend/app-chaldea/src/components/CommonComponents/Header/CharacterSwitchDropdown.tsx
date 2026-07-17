@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { User } from 'react-feather';
 import { motion } from 'motion/react';
+import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import { getMe } from '../../../redux/slices/userSlice';
@@ -69,27 +70,21 @@ const CharacterSwitchDropdown = ({ className = '', onClose }: CharacterSwitchDro
 
     setSwitching(characterId);
     try {
-      const token = localStorage.getItem('accessToken');
-      const response = await fetch(`${BASE_URL_DEFAULT}/users/${userId}/update_character`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ current_character: characterId }),
+      // Default axios instance: Bearer header + refresh-on-401 (FEAT-150).
+      await axios.put(`${BASE_URL_DEFAULT}/users/${userId}/update_character`, {
+        current_character: characterId,
       });
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => null);
-        throw new Error(data?.detail ?? 'Не удалось переключить персонажа');
-      }
 
       await dispatch(getMe()).unwrap();
       toast.success('Персонаж переключён');
       onClose();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Ошибка переключения персонажа';
-      toast.error(message);
+      const detail = axios.isAxiosError<{ detail?: unknown }>(err)
+        ? err.response?.data?.detail
+        : undefined;
+      toast.error(
+        typeof detail === 'string' ? detail : 'Не удалось переключить персонажа'
+      );
     } finally {
       setSwitching(null);
     }

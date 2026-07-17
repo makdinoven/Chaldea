@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { User, Plus } from 'react-feather';
+import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import { getMe } from '../../../redux/slices/userSlice';
@@ -56,14 +57,13 @@ const SelectCharacterPage = () => {
       setLoading(true);
       setError(null);
       try {
-        const response = await fetch(`${BASE_URL_DEFAULT}/users/${userId}/characters`);
-        if (!response.ok) {
-          throw new Error('Не удалось загрузить персонажей');
-        }
-        const data = await response.json();
+        // Default axios instance: inherits auth interceptors (FEAT-150).
+        const { data } = await axios.get<{ characters?: CharacterItem[] }>(
+          `${BASE_URL_DEFAULT}/users/${userId}/characters`
+        );
         setCharacters(data.characters ?? []);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Ошибка загрузки';
+      } catch {
+        const message = 'Не удалось загрузить персонажей';
         setError(message);
         toast.error(message);
       } finally {
@@ -80,27 +80,21 @@ const SelectCharacterPage = () => {
 
     setSwitching(characterId);
     try {
-      const token = localStorage.getItem('accessToken');
-      const response = await fetch(`${BASE_URL_DEFAULT}/users/${userId}/update_character`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ current_character: characterId }),
+      // Default axios instance: Bearer header + refresh-on-401 (FEAT-150).
+      await axios.put(`${BASE_URL_DEFAULT}/users/${userId}/update_character`, {
+        current_character: characterId,
       });
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => null);
-        throw new Error(data?.detail ?? 'Не удалось переключить персонажа');
-      }
 
       await dispatch(getMe()).unwrap();
       toast.success('Персонаж переключён');
       navigate('/profile');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Ошибка переключения';
-      toast.error(message);
+      const detail = axios.isAxiosError<{ detail?: unknown }>(err)
+        ? err.response?.data?.detail
+        : undefined;
+      toast.error(
+        typeof detail === 'string' ? detail : 'Не удалось переключить персонажа'
+      );
     } finally {
       setSwitching(null);
     }

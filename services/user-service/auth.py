@@ -20,7 +20,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 # Создание JWT токена с добавлением роли пользователя
 def create_access_token(data: dict, role: str, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()  # data уже содержит current_character
-    to_encode.update({"role": role})
+    to_encode.update({"role": role, "type": "access"})
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
@@ -31,7 +31,7 @@ def create_access_token(data: dict, role: str, expires_delta: Optional[timedelta
 
 def create_refresh_token(data: dict, role: str, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()  # data уже содержит current_character
-    to_encode.update({"role": role})
+    to_encode.update({"role": role, "type": "refresh"})
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
@@ -50,6 +50,10 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        # Reject refresh tokens used as access tokens.
+        # Tokens without a "type" claim are legacy (issued before the claim existed) and stay accepted.
+        if payload.get("type") == "refresh":
+            raise credentials_exception
         email: str = payload.get("sub")
         role: str = payload.get("role")
         if email is None or role is None:

@@ -1,5 +1,7 @@
 import { createAsyncThunk, createSlice, PayloadAction } from "@reduxjs/toolkit";
+import axios, { AxiosError } from "axios";
 import { BASE_URL_DEFAULT } from "../../api/api";
+import { getAccessToken } from "../../api/authToken";
 import type { RootState } from "../store";
 
 // --- Types ---
@@ -58,30 +60,55 @@ const initialState: UserState = {
   authInitialized: false,
 };
 
-export const getMe = createAsyncThunk<GetMeResponse, void, { rejectValue: string }>(
+/**
+ * getMe reject reasons (FEAT-150):
+ * - 'unauthorized' — definitive 401 (the axios interceptor already tried a
+ *   token refresh and it did not recover the session);
+ * - 'transient' — network error / 5xx (e.g. deploy window). Tokens are KEPT:
+ *   this thunk never touches localStorage — token deletion happens only in
+ *   `handleAuthFailure()` (src/api/authToken.ts).
+ */
+type GetMeRejectReason = "unauthorized" | "transient";
+
+/** Bounded retry for transient errors during deploy windows (section 3). */
+const GET_ME_TRANSIENT_RETRIES = 2;
+const GET_ME_RETRY_DELAY_MS = 1500;
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+export const getMe = createAsyncThunk<GetMeResponse, void, { rejectValue: GetMeRejectReason }>(
   "user/getMe",
   async (_, thunkAPI) => {
-    const token = localStorage.getItem("accessToken");
-
-    if (!token) {
-      return thunkAPI.rejectWithValue("No token");
+    if (!getAccessToken()) {
+      return thunkAPI.rejectWithValue("unauthorized");
     }
-    try {
-      const response = await fetch(`${BASE_URL_DEFAULT}/users/me`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
 
-      if (!response.ok) {
-        throw new Error("Unauthorized");
+    // The default axios instance carries the auth interceptors
+    // (Bearer header + refresh-on-401 + single retry) — see axiosSetup.ts.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const { data } = await axios.get<GetMeResponse>(
+          `${BASE_URL_DEFAULT}/users/me`
+        );
+        return data;
+      } catch (err) {
+        const status = (err as AxiosError).response?.status;
+
+        if (status === 401) {
+          // Refresh already failed (or was fatal) inside the interceptor.
+          return thunkAPI.rejectWithValue("unauthorized");
+        }
+
+        const isTransient = status === undefined || status >= 500;
+        if (isTransient && attempt < GET_ME_TRANSIENT_RETRIES) {
+          await delay(GET_ME_RETRY_DELAY_MS);
+          continue;
+        }
+        // Transient failure (or unexpected non-401 4xx): do NOT log out,
+        // tokens survive — the next navigation/reload recovers the session.
+        return thunkAPI.rejectWithValue("transient");
       }
-
-      const data: GetMeResponse = await response.json();
-      return data;
-    } catch {
-      localStorage.removeItem("accessToken");
-      return thunkAPI.rejectWithValue("Failed to fetch user");
     }
   }
 );

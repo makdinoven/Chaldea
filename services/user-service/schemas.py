@@ -33,6 +33,16 @@ class Login(BaseModel):
     identifier: str
     password: str
 
+# Схема запроса обновления токенов (refresh)
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+# Схема ответа с парой токенов (используется в /users/refresh)
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
 class UserCharacterCreate(BaseModel):
     user_id: int
     character_id: int
