@@ -13,8 +13,8 @@ import { motion } from 'motion/react';
  *   Row 2: Шлем            | Броня
  *   Row 3: Плащ            | Пояс
  *   ---separator---
- *   Row 4: Щит             | Кольцо
- *   Row 5: Ожерелье        | Браслет
+ *   Row 4: Кольцо          | Ожерелье
+ *   Row 5: Браслет
  */
 export default function EquipmentPanel() {
   const equipmentSlots = useAppSelector(selectEquipmentSlots);
@@ -37,7 +37,7 @@ export default function EquipmentPanel() {
   // Weapons + Armor group (top grid)
   const topSlots = ['main_weapon', 'additional_weapons', 'head', 'body', 'cloak', 'belt'];
   // Accessory group (bottom grid)
-  const accessorySlots = ['shield', 'ring', 'necklace', 'bracelet'];
+  const accessorySlots = ['ring', 'necklace', 'bracelet'];
 
   return (
     <motion.div

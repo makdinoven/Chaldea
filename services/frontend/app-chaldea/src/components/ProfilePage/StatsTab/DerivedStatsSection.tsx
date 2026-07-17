@@ -1,5 +1,5 @@
 import { CharacterAttributes } from '../../../redux/slices/profileSlice';
-import { DERIVED_STATS, STAT_LABELS, PERCENTAGE_STATS, CLASS_MAIN_ATTRIBUTE } from '../constants';
+import { STAT_LABELS, PERCENTAGE_STATS, CLASS_MAIN_ATTRIBUTE } from '../constants';
 
 interface DerivedStatsSectionProps {
   attributes: CharacterAttributes;
@@ -7,24 +7,40 @@ interface DerivedStatsSectionProps {
   mainWeaponDamageModifier: number;
 }
 
-const STAT_ICONS: Record<string, string> = {
-  damage: '\u2694\uFE0F',
-  dodge: '\uD83D\uDCA8',
-  res_effects: '\uD83D\uDEE1\uFE0F',
-  res_physical: '\uD83E\uDDBE',
-  res_catting: '\uD83D\uDD2A',
-  res_crushing: '\uD83D\uDD28',
-  res_piercing: '\uD83C\uDFF9',
-  res_magic: '\u2728',
-  res_fire: '\uD83D\uDD25',
-  res_ice: '\u2744\uFE0F',
-  res_watering: '\uD83D\uDCA7',
-  res_electricity: '\u26A1',
-  res_wind: '\uD83C\uDF2C\uFE0F',
-  res_sainting: '\u2600\uFE0F',
-  res_damning: '\uD83C\uDF11',
-  critical_hit_chance: '\uD83C\uDFAF',
-  critical_damage: '\uD83D\uDCA5',
+// FEAT-149: «В бою» — 2-column stat cards for the core combat values.
+// Only REAL stats are rendered (mock's «Блок» does not exist and is dropped;
+// «Инициатива» is kept — it is a real FEAT-143 computed value already shown here).
+// Short labels fit the narrow panel; full names live in the `title` tooltip.
+const COMBAT_CARD_LABELS: Record<string, string> = {
+  damage: 'Урон',
+  initiative: 'Инициатива',
+  dodge: 'Уклонение',
+  critical_hit_chance: 'Крит. шанс',
+  critical_damage: 'Крит. урон',
+};
+
+// Resist chips (per mock): rounded pill with a colored dot + short label + value.
+// Dot colors use existing palette tokens only.
+const RESIST_CHIPS: { key: string; label: string; dotClass: string }[] = [
+  { key: 'res_effects', label: 'Эфф.', dotClass: 'bg-white/70' },
+  { key: 'res_physical', label: 'Физ.', dotClass: 'bg-white/70' },
+  { key: 'res_catting', label: 'Реж.', dotClass: 'bg-white/50' },
+  { key: 'res_crushing', label: 'Дроб.', dotClass: 'bg-white/50' },
+  { key: 'res_piercing', label: 'Кол.', dotClass: 'bg-white/50' },
+  { key: 'res_magic', label: 'Маг.', dotClass: 'bg-rarity-epic' },
+  { key: 'res_fire', label: 'Огонь', dotClass: 'bg-site-red' },
+  { key: 'res_ice', label: 'Лёд', dotClass: 'bg-site-blue' },
+  { key: 'res_watering', label: 'Вода', dotClass: 'bg-stat-mana' },
+  { key: 'res_electricity', label: 'Электр.', dotClass: 'bg-gold' },
+  { key: 'res_wind', label: 'Ветер', dotClass: 'bg-stat-energy' },
+  { key: 'res_sainting', label: 'Свет', dotClass: 'bg-gold-light' },
+  { key: 'res_damning', label: 'Тьма', dotClass: 'bg-rarity-epic/60' },
+];
+
+const formatStatValue = (value: number | string, isPercent: boolean): string => {
+  if (typeof value !== 'number') return String(value);
+  const text = value % 1 === 0 ? String(value) : value.toFixed(1);
+  return isPercent ? `${text}%` : text;
 };
 
 const DerivedStatsSection = ({ attributes, classId, mainWeaponDamageModifier }: DerivedStatsSectionProps) => {
@@ -48,54 +64,103 @@ const DerivedStatsSection = ({ attributes, classId, mainWeaponDamageModifier }: 
   const strength = Number(attributes.strength ?? 0);
   const intelligence = Number(attributes.intelligence ?? 0);
   const initiative = agility * 1.0 + (strength + intelligence) * 0.75;
-  const initiativeText =
-    initiative % 1 === 0 ? String(initiative) : initiative.toFixed(2);
+
+  const combatCards: {
+    key: string;
+    value: number | string;
+    isPercent: boolean;
+    highlighted: boolean;
+    tooltip?: string;
+  }[] = [
+    { key: 'damage', value: getDisplayDamage(), isPercent: false, highlighted: true },
+    {
+      key: 'initiative',
+      value: initiative,
+      isPercent: false,
+      highlighted: true,
+      tooltip: 'Ловкость ×1.0 + (Сила + Интеллект) ×0.75 — определяет очередь хода в бою',
+    },
+    {
+      key: 'dodge',
+      value: (attributes.dodge as number | undefined) ?? 0,
+      isPercent: PERCENTAGE_STATS.has('dodge'),
+      highlighted: false,
+    },
+    {
+      key: 'critical_hit_chance',
+      value: (attributes.critical_hit_chance as number | undefined) ?? 0,
+      isPercent: PERCENTAGE_STATS.has('critical_hit_chance'),
+      highlighted: false,
+    },
+    {
+      key: 'critical_damage',
+      value: (attributes.critical_damage as number | undefined) ?? 0,
+      isPercent: PERCENTAGE_STATS.has('critical_damage'),
+      highlighted: false,
+    },
+  ];
 
   return (
     <div>
-      <h3 className="gold-text text-xl font-medium uppercase mb-4">
-        Боевые характеристики
-      </h3>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
-        {DERIVED_STATS.map((stat) => {
-          const rawValue = attributes[stat as keyof CharacterAttributes] ?? 0;
-          const value = stat === 'damage' ? getDisplayDamage() : rawValue;
-          const isPercent = PERCENTAGE_STATS.has(stat);
-          const displayValue = isPercent
-            ? `${typeof value === 'number' ? value.toFixed(1) : value}%`
-            : String(value);
-
-          return (
-            <div
-              key={stat}
-              className="flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-white/5 transition-colors duration-200"
-            >
-              <span className="text-base w-6 text-center flex-shrink-0">
-                {STAT_ICONS[stat] ?? '\u25C6'}
-              </span>
-              <span className="text-white/70 text-sm flex-1 min-w-0 truncate">
-                {STAT_LABELS[stat] ?? stat}
-              </span>
-              <span className="text-white text-sm font-medium font-mono flex-shrink-0">
-                {displayValue}
-              </span>
-            </div>
-          );
-        })}
+      {/* FEAT-149: section title row with a fading gold rule (per mock) */}
+      <div className="flex items-center gap-3 mb-3.5">
+        <h3 className="gold-text text-xs font-medium uppercase tracking-[0.14em] shrink-0">
+          В бою
+        </h3>
+        <span
+          className="flex-1 h-px bg-gradient-to-r from-gold/40 to-transparent"
+          aria-hidden="true"
+        />
       </div>
 
-      {/* Initiative — highlighted, drives the battle turn order (FEAT-143) */}
-      <div className="mt-3 flex items-center gap-2 py-2 px-3 rounded-lg bg-gold/5 border border-gold/20">
-        <span className="text-base w-6 text-center flex-shrink-0">{'🏃'}</span>
-        <span className="text-gold/90 text-sm flex-1 min-w-0 truncate font-medium">
-          Инициатива
-        </span>
-        <span
-          className="text-gold text-sm font-medium font-mono flex-shrink-0"
-          title="Ловкость ×1.0 + (Сила + Интеллект) ×0.75 — определяет очередь хода в бою"
-        >
-          {initiativeText}
-        </span>
+      {/* Combat stat cards — 2 columns per mock */}
+      <div className="grid grid-cols-2 gap-2">
+        {combatCards.map(({ key, value, isPercent, highlighted, tooltip }) => (
+          <div
+            key={key}
+            title={tooltip ?? STAT_LABELS[key] ?? COMBAT_CARD_LABELS[key]}
+            className={`flex items-center justify-between gap-2 py-2 px-3 rounded-card border transition-colors duration-200 ease-site ${
+              highlighted
+                ? 'bg-gold/5 border-gold/20'
+                : 'bg-white/[0.03] border-white/[0.07] hover:bg-white/5'
+            }`}
+          >
+            <span
+              className={`text-xs min-w-0 truncate ${highlighted ? 'text-gold/90 font-medium' : 'text-white/70'}`}
+            >
+              {COMBAT_CARD_LABELS[key] ?? STAT_LABELS[key] ?? key}
+            </span>
+            <span
+              className={`text-sm font-medium font-mono shrink-0 ${highlighted ? 'text-gold' : 'text-white'}`}
+            >
+              {formatStatValue(value, isPercent)}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Resist chips */}
+      <div className="flex flex-wrap gap-1.5 mt-3">
+        {RESIST_CHIPS.map(({ key, label, dotClass }) => {
+          const rawValue = attributes[key as keyof CharacterAttributes];
+          const value = typeof rawValue === 'number' ? rawValue : Number(rawValue ?? 0);
+          return (
+            <span
+              key={key}
+              title={STAT_LABELS[key] ?? key}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.04] border border-white/10 text-[11px] text-white/75"
+            >
+              <span
+                className={`w-[7px] h-[7px] rounded-full shrink-0 ${dotClass}`}
+                aria-hidden="true"
+              />
+              {label}
+              <span className="text-white font-medium font-mono">
+                {formatStatValue(value, PERCENTAGE_STATS.has(key))}
+              </span>
+            </span>
+          );
+        })}
       </div>
     </div>
   );

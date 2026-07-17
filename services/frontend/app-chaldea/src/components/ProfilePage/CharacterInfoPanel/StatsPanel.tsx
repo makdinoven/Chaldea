@@ -1,6 +1,25 @@
+import { Heart, Droplet, Zap, Wind } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useAppSelector } from '../../../redux/store';
 import { selectAttributes, selectProfile } from '../../../redux/slices/profileSlice';
-import { RESOURCE_BARS } from '../constants';
+import { RESOURCE_BARS, STAT_LABELS } from '../constants';
+
+// FEAT-149: vitals use icon-only labels (no text next to icons — user decision).
+// Icons come from lucide-react (already a project dependency), colored with the
+// existing stat-* design tokens; the Russian label survives as a tooltip (a11y).
+const VITAL_ICONS: Record<string, LucideIcon> = {
+  health: Heart,
+  mana: Droplet,
+  energy: Zap,
+  stamina: Wind,
+};
+
+const VITAL_ICON_COLOR: Record<string, string> = {
+  health: 'text-stat-hp',
+  mana: 'text-stat-mana',
+  energy: 'text-stat-energy',
+  stamina: 'text-stat-stamina',
+};
 
 export default function StatsPanel() {
   const attributes = useAppSelector(selectAttributes);
@@ -8,12 +27,12 @@ export default function StatsPanel() {
 
   if (!attributes && !profile) {
     return (
-      <div className="flex flex-col gap-[10px] w-full">
+      <div className="flex flex-col gap-4 w-full">
         {[...Array(4)].map((_, i) => (
-          <div key={i}>
-            <div className="flex justify-between items-center mb-[10px]">
-              <span className="gold-text text-sm font-medium uppercase w-20 h-4 animate-pulse" />
-              <span className="gold-text text-sm font-medium w-16 h-4 animate-pulse" />
+          <div key={i} className="flex flex-col gap-[7px]">
+            <div className="flex justify-between items-center">
+              <span className="w-4 h-4 rounded-full bg-white/10 animate-pulse" />
+              <span className="w-16 h-4 rounded bg-white/10 animate-pulse" />
             </div>
             <div className="stat-bar" />
           </div>
@@ -36,20 +55,25 @@ export default function StatsPanel() {
   };
 
   return (
-    <div className="flex flex-col gap-5 w-full">
-      {/* Resource Bars — Figma: 210px wide, gold labels, 9px bars */}
+    <div className="flex flex-col gap-4 w-full">
       {RESOURCE_BARS.map(({ key, label, colorClass }) => {
         const currentKey = `current_${key}` as keyof typeof resourceData;
         const maxKey = `max_${key}` as keyof typeof resourceData;
         const current = resourceData[currentKey];
         const max = resourceData[maxKey];
         const percent = max > 0 ? Math.min((current / max) * 100, 100) : 0;
+        const Icon = VITAL_ICONS[key];
+        const tooltip = STAT_LABELS[key] ?? label;
 
         return (
-          <div key={key} className="flex flex-col gap-[10px]">
-            <div className="flex justify-between items-end relative">
-              <span className="gold-text text-sm font-medium uppercase">
-                {label}
+          <div key={key} className="flex flex-col gap-[7px]" title={tooltip}>
+            <div className="flex justify-between items-center">
+              <span
+                className={`flex ${VITAL_ICON_COLOR[key] ?? 'text-white'}`}
+                role="img"
+                aria-label={tooltip}
+              >
+                {Icon && <Icon size={16} strokeWidth={2} />}
               </span>
               <span className="gold-text text-sm font-medium uppercase text-right">
                 {Math.round(current)}/{Math.round(max)}

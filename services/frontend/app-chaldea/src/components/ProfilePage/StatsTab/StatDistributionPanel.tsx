@@ -77,16 +77,21 @@ const StatDistributionPanel = ({
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        <h3 className="gold-text text-xl font-medium uppercase">
+      {/* FEAT-149: section title row with a fading gold rule (per mock) */}
+      <div className="flex items-center gap-3 mb-2">
+        <h3 className="gold-text text-xs font-medium uppercase tracking-[0.14em] shrink-0">
           Распределение очков
         </h3>
-        <span className="text-site-blue text-sm font-medium">
-          Нераспределённые очки: {remaining}
-        </span>
+        <span
+          className="flex-1 h-px bg-gradient-to-r from-gold/40 to-transparent"
+          aria-hidden="true"
+        />
       </div>
+      <span className="block text-site-blue text-sm font-medium mb-3">
+        Нераспределённые очки: {remaining}
+      </span>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+      <div className="flex flex-col gap-1">
         {UPGRADEABLE_STATS.map((stat) => {
           const currentValue = attributes[stat] ?? 0;
           const pendingValue = pending[stat] ?? 0;

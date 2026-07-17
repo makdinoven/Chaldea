@@ -54,12 +54,13 @@ export const CATEGORY_LIST = [
   { key: 'rune', label: 'Руны', icon: resourceIcon },
 ] as const;
 
+// NOTE (FEAT-149): the 'shield' EQUIPMENT SLOT was removed — shield ITEMS
+// remain a distinct item type/category and equip into 'additional_weapons'.
 export const EQUIPMENT_SLOT_ORDER = [
   'head',
   'body',
   'cloak',
   'belt',
-  'shield',
   'ring',
   'necklace',
   'bracelet',
@@ -72,7 +73,6 @@ export const EQUIPMENT_SLOT_LABELS: Record<string, string> = {
   body: 'Броня',
   cloak: 'Плащ',
   belt: 'Пояс',
-  shield: 'Щит',
   ring: 'Кольцо',
   necklace: 'Ожерелье',
   bracelet: 'Браслет',

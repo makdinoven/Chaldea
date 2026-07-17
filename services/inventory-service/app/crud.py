@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 NPC_EQUIPMENT_SLOTS = [
     'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet',
-    'main_weapon', 'additional_weapons', 'shield',
+    'main_weapon', 'additional_weapons',
 ]
 
 
@@ -228,7 +228,7 @@ def create_default_equipment_slots(db: Session, character_id: int):
     """
     slot_types = [
         'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet',
-        'main_weapon', 'additional_weapons', 'shield',
+        'main_weapon', 'additional_weapons',
         'fast_slot_1', 'fast_slot_2', 'fast_slot_3', 'fast_slot_4',
         'fast_slot_5', 'fast_slot_6', 'fast_slot_7', 'fast_slot_8',
         'fast_slot_9', 'fast_slot_10'
@@ -405,8 +405,8 @@ def is_item_compatible_with_slot(item_type: str, slot_type: str) -> bool:
         'necklace': ['necklace'],
         'bracelet': ['bracelet'],
         'main_weapon': ['main_weapon'],
-        'additional_weapons': ['additional_weapons'],
-        'shield': ['shield'],
+        # Shields equip into the off-hand slot (shield SLOT removed, item TYPE stays)
+        'additional_weapons': ['additional_weapons', 'shield'],
         'fast_slot_1': ['consumable'],
         'fast_slot_2': ['consumable'],
         'fast_slot_3': ['consumable'],
@@ -419,7 +419,7 @@ def find_equipment_slot_for_item(db: Session, character_id: int, item_obj: model
         'head': 'head', 'body': 'body', 'cloak': 'cloak', 'belt': 'belt',
         'ring': 'ring', 'necklace': 'necklace', 'bracelet': 'bracelet',
         'main_weapon': 'main_weapon', 'additional_weapons': 'additional_weapons',
-        'shield': 'shield',
+        'shield': 'additional_weapons',
     }
     if item_obj.item_type in fixed:
         return db.query(models.EquipmentSlot).filter_by(

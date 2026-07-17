@@ -10,6 +10,9 @@ import swapBagIcon from '../../../assets/icons/equipment/swap-bag.svg';
 
 const FAST_SLOT_COUNT = 10;
 
+/** Fluid circular cell: fills its 5-col grid track instead of the fixed 80px item-cell size */
+const CELL_SIZE_CLASSES = '!w-full !h-auto aspect-square';
+
 interface MergedFastSlot extends EquipmentSlotData {
   quantity: number;
 }
@@ -84,7 +87,7 @@ const FastSlotDropTarget = ({ slot, slotIndex }: FastSlotDropTargetProps) => {
   if (isDisabled) {
     return (
       <div
-        className="item-cell item-cell-empty opacity-30"
+        className={`item-cell item-cell-empty ${CELL_SIZE_CLASSES} opacity-30`}
         title="Слот недоступен"
       />
     );
@@ -98,21 +101,21 @@ const FastSlotDropTarget = ({ slot, slotIndex }: FastSlotDropTargetProps) => {
     return (
       <div
         ref={setDropRef}
-        className={`item-cell item-cell-empty ${pulseClass} ${isIncompatible ? 'opacity-30 brightness-50' : ''}`}
+        className={`item-cell item-cell-empty ${CELL_SIZE_CLASSES} ${pulseClass} ${isIncompatible ? 'opacity-30 brightness-50' : ''}`}
       />
     );
   }
 
   // Enabled filled slot - both droppable and draggable
   return (
-    <div ref={setDropRef} className={`relative ${pulseClass} ${isIncompatible ? 'opacity-30 brightness-50' : ''}`}>
+    <div ref={setDropRef} className={`relative w-full ${pulseClass} ${isIncompatible ? 'opacity-30 brightness-50' : ''}`}>
       <button
         ref={setDragRef}
         {...dragListeners}
         {...dragAttributes}
         onClick={handleClick}
         className={`
-          item-cell ${rarityClass}
+          item-cell ${rarityClass} ${CELL_SIZE_CLASSES}
           cursor-pointer hover:scale-105 transition-transform duration-200 ease-site
           ${isDragging ? 'opacity-40' : ''}
         `}
@@ -129,11 +132,25 @@ const FastSlotDropTarget = ({ slot, slotIndex }: FastSlotDropTargetProps) => {
           <img
             src={placeholderIcon}
             alt={slot.item!.name}
-            className="w-8 h-8 opacity-70"
+            className="w-6 h-6 lg:w-8 lg:h-8 opacity-70"
             draggable={false}
           />
         )}
       </button>
+      {/* Quantity badge — bottom-right per mock */}
+      {slot.quantity > 1 && (
+        <span
+          className="
+            absolute -bottom-1 -right-1 z-10 min-w-[18px] h-[18px]
+            flex items-center justify-center
+            text-[10px] font-medium text-white
+            bg-site-bg rounded-full
+            border border-white/30 px-1
+          "
+        >
+          {slot.quantity}
+        </span>
+      )}
     </div>
   );
 };
@@ -166,14 +183,14 @@ export default function FastSlots() {
   if (mergedSlots.length === 0) return null;
 
   return (
-    <div className="flex flex-col items-center gap-2">
-      <div className="flex items-center gap-1.5">
-        <img src={swapBagIcon} alt="" className="w-5 h-5 opacity-70" />
-        <span className="text-xs text-white/60 font-medium uppercase tracking-wider">
+    <div className="w-full flex flex-col gap-2.5">
+      <div className="flex items-center gap-2">
+        <img src={swapBagIcon} alt="" className="w-4 h-4 opacity-70" />
+        <span className="text-[11px] text-white/55 font-medium uppercase tracking-[0.1em]">
           Быстрые слоты
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-1.5">
+      <div className="grid grid-cols-5 gap-2">
         {mergedSlots.map((slot, index) => (
           <FastSlotDropTarget
             key={slot.slot_type}

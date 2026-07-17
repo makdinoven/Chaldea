@@ -2,14 +2,19 @@ import { motion } from 'motion/react';
 import InventoryDndProvider from '../InventoryTab/dnd/InventoryDndContext';
 import ItemContextMenu from '../InventoryTab/ItemContextMenu';
 import ItemDetailModal from '../InventoryTab/ItemDetailModal';
-import LeftColumn from './LeftColumn';
-import CenterColumn from './CenterColumn';
-import RightColumn from './RightColumn';
+import CharacterPanel from './CharacterPanel';
+import IndicatorsPanel from './IndicatorsPanel';
+import InventoryPanel from './InventoryPanel';
 
 interface CharacterTabProps {
   characterId: number;
 }
 
+/**
+ * «Персонаж» tab — FEAT-149 3-panel layout:
+ * paper doll (392px) / indicators (minmax(300px,352px)) / inventory (1fr)
+ * on desktop (lg+), single column below.
+ */
 const CharacterTab = ({ characterId }: CharacterTabProps) => {
   return (
     <motion.div
@@ -19,11 +24,10 @@ const CharacterTab = ({ characterId }: CharacterTabProps) => {
       className="relative"
     >
       <InventoryDndProvider characterId={characterId}>
-        {/* Single responsive layout — flex-wrap rearranges on smaller screens */}
-        <div className="flex flex-wrap lg:grid lg:grid-cols-[1fr_auto_1fr] gap-4 items-start relative z-10">
-          <LeftColumn characterId={characterId} />
-          <CenterColumn />
-          <RightColumn />
+        <div className="grid grid-cols-1 lg:grid-cols-[392px_minmax(300px,352px)_1fr] gap-5 items-start relative z-10">
+          <CharacterPanel />
+          <IndicatorsPanel characterId={characterId} />
+          <InventoryPanel />
         </div>
 
         <ItemContextMenu characterId={characterId} />

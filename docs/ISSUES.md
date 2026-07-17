@@ -152,6 +152,12 @@
 **Описание:** participant_id хранится как string ключ в Redis dict, но используется как int в разных местах кода. Потенциальный `KeyError`.
 **Решение:** Унифицировать: всегда приводить к string при работе с Redis state.
 
+### 26. Неиспользуемые константы в ProfilePage/constants.ts (после FEAT-149)
+**Сервис:** frontend
+**Файл:** `services/frontend/app-chaldea/src/components/ProfilePage/constants.ts` (строки ~98, ~252)
+**Описание:** После редизайна профиля (FEAT-149) константы `MIN_GRID_CELLS` (филлеры сетки инвентаря удалены) и `DERIVED_STATS` (DerivedStatsSection перешёл на собственные COMBAT_CARD_LABELS/RESIST_CHIPS) больше нигде не используются.
+**Решение:** Удалить обе константы (безопасный dead-code cleanup, отдельным мелким коммитом).
+
 ---
 
 ## GLOBAL TASKS (стратегические задачи)

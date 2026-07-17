@@ -159,7 +159,7 @@ class EquipmentSlot(Base):
     character_id = Column(Integer, nullable=False)
     slot_type = Column(Enum(
         'head', 'body', 'cloak', 'belt', 'ring',
-        'necklace', 'bracelet', 'main_weapon', 'additional_weapons', 'shield',
+        'necklace', 'bracelet', 'main_weapon', 'additional_weapons',
         'fast_slot_1', 'fast_slot_2', 'fast_slot_3', 'fast_slot_4',
     'fast_slot_5', 'fast_slot_6', 'fast_slot_7', 'fast_slot_8',
     'fast_slot_9', 'fast_slot_10'

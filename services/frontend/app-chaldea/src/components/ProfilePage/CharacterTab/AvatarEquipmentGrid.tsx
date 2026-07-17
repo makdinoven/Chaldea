@@ -12,6 +12,13 @@ import EquipmentSlot from '../EquipmentPanel/EquipmentSlot';
 
 const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
 
+/**
+ * Equipment diamond (FEAT-149 mock): portrait center, slots around —
+ * head top-center; left column: main_weapon, body, ring, belt;
+ * right column: additional_weapons, cloak, necklace, bracelet.
+ * The 'shield' slot no longer exists (shields equip into additional_weapons).
+ * Mobile (<lg): compressed 46px slots, max-w-[320px] centered.
+ */
 const AvatarEquipmentGrid = () => {
   const dispatch = useAppDispatch();
   const profile = useAppSelector(selectProfile);
@@ -58,7 +65,7 @@ const AvatarEquipmentGrid = () => {
   };
 
   return (
-    <div className="flex flex-col items-center">
+    <div className="w-full max-w-[320px] lg:max-w-none mx-auto">
       <input
         ref={fileInputRef}
         type="file"
@@ -67,29 +74,17 @@ const AvatarEquipmentGrid = () => {
         onChange={handleFileChange}
       />
 
-      {/* CSS Grid: equipment slots surrounding avatar */}
-      <div
-        className="grid gap-1 lg:gap-1.5 place-items-center"
-        style={{
-          gridTemplateColumns: 'auto auto 1fr auto auto',
-          gridTemplateRows: 'auto auto auto auto auto',
-        }}
-      >
-        {/* Row 1: head in center */}
-        <div className="col-start-3 row-start-1 flex justify-center">
+      {/* Diamond grid: 5 columns, portrait spans center cols 2-4 / rows 2-4 */}
+      <div className="grid grid-cols-[46px_46px_1fr_46px_46px] lg:grid-cols-[60px_60px_1fr_60px_60px] gap-[9px] place-items-center">
+        {/* Row 1: head top-center */}
+        <div className="col-start-3 row-start-1">
           <EquipmentSlot slot={getSlot('head')} size="small" />
         </div>
 
-        {/* Row 2: main_weapon left, avatar center-start, additional_weapons right */}
-        <div className="col-start-1 row-start-2 flex items-center">
-          <EquipmentSlot slot={getSlot('main_weapon')} size="small" />
-        </div>
-        <div
-          className="col-start-2 col-span-3 row-start-2 row-span-3 flex items-center justify-center px-2 lg:px-4"
-        >
-          {/* Avatar */}
+        {/* Portrait — center, spans rows 2-4 */}
+        <div className="col-start-2 col-span-3 row-start-2 row-span-3 w-full self-stretch flex items-center px-1 lg:px-2">
           <div
-            className="gold-outline relative rounded-card w-[140px] h-[180px] lg:w-[180px] lg:h-[220px] overflow-hidden bg-black/30 cursor-pointer group shrink-0"
+            className="gold-outline relative rounded-card w-full h-[200px] lg:h-[236px] overflow-hidden bg-black/30 cursor-pointer group"
             onClick={handleAvatarClick}
           >
             {profile?.avatar ? (
@@ -132,34 +127,36 @@ const AvatarEquipmentGrid = () => {
             )}
           </div>
         </div>
-        <div className="col-start-5 row-start-2 flex items-center">
+
+        {/* Row 2: main weapon left / additional weapons right */}
+        <div className="col-start-1 row-start-2">
+          <EquipmentSlot slot={getSlot('main_weapon')} size="small" />
+        </div>
+        <div className="col-start-5 row-start-2">
           <EquipmentSlot slot={getSlot('additional_weapons')} size="small" />
         </div>
 
-        {/* Row 3: shield left, body right */}
-        <div className="col-start-1 row-start-3 flex items-center">
-          <EquipmentSlot slot={getSlot('shield')} size="small" />
-        </div>
-        <div className="col-start-5 row-start-3 flex items-center">
+        {/* Row 3: body left / cloak right */}
+        <div className="col-start-1 row-start-3">
           <EquipmentSlot slot={getSlot('body')} size="small" />
         </div>
-
-        {/* Row 4: ring left, cloak right */}
-        <div className="col-start-1 row-start-4 flex items-center">
-          <EquipmentSlot slot={getSlot('ring')} size="small" />
-        </div>
-        <div className="col-start-5 row-start-4 flex items-center">
+        <div className="col-start-5 row-start-3">
           <EquipmentSlot slot={getSlot('cloak')} size="small" />
         </div>
 
-        {/* Row 5: necklace left, belt center, bracelet right */}
-        <div className="col-start-1 row-start-5 flex justify-center">
+        {/* Row 4: ring left / necklace right */}
+        <div className="col-start-1 row-start-4">
+          <EquipmentSlot slot={getSlot('ring')} size="small" />
+        </div>
+        <div className="col-start-5 row-start-4">
           <EquipmentSlot slot={getSlot('necklace')} size="small" />
         </div>
-        <div className="col-start-3 row-start-5 flex justify-center">
+
+        {/* Row 5: belt left / bracelet right */}
+        <div className="col-start-1 row-start-5">
           <EquipmentSlot slot={getSlot('belt')} size="small" />
         </div>
-        <div className="col-start-5 row-start-5 flex justify-center">
+        <div className="col-start-5 row-start-5">
           <EquipmentSlot slot={getSlot('bracelet')} size="small" />
         </div>
       </div>

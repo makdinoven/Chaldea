@@ -8,7 +8,7 @@ import type { DragItemData } from '../InventoryTab/dnd/InventoryDndContext';
 
 interface EquipmentSlotProps {
   slot: EquipmentSlotData;
-  /** Size variant: 'normal' (80px) or 'small' (56px) */
+  /** Size variant: 'normal' (80px) or 'small' (46px on mobile, 56px on lg+) */
   size?: 'normal' | 'small';
 }
 
@@ -29,9 +29,11 @@ export default function EquipmentSlot({ slot, size = 'normal' }: EquipmentSlotPr
   const durabilityPct = hasDurability ? (effectiveDurability / maxDurability) * 100 : 100;
   const isBroken = hasDurability && effectiveDurability === 0;
 
+  // Compressed diamond slots per FEAT-149 mock: 46px below lg, 56px on desktop
   const sizeClasses = size === 'small'
-    ? 'w-[56px] h-[56px] !w-[56px] !h-[56px]'
+    ? '!w-[46px] !h-[46px] lg:!w-[56px] lg:!h-[56px]'
     : '';
+  const placeholderSizeClasses = size === 'small' ? 'w-6 h-6 lg:w-8 lg:h-8' : 'w-8 h-8';
 
   // --- Droppable: accept inventory items matching this slot type ---
   const { setNodeRef: setDropRef, isOver } = useDroppable({
@@ -105,17 +107,14 @@ export default function EquipmentSlot({ slot, size = 'normal' }: EquipmentSlotPr
           ${isOver ? 'ring-2 ring-gold/60' : ''}
           cursor-pointer hover:scale-105 transition-transform duration-200 ease-site
         `}
-        style={{
-          ...(size === 'small' ? { width: 56, height: 56 } : undefined),
-          ...(isDragging ? { opacity: 0.4 } : undefined),
-        }}
+        style={isDragging ? { opacity: 0.4 } : undefined}
         title={isEmpty ? label : slot.item!.name}
       >
         {isEmpty ? (
           <img
             src={placeholderIcon}
             alt={label}
-            className="w-8 h-8 opacity-40"
+            className={`${placeholderSizeClasses} opacity-40`}
           />
         ) : (
           slot.item!.image ? (
@@ -129,7 +128,7 @@ export default function EquipmentSlot({ slot, size = 'normal' }: EquipmentSlotPr
             <img
               src={placeholderIcon}
               alt={slot.item!.name}
-              className="w-8 h-8 opacity-70"
+              className={`${placeholderSizeClasses} opacity-70`}
               draggable={false}
             />
           )

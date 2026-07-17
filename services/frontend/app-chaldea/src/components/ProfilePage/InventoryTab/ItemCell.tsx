@@ -23,12 +23,12 @@ const ItemCell = ({ inventoryItem, placeholderType }: ItemCellProps) => {
     // Empty cell
     const iconSrc = placeholderType ? ITEM_TYPE_ICONS[placeholderType] : undefined;
     return (
-      <div className="item-cell item-cell-empty">
+      <div className="item-cell item-cell-empty w-full h-auto aspect-square">
         {iconSrc && (
           <img
             src={iconSrc}
             alt=""
-            className="w-8 h-8 opacity-40"
+            className="w-1/2 h-1/2 opacity-40"
             draggable={false}
           />
         )}
@@ -114,7 +114,7 @@ const ItemCell = ({ inventoryItem, placeholderType }: ItemCellProps) => {
     <div className="relative">
       <motion.div
         ref={setNodeRef}
-        className={`item-cell ${rarityClass} cursor-pointer hover:scale-105 ${isDragging ? 'opacity-50' : ''} ${isUnidentified ? 'opacity-60' : ''}`}
+        className={`item-cell w-full h-auto aspect-square ${rarityClass} cursor-pointer hover:scale-105 ${isDragging ? 'opacity-50' : ''} ${isUnidentified ? 'opacity-60' : ''}`}
         {...attributes}
         {...listeners}
         {...clickHandlers}
@@ -131,7 +131,7 @@ const ItemCell = ({ inventoryItem, placeholderType }: ItemCellProps) => {
           <img
             src={iconSrc}
             alt={item.name}
-            className={`w-10 h-10 opacity-70 ${isUnidentified ? 'grayscale' : ''}`}
+            className={`w-1/2 h-1/2 opacity-70 ${isUnidentified ? 'grayscale' : ''}`}
           />
         ) : null}
         {isUnidentified && (

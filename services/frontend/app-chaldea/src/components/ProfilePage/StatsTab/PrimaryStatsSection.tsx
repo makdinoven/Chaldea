@@ -43,10 +43,17 @@ const TieredBar = ({ value }: { value: number }) => {
 const PrimaryStatsSection = ({ attributes }: PrimaryStatsSectionProps) => {
   return (
     <div>
-      <h3 className="gold-text text-xl font-medium uppercase mb-4">
-        Основные характеристики
-      </h3>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+      {/* FEAT-149: section title row with a fading gold rule (per mock) */}
+      <div className="flex items-center gap-3 mb-3.5">
+        <h3 className="gold-text text-xs font-medium uppercase tracking-[0.14em] shrink-0">
+          Характеристики
+        </h3>
+        <span
+          className="flex-1 h-px bg-gradient-to-r from-gold/40 to-transparent"
+          aria-hidden="true"
+        />
+      </div>
+      <div className="flex flex-col gap-3">
         {MAIN_STATS.map((stat) => {
           const value = attributes[stat] ?? 0;
           return (

@@ -41,9 +41,11 @@ interface EquipmentSlotData {
 
 /* ── Constants ── */
 
+// NOTE (FEAT-149): the 'shield' equipment SLOT was removed — shield ITEMS
+// remain a valid item type and equip into the 'additional_weapons' slot.
 const NPC_SLOT_TYPES = [
   'head', 'body', 'cloak', 'belt', 'ring',
-  'necklace', 'bracelet', 'main_weapon', 'additional_weapons', 'shield',
+  'necklace', 'bracelet', 'main_weapon', 'additional_weapons',
 ] as const;
 
 const SLOT_LABELS: Record<string, string> = {
@@ -56,7 +58,6 @@ const SLOT_LABELS: Record<string, string> = {
   bracelet: 'Браслет',
   main_weapon: 'Основное оружие',
   additional_weapons: 'Доп. оружие',
-  shield: 'Щит',
 };
 
 const RARITY_COLORS: Record<string, string> = {
@@ -117,8 +118,12 @@ const NpcEquipmentEditor = ({ npcId, npcName, onClose }: NpcEquipmentEditorProps
   const fetchPickerItems = useCallback(async (slotType: string) => {
     setPickerLoading(true);
     try {
+      // Mirrors backend slot compatibility (FEAT-149): the off-hand slot
+      // accepts both additional weapons and shields.
+      const itemTypes =
+        slotType === 'additional_weapons' ? 'additional_weapons,shield' : slotType;
       const res = await axios.get(`${BASE_URL}/inventory/items`, {
-        params: { item_types: slotType, page: 1, page_size: 100 },
+        params: { item_types: itemTypes, page: 1, page_size: 100 },
       });
       const data = res.data;
       setPickerItems(Array.isArray(data) ? data : data.items ?? []);

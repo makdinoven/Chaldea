@@ -1,9 +1,10 @@
 """
-Tests for FEAT-041: Unequip bug fix, shield support, and atomicity.
+Tests for FEAT-041 (unequip bug fix, atomicity) and FEAT-149 (shield off-hand).
 
-Task 11: Test unequip endpoint (no db.begin() error, item returns to inventory, slot cleared)
-Task 12: Test shield support (slot creation, compatibility, find_equipment_slot_for_item)
-Task 13: Test atomicity (flush vs commit in return_item_to_inventory)
+- Unequip endpoint (no db.begin() error, item returns to inventory, slot cleared)
+- FEAT-149: the 'shield' equipment SLOT is removed; 'shield' stays an ITEM TYPE
+  that equips into the single 'additional_weapons' (off-hand) slot
+- Atomicity (flush vs commit in return_item_to_inventory)
 """
 
 import inspect
@@ -205,95 +206,115 @@ class TestUnequipEndpoint:
 
 
 # ===========================================================================
-# TASK 12: Test shield support
+# FEAT-149: Shield slot removed — shields equip into the off-hand slot
 # ===========================================================================
 
+# The 9 equipment slots every character gets (shield slot removed in FEAT-149)
+DEFAULT_EQUIPMENT_SLOT_TYPES = [
+    'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet',
+    'main_weapon', 'additional_weapons',
+]
 
-class TestShieldSupport:
-    """Tests for shield item type and equipment slot support."""
 
-    # --- Schema validation ---
+class TestShieldOffhand:
+    """FEAT-149: 'shield' stays an ITEM TYPE (distinct category, sharpenable,
+    socketable) but the 'shield' equipment SLOT is gone — shields now equip
+    into the single 'additional_weapons' (off-hand) slot."""
 
-    def test_shield_in_item_type_enum(self):
-        """Shield must be a valid ItemType in Pydantic schemas."""
+    # --- Item type survives ---
+
+    def test_shield_item_type_still_in_schemas(self):
+        """Shield must remain a valid ItemType in Pydantic schemas."""
         assert hasattr(schemas.ItemType, "shield")
         assert schemas.ItemType.shield.value == "shield"
 
-    # --- Model validation ---
-
-    def test_shield_in_items_model_enum(self):
-        """Shield must be present in Items.item_type column definition."""
-        # Check the model source references 'shield'
-        col = models.Items.__table__.columns["item_type"]
-        # In test environment, enums are patched to String, so check source
+    def test_shield_item_type_still_in_items_model_enum(self):
+        """'shield' must remain in the Items.item_type column definition."""
+        # In the test environment enums are patched to String, so check source.
         source = inspect.getsource(models)
-        assert "'shield'" in source, "models.py must include 'shield' in Items.item_type Enum"
-
-    def test_shield_in_equipment_slot_model_enum(self):
-        """Shield must be present in EquipmentSlot.slot_type column definition."""
-        source = inspect.getsource(models)
-        # Check that EquipmentSlot slot_type definition contains 'shield'
-        # Find the EquipmentSlot class section
-        es_idx = source.index("class EquipmentSlot")
-        es_source = source[es_idx:]
-        assert "'shield'" in es_source, (
-            "models.py must include 'shield' in EquipmentSlot.slot_type Enum"
+        items_idx = source.index("class Items")
+        next_class = source.find("class ", items_idx + 1)
+        items_source = source[items_idx:next_class if next_class != -1 else len(source)]
+        assert "'shield'" in items_source, (
+            "models.py must keep 'shield' in Items.item_type Enum"
         )
 
-    # --- crud.create_default_equipment_slots ---
+    def test_shield_stays_sharpenable_and_socketable(self):
+        """Shields keep sharpening and gem/rune sockets (item-type based sets)."""
+        assert "shield" in crud.SHARPENABLE_TYPES
+        assert "shield" in crud.SOCKETABLE_TYPES
 
-    def test_create_default_equipment_slots_includes_shield(self, db_session):
-        """create_default_equipment_slots must create a shield slot."""
+    # --- Slot type is gone ---
+
+    def test_shield_slot_absent_from_equipment_slot_model_enum(self):
+        """'shield' must NOT appear in EquipmentSlot.slot_type column definition."""
+        source = inspect.getsource(models)
+        es_idx = source.index("class EquipmentSlot")
+        next_class = source.find("class ", es_idx + 1)
+        es_source = source[es_idx:next_class if next_class != -1 else len(source)]
+        assert "'shield'" not in es_source, (
+            "models.py must not include 'shield' in EquipmentSlot.slot_type Enum"
+        )
+
+    def test_create_default_equipment_slots_has_no_shield(self, db_session):
+        """create_default_equipment_slots must create 9 equipment slots
+        (no shield) + 10 fast slots."""
         slots = crud.create_default_equipment_slots(db_session, character_id=99)
 
         slot_types = [s.slot_type for s in slots]
-        assert "shield" in slot_types, "Default equipment slots must include 'shield'"
+        assert "shield" not in slot_types, "Shield slot must no longer be created"
 
-    def test_shield_slot_is_enabled_by_default(self, db_session):
-        """The shield slot must be enabled (is_enabled=True) by default."""
-        slots = crud.create_default_equipment_slots(db_session, character_id=99)
+        equip_types = [t for t in slot_types if not t.startswith("fast_slot_")]
+        assert sorted(equip_types) == sorted(DEFAULT_EQUIPMENT_SLOT_TYPES)
+        assert len(equip_types) == 9
 
-        shield_slot = [s for s in slots if s.slot_type == "shield"][0]
-        assert shield_slot.is_enabled is True, "Shield slot must be enabled by default"
+        fast_types = [t for t in slot_types if t.startswith("fast_slot_")]
+        assert len(fast_types) == 10
 
-    # --- crud.find_equipment_slot_for_item ---
-
-    def test_find_equipment_slot_for_shield_item(self, db_session):
-        """find_equipment_slot_for_item must return the shield slot for a shield item."""
-        item = _create_item(db_session, name="Iron Shield", item_type="shield")
-        _create_equipment_slot(db_session, character_id=1, slot_type="shield")
-
-        slot = crud.find_equipment_slot_for_item(db_session, character_id=1, item_obj=item)
-        assert slot is not None, "Must find a shield slot for a shield item"
-        assert slot.slot_type == "shield"
-
-    def test_find_equipment_slot_shield_in_fixed_dict(self):
-        """The fixed dict in find_equipment_slot_for_item must contain 'shield'."""
-        source = inspect.getsource(crud.find_equipment_slot_for_item)
-        assert "'shield'" in source, (
-            "find_equipment_slot_for_item must include 'shield' in the fixed dict"
-        )
+    def test_npc_equipment_slots_constant_has_no_shield(self):
+        """NPC_EQUIPMENT_SLOTS must not contain the removed shield slot."""
+        assert "shield" not in crud.NPC_EQUIPMENT_SLOTS
 
     # --- crud.is_item_compatible_with_slot ---
 
-    def test_shield_compatible_with_shield_slot(self):
-        """is_item_compatible_with_slot must return True for shield in shield slot."""
-        assert crud.is_item_compatible_with_slot("shield", "shield") is True
+    def test_shield_compatible_with_offhand_slot(self):
+        """Shield item must be compatible with the additional_weapons slot."""
+        assert crud.is_item_compatible_with_slot("shield", "additional_weapons") is True
 
-    def test_shield_not_compatible_with_head_slot(self):
-        """Shield item must not be compatible with non-shield slots."""
-        assert crud.is_item_compatible_with_slot("shield", "head") is False
+    def test_shield_slot_no_longer_a_valid_target(self):
+        """The removed 'shield' slot must not be a valid target anymore."""
+        assert crud.is_item_compatible_with_slot("shield", "shield") is False
 
-    def test_head_not_compatible_with_shield_slot(self):
-        """Non-shield items must not be compatible with shield slot."""
-        assert crud.is_item_compatible_with_slot("head", "shield") is False
+    def test_offhand_weapon_still_compatible_with_offhand_slot(self):
+        """Regular off-hand weapons keep working in their slot."""
+        assert crud.is_item_compatible_with_slot(
+            "additional_weapons", "additional_weapons"
+        ) is True
 
-    # --- Full equip/unequip cycle for shield ---
+    def test_shield_not_compatible_with_other_slots(self):
+        """Shield item must not be compatible with unrelated slots."""
+        for slot_type in ("head", "body", "main_weapon", "belt", "fast_slot_1"):
+            assert crud.is_item_compatible_with_slot("shield", slot_type) is False
 
-    def test_equip_shield_item_via_endpoint(self, authed_client, db_session):
-        """A shield item must be equippable via the equip endpoint."""
+    # --- crud.find_equipment_slot_for_item ---
+
+    def test_find_equipment_slot_for_shield_returns_offhand(self, db_session):
+        """find_equipment_slot_for_item must map a shield item to the
+        additional_weapons slot."""
+        item = _create_item(db_session, name="Iron Shield", item_type="shield")
+        _create_equipment_slot(db_session, character_id=1, slot_type="additional_weapons")
+
+        slot = crud.find_equipment_slot_for_item(db_session, character_id=1, item_obj=item)
+        assert slot is not None, "Must find the off-hand slot for a shield item"
+        assert slot.slot_type == "additional_weapons"
+
+    # --- Full equip/unequip cycle for shield via endpoints ---
+
+    def test_equip_shield_lands_in_offhand_slot(self, authed_client, db_session):
+        """Equipping a shield via the equip endpoint must land it in
+        the additional_weapons slot."""
         item = _create_item(db_session, name="Tower Shield", item_type="shield")
-        _create_equipment_slot(db_session, character_id=1, slot_type="shield")
+        _create_equipment_slot(db_session, character_id=1, slot_type="additional_weapons")
         _create_inventory_entry(db_session, character_id=1, item_id=item.id, quantity=1)
 
         with patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock):
@@ -304,30 +325,132 @@ class TestShieldSupport:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["slot_type"] == "shield"
+        assert data["slot_type"] == "additional_weapons"
         assert data["item_id"] == item.id
 
-    def test_unequip_shield_item_via_endpoint(self, authed_client, db_session):
-        """A shield item must be unequippable via the unequip endpoint."""
-        item = _create_item(db_session, name="Buckler", item_type="shield")
-        _create_equipment_slot(db_session, character_id=1, slot_type="shield", item_id=item.id)
+        # Shield left the inventory
+        inv = db_session.query(models.CharacterInventory).filter_by(
+            character_id=1, item_id=item.id
+        ).first()
+        assert inv is None, "Equipped shield must be removed from inventory"
 
+    def test_equip_shield_when_offhand_occupied_swaps_gracefully(
+        self, authed_client, db_session
+    ):
+        """Equipping a shield while the off-hand slot is occupied must follow
+        the existing occupied-slot flow: no error, old item returns to
+        inventory, shield takes the slot (no 500, no data loss)."""
+        weapon = _create_item(db_session, name="Off-hand Dagger", item_type="additional_weapons")
+        shield = _create_item(db_session, name="Round Shield", item_type="shield")
+        _create_equipment_slot(
+            db_session, character_id=1, slot_type="additional_weapons", item_id=weapon.id
+        )
+        _create_inventory_entry(db_session, character_id=1, item_id=shield.id, quantity=1)
+
+        with patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock):
+            response = authed_client.post(
+                "/inventory/1/equip",
+                json={"item_id": shield.id},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["slot_type"] == "additional_weapons"
+        assert data["item_id"] == shield.id
+
+        # The displaced off-hand weapon must be back in the inventory
+        inv = db_session.query(models.CharacterInventory).filter_by(
+            character_id=1, item_id=weapon.id
+        ).first()
+        assert inv is not None, "Displaced off-hand item must return to inventory"
+        assert inv.quantity == 1
+
+    def test_unequip_shield_from_offhand_preserves_enhancement(
+        self, authed_client, db_session
+    ):
+        """Unequipping a shield from additional_weapons must return it to the
+        inventory with enhancement points and durability preserved."""
+        item = _create_item(
+            db_session, name="Buckler", item_type="shield", max_durability=100
+        )
+        slot = _create_equipment_slot(
+            db_session, character_id=1, slot_type="additional_weapons", item_id=item.id
+        )
+        slot.enhancement_points_spent = 3
+        slot.current_durability = 42
+        db_session.commit()
+
+        with patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock):
+            response = authed_client.post(
+                "/inventory/1/unequip",
+                params={"slot_type": "additional_weapons"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["item_id"] is None, "Slot must be cleared after unequip"
+
+        inv = db_session.query(models.CharacterInventory).filter_by(
+            character_id=1, item_id=item.id
+        ).first()
+        assert inv is not None, "Shield must return to inventory after unequip"
+        assert inv.quantity == 1
+        assert inv.enhancement_points_spent == 3, "Enhancement must be preserved"
+        assert inv.current_durability == 42, "Durability must be preserved"
+
+    def test_unequip_removed_shield_slot_returns_404(self, authed_client, db_session):
+        """Unequipping the removed 'shield' slot_type must return 404
+        (slot does not exist for the character anymore)."""
         with patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock):
             response = authed_client.post(
                 "/inventory/1/unequip",
                 params={"slot_type": "shield"},
             )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["item_id"] is None
+        assert response.status_code == 404
 
-        # Verify item returned to inventory
-        inv = db_session.query(models.CharacterInventory).filter_by(
-            character_id=1, item_id=item.id
-        ).first()
-        assert inv is not None
-        assert inv.quantity == 1
+    # --- NPC admin equip ---
+
+    def test_admin_equip_npc_rejects_shield_slot(self, db_session):
+        """admin_equip_npc_item must reject slot_type='shield' with 400."""
+        from fastapi import HTTPException
+
+        item = _create_item(db_session, name="NPC Shield", item_type="shield")
+
+        with pytest.raises(HTTPException) as exc_info:
+            crud.admin_equip_npc_item(
+                db_session, character_id=100, slot_type="shield", item_id=item.id
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "Недопустимый тип слота" in exc_info.value.detail
+
+
+class TestShieldEquipSecurity:
+    """Security: equip endpoint must keep rejecting unauthenticated and
+    foreign-character requests (FEAT-149 changes nothing about auth)."""
+
+    def test_equip_without_token_returns_401(self, client, db_session):
+        """Equip without Authorization header must return 401."""
+        response = client.post("/inventory/1/equip", json={"item_id": 1})
+        assert response.status_code == 401
+
+    def test_equip_foreign_character_returns_403(self, authed_client, db_session):
+        """An authenticated user must not equip items on another user's character."""
+        # Character 2 belongs to user 2; authed_client is user 1.
+        db_session.execute(text(
+            "INSERT OR IGNORE INTO characters (id, user_id) VALUES (2, 2)"
+        ))
+        db_session.commit()
+        shield = _create_item(db_session, name="Foreign Shield", item_type="shield")
+
+        with patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock):
+            response = authed_client.post(
+                "/inventory/2/equip",
+                json={"item_id": shield.id},
+            )
+
+        assert response.status_code == 403
 
 
 # ===========================================================================

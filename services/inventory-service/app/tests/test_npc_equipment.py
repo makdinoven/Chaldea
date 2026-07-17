@@ -255,11 +255,11 @@ class TestAdminNpcEquip:
 
         assert response.status_code == 200
 
-        # Verify 10 NPC equipment slots were created (no fast slots)
+        # Verify 9 NPC equipment slots were created (no fast slots, no shield — FEAT-149)
         slots_after = db_session.query(models.EquipmentSlot).filter_by(
             character_id=200
         ).all()
-        assert len(slots_after) == 10
+        assert len(slots_after) == 9
 
         slot_types = sorted([s.slot_type for s in slots_after])
         expected = sorted(crud.NPC_EQUIPMENT_SLOTS)
@@ -427,15 +427,16 @@ class TestNpcEquipmentAuth:
 class TestCreateNpcEquipmentSlots:
     """Unit tests for crud.create_npc_equipment_slots."""
 
-    def test_creates_10_slots(self, db_session):
-        """Should create exactly 10 NPC equipment slots (no fast slots)."""
+    def test_creates_9_slots(self, db_session):
+        """Should create exactly 9 NPC equipment slots (no fast slots,
+        no shield slot — FEAT-149)."""
         crud.create_npc_equipment_slots(db_session, character_id=300)
         db_session.commit()
 
         slots = db_session.query(models.EquipmentSlot).filter_by(
             character_id=300
         ).all()
-        assert len(slots) == 10
+        assert len(slots) == 9
         slot_types = {s.slot_type for s in slots}
         assert slot_types == set(crud.NPC_EQUIPMENT_SLOTS)
 
@@ -449,7 +450,7 @@ class TestCreateNpcEquipmentSlots:
         slots = db_session.query(models.EquipmentSlot).filter_by(
             character_id=300
         ).all()
-        assert len(slots) == 10
+        assert len(slots) == 9
 
     def test_slots_are_enabled_and_empty(self, db_session):
         """All created slots should be enabled with no item."""
@@ -468,10 +469,11 @@ class TestNpcEquipmentSlotsConstant:
     """Verify the NPC_EQUIPMENT_SLOTS constant is correct."""
 
     def test_contains_all_equipment_slots(self):
-        """NPC_EQUIPMENT_SLOTS should contain all 10 non-fast equipment slots."""
+        """NPC_EQUIPMENT_SLOTS should contain all 9 non-fast equipment slots
+        (no shield slot — FEAT-149)."""
         expected = {
             'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet',
-            'main_weapon', 'additional_weapons', 'shield',
+            'main_weapon', 'additional_weapons',
         }
         assert set(crud.NPC_EQUIPMENT_SLOTS) == expected
 

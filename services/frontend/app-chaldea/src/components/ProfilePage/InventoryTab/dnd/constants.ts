@@ -6,13 +6,15 @@ export const DND_TYPES = {
 // Item types that go to fast slots (not equipment slots)
 export const FAST_SLOT_ITEM_TYPES = new Set(['consumable', 'scroll', 'misc', 'resource']);
 
-// Item types that go to equipment slots (1:1 mapping)
+// Item types that go to equipment slots (item_type -> slot_type).
+// FEAT-149: the 'shield' slot no longer exists — shield items equip into
+// the 'additional_weapons' slot (mirrors backend find_equipment_slot_for_item).
 export const EQUIPMENT_ITEM_TYPES: Record<string, string> = {
   head: 'head',
   body: 'body',
   cloak: 'cloak',
   belt: 'belt',
-  shield: 'shield',
+  shield: 'additional_weapons',
   ring: 'ring',
   necklace: 'necklace',
   bracelet: 'bracelet',
