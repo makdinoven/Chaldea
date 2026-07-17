@@ -34,8 +34,10 @@ The Chaldea UI is a **dark fantasy RPG interface**:
 | `text-site-blue` | `#76a6bd` | Hover text, secondary links |
 | `text-site-red` | `#F37753` | Errors, damage, alerts |
 | `text-input` | `#c6c4c4` | Form input text |
-| `bg-site-bg` | `rgba(35,35,41,0.9)` | Container backgrounds |
+| `bg-site-bg` | `rgba(9,10,16,0.62)` | Container backgrounds (затемнённые панели из мокапа, полупрозрачные) |
 | `bg-site-dark` | `#1a1a2e` | Deep dark backgrounds |
+
+Opaque floating surfaces (modals, dropdowns, context menus, tooltips) use `rgba(14,15,21,0.98)` — near-solid, NOT translucent (already baked into `modal-content`, `dropdown-menu`, `context-menu`, `site-tooltip`).
 
 ### CSS variables (for legacy SCSS)
 
@@ -44,8 +46,13 @@ The Chaldea UI is a **dark fantasy RPG interface**:
 --zolotoReal: #f0d95c;   /* gold accent */
 --blue: #76a6bd;          /* hover/interaction */
 --red: #F37753;           /* error/action */
---gray-background: rgba(35, 35, 41, 0.9);
+--gray-background: rgba(9, 10, 16, 0.62);
 ```
+
+### Global page background
+
+`body` uses base color `#05060a` with a **soft** dark gradient overlay on top of the background image:
+`linear-gradient(180deg, rgba(5,6,10,0.35), rgba(5,6,10,0.55)), url(background-main.png)` — deliberately gentler than the mock's overlay (non-aggressive darkening). Defined in `src/index.css` (`body`), do not re-darken pages locally.
 
 ### Rules
 
@@ -106,7 +113,7 @@ Thick variant (2px, for modals/active states):
 ```html
 <div class="gray-bg p-6">Container content</div>
 ```
-Applies `rgba(35,35,41,0.9)` background + `border-radius: 15px`.
+Applies `rgba(9,10,16,0.62)` background + `border-radius: 15px`.
 
 ### Gradient Dividers
 ```html
@@ -140,6 +147,17 @@ Shows a subtle gold gradient on hover. Content needs `relative z-10` to stay abo
 <!-- Line button (top border) -->
 <button class="btn-line">Действие</button>
 ```
+
+### Chip Outline (toggle chips / filter pills)
+```html
+<!-- Filter pill (rounded-full) -->
+<button class="chip-outline rounded-full px-4 py-2 text-xs font-medium">Все</button>
+<button class="chip-outline chip-outline-active rounded-full px-4 py-2 text-xs font-medium">PvP</button>
+
+<!-- Rail chip (rounded-card, e.g. craft profession rail) -->
+<button class="chip-outline rounded-card px-4 py-2">Кузнец</button>
+```
+Framed toggle chip: subtle white border + fill, text brightens on hover; `chip-outline-active` switches to the gold state (gold gradient fill, gold border, `#fff9b8` text). Shape-agnostic — the caller picks the radius (`rounded-full` for filter pills, `rounded-card` for rail chips).
 
 ### Links
 ```html

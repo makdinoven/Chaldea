@@ -42,6 +42,9 @@ def _setup(monkeypatch):
         crud, "get_characters_map",
         lambda db, ids: {cid: CHARS[cid] for cid in ids if cid in CHARS},
     )
+    # character_attributes is a shared MySQL table absent from the SQLite test
+    # DB — stub the batched read; FEAT-151 enrichment fields resolve to null.
+    monkeypatch.setattr(crud, "get_attributes_map", lambda db, ids: {})
     monkeypatch.setattr(main, "_award_passive_xp", lambda cid, amt: AWARDS.append((cid, amt)))
     monkeypatch.setattr(
         crud, "get_character_ids_at_location",

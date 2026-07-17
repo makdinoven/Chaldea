@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import toast from "react-hot-toast";
-import { useAppSelector } from "../../../redux/store";
+// ProfilePage PartyTab — redesigned per Claude Design mock (FEAT-151),
+// party system from FEAT-144. Three states: member / leader / no-party.
+// All existing actions preserved: create / invite / respond / leave /
+// disband / rename / avatar upload.
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { motion } from 'motion/react';
+import toast from 'react-hot-toast';
+import { Trash2, Users } from 'lucide-react';
+import { useAppSelector } from '../../../redux/store';
 import {
   Party,
   IncomingInvite,
@@ -15,7 +21,14 @@ import {
   getPlayersOnLocation,
   updateParty,
   uploadSquadAvatar,
-} from "../../../api/squads";
+} from '../../../api/squads';
+import PartyHeaderCard from './PartyHeaderCard';
+import PartyMemberCard from './PartyMemberCard';
+import InviteFromLocationPanel from './InviteFromLocationPanel';
+import PartyInvitesPanel from './PartyInvitesPanel';
+import PartyCreateCard from './PartyCreateCard';
+
+const PARTY_MAX_SIZE = 4;
 
 interface PartyTabProps {
   characterId: number;
@@ -23,13 +36,16 @@ interface PartyTabProps {
 
 const PartyTab = ({ characterId }: PartyTabProps) => {
   const character = useAppSelector((s) => s.user.character);
-  const myLocationId =
-    (character as { current_location?: { id?: number } } | null)?.current_location?.id ?? null;
+  const myLocation =
+    (character as { current_location?: { id?: number; name?: string } | null } | null)
+      ?.current_location ?? null;
+  const myLocationId = myLocation?.id ?? null;
+  const myLocationName = myLocation?.name ?? null;
 
   const [party, setParty] = useState<Party | null>(null);
   const [invites, setInvites] = useState<IncomingInvite[]>([]);
   const [locPlayers, setLocPlayers] = useState<PlayerOnLocation[]>([]);
-  const [name, setName] = useState("");
+  const [name, setName] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -46,7 +62,7 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
       setParty(p);
       setInvites(inv);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Не удалось загрузить отряд");
+      toast.error(e instanceof Error ? e.message : 'Не удалось загрузить отряд');
     } finally {
       setLoading(false);
     }
@@ -72,7 +88,7 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
     try {
       await fn();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Ошибка");
+      toast.error(e instanceof Error ? e.message : 'Ошибка');
     } finally {
       setBusy(false);
     }
@@ -80,54 +96,61 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    e.target.value = "";
+    e.target.value = '';
     if (!file || !party) return;
     guard(async () => {
       const url = await uploadSquadAvatar(file);
       await updateParty(party.id, { avatar: url });
-      toast.success("Аватар отряда обновлён");
+      toast.success('Аватар отряда обновлён');
       await reload();
     });
   };
 
+  const handleRename = (newName: string) =>
+    guard(async () => {
+      await updateParty(party!.id, { name: newName });
+      toast.success('Название отряда обновлено');
+      await reload();
+    });
+
   const handleCreate = () =>
     guard(async () => {
       if (!name.trim()) {
-        toast.error("Введите название отряда");
+        toast.error('Введите название отряда');
         return;
       }
       await createParty(characterId, name.trim());
-      setName("");
-      toast.success("Отряд создан");
+      setName('');
+      toast.success('Отряд создан');
       await reload();
     });
 
   const handleInvite = (cid: number) =>
     guard(async () => {
       await invitePlayer(party!.id, cid);
-      toast.success("Приглашение отправлено");
+      toast.success('Приглашение отправлено');
       await reload();
     });
 
   const handleRespond = (partyId: number, accept: boolean) =>
     guard(async () => {
       await respondInvite(partyId, characterId, accept);
-      toast.success(accept ? "Вы вступили в отряд" : "Приглашение отклонено");
+      toast.success(accept ? 'Вы вступили в отряд' : 'Приглашение отклонено');
       await reload();
     });
 
   const handleLeave = () =>
     guard(async () => {
       await leaveParty(party!.id, characterId);
-      toast.success("Вы покинули отряд");
+      toast.success('Вы покинули отряд');
       await reload();
     });
 
   const handleDisband = () =>
     guard(async () => {
-      if (!window.confirm("Распустить отряд? Это действие необратимо.")) return;
+      if (!window.confirm('Распустить отряд? Это действие необратимо.')) return;
       await disbandParty(party!.id);
-      toast.success("Отряд распущен");
+      toast.success('Отряд распущен');
       await reload();
     });
 
@@ -140,12 +163,19 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
   }
 
   const memberIds = new Set((party?.members ?? []).map((m) => m.character_id));
-  const invitable = locPlayers.filter(
-    (p) => p.id !== characterId && !memberIds.has(p.id),
-  );
+  const invitable = locPlayers.filter((p) => p.id !== characterId && !memberIds.has(p.id));
+  const freeSlots = party ? Math.max(0, PARTY_MAX_SIZE - party.members.length) : 0;
+  // Invites can arrive while already in a party — keep the panel visible then.
+  const showInvitesPanel = !party || invites.length > 0;
+  const hasRightColumn = isLeader || showInvitesPanel;
 
   return (
-    <div className="max-w-2xl mx-auto gray-bg rounded-card p-4 sm:p-6 flex flex-col gap-6">
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+      className="flex flex-col gap-4"
+    >
       {/* Hidden file input for the squad avatar (leader only) */}
       <input
         ref={fileInputRef}
@@ -155,186 +185,75 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
         onChange={handleAvatarChange}
       />
 
-      {/* Incoming invites */}
-      {invites.length > 0 && (
-        <section className="flex flex-col gap-3">
-          <h3 className="gold-text text-lg font-medium uppercase">Приглашения</h3>
-          {invites.map((inv) => (
-            <div
-              key={inv.party_id}
-              className="flex items-center justify-between gap-3 bg-white/[0.03] rounded-lg p-3"
-            >
-              <div className="min-w-0">
-                <p className="text-white truncate">{inv.party_name}</p>
-                <p className="text-white/50 text-xs truncate">
-                  Лидер: {inv.leader_name ?? `#${inv.leader_character_id}`}
-                </p>
-              </div>
-              <div className="flex gap-2 shrink-0">
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => handleRespond(inv.party_id, true)}
-                  className="px-3 py-1.5 rounded-lg border border-emerald-400/40 text-emerald-300 text-sm hover:bg-emerald-400/10 transition disabled:opacity-50"
-                >
-                  Принять
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => handleRespond(inv.party_id, false)}
-                  className="px-3 py-1.5 rounded-lg border border-white/15 text-white/60 text-sm hover:bg-white/5 transition disabled:opacity-50"
-                >
-                  Отклонить
-                </button>
-              </div>
-            </div>
-          ))}
-        </section>
-      )}
+      {/* Header row */}
+      <div className="flex items-center gap-3.5">
+        <h3 className="gold-text text-sm font-medium uppercase tracking-[0.12em]">Отряд</h3>
+        {party && (
+          <span className="font-mono tabular-nums text-[13px] text-white/50">
+            {party.members.filter((m) => m.status === 'accepted').length}/{PARTY_MAX_SIZE}
+          </span>
+        )}
+      </div>
 
-      {/* No party yet — create form */}
-      {!party && (
-        <section className="flex flex-col gap-4 bg-white/[0.03] rounded-lg p-5">
-          <h3 className="gold-text text-lg font-medium uppercase">Создать отряд</h3>
-          <p className="text-white/50 text-sm">
-            Постоянный отряд: до 4 участников, совместные бои, данжи и бонус к опыту
-            рядом с соотрядцами. Приглашать можно только игроков на вашей локации.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-3">
-            <input
-              type="text"
-              value={name}
-              maxLength={60}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Название отряда"
-              className="flex-1 bg-transparent border-b border-white/20 focus:border-gold outline-none py-2 text-white placeholder-white/30 transition"
+      <div
+        className={
+          hasRightColumn
+            ? 'grid gap-4 items-start lg:grid-cols-[1.15fr_0.85fr]'
+            : 'flex flex-col gap-4'
+        }
+      >
+        {/* Left column */}
+        {party ? (
+          <section className="flex flex-col gap-4 min-w-0">
+            <PartyHeaderCard
+              party={party}
+              isLeader={isLeader}
+              busy={busy}
+              onAvatarClick={() => fileInputRef.current?.click()}
+              onRename={handleRename}
             />
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleCreate}
-              className="px-5 py-2 rounded-lg border border-gold/40 text-gold hover:bg-gold/10 transition disabled:opacity-50 whitespace-nowrap"
+
+            {/* Member grid + free-slot placeholders */}
+            <motion.div
+              initial="hidden"
+              animate="visible"
+              variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.05 } } }}
+              className="grid grid-cols-1 sm:grid-cols-2 gap-3.5"
             >
-              Создать
-            </button>
-          </div>
-        </section>
-      )}
-
-      {/* Party card */}
-      {party && (
-        <section className="flex flex-col gap-5">
-          <div className="flex items-center gap-4">
-            {isLeader ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => fileInputRef.current?.click()}
-                title="Сменить аватар отряда"
-                className="relative w-14 h-14 rounded-lg bg-white/5 border border-gold/20 flex items-center justify-center overflow-hidden shrink-0 group disabled:opacity-50"
-              >
-                {party.avatar ? (
-                  <img src={party.avatar} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <span className="text-gold text-xl">⚔</span>
-                )}
-                <span className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-[10px] text-white leading-tight text-center">
-                  Сменить
-                </span>
-              </button>
-            ) : (
-              <div className="w-14 h-14 rounded-lg bg-white/5 border border-gold/20 flex items-center justify-center overflow-hidden shrink-0">
-                {party.avatar ? (
-                  <img src={party.avatar} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <span className="text-gold text-xl">⚔</span>
-                )}
-              </div>
-            )}
-            <div className="min-w-0">
-              <h3 className="gold-text text-xl font-medium truncate">{party.name}</h3>
-              <p className="text-white/50 text-xs">
-                {party.members.filter((m) => m.status === "accepted").length} / 4 в отряде
-              </p>
-            </div>
-          </div>
-
-          {/* Members */}
-          <div className="flex flex-col gap-2">
-            {party.members.map((m) => {
-              const green = m.current_location_id != null && m.current_location_id === myLocationId;
-              return (
-                <div
+              {party.members.map((m) => (
+                <motion.div
                   key={m.character_id}
-                  className="flex items-center gap-3 bg-white/[0.03] rounded-lg p-3"
+                  variants={{
+                    hidden: { opacity: 0, y: 10 },
+                    visible: { opacity: 1, y: 0 },
+                  }}
                 >
-                  <span
-                    className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${
-                      green ? "bg-emerald-400" : "bg-red-500/70"
-                    }`}
-                    title={green ? "На вашей локации" : "В другой локации"}
-                  />
-                  <div className="w-8 h-8 rounded-full bg-white/10 overflow-hidden shrink-0">
-                    {m.avatar && <img src={m.avatar} alt="" className="w-full h-full object-cover" />}
-                  </div>
-                  <span className="text-white flex-1 min-w-0 truncate">
-                    {m.name ?? `#${m.character_id}`}
-                  </span>
-                  {m.is_leader && (
-                    <span className="text-gold text-xs uppercase tracking-wide shrink-0">Лидер</span>
-                  )}
-                  {m.status === "invited" && (
-                    <span className="text-white/40 text-xs shrink-0">приглашён…</span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                  <PartyMemberCard member={m} ownLocationId={myLocationId} />
+                </motion.div>
+              ))}
+              {Array.from({ length: freeSlots }, (_, i) => (
+                <motion.div
+                  key={`free-${i}`}
+                  variants={{
+                    hidden: { opacity: 0, y: 10 },
+                    visible: { opacity: 1, y: 0 },
+                  }}
+                  className="flex flex-col items-center justify-center gap-2 min-h-[104px] rounded-card border-[1.5px] border-dashed border-gold/[0.18] bg-white/[0.02] text-gold/45"
+                >
+                  <Users size={22} strokeWidth={1.7} />
+                  <span className="text-[11px] uppercase tracking-[0.05em]">Свободный слот</span>
+                </motion.div>
+              ))}
+            </motion.div>
 
-          {/* Leader: invite players on this location */}
-          {isLeader && (
-            <div className="flex flex-col gap-2">
-              <h4 className="text-white/70 text-sm uppercase tracking-wide">
-                Пригласить с локации
-              </h4>
-              {!myLocationId ? (
-                <p className="text-white/40 text-sm">Вы не находитесь в локации.</p>
-              ) : invitable.length === 0 ? (
-                <p className="text-white/40 text-sm">Нет доступных игроков на вашей локации.</p>
-              ) : (
-                invitable.map((p) => (
-                  <div
-                    key={p.id}
-                    className="flex items-center gap-3 bg-white/[0.02] rounded-lg p-2.5"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-white/10 overflow-hidden shrink-0">
-                      {p.avatar && <img src={p.avatar} alt="" className="w-full h-full object-cover" />}
-                    </div>
-                    <span className="text-white/90 flex-1 min-w-0 truncate">{p.name}</span>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => handleInvite(p.id)}
-                      className="px-3 py-1.5 rounded-lg border border-gold/40 text-gold text-sm hover:bg-gold/10 transition disabled:opacity-50 shrink-0"
-                    >
-                      Пригласить
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-
-          {/* Controls */}
-          <div className="flex gap-3 pt-2">
             {isLeader ? (
               <button
                 type="button"
                 disabled={busy}
                 onClick={handleDisband}
-                className="px-4 py-2 rounded-lg border border-red-500/40 text-red-300 text-sm hover:bg-red-500/10 transition disabled:opacity-50"
+                className="self-start flex items-center gap-2 px-[18px] py-2.5 rounded-[10px] text-xs font-medium uppercase tracking-[0.04em] text-site-red/85 bg-site-red/[0.08] border border-site-red/35 cursor-pointer hover:bg-site-red/[0.18] transition-colors duration-200 ease-site disabled:opacity-50"
               >
+                <Trash2 size={15} strokeWidth={2} className="shrink-0" />
                 Распустить отряд
               </button>
             ) : (
@@ -342,15 +261,40 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
                 type="button"
                 disabled={busy}
                 onClick={handleLeave}
-                className="px-4 py-2 rounded-lg border border-white/15 text-white/70 text-sm hover:bg-white/5 transition disabled:opacity-50"
+                className="self-start px-[18px] py-2.5 rounded-[10px] text-xs font-medium uppercase tracking-[0.04em] text-white/70 border border-white/15 cursor-pointer hover:text-site-red hover:border-site-red/40 transition-colors duration-200 ease-site disabled:opacity-50"
               >
                 Покинуть отряд
               </button>
             )}
+          </section>
+        ) : (
+          <PartyCreateCard
+            name={name}
+            onNameChange={setName}
+            busy={busy}
+            onCreate={handleCreate}
+          />
+        )}
+
+        {/* Right column */}
+        {hasRightColumn && (
+          <div className="flex flex-col gap-4 min-w-0">
+            {isLeader && (
+              <InviteFromLocationPanel
+                locationName={myLocationName}
+                hasLocation={myLocationId != null}
+                players={invitable}
+                busy={busy}
+                onInvite={handleInvite}
+              />
+            )}
+            {showInvitesPanel && (
+              <PartyInvitesPanel invites={invites} busy={busy} onRespond={handleRespond} />
+            )}
           </div>
-        </section>
-      )}
-    </div>
+        )}
+      </div>
+    </motion.div>
   );
 };
 

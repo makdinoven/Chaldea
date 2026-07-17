@@ -1,6 +1,11 @@
+// FEAT-151 — recipes section (mock 1003-1039): SectionHeader «Рецепты» with a
+// count, search preserved, responsive card grid, EmptyState when empty.
 import { useState, useMemo } from 'react';
 import { motion } from 'motion/react';
+import { Hammer } from 'lucide-react';
 import type { Recipe } from '../../../types/professions';
+import SectionHeader from '../shared/SectionHeader';
+import EmptyState from '../shared/EmptyState';
 import RecipeCard from './RecipeCard';
 
 interface RecipeListProps {
@@ -41,7 +46,16 @@ const RecipeList = ({ recipes, loading, error, onCraft }: RecipeListProps) => {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
+      <SectionHeader
+        title="Рецепты"
+        extra={
+          <span className="font-mono tabular-nums text-xs text-white/45">
+            {filtered.length}
+          </span>
+        }
+      />
+
       {/* Search */}
       <input
         type="text"
@@ -53,9 +67,10 @@ const RecipeList = ({ recipes, loading, error, onCraft }: RecipeListProps) => {
 
       {/* Recipes grid */}
       {filtered.length === 0 ? (
-        <p className="text-white/40 text-sm py-6 text-center">
-          {recipes.length === 0 ? 'Нет доступных рецептов' : 'Ничего не найдено'}
-        </p>
+        <EmptyState
+          icon={<Hammer size={32} strokeWidth={1.5} className="text-white/20" />}
+          message={recipes.length === 0 ? 'Нет доступных рецептов' : 'Ничего не найдено'}
+        />
       ) : (
         <motion.div
           initial="hidden"
@@ -64,7 +79,7 @@ const RecipeList = ({ recipes, loading, error, onCraft }: RecipeListProps) => {
             hidden: {},
             visible: { transition: { staggerChildren: 0.04 } },
           }}
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"
+          className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"
         >
           {filtered.map((recipe) => (
             <RecipeCard key={recipe.id} recipe={recipe} onCraft={onCraft} />

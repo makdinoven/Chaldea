@@ -14,8 +14,10 @@ import models
 def get_character_info(db: Session, character_id: int) -> Optional[dict]:
     row = db.execute(
         text(
-            "SELECT id, user_id, current_location_id, name, avatar "
-            "FROM characters WHERE id = :id"
+            "SELECT c.id, c.user_id, c.current_location_id, c.name, c.avatar, "
+            "c.level, cl.name AS class_name "
+            "FROM characters c LEFT JOIN classes cl ON cl.id_class = c.id_class "
+            "WHERE c.id = :id"
         ),
         {"id": character_id},
     ).fetchone()
@@ -27,6 +29,8 @@ def get_character_info(db: Session, character_id: int) -> Optional[dict]:
         "current_location_id": row[2],
         "name": row[3],
         "avatar": row[4],
+        "level": row[5],
+        "class_name": row[6],
     }
 
 
@@ -35,8 +39,10 @@ def get_characters_map(db: Session, character_ids: list) -> dict:
         return {}
     rows = db.execute(
         text(
-            "SELECT id, user_id, current_location_id, name, avatar "
-            "FROM characters WHERE id IN :ids"
+            "SELECT c.id, c.user_id, c.current_location_id, c.name, c.avatar, "
+            "c.level, cl.name AS class_name "
+            "FROM characters c LEFT JOIN classes cl ON cl.id_class = c.id_class "
+            "WHERE c.id IN :ids"
         ).bindparams(bindparam("ids", expanding=True)),
         {"ids": list(character_ids)},
     ).fetchall()
@@ -47,6 +53,36 @@ def get_characters_map(db: Session, character_ids: list) -> dict:
             "current_location_id": r[2],
             "name": r[3],
             "avatar": r[4],
+            "level": r[5],
+            "class_name": r[6],
+        }
+        for r in rows
+    }
+
+
+def get_attributes_map(db: Session, character_ids: list) -> dict:
+    """Batched read of the shared `character_attributes` table (FEAT-151).
+
+    A character may legitimately lack an attributes row (attributes are created
+    on approval) — such members simply get no entry here and the enrichment
+    fields stay null.
+    """
+    if not character_ids:
+        return {}
+    rows = db.execute(
+        text(
+            "SELECT character_id, current_health, max_health, "
+            "current_mana, max_mana "
+            "FROM character_attributes WHERE character_id IN :ids"
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"ids": list(character_ids)},
+    ).fetchall()
+    return {
+        r[0]: {
+            "current_health": r[1],
+            "max_health": r[2],
+            "current_mana": r[3],
+            "max_mana": r[4],
         }
         for r in rows
     }
@@ -103,10 +139,13 @@ def count_committed_members(db: Session, party_id: int) -> int:
 
 def build_party_out(db: Session, party: models.Party) -> dict:
     members = get_members(db, party.id)
-    info = get_characters_map(db, [m.character_id for m in members])
+    member_ids = [m.character_id for m in members]
+    info = get_characters_map(db, member_ids)
+    attrs = get_attributes_map(db, member_ids)
     member_dicts = []
     for m in members:
         ci = info.get(m.character_id, {})
+        ai = attrs.get(m.character_id, {})
         member_dicts.append({
             "character_id": m.character_id,
             "user_id": m.user_id,
@@ -115,6 +154,12 @@ def build_party_out(db: Session, party: models.Party) -> dict:
             "is_leader": m.is_leader,
             "status": m.status.value if hasattr(m.status, "value") else str(m.status),
             "current_location_id": ci.get("current_location_id"),
+            "level": ci.get("level"),
+            "class_name": ci.get("class_name"),
+            "current_health": ai.get("current_health"),
+            "max_health": ai.get("max_health"),
+            "current_mana": ai.get("current_mana"),
+            "max_mana": ai.get("max_mana"),
         })
     return {
         "id": party.id,

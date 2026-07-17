@@ -23,6 +23,7 @@ import {
 } from '../../../redux/slices/craftingSlice';
 import type { Recipe, CraftResult } from '../../../types/professions';
 import ProfessionSelect from './ProfessionSelect';
+import ProfessionRail from './ProfessionRail';
 import ProfessionInfo from './ProfessionInfo';
 import RecipeList from './RecipeList';
 import CraftConfirmModal from './CraftConfirmModal';
@@ -192,8 +193,16 @@ const CraftTab = ({ characterId }: CraftTabProps) => {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="space-y-4 rounded-card border border-white/10 bg-black/50 p-3 sm:p-4"
+      className="flex flex-col gap-4"
     >
+      {/* Header: gold title + active craft buffs (mock 932-939) */}
+      <div className="flex items-center justify-between flex-wrap gap-3.5">
+        <h3 className="gold-text text-sm font-medium uppercase tracking-[0.12em]">
+          Мастерская
+        </h3>
+        <ActiveBuffIndicator characterId={characterId} />
+      </div>
+
       {!hasProfession ? (
         <ProfessionSelect
           professions={safeProfs}
@@ -202,13 +211,13 @@ const CraftTab = ({ characterId }: CraftTabProps) => {
         />
       ) : (
         <>
-          <ProfessionInfo
-            characterProfession={characterProfession}
+          <ProfessionRail
             professions={safeProfs}
+            characterProfession={characterProfession}
             loading={charProfLoading}
             onChangeProfession={handleChangeProfession}
           />
-          <ActiveBuffIndicator characterId={characterId} />
+          <ProfessionInfo characterProfession={characterProfession} />
           {characterProfession.profession.slug === 'blacksmith' && (
             <SharpeningSection characterId={characterId} />
           )}

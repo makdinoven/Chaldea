@@ -24,7 +24,7 @@ export default {
         site: {
           blue: '#76a6bd',
           red: '#F37753',
-          bg: 'rgba(35, 35, 41, 0.9)',
+          bg: 'rgba(9, 10, 16, 0.62)',
           dark: '#1a1a2e',
         },
         input: '#c6c4c4',

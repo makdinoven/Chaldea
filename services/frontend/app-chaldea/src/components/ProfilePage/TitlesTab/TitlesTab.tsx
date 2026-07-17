@@ -1,9 +1,15 @@
-import { useEffect, useState } from 'react';
+// ProfilePage TitlesTab — redesigned per Claude Design mock (FEAT-151).
+// Keeps condition progress bars on locked titles, XP-reward badges and
+// select/unselect actions (user decision); adds Все/Полученные/Закрытые filters.
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import toast from 'react-hot-toast';
+import { Lock, Sparkles, Star } from 'lucide-react';
 import { fetchCharacterTitles, setActiveTitle, unsetActiveTitle } from '../../../api/titles';
 import type { CharacterTitle, TitleCondition } from '../../../types/titles';
 import { useAppSelector } from '../../../redux/store';
+import FilterChips, { type FilterChipItem } from '../shared/FilterChips';
+import EmptyState from '../shared/EmptyState';
 
 /* ── Dictionaries ── */
 
@@ -105,6 +111,8 @@ const STAT_LABELS: Record<string, string> = {
   active_experience: 'Активный опыт',
 };
 
+type TitleFilter = 'all' | 'unlocked' | 'locked';
+
 /* ── Helpers ── */
 
 const getConditionLabel = (c: TitleCondition): string => {
@@ -126,6 +134,7 @@ const TitlesTab = ({ characterId }: TitlesTabProps) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
+  const [filter, setFilter] = useState<TitleFilter>('all');
 
   const activeTitle = useAppSelector((state) => state.profile.character?.active_title ?? null);
 
@@ -176,6 +185,23 @@ const TitlesTab = ({ characterId }: TitlesTabProps) => {
     }
   };
 
+  const unlockedCount = useMemo(() => titles.filter((t) => t.is_unlocked).length, [titles]);
+
+  const filterItems: FilterChipItem[] = useMemo(
+    () => [
+      { key: 'all', label: 'Все', count: titles.length },
+      { key: 'unlocked', label: 'Полученные', count: unlockedCount },
+      { key: 'locked', label: 'Закрытые', count: titles.length - unlockedCount },
+    ],
+    [titles.length, unlockedCount]
+  );
+
+  const filteredTitles = useMemo(() => {
+    if (filter === 'unlocked') return titles.filter((t) => t.is_unlocked);
+    if (filter === 'locked') return titles.filter((t) => !t.is_unlocked);
+    return titles;
+  }, [titles, filter]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -192,151 +218,207 @@ const TitlesTab = ({ characterId }: TitlesTabProps) => {
     );
   }
 
-  const unlockedCount = titles.filter((t) => t.is_unlocked).length;
-
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="space-y-3"
+      className="flex flex-col gap-4"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h3 className="gold-text text-lg font-medium uppercase">
-          Титулы ({unlockedCount}/{titles.length})
-        </h3>
+      {/* Header row: title + counter, status filter */}
+      <div className="flex items-center justify-between flex-wrap gap-3.5">
+        <div className="flex items-center gap-3.5 min-w-0">
+          <h3 className="gold-text text-sm font-medium uppercase tracking-[0.12em]">Титулы</h3>
+          <span className="font-mono tabular-nums text-[13px] text-white/50">
+            {unlockedCount}/{titles.length}
+          </span>
+        </div>
+        <FilterChips
+          items={filterItems}
+          active={filter}
+          onChange={(key) => setFilter(key as TitleFilter)}
+        />
       </div>
 
-      {titles.length === 0 && (
-        <p className="text-white/50 text-sm">Нет доступных титулов</p>
-      )}
+      {/* Cards grid / empty states */}
+      {titles.length === 0 ? (
+        <EmptyState
+          icon={<Star size={32} strokeWidth={1.5} className="text-white/20" />}
+          message="Нет доступных титулов"
+        />
+      ) : filteredTitles.length === 0 ? (
+        <EmptyState
+          icon={
+            filter === 'locked' ? (
+              <Lock size={32} strokeWidth={1.5} className="text-white/20" />
+            ) : (
+              <Star size={32} strokeWidth={1.5} className="text-white/20" />
+            )
+          }
+          message={
+            filter === 'locked'
+              ? 'Все титулы уже получены'
+              : 'Нет титулов по выбранному фильтру'
+          }
+        />
+      ) : (
+        <motion.div
+          initial="hidden"
+          animate="visible"
+          variants={{
+            hidden: {},
+            visible: { transition: { staggerChildren: 0.04 } },
+          }}
+          className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4"
+        >
+          {filteredTitles.map((title) => {
+            const isActive = activeTitle === title.name;
+            const isLocked = !title.is_unlocked;
+            const hasXpReward = title.reward_passive_exp > 0 || title.reward_active_exp > 0;
+            const rarityColor = RARITY_COLOR_CLASS[title.rarity] ?? 'text-white';
+            const barColor = RARITY_BAR_CLASS[title.rarity] ?? 'bg-white/60';
+            const rarityLabel = RARITY_LABELS[title.rarity] ?? title.rarity;
 
-      {/* Title cards grid */}
-      <motion.div
-        initial="hidden"
-        animate="visible"
-        variants={{
-          hidden: {},
-          visible: { transition: { staggerChildren: 0.04 } },
-        }}
-        className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2"
-      >
-        {titles.map((title) => {
-          const isActive = activeTitle === title.name;
-          const hasXpReward = title.reward_passive_exp > 0 || title.reward_active_exp > 0;
-          const rarityColor = RARITY_COLOR_CLASS[title.rarity] ?? 'text-white';
-          const barColor = RARITY_BAR_CLASS[title.rarity] ?? 'bg-white/60';
+            const cardChrome = isActive
+              ? 'border-gold/40 bg-gold/[0.05] shadow-[0_0_18px_rgba(240,217,92,0.12)]'
+              : isLocked
+                ? 'border-white/10 bg-black/25 opacity-60'
+                : 'border-gold/[0.16] bg-black/30 shadow-card';
 
-          return (
-            <motion.div
-              key={title.id_title}
-              variants={{
-                hidden: { opacity: 0, scale: 0.95 },
-                visible: { opacity: 1, scale: 1 },
-              }}
-              className={`relative rounded-lg p-2.5 flex flex-col gap-1.5 transition-all duration-200 ${
-                title.is_unlocked
-                  ? 'bg-black/50'
-                  : 'bg-black/30 opacity-50'
-              } ${isActive ? 'gold-outline gold-outline-thick' : ''}`}
-            >
-              {/* Title name + rarity */}
-              <div className="flex items-start justify-between gap-1">
-                <h4 className={`text-sm font-medium leading-tight ${rarityColor}`}>
-                  {title.name}
-                </h4>
-                {isActive && (
-                  <span className="shrink-0 text-[8px] font-medium uppercase text-gold px-1 py-0.5 rounded bg-gold/20">
-                    ✦
-                  </span>
+            return (
+              <motion.div
+                key={title.id_title}
+                variants={{
+                  hidden: { opacity: 0, y: 10 },
+                  visible: { opacity: 1, y: 0 },
+                }}
+                className={`relative rounded-card border p-[18px] flex flex-col gap-2.5 transition-colors duration-200 ease-site ${cardChrome}`}
+              >
+                {/* Name + lock */}
+                <div className="flex items-start justify-between gap-2.5">
+                  <h4 className={`text-base font-medium leading-tight ${rarityColor}`}>
+                    {title.name}
+                  </h4>
+                  {isLocked && (
+                    <Lock size={15} strokeWidth={2} className="shrink-0 mt-0.5 text-white/40" />
+                  )}
+                </div>
+
+                {/* Rarity label */}
+                <span
+                  className={`text-[10px] font-medium uppercase tracking-[0.06em] opacity-80 ${rarityColor}`}
+                >
+                  {rarityLabel}
+                </span>
+
+                {/* Description */}
+                {title.description && (
+                  <p className="text-xs leading-relaxed text-white/60">{title.description}</p>
                 )}
-              </div>
 
-              {/* Description */}
-              {title.description && (
-                <p className="text-white/50 text-[11px] leading-snug line-clamp-2">{title.description}</p>
-              )}
+                {/* Condition progress bars (locked titles only — kept per user decision) */}
+                {isLocked && title.conditions && title.conditions.length > 0 && (
+                  <div className="flex flex-col gap-1.5 mt-0.5">
+                    {title.conditions.map((cond, idx) => {
+                      const key = cond.stat ?? cond.type ?? `cond-${idx}`;
+                      const progKey = cond.type === 'character_level' ? 'level' : key;
+                      const prog = title.progress?.[progKey];
+                      const pct = prog
+                        ? Math.min(100, (prog.current / prog.required) * 100)
+                        : 0;
+                      const isMet = prog ? prog.current >= prog.required : false;
 
-              {/* Progress bars */}
-              {title.conditions && title.conditions.length > 0 && !title.is_unlocked && (
-                <div className="flex flex-col gap-1 mt-0.5">
-                  {title.conditions.map((cond, idx) => {
-                    const key = cond.stat ?? cond.type ?? `cond-${idx}`;
-                    const progKey = cond.type === 'character_level' ? 'level' : key;
-                    const prog = title.progress?.[progKey];
-                    const pct = prog ? Math.min(100, (prog.current / prog.required) * 100) : 0;
-                    const isMet = prog ? prog.current >= prog.required : false;
-
-                    return (
-                      <div key={idx}>
-                        <div className="flex items-center justify-between text-[10px] mb-0.5">
-                          <span className={isMet ? 'text-green-400' : 'text-white/50'}>
-                            {getConditionLabel(cond)}
-                          </span>
-                          {prog && (
-                            <span className="text-white/30">
-                              {prog.current}/{prog.required}
+                      return (
+                        <div key={idx}>
+                          <div className="flex items-center justify-between text-[10px] mb-1">
+                            <span className={isMet ? 'text-stat-energy' : 'text-white/50'}>
+                              {getConditionLabel(cond)}
                             </span>
-                          )}
+                            {prog && (
+                              <span className="font-mono tabular-nums text-white/40">
+                                {prog.current}/{prog.required}
+                              </span>
+                            )}
+                          </div>
+                          <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-300 ${
+                                isMet ? 'bg-stat-energy' : barColor
+                              }`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
                         </div>
-                        <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all duration-300 ${
-                              isMet ? 'bg-green-400' : barColor
-                            }`}
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                      );
+                    })}
+                  </div>
+                )}
 
-              {/* Unlocked checkmark for completed titles */}
-              {title.is_unlocked && title.conditions && title.conditions.length > 0 && (
-                <span className="text-green-400 text-[10px]">✓ Получен</span>
-              )}
+                {/* XP-reward badges (kept per user decision) */}
+                {hasXpReward && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {title.reward_passive_exp > 0 && (
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-site-blue/30 bg-site-blue/10 text-[10px] font-medium text-site-blue">
+                        <Sparkles size={11} strokeWidth={1.8} className="shrink-0" />
+                        +{title.reward_passive_exp} опыта
+                      </span>
+                    )}
+                    {title.reward_active_exp > 0 && (
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-site-blue/30 bg-site-blue/10 text-[10px] font-medium text-site-blue">
+                        <Sparkles size={11} strokeWidth={1.8} className="shrink-0" />
+                        +{title.reward_active_exp} акт. опыта
+                      </span>
+                    )}
+                  </div>
+                )}
 
-              {/* XP Rewards */}
-              {hasXpReward && (
-                <div className="flex flex-wrap gap-x-2 text-[10px] text-white/40">
-                  {title.reward_passive_exp > 0 && (
-                    <span>+{title.reward_passive_exp} опыта</span>
+                {/* Status row */}
+                <div className="flex items-center gap-2 mt-auto pt-1">
+                  {isActive && (
+                    <span className="w-[7px] h-[7px] rounded-full bg-gold shadow-[0_0_6px_rgba(240,217,92,0.9)]" />
                   )}
-                  {title.reward_active_exp > 0 && (
-                    <span>+{title.reward_active_exp} акт. опыта</span>
-                  )}
+                  <span
+                    className={`text-[11px] font-medium uppercase tracking-[0.05em] ${
+                      isActive
+                        ? 'text-gold'
+                        : isLocked
+                          ? 'text-white/40'
+                          : 'text-stat-energy'
+                    }`}
+                  >
+                    {isActive ? 'Активен' : isLocked ? 'Закрыт' : 'Получен'}
+                  </span>
                 </div>
-              )}
 
-              {/* Actions */}
-              {title.is_unlocked && (
-                <div className="mt-auto pt-1">
-                  {isActive ? (
-                    <button
-                      onClick={handleUnsetActive}
-                      disabled={actionLoading === -1}
-                      className="w-full text-[10px] py-1 rounded border border-white/20 text-white/50 hover:text-white hover:border-white/40 transition-colors"
-                    >
-                      {actionLoading === -1 ? '...' : 'Снять'}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleSetActive(title.id_title)}
-                      disabled={actionLoading === title.id_title}
-                      className="w-full text-[10px] py-1 rounded bg-site-blue/20 text-site-blue hover:bg-site-blue/30 transition-colors"
-                    >
-                      {actionLoading === title.id_title ? '...' : 'Выбрать'}
-                    </button>
-                  )}
-                </div>
-              )}
-            </motion.div>
-          );
-        })}
-      </motion.div>
+                {/* Actions (unlocked titles only) */}
+                {title.is_unlocked && (
+                  <div className="pt-0.5">
+                    {isActive ? (
+                      <button
+                        type="button"
+                        onClick={handleUnsetActive}
+                        disabled={actionLoading === -1}
+                        className="w-full text-[11px] font-medium py-1.5 rounded-full border border-white/20 text-white/60 hover:text-white hover:border-white/40 transition-colors duration-200 ease-site disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {actionLoading === -1 ? '...' : 'Снять'}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleSetActive(title.id_title)}
+                        disabled={actionLoading === title.id_title}
+                        className="w-full text-[11px] font-medium py-1.5 rounded-full border border-gold/30 bg-gold/10 text-gold hover:bg-gold/20 transition-colors duration-200 ease-site disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {actionLoading === title.id_title ? '...' : 'Выбрать'}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </motion.div>
+            );
+          })}
+        </motion.div>
+      )}
     </motion.div>
   );
 };

@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { motion } from 'motion/react';
 import { useAppSelector } from '../../../redux/store';
 import { selectInventory, selectEquipmentSlots } from '../../../redux/slices/profileSlice';
+import SectionHeader from '../shared/SectionHeader';
 import GemSocketModal from './GemSocketModal';
 
 const ARMOR_WEAPON_TYPES = new Set([
@@ -94,10 +95,10 @@ const RuneSocketSection = ({ characterId }: RuneSocketSectionProps) => {
   };
 
   return (
-    <div className="space-y-3">
-      <div>
-        <h3 className="gold-text text-lg font-medium uppercase">Руны и слоты</h3>
-        <p className="text-white/60 text-sm mt-1">
+    <div className="rounded-card border border-white/[0.07] bg-black/25 p-5 space-y-3">
+      <div className="space-y-1.5">
+        <SectionHeader title="Руны и слоты" />
+        <p className="text-xs text-white/50">
           Вставляйте руны в слоты оружия и брони для усиления характеристик.
         </p>
       </div>

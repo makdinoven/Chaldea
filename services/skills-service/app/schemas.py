@@ -195,6 +195,10 @@ class CharacterSkillSummarySkill(BaseModel):
     name: str
     skill_type: str
     skill_image: Optional[str] = None
+    # FEAT-151 — base (non-perk-adjusted) costs for list cards:
+    cost_energy: int = 0
+    cost_mana: int = 0
+    cooldown: int = 0
 
     class Config:
         orm_mode = True

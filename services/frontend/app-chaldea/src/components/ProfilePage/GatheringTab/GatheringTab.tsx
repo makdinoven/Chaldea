@@ -1,6 +1,7 @@
 /**
  * "Сбор" profile tab — shows the character's three gathering skills
  * (mining / herbalism / woodcutting) with rank, XP progress, and bonuses.
+ * Restyled per Claude Design mock (FEAT-151); data/redux flow unchanged.
  *
  * Visible read-only on other players' profiles per FEAT-128 §2.7 #4.
  * No interactive controls — rank-up is automatic via XP gain.
@@ -8,6 +9,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import toast from 'react-hot-toast';
+import { Pickaxe } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import {
   loadGatheringSkills,
@@ -17,6 +19,7 @@ import {
   clearGatheringError,
 } from '../../../redux/slices/gatheringSlice';
 import GatheringSkillCard from './GatheringSkillCard';
+import EmptyState from '../shared/EmptyState';
 
 interface GatheringTabProps {
   characterId: number;
@@ -69,29 +72,32 @@ const GatheringTab = ({ characterId, isOwnProfile = true }: GatheringTabProps) =
 
   if (!loading && skills.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 gap-2">
-        <p className="text-white/50 text-lg">
-          {loadFailed
+      <EmptyState
+        icon={<Pickaxe size={32} strokeWidth={1.5} className="text-white/20" />}
+        message={
+          loadFailed
             ? 'Не удалось загрузить навыки сбора.'
             : isOwnProfile
               ? 'Навыки сбора ещё не получены.'
-              : 'У игрока пока нет навыков сбора.'}
-        </p>
-        {loadFailed && (
-          <button
-            type="button"
-            onClick={() => {
-              setLoadFailed(false);
-              dispatch(loadGatheringSkills(characterId))
-                .unwrap()
-                .catch(() => setLoadFailed(true));
-            }}
-            className="text-sm text-site-blue hover:text-white transition-colors"
-          >
-            Попробовать снова
-          </button>
-        )}
-      </div>
+              : 'У игрока пока нет навыков сбора.'
+        }
+        action={
+          loadFailed ? (
+            <button
+              type="button"
+              onClick={() => {
+                setLoadFailed(false);
+                dispatch(loadGatheringSkills(characterId))
+                  .unwrap()
+                  .catch(() => setLoadFailed(true));
+              }}
+              className="text-sm text-site-blue hover:text-white transition-colors duration-200 ease-site"
+            >
+              Попробовать снова
+            </button>
+          ) : undefined
+        }
+      />
     );
   }
 
@@ -100,21 +106,38 @@ const GatheringTab = ({ characterId, isOwnProfile = true }: GatheringTabProps) =
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="space-y-4"
+      className="flex flex-col gap-4"
     >
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h3 className="gold-text text-xl font-medium uppercase">
+      <div className="flex items-center gap-2.5">
+        <Pickaxe size={17} strokeWidth={1.8} className="text-gold shrink-0" />
+        <h3 className="gold-text text-sm font-medium uppercase tracking-[0.12em]">
           Навыки сбора
         </h3>
       </div>
 
       {/* Skill cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <motion.div
+        initial="hidden"
+        animate="visible"
+        variants={{
+          hidden: {},
+          visible: { transition: { staggerChildren: 0.05 } },
+        }}
+        className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"
+      >
         {skills.map((skill) => (
-          <GatheringSkillCard key={skill.skill_id} skill={skill} />
+          <motion.div
+            key={skill.skill_id}
+            variants={{
+              hidden: { opacity: 0, y: 10 },
+              visible: { opacity: 1, y: 0 },
+            }}
+          >
+            <GatheringSkillCard skill={skill} />
+          </motion.div>
         ))}
-      </div>
+      </motion.div>
     </motion.div>
   );
 };

@@ -37,6 +37,13 @@ class MemberOut(BaseModel):
     # Current location of the member; the client colours 🟢/🔴 by comparing it to
     # its own character's location (FEAT-144 §4).
     current_location_id: Optional[int] = None
+    # FEAT-151 — additive enrichment (all Optional → backward compatible):
+    level: Optional[int] = None
+    class_name: Optional[str] = None
+    current_health: Optional[int] = None
+    max_health: Optional[int] = None
+    current_mana: Optional[int] = None
+    max_mana: Optional[int] = None
 
     class Config:
         orm_mode = True

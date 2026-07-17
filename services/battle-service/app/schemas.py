@@ -280,6 +280,38 @@ class SpectateStateResponse(BaseModel):
     runtime: Optional[dict] = None
 
 
+# --- Battle preview schemas (FEAT-151, profile Battles tab) ---
+
+class BattlePreviewTurnEntry(BaseModel):
+    participant_id: str
+    name: str
+    is_current: bool = False
+
+
+class BattlePreviewParticipant(BaseModel):
+    participant_id: str
+    character_id: Optional[int] = None
+    name: str
+    avatar: Optional[str] = None
+    team: str
+    is_ally: bool
+    is_alive: bool
+    hp: int
+    max_hp: int
+    mana: int
+    max_mana: int
+
+
+class BattlePreviewOut(BaseModel):
+    battle_id: int
+    battle_type: Optional[str] = None
+    turn_number: int
+    location_id: Optional[int] = None
+    location_name: Optional[str] = None
+    turn_order: List[BattlePreviewTurnEntry] = []
+    participants: List[BattlePreviewParticipant] = []
+
+
 # --- Join Request schemas ---
 
 class JoinRequestCreate(BaseModel):

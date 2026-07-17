@@ -12,6 +12,7 @@ import {
   selectTransmuteError,
 } from '../../../redux/slices/craftingSlice';
 import type { TransmuteItemInfo, TransmuteResult } from '../../../types/professions';
+import SectionHeader from '../shared/SectionHeader';
 
 interface TransmutationSectionProps {
   characterId: number;
@@ -88,10 +89,10 @@ const TransmutationSection = ({ characterId }: TransmutationSectionProps) => {
   const items = transmuteInfo?.items ?? [];
 
   return (
-    <div className="space-y-3">
-      <div>
-        <h3 className="gold-text text-lg font-medium uppercase">Трансмутация</h3>
-        <p className="text-white/60 text-sm mt-1">
+    <div className="rounded-card border border-white/[0.07] bg-black/25 p-5 space-y-3">
+      <div className="space-y-1.5">
+        <SectionHeader title="Трансмутация" />
+        <p className="text-xs text-white/50">
           Преобразуйте 5 ресурсов одной редкости в 1 ресурс следующей редкости.
         </p>
       </div>

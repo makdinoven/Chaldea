@@ -24,10 +24,8 @@ const CategorySidebar = () => {
             title={cat.label}
             aria-label={cat.label}
             aria-pressed={isActive}
-            className={`shrink-0 flex items-center justify-center w-9 h-9 rounded-full border transition-all duration-200 ease-site ${
-              isActive
-                ? 'border-gold/50 bg-gold/10'
-                : 'border-white/10 bg-white/[0.04] hover:border-white/30'
+            className={`chip-outline shrink-0 flex items-center justify-center w-9 h-9 rounded-full ${
+              isActive ? 'chip-outline-active' : 'hover:border-white/30'
             }`}
           >
             <img

@@ -14,7 +14,7 @@ import SkillsTab from './SkillsTab/SkillsTab';
 import PerksTab from './PerksTab/PerksTab';
 import PartyTab from './PartyTab/PartyTab';
 import GatheringTab from './GatheringTab/GatheringTab';
-import QuestLogTab from './QuestLogTab';
+import QuestsTab from './QuestsTab/QuestsTab';
 import BattlesTab from './BattlesTab/BattlesTab';
 import LogsTab from './LogsTab/LogsTab';
 import TitlesTab from './TitlesTab/TitlesTab';
@@ -77,7 +77,7 @@ const ProfilePage = () => {
           </ErrorBoundary>
         );
       case 'quests':
-        return <QuestLogTab characterId={characterId} />;
+        return <QuestsTab characterId={characterId} />;
       case 'battles':
         return <BattlesTab characterId={characterId} />;
       case 'logs':

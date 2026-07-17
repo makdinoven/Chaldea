@@ -339,6 +339,10 @@ def serialize_character_skill(cs: models.CharacterSkill) -> dict:
                 "name": cs.skill.name,
                 "skill_type": cs.skill.skill_type,
                 "skill_image": cs.skill.skill_image,
+                # FEAT-151 — base costs (perk-adjusted values come from /resolved)
+                "cost_energy": cs.skill.cost_energy or 0,
+                "cost_mana": cs.skill.cost_mana or 0,
+                "cooldown": cs.skill.cooldown or 0,
             }
             if cs.skill
             else None

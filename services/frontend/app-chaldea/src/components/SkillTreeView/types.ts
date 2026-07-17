@@ -114,6 +114,10 @@ export interface CharacterSkillState {
     name: string;
     skill_type: string;
     skill_image: string | null;
+    // FEAT-151 — base (non-perk-adjusted) costs, added to the list endpoint
+    cost_energy: number;
+    cost_mana: number;
+    cooldown: number;
   };
 }
 

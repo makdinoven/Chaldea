@@ -51,7 +51,7 @@
   /* --- Gray Background Container --- */
   /* Usage: <div className="gray-bg">...</div> */
   .gray-bg {
-    background-color: rgba(35, 35, 41, 0.9);
+    background-color: rgba(9, 10, 16, 0.62);
     border-radius: 15px;
   }
 
@@ -216,7 +216,7 @@
   /* --- Dropdown Container --- */
   /* Usage: <div className="dropdown-menu">...</div> */
   .dropdown-menu {
-    background-color: rgba(35, 35, 41, 0.9);
+    background-color: rgba(14, 15, 21, 0.98);
     border-radius: 15px;
     padding: 8px 4px;
     min-width: 160px;
@@ -254,7 +254,7 @@
   /* --- Modal Content --- */
   /* Usage: <div className="modal-content">...</div> */
   .modal-content {
-    background: rgba(35, 35, 41, 0.9);
+    background: rgba(14, 15, 21, 0.98);
     border-radius: 15px;
     padding: 2rem;
     max-width: 700px;
@@ -329,11 +329,19 @@
     background: linear-gradient(180deg, #fff9b8, #bcab4c);
     border-radius: 3px;
   }
+  /* Mobile: slim HORIZONTAL scrollbar (chip rows, tab rails). `height` only
+     affects the horizontal axis — vertical widths above stay untouched. */
+  @media (max-width: 640px) {
+    .gold-scrollbar::-webkit-scrollbar,
+    .gold-scrollbar-wide::-webkit-scrollbar {
+      height: 3px;
+    }
+  }
 
   /* --- Tooltip --- */
   /* Usage: <div className="site-tooltip">...</div> */
   .site-tooltip {
-    background: rgba(35, 35, 41, 0.95);
+    background: rgba(14, 15, 21, 0.98);
     border-radius: 10px;
     padding: 8px 12px;
     font-size: 12px;
@@ -472,13 +480,36 @@
     position: relative;
     border-radius: 6px;
     border: 1px solid transparent;
-    background-image: linear-gradient(rgba(35,35,41,0.9), rgba(35,35,41,0.9)), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    background-image: linear-gradient(rgba(14,15,21,0.98), rgba(14,15,21,0.98)), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
     background-origin: border-box;
     background-clip: padding-box, border-box;
   }
   .category-icon-active img,
   .category-icon-active svg {
     filter: brightness(1.2);
+  }
+
+  /* --- Chip Outline (toggle chips / filter pills) --- */
+  /* Usage: <button className="chip-outline rounded-full px-4 py-2">...</button> */
+  /* Shape-agnostic frame: caller picks the radius (rounded-full for filter
+     pills, rounded-card for rail chips). Active state: add .chip-outline-active */
+  .chip-outline {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.65);
+    transition: color 0.2s ease-in-out, border-color 0.2s ease-in-out, background-color 0.2s ease-in-out;
+  }
+  .chip-outline:hover {
+    color: #fff;
+  }
+
+  /* --- Chip Outline Active (gold state) --- */
+  /* Usage: <button className="chip-outline chip-outline-active rounded-full">...</button> */
+  .chip-outline-active,
+  .chip-outline-active:hover {
+    background: linear-gradient(180deg, rgba(240, 217, 92, 0.2), rgba(240, 217, 92, 0.05));
+    border-color: rgba(240, 217, 92, 0.5);
+    color: #fff9b8;
   }
 
   /* --- Skill Point Dot --- */
@@ -514,13 +545,13 @@
   /* Usage: <div className="context-menu">...</div> */
   .context-menu {
     position: absolute;
-    background-color: rgba(35, 35, 41, 0.95);
+    background-color: rgba(14, 15, 21, 0.98);
     border-radius: 15px;
     padding: 8px 4px;
     min-width: 180px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.4);
     border: 1px solid transparent;
-    background-image: linear-gradient(rgba(35,35,41,0.95), rgba(35,35,41,0.95)), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    background-image: linear-gradient(rgba(14,15,21,0.98), rgba(14,15,21,0.98)), linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
     background-origin: border-box;
     background-clip: padding-box, border-box;
     z-index: 50;
@@ -719,7 +750,7 @@
     --blue: #76a6bd;
     --red: #F37753;
     --transition02: 0.2s ease-in-out;
-    --gray-background: rgba(35, 35, 41, 0.9);
+    --gray-background: rgba(9, 10, 16, 0.62);
 }
 
 #root {
@@ -733,8 +764,10 @@
 body {
     font-family: var(--font-family);
     color: #fff;
-    background-color: black;
-    background-image: url('./assets/background-main.png');
+    background-color: #05060a;
+    /* Soft dark overlay over the background image (FEAT-151 T14; intentionally
+       softer than the mock's 0.55 -> 0.96 — user asked for a non-aggressive darkening) */
+    background-image: linear-gradient(180deg, rgba(5, 6, 10, 0.35), rgba(5, 6, 10, 0.55)), url('./assets/background-main.png');
     background-size: cover;
     background-repeat: no-repeat;
     background-position: center;

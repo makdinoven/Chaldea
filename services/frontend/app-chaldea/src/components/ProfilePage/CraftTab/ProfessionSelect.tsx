@@ -1,6 +1,12 @@
+// FEAT-151 — CraftTab no-profession screen (§3.4.3, user decision — the mock
+// has no such screen): gold-framed PanelShell with a heading and 4 profession
+// cards (gold icon frame, name, short description, «Выбрать»).
+// The confirmation modal flow is preserved from the previous version.
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Hammer } from 'lucide-react';
 import type { Profession } from '../../../types/professions';
+import PanelShell from '../PanelShell';
 
 interface ProfessionSelectProps {
   professions: Profession[];
@@ -21,10 +27,10 @@ const ProfessionSelect = ({ professions, loading, onSelect }: ProfessionSelectPr
   };
 
   return (
-    <div>
-      <h3 className="gold-text text-lg font-medium uppercase mb-1">
-        Выберите профессию
-      </h3>
+    <PanelShell
+      title="Выбор профессии"
+      icon={<Hammer size={16} strokeWidth={1.8} className="text-gold shrink-0" />}
+    >
       <p className="text-white/50 text-sm mb-4">
         Профессия определяет, какие предметы вы сможете создавать. Выбрать можно только одну.
       </p>
@@ -36,7 +42,7 @@ const ProfessionSelect = ({ professions, loading, onSelect }: ProfessionSelectPr
           hidden: {},
           visible: { transition: { staggerChildren: 0.06 } },
         }}
-        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4"
+        className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5"
       >
         {[...professions]
           .filter((p) => p.is_active)
@@ -48,56 +54,37 @@ const ProfessionSelect = ({ professions, loading, onSelect }: ProfessionSelectPr
                 hidden: { opacity: 0, y: 10 },
                 visible: { opacity: 1, y: 0 },
               }}
-              className="rounded-card p-4 bg-black/40 border border-white/10 flex flex-col gap-2 hover:border-white/20 transition-all duration-200"
+              className="relative rounded-card bg-black/30 border border-gold/[0.16] shadow-card flex flex-col gap-3 p-4 transition-colors duration-200 ease-site hover:border-gold/40"
             >
-              {/* Icon + name */}
+              {/* Icon frame + name */}
               <div className="flex items-center gap-3">
-                {prof.icon ? (
-                  <img
-                    src={prof.icon}
-                    alt={prof.name}
-                    className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg object-cover"
-                  />
-                ) : (
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-white/10 flex items-center justify-center">
-                    <span className="text-gold text-lg">
-                      {prof.name.charAt(0)}
-                    </span>
+                <div className="w-[54px] h-[54px] shrink-0 rounded-[13px] p-[2px] bg-gradient-to-b from-gold-light to-gold-dark">
+                  <div className="w-full h-full rounded-[11px] bg-site-dark flex items-center justify-center overflow-hidden">
+                    {prof.icon ? (
+                      <img src={prof.icon} alt={prof.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-gold text-lg">{prof.name.charAt(0)}</span>
+                    )}
                   </div>
-                )}
-                <h4 className="gold-text text-base sm:text-lg font-medium">
+                </div>
+                <h4 className="text-white text-[15px] font-medium leading-tight">
                   {prof.name}
                 </h4>
               </div>
 
               {/* Description */}
               {prof.description && (
-                <p className="text-white/50 text-xs sm:text-sm leading-relaxed line-clamp-3">
+                <p className="text-white/50 text-xs leading-relaxed line-clamp-3">
                   {prof.description}
                 </p>
               )}
 
-              {/* Ranks preview */}
-              {Array.isArray(prof.ranks) && prof.ranks.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-1">
-                  {[...prof.ranks]
-                    .sort((a, b) => a.rank_number - b.rank_number)
-                    .map((rank) => (
-                      <span
-                        key={rank.id}
-                        className="text-[10px] sm:text-xs text-white/30 px-1.5 py-0.5 rounded bg-white/[0.05]"
-                      >
-                        {rank.name}
-                      </span>
-                    ))}
-                </div>
-              )}
-
               {/* Select button */}
               <button
+                type="button"
                 onClick={() => setConfirmId(prof.id)}
                 disabled={loading}
-                className="mt-auto w-full py-2 rounded-lg text-sm font-medium bg-site-blue/20 text-site-blue hover:bg-site-blue/30 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="mt-auto w-full py-2.5 rounded-[10px] text-xs font-medium uppercase tracking-[0.04em] bg-site-blue/20 text-site-blue hover:bg-site-blue/30 transition-colors duration-200 ease-site disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Выбрать
               </button>
@@ -143,7 +130,7 @@ const ProfessionSelect = ({ professions, loading, onSelect }: ProfessionSelectPr
           </div>
         )}
       </AnimatePresence>
-    </div>
+    </PanelShell>
   );
 };
 

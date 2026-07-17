@@ -40,6 +40,13 @@ export interface PartyMember {
   is_leader: boolean;
   status: "invited" | "accepted";
   current_location_id: number | null;
+  /* FEAT-151 — enriched member payload (all nullable; hide UI when null) */
+  level?: number | null;
+  class_name?: string | null;
+  current_health?: number | null;
+  max_health?: number | null;
+  current_mana?: number | null;
+  max_mana?: number | null;
 }
 
 export interface Party {

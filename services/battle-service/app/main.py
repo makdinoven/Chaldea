@@ -22,7 +22,7 @@ from schemas import (
     AdminBattleParticipant, AdminBattleListItem, AdminBattleListResponse,
     AdminBattleStateResponse, AdminForceFinishResponse,
     LocationBattleParticipant, LocationBattleItem, LocationBattlesResponse,
-    SpectateStateResponse,
+    SpectateStateResponse, BattlePreviewOut,
     JoinRequestCreate, JoinRequestResponse, JoinRequestListItem, JoinRequestListResponse,
     AdminJoinRequestItem, AdminJoinRequestListResponse, AdminJoinRequestActionResponse,
     PartyCreateRequest, PartyInviteRequest, PartyRespondRequest,
@@ -1468,6 +1468,122 @@ async def spectate_battle(
     }
 
     return {"snapshot": snapshot, "runtime": runtime}
+
+
+@router.get("/{battle_id}/preview", response_model=BattlePreviewOut)
+async def get_battle_preview(
+    battle_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """
+    Compact active-battle preview for the profile Battles tab (FEAT-151).
+
+    JWT + participant-ownership check (same semantics as /state). Reads only
+    Redis runtime state, the snapshot (name/avatar) and the `battles` MySQL
+    row + shared `Locations` table — no cross-service HTTP calls.
+    """
+    # 1. Battle must exist and still be active
+    battle_record = await get_battle(db, battle_id)
+    if not battle_record:
+        raise HTTPException(status_code=404, detail="Бой не найден")
+    if battle_record.status not in (BattleStatus.pending, BattleStatus.in_progress):
+        raise HTTPException(status_code=404, detail="Бой не найден или уже завершён")
+
+    # 2. Runtime state must exist (finished-battle race → 404)
+    state = await load_state(battle_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Бой не найден или уже завершён")
+
+    # 3. Ownership: verify the user has a character participating in this battle
+    #    (mirrors /state); remember the requester's team to compute is_ally.
+    own_team = None
+    for pdata in state["participants"].values():
+        cid = pdata.get("character_id")
+        if cid is None:
+            continue
+        result = await db.execute(
+            text("SELECT user_id FROM characters WHERE id = :cid"),
+            {"cid": cid},
+        )
+        row = result.fetchone()
+        if row and row[0] == current_user.id:
+            own_team = pdata["team"]
+            break
+    if own_team is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Вы не участвуете в этом бою",
+        )
+
+    # 4. Snapshot for name/avatar (Redis cache → MongoDB fallback)
+    rds = await get_redis_client()
+    snapshot = await get_cached_snapshot(rds, battle_id)
+    if snapshot is None:
+        snap_doc = await load_snapshot(battle_id)
+        if snap_doc:
+            snapshot = snap_doc["participants"]
+            await cache_snapshot(rds, battle_id, snapshot)
+    snap_by_pid = {str(p["participant_id"]): p for p in (snapshot or [])}
+
+    def participant_name(pid: str) -> str:
+        snap = snap_by_pid.get(pid)
+        if snap and snap.get("name"):
+            return snap["name"]
+        return f"Участник #{pid}"
+
+    # 5. Location name from the shared Locations table (single raw-SQL read)
+    location_id = battle_record.location_id
+    location_name = None
+    if location_id is not None:
+        result = await db.execute(
+            text("SELECT name FROM Locations WHERE id = :lid"),
+            {"lid": location_id},
+        )
+        row = result.fetchone()
+        if row:
+            location_name = row[0]
+
+    current_actor = state["next_actor"]
+    turn_order = [
+        {
+            "participant_id": str(pid),
+            "name": participant_name(str(pid)),
+            "is_current": pid == current_actor,
+        }
+        for pid in state["turn_order"]
+    ]
+
+    participants = []
+    for pid, pdata in state["participants"].items():
+        snap = snap_by_pid.get(pid)
+        hp = pdata.get("hp", 0)
+        participants.append(
+            {
+                "participant_id": pid,
+                "character_id": pdata.get("character_id"),
+                "name": participant_name(pid),
+                "avatar": (snap.get("avatar") or None) if snap else None,
+                "team": str(pdata["team"]),
+                "is_ally": pdata["team"] == own_team,
+                "is_alive": hp > 0,
+                "hp": hp,
+                "max_hp": pdata.get("max_hp", 0),
+                "mana": pdata.get("mana", 0),
+                "max_mana": pdata.get("max_mana", 0),
+            }
+        )
+
+    battle_type = battle_record.battle_type
+    return {
+        "battle_id": battle_id,
+        "battle_type": battle_type.value if isinstance(battle_type, BattleType) else battle_type,
+        "turn_number": state["turn_number"],
+        "location_id": location_id,
+        "location_name": location_name,
+        "turn_order": turn_order,
+        "participants": participants,
+    }
 
 
 # ---------------------------------------------------------------------------
