@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import toast from 'react-hot-toast';
 import { Player, NpcInLocation } from './types';
+import type { PartyOnLocation } from '../../../api/squads';
 import { NPC_ROLE_LABELS, NPC_ROLE_ICONS } from '../../../constants/npc';
 import useNpcAttack from '../../../hooks/useNpcAttack';
 import NpcProfileModal from './NpcProfileModal';
@@ -19,9 +20,83 @@ interface PlayersSectionProps {
   // Staff bypass the gate entirely.
   talkableNpcIds?: number[];
   npcGateStaff?: boolean;
+  // FEAT-153 §3.5: squads present on this location. The fetch is owned by
+  // LocationPage so the players↔squads join happens in one place.
+  parties: PartyOnLocation[];
+  partiesError: string | null;
+  onRetryParties: () => void;
 }
 
 type WhoTab = 'players' | 'npcs';
+
+/** A player as rendered inside a group frame. */
+interface GroupMember extends Player {
+  isLeader: boolean;
+}
+
+/** One frame in the Игроки tab: a squad, or the trailing «Вне отряда» frame. */
+interface PlayerGroup {
+  id: string;
+  name: string;
+  isSquad: boolean;
+  members: GroupMember[];
+}
+
+/**
+ * FEAT-153 §3.5: join `players` (from /client/details) with `parties`
+ * (from party-service) client-side. Squads keep server order; every player not
+ * claimed by a squad falls into the trailing «Вне отряда» frame, so the total
+ * number of avatars always equals `players.length` with no duplicates.
+ */
+const buildPlayerGroups = (players: Player[], parties: PartyOnLocation[]): PlayerGroup[] => {
+  const byId = new Map(players.map((p) => [p.id, p]));
+  const claimed = new Set<number>();
+
+  const groups: PlayerGroup[] = parties
+    .map((party) => {
+      const members = party.members.reduce<GroupMember[]>((acc, member) => {
+        const player = byId.get(member.character_id);
+        // Defensive: a squad member who is not in `players` cannot normally
+        // happen (the endpoint returns co-located members only) — skip, never crash.
+        if (player && !claimed.has(player.id)) {
+          claimed.add(player.id);
+          acc.push({ ...player, isLeader: member.is_leader });
+        }
+        return acc;
+      }, []);
+      return { id: `squad-${party.id}`, name: party.name, isSquad: true, members };
+    })
+    .filter((group) => group.members.length > 0);
+
+  const solo = players
+    .filter((player) => !claimed.has(player.id))
+    .map((player) => ({ ...player, isLeader: false }));
+
+  if (solo.length > 0) {
+    groups.push({ id: 'solo', name: 'Вне отряда', isSquad: false, members: solo });
+  }
+
+  return groups;
+};
+
+const SquadIcon = ({ className }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
+  </svg>
+);
+
+const LeaderCrown = () => (
+  <span
+    title="Лидер отряда"
+    className="absolute top-0.5 right-2 z-10 text-gold pointer-events-none drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]"
+  >
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-[15px] h-[15px]" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm0 3h14v2H5v-2z" />
+    </svg>
+  </span>
+);
 
 const getRarityColorClass = (rarity?: string): string => {
   switch (rarity) {
@@ -156,11 +231,19 @@ const NpcCard = ({ npc, onClick, currentCharacterId, isCharacterHere = false }: 
  * «Кто здесь» — single card with Игроки/НПС tabs (FEAT-152 §3.5 mock style).
  * Deliberately NOT dimmed while in battle (decision A10): the lists and
  * profiles stay browsable, only the actions themselves are gated elsewhere.
+ *
+ * FEAT-153 §3.5: squads are NOT a third tab. The tab strip stays two tabs and
+ * the Игроки tab body is a vertical list of group frames — one per co-located
+ * squad, plus a trailing «Вне отряда» frame. Squads arrive as props; the fetch
+ * lives in LocationPage (which also supplies the retry handler).
  */
-const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, currentCharacterLevel = 0, locationId, locationMarkerType = 'safe', isCharacterHere = false, talkableNpcIds = [], npcGateStaff = false }: PlayersSectionProps) => {
+const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, currentCharacterLevel = 0, locationId, locationMarkerType = 'safe', isCharacterHere = false, talkableNpcIds = [], npcGateStaff = false, parties, partiesError, onRetryParties }: PlayersSectionProps) => {
   const [selectedNpcId, setSelectedNpcId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<WhoTab>('players');
 
+  const playerGroups = useMemo(() => buildPlayerGroups(players, parties), [players, parties]);
+
+  // The tab pill keeps the TOTAL player count, not a per-group count.
   const tabs: { key: WhoTab; label: string; count: number }[] = [
     { key: 'players', label: 'Игроки', count: players.length },
     { key: 'npcs', label: 'НПС', count: npcs.length },
@@ -168,9 +251,12 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
 
   return (
     <>
-      <section className="bg-site-bg backdrop-blur-sm rounded-card border border-gold-dark/20 shadow-card overflow-hidden flex flex-col">
+      {/* FEAT-153 §3.6: fixed 460px row-3 box from `sm` up; below it the height
+          is natural and the tab body caps at 320px. Empty states render INSIDE
+          the flex body so an empty block keeps its box instead of collapsing. */}
+      <section className="bg-site-bg backdrop-blur-sm rounded-card border border-gold-dark/20 shadow-card overflow-hidden h-auto sm:h-[460px] flex flex-col">
         {/* Header: icon + title + tab switcher */}
-        <div className="flex items-center gap-2.5 px-4 sm:px-5 py-3 border-b border-white/[0.07] flex-wrap">
+        <div className="flex items-center gap-2.5 px-4 sm:px-5 py-3 border-b border-white/[0.07] flex-wrap shrink-0">
           <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px] text-gold shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
             <circle cx="9" cy="7" r="4" />
@@ -200,43 +286,93 @@ const PlayersSection = ({ players, npcs, currentUserId, currentCharacterId, curr
 
         {/* Tab content */}
         {activeTab === 'players' ? (
-          players.length === 0 ? (
-            <p className="text-white/50 text-sm p-4 sm:p-5">Здесь пока никого нет</p>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 sm:gap-2 p-3 sm:p-4 max-h-[320px] lg:max-h-[400px] overflow-y-auto gold-scrollbar">
-              {players.map((player) => (
-                <AvatarCard
-                  key={player.id}
-                  avatar={player.avatar}
-                  name={player.name}
-                  level={player.level}
-                  title={player.character_title}
-                  titleRarity={player.character_title_rarity}
-                  actionsSlot={
-                    currentCharacterId != null &&
-                    currentUserId != null &&
-                    player.user_id !== currentUserId ? (
-                      <PlayerActionsMenu
-                        targetCharacterId={player.id}
-                        targetUserId={player.user_id}
-                        targetName={player.name}
-                        targetLevel={player.level}
-                        currentCharacterId={currentCharacterId}
-                        currentCharacterLevel={currentCharacterLevel}
-                        locationId={locationId}
-                        locationMarkerType={locationMarkerType}
-                        isCharacterHere={isCharacterHere}
-                      />
-                    ) : undefined
-                  }
-                />
-              ))}
-            </div>
-          )
+          <div className="flex-1 min-h-0 max-h-[320px] sm:max-h-none overflow-y-auto gold-scrollbar flex flex-col gap-3 p-3 sm:p-4">
+            {/* Squads failed to load — visible inline (CLAUDE.md: no silent failures).
+                Rendered ABOVE the frames; players still render below it. */}
+            {partiesError && (
+              <div className="shrink-0 flex flex-wrap items-center gap-2 rounded-card border border-site-red/30 bg-site-red/[0.06] p-3">
+                <p className="text-site-red text-sm min-w-0 flex-1">{partiesError}</p>
+                <button
+                  type="button"
+                  onClick={onRetryParties}
+                  className="btn-blue text-xs px-3 py-1.5 shrink-0"
+                >
+                  Повторить
+                </button>
+              </div>
+            )}
+
+            {players.length === 0 ? (
+              <div className="flex-1 min-h-0 flex items-center justify-center p-5 text-center text-white/50 text-sm">
+                Здесь пока никого нет
+              </div>
+            ) : (
+              playerGroups.map((group) => (
+                <div
+                  key={group.id}
+                  className={`shrink-0 rounded-card overflow-hidden border ${
+                    group.isSquad ? 'border-gold-dark/25 bg-gold/[0.04]' : 'border-transparent bg-transparent'
+                  }`}
+                >
+                  <div
+                    className={`flex items-center gap-2 px-3 py-2 border-b ${
+                      group.isSquad ? 'border-gold-dark/15' : 'border-white/[0.07]'
+                    }`}
+                  >
+                    {group.isSquad && <SquadIcon className="w-3.5 h-3.5 text-gold shrink-0" />}
+                    <span
+                      className={`text-[11.5px] font-medium tracking-[0.04em] truncate ${
+                        group.isSquad ? 'text-gold' : 'text-white/50'
+                      }`}
+                    >
+                      {group.name}
+                    </span>
+                    <span className="ml-auto shrink-0 bg-white/10 text-white/60 text-[9.5px] font-bold px-[7px] py-px rounded-full">
+                      {group.members.length}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 p-3">
+                    {group.members.map((player) => (
+                      <div key={player.id} className="relative">
+                        {player.isLeader && <LeaderCrown />}
+                        <AvatarCard
+                          avatar={player.avatar}
+                          name={player.name}
+                          level={player.level}
+                          title={player.character_title}
+                          titleRarity={player.character_title_rarity}
+                          actionsSlot={
+                            currentCharacterId != null &&
+                            currentUserId != null &&
+                            player.user_id !== currentUserId ? (
+                              <PlayerActionsMenu
+                                targetCharacterId={player.id}
+                                targetUserId={player.user_id}
+                                targetName={player.name}
+                                targetLevel={player.level}
+                                currentCharacterId={currentCharacterId}
+                                currentCharacterLevel={currentCharacterLevel}
+                                locationId={locationId}
+                                locationMarkerType={locationMarkerType}
+                                isCharacterHere={isCharacterHere}
+                              />
+                            ) : undefined
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         ) : npcs.length === 0 ? (
-          <p className="text-white/50 text-sm p-4 sm:p-5">НПС отсутствуют на этой локации</p>
+          <div className="flex-1 min-h-0 flex items-center justify-center p-5 text-center text-white/50 text-sm">
+            НПС отсутствуют на этой локации
+          </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 sm:gap-2 p-3 sm:p-4 max-h-[320px] lg:max-h-[400px] overflow-y-auto gold-scrollbar">
+          <div className="flex-1 min-h-0 max-h-[320px] sm:max-h-none overflow-y-auto gold-scrollbar grid grid-cols-2 sm:grid-cols-3 content-start items-start gap-1.5 sm:gap-2 p-3 sm:p-4">
             {npcs.map((npc) => (
               <NpcCard
                 key={npc.id}

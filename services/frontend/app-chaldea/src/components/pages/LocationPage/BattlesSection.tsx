@@ -40,7 +40,9 @@ const BattlesSection = ({ locationId, characterId, inBattle, players }: BattlesS
   const [battles, setBattles] = useState<LocationBattleItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isOpen, setIsOpen] = useState(false);
+  // Req 8: the section only mounts visibly when it has content, so arriving
+  // collapsed would read as a bug — default to expanded.
+  const [isOpen, setIsOpen] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [modalBattleId, setModalBattleId] = useState<number | null>(null);
   const [requestedBattleIds, setRequestedBattleIds] = useState<Set<number>>(new Set());
@@ -111,6 +113,20 @@ const BattlesSection = ({ locationId, characterId, inBattle, players }: BattlesS
   };
 
   const battleCount = battles.length;
+
+  // Req 8 (FEAT-153): hide the whole section — header, «+ Собрать группу» and body —
+  // when the location has no battles. This guard MUST stay inside the component, after
+  // the hooks: BattlesSection owns the 10s poll that discovers battles, so a
+  // conditional mount in LocationPage would stop the poll and the section could never
+  // reappear once hidden.
+  // `error !== null` keeps the section visible so a failed load is never silently
+  // swallowed (CLAUDE.md: every API call must have visible error handling) — the error
+  // text and «Повторить» render inside the section below.
+  // The two modal guards stop an open PartyLobbyModal / JoinRequestModal from being torn
+  // down mid-interaction if the last battle ends during a poll cycle.
+  if (battleCount === 0 && error === null && !partyOpen && modalBattleId === null) {
+    return null;
+  }
 
   return (
     <section className="bg-site-bg backdrop-blur-sm rounded-card border border-gold-dark/20 shadow-card overflow-hidden">

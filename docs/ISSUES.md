@@ -112,6 +112,12 @@
 **Описание:** `contextlib.suppress(Exception)` маскирует любые ошибки записи в MongoDB/Redis. Логи боёв могут теряться без каких-либо следов.
 **Решение:** Заменить на try/except с логированием ошибки.
 
+### 30. N+1 HTTP-запросов в BattlesSection при каждом polling-цикле
+**Сервис:** frontend (+ нагрузка на battle-service)
+**Файл:** `services/frontend/app-chaldea/src/components/pages/LocationPage/BattlesSection.tsx:49-69, 71-97`
+**Описание:** После каждой загрузки списка боёв `checkExistingRequests()` последовательно вызывает `fetchJoinRequests(battle.id)` для КАЖДОГО боя в локации. При polling каждые 10 секунд это даёт N дополнительных запросов к battle-service каждые 10 с на каждого зрителя страницы локации. При 10 активных боях и 20 игроках на странице — 200 запросов / 10 с. Запросы выполняются последовательно (`for ... await`), что дополнительно растягивает цикл.
+**Решение:** Отдавать признак «моя заявка подана» batch-эндпоинтом battle-service (например, поле `has_my_request` прямо в `/battles/by-location/{id}`), либо запрашивать заявки только для развёрнутой секции и параллельно (`Promise.all`).
+
 ### 13. Опечатки в названиях полей БД
 **Сервис:** character-attributes-service
 **Файл:** `services/character-attributes-service/app/models.py`

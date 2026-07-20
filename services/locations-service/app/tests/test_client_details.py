@@ -9,6 +9,9 @@ Verifies:
 - FEAT-152: breadcrumb fields (country_id / country_name / region_name /
   district_name) — schema, endpoint response, crud name-resolution logic,
   and backward compatibility with payloads lacking the new keys.
+- FEAT-153: the breadcrumb id/name CONSISTENCY invariant — every breadcrumb
+  name the response ships must be accompanied by the id of the very entity
+  that name belongs to. See TestBreadcrumbIdNameConsistency.
 """
 
 from types import SimpleNamespace
@@ -577,3 +580,240 @@ class TestBreadcrumbResolution:
         assert result["region_name"] == "Северные земли"
         assert result["country_id"] is None
         assert result["country_name"] is None
+
+
+# ===========================================================================
+# CRUD unit tests — breadcrumb id/name CONSISTENCY (FEAT-153, review issue 1)
+# ===========================================================================
+#
+# The bug: `get_client_location_details` returned `"region_id": loc.region_id`
+# — the Location row's OWN column. That column is NULL for every
+# district-nested location, so the response shipped
+# `region_name: "Уэймок"` together with `region_id: None`. The frontend
+# breadcrumb builds a `Crumb {label, to}` and only renders a `<Link>` when it
+# has an id, so the region degraded to unclickable plain text.
+#
+# The invariant these tests pin is NOT "region_id is never null" — a location
+# genuinely outside any region must report null. The invariant is that the id
+# and the name always AGREE:
+#
+#   * a name without its id  -> a crumb rendered as dead plain text  (THE BUG)
+#   * an id that belongs to a different entity than the name -> a wrong link
+#
+# The reverse — an id with no name — is harmless and deliberately allowed:
+# the frontend renders no crumb at all when there is no label, so there is no
+# link to break. `test_missing_district_row_...` above covers that shape.
+
+BREADCRUMB_PAIRS = (
+    ("country_id", "country_name"),
+    ("region_id", "region_name"),
+    ("district_id", "district_name"),
+)
+
+
+def _assert_no_orphan_name(result):
+    """Every breadcrumb name must be accompanied by its id.
+
+    This is the direction that actually breaks the UI: a name with no id is a
+    crumb the user sees but cannot click. Asserted for all three levels, so a
+    future change cannot reintroduce the FEAT-153 defect at any level.
+    """
+    for id_key, name_key in BREADCRUMB_PAIRS:
+        if result[name_key] is not None:
+            assert result[id_key] is not None, (
+                f"{name_key}={result[name_key]!r} was returned without {id_key} — "
+                f"the frontend renders this crumb as unclickable plain text"
+            )
+
+
+@patch("crud.fetch_gathering_nodes_with_active_sessions", new_callable=AsyncMock, return_value=[])
+@patch("crud.lazy_restore_depleted_nodes", new_callable=AsyncMock)
+@patch("crud.get_location_loot", new_callable=AsyncMock, return_value=[])
+@patch("crud.gates_for_posts", new_callable=AsyncMock, return_value={})
+@patch("crud.get_likes_for_posts", new_callable=AsyncMock, return_value={})
+@patch("crud.get_posts_by_location", new_callable=AsyncMock, return_value=[])
+@patch("crud.get_npcs_in_location", new_callable=AsyncMock, return_value=[])
+@patch("crud.get_players_in_location", new_callable=AsyncMock, return_value=[])
+class TestBreadcrumbIdNameConsistency:
+    """FEAT-153: breadcrumb ids must agree with the names shipped alongside them."""
+
+    # -- 1. The regression case: location nested under a district ------------
+    #
+    # This is the real dev-DB shape: Locations.region_id is NULL and the region
+    # is reachable only through Districts.region_id. Against the pre-fix code
+    # (`"region_id": loc.region_id`) the region_id assertion below returns None
+    # and the test FAILS — which is what makes it a regression test.
+
+    @pytest.mark.asyncio
+    async def test_district_nested_region_id_matches_region_name(self, *mocks):
+        """District-nested location: region_id is the district's region, and it
+        is returned together with that same region's name."""
+        import crud
+
+        loc = _make_loc(district_id=5, region_id=None)  # own region_id NULL — the real shape
+        session = _make_session(loc, [
+            SimpleNamespace(name="Чащоба", region_id=2),           # District row
+            SimpleNamespace(name="Северные земли", country_id=1),  # Region row
+            SimpleNamespace(id=1, name="Фолгард"),                 # Country row
+        ])
+
+        result = await crud.get_client_location_details(session, 72)
+
+        # id and name refer to the same region — this pairing is the invariant
+        assert result["region_id"] == 2
+        assert result["region_name"] == "Северные земли"
+        _assert_no_orphan_name(result)
+
+    @pytest.mark.asyncio
+    async def test_district_nested_all_three_levels_consistent(self, *mocks):
+        """District-nested location: country, region and district each ship an
+        id together with the matching name."""
+        import crud
+
+        loc = _make_loc(district_id=5, region_id=None)
+        session = _make_session(loc, [
+            SimpleNamespace(name="Чащоба", region_id=2),
+            SimpleNamespace(name="Северные земли", country_id=1),
+            SimpleNamespace(id=1, name="Фолгард"),
+        ])
+
+        result = await crud.get_client_location_details(session, 72)
+
+        assert (result["country_id"], result["country_name"]) == (1, "Фолгард")
+        assert (result["region_id"], result["region_name"]) == (2, "Северные земли")
+        assert (result["district_id"], result["district_name"]) == (5, "Чащоба")
+        _assert_no_orphan_name(result)
+
+    @pytest.mark.asyncio
+    async def test_district_nested_region_id_is_districts_region_not_locations(self, *mocks):
+        """When the Location's own region_id disagrees with its district's, the
+        DISTRICT's region wins — because that is the region whose name is shown.
+
+        Guards against a `breadcrumb_region_id or loc.region_id` style fallback
+        silently linking to a region other than the one named.
+        """
+        import crud
+
+        loc = _make_loc(district_id=5, region_id=999)  # stale/disagreeing own column
+        session = _make_session(loc, [
+            SimpleNamespace(name="Чащоба", region_id=2),
+            SimpleNamespace(name="Северные земли", country_id=1),
+            SimpleNamespace(id=1, name="Фолгард"),
+        ])
+
+        result = await crud.get_client_location_details(session, 72)
+
+        assert result["region_id"] == 2, "must be the region the name came from, not loc.region_id"
+        assert result["region_name"] == "Северные земли"
+        _assert_no_orphan_name(result)
+
+    # -- 2. The region-nested shape must not be broken by the fix ------------
+    #
+    # No such row exists in the dev DB (all 6 Locations are district-nested),
+    # so this shape is only reachable through a constructed fixture.
+
+    @pytest.mark.asyncio
+    async def test_region_nested_region_id_matches_region_name(self, *mocks):
+        """Region-nested location (district_id NULL, region_id set): region_id
+        still returned and still agrees with region_name."""
+        import crud
+
+        loc = _make_loc(district_id=None, region_id=2)
+        session = _make_session(loc, [
+            SimpleNamespace(name="Северные земли", country_id=1),  # Region row
+            SimpleNamespace(id=1, name="Фолгард"),                 # Country row
+        ])
+
+        result = await crud.get_client_location_details(session, 72)
+
+        assert (result["region_id"], result["region_name"]) == (2, "Северные земли")
+        assert (result["country_id"], result["country_name"]) == (1, "Фолгард")
+        # no district level at all — neither id nor name
+        assert result["district_id"] is None
+        assert result["district_name"] is None
+        _assert_no_orphan_name(result)
+
+    @pytest.mark.asyncio
+    async def test_region_nested_country_pair_consistent(self, *mocks):
+        """Region-nested location: country_id is the named country's id."""
+        import crud
+
+        loc = _make_loc(district_id=None, region_id=2)
+        session = _make_session(loc, [
+            SimpleNamespace(name="Северные земли", country_id=7),
+            SimpleNamespace(id=7, name="Союзная империя"),
+        ])
+
+        result = await crud.get_client_location_details(session, 72)
+
+        assert (result["country_id"], result["country_name"]) == (7, "Союзная империя")
+        _assert_no_orphan_name(result)
+
+    # -- 3. Degraded chains stay consistent rather than emitting a bad link --
+
+    @pytest.mark.asyncio
+    async def test_missing_district_row_yields_no_region_id_and_no_region_name(self, *mocks):
+        """District row missing while the Location carries a stale own region_id:
+        the response must emit NEITHER a region id NOR a region name.
+
+        Pins the Backend Developer's deliberate choice of plain
+        `breadcrumb_region_id` over `breadcrumb_region_id or loc.region_id`:
+        the fallback would emit region_id=7 with region_name=None here — an id
+        for a region the breadcrumb never names.
+        """
+        import crud
+
+        loc = _make_loc(district_id=999, region_id=7)
+        session = _make_session(loc, [None])  # District query returns no row
+
+        result = await crud.get_client_location_details(session, 72)
+
+        assert result["region_id"] is None
+        assert result["region_name"] is None
+        _assert_no_orphan_name(result)
+
+    @pytest.mark.asyncio
+    async def test_missing_country_row_keeps_region_pair_intact(self, *mocks):
+        """Country row missing: the region pair survives whole, the country
+        level is dropped whole. No half-populated level either way."""
+        import crud
+
+        loc = _make_loc(district_id=5, region_id=None)
+        session = _make_session(loc, [
+            SimpleNamespace(name="Чащоба", region_id=2),
+            SimpleNamespace(name="Северные земли", country_id=42),
+            None,  # Country row missing
+        ])
+
+        result = await crud.get_client_location_details(session, 72)
+
+        assert (result["region_id"], result["region_name"]) == (2, "Северные земли")
+        assert result["country_id"] is None
+        assert result["country_name"] is None
+        _assert_no_orphan_name(result)
+
+    # -- 4. The latent parent_id-only shape (not fixed, behaviour pinned) ----
+
+    @pytest.mark.asyncio
+    async def test_parent_only_location_breadcrumb_is_wholly_empty(self, *mocks):
+        """Location reachable only via parent_id (district_id AND region_id both
+        NULL): the breadcrumb is entirely empty — no ids and no names.
+
+        Out of scope to fix (FEAT-152 §3.1 does no parent-chain walking) and no
+        such row exists today. Pinned here so a future change cannot start
+        emitting an id without the matching name at any level.
+        """
+        import crud
+
+        loc = _make_loc(district_id=None, region_id=None)
+        loc.parent_id = 40
+        session = _make_session(loc, [])
+
+        result = await crud.get_client_location_details(session, 72)
+
+        for id_key, name_key in BREADCRUMB_PAIRS:
+            assert result[id_key] is None, f"{id_key} must be None for a parent-only location"
+            assert result[name_key] is None, f"{name_key} must be None for a parent-only location"
+        _assert_no_orphan_name(result)  # vacuously true, and stays true by construction
+        # self-consistent AND cheap: no hierarchy queries at all
+        assert session.execute.call_count == 2  # location + neighbors only

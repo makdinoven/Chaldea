@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { LocationData } from './types';
 
 interface LocationTopBarProps {
@@ -8,11 +9,22 @@ interface LocationTopBarProps {
 }
 
 /**
- * Top bar of the location page (FEAT-152): back button, plain-text
- * breadcrumb (Country / Region / District / Location — segments with no
- * data are hidden) and the labeled favorite toggle (A8).
- * Breadcrumb segments are intentionally NOT links — the app has no client
- * routes for countries/regions/districts (§3.1).
+ * A breadcrumb segment. `to === null` renders as plain text — used both for
+ * the district (no route) and defensively when a name arrives without its id,
+ * so a missing id can never produce a dead link.
+ */
+type Crumb = { label: string; to: string | null };
+
+/**
+ * Top bar of the location page: back button, breadcrumb
+ * (Country / Region / District / Location — segments with no data are hidden)
+ * and the labeled favorite toggle (A8).
+ *
+ * Breadcrumb navigation (FEAT-153 §3.8): the country and region segments link
+ * into `WorldPage` via the pre-existing `world/country/:countryId` and
+ * `world/region/:regionId` routes (`App.tsx:120-121`). The district segment is
+ * plain text — no district route exists and creating one was declined as out of
+ * scope. The current location is plain text because you are already there.
  */
 const LocationTopBar = ({
   location,
@@ -20,11 +32,21 @@ const LocationTopBar = ({
   onToggleFavorite,
   onBack,
 }: LocationTopBarProps) => {
-  const parentSegments = [
-    location.country_name,
-    location.region_name,
-    location.district_name,
-  ].filter((s): s is string => Boolean(s));
+  const crumbs: Crumb[] = [
+    location.country_name
+      ? {
+          label: location.country_name,
+          to: location.country_id ? `/world/country/${location.country_id}` : null,
+        }
+      : null,
+    location.region_name
+      ? {
+          label: location.region_name,
+          to: location.region_id ? `/world/region/${location.region_id}` : null,
+        }
+      : null,
+    location.district_name ? { label: location.district_name, to: null } : null,
+  ].filter((c): c is Crumb => c !== null);
 
   return (
     <div className="flex items-center justify-between gap-3 sm:gap-4 flex-wrap">
@@ -48,18 +70,31 @@ const LocationTopBar = ({
           Назад
         </button>
 
-        {/* Breadcrumb — plain text, missing segments hidden */}
+        {/* Breadcrumb — ancestors link into WorldPage, missing segments hidden.
+            The row wraps instead of truncating so every link stays tappable. */}
         <nav
           aria-label="Расположение локации"
-          className="flex items-center gap-2 min-w-0 text-xs tracking-[0.04em] whitespace-nowrap overflow-hidden text-ellipsis"
+          className="flex items-center gap-2 min-w-0 flex-wrap text-xs tracking-[0.04em]"
         >
-          {parentSegments.map((segment) => (
-            <span key={segment} className="flex items-center gap-2 min-w-0">
-              <span className="text-white/55 truncate">{segment}</span>
-              <span className="text-white/25">/</span>
+          {crumbs.map((crumb, index) => (
+            <span
+              key={`${index}-${crumb.label}`}
+              className="flex items-center gap-2 min-w-0"
+            >
+              {crumb.to ? (
+                <Link
+                  to={crumb.to}
+                  className="site-link text-white/70 hover:text-site-blue truncate max-w-[110px] transition-colors duration-200 ease-site"
+                >
+                  {crumb.label}
+                </Link>
+              ) : (
+                <span className="text-white/55 truncate max-w-[110px]">{crumb.label}</span>
+              )}
+              <span className="text-white/25 shrink-0">/</span>
             </span>
           ))}
-          <span className="text-gold font-medium truncate">{location.name}</span>
+          <span className="text-gold font-medium shrink-0">{location.name}</span>
         </nav>
       </div>
 

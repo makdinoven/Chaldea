@@ -139,10 +139,12 @@ const GatheringSection = ({
     return null;
   }
 
+  // FEAT-153 §3.6: row-3 chrome — fixed 460px box from `sm` up, natural height
+  // below it; the node list is the only scrolling part.
   return (
-    <section className="bg-site-bg backdrop-blur-sm rounded-card border border-stat-energy/20 shadow-card overflow-hidden">
+    <section className="bg-site-bg backdrop-blur-sm rounded-card border border-stat-energy/20 shadow-card overflow-hidden h-auto sm:h-[460px] flex flex-col">
       {/* Header — green accent per mock («Добыча ресурсов») */}
-      <div className="flex items-center gap-2.5 px-4 sm:px-5 py-3.5 border-b border-white/[0.07]">
+      <div className="flex items-center gap-2.5 px-4 sm:px-5 py-3.5 border-b border-white/[0.07] shrink-0">
         <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px] text-stat-energy shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M11 20A7 7 0 019.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10z" />
           <path strokeLinecap="round" strokeLinejoin="round" d="M2 21c0-3 1.85-5.36 5.08-6" />
@@ -155,7 +157,7 @@ const GatheringSection = ({
         </span>
       </div>
 
-      <div className="flex flex-col gap-2.5 p-3.5 sm:p-4">
+      <div className="flex-1 min-h-0 max-h-[320px] sm:max-h-none overflow-y-auto gold-scrollbar space-y-2.5 p-3.5 sm:p-4">
         {nodes.map((node) => (
           <GatheringNodeCard
             key={node.id}

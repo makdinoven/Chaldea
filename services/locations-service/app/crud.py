@@ -1671,7 +1671,17 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
         "no_quick_move": getattr(loc, 'no_quick_move', False),
         "marker_type": loc.marker_type,
         "district_id": loc.district_id,
-        "region_id": loc.region_id,
+        # FEAT-153: return the RESOLVED region id, not Location.region_id.
+        # Location.region_id is only populated for standalone (region-nested)
+        # locations and is NULL for every district-nested location, which made
+        # the breadcrumb ship `region_name` with `region_id: null` and forced
+        # the frontend to render the region as plain text. `breadcrumb_region_id`
+        # (see 1b above) already covers both shapes: it is the district's
+        # region_id when the location hangs off a district, and loc.region_id
+        # otherwise. Deliberately NOT falling back to loc.region_id — that would
+        # reintroduce an id/name mismatch (or a stale, wrong link) whenever the
+        # district row is missing or its region_id is NULL.
+        "region_id": breadcrumb_region_id,
         "country_id": country_id,
         "country_name": country_name,
         "region_name": region_name,

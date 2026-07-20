@@ -69,8 +69,14 @@ export interface LocationData {
   /**
    * FEAT-152 breadcrumb (A1): resolved hierarchy names from locations-service.
    * All optional/nullable — the UI hides missing segments.
+   * FEAT-153 (§3.8): the ids were already on the wire (locations-service
+   * `crud.py` / `schemas.py`) but only `country_id` was declared here. The
+   * breadcrumb needs `region_id` to build the region link; `district_id` is
+   * declared for completeness and is currently unused (no district route).
    */
   country_id?: number | null;
+  region_id?: number | null;
+  district_id?: number | null;
   country_name?: string | null;
   region_name?: string | null;
   district_name?: string | null;

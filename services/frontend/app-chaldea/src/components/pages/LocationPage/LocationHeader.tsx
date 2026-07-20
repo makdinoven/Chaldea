@@ -1,7 +1,10 @@
+import { ReactNode } from 'react';
 import { LocationData, MarkerType } from './types';
 
 interface LocationHeaderProps {
   location: LocationData;
+  /** Right-hand inset panel of the hero body (FEAT-153 §3.2 — «Соседние локации»). */
+  aside?: ReactNode;
 }
 
 const MARKER_LABELS: Record<MarkerType, string> = {
@@ -23,8 +26,13 @@ const MARKER_COLORS: Record<MarkerType, string> = {
  * soft overlays (toned down vs the mock per business rules 2–3), marker +
  * level badges, title, description and the meta row (players here / posts /
  * region — A6). Favorite toggle moved to LocationTopBar (A8).
+ *
+ * FEAT-153 §3.2: the hero is now a fixed-height card (400px from `lg`) whose
+ * body is a flex row ending at the bottom — free text on the left, the optional
+ * `aside` panel («Соседние локации») as a full-body-height column on the right.
+ * Below `lg` the body stacks and the card returns to natural height.
  */
-const LocationHeader = ({ location }: LocationHeaderProps) => {
+const LocationHeader = ({ location, aside }: LocationHeaderProps) => {
   const markerType = (location.marker_type || 'safe') as MarkerType;
   const markerLabel = MARKER_LABELS[markerType] ?? markerType;
   const markerColor =
@@ -34,7 +42,7 @@ const LocationHeader = ({ location }: LocationHeaderProps) => {
   const postsCount = location.posts.length;
 
   return (
-    <section className="relative min-h-[220px] sm:min-h-[300px] lg:min-h-[360px] rounded-card-xl overflow-hidden border border-gold-dark/30 shadow-card bg-black/40 flex flex-col justify-end">
+    <section className="relative min-h-[220px] h-auto lg:h-[400px] rounded-card-xl overflow-hidden border border-gold-dark/30 shadow-card bg-black/40 flex flex-col justify-end">
       {/* Location art */}
       {location.image_url ? (
         <div
@@ -107,54 +115,36 @@ const LocationHeader = ({ location }: LocationHeaderProps) => {
         )}
       </div>
 
-      {/* Title block — bottom */}
-      <div className="relative px-4 pb-5 pt-16 sm:px-8 sm:pb-7 flex flex-col gap-2.5 sm:gap-3">
-        <h1
-          className="text-white text-3xl sm:text-5xl font-medium uppercase leading-tight"
-          style={{ textShadow: '0 6px 26px rgba(0,0,0,.8)' }}
-        >
-          {location.name}
-        </h1>
-
-        {location.description && (
-          <p
-            className="max-w-2xl text-white/80 text-sm sm:text-[15px] font-light leading-relaxed break-words"
-            style={{ textShadow: '0 2px 10px rgba(0,0,0,.8)' }}
+      {/* Body — free text (left) + optional inset panel (right) */}
+      <div className="relative flex-1 min-h-0 flex flex-col lg:flex-row lg:items-end gap-4 lg:gap-6 px-4 pb-5 pt-16 sm:px-8 sm:pb-7">
+        <div className="flex-1 min-w-0 flex flex-col gap-2.5 sm:gap-3">
+          <h1
+            className="text-white text-3xl sm:text-5xl font-medium uppercase leading-tight"
+            style={{ textShadow: '0 6px 26px rgba(0,0,0,.8)' }}
           >
-            {location.description}
-          </p>
-        )}
+            {location.name}
+          </h1>
 
-        {/* Meta row (A6) */}
-        <div className="flex items-center gap-4 sm:gap-6 mt-1 flex-wrap text-xs sm:text-[12.5px] text-white/75">
-          <span className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-stat-energy shadow-[0_0_8px_#88B332] animate-pulse" />
-            <b className="text-white font-medium">{playersCount}</b>
-            {' '}игроков сейчас здесь
-          </span>
-          <span className="flex items-center gap-2">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="w-4 h-4 text-site-blue shrink-0"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
+          {location.description && (
+            <p
+              className="max-w-2xl text-white/80 text-sm sm:text-[15px] font-light leading-relaxed break-words"
+              style={{ textShadow: '0 2px 10px rgba(0,0,0,.8)' }}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"
-              />
-            </svg>
-            <b className="text-white font-medium">{postsCount}</b>
-            {' '}постов
-          </span>
-          {location.region_name && (
+              {location.description}
+            </p>
+          )}
+
+          {/* Meta row (A6) */}
+          <div className="flex items-center gap-4 sm:gap-6 mt-1 flex-wrap text-xs sm:text-[12.5px] text-white/75">
+            <span className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-stat-energy shadow-[0_0_8px_#88B332] animate-pulse" />
+              <b className="text-white font-medium">{playersCount}</b>
+              {' '}игроков сейчас здесь
+            </span>
             <span className="flex items-center gap-2">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                className="w-4 h-4 text-gold shrink-0"
+                className="w-4 h-4 text-site-blue shrink-0"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -163,15 +153,37 @@ const LocationHeader = ({ location }: LocationHeaderProps) => {
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"
+                  d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"
                 />
-                <circle cx="12" cy="10" r="3" />
               </svg>
-              Регион{' '}
-              <b className="text-white font-medium">{location.region_name}</b>
+              <b className="text-white font-medium">{postsCount}</b>
+              {' '}постов
             </span>
-          )}
+            {location.region_name && (
+              <span className="flex items-center gap-2">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="w-4 h-4 text-gold shrink-0"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"
+                  />
+                  <circle cx="12" cy="10" r="3" />
+                </svg>
+                Регион{' '}
+                <b className="text-white font-medium">{location.region_name}</b>
+              </span>
+            )}
+          </div>
         </div>
+
+        {aside}
       </div>
     </section>
   );

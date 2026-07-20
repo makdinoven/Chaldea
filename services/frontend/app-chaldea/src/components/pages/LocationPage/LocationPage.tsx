@@ -17,11 +17,10 @@ import NeighborsSection from './NeighborsSection';
 import LootSection from './LootSection';
 import PendingInvitationsPanel from './PendingInvitationsPanel';
 import PendingPartyInvitesPanel from './PendingPartyInvitesPanel';
-import LocationMobs from '../../LocationMobs';
-import LocationMobPacks from '../../LocationMobPacks';
-import PartiesOnLocation from './PartiesOnLocation';
+import EnemiesSection from './EnemiesSection';
 import { fetchMobsByLocation } from '../../../api/mobs';
 import { fetchMobPacksByLocation } from '../../../api/mobPacks';
+import { getPartiesOnLocation, type PartyOnLocation } from '../../../api/squads';
 import { selectDungeonsAtLocation } from '../../../redux/slices/dungeonSlice';
 import BattlesSection from './BattlesSection';
 import useBattleLock from '../../../hooks/useBattleLock';
@@ -115,6 +114,29 @@ const LocationPage = () => {
   useEffect(() => {
     fetchLocationData();
   }, [fetchLocationData]);
+
+  // --- Squads on this location (FEAT-153 §3.5) ---
+  // Lifted out of the deleted PartiesOnLocation so the players↔squads join
+  // happens in one place, inside «Кто здесь». Unlike the old component, a
+  // failed load is NOT swallowed — PlayersSection renders it inline with a
+  // «Повторить» button while still showing the players.
+  const [parties, setParties] = useState<PartyOnLocation[]>([]);
+  const [partiesError, setPartiesError] = useState<string | null>(null);
+
+  const loadParties = useCallback(() => {
+    if (!locationId) return;
+    setPartiesError(null);
+    getPartiesOnLocation(Number(locationId))
+      .then((data) => setParties(data))
+      .catch(() => {
+        setParties([]);
+        setPartiesError('Не удалось загрузить отряды');
+      });
+  }, [locationId]);
+
+  useEffect(() => {
+    loadParties();
+  }, [loadParties]);
 
   // --- Favorite handler (optimistic) ---
 
@@ -520,6 +542,16 @@ const LocationPage = () => {
     );
   }
 
+  // FEAT-153 §3.6 — row 3 drops its third track when the location has no
+  // gathering nodes (GatheringSection returns null in that case), so the row
+  // never carries an empty column.
+  const hasGathering = (location.gathering_nodes ?? []).length > 0;
+  // FEAT-153 §3.7 — ground loot is the ONLY remaining sidebar block. When there
+  // is none, the body grid must collapse to a single track: hiding just the
+  // children would leave the hardcoded 400px gutter and keep posts narrow.
+  // Anything added back to the sidebar must be OR-ed into this flag.
+  const hasSidebar = (location.loot ?? []).length > 0;
+
   return (
     <div className="flex flex-col gap-4 sm:gap-6 pb-10">
       {/* Top bar: back, breadcrumb, labeled favorite (FEAT-152 A1/A8) */}
@@ -558,12 +590,33 @@ const LocationPage = () => {
         <PendingPartyInvitesPanel characterId={character.id} locationId={location.id} />
       )}
 
-      {/* Hero banner */}
-      <LocationHeader location={location} />
+      {/* Hero banner — «Соседние локации» now live inside it (§3.2).
+          The dimming wrapper carries the panel's own sizing classes: it is the
+          flex child of the hero body, so without them `lg:self-stretch` would
+          apply to the wrapper while the panel collapsed to content height. */}
+      <LocationHeader
+        location={location}
+        aside={
+          <div
+            className={`flex min-h-0 w-full lg:w-[330px] lg:shrink-0 lg:self-stretch ${
+              actionsLocked ? 'pointer-events-none opacity-50' : ''
+            }`}
+          >
+            <NeighborsSection neighbors={location.neighbors} />
+          </div>
+        }
+      />
 
-      {/* 3-column row: who's here / neighbors / enemies (§3.5) */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_1fr_1fr] gap-4 sm:gap-6 items-start">
-        {/* Players + NPCs — NOT dimmed in battle (A10) */}
+      {/* Row 3 (§3.1/§3.6): Кто здесь | Противники | Добыча ресурсов.
+          Equal-height columns; the third track exists only when there are
+          gathering nodes. Both templates are written out in full so Tailwind's
+          JIT scanner emits them. */}
+      <div
+        className={`grid grid-cols-1 gap-4 sm:gap-6 items-stretch ${
+          hasGathering ? 'lg:grid-cols-[1.5fr_1fr_1fr]' : 'lg:grid-cols-[1.5fr_1fr]'
+        }`}
+      >
+        {/* Players + NPCs + squads — NOT dimmed in battle (A10) */}
         <div className="min-w-0">
           <PlayersSection
             players={location.players}
@@ -575,32 +628,40 @@ const LocationPage = () => {
             locationMarkerType={location.marker_type}
             isCharacterHere={isCharacterHere}
             talkableNpcIds={(gateStatus.npc_dialogue as number[]) ?? []}
+            parties={parties}
+            partiesError={partiesError}
+            onRetryParties={loadParties}
           />
         </div>
 
-        {/* Neighbors */}
+        {/* Enemies — single mobs AND packs (§3.4); dimmed while locked */}
         <div className={`min-w-0 ${actionsLocked ? 'pointer-events-none opacity-50' : ''}`}>
-          <NeighborsSection neighbors={location.neighbors} />
-        </div>
-
-        {/* Mobs / Enemies — dimmed while actions are locked (§3.5) */}
-        <div className={`min-w-0 ${actionsLocked ? 'pointer-events-none opacity-50' : ''}`}>
-          <LocationMobs
+          <EnemiesSection
             locationId={location.id}
             characterId={isCharacterHere ? (character?.id ?? null) : null}
             gatedMobIds={(gateStatus.combat as number[]) ?? []}
           />
         </div>
+
+        {/* Resource gathering — moved out of the sidebar (§3.3) */}
+        {hasGathering && (
+          <div className="min-w-0">
+            <GatheringSection
+              locationId={location.id}
+              characterId={character?.id ?? null}
+              inventoryId={character?.id ?? null}
+              isCharacterHere={isCharacterHere}
+              actionsLocked={actionsLocked}
+              nodes={location.gathering_nodes ?? []}
+              onGatherSucceeded={fetchLocationData}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Mob packs (FEAT-147) — full width */}
-      <LocationMobPacks
-        locationId={location.id}
-        characterId={isCharacterHere ? (character?.id ?? null) : null}
-        gatedMobIds={(gateStatus.combat as number[]) ?? []}
-      />
-
-      {/* Active battles — full width */}
+      {/* Active battles — full width. Rendered unconditionally on purpose:
+          the visibility guard lives inside the component, which owns the 10s
+          poll that discovers battles (§3.9). */}
       <BattlesSection
         locationId={location.id}
         characterId={character?.id ?? null}
@@ -617,8 +678,14 @@ const LocationPage = () => {
         />
       )}
 
-      {/* Body grid: chronicle (posts) + sidebar; sidebar above posts on <lg */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-4 sm:gap-6 items-start">
+      {/* Body grid: chronicle (posts) + sidebar; sidebar above posts on <lg.
+          Both the track template and the sidebar wrapper are conditional (§3.7)
+          — with no ground loot the posts span the full container width. */}
+      <div
+        className={`grid grid-cols-1 gap-4 sm:gap-6 items-start ${
+          hasSidebar ? 'lg:grid-cols-[1fr_400px]' : 'lg:grid-cols-1'
+        }`}
+      >
         {/* LEFT: movement, chronicle heading, post form, posts feed */}
         <div className="order-2 lg:order-1 flex flex-col gap-4 min-w-0">
           {/* Movement choice UI for neighbor locations (B1) */}
@@ -781,32 +848,18 @@ const LocationPage = () => {
           )}
         </div>
 
-        {/* RIGHT: sidebar (gathering, loot, squads) — above posts on <lg */}
-        <div className="order-1 lg:order-2 flex flex-col gap-4 sm:gap-6 min-w-0">
-          {/* Resource gathering — hidden by GatheringSection itself when empty */}
-          <GatheringSection
-            locationId={location.id}
-            characterId={character?.id ?? null}
-            inventoryId={character?.id ?? null}
-            isCharacterHere={isCharacterHere}
-            actionsLocked={actionsLocked}
-            nodes={location.gathering_nodes ?? []}
-            onGatherSucceeded={fetchLocationData}
-          />
-
-          {/* Loot — only shown when items exist */}
-          {(location.loot ?? []).length > 0 && (
+        {/* RIGHT: sidebar — «На земле» only; gathering moved to row 3 (§3.3)
+            and squads into «Кто здесь» (§3.5). Above posts on <lg. */}
+        {hasSidebar && (
+          <div className="order-1 lg:order-2 flex flex-col gap-4 sm:gap-6 min-w-0">
             <LootSection
               loot={location.loot}
               currentCharacterId={isCharacterHere ? (character?.id ?? null) : null}
               locationId={location.id}
               onPickup={handlePickupLoot}
             />
-          )}
-
-          {/* Squads present on this location (FEAT-144 Ф5) */}
-          <PartiesOnLocation locationId={location.id} />
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
