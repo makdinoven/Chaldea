@@ -10,6 +10,7 @@ import HomePage from "../HomePage/HomePage";
 import CreateCharacterPage from "../CreateCharacterPage/CreateCharacterPage";
 import RequestsPage from "../Admin/RequestsPage/RequestsPage";
 import Layout from "./Layout/Layout";
+import WorldMapPage from "../WorldMapPage/WorldMapPage";
 import WorldPage from "../WorldPage/WorldPage";
 import AdminLocationsPage from "../AdminLocationsPage/AdminLocationsPage";
 import FloatingStructuresPage from "../AdminLocationsPage/FloatingStructuresPage";
@@ -104,6 +105,16 @@ const App = () => {
       <Router>
         <Routes>
           <Route path="/" element={<StartPage />} />
+          {/* Standalone full-screen world map — deliberately outside <Layout>.
+              Admin-only; the graph endpoint enforces the same rule server-side. */}
+          <Route
+            path="/map"
+            element={(
+              <ProtectedRoute requiredRole="admin">
+                <WorldMapPage />
+              </ProtectedRoute>
+            )}
+          />
           <Route path="/*" element={<Layout />}>
             <Route path="home" element={<HomePage />} />
             <Route path="characters" element={<CharactersHubPage />} />

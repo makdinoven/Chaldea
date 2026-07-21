@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useRequireAuth } from '../../hooks/useRequireAuth';
 import toast from 'react-hot-toast';
 import {
@@ -16,6 +17,7 @@ import { deleteRegion } from '../../redux/actions/regionEditActions';
 import { deleteDistrict } from '../../redux/actions/districtEditActions';
 import { deleteLocation } from '../../redux/actions/locationEditActions';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
+import { selectRole } from '../../redux/slices/userSlice';
 
 import EditCountryForm from './EditForms/EditCountryForm/EditCountryForm';
 import EditRegionForm from './EditForms/EditRegionForm/EditRegionForm';
@@ -83,6 +85,10 @@ const AdminLocationsPage = () => {
   const { countries, countryDetails, regionDetails, areas, loading, error } = useAppSelector(
     (state) => state.adminLocations
   );
+  // The world map route is admin-only, so moderators and editors who can reach
+  // this page must not be shown a link that would just bounce them back.
+  const role = useAppSelector(selectRole);
+  const canOpenWorldMap = role === 'admin';
 
   // Local state
   const [editingCountry, setEditingCountry] = useState<Record<string, unknown> | null>(null);
@@ -399,9 +405,25 @@ const AdminLocationsPage = () => {
 
   return (
     <div className="p-5 text-white min-h-screen">
-      <h1 className="gold-text text-2xl font-medium uppercase text-center mb-8 tracking-wider">
+      <h1 className="gold-text text-2xl font-medium uppercase text-center mb-4 tracking-wider">
         Управление локациями
       </h1>
+
+      {canOpenWorldMap && (
+        <div className="flex justify-center mb-8">
+          {/* btn-line is width:100% by design, so a compact centred control
+              uses the gold outline instead. */}
+          <Link
+            to="/map"
+            className="gold-outline inline-flex items-center gap-2 rounded-card px-5 py-2 text-sm
+                       uppercase tracking-wider text-gold-light transition-colors hover:bg-gold-dark/15"
+            title="Граф всего мира: связи между локациями, навигатор маршрутов и редактор переходов"
+          >
+            <span aria-hidden>🗺</span>
+            Карта мира
+          </Link>
+        </div>
+      )}
 
       <div className="flex flex-col gap-2.5 max-w-[1200px] mx-auto">
         {/* === Areas Section === */}
