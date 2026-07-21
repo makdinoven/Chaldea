@@ -542,25 +542,44 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>((props, ref) => {
         container.releasePointerCapture(event.pointerId);
       }
       // A drag must not be mistaken for a click.
-      if (moved || !(event.target instanceof Element)) return;
+      if (moved) return;
 
-      const hit = event.target.closest('[data-loc]');
-      if (hit) {
-        onLocationClick(Number(hit.getAttribute('data-loc')));
-        return;
-      }
-
-      // Edges are 1px lines — far too thin to hit reliably, and widening the
-      // clickable stroke would mean 2000 extra DOM nodes. Instead find the
-      // nearest segment geometrically, which costs nothing until a click.
+      /*
+       * Hit-testing is geometric for both nodes and edges rather than reading
+       * event.target. Pointer capture retargets pointerup to this container,
+       * so by the time the event lands the original <circle> is no longer the
+       * target and a DOM-based lookup silently misses every location. Doing
+       * the maths also makes the small dots easier to hit.
+       */
       const rect = container.getBoundingClientRect();
       const { x: tx, y: ty, k } = transform.current;
       const worldX = (event.clientX - rect.left - tx) / k;
       const worldY = (event.clientY - rect.top - ty) / k;
-      const tolerance = 9 / k;
+      /*
+       * Distances are compared in screen pixels, not world units. A world-unit
+       * tolerance behaves wildly differently across the zoom range: at the
+       * default zoom 14 world units is a third of a pixel, while 14/k is over
+       * 300 world units and swallows every edge near a node.
+       */
+      const NODE_HIT_PX = 8;
+      const EDGE_HIT_PX = 7;
+
+      let nearestNode = -1;
+      let nearestNodePx = Number.POSITIVE_INFINITY;
+      for (const location of locations) {
+        const point = layout.positions.get(location.id);
+        if (!point) continue;
+        const pixels = Math.hypot(worldX - point.x, worldY - point.y) * k;
+        // Allow for the dot's own drawn radius so big waypoint markers stay easy
+        // to grab when zoomed in.
+        if (pixels <= Math.max(5 * k + 4, NODE_HIT_PX) && pixels < nearestNodePx) {
+          nearestNodePx = pixels;
+          nearestNode = location.id;
+        }
+      }
 
       let bestIndex = -1;
-      let bestDistance = tolerance;
+      let bestEdgePx = EDGE_HIT_PX;
       for (let i = 0; i < edges.length; i += 1) {
         const from = layout.positions.get(edges[i].a);
         const to = layout.positions.get(edges[i].b);
@@ -571,11 +590,17 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>((props, ref) => {
         const t = lengthSq === 0
           ? 0
           : Math.max(0, Math.min(1, ((worldX - from.x) * dx + (worldY - from.y) * dy) / lengthSq));
-        const distance = Math.hypot(worldX - (from.x + t * dx), worldY - (from.y + t * dy));
-        if (distance < bestDistance) {
-          bestDistance = distance;
+        const pixels = Math.hypot(worldX - (from.x + t * dx), worldY - (from.y + t * dy)) * k;
+        if (pixels < bestEdgePx) {
+          bestEdgePx = pixels;
           bestIndex = i;
         }
+      }
+
+      // Whichever is genuinely closer to the cursor wins.
+      if (nearestNode >= 0 && (bestIndex < 0 || nearestNodePx <= bestEdgePx)) {
+        onLocationClick(nearestNode);
+        return;
       }
 
       if (bestIndex >= 0) onEdgeClick(bestIndex);
@@ -608,7 +633,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>((props, ref) => {
       container.removeEventListener('wheel', onWheel);
       if (busyTimer.current) window.clearTimeout(busyTimer.current);
     };
-  }, [applyTransform, setScale, markBusy, onLocationClick, onEdgeClick, onBackgroundClick, edges, layout]);
+  }, [applyTransform, setScale, markBusy, onLocationClick, onEdgeClick, onBackgroundClick, edges, locations, layout]);
 
   /**
    * Keep the framing sensible when the window or orientation changes. The world
