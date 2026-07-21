@@ -14,6 +14,7 @@ import type {
   PermissionItem,
 } from '../../../api/rbacAdmin';
 import PermissionGrid from './PermissionGrid';
+import AdminPagination from '../AdminPagination/AdminPagination';
 
 const PAGE_SIZE = 20;
 
@@ -362,27 +363,14 @@ const UsersTab = () => {
       )}
 
       {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2 pt-2">
-          <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page <= 1}
-            className="text-white/60 hover:text-site-blue disabled:opacity-30 disabled:cursor-not-allowed text-sm transition-colors duration-200"
-          >
-            Назад
-          </button>
-          <span className="text-white/60 text-sm">
-            {page} / {totalPages}
-          </span>
-          <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page >= totalPages}
-            className="text-white/60 hover:text-site-blue disabled:opacity-30 disabled:cursor-not-allowed text-sm transition-colors duration-200"
-          >
-            Вперёд
-          </button>
-        </div>
-      )}
+      <AdminPagination
+        page={page}
+        totalPages={totalPages}
+        onPageChange={(p) => setPage(p)}
+        total={total}
+        pageSize={PAGE_SIZE}
+        className="pt-2"
+      />
     </div>
   );
 };

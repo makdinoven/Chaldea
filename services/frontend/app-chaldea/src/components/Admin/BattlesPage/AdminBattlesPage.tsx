@@ -10,6 +10,7 @@ import {
 } from '../../../api/battles';
 import type { AdminJoinRequestItem } from '../../../api/battles';
 import PvpRequestsPanel from './PvpRequestsPanel';
+import AdminPagination from '../AdminPagination/AdminPagination';
 
 // --- Types ---
 
@@ -674,27 +675,11 @@ const AdminJoinRequestsSection = () => {
       </div>
 
       {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex justify-center items-center gap-3">
-          <button
-            disabled={page <= 1}
-            onClick={() => setPage((p) => p - 1)}
-            className="text-sm text-white hover:text-site-blue transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            Назад
-          </button>
-          <span className="text-sm text-white/50">
-            {page} / {totalPages}
-          </span>
-          <button
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
-            className="text-sm text-white hover:text-site-blue transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            Вперёд
-          </button>
-        </div>
-      )}
+      <AdminPagination
+        page={page}
+        totalPages={totalPages}
+        onPageChange={(p) => setPage(p)}
+      />
     </div>
   );
 };
@@ -947,27 +932,11 @@ const AdminBattlesPage = () => {
           </div>
 
           {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex justify-center items-center gap-3">
-              <button
-                disabled={page <= 1}
-                onClick={() => setPage((p) => p - 1)}
-                className="text-sm text-white hover:text-site-blue transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                Назад
-              </button>
-              <span className="text-sm text-white/50">
-                {page} / {totalPages}
-              </span>
-              <button
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => p + 1)}
-                className="text-sm text-white hover:text-site-blue transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                Вперёд
-              </button>
-            </div>
-          )}
+          <AdminPagination
+            page={page}
+            totalPages={totalPages}
+            onPageChange={(p) => setPage(p)}
+          />
         </>
       ) : activeTab === 'join-requests' ? (
         <AdminJoinRequestsSection />

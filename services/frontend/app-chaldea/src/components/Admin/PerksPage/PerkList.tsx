@@ -4,6 +4,7 @@ import useDebounce from "../../../hooks/useDebounce";
 import toast from "react-hot-toast";
 import { motion } from "motion/react";
 import type { Perk } from "../../../types/perks";
+import AdminPagination from "../AdminPagination/AdminPagination";
 
 /* ── Dictionaries ── */
 
@@ -228,27 +229,11 @@ const PerkList = ({ onSelect, onCreate, onGrant }: PerkListProps) => {
       </div>
 
       {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-3">
-          <button
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            className="text-sm text-white hover:text-site-blue transition-colors duration-200 disabled:text-white/20 disabled:cursor-not-allowed"
-          >
-            Назад
-          </button>
-          <span className="text-sm text-white/60">
-            {page} / {totalPages}
-          </span>
-          <button
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            className="text-sm text-white hover:text-site-blue transition-colors duration-200 disabled:text-white/20 disabled:cursor-not-allowed"
-          >
-            Вперёд
-          </button>
-        </div>
-      )}
+      <AdminPagination
+        page={page}
+        totalPages={totalPages}
+        onPageChange={(p) => setPage(p)}
+      />
     </div>
   );
 };

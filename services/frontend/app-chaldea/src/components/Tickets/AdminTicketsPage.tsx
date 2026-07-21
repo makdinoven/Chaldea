@@ -11,6 +11,7 @@ import {
   clearTicketError,
 } from '../../redux/slices/ticketSlice';
 import type { TicketStatus, TicketCategory } from '../../types/ticket';
+import AdminPagination from '../Admin/AdminPagination/AdminPagination';
 import toast from 'react-hot-toast';
 
 const STATUS_LABELS: Record<TicketStatus, string> = {
@@ -208,23 +209,12 @@ const AdminTicketsPage = () => {
       </div>
 
       {/* Pagination */}
-      {pagination.totalPages > 1 && (
-        <div className="flex justify-center gap-2 mt-6">
-          {Array.from({ length: pagination.totalPages }, (_, i) => i + 1).map((page) => (
-            <button
-              key={page}
-              onClick={() => handlePageChange(page)}
-              className={`w-8 h-8 rounded-lg text-xs font-medium transition-colors duration-200 ease-site cursor-pointer ${
-                page === pagination.page
-                  ? 'bg-white/15 text-white'
-                  : 'bg-white/[0.05] text-white/40 hover:text-white/70'
-              }`}
-            >
-              {page}
-            </button>
-          ))}
-        </div>
-      )}
+      <AdminPagination
+        page={pagination.page}
+        totalPages={pagination.totalPages}
+        onPageChange={handlePageChange}
+        className="mt-6"
+      />
     </motion.div>
   );
 };

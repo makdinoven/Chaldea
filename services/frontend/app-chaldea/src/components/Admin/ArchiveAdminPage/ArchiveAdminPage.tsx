@@ -12,6 +12,7 @@ import type { ArchiveArticle } from "../../../api/archive";
 import { useEffect } from "react";
 import toast from "react-hot-toast";
 import { motion } from "motion/react";
+import AdminPagination from "../AdminPagination/AdminPagination";
 
 type Tab = "articles" | "categories";
 
@@ -299,27 +300,12 @@ const ArticlesList = ({ onEdit, onCreate }: ArticlesListProps) => {
       </div>
 
       {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2 pt-2">
-          <button
-            disabled={page <= 1}
-            onClick={() => setPage((p) => p - 1)}
-            className="text-sm text-white/60 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors duration-200 px-3 py-1"
-          >
-            &larr; Назад
-          </button>
-          <span className="text-sm text-white/60">
-            {page} / {totalPages}
-          </span>
-          <button
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
-            className="text-sm text-white/60 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors duration-200 px-3 py-1"
-          >
-            Вперёд &rarr;
-          </button>
-        </div>
-      )}
+      <AdminPagination
+        page={page}
+        totalPages={totalPages}
+        onPageChange={(p) => setPage(p)}
+        className="pt-2"
+      />
 
       {/* Delete confirmation modal */}
       {deleteTarget && (

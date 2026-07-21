@@ -10,6 +10,7 @@ import QuestEditor from './QuestEditor';
 import NpcStatsEditor from './NpcStatsEditor';
 import NpcEquipmentEditor from './NpcEquipmentEditor';
 import TeleportLinksPanel from './TeleportLinksPanel';
+import AdminPagination from '../Admin/AdminPagination/AdminPagination';
 
 /* ── Types ── */
 
@@ -883,32 +884,14 @@ const AdminNpcsPage = () => {
             )}
 
             {/* Pagination */}
-            {total > 0 && (
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-white/10">
-                <span className="text-white/50 text-sm">
-                  Показано {Math.min((page - 1) * pageSize + 1, total)}–{Math.min(page * pageSize, total)} из {total}
-                </span>
-                <div className="flex items-center gap-3">
-                  <button
-                    className="btn-line !w-auto !px-4 !py-1.5 !text-sm disabled:opacity-30 disabled:pointer-events-none"
-                    disabled={page <= 1}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  >
-                    Назад
-                  </button>
-                  <span className="text-white/50 text-sm">
-                    Страница {page} из {Math.max(1, Math.ceil(total / pageSize))}
-                  </span>
-                  <button
-                    className="btn-line !w-auto !px-4 !py-1.5 !text-sm disabled:opacity-30 disabled:pointer-events-none"
-                    disabled={page >= Math.ceil(total / pageSize)}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    Вперёд
-                  </button>
-                </div>
-              </div>
-            )}
+            <AdminPagination
+              page={page}
+              totalPages={Math.max(1, Math.ceil(total / pageSize))}
+              onPageChange={(p) => setPage(p)}
+              total={total}
+              pageSize={pageSize}
+              className="px-4 py-3 border-t border-white/10"
+            />
           </>
         )}
       </div>

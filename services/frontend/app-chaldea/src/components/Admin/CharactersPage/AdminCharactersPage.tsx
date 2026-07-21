@@ -18,6 +18,7 @@ import {
   selectAdminCharactersListLoading,
   selectAdminCharactersListError,
 } from '../../../redux/slices/adminCharactersSlice';
+import AdminPagination from '../AdminPagination/AdminPagination';
 import { CLASS_NAMES } from '../../ProfilePage/constants';
 import {
   selectRaceNamesMap,
@@ -101,23 +102,6 @@ const AdminCharactersPage = () => {
     value: Number(id),
     label: name,
   }));
-
-  // Build page number buttons
-  const pageNumbers: number[] = [];
-  const maxVisiblePages = 7;
-  if (totalPages <= maxVisiblePages) {
-    for (let i = 1; i <= totalPages; i++) pageNumbers.push(i);
-  } else {
-    pageNumbers.push(1);
-    let start = Math.max(2, page - 2);
-    let end = Math.min(totalPages - 1, page + 2);
-    if (page <= 3) end = Math.min(5, totalPages - 1);
-    if (page >= totalPages - 2) start = Math.max(totalPages - 4, 2);
-    if (start > 2) pageNumbers.push(-1); // ellipsis marker
-    for (let i = start; i <= end; i++) pageNumbers.push(i);
-    if (end < totalPages - 1) pageNumbers.push(-2); // ellipsis marker
-    pageNumbers.push(totalPages);
-  }
 
   return (
     <div className="w-full max-w-container mx-auto">
@@ -292,49 +276,14 @@ const AdminCharactersPage = () => {
         </div>
 
         {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex justify-center items-center gap-2 mt-6">
-            <button
-              className="text-white/60 text-sm px-3 py-1 hover:text-site-blue transition-colors duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
-              disabled={page <= 1}
-              onClick={() => dispatch(setPage(page - 1))}
-            >
-              &laquo;
-            </button>
-
-            {pageNumbers.map((p, i) =>
-              p < 0 ? (
-                <span key={`ellipsis-${i}`} className="text-white/40 text-sm px-1">
-                  ...
-                </span>
-              ) : (
-                <button
-                  key={p}
-                  onClick={() => dispatch(setPage(p))}
-                  className={`text-sm px-3 py-1 rounded-[8px] transition-colors duration-200 ${
-                    p === page
-                      ? 'bg-white/10 text-white font-medium'
-                      : 'text-white/60 hover:text-site-blue'
-                  }`}
-                >
-                  {p}
-                </button>
-              ),
-            )}
-
-            <button
-              className="text-white/60 text-sm px-3 py-1 hover:text-site-blue transition-colors duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
-              disabled={page >= totalPages}
-              onClick={() => dispatch(setPage(page + 1))}
-            >
-              &raquo;
-            </button>
-
-            <span className="text-white/40 text-xs ml-4">
-              Всего: {total}
-            </span>
-          </div>
-        )}
+        <AdminPagination
+          page={page}
+          totalPages={totalPages}
+          onPageChange={(p) => dispatch(setPage(p))}
+          total={total}
+          pageSize={pageSize}
+          className="mt-6"
+        />
       </motion.div>
     </div>
   );
