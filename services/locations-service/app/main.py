@@ -17,7 +17,10 @@ import schemas
 import crud
 from database import get_db
 from fastapi.middleware.cors import CORSMiddleware
-from auth_http import get_admin_user, get_current_user_via_http, require_permission, UserRead, OAUTH2_SCHEME
+from auth_http import (
+    get_admin_user, get_strict_admin_user, get_current_user_via_http,
+    require_permission, UserRead, OAUTH2_SCHEME,
+)
 from rabbitmq_publisher import publish_notification_sync
 from sqlalchemy import text
 
@@ -513,6 +516,26 @@ async def update_neighbor_path(
 
     path_data_dicts = [{"x": wp.x, "y": wp.y} for wp in body.path_data]
     result = await crud.update_neighbor_path(session, from_id, to_id, path_data_dicts)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Связь соседей не найдена")
+    return result
+
+
+@router.patch("/neighbors/{from_id}/{to_id}/cost", response_model=schemas.NeighborEdgeResponse)
+async def update_neighbor_cost_route(
+    from_id: int,
+    to_id: int,
+    body: schemas.NeighborCostUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("locations:update"))
+):
+    """
+    Меняет стоимость перехода в обе стороны, не затрагивая нарисованный путь.
+
+    Нужен отдельно от POST /{id}/neighbors/, который обнуляет path_data,
+    если его не передать вместе со стоимостью.
+    """
+    result = await crud.update_neighbor_cost(session, from_id, to_id, body.energy_cost)
     if result is None:
         raise HTTPException(status_code=404, detail="Связь соседей не найдена")
     return result
@@ -1553,6 +1576,24 @@ async def delete_clickable_zone_route(
 async def get_hierarchy_tree_route(session: AsyncSession = Depends(get_db)):
     """Returns the full hierarchy tree for navigation."""
     return await crud.get_hierarchy_tree(session)
+
+
+# --------------------------------------------------------------------
+# WORLD GRAPH (standalone map screen at /map)
+# --------------------------------------------------------------------
+@router.get("/map/graph")
+async def get_world_graph_route(
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_strict_admin_user),
+):
+    """
+    Returns every visible location plus the neighbor graph between them.
+
+    Admin-only: this payload exposes the whole world structure at once, so
+    gating the /map route on the client is not enough — the data itself must be
+    protected. Hidden countries are filtered out in crud.get_world_graph anyway.
+    """
+    return await crud.get_world_graph(session)
 
 
 # --------------------------------------------------------------------

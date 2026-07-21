@@ -282,6 +282,25 @@ class LocationNeighborCreate(BaseModel):
     energy_cost: int = 1
     path_data: Optional[List[PathWaypoint]] = None
 
+class NeighborCostUpdate(BaseModel):
+    """
+    Changes only the stamina cost of an existing link.
+
+    Exists as its own payload because add_neighbor overwrites path_data with
+    NULL whenever it is not resupplied, which would silently destroy the
+    waypoints drawn in the region map editor.
+    """
+    energy_cost: int
+
+    @validator("energy_cost")
+    def cost_must_be_sane(cls, value):  # noqa: N805
+        if value < 0:
+            raise ValueError("energy_cost не может быть отрицательным")
+        if value > 1000:
+            raise ValueError("energy_cost не может превышать 1000")
+        return value
+
+
 class LocationNeighbor(BaseModel):
     id: int
     location_id: int

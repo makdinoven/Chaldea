@@ -800,6 +800,50 @@ async def add_neighbor(session: AsyncSession, location_id: int, neighbor_id: int
     }
 
 
+async def update_neighbor_cost(
+    session: AsyncSession, from_id: int, to_id: int, energy_cost: int
+) -> Optional[dict]:
+    """
+    Обновляет energy_cost на обоих направлениях связи, сохраняя path_data.
+
+    Отличается от add_neighbor тем, что не трогает нарисованные waypoints:
+    add_neighbor записывает path_data безусловно и обнуляет его, если он не
+    передан. Возвращает None, если связи не существует.
+    """
+    forward_result = await session.execute(
+        select(LocationNeighbor).where(
+            LocationNeighbor.location_id == from_id,
+            LocationNeighbor.neighbor_id == to_id
+        )
+    )
+    forward = forward_result.scalars().first()
+
+    reverse_result = await session.execute(
+        select(LocationNeighbor).where(
+            LocationNeighbor.location_id == to_id,
+            LocationNeighbor.neighbor_id == from_id
+        )
+    )
+    reverse = reverse_result.scalars().first()
+
+    if not forward and not reverse:
+        return None
+
+    if forward:
+        forward.energy_cost = energy_cost
+    if reverse:
+        reverse.energy_cost = energy_cost
+
+    await session.commit()
+
+    return {
+        "from_id": from_id,
+        "to_id": to_id,
+        "energy_cost": energy_cost,
+        "path_data": (forward.path_data if forward else reverse.path_data),
+    }
+
+
 async def update_neighbor_path(session: AsyncSession, from_id: int, to_id: int, path_data: list) -> Optional[dict]:
     """Обновляет path_data на обоих направлениях связи соседей"""
     path_data_json = [{"x": wp["x"], "y": wp["y"]} for wp in path_data] if path_data is not None else None
@@ -2022,6 +2066,118 @@ async def get_hierarchy_tree(session: AsyncSession) -> List[dict]:
     tree.extend(orphan_countries)
 
     return tree
+
+
+# -------------------------------
+#   WORLD GRAPH (map screen)
+# -------------------------------
+async def get_world_graph(session: AsyncSession) -> dict:
+    """
+    Returns the whole world as a flat graph for the standalone map screen.
+
+    Nodes are locations, resolved up to their region/country/area so the client
+    can cluster them. Edges come from LocationNeighbors, deduplicated into one
+    entry per unordered pair while preserving direction: `cost_ab` is always
+    present, `cost_ba` is None when the reverse row is missing. The table has no
+    unique constraint and the codebase writes pairs by convention only, so
+    one-way and duplicated edges do occur and the navigator must respect them.
+
+    Hidden countries (and everything beneath them) are excluded — this endpoint
+    is public and must not leak unreleased content.
+    """
+    areas = (await session.execute(
+        select(Area).order_by(Area.sort_order.asc(), Area.id.asc())
+    )).scalars().all()
+
+    countries = (await session.execute(
+        select(Country).where(Country.is_hidden == False)  # noqa: E712
+    )).scalars().all()
+    visible_country_ids = {c.id for c in countries}
+
+    regions = (await session.execute(select(Region))).scalars().all()
+    regions = [r for r in regions if r.country_id in visible_country_ids]
+    region_to_country = {r.id: r.country_id for r in regions}
+
+    districts = (await session.execute(select(District))).scalars().all()
+    districts = [d for d in districts if d.region_id in region_to_country]
+    district_to_region = {d.id: d.region_id for d in districts}
+
+    locations = (await session.execute(select(Location))).scalars().all()
+
+    location_nodes = []
+    visible_location_ids = set()
+    for loc in locations:
+        # A location hangs off either a district or, for standalone ones, a
+        # region directly. District.region_id is NOT NULL even for nested
+        # districts, so a single lookup resolves the region in both cases.
+        region_id = district_to_region.get(loc.district_id) if loc.district_id else loc.region_id
+        if region_id not in region_to_country:
+            continue  # belongs to a hidden country, or dangling FK
+        visible_location_ids.add(loc.id)
+        location_nodes.append({
+            "id": loc.id,
+            "name": loc.name,
+            "region_id": region_id,
+            "country_id": region_to_country[region_id],
+            "district_id": loc.district_id,
+            "marker_type": loc.marker_type or "safe",
+            "recommended_level": loc.recommended_level,
+            "no_quick_move": bool(loc.no_quick_move),
+            "quick_travel_marker": bool(loc.quick_travel_marker),
+        })
+
+    neighbor_rows = (await session.execute(select(LocationNeighbor))).scalars().all()
+
+    # Collapse the directed rows into one record per unordered pair.
+    pairs: Dict[Tuple[int, int], dict] = {}
+    duplicate_rows = 0
+    for row in neighbor_rows:
+        if row.location_id not in visible_location_ids or row.neighbor_id not in visible_location_ids:
+            continue
+        if row.location_id == row.neighbor_id:
+            continue  # self-loop: meaningless for routing
+        a, b = sorted((row.location_id, row.neighbor_id))
+        forward = row.location_id == a
+        entry = pairs.get((a, b))
+        if entry is None:
+            entry = {"a": a, "b": b, "cost_ab": None, "cost_ba": None, "auto": False}
+            pairs[(a, b)] = entry
+        key = "cost_ab" if forward else "cost_ba"
+        if entry[key] is not None:
+            duplicate_rows += 1
+            entry[key] = min(entry[key], row.energy_cost)
+        else:
+            entry[key] = row.energy_cost
+        if row.is_auto_arrow:
+            entry["auto"] = True
+
+    edges = list(pairs.values())
+    one_way = sum(1 for e in edges if e["cost_ab"] is None or e["cost_ba"] is None)
+    connected_ids = {e["a"] for e in edges} | {e["b"] for e in edges}
+
+    return {
+        "areas": [
+            {"id": a.id, "name": a.name, "sort_order": a.sort_order} for a in areas
+        ],
+        "countries": [
+            {"id": c.id, "name": c.name, "area_id": c.area_id} for c in countries
+        ],
+        "regions": [
+            {"id": r.id, "name": r.name, "country_id": r.country_id} for r in regions
+        ],
+        "districts": [
+            {"id": d.id, "name": d.name, "region_id": d.region_id} for d in districts
+        ],
+        "locations": location_nodes,
+        "edges": edges,
+        "stats": {
+            "locations": len(location_nodes),
+            "edges": len(edges),
+            "isolated": len(visible_location_ids - connected_ids),
+            "one_way_edges": one_way,
+            "duplicate_rows": duplicate_rows,
+        },
+    }
 
 
 # -------------------------------

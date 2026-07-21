@@ -55,6 +55,21 @@ def get_admin_user(user: UserRead = Depends(get_current_user_via_http)) -> UserR
     return user
 
 
+def get_strict_admin_user(user: UserRead = Depends(get_current_user_via_http)) -> UserRead:
+    """
+    Проверяет, что пользователь — именно администратор.
+
+    В отличие от get_admin_user не пропускает модераторов: используется там,
+    где доступ ограничен только ролью admin (например, экран карты мира).
+    """
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступ только для администраторов",
+        )
+    return user
+
+
 def require_permission(permission: str):
     """FastAPI dependency factory for granular permission checks."""
     def checker(user: UserRead = Depends(get_current_user_via_http)) -> UserRead:
