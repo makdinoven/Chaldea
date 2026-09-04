@@ -20,6 +20,11 @@ _engine_kwargs: dict = {}
 if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
     _engine_kwargs["connect_args"] = {"check_same_thread": False}
     _engine_kwargs["poolclass"] = StaticPool
+else:
+    # Every other service sets these; without them a connection idle past
+    # MySQL's wait_timeout is handed out dead ("server has gone away").
+    _engine_kwargs["pool_recycle"] = 3600
+    _engine_kwargs["pool_pre_ping"] = True
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL, **_engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
