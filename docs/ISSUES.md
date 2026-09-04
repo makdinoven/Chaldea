@@ -6,6 +6,21 @@
 
 ## DONE / Learning notes
 
+### Prod-инцидент: взаимные HTTP-вызовы вычерпали QueuePool у character-service DONE (2026-09-04)
+**Сервисы:** character-service, user-service, notification-service
+**Симптом:** Прод «жутко лагает», внизу постоянно висит «Переподключение к серверу». При этом сервер здоров: load average 0.29, диск 40%, все контейнеры Up.
+**Механика (цикл):**
+1. `user-service` `GET /users/me` -> `_fetch_character_short()` -> ждёт `character-service /characters/{id}/short_info`.
+2. `character-service` `GET /characters/{id}/profile` держал сессию из `Depends(get_db)` **и одновременно** ждал `user-service /users/{id}` до 5 секунд.
+Соединение из пула удерживалось на всё время ожидания чужого HTTP. Пул (5 + 10 overflow) вычерпывался, дальше `sqlalchemy.exc.TimeoutError: QueuePool limit of size 5 overflow 10 reached`, и сервис переставал отвечать вообще — включая `/openapi.json`, который к БД не обращается.
+**Как это убивало WebSocket:** деградировавший `/users/me` стабильно отвечал за 5.03–5.07 с (сработавший внутренний `timeout=5.0`, исключение проглатывалось). В `notification-service.authenticate_websocket` таймаут был ровно `5.0` — промах на десятки миллисекунд, `return None`, handshake закрывался с 403 для **всех** пользователей. Фронт (`useWebSocket.ts`) уходил в бесконечный реконнект. В логах — ни одной причины: `except Exception: return None`.
+**Исправление:**
+- `character-service/app/main.py::get_character_profile` — все поля материализуются до вызова, `db.close()` перед HTTP. Цикл разорван.
+- `character-service/app/database.py` — пул 15 + 15 overflow, `pool_timeout=10` (fail-fast вместо 30 с).
+- `notification-service/app/auth_http.py` — `AUTH_REQUEST_TIMEOUT = 15.0` (заведомо больше худшего случая `/users/me` = 2 x 5 с), логирование причины отказа, таймаут для `requests.get` (его вообще не было — поток мог зависнуть навсегда), 503 вместо зависания при недоступном user-service.
+- `notification-service/app/database.py` — добавлены `pool_pre_ping` / `pool_recycle` (единственный сервис, где их не было).
+**Правило на будущее:** никогда не держать сессию БД открытой через `await` на межсервисный HTTP. Таймаут вызывающего всегда должен быть строго больше суммарного худшего случая вызываемого — равные таймауты дают 100% отказов вместо деградации. `except Exception: return None` в пути аутентификации делает такой инцидент недиагностируемым.
+
 ### Баг: некорректный рендер пути между локациями при рисовании от большего id к меньшему DONE
 **Сервис:** frontend (`AdminPathEditor`) + locations-service
 **Файл:** `services/frontend/app-chaldea/src/components/AdminPathEditor/AdminPathEditorPage.tsx` (`handleDrawClick`)
@@ -46,6 +61,25 @@
 - `services/frontend/app-chaldea/src/components/pages/LocationPage/LocationPage.tsx:59-90` — UI-таймер читает `character.travel_cooldown_until`, который никогда не приходит
 **Описание:** `MeResponse.character` типизирован как `CharacterShort`, в котором нет поля `travel_cooldown_until`. Pydantic отфильтровывает поле из ответа `/users/me`, хотя main.py его подставляет (и frontend-тип `userSlice.ts` его ожидает). В результате блок «Перемещение будет доступно через N мин M сек» на странице локации никогда не показывается, кулдаун виден только как ошибка при попытке перемещения. Баг существовал до FEAT-152 (обнаружен Reviewer при live-проверке FEAT-152, 2026-07-17). Фикс: добавить `travel_cooldown_until: Optional[datetime/str] = None` в `CharacterShort`.
 **Приоритет:** HIGH (нерабочая пользовательская функция)
+### Хрупкость теста: rate limiting в notification-service зависит от скорости отказа внешнего вызова
+**Сервис:** notification-service
+**Файлы:** `services/notification-service/app/chat_routes.py` (`send_message`, шаг 9), `services/notification-service/app/tests/test_chat.py::TestRateLimiting`
+**Описание:** `send_message` в конце делает незамоканный `requests.post` на `{AUTH_SERVICE_URL}/users/{id}/activity/increment` с `timeout=3`. Тест `test_rate_limit_second_message_within_2_seconds` шлёт два сообщения подряд и ждёт 429 во втором, но окно лимита — всего 2 секунды. Пока хост `user-service` не резолвится мгновенно, каждый запрос занимает ~4 с, окно истекает, и тест падает с `assert 201 == 429`.
+**Когда проявляется:** на CI (ubuntu-latest) DNS отдаёт NXDOMAIN мгновенно — тест зелёный. В изолированном контейнере без docker-сети резолв медленный — тест красный. Проверено: с `AUTH_SERVICE_URL=http://127.0.0.1:1` оба теста класса проходят за 0.35 с.
+**Что сделать:** замокать `requests.post` в тесте (как уже замоканы `_fetch_user_profile_data` и `broadcast_to_channel`), либо вынести инкремент активности в `BackgroundTasks`. Сейчас пользовательский запрос на отправку сообщения синхронно ждёт до 3 секунд на не-критичном fire-and-forget вызове.
+**Приоритет:** LOW для теста, MEDIUM для самого блокирующего вызова в горячем пути чата.
+
+### Долг: list_characters держит сессию БД через N последовательных HTTP-вызовов
+**Сервис:** character-service
+**Файл:** `services/character-service/app/main.py` (`list_characters`, ~строка 1646)
+**Описание:** Эндпоинт делает по одному синхронному `httpx.get` к user-service на каждого уникального `user_id` в выдаче (до 5 с каждый), не закрывая сессию БД, и продолжает пользоваться `db` после. Это тот же паттерн, что вызвал prod-инцидент 2026-09-04 в `get_character_profile`, но здесь эндпоинт объявлен обычным `def` (то есть исполняется в threadpool и не блокирует event loop) и доступен только админам, поэтому риск ниже.
+**Что сделать:** батчить запрос имён одним вызовом к user-service либо закрывать сессию до HTTP-фазы. Отдельной задачей — в рамках инцидента не трогалось, чтобы не раздувать дифф.
+
+### Долг: ~93 эндпоинта character-service объявлены `async def`, но ходят в БД синхронно
+**Сервис:** character-service
+**Файл:** `services/character-service/app/main.py`
+**Описание:** Сервис использует синхронный SQLAlchemy, но большинство эндпоинтов — `async def` с `db: Session = Depends(get_db)`. Такие обработчики выполняются прямо в event loop, и каждый синхронный запрос к БД блокирует весь цикл вместо того, чтобы уйти в threadpool. Именно поэтому во время инцидента 2026-09-04 перестал отвечать даже `/openapi.json`, не обращающийся к БД.
+**Что сделать:** привести обработчики без `await` к обычному `def` (FastAPI сам уведёт их в threadpool). Менять пачками с прогоном тестов; правка механическая, но затрагивает почти весь файл.
 
 ### ~~Баг: locations-service миграция 004 падает на свежей БД (отсутствует таблица `permissions`)~~ DONE (2026-04-08)
 ~~**Сервис:** locations-service~~
