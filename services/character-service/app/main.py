@@ -1538,8 +1538,29 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
     if not character:
         raise HTTPException(status_code=404, detail="Character not found")
 
+    # Materialise everything we need (including the lazy `current_title`
+    # relationship) while the session is still open, so the DB connection can go
+    # back to the pool before we make the cross-service call below.
     user_id = character.user_id
-    user_nickname = ""
+    profile = {
+        "character_photo": character.avatar,
+        "character_title": character.current_title.name if character.current_title else "",
+        "character_title_rarity": character.current_title.rarity if character.current_title else None,
+        "character_level": character.level,
+        "user_id": user_id,
+        "user_nickname": "",
+        "character_name": character.name,
+        "current_location_id": character.current_location_id,
+        "travel_cooldown_until": character.travel_cooldown_until,
+    }
+
+    # Release the pooled connection before calling user-service. user-service's
+    # own GET /users/me calls back into this service (/short_info), so holding a
+    # connection across this await lets the two services drain each other's
+    # pools under concurrent load until QueuePool is exhausted and both hang.
+    # get_db()'s finally-block close() is idempotent, so closing early is safe.
+    db.close()
+
     if user_id:
         user_profile_url = f"{settings.USER_SERVICE_URL}/users/{user_id}"
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1548,26 +1569,14 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
                 if resp.status_code == 200:
                     user_data = resp.json()
                     # Предполагаем, что в ответе есть ключ "username"
-                    user_nickname = user_data.get("username", "")
+                    profile["user_nickname"] = user_data.get("username", "")
                 else:
                     logger.error(f"Не удалось получить профиль пользователя user_id {user_id}: {resp.status_code} - {resp.text}")
-                    user_nickname = ""
             except httpx.RequestError as e:
                 logger.error(f"Ошибка при получении профиля пользователя с user_id {user_id}: {e}")
                 # Можно вернуть пустое значение или сообщить об ошибке – здесь выбираем оставить пустое имя.
-                user_nickname = ""
 
-    return {
-        "character_photo": character.avatar,
-        "character_title": character.current_title.name if character.current_title else "",
-        "character_title_rarity": character.current_title.rarity if character.current_title else None,
-        "character_level": character.level,
-        "user_id": user_id,
-        "user_nickname": user_nickname,
-        "character_name": character.name,
-        "current_location_id": character.current_location_id,
-        "travel_cooldown_until": character.travel_cooldown_until,
-    }
+    return profile
 
 @router.get("/{character_id}/short_info")
 def get_short_info(character_id: int, db: Session = Depends(get_db)):
