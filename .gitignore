@@ -44,3 +44,11 @@ services/notification-service/app/consumers/__pycache__
 celerybeat-schedule
 celerybeat-schedule.db
 
+# Reference screenshots and scratch files that live in the working tree only
+services/frontend/img*.png
+services/frontend/app-chaldea;D/
+features/*.png
+.claude/skills/*.png
+.claude/settings.local.json
+Template_to_design/*.png
+*.stackdump
