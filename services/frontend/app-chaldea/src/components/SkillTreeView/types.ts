@@ -104,6 +104,8 @@ export interface SkillWithPerks {
   skill_image: string | null;
   min_level?: number;
   class_limitations?: string | null;
+  subclass_limitations?: string | null;
+  is_mob_skill?: boolean;
   race_limitations?: string | null;
   subrace_limitations?: string | null;
   base: SkillBase;

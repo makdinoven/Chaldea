@@ -24,17 +24,24 @@ export interface AdminSkillListItem {
   min_level: number;
   skill_image: string | null;
   skill_image_preview?: string | null;
+  // Category scoping — see AdminSkillsPage/skillCategories.ts
+  class_limitations: string | null;
+  subclass_limitations: string | null;
+  is_mob_skill: boolean;
 }
 
 export const fetchSkills = createAsyncThunk<
   AdminSkillListItem[],
-  void,
+  // Category filter (class_id / subclass_key / mob); omitted means every skill.
+  Record<string, string | number> | void,
   { rejectValue: string }
 >(
   'skills/fetchSkills',
-  async (_, { rejectWithValue }) => {
+  async (params, { rejectWithValue }) => {
     try {
-      const res = await axios.get(`${BASE_URL}/admin/skills/`);
+      const res = await axios.get(`${BASE_URL}/admin/skills/`, {
+        params: params || undefined,
+      });
       return res.data;
     } catch (err) {
       return rejectWithValue(extractError(err, 'Ошибка загрузки списка навыков'));
@@ -126,6 +133,8 @@ export interface SkillBaseScalarsPayload {
   skill_type: string;
   description: string | null;
   class_limitations: string | null;
+  subclass_limitations: string | null;
+  is_mob_skill: boolean;
   race_limitations: string | null;
   subrace_limitations: string | null;
   min_level: number;

@@ -93,10 +93,26 @@ async def admin_create_skill(
 @router.get("/admin/skills/", response_model=List[schemas.SkillRead])
 async def admin_list_skills(
     q: str | None = Query(None),
+    class_id: int | None = Query(None, description="Skills of this class and no subclass"),
+    subclass_key: str | None = Query(None, description="Skills of this subclass"),
+    race_id: int | None = Query(None, description="Skills of this race and no subrace"),
+    subrace_id: int | None = Query(None, description="Skills of this subrace"),
+    general: bool | None = Query(None, description="true: skills with no scoping at all"),
+    mob: bool | None = Query(None, description="true: mob skills only, false: players' only"),
     db: AsyncSession = Depends(get_db),
     current_user = Depends(require_permission("skills:read")),
 ):
-    return await crud.list_skills(db, q=q)
+    """List skills for the admin, optionally narrowed to one category."""
+    return await crud.list_skills(
+        db,
+        q=q,
+        class_id=class_id,
+        subclass_key=subclass_key,
+        race_id=race_id,
+        subrace_id=subrace_id,
+        general=general,
+        mob=mob,
+    )
 
 @router.get("/admin/skills/{skill_id}", response_model=schemas.SkillRead)
 async def admin_get_skill(

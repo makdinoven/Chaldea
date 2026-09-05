@@ -30,8 +30,80 @@ async def get_skill(db: AsyncSession, skill_id: int) -> models.Skill | None:
     result = await db.execute(select(models.Skill).where(models.Skill.id == skill_id))
     return result.scalar_one_or_none()
 
-async def list_skills(db: AsyncSession, q: str | None = None) -> list[models.Skill]:
+def _csv_contains(column, value: str):
+    """
+    True when a comma-separated column holds `value` as one of its entries.
+
+    MySQL has FIND_IN_SET for this, but the tests run on SQLite, so the check is
+    spelled out instead: wrap both sides in commas and look for the value as a
+    whole entry, which stops "1" matching "10". SQLAlchemy renders the
+    concatenation as CONCAT on MySQL and || on SQLite.
+    """
+    padded = "," + func.coalesce(column, "") + ","
+    return padded.like(f"%,{value},%")
+
+
+def _csv_is_empty(column):
+    """True when a comma-separated column carries no entries at all."""
+    return or_(column.is_(None), column == "")
+
+
+async def list_skills(
+    db: AsyncSession,
+    q: str | None = None,
+    class_id: int | None = None,
+    subclass_key: str | None = None,
+    race_id: int | None = None,
+    subrace_id: int | None = None,
+    general: bool | None = None,
+    mob: bool | None = None,
+) -> list[models.Skill]:
+    """
+    Admin skill list, optionally narrowed to one category.
+
+    Each filter is a separate parameter because the categories are not one
+    field but several axes:
+
+    - `mob` splits mob skills from the players' outright; nothing crosses it.
+    - `class_id` means "this class, and none of its subclasses" — a subclass
+      skill belongs to the subclass alone — and `subclass_key` means that
+      subclass. `race_id` / `subrace_id` narrow the same way.
+    - class and race are independent of each other, so a skill scoped to both
+      is listed under both. That is what it is.
+    - `general` means no scoping at all: no class, no subclass, no race, no
+      subrace, and not a mob skill.
+    """
     stmt = select(models.Skill)
+
+    if mob is not None:
+        stmt = stmt.where(models.Skill.is_mob_skill == mob)
+
+    if general:
+        stmt = stmt.where(
+            _csv_is_empty(models.Skill.class_limitations),
+            _csv_is_empty(models.Skill.subclass_limitations),
+            _csv_is_empty(models.Skill.race_limitations),
+            _csv_is_empty(models.Skill.subrace_limitations),
+            models.Skill.is_mob_skill == False,  # noqa: E712 — SQL, not Python
+        )
+
+    if subclass_key:
+        stmt = stmt.where(_csv_contains(models.Skill.subclass_limitations, subclass_key))
+    elif class_id is not None:
+        # Scoped to the class itself: tied to it, and to no subclass.
+        stmt = stmt.where(
+            _csv_contains(models.Skill.class_limitations, str(class_id)),
+            _csv_is_empty(models.Skill.subclass_limitations),
+        )
+
+    if subrace_id is not None:
+        stmt = stmt.where(_csv_contains(models.Skill.subrace_limitations, str(subrace_id)))
+    elif race_id is not None:
+        stmt = stmt.where(
+            _csv_contains(models.Skill.race_limitations, str(race_id)),
+            _csv_is_empty(models.Skill.subrace_limitations),
+        )
+
     if q is not None and q.strip():
         q_stripped = q.strip()
         name_clause = func.lower(models.Skill.name).like(f"%{q_stripped.lower()}%")

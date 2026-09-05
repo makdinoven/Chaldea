@@ -11,6 +11,16 @@ import {
 import { clearSelectedSkill } from '../../redux/slices/skillsAdminSlice';
 import PerkPoolEditor from './PerkPoolEditor';
 import SkillBaseEditor from './SkillBaseEditor';
+import SkillCategoryBar from './SkillCategoryBar';
+import {
+  ALL_SKILLS,
+  categoryDefaults,
+  categoryLabel,
+  categoryParams,
+  type RaceWithSubraces,
+  type SkillCategory,
+} from './skillCategories';
+import type { Subclass } from '../AdminClassTreeEditor/types';
 
 const extractError = (err: unknown, fallback: string): string => {
   const e = err as { response?: { data?: { detail?: string } }; message?: string };
@@ -23,10 +33,30 @@ const AdminSkillsPage = () => {
     (state) => state.skills
   );
   const [searchQuery, setSearchQuery] = useState('');
+  const [category, setCategory] = useState<SkillCategory>(ALL_SKILLS);
+  const [subclasses, setSubclasses] = useState<Subclass[]>([]);
+  const [races, setRaces] = useState<RaceWithSubraces[]>([]);
+
+  // The list is narrowed on the server, so a category is a section of the data
+  // rather than a view over everything.
+  useEffect(() => {
+    dispatch(fetchSkills(categoryParams(category)));
+  }, [dispatch, category]);
 
   useEffect(() => {
-    dispatch(fetchSkills());
-  }, [dispatch]);
+    axios
+      .get<Subclass[]>('/skills/subclasses')
+      .then((res) => setSubclasses(res.data))
+      .catch(() => toast.error('Не удалось загрузить список подклассов'));
+    axios
+      .get<RaceWithSubraces[]>('/characters/races')
+      .then((res) => setRaces(res.data))
+      .catch(() => toast.error('Не удалось загрузить список рас'));
+  }, []);
+
+  const reloadList = () => {
+    dispatch(fetchSkills(categoryParams(category)));
+  };
 
   const handleSelectSkill = (skillId: number) => {
     dispatch(clearSelectedSkill());
@@ -42,7 +72,7 @@ const AdminSkillsPage = () => {
     if (!file || !selectedSkill) return;
     try {
       await dispatch(uploadSkillImage({ skillId: selectedSkill.id, file })).unwrap();
-      dispatch(fetchSkills());
+      reloadList();
       dispatch(fetchSkillAdmin(selectedSkill.id));
     } catch (err) {
       toast.error(typeof err === 'string' ? err : 'Ошибка загрузки изображения');
@@ -63,12 +93,15 @@ const AdminSkillsPage = () => {
       newName = `${baseName} (${counter})`;
     }
     try {
+      // Created inside a section, so it lands in that section: no picking the
+      // class by hand every time.
       const res = await axios.post('/skills/admin/skills/', {
         name: newName,
         skill_type: 'attack',
         description: '',
+        ...categoryDefaults(category),
       });
-      dispatch(fetchSkills());
+      reloadList();
       handleSelectSkill(res.data.id);
     } catch (err) {
       toast.error(extractError(err, 'Не удалось создать навык'));
@@ -81,7 +114,7 @@ const AdminSkillsPage = () => {
     try {
       await axios.delete(`/skills/admin/skills/${selectedSkill.id}`);
       toast.success('Навык удалён');
-      dispatch(fetchSkills());
+      reloadList();
       dispatch(clearSelectedSkill());
     } catch (err) {
       toast.error(extractError(err, 'Не удалось удалить навык'));
@@ -93,6 +126,17 @@ const AdminSkillsPage = () => {
       <h1 className="gold-text text-center text-xl sm:text-2xl font-medium uppercase mb-5">
         Администрирование навыков
       </h1>
+
+      <div className="mb-4">
+        <SkillCategoryBar
+          category={category}
+          onChange={setCategory}
+          subclasses={subclasses}
+          races={races}
+          count={skillsList.length}
+        />
+      </div>
+
       <div className="flex flex-col lg:flex-row gap-4 lg:gap-6">
         {/* Sidebar */}
         <aside className="w-full lg:w-[260px] flex-shrink-0 rounded-card border border-white/10 bg-white/[0.03] p-3">
@@ -106,11 +150,16 @@ const AdminSkillsPage = () => {
           />
           <button
             type="button"
-            className="btn-blue w-full py-1.5 text-sm mb-2"
+            className="btn-blue w-full py-1.5 text-sm"
             onClick={handleAddSkill}
           >
             + Добавить навык
           </button>
+          <p className="text-white/35 text-[11px] mb-2 mt-1">
+            {category.kind === 'all'
+              ? 'Без категории — её можно задать в карточке навыка.'
+              : `Сразу в раздел «${categoryLabel(category, subclasses, races)}»`}
+          </p>
           {status === 'loading' && <p className="text-white/50 text-xs">Загрузка...</p>}
           {status === 'failed' && error && (
             <p className="text-red-400 text-xs">Ошибка: {error}</p>

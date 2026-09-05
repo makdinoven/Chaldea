@@ -23,9 +23,37 @@ import type {
   DamageEntry,
   EffectEntry,
 } from '../SkillTreeView/types';
+import axios from 'axios';
 import { CLASS_OPTIONS } from './skillConstants';
+import type { Subclass } from '../AdminClassTreeEditor/types';
+import type { RaceWithSubraces } from './skillCategories';
 
 // Parse comma-separated class IDs ("1,3") into a Set for quick lookup.
+/** Every race, with its subraces. */
+const useRaces = () => {
+  const [races, setRaces] = useState<RaceWithSubraces[]>([]);
+  useEffect(() => {
+    axios
+      .get<RaceWithSubraces[]>('/characters/races')
+      .then((res) => setRaces(res.data))
+      .catch(() => toast.error('Не удалось загрузить список рас'));
+  }, []);
+  return races;
+};
+
+/** Subclasses of whichever classes the skill is scoped to. */
+const useSubclassesForClasses = (classList: string) => {
+  const [subclasses, setSubclasses] = useState<Subclass[]>([]);
+  useEffect(() => {
+    axios
+      .get<Subclass[]>('/skills/subclasses')
+      .then((res) => setSubclasses(res.data))
+      .catch(() => toast.error('Не удалось загрузить список подклассов'));
+  }, []);
+  const classIds = parseIdList(classList);
+  return subclasses.filter((s) => classIds.has(String(s.class_id)));
+};
+
 const parseIdList = (raw: string | null | undefined): Set<string> => {
   if (!raw) return new Set();
   return new Set(
@@ -56,8 +84,10 @@ interface CoreFields {
   description: string;
   min_level: number;
   class_limitations: string;
+  subclass_limitations: string;
   race_limitations: string;
   subrace_limitations: string;
+  is_mob_skill: boolean;
 }
 
 interface Scalars {
@@ -87,8 +117,10 @@ const SkillBaseEditor = ({ skill, onRefresh }: SkillBaseEditorProps) => {
     description: skill.description ?? '',
     min_level: skill.min_level ?? 1,
     class_limitations: skill.class_limitations ?? '',
+    subclass_limitations: skill.subclass_limitations ?? '',
     race_limitations: skill.race_limitations ?? '',
     subrace_limitations: skill.subrace_limitations ?? '',
+    is_mob_skill: skill.is_mob_skill ?? false,
   });
   const [scalars, setScalars] = useState<Scalars>({
     cost_energy: skill.base.cost_energy,
@@ -112,8 +144,10 @@ const SkillBaseEditor = ({ skill, onRefresh }: SkillBaseEditorProps) => {
       description: skill.description ?? '',
       min_level: skill.min_level ?? 1,
       class_limitations: skill.class_limitations ?? '',
+      subclass_limitations: skill.subclass_limitations ?? '',
       race_limitations: skill.race_limitations ?? '',
       subrace_limitations: skill.subrace_limitations ?? '',
+      is_mob_skill: skill.is_mob_skill ?? false,
     });
     setScalars({
       cost_energy: skill.base.cost_energy,
@@ -124,6 +158,12 @@ const SkillBaseEditor = ({ skill, onRefresh }: SkillBaseEditorProps) => {
     setDamageDraft(skill.base.damage_entries);
     setEffectsDraft(skill.base.effects);
   }, [skill]);
+
+  const selectedClassSubclasses = useSubclassesForClasses(core.class_limitations);
+  const races = useRaces();
+  const selectedRaceSubraces = races
+    .filter((r) => parseIdList(core.race_limitations).has(String(r.id_race)))
+    .flatMap((r) => r.subraces);
 
   const patchCore = <K extends keyof CoreFields>(k: K, v: CoreFields[K]) => {
     setCore((c) => ({ ...c, [k]: v }));
@@ -177,9 +217,21 @@ const SkillBaseEditor = ({ skill, onRefresh }: SkillBaseEditorProps) => {
             name: core.name.trim(),
             skill_type: core.skill_type,
             description: core.description || null,
-            class_limitations: core.class_limitations.trim() || null,
-            race_limitations: core.race_limitations.trim() || null,
-            subrace_limitations: core.subrace_limitations.trim() || null,
+            // A mob skill carries no class scoping: the two categories are
+            // kept apart, so saving one clears the other.
+            class_limitations: core.is_mob_skill
+              ? null
+              : core.class_limitations.trim() || null,
+            subclass_limitations: core.is_mob_skill
+              ? null
+              : core.subclass_limitations.trim() || null,
+            is_mob_skill: core.is_mob_skill,
+            race_limitations: core.is_mob_skill
+              ? null
+              : core.race_limitations.trim() || null,
+            subrace_limitations: core.is_mob_skill
+              ? null
+              : core.subrace_limitations.trim() || null,
             min_level: core.min_level,
             purchase_cost: core.purchase_cost,
             skill_image: skill.skill_image,
@@ -426,6 +478,157 @@ const SkillBaseEditor = ({ skill, onRefresh }: SkillBaseEditorProps) => {
             </div>
             <span className="text-white/40 text-[11px]">
               Пусто = навык доступен всем классам.
+            </span>
+          </div>
+
+          {/* Subclass scope — a narrower category than the class, not a part of
+              it: a skill listed here does not show under its parent class. */}
+          <div className="flex flex-col gap-1 sm:col-span-2">
+            <label className={labelBase}>Только для подкласса:</label>
+            {selectedClassSubclasses.length === 0 ? (
+              <span className="text-white/40 text-[11px]">
+                Сначала выберите класс выше — подклассы предлагаются по нему.
+              </span>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {selectedClassSubclasses.map((sub) => {
+                  const selected = parseIdList(core.subclass_limitations);
+                  const isChecked = selected.has(sub.key);
+                  return (
+                    <label
+                      key={sub.key}
+                      title={sub.description}
+                      className={`flex items-center gap-2 rounded-sm px-3 py-1.5 text-sm cursor-pointer border transition-colors ${
+                        isChecked
+                          ? 'border-amber-400/60 bg-amber-400/10 text-amber-200'
+                          : 'border-white/15 bg-white/5 text-white/70 hover:border-white/30'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          const next = parseIdList(core.subclass_limitations);
+                          if (e.target.checked) next.add(sub.key);
+                          else next.delete(sub.key);
+                          patchCore('subclass_limitations', serializeIdList(next));
+                        }}
+                        className="accent-amber-400"
+                      />
+                      <span>{sub.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <span className="text-white/40 text-[11px]">
+              Пусто = навык класса целиком. Отмечен подкласс — навык виден только в его разделе.
+            </span>
+          </div>
+
+          {/* Race scope — an axis of its own: independent of the class, so a
+              skill can be scoped by both and is then listed under both. */}
+          <div className="flex flex-col gap-1 sm:col-span-2">
+            <label className={labelBase}>Доступно расам:</label>
+            <div className="flex flex-wrap gap-2">
+              {races.map((race) => {
+                const selected = parseIdList(core.race_limitations);
+                const isChecked = selected.has(String(race.id_race));
+                return (
+                  <label
+                    key={race.id_race}
+                    className={`flex items-center gap-2 rounded-sm px-3 py-1.5 text-sm cursor-pointer border transition-colors ${
+                      isChecked
+                        ? 'border-amber-400/60 bg-amber-400/10 text-amber-200'
+                        : 'border-white/15 bg-white/5 text-white/70 hover:border-white/30'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={(e) => {
+                        const next = parseIdList(core.race_limitations);
+                        if (e.target.checked) next.add(String(race.id_race));
+                        else next.delete(String(race.id_race));
+                        patchCore('race_limitations', serializeIdList(next));
+                      }}
+                      className="accent-amber-400"
+                    />
+                    <span>{race.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <span className="text-white/40 text-[11px]">
+              Пусто = навык доступен всем расам.
+            </span>
+          </div>
+
+          {/* Subrace scope — narrower than the race, same as subclass to class */}
+          <div className="flex flex-col gap-1 sm:col-span-2">
+            <label className={labelBase}>Только для подрасы:</label>
+            {selectedRaceSubraces.length === 0 ? (
+              <span className="text-white/40 text-[11px]">
+                Сначала выберите расу выше — подрасы предлагаются по ней.
+              </span>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {selectedRaceSubraces.map((sub) => {
+                  const selected = parseIdList(core.subrace_limitations);
+                  const isChecked = selected.has(String(sub.id_subrace));
+                  return (
+                    <label
+                      key={sub.id_subrace}
+                      className={`flex items-center gap-2 rounded-sm px-3 py-1.5 text-sm cursor-pointer border transition-colors ${
+                        isChecked
+                          ? 'border-amber-400/60 bg-amber-400/10 text-amber-200'
+                          : 'border-white/15 bg-white/5 text-white/70 hover:border-white/30'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          const next = parseIdList(core.subrace_limitations);
+                          if (e.target.checked) next.add(String(sub.id_subrace));
+                          else next.delete(String(sub.id_subrace));
+                          patchCore('subrace_limitations', serializeIdList(next));
+                        }}
+                        className="accent-amber-400"
+                      />
+                      <span>{sub.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <span className="text-white/40 text-[11px]">
+              Пусто = навык расы целиком. Отмечена подраса — навык виден только в её разделе.
+            </span>
+          </div>
+
+          {/* Mob skills are a category of their own and never mix with the
+              players' — so this hides the class scoping above. */}
+          <div className="flex flex-col gap-1 sm:col-span-2">
+            <label
+              className={`flex items-center gap-2 rounded-sm px-3 py-1.5 text-sm cursor-pointer border w-fit transition-colors ${
+                core.is_mob_skill
+                  ? 'border-purple-400/60 bg-purple-400/10 text-purple-200'
+                  : 'border-white/15 bg-white/5 text-white/70 hover:border-white/30'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={core.is_mob_skill}
+                onChange={(e) => patchCore('is_mob_skill', e.target.checked)}
+                className="accent-purple-400"
+              />
+              <span>Навык моба</span>
+            </label>
+            <span className="text-white/40 text-[11px]">
+              {core.is_mob_skill
+                ? 'Навык мобов: ограничения по классу и подклассу при сохранении очистятся.'
+                : 'Навык мобов не показывается игрокам и не попадает в разделы классов.'}
             </span>
           </div>
 
