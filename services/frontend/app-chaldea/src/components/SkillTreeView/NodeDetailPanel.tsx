@@ -20,6 +20,8 @@ interface NodeDetailPanelProps {
   onClose: () => void;
   onRefresh: () => void;
   onNavigateToSubclass?: (nodeId: number) => void;
+  /** Node from another class's tree: show what it holds, offer no actions. */
+  readOnly?: boolean;
 }
 
 const nodeTypeLabels: Record<string, string> = {
@@ -36,6 +38,7 @@ const NodeDetailPanel = ({
   onClose,
   onRefresh,
   onNavigateToSubclass,
+  readOnly = false,
 }: NodeDetailPanelProps) => {
   const dispatch = useAppDispatch();
   const [choosing, setChoosing] = useState(false);
@@ -50,13 +53,15 @@ const NodeDetailPanel = ({
   const characterLevel = progress?.character_level ?? 0;
   const activeExperience = progress?.active_experience ?? 0;
 
-  const visualState: NodeVisualState = computeNodeState(
-    node,
-    tree.connections,
-    chosenNodeIds,
-    characterLevel,
-    tree.nodes
-  );
+  const visualState: NodeVisualState = readOnly
+    ? 'locked'
+    : computeNodeState(
+        node,
+        tree.connections,
+        chosenNodeIds,
+        characterLevel,
+        tree.nodes
+      );
 
   const handleChooseNode = async () => {
     setChoosing(true);
@@ -146,16 +151,18 @@ const NodeDetailPanel = ({
       {/* Status message */}
       <div
         className={`text-xs font-medium px-3 py-1.5 rounded-full self-start ${
-          visualState === 'chosen'
-            ? 'bg-green-400/15 text-green-400'
-            : visualState === 'available'
-              ? 'bg-gold/15 text-gold'
-              : visualState === 'blocked'
-                ? 'bg-site-red/15 text-site-red'
-                : 'bg-white/10 text-white/50'
+          readOnly
+            ? 'bg-white/10 text-white/50'
+            : visualState === 'chosen'
+              ? 'bg-green-400/15 text-green-400'
+              : visualState === 'available'
+                ? 'bg-gold/15 text-gold'
+                : visualState === 'blocked'
+                  ? 'bg-site-red/15 text-site-red'
+                  : 'bg-white/10 text-white/50'
         }`}
       >
-        {stateMessages[visualState]}
+        {readOnly ? `${tree.name} — только просмотр` : stateMessages[visualState]}
       </div>
 
       {/* Choose node button */}
@@ -207,8 +214,34 @@ const NodeDetailPanel = ({
         <p className="text-white/40 text-sm">В этом узле пока нет навыков</p>
       )}
 
+      {/* Foreign node: list what it holds, with nothing to click */}
+      {readOnly && node.skills.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <h4 className="text-white text-sm font-medium uppercase tracking-wide">
+            Навыки ({node.skills.length})
+          </h4>
+          <ul className="flex flex-col gap-1">
+            {node.skills.map((skill) => (
+              <li key={skill.id} className="text-white/60 text-sm">
+                {skill.skill_name ?? `Навык #${skill.skill_id}`}
+              </li>
+            ))}
+          </ul>
+          <p className="text-white/30 text-xs">
+            Изучать можно только узлы дерева своего класса.
+          </p>
+        </div>
+      )}
+
+      {readOnly && node.skills.length === 0 && (
+        <p className="text-white/30 text-xs">
+          Изучать можно только узлы дерева своего класса.
+        </p>
+      )}
+
       {/* Locked/blocked info for skills */}
-      {(visualState === 'locked' || visualState === 'blocked') &&
+      {!readOnly &&
+        (visualState === 'locked' || visualState === 'blocked') &&
         node.skills.length > 0 && (
           <p className="text-white/30 text-xs">
             Выберите этот узел, чтобы получить доступ к {node.skills.length}{' '}
@@ -217,7 +250,8 @@ const NodeDetailPanel = ({
         )}
 
       {/* Reset button at bottom — hidden if subclass is chosen (irreversible) */}
-      {chosenNodeIds.size > 0 &&
+      {!readOnly &&
+        chosenNodeIds.size > 0 &&
         !tree.nodes.some(
           (n) => n.node_type === 'subclass_choice' && chosenNodeIds.has(n.id)
         ) && (

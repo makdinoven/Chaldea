@@ -3,6 +3,7 @@ import ReactFlow, {
   Controls,
   BaseEdge,
   getSmoothStepPath,
+  getStraightPath,
   type Node,
   type Edge,
   type EdgeProps,
@@ -11,6 +12,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import PlayerNodeComponent from './PlayerNodeComponent';
 import { computeNodeState } from './utils/computeNodeState';
+import { combineTrees } from './utils/combineTrees';
 import type {
   FullClassTreeResponse,
   CharacterTreeProgressResponse,
@@ -106,100 +108,156 @@ const GradientEdge = memo(({
   );
 });
 
+/**
+ * Link between two class sectors of the combined wheel. Purely scenic — a
+ * character can only ever choose nodes in its own class tree, so these are
+ * drawn as severed, dashed lines rather than as a walkable path.
+ */
+const BridgeEdge = memo(({ id, sourceX, sourceY, targetX, targetY }: EdgeProps) => {
+  const [edgePath] = getStraightPath({ sourceX, sourceY, targetX, targetY });
+  return (
+    <BaseEdge
+      id={id}
+      path={edgePath}
+      style={{
+        stroke: 'rgba(255,255,255,0.14)',
+        strokeWidth: 1.5,
+        strokeDasharray: '2 10',
+      }}
+    />
+  );
+});
 
-interface PlayerTreeCanvasProps {
+export interface TreeView {
   tree: FullClassTreeResponse;
   progress: CharacterTreeProgressResponse | null;
+  /** Another class's tree: visible for reference, but nothing in it is choosable. */
+  readOnly: boolean;
+}
+
+interface PlayerTreeCanvasProps {
+  views: TreeView[];
   onNodeClick: (nodeId: number) => void;
 }
 
-const PlayerTreeCanvas = ({
-  tree,
-  progress,
-  onNodeClick,
-}: PlayerTreeCanvasProps) => {
+/** Admin nodes are 100px; player hex nodes are 40px, or 70px when large. */
+const ADMIN_NODE_SIZE = 100;
+const playerNodeSize = (nodeType: string) =>
+  nodeType === 'root' || nodeType === 'subclass_choice' ? 70 : 40;
+
+const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
   const nodeTypes = useMemo(() => ({
     playerNode: PlayerNodeComponent,
   }), []);
 
   const edgeTypes = useMemo(() => ({
     gradient: GradientEdge,
+    bridge: BridgeEdge,
   }), []);
 
-  const chosenNodeIds = useMemo(() => {
-    if (!progress) return new Set<number>();
-    return new Set(progress.chosen_nodes.map((cn) => cn.node_id));
-  }, [progress]);
-
-  const characterLevel = progress?.character_level ?? 0;
+  const combined = views.length > 1;
 
   const { nodes, edges } = useMemo(() => {
-    const rfNodes: Node[] = tree.nodes.map((apiNode) => {
-      const visualState: NodeVisualState = computeNodeState(
-        apiNode,
-        tree.connections,
-        chosenNodeIds,
-        characterLevel,
-        tree.nodes
+    // In combined mode the trees are arranged into one wheel; in single-tree
+    // mode the authored coordinates are used as-is.
+    const layout = combined ? combineTrees(views.map((v) => v.tree)) : null;
+
+    const rfNodes: Node[] = [];
+    const rfEdges: Edge[] = [];
+
+    for (const view of views) {
+      const { tree, progress, readOnly } = view;
+      const chosenNodeIds = new Set(
+        (progress?.chosen_nodes ?? []).map((cn) => cn.node_id),
       );
+      const characterLevel = progress?.character_level ?? 0;
 
-      // Admin nodes are 100px. Player hex nodes vary (40/70px).
-      // Adjust position so centers align.
-      const adminSize = 100;
-      const nodeType = apiNode.node_type ?? 'regular';
-      const playerSize = (nodeType === 'root' || nodeType === 'subclass_choice') ? 70 : 40;
-      const offset = (adminSize - playerSize) / 2;
+      for (const apiNode of tree.nodes) {
+        // A foreign tree carries no progress, so every node in it would come
+        // out "locked" anyway — but say so explicitly rather than relying on
+        // that, so a foreign root never pulses as if it were available.
+        const visualState: NodeVisualState = readOnly
+          ? 'locked'
+          : computeNodeState(
+              apiNode,
+              tree.connections,
+              chosenNodeIds,
+              characterLevel,
+              tree.nodes,
+            );
 
-      return {
-        id: String(apiNode.id),
-        type: 'playerNode',
-        position: { x: apiNode.position_x + offset, y: apiNode.position_y + offset },
-        data: {
-          ...apiNode,
-          visualState,
-          classId: tree.class_id,
-        },
-        draggable: false,
-        selectable: true,
-        connectable: false,
-      };
-    });
+        const placed = layout?.positions.get(apiNode.id);
+        const baseX = placed?.x ?? apiNode.position_x;
+        const baseY = placed?.y ?? apiNode.position_y;
+        // Centre the (smaller) player node on the admin node's slot.
+        const offset = (ADMIN_NODE_SIZE - playerNodeSize(apiNode.node_type ?? 'regular')) / 2;
 
-    /* ---------- Edges with gradient styling ---------- */
-    const gradient = classGradientColors[tree.class_id] ?? defaultGradient;
-    const rfEdges: Edge[] = tree.connections.map((conn) => {
-      const sourceChosen = chosenNodeIds.has(Number(conn.from_node_id));
-      const targetChosen = chosenNodeIds.has(Number(conn.to_node_id));
-      const bothChosen = sourceChosen && targetChosen;
-      const oneChosen = sourceChosen || targetChosen;
-
-      // Unchosen connections must still read on the dark class art — the old
-      // 0.06/0.03 white was effectively invisible. Keep a clear tier:
-      // none chosen -> visible neutral, one -> dim class color, both -> bright.
-      let colors: [string, string] = ['rgba(255,255,255,0.32)', 'rgba(255,255,255,0.2)'];
-      let strokeWidth = 1.5;
-      let glowing = false;
-
-      if (bothChosen) {
-        colors = gradient.bright;
-        strokeWidth = 2.5;
-        glowing = true;
-      } else if (oneChosen) {
-        colors = gradient.dim;
-        strokeWidth = 1.5;
+        rfNodes.push({
+          id: String(apiNode.id),
+          type: 'playerNode',
+          position: { x: baseX + offset, y: baseY + offset },
+          data: {
+            ...apiNode,
+            visualState,
+            classId: tree.class_id,
+            foreign: readOnly,
+          },
+          draggable: false,
+          selectable: true,
+          connectable: false,
+        });
       }
 
-      return {
-        id: String(conn.id ?? `edge-${conn.from_node_id}-${conn.to_node_id}`),
-        source: String(conn.from_node_id),
-        target: String(conn.to_node_id),
-        type: 'gradient',
-        data: { colors, strokeWidth, glowing },
-      };
-    });
+      /* ---------- Edges with gradient styling ---------- */
+      const gradient = classGradientColors[tree.class_id] ?? defaultGradient;
+      for (const conn of tree.connections) {
+        const sourceChosen = chosenNodeIds.has(Number(conn.from_node_id));
+        const targetChosen = chosenNodeIds.has(Number(conn.to_node_id));
+        const bothChosen = sourceChosen && targetChosen;
+        const oneChosen = sourceChosen || targetChosen;
+
+        // Unchosen connections must still read on the dark class art — the old
+        // 0.06/0.03 white was effectively invisible. Keep a clear tier:
+        // none chosen -> visible neutral, one -> dim class color, both -> bright.
+        let colors: [string, string] = ['rgba(255,255,255,0.32)', 'rgba(255,255,255,0.2)'];
+        let strokeWidth = 1.5;
+        let glowing = false;
+
+        if (bothChosen) {
+          colors = gradient.bright;
+          strokeWidth = 2.5;
+          glowing = true;
+        } else if (oneChosen) {
+          colors = gradient.dim;
+          strokeWidth = 1.5;
+        } else if (readOnly) {
+          // Another class's branches sit behind the player's own.
+          colors = ['rgba(255,255,255,0.16)', 'rgba(255,255,255,0.1)'];
+        }
+
+        rfEdges.push({
+          id: String(conn.id ?? `edge-${conn.from_node_id}-${conn.to_node_id}`),
+          source: String(conn.from_node_id),
+          target: String(conn.to_node_id),
+          type: 'gradient',
+          data: { colors, strokeWidth, glowing },
+        });
+      }
+    }
+
+    for (const bridge of layout?.bridges ?? []) {
+      rfEdges.push({
+        id: bridge.id,
+        source: String(bridge.fromNodeId),
+        target: String(bridge.toNodeId),
+        type: 'bridge',
+        focusable: false,
+        interactionWidth: 0,
+      });
+    }
 
     return { nodes: rfNodes, edges: rfEdges };
-  }, [tree, chosenNodeIds, characterLevel]);
+  }, [views, combined]);
 
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => {
@@ -208,7 +266,9 @@ const PlayerTreeCanvas = ({
     [onNodeClick]
   );
 
-  const classArt = classArtMap[tree.class_id] ?? warriorArt;
+  // The class art only makes sense behind a single class's tree; the combined
+  // wheel spans all three, so it gets the plain vignette instead.
+  const classArt = combined ? null : classArtMap[views[0]?.tree.class_id ?? 1] ?? warriorArt;
 
   // Lock minZoom to fitView level + compute translate bounds from node positions
   const [initialZoom, setInitialZoom] = useState<number | null>(null);
@@ -227,15 +287,17 @@ const PlayerTreeCanvas = ({
   return (
     <div className="relative w-full h-full min-h-[400px] overflow-hidden">
       {/* ---- Class art as fixed background ---- */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          backgroundImage: `url(${classArt})`,
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          opacity: 0.25,
-        }}
-      />
+      {classArt && (
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            backgroundImage: `url(${classArt})`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            opacity: 0.25,
+          }}
+        />
+      )}
 
       {/* ---- Dark radial vignette over the art ---- */}
       <div

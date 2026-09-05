@@ -5,6 +5,8 @@ import type { TreeNodeInTreeResponse, NodeVisualState } from './types';
 interface PlayerNodeData extends TreeNodeInTreeResponse {
   visualState: NodeVisualState;
   classId: number;
+  /** Node belongs to another class's tree: readable, but never choosable. */
+  foreign?: boolean;
 }
 
 /* ========== Rune symbols by level_ring ========== */
@@ -72,7 +74,10 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   const state = d.visualState ?? 'locked';
   const nodeType = d.node_type ?? 'regular';
   const isLarge = nodeType === 'root' || nodeType === 'subclass_choice';
-  const isClickable = state === 'available' || state === 'chosen';
+  const isForeign = d.foreign ?? false;
+  // Foreign nodes stay clickable: the panel they open is read-only, and being
+  // able to inspect another class's branches is the whole point of showing them.
+  const isClickable = isForeign || state === 'available' || state === 'chosen';
   const colors = classColors[d.classId] ?? defaultColors;
   const stateColors = colors[state];
 
@@ -80,8 +85,9 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   const rune = getRune(d.level_ring, d.sort_order ?? 0);
   const runeSize = isLarge ? 'text-[22px]' : 'text-[16px]';
 
-  const opacity = state === 'locked' ? 0.4 : state === 'blocked' ? 0.3 : 1;
-  const animClass = state === 'available' ? 'animate-pulse' : '';
+  const opacity = isForeign ? 0.45 : state === 'locked' ? 0.4 : state === 'blocked' ? 0.3 : 1;
+  // Nothing in another class's tree should pulse as if it were waiting to be taken.
+  const animClass = !isForeign && state === 'available' ? 'animate-pulse' : '';
 
   return (
     <div
@@ -93,11 +99,13 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
       `}
       style={{ width: size, height: size, opacity }}
       title={
-        state === 'locked'
-          ? `Требуется уровень ${d.level_ring}`
-          : state === 'blocked'
-            ? 'Альтернативная ветка выбрана'
-            : d.name
+        isForeign
+          ? `${d.name} — дерево другого класса`
+          : state === 'locked'
+            ? `Требуется уровень ${d.level_ring}`
+            : state === 'blocked'
+              ? 'Альтернативная ветка выбрана'
+              : d.name
       }
     >
       {/* Handle top */}
