@@ -8,26 +8,28 @@ import perksBackdrop from '../../../assets/perksBackdrop.png';
 /* ── Backdrop ── */
 
 /**
- * The painted backdrop behind the perk constellation.
+ * The artwork is painted for this layout: its five coloured zones sit on the
+ * same bearings as the tree's five branches. Measured against the tree's own
+ * sector angles, the zones land within a degree or two — red -90.6° against
+ * -90°, gold -18.5° against -18°, purple -162.2° against -162°, with green and
+ * blue the loose ones at +6° and -10°.
  *
- * The art is 1560x1008 with no margin to speak of — its composition runs to the
- * edges — so it is fitted with cover and centred: the panel is as wide as the
- * profile page and as tall as the constellation inside it, which is a shape
- * nothing can be letterboxed into cleanly. Cover crops evenly instead, and the
- * artwork's corners carry nothing that matters.
+ * So it is drawn inside the SVG rather than behind the panel, anchored on the
+ * tree's own centre and measured in the tree's own units. The viewBox then
+ * scales art and nodes together, and the two cannot drift apart however the
+ * panel is sized — which is what went wrong when it was a CSS background: it
+ * was centred on the panel, and the panel's centre is not the tree's.
  */
-const PerkBackdrop = ({ dim = 0.5 }: { dim?: number }) => (
+/** Panel backing behind the constellation and the mobile list. */
+const PerkBackdrop = () => (
   <div className="absolute inset-0 overflow-hidden rounded-card">
     <div
       className="absolute inset-0"
       style={{
-        backgroundImage: `url(${perksBackdrop})`,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
+        background:
+          'radial-gradient(ellipse at 50% 45%, rgba(20,18,44,0.95) 0%, rgba(8,8,24,0.98) 55%, rgba(4,4,16,1) 100%)',
       }}
     />
-    {/* Darkening, so the perk nodes and their labels stay legible over it */}
-    <div className="absolute inset-0" style={{ background: `rgba(4,4,16,${dim})` }} />
   </div>
 );
 
@@ -365,16 +367,39 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
     [categories, nodePositions],
   );
 
-  const viewBox = useMemo(() => {
+  const bounds = useMemo(() => {
     const allX = [CENTER, ...nodePositions.map((p) => p.x)];
     const allY = [CENTER, ...nodePositions.map((p) => p.y)];
     const pad = 90;
-    const minX = Math.min(...allX) - pad;
-    const maxX = Math.max(...allX) + pad;
-    const minY = Math.min(...allY) - pad;
-    const maxY = Math.max(...allY) + pad;
-    return `${minX} ${minY} ${maxX - minX} ${maxY - minY}`;
+    return {
+      minX: Math.min(...allX) - pad,
+      maxX: Math.max(...allX) + pad,
+      minY: Math.min(...allY) - pad,
+      maxY: Math.max(...allY) + pad,
+    };
   }, [nodePositions]);
+
+  const viewBox = `${bounds.minX} ${bounds.minY} ${bounds.maxX - bounds.minX} ${
+    bounds.maxY - bounds.minY
+  }`;
+
+  /*
+    The art's box: centred on the tree's hub, and big enough to reach every
+    corner of the viewBox. Centring on the hub rather than on the viewBox
+    matters — a five-sector fan is not centred on its own bounding box, so the
+    two differ, and it was that difference showing up as the art sitting off to
+    one side. "slice" keeps the artwork's proportions and crops the overhang.
+  */
+  const art = useMemo(() => {
+    const halfW = Math.max(CENTER - bounds.minX, bounds.maxX - CENTER);
+    const halfH = Math.max(CENTER - bounds.minY, bounds.maxY - CENTER);
+    return {
+      x: CENTER - halfW,
+      y: CENTER - halfH,
+      width: halfW * 2,
+      height: halfH * 2,
+    };
+  }, [bounds]);
 
   if (perks.length === 0) {
     return (
@@ -402,6 +427,24 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
               className="w-full max-w-[850px] h-auto"
               xmlns="http://www.w3.org/2000/svg"
             >
+              <image
+                href={perksBackdrop}
+                x={art.x}
+                y={art.y}
+                width={art.width}
+                height={art.height}
+                preserveAspectRatio="xMidYMid slice"
+                style={{ opacity: 0.85 }}
+              />
+              {/* Just enough darkening for the nodes and labels to read over it */}
+              <rect
+                x={art.x}
+                y={art.y}
+                width={art.width}
+                height={art.height}
+                fill="rgba(4,4,16,0.35)"
+              />
+
               {/* Edge gradient defs + blur filter */}
               <defs>
                 <filter id="edge-blur" x="-20%" y="-20%" width="140%" height="140%">
