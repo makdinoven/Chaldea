@@ -383,7 +383,13 @@ const SkillTreePage = () => {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.2 }}
-                className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-[2px]"
+                /*
+                  No wash behind the panel: this layer is a square, the wheel's
+                  frame is a circle, and a darkened square around a round tree
+                  is all you could see of it. It stays only to catch a click
+                  outside the panel and close it.
+                */
+                className="absolute inset-0 z-20 flex items-center justify-center"
                 onClick={handleClosePanel}
               >
                 <motion.div
