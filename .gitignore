@@ -51,6 +51,6 @@ services/frontend/app-chaldea;D/
 features/*.png
 .claude/skills/*.png
 .claude/settings.local.json
-Template_to_design/*.png
+Template_to_design/img*.png
 *.stackdump
 tmp_out.txt
