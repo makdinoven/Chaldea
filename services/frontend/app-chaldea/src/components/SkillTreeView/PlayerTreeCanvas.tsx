@@ -52,8 +52,12 @@ const WHEEL_EDGE_PADDING = 50;
  */
 const WHEEL_BACKDROP_DIM = 0.12;
 
-/** A link running into a branch the player can no longer take. */
-const DEAD_LINK_COLORS: [string, string] = ['rgba(255,255,255,0.2)', 'rgba(255,255,255,0.12)'];
+/**
+ * A link running into a branch the player can no longer take. Knocked back to
+ * the same degree as another class's links, so a closed branch reads as set
+ * aside rather than as erased.
+ */
+const DEAD_LINK_COLORS: [string, string] = ['rgba(255,255,255,0.55)', 'rgba(255,255,255,0.35)'];
 
 /** Admin nodes are 100px boxes positioned by their top-left corner. */
 const ADMIN_NODE_SIZE = 100;
@@ -155,8 +159,8 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
           opacity = 0.45;
         } else if (deadEnd) {
           colors = DEAD_LINK_COLORS;
-          strokeWidth = 1.25;
-          opacity = 0.35;
+          strokeWidth = 1.5;
+          opacity = 0.45;
         } else if (oneChosen) {
           strokeWidth = 2.5;
         }

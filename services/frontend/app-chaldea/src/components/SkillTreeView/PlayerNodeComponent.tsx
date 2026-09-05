@@ -55,16 +55,17 @@ interface ClassColors {
 }
 
 /**
- * What a node that can never be taken again looks like: no class colour, no
- * glow, no weight. Everything still on the table keeps its class hue, so the
- * only thing that goes dark on the wheel is what the player has closed off.
+ * What a node that can never be taken again looks like: the class colour and
+ * the glow are gone, which is what marks it as closed off, but it is knocked
+ * back no harder than another class's node — still plainly there, just no
+ * longer part of the choice in front of the player.
  */
 const DEAD_COLORS: StateColors = {
-  border: 'rgba(255,255,255,0.14)',
-  fill: 'rgba(255,255,255,0.03)',
+  border: 'rgba(255,255,255,0.5)',
+  fill: 'rgba(255,255,255,0.06)',
   glow: 'none',
-  rune: 'rgba(255,255,255,0.22)',
-  badge: 'rgba(255,255,255,0.1)',
+  rune: 'rgba(255,255,255,0.55)',
+  badge: 'rgba(255,255,255,0.15)',
 };
 
 /* DB class IDs: 1=Warrior (red), 2=Rogue (emerald), 3=Mage (cyan) */
@@ -197,10 +198,10 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   // Otherwise another class's node is always fainter than anything in the
   // player's own sector — a locked node of your own class still outranks it.
   // Everything still obtainable stays at full strength — it has to read against
-  // the painted wheel. Only what the player has closed off goes dark, plus
-  // another class's nodes, which rank below anything in your own sector.
+  // the painted wheel. What the player has closed off steps back exactly as far
+  // as another class's nodes do, and no further.
   const isDead = state === 'blocked' || state === 'unreachable';
-  const opacity = isAdmin ? 1 : isForeign ? 0.65 : isDead ? 0.35 : 1;
+  const opacity = isAdmin || (!isForeign && !isDead) ? 1 : 0.65;
   // Nothing in another class's tree should pulse as if it were waiting to be taken.
   const animClass = !isForeign && !isAdmin && state === 'available' ? 'animate-pulse' : '';
 
