@@ -423,10 +423,14 @@ def admin_list_characters(
     current_user=Depends(require_permission("characters:read")),
 ):
     """
-    Paginated list of all characters with search and filters. Admin only.
+    Paginated list of player characters with search and filters. Admin only.
+
+    NPCs and mobs live in the same `characters` table but are managed in their
+    own admin sections (/admin/npcs, /admin/mob-templates), so they are
+    excluded here.
     """
     try:
-        query = db.query(models.Character)
+        query = db.query(models.Character).filter(models.Character.is_npc == False)
 
         if q:
             query = query.filter(models.Character.name.ilike(f"%{q}%"))

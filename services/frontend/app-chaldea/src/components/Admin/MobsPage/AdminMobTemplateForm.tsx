@@ -28,18 +28,16 @@ const STAT_KEYS = [
   { key: 'luck', label: 'Удача' },
 ] as const;
 
-const DEFAULT_ATTRIBUTES: Record<string, number> = {
-  strength: 10,
-  agility: 10,
-  intelligence: 10,
-  endurance: 10,
-  health: 100,
-  mana: 50,
-  energy: 50,
-  stamina: 50,
-  charisma: 5,
-  luck: 5,
-};
+/**
+ * A mob starts at zero in every stat — unlike player characters and NPCs it has
+ * no subrace preset to build on. Everything it has is bought with the
+ * POINTS_PER_LEVEL points its level grants.
+ */
+const DEFAULT_ATTRIBUTES: Record<string, number> = Object.fromEntries(
+  STAT_KEYS.map(({ key }) => [key, 0]),
+);
+
+const POINTS_PER_LEVEL = 10;
 
 interface FormData {
   name: string;
@@ -152,6 +150,16 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
     () => computeDerivedStats(form.base_attributes, Number(form.id_class)),
     [form.base_attributes, form.id_class],
   );
+
+  const totalPoints = Math.max(0, Number(form.level) || 0) * POINTS_PER_LEVEL;
+  const spentPoints = useMemo(
+    () => STAT_KEYS.reduce(
+      (sum, { key }) => sum + Math.max(0, Number(form.base_attributes[key] ?? 0)),
+      0,
+    ),
+    [form.base_attributes],
+  );
+  const remainingPoints = totalPoints - spentPoints;
 
   const renderPreviewGroup = (title: string, keys: readonly string[], stats: Record<string, number>) => (
     <div className="flex flex-col gap-2">
@@ -391,6 +399,26 @@ const AdminMobTemplateForm = ({ editingId, onClose }: AdminMobTemplateFormProps)
       {/* Base attributes */}
       <div>
         <h3 className="text-white text-sm font-medium uppercase tracking-[0.06em] mb-3">Базовые атрибуты</h3>
+
+        {/* Stat points counter */}
+        <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-card px-4 py-3 text-sm mb-4 ${
+          remainingPoints < 0 ? 'bg-yellow-500/10 border border-yellow-500/30' : 'bg-white/[0.05]'
+        }`}>
+          <span className="text-white font-medium">
+            Очки статов: {spentPoints} / {totalPoints}
+          </span>
+          {remainingPoints >= 0 ? (
+            <span className="text-white/50">(осталось: {remainingPoints})</span>
+          ) : (
+            <span className="text-yellow-400 font-medium">
+              Превышен лимит на {Math.abs(remainingPoints)}!
+            </span>
+          )}
+          <span className="text-white/40 text-xs">
+            {POINTS_PER_LEVEL} очков за уровень, стартовые статы моба — 0
+          </span>
+        </div>
+
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
           {STAT_KEYS.map(({ key, label }) => (
             <label key={key} className="flex flex-col gap-1">

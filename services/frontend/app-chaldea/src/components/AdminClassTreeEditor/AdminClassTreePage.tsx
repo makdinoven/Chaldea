@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
@@ -11,10 +11,19 @@ import {
 } from '../../redux/actions/classTreeAdminActions';
 import { clearSelectedTree } from '../../redux/slices/classTreeAdminSlice';
 import { useClassTreeEditor } from './hooks/useClassTreeEditor';
+import { useCombinedTreeEditor } from './hooks/useCombinedTreeEditor';
 import { autoLayoutRings, autoAlignRows } from './utils/ringLayout';
 import ClassTreeCanvas from './ClassTreeCanvas';
+import CombinedTreeCanvas from './CombinedTreeCanvas';
+import WheelToolbar, { type WheelToolbarTree } from './WheelToolbar';
+import WheelLayoutPanel from './WheelLayoutPanel';
+import {
+  DEFAULT_WHEEL_LAYOUT,
+  type WheelLayoutConfig,
+} from '../SkillTreeView/utils/combineTrees';
 import TreeNodeInspector from './TreeNodeInspector';
 import TreeToolbar from './TreeToolbar';
+import type { FullClassTreeResponse } from './types';
 import {
   CLASS_OPTIONS,
   TREE_TYPE_OPTIONS,
@@ -23,6 +32,31 @@ import {
   type Subclass,
 } from './types';
 import { Plus, Trash2, ChevronRight, Search } from 'react-feather';
+
+/** Accent per class, matching the node colours in the player wheel. */
+const CLASS_ACCENTS: Record<number, string> = {
+  1: '#f87171',
+  2: '#34d399',
+  3: '#38bdf8',
+};
+
+type EditorMode = 'wheel' | 'single';
+
+/**
+ * Tuning the wheel's shape is a per-author experiment, so it lives in this
+ * browser only. Players get DEFAULT_WHEEL_LAYOUT until numbers are committed.
+ */
+const WHEEL_LAYOUT_STORAGE_KEY = 'chaldea.admin.wheelLayout';
+
+const readStoredLayout = (): WheelLayoutConfig => {
+  try {
+    const raw = localStorage.getItem(WHEEL_LAYOUT_STORAGE_KEY);
+    if (!raw) return DEFAULT_WHEEL_LAYOUT;
+    return { ...DEFAULT_WHEEL_LAYOUT, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_WHEEL_LAYOUT;
+  }
+};
 
 const AdminClassTreePage = () => {
   const dispatch = useAppDispatch();
@@ -43,11 +77,64 @@ const AdminClassTreePage = () => {
 
   const [allSubclasses, setAllSubclasses] = useState<Subclass[]>([]);
 
+  // Combined wheel: every class tree at once, laid out as the players see it.
+  const [mode, setMode] = useState<EditorMode>('wheel');
+  const [wheelTrees, setWheelTrees] = useState<FullClassTreeResponse[]>([]);
+  const [wheelLoading, setWheelLoading] = useState(false);
+  const [wheelSaving, setWheelSaving] = useState(false);
+
+  const [wheelLayout, setWheelLayout] = useState<WheelLayoutConfig>(readStoredLayout);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(WHEEL_LAYOUT_STORAGE_KEY, JSON.stringify(wheelLayout));
+    } catch {
+      // A browser with site data blocked just loses the tuning between visits.
+    }
+  }, [wheelLayout]);
+
   const editor = useClassTreeEditor(selectedFullTree);
+  const wheel = useCombinedTreeEditor(wheelTrees, wheelLayout);
 
   useEffect(() => {
     dispatch(fetchClassTrees());
   }, [dispatch]);
+
+  /** Class trees only — subclass trees are not part of the wheel. */
+  const classTreeIds = useMemo(
+    () =>
+      treeList
+        .filter((t) => t.tree_type === 'class')
+        .sort((a, b) => a.class_id - b.class_id)
+        .map((t) => t.id),
+    [treeList],
+  );
+
+  const loadWheelTrees = useCallback(async () => {
+    if (classTreeIds.length === 0) {
+      setWheelTrees([]);
+      return;
+    }
+    setWheelLoading(true);
+    try {
+      const results = await Promise.all(
+        classTreeIds.map((id) =>
+          axios
+            .get<FullClassTreeResponse>(`/skills/admin/class_trees/${id}/full`)
+            .then((res) => res.data),
+        ),
+      );
+      setWheelTrees(results);
+    } catch {
+      toast.error('Не удалось загрузить деревья классов');
+    } finally {
+      setWheelLoading(false);
+    }
+  }, [classTreeIds]);
+
+  useEffect(() => {
+    if (mode === 'wheel') loadWheelTrees();
+  }, [mode, loadWheelTrees]);
 
   // Hardcoded subclass registry (skills-service) — drives node + create-form dropdowns.
   useEffect(() => {
@@ -79,6 +166,7 @@ const AdminClassTreePage = () => {
   );
 
   const handleSelectTree = (treeId: number) => {
+    setMode('single');
     dispatch(clearSelectedTree());
     dispatch(fetchFullClassTree(treeId));
   };
@@ -129,6 +217,52 @@ const AdminClassTreePage = () => {
     }
   };
 
+  const handleWheelSave = async () => {
+    const payloads = wheel.getDirtyPayloads();
+    if (payloads.length === 0) return;
+    setWheelSaving(true);
+    try {
+      for (const { treeId, payload } of payloads) {
+        await dispatch(saveFullClassTree({ treeId, data: payload })).unwrap();
+      }
+      wheel.clearDirty();
+      // Re-read so temporary node ids are replaced by the real ones.
+      await loadWheelTrees();
+      toast.success(
+        payloads.length === 1 ? 'Дерево сохранено' : `Сохранено деревьев: ${payloads.length}`,
+      );
+    } catch (err) {
+      toast.error(typeof err === 'string' ? err : 'Ошибка при сохранении деревьев');
+    } finally {
+      setWheelSaving(false);
+    }
+  };
+
+  const handleUntangle = () => {
+    const { crossingsBefore, crossingsAfter, changedTrees } = wheel.untangleAll();
+    if (changedTrees === 0) {
+      toast.success(
+        crossingsBefore === 0
+          ? 'Связи и так не пересекаются'
+          : `Лучше не выходит: пересечений ${crossingsBefore}`,
+      );
+      return;
+    }
+    toast.success(`Связи расправлены: пересечений ${crossingsBefore} → ${crossingsAfter}`);
+  };
+
+  const wheelToolbarTrees: WheelToolbarTree[] = wheelTrees.map((tree) => ({
+    treeId: tree.id,
+    classId: tree.class_id,
+    label: CLASS_OPTIONS.find((c) => c.value === tree.class_id)?.label ?? tree.name,
+    accent: CLASS_ACCENTS[tree.class_id] ?? '#f0d95c',
+    dirty: wheel.dirtyTreeIds.has(tree.id),
+  }));
+
+  const wheelInspectorSubclasses = allSubclasses.filter(
+    (s) => s.class_id === (wheel.selectedNode?.data?.classId as number | undefined),
+  );
+
   const handleAutoLayout = () => {
     const laid = autoLayoutRings(editor.nodes);
     editor.setNodes(laid);
@@ -146,10 +280,33 @@ const AdminClassTreePage = () => {
 
   return (
     <div className="w-full h-[calc(100vh-80px)] flex flex-col">
-      {/* Page title */}
-      <h1 className="gold-text text-2xl sm:text-3xl font-medium uppercase tracking-wider px-4 py-3 flex-shrink-0">
-        Деревья классов
-      </h1>
+      {/* Page title + view switch */}
+      <div className="px-4 py-3 flex-shrink-0 flex flex-wrap items-center gap-4">
+        <h1 className="gold-text text-2xl sm:text-3xl font-medium uppercase tracking-wider">
+          Деревья классов
+        </h1>
+        <div className="flex gap-1 rounded-card bg-white/[0.04] p-1">
+          {([
+            ['wheel', 'Общий вид'],
+            ['single', 'Отдельное дерево'],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              onClick={() => setMode(value)}
+              className={`px-3 py-1.5 rounded-card text-xs font-medium uppercase tracking-wide transition-colors duration-200 ${
+                mode === value ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/70'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {mode === 'wheel' && (
+          <span className="text-white/35 text-xs">
+            Так дерево увидят игроки. Подклассы правятся в отдельном виде.
+          </span>
+        )}
+      </div>
 
       <div className="flex-1 flex min-h-0">
         {/* Left Sidebar — Tree List */}
@@ -325,6 +482,42 @@ const AdminClassTreePage = () => {
         <div className="flex-1 flex flex-col md:flex-row min-w-0">
           {/* Center — Canvas */}
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
+            {mode === 'wheel' ? (
+              <>
+                <WheelToolbar
+                  trees={wheelToolbarTrees}
+                  onAddNode={wheel.addNode}
+                  onSave={handleWheelSave}
+                  onReload={loadWheelTrees}
+                  onUntangle={handleUntangle}
+                  isSaving={wheelSaving}
+                  isDirty={wheel.isDirty}
+                />
+                <WheelLayoutPanel config={wheelLayout} onChange={setWheelLayout} />
+                <div className="flex-1 min-h-0 relative z-0">
+                  {wheelLoading && wheelTrees.length === 0 ? (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin" />
+                    </div>
+                  ) : wheelTrees.length === 0 ? (
+                    <div className="flex items-center justify-center h-full">
+                      <p className="text-white/30 text-lg text-center px-6">
+                        Нет ни одного дерева класса. Создайте его в списке слева.
+                      </p>
+                    </div>
+                  ) : (
+                    <CombinedTreeCanvas
+                      nodes={wheel.nodes}
+                      edges={wheel.edges}
+                      onNodeClick={wheel.setSelectedNodeId}
+                      onEdgeDelete={wheel.removeEdge}
+                      onConnectNodes={wheel.connectNodes}
+                    />
+                  )}
+                </div>
+              </>
+            ) : (
+            <>
             {/* Toolbar */}
             <TreeToolbar
               treeName={editor.treeName}
@@ -373,10 +566,34 @@ const AdminClassTreePage = () => {
                 </div>
               )}
             </div>
+            </>
+            )}
           </div>
 
-          {/* Right — Node Inspector */}
-          {editor.selectedNode && (
+          {/* Right — Node Inspector (wheel) */}
+          {mode === 'wheel' && wheel.selectedNode && (
+            <div
+              className="
+                w-full md:w-[300px] flex-shrink-0
+                bg-black/40 backdrop-blur-sm border-l border-white/10
+                p-4 overflow-y-auto gold-scrollbar
+                max-h-[40vh] md:max-h-none
+              "
+            >
+              <TreeNodeInspector
+                node={wheel.selectedNode}
+                subclasses={wheelInspectorSubclasses}
+                onUpdateField={wheel.updateNodeData}
+                onRemoveNode={wheel.removeNode}
+                onAddSkill={wheel.addSkillToNode}
+                onRemoveSkill={wheel.removeSkillFromNode}
+                onClose={() => wheel.setSelectedNodeId(null)}
+              />
+            </div>
+          )}
+
+          {/* Right — Node Inspector (single tree) */}
+          {mode === 'single' && editor.selectedNode && (
             <div
               className={`
                 w-full md:w-[300px] flex-shrink-0

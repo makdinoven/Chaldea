@@ -32,7 +32,15 @@ export interface CharacterTreeProgressResponse {
 
 // --- Node Visual State ---
 
-export type NodeVisualState = 'chosen' | 'available' | 'locked' | 'blocked';
+export type NodeVisualState =
+  | 'chosen'
+  | 'available'
+  /** Not yet, but still possible. */
+  | 'locked'
+  /** An alternative at the same fork was taken. */
+  | 'blocked'
+  /** Cut off further up the chain — every route here runs through a dead node. */
+  | 'unreachable';
 
 // --- Damage / Effect shared ---
 

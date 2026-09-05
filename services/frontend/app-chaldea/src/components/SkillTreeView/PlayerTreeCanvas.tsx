@@ -1,16 +1,17 @@
-import { useMemo, useCallback, memo, useState } from 'react';
+import { useMemo, useCallback, useEffect, useRef, useState } from 'react';
 import ReactFlow, {
   Controls,
-  BaseEdge,
-  getSmoothStepPath,
   type Node,
   type Edge,
-  type EdgeProps,
   type NodeMouseHandler,
+  type ReactFlowInstance,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import PlayerNodeComponent from './PlayerNodeComponent';
-import { computeNodeState } from './utils/computeNodeState';
+import { computeTreeStates } from './utils/computeNodeState';
+import { combineTrees } from './utils/combineTrees';
+import { GradientEdge, BridgeEdge, classGradientColors, defaultGradient } from './treeEdges';
+import { playerNodeSize } from './nodeSizes';
 import type {
   FullClassTreeResponse,
   CharacterTreeProgressResponse,
@@ -20,6 +21,7 @@ import type {
 import warriorArt from '../../assets/skillTreeWarrior.png';
 import mageArt from '../../assets/skillTreeMage.png';
 import rogueArt from '../../assets/skillTreeRogue.png';
+import WheelBackdrop from './WheelBackdrop';
 
 /* Map class_id -> art image (DB: 1=Warrior, 2=Rogue, 3=Mage) */
 const classArtMap: Record<number, string> = {
@@ -28,178 +30,175 @@ const classArtMap: Record<number, string> = {
   3: mageArt,
 };
 
-/* Map class_id -> gradient colors (DB: 1=Warrior, 2=Rogue, 3=Mage) */
-const classGradientColors: Record<number, { bright: [string, string]; dim: [string, string] }> = {
-  1: {
-    bright: ['#fbbf24', '#ef4444'],  // Warrior — gold → red
-    dim: ['rgba(251,191,36,0.3)', 'rgba(239,68,68,0.2)'],
-  },
-  2: {
-    bright: ['#fbbf24', '#34d399'],  // Rogue — gold → green
-    dim: ['rgba(251,191,36,0.3)', 'rgba(52,211,153,0.2)'],
-  },
-  3: {
-    bright: ['#a78bfa', '#38bdf8'],  // Mage — purple → blue
-    dim: ['rgba(167,139,250,0.3)', 'rgba(56,189,248,0.2)'],
-  },
-};
-
-const defaultGradient = classGradientColors[1];
-
-/* Custom gradient edge component */
-const GradientEdge = memo(({
-  id,
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
-  sourcePosition,
-  targetPosition,
-  data,
-}: EdgeProps) => {
-  const [edgePath] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-    borderRadius: 16,
-  });
-
-  const gradientId = `gradient-${id}`;
-  const colors = (data?.colors ?? defaultGradient.dim) as [string, string];
-  const strokeWidth = (data?.strokeWidth ?? 1) as number;
-  const glowing = (data?.glowing ?? false) as boolean;
-
-  return (
-    <>
-      <defs>
-        <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor={colors[0]} />
-          <stop offset="100%" stopColor={colors[1]} />
-        </linearGradient>
-      </defs>
-      {/* Glow layer */}
-      {glowing && (
-        <BaseEdge
-          id={`${id}-glow`}
-          path={edgePath}
-          style={{
-            stroke: `url(#${gradientId})`,
-            strokeWidth: strokeWidth + 4,
-            opacity: 0.3,
-            filter: 'blur(3px)',
-          }}
-        />
-      )}
-      {/* Main line */}
-      <BaseEdge
-        id={id}
-        path={edgePath}
-        style={{
-          stroke: `url(#${gradientId})`,
-          strokeWidth,
-        }}
-      />
-    </>
-  );
-});
-
-
-interface PlayerTreeCanvasProps {
+export interface TreeView {
   tree: FullClassTreeResponse;
   progress: CharacterTreeProgressResponse | null;
+  /** Another class's tree: visible for reference, but nothing in it is choosable. */
+  readOnly: boolean;
+}
+
+interface PlayerTreeCanvasProps {
+  views: TreeView[];
   onNodeClick: (nodeId: number) => void;
 }
 
-const PlayerTreeCanvas = ({
-  tree,
-  progress,
-  onNodeClick,
-}: PlayerTreeCanvasProps) => {
+/** Gap between the outermost node and the edge of the round frame, in pixels. */
+const WHEEL_EDGE_PADDING = 50;
+
+/**
+ * How far the painted backdrop is knocked back. Light: the nodes carry their
+ * own opaque core and glow, so the art does not need to be dimmed to keep them
+ * readable, and dimming it only made the wheel look murky.
+ */
+const WHEEL_BACKDROP_DIM = 0.12;
+
+/**
+ * A link running into a branch the player can no longer take. Knocked back to
+ * the same degree as another class's links, so a closed branch reads as set
+ * aside rather than as erased.
+ */
+const DEAD_LINK_COLORS: [string, string] = ['rgba(255,255,255,0.55)', 'rgba(255,255,255,0.35)'];
+
+/** Admin nodes are 100px boxes positioned by their top-left corner. */
+const ADMIN_NODE_SIZE = 100;
+
+const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
   const nodeTypes = useMemo(() => ({
     playerNode: PlayerNodeComponent,
   }), []);
 
   const edgeTypes = useMemo(() => ({
     gradient: GradientEdge,
+    bridge: BridgeEdge,
   }), []);
 
-  const chosenNodeIds = useMemo(() => {
-    if (!progress) return new Set<number>();
-    return new Set(progress.chosen_nodes.map((cn) => cn.node_id));
-  }, [progress]);
+  const combined = views.length > 1;
 
-  const characterLevel = progress?.character_level ?? 0;
+  const { nodes, edges, wheelRadius } = useMemo(() => {
+    // In combined mode the trees are arranged into one wheel; in single-tree
+    // mode the authored coordinates are used as-is.
+    const layout = combined ? combineTrees(views.map((v) => v.tree)) : null;
 
-  const { nodes, edges } = useMemo(() => {
-    const rfNodes: Node[] = tree.nodes.map((apiNode) => {
-      const visualState: NodeVisualState = computeNodeState(
-        apiNode,
+    const rfNodes: Node[] = [];
+    const rfEdges: Edge[] = [];
+
+    for (const view of views) {
+      const { tree, progress, readOnly } = view;
+      const chosenNodeIds = new Set(
+        (progress?.chosen_nodes ?? []).map((cn) => cn.node_id),
+      );
+      const characterLevel = progress?.character_level ?? 0;
+      const states = computeTreeStates(
+        tree.nodes,
         tree.connections,
         chosenNodeIds,
         characterLevel,
-        tree.nodes
       );
 
-      // Admin nodes are 100px. Player hex nodes vary (40/70px).
-      // Adjust position so centers align.
-      const adminSize = 100;
-      const nodeType = apiNode.node_type ?? 'regular';
-      const playerSize = (nodeType === 'root' || nodeType === 'subclass_choice') ? 70 : 40;
-      const offset = (adminSize - playerSize) / 2;
+      for (const apiNode of tree.nodes) {
+        // A foreign tree carries no progress, so every node in it would come
+        // out "locked" anyway — but say so explicitly rather than relying on
+        // that, so a foreign root never pulses as if it were available.
+        const visualState: NodeVisualState = readOnly
+          ? 'locked'
+          : states.state.get(apiNode.id) ?? 'locked';
 
-      return {
-        id: String(apiNode.id),
-        type: 'playerNode',
-        position: { x: apiNode.position_x + offset, y: apiNode.position_y + offset },
-        data: {
-          ...apiNode,
-          visualState,
-          classId: tree.class_id,
-        },
-        draggable: false,
-        selectable: true,
-        connectable: false,
-      };
-    });
+        // The wheel hands back node centres; the single-tree view uses the
+        // authored top-left coordinates, whose centre is half an admin node in.
+        const placed = layout?.positions.get(String(apiNode.id));
+        const centreX = placed?.x ?? apiNode.position_x + ADMIN_NODE_SIZE / 2;
+        const centreY = placed?.y ?? apiNode.position_y + ADMIN_NODE_SIZE / 2;
+        const half = playerNodeSize(apiNode.node_type ?? 'regular') / 2;
 
-    /* ---------- Edges with gradient styling ---------- */
-    const gradient = classGradientColors[tree.class_id] ?? defaultGradient;
-    const rfEdges: Edge[] = tree.connections.map((conn) => {
-      const sourceChosen = chosenNodeIds.has(Number(conn.from_node_id));
-      const targetChosen = chosenNodeIds.has(Number(conn.to_node_id));
-      const bothChosen = sourceChosen && targetChosen;
-      const oneChosen = sourceChosen || targetChosen;
-
-      // Unchosen connections must still read on the dark class art — the old
-      // 0.06/0.03 white was effectively invisible. Keep a clear tier:
-      // none chosen -> visible neutral, one -> dim class color, both -> bright.
-      let colors: [string, string] = ['rgba(255,255,255,0.32)', 'rgba(255,255,255,0.2)'];
-      let strokeWidth = 1.5;
-      let glowing = false;
-
-      if (bothChosen) {
-        colors = gradient.bright;
-        strokeWidth = 2.5;
-        glowing = true;
-      } else if (oneChosen) {
-        colors = gradient.dim;
-        strokeWidth = 1.5;
+        rfNodes.push({
+          id: String(apiNode.id),
+          type: 'playerNode',
+          position: { x: centreX - half, y: centreY - half },
+          data: {
+            ...apiNode,
+            visualState,
+            classId: tree.class_id,
+            foreign: readOnly,
+          },
+          draggable: false,
+          selectable: true,
+          connectable: false,
+        });
       }
 
-      return {
-        id: String(conn.id ?? `edge-${conn.from_node_id}-${conn.to_node_id}`),
-        source: String(conn.from_node_id),
-        target: String(conn.to_node_id),
-        type: 'gradient',
-        data: { colors, strokeWidth, glowing },
-      };
-    });
+      /* ---------- Edges with gradient styling ---------- */
+      const gradient = classGradientColors[tree.class_id] ?? defaultGradient;
+      for (const conn of tree.connections) {
+        const sourceChosen = chosenNodeIds.has(Number(conn.from_node_id));
+        const targetChosen = chosenNodeIds.has(Number(conn.to_node_id));
+        const bothChosen = sourceChosen && targetChosen;
+        const oneChosen = sourceChosen || targetChosen;
 
-    return { nodes: rfNodes, edges: rfEdges };
-  }, [tree, chosenNodeIds, characterLevel]);
+        // A link has to show the player where a branch leads, over a painted
+        // backdrop, so every branch still on the table is drawn in full class
+        // colour whether or not it has been walked. What goes dark is only what
+        // the player has closed off — a link into a dead branch, on either end.
+        const deadEnd =
+          states.dead.has(Number(conn.from_node_id)) ||
+          states.dead.has(Number(conn.to_node_id));
+
+        let colors: [string, string] = gradient.strong;
+        let strokeWidth = 2;
+        let glowing = false;
+        let opacity = 1;
+
+        if (bothChosen) {
+          colors = gradient.bright;
+          strokeWidth = 3;
+          glowing = true;
+        } else if (readOnly) {
+          // Another class's branches are always the faintest thing on screen:
+          // fainter than anything in the player's own sector.
+          colors = gradient.faint;
+          strokeWidth = 1.5;
+          opacity = 0.45;
+        } else if (deadEnd) {
+          colors = DEAD_LINK_COLORS;
+          strokeWidth = 1.5;
+          opacity = 0.45;
+        } else if (oneChosen) {
+          strokeWidth = 2.5;
+        }
+
+        rfEdges.push({
+          id: String(conn.id ?? `edge-${conn.from_node_id}-${conn.to_node_id}`),
+          source: String(conn.from_node_id),
+          target: String(conn.to_node_id),
+          type: 'gradient',
+          data: { colors, strokeWidth, glowing, opacity, curved: combined, casing: combined },
+        });
+      }
+    }
+
+    for (const bridge of layout?.bridges ?? []) {
+      rfEdges.push({
+        id: bridge.id,
+        source: bridge.fromNodeId,
+        target: bridge.toNodeId,
+        type: 'bridge',
+        focusable: false,
+        interactionWidth: 0,
+      });
+    }
+
+    // Radius of the whole wheel, measured to the outer edge of the furthest
+    // node. Used to centre and scale the pinned view.
+    let wheelRadius = 0;
+    if (combined) {
+      for (const node of rfNodes) {
+        const half = playerNodeSize((node.data as { node_type?: string }).node_type ?? 'regular') / 2;
+        const centre = Math.hypot(node.position.x + half, node.position.y + half);
+        wheelRadius = Math.max(wheelRadius, centre + half);
+      }
+    }
+
+    return { nodes: rfNodes, edges: rfEdges, wheelRadius };
+  }, [views, combined]);
 
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => {
@@ -208,10 +207,40 @@ const PlayerTreeCanvas = ({
     [onNodeClick]
   );
 
-  const classArt = classArtMap[tree.class_id] ?? warriorArt;
+  // The class art only makes sense behind a single class's tree; the combined
+  // wheel spans all three, so it gets the plain vignette instead.
+  const classArt = combined ? null : classArtMap[views[0]?.tree.class_id ?? 1] ?? warriorArt;
 
   // Lock minZoom to fitView level + compute translate bounds from node positions
   const [initialZoom, setInitialZoom] = useState<number | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [instance, setInstance] = useState<ReactFlowInstance | null>(null);
+
+  /*
+    fitView centres the *bounding box*, and a three-fold wheel with one sector
+    pointing up does not have a box centred on its hub: it reaches r upward but
+    only r·sin(54°) downward. Centring that box pushes the top class towards the
+    edge and leaves the other two with room to spare. So the pinned wheel sets
+    its own viewport: hub at the centre of the frame, scaled to leave exactly
+    WHEEL_EDGE_PADDING outside the last ring.
+  */
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!combined || !instance || !el || wheelRadius <= 0) return;
+
+    const apply = () => {
+      const { width, height } = el.getBoundingClientRect();
+      if (!width || !height) return;
+      const usable = Math.min(width, height) / 2 - WHEEL_EDGE_PADDING;
+      if (usable <= 0) return;
+      instance.setViewport({ x: width / 2, y: height / 2, zoom: usable / wheelRadius });
+    };
+
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [combined, instance, wheelRadius]);
 
   const translateExtent = useMemo((): [[number, number], [number, number]] => {
     if (nodes.length === 0) return [[-Infinity, -Infinity], [Infinity, Infinity]];
@@ -225,36 +254,49 @@ const PlayerTreeCanvas = ({
   }, [nodes]);
 
   return (
-    <div className="relative w-full h-full min-h-[400px] overflow-hidden">
-      {/* ---- Class art as fixed background ---- */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          backgroundImage: `url(${classArt})`,
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          opacity: 0.25,
-        }}
-      />
+    <div ref={wrapperRef} className="relative w-full h-full min-h-[400px] overflow-hidden">
+      {combined ? (
+        /*
+          The backdrop is one circle split into the same three sectors in the
+          same order — red warrior up, green rogue lower right, blue mage lower
+          left — so it registers with the layout rather than sitting behind it.
+        */
+        <WheelBackdrop dim={WHEEL_BACKDROP_DIM} />
+      ) : (
+        <>
+          {/* ---- Class art as fixed background ---- */}
+          {classArt && (
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                backgroundImage: `url(${classArt})`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                opacity: 0.25,
+              }}
+            />
+          )}
 
-      {/* ---- Dark radial vignette over the art ---- */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            'radial-gradient(circle at 50% 50%, rgba(10,10,18,0.15) 0%, rgba(10,10,18,0.6) 55%, rgba(10,10,18,0.9) 80%)',
-        }}
-      />
+          {/* ---- Dark radial vignette over the art ---- */}
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              background:
+                'radial-gradient(circle at 50% 50%, rgba(10,10,18,0.15) 0%, rgba(10,10,18,0.6) 55%, rgba(10,10,18,0.9) 80%)',
+            }}
+          />
 
-      {/* ---- Subtle grid overlay ---- */}
-      <div
-        className="absolute inset-0 pointer-events-none opacity-[0.04]"
-        style={{
-          backgroundImage:
-            'linear-gradient(rgba(255,255,255,0.15) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.15) 1px, transparent 1px)',
-          backgroundSize: '40px 40px',
-        }}
-      />
+          {/* ---- Subtle grid overlay ---- */}
+          <div
+            className="absolute inset-0 pointer-events-none opacity-[0.04]"
+            style={{
+              backgroundImage:
+                'linear-gradient(rgba(255,255,255,0.15) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.15) 1px, transparent 1px)',
+              backgroundSize: '40px 40px',
+            }}
+          />
+        </>
+      )}
 
       {/* ---- ReactFlow canvas ---- */}
       <ReactFlow
@@ -266,20 +308,26 @@ const PlayerTreeCanvas = ({
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={true}
-        panOnDrag={true}
+        // The wheel is meant to be taken in whole, so it is pinned: no panning,
+        // no zooming, and the page keeps scrolling over it. The single-class
+        // view still needs both, since it fills the screen on a phone.
+        panOnDrag={!combined}
         panOnScroll={false}
-        zoomOnScroll={true}
-        zoomOnPinch={true}
-        zoomOnDoubleClick={true}
-        fitView
+        zoomOnScroll={!combined}
+        zoomOnPinch={!combined}
+        zoomOnDoubleClick={!combined}
+        preventScrolling={!combined}
+        fitView={!combined}
         fitViewOptions={{ padding: 0.1 }}
         minZoom={initialZoom ?? 0.1}
         maxZoom={2.5}
         translateExtent={translateExtent}
-        onInit={(instance) => {
+        onInit={(flow) => {
+          setInstance(flow);
+          if (combined) return; // the wheel drives its own viewport
           // After fitView, lock minZoom to current zoom (= fully zoomed out state)
           setTimeout(() => {
-            const { zoom } = instance.getViewport();
+            const { zoom } = flow.getViewport();
             setInitialZoom(zoom);
           }, 150);
         }}
@@ -288,6 +336,7 @@ const PlayerTreeCanvas = ({
         style={{ position: 'relative', zIndex: 2 }}
         proOptions={{ hideAttribution: true }}
       >
+        {!combined && (
         <Controls
           showInteractive={false}
           className="
@@ -297,6 +346,7 @@ const PlayerTreeCanvas = ({
             [&_button:hover]:!bg-white/5
           "
         />
+        )}
       </ReactFlow>
     </div>
   );

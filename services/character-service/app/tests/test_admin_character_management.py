@@ -207,6 +207,36 @@ class TestAdminListCharacters:
         assert len(data["items"]) == 2
         assert data["page"] == 1
 
+    def test_list_excludes_npcs_and_mobs(self, admin_client, db_session):
+        """Only player characters belong in the "Персонажи" admin section."""
+        _seed_request(db_session, 1)
+        _seed_character(db_session, char_id=1, request_id=1, name="Player")
+        _seed_character(
+            db_session, char_id=2, request_id=None, user_id=None,
+            name="Кузнец", is_npc=True, npc_role="merchant",
+        )
+        _seed_character(
+            db_session, char_id=3, request_id=None, user_id=None,
+            name="Гоблин", is_npc=True, npc_role="mob",
+        )
+
+        resp = admin_client.get("/characters/admin/list")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert [i["name"] for i in data["items"]] == ["Player"]
+
+    def test_list_search_does_not_leak_npcs(self, admin_client, db_session):
+        """Search must not bring NPCs/mobs back into the player list."""
+        _seed_character(
+            db_session, char_id=1, request_id=None, user_id=None,
+            name="Страж", is_npc=True, npc_role="guard",
+        )
+
+        resp = admin_client.get("/characters/admin/list?q=Страж")
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+
     def test_list_forbidden_for_non_admin(self, non_admin_client, db_session):
         resp = non_admin_client.get("/characters/admin/list")
         assert resp.status_code == 403
