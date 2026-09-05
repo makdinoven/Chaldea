@@ -12,6 +12,7 @@ import {
   type WheelLayoutConfig,
 } from '../../SkillTreeView/utils/combineTrees';
 import { reactFlowToApi } from '../utils/treeTransforms';
+import { untangleRings } from '../utils/untangleRings';
 
 /**
  * Editor state for the combined class wheel — all three class trees at once,
@@ -310,6 +311,46 @@ export const useCombinedTreeEditor = (
     [editTree, treeIdOfNode],
   );
 
+  /**
+   * Reorders every ring of every tree so the links cross as little as possible.
+   * Only sort_order changes; rings and links are untouched. Returns the tally
+   * so the caller can say what it did.
+   */
+  const untangleAll = useCallback(() => {
+    const results = draft.map((tree) => ({ tree, result: untangleRings(tree) }));
+
+    const changedIds = results.filter((r) => r.result.changed).map((r) => r.tree.id);
+    if (changedIds.length > 0) {
+      const reordered = new Map(
+        results.filter((r) => r.result.changed).map((r) => [r.tree.id, r.result.order]),
+      );
+      setDraft((prev) =>
+        prev.map((tree) => {
+          const order = reordered.get(tree.id);
+          if (!order) return tree;
+          return {
+            ...tree,
+            nodes: tree.nodes.map((n) => ({
+              ...n,
+              sort_order: order.get(String(n.id)) ?? n.sort_order ?? 0,
+            })),
+          };
+        }),
+      );
+      setDirtyTreeIds((prev) => {
+        const next = new Set(prev);
+        for (const id of changedIds) next.add(id);
+        return next;
+      });
+    }
+
+    return {
+      crossingsBefore: results.reduce((sum, r) => sum + r.result.crossingsBefore, 0),
+      crossingsAfter: results.reduce((sum, r) => sum + r.result.crossingsAfter, 0),
+      changedTrees: changedIds.length,
+    };
+  }, [draft]);
+
   /** One save payload per tree that actually changed. */
   const getDirtyPayloads = useCallback((): TreePayload[] => {
     return draft
@@ -360,6 +401,7 @@ export const useCombinedTreeEditor = (
     updateNodeData,
     addSkillToNode,
     removeSkillFromNode,
+    untangleAll,
     getDirtyPayloads,
     clearDirty,
   };

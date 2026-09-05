@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Save, PlusCircle, ChevronDown, RefreshCw } from 'react-feather';
+import { Save, PlusCircle, ChevronDown, RefreshCw, Shuffle } from 'react-feather';
 import { LEVEL_RING_OPTIONS } from './types';
 
 /** One class tree shown in the wheel, as far as the toolbar cares. */
@@ -16,6 +16,7 @@ interface WheelToolbarProps {
   onAddNode: (treeId: number, levelRing: number) => void;
   onSave: () => void;
   onReload: () => void;
+  onUntangle: () => void;
   isSaving: boolean;
   isDirty: boolean;
 }
@@ -25,6 +26,7 @@ const WheelToolbar = ({
   onAddNode,
   onSave,
   onReload,
+  onUntangle,
   isSaving,
   isDirty,
 }: WheelToolbarProps) => {
@@ -52,6 +54,16 @@ const WheelToolbar = ({
       >
         <RefreshCw size={14} />
         Обновить
+      </button>
+
+      <button
+        onClick={onUntangle}
+        disabled={isSaving}
+        className="btn-line flex items-center gap-1.5 text-sm !py-1.5 !px-3"
+        title="Переставить узлы внутри колец так, чтобы связи меньше пересекались"
+      >
+        <Shuffle size={14} />
+        Расправить связи
       </button>
 
       {/* One "add node" menu per class — a node always belongs to one tree */}

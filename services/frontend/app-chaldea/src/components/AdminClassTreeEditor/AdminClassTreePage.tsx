@@ -238,6 +238,19 @@ const AdminClassTreePage = () => {
     }
   };
 
+  const handleUntangle = () => {
+    const { crossingsBefore, crossingsAfter, changedTrees } = wheel.untangleAll();
+    if (changedTrees === 0) {
+      toast.success(
+        crossingsBefore === 0
+          ? 'Связи и так не пересекаются'
+          : `Лучше не выходит: пересечений ${crossingsBefore}`,
+      );
+      return;
+    }
+    toast.success(`Связи расправлены: пересечений ${crossingsBefore} → ${crossingsAfter}`);
+  };
+
   const wheelToolbarTrees: WheelToolbarTree[] = wheelTrees.map((tree) => ({
     treeId: tree.id,
     classId: tree.class_id,
@@ -476,6 +489,7 @@ const AdminClassTreePage = () => {
                   onAddNode={wheel.addNode}
                   onSave={handleWheelSave}
                   onReload={loadWheelTrees}
+                  onUntangle={handleUntangle}
                   isSaving={wheelSaving}
                   isDirty={wheel.isDirty}
                 />
