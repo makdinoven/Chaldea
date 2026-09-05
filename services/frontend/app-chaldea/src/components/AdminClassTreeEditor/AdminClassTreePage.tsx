@@ -16,6 +16,11 @@ import { autoLayoutRings, autoAlignRows } from './utils/ringLayout';
 import ClassTreeCanvas from './ClassTreeCanvas';
 import CombinedTreeCanvas from './CombinedTreeCanvas';
 import WheelToolbar, { type WheelToolbarTree } from './WheelToolbar';
+import WheelLayoutPanel from './WheelLayoutPanel';
+import {
+  DEFAULT_WHEEL_LAYOUT,
+  type WheelLayoutConfig,
+} from '../SkillTreeView/utils/combineTrees';
 import TreeNodeInspector from './TreeNodeInspector';
 import TreeToolbar from './TreeToolbar';
 import type { FullClassTreeResponse } from './types';
@@ -36,6 +41,22 @@ const CLASS_ACCENTS: Record<number, string> = {
 };
 
 type EditorMode = 'wheel' | 'single';
+
+/**
+ * Tuning the wheel's shape is a per-author experiment, so it lives in this
+ * browser only. Players get DEFAULT_WHEEL_LAYOUT until numbers are committed.
+ */
+const WHEEL_LAYOUT_STORAGE_KEY = 'chaldea.admin.wheelLayout';
+
+const readStoredLayout = (): WheelLayoutConfig => {
+  try {
+    const raw = localStorage.getItem(WHEEL_LAYOUT_STORAGE_KEY);
+    if (!raw) return DEFAULT_WHEEL_LAYOUT;
+    return { ...DEFAULT_WHEEL_LAYOUT, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_WHEEL_LAYOUT;
+  }
+};
 
 const AdminClassTreePage = () => {
   const dispatch = useAppDispatch();
@@ -62,8 +83,18 @@ const AdminClassTreePage = () => {
   const [wheelLoading, setWheelLoading] = useState(false);
   const [wheelSaving, setWheelSaving] = useState(false);
 
+  const [wheelLayout, setWheelLayout] = useState<WheelLayoutConfig>(readStoredLayout);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(WHEEL_LAYOUT_STORAGE_KEY, JSON.stringify(wheelLayout));
+    } catch {
+      // A browser with site data blocked just loses the tuning between visits.
+    }
+  }, [wheelLayout]);
+
   const editor = useClassTreeEditor(selectedFullTree);
-  const wheel = useCombinedTreeEditor(wheelTrees);
+  const wheel = useCombinedTreeEditor(wheelTrees, wheelLayout);
 
   useEffect(() => {
     dispatch(fetchClassTrees());
@@ -448,6 +479,7 @@ const AdminClassTreePage = () => {
                   isSaving={wheelSaving}
                   isDirty={wheel.isDirty}
                 />
+                <WheelLayoutPanel config={wheelLayout} onChange={setWheelLayout} />
                 <div className="flex-1 min-h-0 relative z-0">
                   {wheelLoading && wheelTrees.length === 0 ? (
                     <div className="flex items-center justify-center h-full">

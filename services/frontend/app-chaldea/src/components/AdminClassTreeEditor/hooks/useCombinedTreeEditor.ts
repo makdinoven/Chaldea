@@ -6,7 +6,11 @@ import type {
   TreeNodeInTreeResponse,
   TreeNodeSkillRead,
 } from '../types';
-import { combineTrees } from '../../SkillTreeView/utils/combineTrees';
+import {
+  combineTrees,
+  DEFAULT_WHEEL_LAYOUT,
+  type WheelLayoutConfig,
+} from '../../SkillTreeView/utils/combineTrees';
 import { reactFlowToApi } from '../utils/treeTransforms';
 
 /**
@@ -38,7 +42,10 @@ const cloneTree = (tree: FullClassTreeResponse): FullClassTreeResponse => ({
   connections: tree.connections.map((c) => ({ ...c })),
 });
 
-export const useCombinedTreeEditor = (trees: FullClassTreeResponse[]) => {
+export const useCombinedTreeEditor = (
+  trees: FullClassTreeResponse[],
+  layout: WheelLayoutConfig = DEFAULT_WHEEL_LAYOUT,
+) => {
   const [draft, setDraft] = useState<FullClassTreeResponse[]>([]);
   const [dirtyTreeIds, setDirtyTreeIds] = useState<Set<number>>(new Set());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -75,14 +82,14 @@ export const useCombinedTreeEditor = (trees: FullClassTreeResponse[]) => {
     [draft],
   );
 
-  const layout = useMemo(() => combineTrees(draft), [draft]);
+  const placement = useMemo(() => combineTrees(draft, layout), [draft, layout]);
 
   const nodes: Node[] = useMemo(() => {
     const out: Node[] = [];
     for (const tree of draft) {
       for (const apiNode of tree.nodes) {
         const id = String(apiNode.id);
-        const centre = layout.positions.get(id);
+        const centre = placement.positions.get(id);
         if (!centre) continue;
         const half = (apiNode.node_type === 'root' || apiNode.node_type === 'subclass_choice' ? 70 : 40) / 2;
         const data: WheelNodeData = {
@@ -104,7 +111,7 @@ export const useCombinedTreeEditor = (trees: FullClassTreeResponse[]) => {
       }
     }
     return out;
-  }, [draft, layout]);
+  }, [draft, placement]);
 
   const edges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
@@ -119,7 +126,7 @@ export const useCombinedTreeEditor = (trees: FullClassTreeResponse[]) => {
         });
       }
     }
-    for (const bridge of layout.bridges) {
+    for (const bridge of placement.bridges) {
       out.push({
         id: bridge.id,
         source: bridge.fromNodeId,
@@ -130,7 +137,7 @@ export const useCombinedTreeEditor = (trees: FullClassTreeResponse[]) => {
       });
     }
     return out;
-  }, [draft, layout]);
+  }, [draft, placement]);
 
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedNodeId) ?? null,

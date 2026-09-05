@@ -2,6 +2,7 @@ import type {
   FullClassTreeResponse,
   TreeNodeInTreeResponse,
 } from '../types';
+import { LEVEL_RING_OPTIONS } from '../../AdminClassTreeEditor/types';
 
 /**
  * Lays the class trees out as one Path-of-Exile-style wheel.
@@ -10,35 +11,58 @@ import type {
  * editor and do not survive being packed into a 120° wedge, so the wheel
  * derives its own polar layout instead: ``level_ring`` becomes the distance
  * from the centre, and each class fans out across its own sector. The authored
- * left-to-right order within a ring is preserved, so branches still sit where
- * their author put them relative to each other.
+ * order within a ring is preserved, so branches still sit where their author
+ * put them relative to each other.
  *
  * Nothing here mutates the source data or the stored coordinates.
  */
 
-/**
- * Radius of the innermost ring, where the root nodes sit.
- *
- * Kept small on purpose: the three class starts should almost touch at the
- * centre of the wheel, parted just enough not to overlap. At 90px with 70px
- * root nodes, neighbouring roots stand 156px apart — an 86px gap.
- */
-const INNER_RADIUS = 90;
+/** Everything about the wheel's shape, in one place so it can be tuned. */
+export interface WheelLayoutConfig {
+  /** Distance from the centre to ring 1, where the class roots sit. */
+  innerRadius: number;
+  /** Distance between two consecutive rings of the ladder. */
+  ringSpacing: number;
+  /**
+   * How a ring's nodes spread across the sector.
+   *
+   * "arc" keeps a constant gap in pixels between neighbours, so outer rings
+   * stay dense and the class reads as a wedge widening outward.
+   * "fill" gives every ring the same angular width, so the rings read as
+   * concentric arcs and the class reads as a slice of a wheel.
+   */
+  spread: 'arc' | 'fill';
+  /** Target gap, in pixels, between neighbouring nodes on the same ring. Used by "arc". */
+  arcSpacing: number;
+  /** Share of its 120° sector a class may fill, 0..1. */
+  sectorFill: number;
+  /** Where the first class sits, in degrees. -90 is straight up. */
+  startAngleDeg: number;
+}
 
-/** Distance between two consecutive rings. */
-const RING_SPACING = 150;
-
-/** Target gap, in pixels, between neighbouring nodes on the same ring. */
-const ARC_SPACING = 120;
-
-/** Share of a sector left empty, so neighbouring classes stay visually apart. */
-const SECTOR_GAP = 0.2;
-
-/** Sector of the first tree. -90° puts it straight up. */
-const FIRST_SECTOR_ANGLE = -Math.PI / 2;
+export const DEFAULT_WHEEL_LAYOUT: WheelLayoutConfig = {
+  // Small on purpose: the three class starts should read as one shared centre,
+  // parted just enough not to overlap.
+  innerRadius: 90,
+  ringSpacing: 150,
+  spread: 'fill',
+  arcSpacing: 120,
+  sectorFill: 0.8,
+  startAngleDeg: -90,
+};
 
 /** Bridges drawn between each pair of neighbouring sectors. */
 const BRIDGES_PER_SECTOR_PAIR = 2;
+
+/**
+ * The ladder of ring values a node can sit on, shared with the admin editor.
+ *
+ * A ring's radius comes from its place on this ladder rather than from its
+ * place among the rings a given tree happens to use — otherwise ring 30 would
+ * land at a different distance in each class, and the rings would never line up
+ * into shared circles across the wheel. A ring nobody filled leaves a real gap.
+ */
+const RING_LADDER: number[] = LEVEL_RING_OPTIONS.map((o) => o.value);
 
 export interface CombinedNode {
   node: TreeNodeInTreeResponse;
@@ -72,7 +96,7 @@ export interface CombinedLayout {
 }
 
 /** Groups a tree's nodes by level_ring, innermost ring first. */
-const byRing = (nodes: TreeNodeInTreeResponse[]): TreeNodeInTreeResponse[][] => {
+const byRing = (nodes: TreeNodeInTreeResponse[]): [number, TreeNodeInTreeResponse[]][] => {
   const groups = new Map<number, TreeNodeInTreeResponse[]>();
   for (const node of nodes) {
     const ring = node.level_ring ?? 1;
@@ -82,7 +106,8 @@ const byRing = (nodes: TreeNodeInTreeResponse[]): TreeNodeInTreeResponse[][] => 
   }
   return [...groups.entries()]
     .sort(([a], [b]) => a - b)
-    .map(([, ringNodes]) =>
+    .map(([ring, ringNodes]) => [
+      ring,
       // sort_order is the author's explicit knob, so it wins. A ring that never
       // set it (all zeros) ties and falls through to the left-to-right order
       // drawn in the editor, which is how older trees stay put.
@@ -92,7 +117,14 @@ const byRing = (nodes: TreeNodeInTreeResponse[]): TreeNodeInTreeResponse[][] => 
           a.position_x - b.position_x ||
           String(a.id).localeCompare(String(b.id), undefined, { numeric: true }),
       ),
-    );
+    ]);
+};
+
+/** Radius of a ring, by its place on the shared ladder. */
+const radiusOfRing = (ring: number, fallbackIndex: number, config: WheelLayoutConfig): number => {
+  const laddered = RING_LADDER.indexOf(ring);
+  const index = laddered >= 0 ? laddered : fallbackIndex;
+  return config.innerRadius + index * config.ringSpacing;
 };
 
 /** Fans one tree out across its sector, ring by ring. */
@@ -100,19 +132,27 @@ const placeTree = (
   tree: FullClassTreeResponse,
   sector: number,
   sectorCount: number,
+  config: WheelLayoutConfig,
 ): CombinedTree => {
   if (tree.nodes.length === 0) return { tree, sector, nodes: [] };
 
-  const sectorCentre = FIRST_SECTOR_ANGLE + (2 * Math.PI * sector) / sectorCount;
-  const maxSpan = ((2 * Math.PI) / sectorCount) * (1 - SECTOR_GAP);
+  const sectorCentre =
+    (config.startAngleDeg * Math.PI) / 180 + (2 * Math.PI * sector) / sectorCount;
+  const maxSpan = ((2 * Math.PI) / sectorCount) * config.sectorFill;
 
   const placed: CombinedNode[] = [];
-  byRing(tree.nodes).forEach((ringNodes, ringIndex) => {
-    const radius = INNER_RADIUS + ringIndex * RING_SPACING;
+  byRing(tree.nodes).forEach(([ring, ringNodes], ringIndex) => {
+    const radius = radiusOfRing(ring, ringIndex, config);
     const count = ringNodes.length;
-    // Even pixel spacing along the arc, but never wider than the sector.
+    const evenAngle = count > 1 ? maxSpan / (count - 1) : 0;
+    // "arc" keeps neighbours a fixed distance apart but never spills out of the
+    // sector; "fill" simply uses the whole sector on every ring.
     const step =
-      count > 1 ? Math.min(ARC_SPACING / radius, maxSpan / (count - 1)) : 0;
+      config.spread === 'fill'
+        ? evenAngle
+        : count > 1
+          ? Math.min(config.arcSpacing / radius, evenAngle)
+          : 0;
 
     ringNodes.forEach((node, i) => {
       const angle = sectorCentre + (i - (count - 1) / 2) * step;
@@ -156,8 +196,11 @@ const bridgeSectors = (a: CombinedTree, b: CombinedTree, limit: number): SectorB
 };
 
 /** Arranges the given trees into one wheel. Trees without nodes are kept but contribute nothing. */
-export const combineTrees = (trees: FullClassTreeResponse[]): CombinedLayout => {
-  const placed = trees.map((tree, i) => placeTree(tree, i, trees.length));
+export const combineTrees = (
+  trees: FullClassTreeResponse[],
+  config: WheelLayoutConfig = DEFAULT_WHEEL_LAYOUT,
+): CombinedLayout => {
+  const placed = trees.map((tree, i) => placeTree(tree, i, trees.length, config));
 
   const positions = new Map<string, { x: number; y: number }>();
   for (const t of placed) {
