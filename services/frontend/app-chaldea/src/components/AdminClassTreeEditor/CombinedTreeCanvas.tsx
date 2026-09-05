@@ -58,7 +58,11 @@ const CombinedTreeCanvas = ({
         if (edge.type !== 'gradient') return edge;
         const classId = (edge.data?.classId ?? 1) as number;
         const gradient = classGradientColors[classId] ?? defaultGradient;
-        return { ...edge, data: { ...edge.data, colors: gradient.faint, strokeWidth: 1.5 } };
+        // curved: the admin wheel is the same wheel, so it bows the same way.
+        return {
+          ...edge,
+          data: { ...edge.data, colors: gradient.faint, strokeWidth: 1.5, curved: true },
+        };
       }),
     [edges],
   );

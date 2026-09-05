@@ -39,6 +39,12 @@ interface PlayerTreeCanvasProps {
   onNodeClick: (nodeId: number) => void;
 }
 
+/**
+ * Breathing room around the pinned wheel, as a share of the viewport. On a
+ * typical 800px round frame this leaves roughly 50px outside the last ring.
+ */
+const WHEEL_FIT_PADDING = 0.06;
+
 /** Admin nodes are 100px boxes positioned by their top-left corner. */
 const ADMIN_NODE_SIZE = 100;
 /** Player hex nodes are 40px, or 70px for roots and subclass choices. */
@@ -111,6 +117,7 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
 
       /* ---------- Edges with gradient styling ---------- */
       const gradient = classGradientColors[tree.class_id] ?? defaultGradient;
+      const ringOf = new Map(tree.nodes.map((n) => [String(n.id), n.level_ring ?? 1]));
       for (const conn of tree.connections) {
         const sourceChosen = chosenNodeIds.has(Number(conn.from_node_id));
         const targetChosen = chosenNodeIds.has(Number(conn.to_node_id));
@@ -122,6 +129,7 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
         let colors: [string, string] = gradient.faint;
         let strokeWidth = 1.5;
         let glowing = false;
+        let opacity = 1;
 
         if (bothChosen) {
           colors = gradient.bright;
@@ -132,6 +140,17 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
         } else if (readOnly) {
           colors = gradient.faint;
           strokeWidth = 1;
+        } else {
+          // Rings the character cannot reach yet recede, so the branches that
+          // are actually in play stand out from the rest of the web.
+          const reach = Math.max(
+            ringOf.get(String(conn.from_node_id)) ?? 0,
+            ringOf.get(String(conn.to_node_id)) ?? 0,
+          );
+          if (reach > characterLevel) {
+            strokeWidth = 1;
+            opacity = 0.4;
+          }
         }
 
         rfEdges.push({
@@ -139,7 +158,7 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
           source: String(conn.from_node_id),
           target: String(conn.to_node_id),
           type: 'gradient',
-          data: { colors, strokeWidth, glowing },
+          data: { colors, strokeWidth, glowing, opacity, curved: combined },
         });
       }
     }
@@ -227,13 +246,17 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={true}
-        panOnDrag={true}
+        // The wheel is meant to be taken in whole, so it is pinned: no panning,
+        // no zooming, and the page keeps scrolling over it. The single-class
+        // view still needs both, since it fills the screen on a phone.
+        panOnDrag={!combined}
         panOnScroll={false}
-        zoomOnScroll={true}
-        zoomOnPinch={true}
-        zoomOnDoubleClick={true}
+        zoomOnScroll={!combined}
+        zoomOnPinch={!combined}
+        zoomOnDoubleClick={!combined}
+        preventScrolling={!combined}
         fitView
-        fitViewOptions={{ padding: 0.1 }}
+        fitViewOptions={{ padding: combined ? WHEEL_FIT_PADDING : 0.1 }}
         minZoom={initialZoom ?? 0.1}
         maxZoom={2.5}
         translateExtent={translateExtent}
@@ -249,6 +272,7 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
         style={{ position: 'relative', zIndex: 2 }}
         proOptions={{ hideAttribution: true }}
       >
+        {!combined && (
         <Controls
           showInteractive={false}
           className="
@@ -258,6 +282,7 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
             [&_button:hover]:!bg-white/5
           "
         />
+        )}
       </ReactFlow>
     </div>
   );

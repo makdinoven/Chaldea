@@ -303,7 +303,27 @@ const SkillTreePage = () => {
           </div>
         )}
 
-        <div className="relative w-full h-[65vh] md:h-[80vh] rounded-card overflow-hidden bg-[#12121e]">
+        {/*
+          The wheel gets a round frame instead of the usual panel: a circle of
+          content inside a square box left obvious dead corners. The frame is a
+          square that never exceeds 80vh, so the circle stays a circle, and the
+          canvas is clipped to it while the overlays below sit outside the clip.
+        */}
+        <div
+          className={`relative ${
+            showsWholeWheel
+              ? 'w-full max-w-[80vh] aspect-square mx-auto'
+              : 'w-full h-[65vh] md:h-[80vh]'
+          }`}
+        >
+          <div
+            className={`absolute inset-0 overflow-hidden bg-[#12121e] ${
+              showsWholeWheel ? 'rounded-full' : 'rounded-card'
+            }`}
+          >
+            <PlayerTreeCanvas views={views} onNodeClick={handleNodeClick} />
+          </div>
+
           {/* Header */}
           <div className="absolute top-3 left-4 z-10 flex items-center gap-3">
             {viewingSubclass && (
@@ -354,8 +374,6 @@ const SkillTreePage = () => {
               ))}
             </div>
           )}
-
-          <PlayerTreeCanvas views={views} onNodeClick={handleNodeClick} />
 
           {/* Node detail modal */}
           <AnimatePresence>

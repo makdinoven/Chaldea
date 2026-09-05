@@ -36,6 +36,45 @@ export const classGradientColors: Record<
 
 export const defaultGradient = classGradientColors[1];
 
+/**
+ * Beyond this angular span the quadratic stops approximating a circular arc and
+ * starts bulging outward — at 60° the midpoint overshoots the true arc by about
+ * 1%, at 140° by 63%. Wider links are drawn straight instead.
+ */
+const MAX_CURVE_SPAN = (60 * Math.PI) / 180;
+
+/**
+ * Path for a link that follows the wheel rather than cutting across it.
+ *
+ * The wheel is centred on the flow origin, so a link's two ends are simply two
+ * polar points. A quadratic Bézier whose control point sits on the bisecting
+ * ray at radius `meanRadius / cos(halfSpan)` hugs the circle through both ends;
+ * for a purely radial link the span is zero and it degenerates to the straight
+ * line, which is what a link between rings should be.
+ */
+const arcPath = (sourceX: number, sourceY: number, targetX: number, targetY: number): string => {
+  const r1 = Math.hypot(sourceX, sourceY);
+  const r2 = Math.hypot(targetX, targetY);
+  if (r1 < 1 || r2 < 1) return `M ${sourceX},${sourceY} L ${targetX},${targetY}`;
+
+  const a1 = Math.atan2(sourceY, sourceX);
+  const a2 = Math.atan2(targetY, targetX);
+  // Shortest way round, so a link never bows the long way about the wheel.
+  let span = a2 - a1;
+  while (span > Math.PI) span -= 2 * Math.PI;
+  while (span < -Math.PI) span += 2 * Math.PI;
+
+  if (Math.abs(span) > MAX_CURVE_SPAN) {
+    return `M ${sourceX},${sourceY} L ${targetX},${targetY}`;
+  }
+
+  const midAngle = a1 + span / 2;
+  const controlRadius = ((r1 + r2) / 2) / Math.cos(span / 2);
+  const cx = Math.cos(midAngle) * controlRadius;
+  const cy = Math.sin(midAngle) * controlRadius;
+  return `M ${sourceX},${sourceY} Q ${cx},${cy} ${targetX},${targetY}`;
+};
+
 /** A link inside one class tree, coloured by how far the player has walked it. */
 export const GradientEdge = memo(({
   id,
@@ -45,14 +84,19 @@ export const GradientEdge = memo(({
   targetY,
   data,
 }: EdgeProps) => {
-  // Straight, centre-to-centre. Orthogonal routing turned the rotated sectors
-  // of the combined wheel into staircases.
-  const [edgePath] = getStraightPath({ sourceX, sourceY, targetX, targetY });
+  // On the wheel, links bow along the rings instead of cutting the middle out
+  // of it. Elsewhere — the single-class view — there is no centre to bow
+  // around, so they stay straight. (Orthogonal routing was worse than either:
+  // it turned every diagonal into a staircase.)
+  const curved = (data?.curved ?? false) as boolean;
+  const [straightPath] = getStraightPath({ sourceX, sourceY, targetX, targetY });
+  const edgePath = curved ? arcPath(sourceX, sourceY, targetX, targetY) : straightPath;
 
   const gradientId = `gradient-${id}`;
   const colors = (data?.colors ?? defaultGradient.faint) as [string, string];
   const strokeWidth = (data?.strokeWidth ?? 1.5) as number;
   const glowing = (data?.glowing ?? false) as boolean;
+  const opacity = (data?.opacity ?? 1) as number;
 
   return (
     <>
@@ -79,7 +123,7 @@ export const GradientEdge = memo(({
       <BaseEdge
         id={id}
         path={edgePath}
-        style={{ stroke: `url(#${gradientId})`, strokeWidth }}
+        style={{ stroke: `url(#${gradientId})`, strokeWidth, opacity }}
       />
     </>
   );
