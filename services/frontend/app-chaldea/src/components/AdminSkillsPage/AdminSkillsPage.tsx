@@ -17,6 +17,7 @@ import {
   categoryDefaults,
   categoryLabel,
   categoryParams,
+  type RaceWithSubraces,
   type SkillCategory,
 } from './skillCategories';
 import type { Subclass } from '../AdminClassTreeEditor/types';
@@ -34,6 +35,7 @@ const AdminSkillsPage = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [category, setCategory] = useState<SkillCategory>(ALL_SKILLS);
   const [subclasses, setSubclasses] = useState<Subclass[]>([]);
+  const [races, setRaces] = useState<RaceWithSubraces[]>([]);
 
   // The list is narrowed on the server, so a category is a section of the data
   // rather than a view over everything.
@@ -46,6 +48,10 @@ const AdminSkillsPage = () => {
       .get<Subclass[]>('/skills/subclasses')
       .then((res) => setSubclasses(res.data))
       .catch(() => toast.error('Не удалось загрузить список подклассов'));
+    axios
+      .get<RaceWithSubraces[]>('/characters/races')
+      .then((res) => setRaces(res.data))
+      .catch(() => toast.error('Не удалось загрузить список рас'));
   }, []);
 
   const reloadList = () => {
@@ -126,6 +132,7 @@ const AdminSkillsPage = () => {
           category={category}
           onChange={setCategory}
           subclasses={subclasses}
+          races={races}
           count={skillsList.length}
         />
       </div>
@@ -151,7 +158,7 @@ const AdminSkillsPage = () => {
           <p className="text-white/35 text-[11px] mb-2 mt-1">
             {category.kind === 'all'
               ? 'Без категории — её можно задать в карточке навыка.'
-              : `Сразу в раздел «${categoryLabel(category, subclasses)}»`}
+              : `Сразу в раздел «${categoryLabel(category, subclasses, races)}»`}
           </p>
           {status === 'loading' && <p className="text-white/50 text-xs">Загрузка...</p>}
           {status === 'failed' && error && (

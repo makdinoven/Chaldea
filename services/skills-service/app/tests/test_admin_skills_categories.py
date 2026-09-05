@@ -120,6 +120,18 @@ async def _seed():
                     id=9, name="Smite", skill_type="Attack",
                     class_limitations="1", subclass_limitations="warrior_paladin",
                 ),
+                # Racial skills: the same narrowing as class -> subclass
+                models.Skill(id=10, name="Кровь", skill_type="Support", race_limitations="3"),
+                models.Skill(
+                    id=11, name="Чешуя", skill_type="Defense",
+                    race_limitations="3", subrace_limitations="7",
+                ),
+                # Scoped on both axes: class and race are independent, so it
+                # belongs to both categories at once.
+                models.Skill(
+                    id=12, name="Ярость", skill_type="Attack",
+                    class_limitations="1", race_limitations="3",
+                ),
             ]
         )
         await session.commit()
@@ -139,7 +151,7 @@ async def _ids(client, **params):
 @pytest.mark.asyncio
 async def test_no_filters_returns_everything(admin_client):
     await _seed()
-    assert await _ids(admin_client) == {1, 2, 3, 4, 5, 6, 7, 8, 9}
+    assert await _ids(admin_client) == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
 
 
 @pytest.mark.asyncio
@@ -160,7 +172,7 @@ async def test_new_columns_default_to_no_category(admin_client):
 async def test_class_filter_excludes_subclass_skills(admin_client):
     """The point of the split: a Paladin skill is not a Warrior skill."""
     await _seed()
-    assert await _ids(admin_client, class_id=1) == {1, 3}
+    assert await _ids(admin_client, class_id=1) == {1, 3, 12}
 
 
 @pytest.mark.asyncio
@@ -204,7 +216,7 @@ async def test_unknown_subclass_returns_nothing(admin_client):
 async def test_mob_filter_splits_both_ways(admin_client):
     await _seed()
     assert await _ids(admin_client, mob=True) == {6}
-    assert await _ids(admin_client, mob=False) == {1, 2, 3, 4, 5, 7, 8, 9}
+    assert await _ids(admin_client, mob=False) == {1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12}
 
 
 @pytest.mark.asyncio
@@ -233,3 +245,48 @@ async def test_search_cannot_reach_outside_its_category(admin_client):
     assert await _ids(admin_client, q="smi") == {9}
     assert await _ids(admin_client, class_id=1, q="smi") == set()
     assert await _ids(admin_client, mob=True, q="smi") == set()
+
+
+# ---------------------------------------------------------------------------
+# Race
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_race_filter_excludes_subrace_skills(admin_client):
+    """Same narrowing as class -> subclass: a subrace skill is not a race skill."""
+    await _seed()
+    assert await _ids(admin_client, race_id=3) == {10, 12}
+
+
+@pytest.mark.asyncio
+async def test_subrace_filter(admin_client):
+    await _seed()
+    assert await _ids(admin_client, subrace_id=7) == {11}
+
+
+@pytest.mark.asyncio
+async def test_class_and_race_are_independent_axes(admin_client):
+    """A skill scoped to both is listed under both — it is both."""
+    await _seed()
+    assert 12 in await _ids(admin_client, class_id=1)
+    assert 12 in await _ids(admin_client, race_id=3)
+
+
+# ---------------------------------------------------------------------------
+# General
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_general_means_no_scoping_at_all(admin_client):
+    """Only the skill with no class, no subclass, no race and no mob flag."""
+    await _seed()
+    assert await _ids(admin_client, general="true") == {7}
+
+
+@pytest.mark.asyncio
+async def test_general_excludes_mob_skills(admin_client):
+    """A mob skill has no class scoping either, but it is not "general"."""
+    await _seed()
+    assert 6 not in await _ids(admin_client, general="true")

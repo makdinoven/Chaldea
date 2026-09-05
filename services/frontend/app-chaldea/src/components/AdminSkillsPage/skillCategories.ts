@@ -12,9 +12,20 @@ import type { Subclass } from '../AdminClassTreeEditor/types';
 
 export type SkillCategory =
   | { kind: 'all' }
+  /** No scoping at all: available to everyone. */
+  | { kind: 'general' }
   | { kind: 'class'; classId: number }
   | { kind: 'subclass'; classId: number; subclassKey: string }
+  | { kind: 'race'; raceId: number }
+  | { kind: 'subrace'; raceId: number; subraceId: number }
   | { kind: 'mob' };
+
+/** A race and its subraces, as /characters/races returns them. */
+export interface RaceWithSubraces {
+  id_race: number;
+  name: string;
+  subraces: Array<{ id_subrace: number; name: string }>;
+}
 
 export const ALL_SKILLS: SkillCategory = { kind: 'all' };
 
@@ -26,12 +37,19 @@ export const SKILL_CLASSES = [
 ] as const;
 
 export const MOB_ACCENT = '#c084fc';
+export const RACE_ACCENT = '#fbbf24';
+export const GENERAL_ACCENT = '#94a3b8';
 
 export const categoryAccent = (category: SkillCategory): string => {
   switch (category.kind) {
     case 'class':
     case 'subclass':
       return SKILL_CLASSES.find((c) => c.id === category.classId)?.accent ?? '#f0d95c';
+    case 'race':
+    case 'subrace':
+      return RACE_ACCENT;
+    case 'general':
+      return GENERAL_ACCENT;
     case 'mob':
       return MOB_ACCENT;
     default:
@@ -39,12 +57,26 @@ export const categoryAccent = (category: SkillCategory): string => {
   }
 };
 
-export const categoryLabel = (category: SkillCategory, subclasses: Subclass[]): string => {
+export const categoryLabel = (
+  category: SkillCategory,
+  subclasses: Subclass[],
+  races: RaceWithSubraces[] = [],
+): string => {
   switch (category.kind) {
     case 'class':
       return SKILL_CLASSES.find((c) => c.id === category.classId)?.label ?? 'Класс';
     case 'subclass':
       return subclasses.find((s) => s.key === category.subclassKey)?.name ?? category.subclassKey;
+    case 'race':
+      return races.find((r) => r.id_race === category.raceId)?.name ?? 'Раса';
+    case 'subrace':
+      return (
+        races
+          .flatMap((r) => r.subraces)
+          .find((s) => s.id_subrace === category.subraceId)?.name ?? 'Подраса'
+      );
+    case 'general':
+      return 'Общие';
     case 'mob':
       return 'Мобы';
     default:
@@ -56,6 +88,8 @@ export const sameCategory = (a: SkillCategory, b: SkillCategory): boolean => {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'class' && b.kind === 'class') return a.classId === b.classId;
   if (a.kind === 'subclass' && b.kind === 'subclass') return a.subclassKey === b.subclassKey;
+  if (a.kind === 'race' && b.kind === 'race') return a.raceId === b.raceId;
+  if (a.kind === 'subrace' && b.kind === 'subrace') return a.subraceId === b.subraceId;
   return true;
 };
 
@@ -68,6 +102,12 @@ export const categoryParams = (
       return { class_id: category.classId };
     case 'subclass':
       return { subclass_key: category.subclassKey };
+    case 'race':
+      return { race_id: category.raceId };
+    case 'subrace':
+      return { subrace_id: category.subraceId };
+    case 'general':
+      return { general: 'true' };
     case 'mob':
       return { mob: 'true' };
     default:
@@ -85,26 +125,41 @@ export const categoryDefaults = (
 ): {
   class_limitations: string | null;
   subclass_limitations: string | null;
+  race_limitations: string | null;
+  subrace_limitations: string | null;
   is_mob_skill: boolean;
 } => {
+  const none = {
+    class_limitations: null,
+    subclass_limitations: null,
+    race_limitations: null,
+    subrace_limitations: null,
+    is_mob_skill: false,
+  };
   switch (category.kind) {
     case 'class':
-      return {
-        class_limitations: String(category.classId),
-        subclass_limitations: null,
-        is_mob_skill: false,
-      };
+      return { ...none, class_limitations: String(category.classId) };
     case 'subclass':
       return {
+        ...none,
         // The parent class is kept alongside the subclass so the game's
         // class checks still pass; the subclass is what narrows the category.
         class_limitations: String(category.classId),
         subclass_limitations: category.subclassKey,
-        is_mob_skill: false,
+      };
+    case 'race':
+      return { ...none, race_limitations: String(category.raceId) };
+    case 'subrace':
+      return {
+        ...none,
+        race_limitations: String(category.raceId),
+        subrace_limitations: String(category.subraceId),
       };
     case 'mob':
-      return { class_limitations: null, subclass_limitations: null, is_mob_skill: true };
+      return { ...none, is_mob_skill: true };
+    // "Общие" and "Все" both create an unscoped skill: general is what
+    // unscoped means, and from "Все" there is no section to inherit.
     default:
-      return { class_limitations: null, subclass_limitations: null, is_mob_skill: false };
+      return none;
   }
 };
