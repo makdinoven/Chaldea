@@ -65,15 +65,22 @@ const PerkNode = ({ perk, x, y, categoryColor, onSelect }: PerkNodeProps) => {
   const clipId = `perk-fill-${perk.id}`;
   const glowColor = accent || categoryColor;
 
+  /*
+    A locked perk still has to be findable. It used to be white at 0.12 alpha
+    under an overall opacity of 0.5 — six percent, over a painted backdrop,
+    which is nothing at all. It now keeps its branch's colour at half strength
+    over an opaque core, so it reads as a place you have not been yet rather
+    than as a smudge.
+  */
   const borderColor = active
     ? categoryColor
-    : 'rgba(255,255,255,0.12)';
+    : categoryColor.replace(/[\d.]+\)$/, '0.55)');
   const fillColor = active
     ? categoryColor.replace(/[\d.]+\)$/, '0.15)')
-    : 'rgba(255,255,255,0.03)';
+    : categoryColor.replace(/[\d.]+\)$/, '0.08)');
 
   // Rune colors: dim base + bright fill clipped by progress
-  const runeDim = 'rgba(255,255,255,0.12)';
+  const runeDim = 'rgba(255,255,255,0.4)';
   const runeBright = active
     ? 'rgba(255,255,255,0.9)'
     : categoryColor.replace(/[\d.]+\)$/, '0.7)');
@@ -119,15 +126,39 @@ const PerkNode = ({ perk, x, y, categoryColor, onSelect }: PerkNodeProps) => {
         </defs>
       )}
 
+      {/* Opaque core, so the painted backdrop cannot show through a node */}
+      <polygon
+        points={hexPoints(x, y, HEX_SIZE)}
+        fill="rgba(9,9,20,0.82)"
+        stroke="none"
+      />
+
       {/* Main hexagon */}
       <polygon
         points={hexPoints(x, y, HEX_SIZE)}
         fill={fillColor}
         stroke={borderColor}
-        strokeWidth={active ? 2.5 : 1.5}
+        strokeWidth={active ? 2.5 : 2}
         filter={active ? `url(#${filterId})` : undefined}
-        opacity={active ? 1 : 0.5}
       />
+
+      {/* Progress ring for a locked perk: how close it is, at a glance */}
+      {!active && progressPct > 0 && (
+        <circle
+          cx={x}
+          cy={y}
+          r={HEX_SIZE + 3}
+          fill="none"
+          stroke={runeBright}
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeDasharray={`${2 * Math.PI * (HEX_SIZE + 3) * progressPct} ${
+            2 * Math.PI * (HEX_SIZE + 3)
+          }`}
+          transform={`rotate(-90 ${x} ${y})`}
+          opacity={0.75}
+        />
+      )}
 
       {/* Inner decorative hexagon (active only) */}
       {active && (
@@ -152,7 +183,7 @@ const PerkNode = ({ perk, x, y, categoryColor, onSelect }: PerkNodeProps) => {
         className="pointer-events-none select-none"
         style={active ? {
           textShadow: `0 0 8px ${glowColor}, 0 0 16px ${glowColor}40`,
-        } : undefined}
+        } : { textShadow: '0 0 5px rgba(0,0,0,0.9)' }}
       >
         {runeSymbol}
       </text>
