@@ -7,17 +7,24 @@
  */
 
 /*
-  Sized against the wheel rather than against nothing: on the current trees the
-  tightest spot is where two sectors nearly meet at ring 5, where node centres
-  are ~100px apart. These sizes leave ~36px of clear space there, while cutting
-  the emptiness between neighbours on a ring, which runs to 200px and more.
+  Sized against the wheel rather than against nothing. The binding constraint is
+  where two sectors nearly meet at ring 5: their nearest nodes are 24° apart, so
+  at that ring's radius their centres are only ~110px apart. These sizes keep
+  ~30px of daylight there while filling the 200px-plus emptiness between
+  neighbours on a ring. Raising them further means pushing ring 5 outward too —
+  see innerRadius in combineTrees.
 */
 
 /** Ordinary nodes. */
-export const NODE_SIZE_REGULAR = 64;
+export const NODE_SIZE_REGULAR = 80;
 
-/** Class roots and subclass picks — the landmarks of a tree. */
-export const NODE_SIZE_LARGE = 96;
+/**
+ * Subclass picks — the one landmark worth enlarging.
+ *
+ * Class roots deliberately stay ordinary size: they sit at the very centre,
+ * inside the painted hub, and an enlarged root spilled out of it.
+ */
+export const NODE_SIZE_LARGE = 120;
 
 export const playerNodeSize = (nodeType: string | undefined | null): number =>
-  nodeType === 'root' || nodeType === 'subclass_choice' ? NODE_SIZE_LARGE : NODE_SIZE_REGULAR;
+  nodeType === 'subclass_choice' ? NODE_SIZE_LARGE : NODE_SIZE_REGULAR;

@@ -10,7 +10,7 @@ import 'reactflow/dist/style.css';
 import PlayerNodeComponent from './PlayerNodeComponent';
 import { computeNodeState } from './utils/computeNodeState';
 import { combineTrees } from './utils/combineTrees';
-import { GradientEdge, classGradientColors, defaultGradient } from './treeEdges';
+import { GradientEdge, BridgeEdge, classGradientColors, defaultGradient } from './treeEdges';
 import { playerNodeSize } from './nodeSizes';
 import type {
   FullClassTreeResponse,
@@ -60,10 +60,9 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
     playerNode: PlayerNodeComponent,
   }), []);
 
-  // No bridge type here: sector bridges belong to the wheel, which draws no
-  // links at all. The admin editor still registers and uses them.
   const edgeTypes = useMemo(() => ({
     gradient: GradientEdge,
+    bridge: BridgeEdge,
   }), []);
 
   const combined = views.length > 1;
@@ -120,14 +119,7 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
         });
       }
 
-      /* ---------- Edges with gradient styling ----------
-         The wheel draws none: laid over the painted backdrop the links read as
-         clutter rather than as paths. Prerequisites still come from
-         tree.connections, so nothing about how the tree works changes — only
-         what is drawn. The single-class view, which has no artwork to fight
-         with, keeps them. */
-      if (combined) continue;
-
+      /* ---------- Edges with gradient styling ---------- */
       const gradient = classGradientColors[tree.class_id] ?? defaultGradient;
       const ringOf = new Map(tree.nodes.map((n) => [String(n.id), n.level_ring ?? 1]));
       for (const conn of tree.connections) {
@@ -136,25 +128,26 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
         const bothChosen = sourceChosen && targetChosen;
         const oneChosen = sourceChosen || targetChosen;
 
-        // Untouched links still carry the class hue so the three sectors read
-        // apart at a glance; another class's branches sit a step further back.
-        let colors: [string, string] = gradient.faint;
-        let strokeWidth = 1.5;
+        // A link has to show the player where a branch leads, over a painted
+        // backdrop, so even an untouched one is drawn in full class colour.
+        // The tiers separate by weight, not by fading towards invisible.
+        let colors: [string, string] = gradient.strong;
+        let strokeWidth = 2;
         let glowing = false;
         let opacity = 1;
 
         if (bothChosen) {
           colors = gradient.bright;
-          strokeWidth = 2.5;
+          strokeWidth = 3;
           glowing = true;
         } else if (oneChosen) {
-          colors = gradient.dim;
+          strokeWidth = 2.5;
         } else if (readOnly) {
           // Another class's branches are always the faintest thing on screen:
           // fainter than anything in the player's own sector, reachable or not.
           colors = gradient.faint;
-          strokeWidth = 1;
-          opacity = 0.3;
+          strokeWidth = 1.5;
+          opacity = 0.45;
         } else {
           // Rings the character cannot reach yet recede, so the branches that
           // are actually in play stand out from the rest of their own sector.
@@ -163,8 +156,8 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
             ringOf.get(String(conn.to_node_id)) ?? 0,
           );
           if (reach > characterLevel) {
-            strokeWidth = 1;
-            opacity = 0.55;
+            strokeWidth = 1.75;
+            opacity = 0.7;
           }
         }
 
@@ -173,9 +166,20 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
           source: String(conn.from_node_id),
           target: String(conn.to_node_id),
           type: 'gradient',
-          data: { colors, strokeWidth, glowing, opacity, curved: combined },
+          data: { colors, strokeWidth, glowing, opacity, curved: combined, casing: combined },
         });
       }
+    }
+
+    for (const bridge of layout?.bridges ?? []) {
+      rfEdges.push({
+        id: bridge.id,
+        source: bridge.fromNodeId,
+        target: bridge.toNodeId,
+        type: 'bridge',
+        focusable: false,
+        interactionWidth: 0,
+      });
     }
 
     // Radius of the whole wheel, measured to the outer edge of the furthest

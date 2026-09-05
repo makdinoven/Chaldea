@@ -42,8 +42,10 @@ export interface WheelLayoutConfig {
 
 export const DEFAULT_WHEEL_LAYOUT: WheelLayoutConfig = {
   // Small on purpose: the three class starts should read as one shared centre,
-  // parted just enough not to overlap.
-  innerRadius: 90,
+  // parted just enough not to overlap. It also sets where every other ring
+  // lands, and the tightest spot on the wheel is where two sectors nearly meet
+  // at ring 5 — this puts that ring far enough out for the nodes to clear.
+  innerRadius: 115,
   ringSpacing: 150,
   spread: 'fill',
   arcSpacing: 120,

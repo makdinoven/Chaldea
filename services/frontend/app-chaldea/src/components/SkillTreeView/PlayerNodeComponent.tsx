@@ -167,7 +167,8 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   const skillsCount = d.skills?.length ?? 0;
   const state = d.visualState ?? 'locked';
   const nodeType = d.node_type ?? 'regular';
-  const isLarge = nodeType === 'root' || nodeType === 'subclass_choice';
+  // Roots are drawn like any other node — see NODE_SIZE_LARGE for why.
+  const isLarge = nodeType === 'subclass_choice';
   const isForeign = d.foreign ?? false;
   const isAdmin = d.adminView ?? false;
   const handleStyle = isAdmin ? ADMIN_HANDLE_STYLE : CENTRED_HANDLE_STYLE;
