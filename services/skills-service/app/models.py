@@ -1,5 +1,5 @@
 from sqlalchemy.orm import relationship, Mapped, mapped_column
-from sqlalchemy import Column, Integer, SmallInteger, String, Text, ForeignKey, Float, TIMESTAMP, DateTime, UniqueConstraint
+from sqlalchemy import Column, Integer, SmallInteger, String, Text, ForeignKey, Float, TIMESTAMP, DateTime, UniqueConstraint, Boolean
 from sqlalchemy.sql import func
 from database import Base
 
@@ -14,8 +14,17 @@ class Skill(Base):
     skill_type: Mapped[str] = mapped_column(String(50), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
     class_limitations = Column(String(100), nullable=True)
+    # Comma-separated subclass keys (see subclasses.py). A skill scoped to a
+    # subclass is NOT a skill of its parent class: it is a narrower category,
+    # and it is listed only under that subclass.
+    subclass_limitations = Column(String(255), nullable=True)
     race_limitations = Column(String(100), nullable=True)
     subrace_limitations = Column(String(100), nullable=True)
+    # Mob skills and player skills are kept apart: a mob skill carries no class
+    # or subclass scoping, and never appears in the players' categories.
+    is_mob_skill = Column(
+        Boolean, nullable=False, default=False, server_default="0", index=True
+    )
     min_level = Column(Integer, default=1)
     purchase_cost = Column(Integer, default=0)
     skill_image = Column(Text, nullable=True)

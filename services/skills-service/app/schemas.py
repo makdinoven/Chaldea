@@ -67,8 +67,13 @@ class SkillBase(BaseModel):
     description: Optional[str] = None
 
     class_limitations: Optional[str] = None
+    # Comma-separated subclass keys; a narrower category than the class, not a
+    # part of it.
+    subclass_limitations: Optional[str] = None
     race_limitations: Optional[str] = None
     subrace_limitations: Optional[str] = None
+    # Mob skills are kept apart from the players' categories entirely.
+    is_mob_skill: bool = False
     min_level: int = 1
     purchase_cost: int = 0
     skill_image: Optional[str] = None
@@ -164,8 +169,10 @@ class SkillWithPerksRead(BaseModel):
     skill_image: Optional[str] = None
     min_level: int = 1
     class_limitations: Optional[str] = None
+    subclass_limitations: Optional[str] = None
     race_limitations: Optional[str] = None
     subrace_limitations: Optional[str] = None
+    is_mob_skill: bool = False
     base: SkillBaseStats
     perks: List[SkillPerkRead] = []
 

@@ -30,8 +30,54 @@ async def get_skill(db: AsyncSession, skill_id: int) -> models.Skill | None:
     result = await db.execute(select(models.Skill).where(models.Skill.id == skill_id))
     return result.scalar_one_or_none()
 
-async def list_skills(db: AsyncSession, q: str | None = None) -> list[models.Skill]:
+def _csv_contains(column, value: str):
+    """
+    True when a comma-separated column holds `value` as one of its entries.
+
+    MySQL has FIND_IN_SET for this, but the tests run on SQLite, so the check is
+    spelled out instead: wrap both sides in commas and look for the value as a
+    whole entry, which stops "1" matching "10". SQLAlchemy renders the
+    concatenation as CONCAT on MySQL and || on SQLite.
+    """
+    padded = "," + func.coalesce(column, "") + ","
+    return padded.like(f"%,{value},%")
+
+
+def _csv_is_empty(column):
+    """True when a comma-separated column carries no entries at all."""
+    return or_(column.is_(None), column == "")
+
+
+async def list_skills(
+    db: AsyncSession,
+    q: str | None = None,
+    class_id: int | None = None,
+    subclass_key: str | None = None,
+    mob: bool | None = None,
+) -> list[models.Skill]:
+    """
+    Admin skill list, optionally narrowed to one category.
+
+    The categories are exclusive by design, which is why they are separate
+    filters rather than one field: `mob` splits mob skills from players'
+    skills outright, `class_id` means "this class, but none of its subclasses"
+    — a subclass skill belongs to the subclass alone — and `subclass_key`
+    means that subclass.
+    """
     stmt = select(models.Skill)
+
+    if mob is not None:
+        stmt = stmt.where(models.Skill.is_mob_skill == mob)
+
+    if subclass_key:
+        stmt = stmt.where(_csv_contains(models.Skill.subclass_limitations, subclass_key))
+    elif class_id is not None:
+        # Scoped to the class itself: tied to it, and to no subclass.
+        stmt = stmt.where(
+            _csv_contains(models.Skill.class_limitations, str(class_id)),
+            _csv_is_empty(models.Skill.subclass_limitations),
+        )
+
     if q is not None and q.strip():
         q_stripped = q.strip()
         name_clause = func.lower(models.Skill.name).like(f"%{q_stripped.lower()}%")
