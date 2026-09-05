@@ -10,7 +10,7 @@ import 'reactflow/dist/style.css';
 import PlayerNodeComponent from './PlayerNodeComponent';
 import { computeNodeState } from './utils/computeNodeState';
 import { combineTrees } from './utils/combineTrees';
-import { GradientEdge, BridgeEdge, classGradientColors, defaultGradient } from './treeEdges';
+import { GradientEdge, classGradientColors, defaultGradient } from './treeEdges';
 import { playerNodeSize } from './nodeSizes';
 import type {
   FullClassTreeResponse,
@@ -45,6 +45,13 @@ interface PlayerTreeCanvasProps {
 /** Gap between the outermost node and the edge of the round frame, in pixels. */
 const WHEEL_EDGE_PADDING = 50;
 
+/**
+ * How far the painted backdrop is knocked back. Light: the nodes carry their
+ * own opaque core and glow, so the art does not need to be dimmed to keep them
+ * readable, and dimming it only made the wheel look murky.
+ */
+const WHEEL_BACKDROP_DIM = 0.12;
+
 /** Admin nodes are 100px boxes positioned by their top-left corner. */
 const ADMIN_NODE_SIZE = 100;
 
@@ -53,9 +60,10 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
     playerNode: PlayerNodeComponent,
   }), []);
 
+  // No bridge type here: sector bridges belong to the wheel, which draws no
+  // links at all. The admin editor still registers and uses them.
   const edgeTypes = useMemo(() => ({
     gradient: GradientEdge,
-    bridge: BridgeEdge,
   }), []);
 
   const combined = views.length > 1;
@@ -112,7 +120,14 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
         });
       }
 
-      /* ---------- Edges with gradient styling ---------- */
+      /* ---------- Edges with gradient styling ----------
+         The wheel draws none: laid over the painted backdrop the links read as
+         clutter rather than as paths. Prerequisites still come from
+         tree.connections, so nothing about how the tree works changes — only
+         what is drawn. The single-class view, which has no artwork to fight
+         with, keeps them. */
+      if (combined) continue;
+
       const gradient = classGradientColors[tree.class_id] ?? defaultGradient;
       const ringOf = new Map(tree.nodes.map((n) => [String(n.id), n.level_ring ?? 1]));
       for (const conn of tree.connections) {
@@ -161,17 +176,6 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
           data: { colors, strokeWidth, glowing, opacity, curved: combined },
         });
       }
-    }
-
-    for (const bridge of layout?.bridges ?? []) {
-      rfEdges.push({
-        id: bridge.id,
-        source: bridge.fromNodeId,
-        target: bridge.toNodeId,
-        type: 'bridge',
-        focusable: false,
-        interactionWidth: 0,
-      });
     }
 
     // Radius of the whole wheel, measured to the outer edge of the furthest
@@ -249,7 +253,7 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
           same order — red warrior up, green rogue lower right, blue mage lower
           left — so it registers with the layout rather than sitting behind it.
         */
-        <WheelBackdrop />
+        <WheelBackdrop dim={WHEEL_BACKDROP_DIM} />
       ) : (
         <>
           {/* ---- Class art as fixed background ---- */}

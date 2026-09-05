@@ -37,11 +37,20 @@ const getRune = (levelRing: number, sortOrder: number): string => {
 };
 
 /* ========== Class color schemes ========== */
+interface StateColors {
+  border: string;
+  fill: string;
+  /** CSS drop-shadow value, applied to the whole disc. */
+  glow: string;
+  rune: string;
+  badge: string;
+}
+
 interface ClassColors {
-  chosen: { border: string; fill: string; glow: string; rune: string; badge: string };
-  available: { border: string; fill: string; glow: string; rune: string };
-  locked: { border: string; fill: string; rune: string };
-  blocked: { border: string; fill: string; rune: string };
+  chosen: StateColors;
+  available: StateColors;
+  locked: StateColors;
+  blocked: StateColors;
 }
 
 /* DB class IDs: 1=Warrior (red), 2=Rogue (emerald), 3=Mage (cyan) */
@@ -54,34 +63,42 @@ const CLASS_ACCENTS: Record<number, { base: string; light: string; rgb: string }
 /**
  * Builds a node palette from one class accent.
  *
- * Every state keeps the class hue — an untaken node used to be the same grey
- * for all three classes, which made the combined wheel unreadable: you could
- * not tell whose branch you were looking at until something was chosen.
- * "blocked" stays red on purpose: that is a rule, not a class.
+ * The nodes sit on a painted, busy backdrop, so every state has to hold its own
+ * against it: full-strength borders, a lit rune, and a glow that separates the
+ * disc from whatever is behind it. The opaque core drawn under the fill (see
+ * CORE_FILL) is what stops the art bleeding through and washing the node out.
+ *
+ * Every state keeps the class hue, so an untaken node still says whose branch
+ * it is. "blocked" stays red on purpose: that is a rule, not a class.
  */
 const buildClassColors = ({ base, light, rgb }: { base: string; light: string; rgb: string }): ClassColors => ({
   chosen: {
+    border: light,
+    fill: `rgba(${rgb},0.38)`,
+    glow: `drop-shadow(0 0 10px rgba(${rgb},0.95)) drop-shadow(0 0 22px rgba(${rgb},0.55))`,
+    rune: '#ffffff',
+    badge: `rgba(${rgb},0.35)`,
+  },
+  available: {
     border: base,
-    fill: `rgba(${rgb},0.15)`,
-    glow: `0 0 16px rgba(${rgb},0.6), inset 0 0 12px rgba(${rgb},0.15)`,
+    fill: `rgba(${rgb},0.26)`,
+    glow: `drop-shadow(0 0 8px rgba(${rgb},0.8)) drop-shadow(0 0 18px rgba(${rgb},0.4))`,
+    rune: light,
+    badge: `rgba(${rgb},0.3)`,
+  },
+  locked: {
+    border: `rgba(${rgb},0.9)`,
+    fill: `rgba(${rgb},0.16)`,
+    glow: `drop-shadow(0 0 6px rgba(${rgb},0.5))`,
     rune: light,
     badge: `rgba(${rgb},0.25)`,
   },
-  available: {
-    border: `${base}80`,
-    fill: `rgba(${rgb},0.06)`,
-    glow: `0 0 10px rgba(${rgb},0.3)`,
-    rune: `${base}99`,
-  },
-  locked: {
-    border: `rgba(${rgb},0.35)`,
-    fill: `rgba(${rgb},0.05)`,
-    rune: `rgba(${rgb},0.4)`,
-  },
   blocked: {
-    border: 'rgba(239,68,68,0.2)',
-    fill: 'rgba(239,68,68,0.04)',
-    rune: 'rgba(239,68,68,0.15)',
+    border: 'rgba(239,68,68,0.75)',
+    fill: 'rgba(239,68,68,0.14)',
+    glow: 'drop-shadow(0 0 5px rgba(239,68,68,0.4))',
+    rune: 'rgba(252,165,165,0.75)',
+    badge: 'rgba(239,68,68,0.25)',
   },
 });
 
@@ -141,6 +158,9 @@ const ADMIN_HANDLE_STYLE = {
 const OUTER_RADIUS = 48;
 const INNER_RADIUS = 37;
 
+/** Opaque core, so the painted backdrop never shows through a node. */
+const CORE_FILL = 'rgba(9,9,16,0.9)';
+
 /* ========== Component ========== */
 const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   const d = data as PlayerNodeData;
@@ -164,9 +184,9 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   // The admin is editing, not playing: nothing there is dimmed or pulsing.
   // Otherwise another class's node is always fainter than anything in the
   // player's own sector — a locked node of your own class still outranks it.
-  const opacity = isAdmin
-    ? 1
-    : isForeign ? 0.3 : state === 'locked' ? 0.5 : state === 'blocked' ? 0.3 : 1;
+  // Nodes stay at full strength: they have to read against the painted wheel.
+  // Only another class's nodes step back, and only enough to rank below yours.
+  const opacity = isAdmin ? 1 : isForeign ? 0.65 : state === 'blocked' ? 0.5 : 1;
   // Nothing in another class's tree should pulse as if it were waiting to be taken.
   const animClass = !isForeign && !isAdmin && state === 'available' ? 'animate-pulse' : '';
 
@@ -197,16 +217,14 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
         className={isAdmin ? '!cursor-crosshair' : undefined}
       />
 
-      {/* Hexagon shape via SVG */}
+      {/* Disc */}
       <svg
         viewBox="0 0 100 100"
         className="absolute inset-0 w-full h-full"
-        style={{ filter: 'glow' in stateColors ? `drop-shadow(${stateColors.glow.split(',')[0]})` : undefined }}
+        style={{ filter: stateColors.glow }}
       >
-        {/* Glow background for chosen */}
-        {state === 'chosen' && (
-          <circle cx={50} cy={50} r={OUTER_RADIUS} fill={stateColors.fill} stroke="none" />
-        )}
+        {/* Opaque core first, so the art behind cannot wash the node out */}
+        <circle cx={50} cy={50} r={OUTER_RADIUS} fill={CORE_FILL} stroke="none" />
 
         {/* Main ring */}
         <circle
@@ -215,7 +233,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
           r={OUTER_RADIUS}
           fill={stateColors.fill}
           stroke={stateColors.border}
-          strokeWidth={state === 'chosen' ? 3 : state === 'available' ? 2.5 : 1.5}
+          strokeWidth={state === 'chosen' ? 4 : state === 'available' ? 3.5 : 2.5}
         />
 
         {/* Inner ring (decorative) */}
@@ -241,9 +259,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
         `}
         style={{
           color: stateColors.rune,
-          textShadow: state === 'chosen'
-            ? `0 0 8px ${stateColors.rune}, 0 0 16px ${stateColors.rune}40`
-            : undefined,
+          textShadow: '0 0 6px rgba(0,0,0,0.9)',
         }}
       >
         {rune}
@@ -256,7 +272,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
           style={{
             background: '#0e0e1a',
             borderColor: stateColors.border,
-            color: state === 'chosen' ? stateColors.rune : 'rgba(255,255,255,0.5)',
+            color: stateColors.rune,
           }}
         >
           {d.level_ring}
@@ -268,8 +284,9 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
         <span
           className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 z-10 text-[8px] font-bold rounded-full px-1.5 min-w-[16px] text-center leading-[15px]"
           style={{
-            background: state === 'chosen' ? (colors.chosen.badge) : 'rgba(100,130,255,0.2)',
-            color: state === 'chosen' ? stateColors.rune : 'rgba(100,130,255,0.8)',
+            background: '#0e0e1a',
+            color: stateColors.rune,
+            border: `1px solid ${stateColors.border}`,
           }}
         >
           {skillsCount}
