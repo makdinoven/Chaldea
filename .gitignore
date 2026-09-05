@@ -45,10 +45,12 @@ celerybeat-schedule
 celerybeat-schedule.db
 
 # Reference screenshots and scratch files that live in the working tree only
-services/frontend/img*.png
+services/*.png
+services/frontend/*.png
 services/frontend/app-chaldea;D/
 features/*.png
 .claude/skills/*.png
 .claude/settings.local.json
 Template_to_design/*.png
 *.stackdump
+tmp_out.txt
