@@ -36,9 +36,15 @@ const TOP_PERCENT = 50 - (CIRCLE_CENTRE_Y / IMAGE_SIZE) * SIZE_PERCENT;
 interface WheelBackdropProps {
   /** Darkening laid over the art so the nodes stay legible, 0..1. */
   dim?: number;
+  /**
+   * Softening of the art, in pixels. Enough to push it behind the tree without
+   * losing what it depicts. The 4% overscan keeps the blur's soft edge outside
+   * the round frame, so it never shows as a halo.
+   */
+  blur?: number;
 }
 
-const WheelBackdrop = ({ dim = 0.45 }: WheelBackdropProps) => (
+const WheelBackdrop = ({ dim = 0.45, blur = 2 }: WheelBackdropProps) => (
   <div className="absolute inset-0 grid place-items-center overflow-hidden pointer-events-none">
     {/* A square that fits the frame whichever way round it is, so the art stays
         circular even on the admin's wide panel. */}
@@ -53,6 +59,7 @@ const WheelBackdrop = ({ dim = 0.45 }: WheelBackdropProps) => (
           height: `${SIZE_PERCENT}%`,
           left: `${LEFT_PERCENT}%`,
           top: `${TOP_PERCENT}%`,
+          filter: blur > 0 ? `blur(${blur}px)` : undefined,
         }}
       />
       <div
