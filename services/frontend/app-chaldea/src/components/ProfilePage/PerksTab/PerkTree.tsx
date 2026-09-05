@@ -98,10 +98,15 @@ interface NodePos {
  * Nodes within a ring are spaced evenly across the sector angle.
  */
 function computePositions(
+  /** Every category, in a fixed order — including the ones with no perks. */
   categories: Array<[string, CharacterPerk[]]>,
   center: number,
 ): NodePos[] {
   const positions: NodePos[] = [];
+  // Sectors are counted over every category, not just the populated ones, so a
+  // branch keeps its bearing when another empties out. The backdrop is painted
+  // against these bearings; if they shifted with the data it could never line
+  // up.
   const catCount = categories.length || 1;
   const sectorAngle = (2 * Math.PI) / catCount;
 
@@ -152,162 +157,7 @@ function computePositions(
   return positions;
 }
 
-interface EdgeData {
-  /** Trimmed line start (at hex border, not center) */
-  x1: number; y1: number;
-  /** Trimmed line end */
-  x2: number; y2: number;
-  cat: string;
-  /** Visual state: 'both' = both unlocked, 'one' = one unlocked, 'none' = neither */
-  state: 'both' | 'one' | 'none';
-}
-
-const CENTER_HEX_SIZE = 34; // center node hex radius
-
-/**
- * Trim a line segment so it starts/ends at the hex border
- * (offset inward by `r` from each endpoint).
- */
-function trimLine(
-  ax: number, ay: number, bx: number, by: number,
-  rA: number, rB: number,
-): [number, number, number, number] {
-  const dx = bx - ax;
-  const dy = by - ay;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < rA + rB) return [ax, ay, bx, by]; // too short to trim
-  const ux = dx / len;
-  const uy = dy / len;
-  return [ax + ux * rA, ay + uy * rA, bx - ux * rB, by - uy * rB];
-}
-
-/**
- * Build constellation edges connecting nodes within each category.
- * Lines are trimmed to hex borders and carry unlock state for styling.
- *
- * Unlocked perks draw bright edges to their nearest neighbours regardless
- * of ring order — so an unlocked node in ring 3 still lights up even when
- * intermediate rings are locked.
- */
-function computeEdges(
-  categories: Array<[string, CharacterPerk[]]>,
-  positions: NodePos[],
-  center: number,
-): EdgeData[] {
-  const edges: EdgeData[] = [];
-  const avoidR = HEX_SIZE + 2;
-
-  // Track existing edges to avoid duplicates (key = sorted perk ids, 0 = center)
-  const edgeSet = new Set<string>();
-  const eKey = (a: number, b: number) => (a < b ? `${a}-${b}` : `${b}-${a}`);
-
-  const pushEdge = (e: EdgeData, idA: number, idB: number) => {
-    const k = eKey(idA, idB);
-    if (edgeSet.has(k)) return;
-    edgeSet.add(k);
-    edges.push(e);
-  };
-
-  for (const [cat] of categories) {
-    const catNodes = positions.filter((p) => p.category === cat);
-    if (catNodes.length === 0) continue;
-
-    // Group by ring (distance from center)
-    const byRing: NodePos[][] = [];
-    const sorted = [...catNodes].sort((a, b) => {
-      const da = Math.sqrt((a.x - center) ** 2 + (a.y - center) ** 2);
-      const db = Math.sqrt((b.x - center) ** 2 + (b.y - center) ** 2);
-      return da - db;
-    });
-
-    let currentRing: NodePos[] = [];
-    let lastDist = 0;
-    for (const node of sorted) {
-      const d = Math.sqrt((node.x - center) ** 2 + (node.y - center) ** 2);
-      if (currentRing.length > 0 && d - lastDist > RING_SPACING * 0.5) {
-        byRing.push(currentRing);
-        currentRing = [];
-      }
-      currentRing.push(node);
-      lastDist = d;
-    }
-    if (currentRing.length > 0) byRing.push(currentRing);
-
-    // Center → first ring (center always counts as "active")
-    for (const node of (byRing[0] ?? [])) {
-      const [tx1, ty1, tx2, ty2] = trimLine(center, center, node.x, node.y, CENTER_HEX_SIZE, HEX_SIZE);
-      const state = isPerkActive(node.perk) ? 'both' : 'one';
-      pushEdge({ x1: tx1, y1: ty1, x2: tx2, y2: ty2, cat, state }, 0, node.perk.id);
-    }
-
-    // Ring N → Ring N+1
-    for (let r = 0; r < byRing.length - 1; r++) {
-      const ringA = byRing[r];
-      const ringB = byRing[r + 1];
-      const connectedB = new Set<number>();
-
-      const addEdge = (a: NodePos, b: NodePos) => {
-        const [tx1, ty1, tx2, ty2] = trimLine(a.x, a.y, b.x, b.y, HEX_SIZE, HEX_SIZE);
-        const aAct = isPerkActive(a.perk);
-        const bAct = isPerkActive(b.perk);
-        const state = aAct && bAct ? 'both' : (aAct || bAct ? 'one' : 'none');
-        pushEdge({ x1: tx1, y1: ty1, x2: tx2, y2: ty2, cat, state }, a.perk.id, b.perk.id);
-      };
-
-      for (const a of ringA) {
-        let bestIdx = 0;
-        let bestDist = Infinity;
-        ringB.forEach((b, idx) => {
-          const d = Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
-          if (d < bestDist) { bestDist = d; bestIdx = idx; }
-        });
-        const b = ringB[bestIdx];
-        if (!lineHitsNode(a.x, a.y, b.x, b.y, positions, a, b, avoidR)) {
-          addEdge(a, b);
-          connectedB.add(bestIdx);
-        }
-      }
-
-      // Orphaned ringB nodes
-      ringB.forEach((b, idx) => {
-        if (connectedB.has(idx)) return;
-        let bestA = ringA[0];
-        let bestDist = Infinity;
-        for (const a of ringA) {
-          const d = Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
-          if (d < bestDist) { bestDist = d; bestA = a; }
-        }
-        addEdge(bestA, b);
-      });
-    }
-
-    // ── Proximity edges for active perks ──
-    // Each active perk draws bright lines to its 2 nearest neighbours
-    // in the same category, regardless of ring structure.
-    for (const node of catNodes) {
-      if (!isPerkActive(node.perk)) continue;
-
-      const nearest = catNodes
-        .filter((n) => n !== node)
-        .map((n) => ({ n, d: Math.hypot(node.x - n.x, node.y - n.y) }))
-        .sort((a, b) => a.d - b.d)
-        .slice(0, 2);
-
-      for (const { n: neighbor } of nearest) {
-        const [tx1, ty1, tx2, ty2] = trimLine(
-          node.x, node.y, neighbor.x, neighbor.y, HEX_SIZE, HEX_SIZE,
-        );
-        const state = isPerkActive(neighbor.perk) ? 'both' : 'one';
-        pushEdge(
-          { x1: tx1, y1: ty1, x2: tx2, y2: ty2, cat, state },
-          node.perk.id, neighbor.perk.id,
-        );
-      }
-    }
-  }
-
-  return edges;
-}
+ 
 
 function lineHitsNode(
   x1: number, y1: number, x2: number, y2: number,
@@ -350,56 +200,41 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
     return map;
   }, [perks]);
 
+  /** Every category in its fixed order — this is what sets the bearings. */
+  const allCategories = useMemo(() => [...grouped.entries()], [grouped]);
+
+  /** Only the ones with perks — for the legend and the mobile list. */
   const categories = useMemo(
-    () => [...grouped.entries()].filter(([, items]) => items.length > 0),
-    [grouped],
+    () => allCategories.filter(([, items]) => items.length > 0),
+    [allCategories],
   );
 
   const CENTER = 350;
 
   const nodePositions = useMemo(
-    () => computePositions(categories, CENTER),
-    [categories],
+    () => computePositions(allCategories, CENTER),
+    [allCategories],
   );
-
-  const edges = useMemo(
-    () => computeEdges(categories, nodePositions, CENTER),
-    [categories, nodePositions],
-  );
-
-  const bounds = useMemo(() => {
-    const allX = [CENTER, ...nodePositions.map((p) => p.x)];
-    const allY = [CENTER, ...nodePositions.map((p) => p.y)];
-    const pad = 90;
-    return {
-      minX: Math.min(...allX) - pad,
-      maxX: Math.max(...allX) + pad,
-      minY: Math.min(...allY) - pad,
-      maxY: Math.max(...allY) + pad,
-    };
-  }, [nodePositions]);
-
-  const viewBox = `${bounds.minX} ${bounds.minY} ${bounds.maxX - bounds.minX} ${
-    bounds.maxY - bounds.minY
-  }`;
 
   /*
-    The art's box: centred on the tree's hub, and big enough to reach every
-    corner of the viewBox. Centring on the hub rather than on the viewBox
-    matters — a five-sector fan is not centred on its own bounding box, so the
-    two differ, and it was that difference showing up as the art sitting off to
-    one side. "slice" keeps the artwork's proportions and crops the overhang.
+    A square window centred on the hub, wide enough for the furthest node.
+
+    Square and hub-centred on purpose: the frame is a circle and the artwork is
+    square, so this is what makes all three agree. A bounding box round the
+    nodes would be neither — a five-sector fan reaches further down than up —
+    and centring on it is exactly what used to push the picture off to one side.
   */
-  const art = useMemo(() => {
-    const halfW = Math.max(CENTER - bounds.minX, bounds.maxX - CENTER);
-    const halfH = Math.max(CENTER - bounds.minY, bounds.maxY - CENTER);
-    return {
-      x: CENTER - halfW,
-      y: CENTER - halfH,
-      width: halfW * 2,
-      height: halfH * 2,
-    };
-  }, [bounds]);
+  const half = useMemo(() => {
+    const reach = nodePositions.reduce(
+      (worst, p) => Math.max(worst, Math.abs(p.x - CENTER), Math.abs(p.y - CENTER)),
+      0,
+    );
+    return reach + 90;
+  }, [nodePositions]);
+
+  const viewBox = `${CENTER - half} ${CENTER - half} ${half * 2} ${half * 2}`;
+
+
 
   if (perks.length === 0) {
     return (
@@ -411,10 +246,9 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
   }
 
   return (
-    <div className="relative rounded-card overflow-hidden">
-      <PerkBackdrop />
+    <div className="relative">
       <div className="relative z-10">
-        {/* Desktop: SVG constellation */}
+        {/* Desktop: SVG constellation, in a round frame like the skill wheel */}
         <div className="hidden md:block py-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
@@ -422,52 +256,32 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
             transition={{ duration: 0.5, ease: 'easeOut' }}
             className="w-full flex justify-center"
           >
-            <svg
-              viewBox={viewBox}
-              className="w-full max-w-[850px] h-auto"
-              xmlns="http://www.w3.org/2000/svg"
-            >
+            <div className="relative w-full max-w-[760px] aspect-square rounded-full overflow-hidden bg-[#04041a]">
+              <svg
+                viewBox={viewBox}
+                className="absolute inset-0 w-full h-full"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+              {/* Square art in a square window, both centred on the hub, so
+                  it lands where the branches are without any fitting to do */}
               <image
                 href={perksBackdrop}
-                x={art.x}
-                y={art.y}
-                width={art.width}
-                height={art.height}
+                x={CENTER - half}
+                y={CENTER - half}
+                width={half * 2}
+                height={half * 2}
                 preserveAspectRatio="xMidYMid slice"
-                style={{ opacity: 0.85 }}
               />
               {/* Just enough darkening for the nodes and labels to read over it */}
               <rect
-                x={art.x}
-                y={art.y}
-                width={art.width}
-                height={art.height}
-                fill="rgba(4,4,16,0.35)"
+                x={CENTER - half}
+                y={CENTER - half}
+                width={half * 2}
+                height={half * 2}
+                fill="rgba(4,4,16,0.3)"
               />
 
-              {/* Edge gradient defs + blur filter */}
-              <defs>
-                <filter id="edge-blur" x="-20%" y="-20%" width="140%" height="140%">
-                  <feGaussianBlur stdDeviation="3" />
-                </filter>
-                {categories.map(([cat]) => {
-                  const c = CATEGORY_CONFIG[cat]?.color ?? 'rgba(255,255,255,0.5)';
-                  return (
-                    <React.Fragment key={cat}>
-                      <linearGradient id={`edge-bright-${cat}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stopColor="rgba(240,217,92,0.9)" />
-                        <stop offset="100%" stopColor={c.replace(/[\d.]+\)$/, '0.9)')} />
-                      </linearGradient>
-                      <linearGradient id={`edge-dim-${cat}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stopColor="rgba(240,217,92,0.5)" />
-                        <stop offset="100%" stopColor={c.replace(/[\d.]+\)$/, '0.45)')} />
-                      </linearGradient>
-                    </React.Fragment>
-                  );
-                })}
-              </defs>
-
-              {/* Center hexagon (drawn first — behind edges and nodes) */}
+              {/* Center hexagon (drawn before the nodes, so they sit on top) */}
               <polygon
                 points={hexPoints(CENTER, CENTER, 34)}
                 fill="rgba(20,18,40,0.9)"
@@ -495,46 +309,6 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
                 Перки
               </text>
 
-              {/* Edges (above center hex, behind perk nodes) */}
-              {edges.map((e, i) => {
-                // Only render edges connected to at least one active perk
-                if (e.state === 'none') return null;
-
-                const isBright = e.state === 'both';
-                const stroke = isBright
-                  ? `url(#edge-bright-${e.cat})`
-                  : `url(#edge-dim-${e.cat})`;
-                const width = isBright ? 2.5 : 1.5;
-
-                // Nudge perfectly vertical/horizontal lines so SVG gradient
-                // bounding box isn't degenerate (zero width/height kills gradient)
-                let { x1, y1, x2, y2 } = e;
-                if (x1 === x2) x2 += 0.1;
-                if (y1 === y2) y2 += 0.1;
-
-                return (
-                  <g key={i}>
-                    {/* Glow layer for bright edges */}
-                    {isBright && (
-                      <line
-                        x1={x1} y1={y1} x2={x2} y2={y2}
-                        stroke={stroke}
-                        strokeWidth={width + 4}
-                        opacity={0.25}
-                        filter="url(#edge-blur)"
-                      />
-                    )}
-                    {/* Main line */}
-                    <line
-                      x1={x1} y1={y1} x2={x2} y2={y2}
-                      stroke={stroke}
-                      strokeWidth={width}
-                      strokeLinecap="round"
-                    />
-                  </g>
-                );
-              })}
-
               {/* Perk nodes */}
               {nodePositions.map(({ perk, x, y, category }) => (
                 <PerkNode
@@ -547,12 +321,14 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
                 />
               ))}
 
-            </svg>
+              </svg>
+            </div>
           </motion.div>
         </div>
 
         {/* Mobile: flat list */}
-        <div className="block md:hidden space-y-6 p-4">
+        <div className="relative block md:hidden space-y-6 p-4 rounded-card overflow-hidden">
+          <PerkBackdrop />
           <motion.div
             initial="hidden"
             animate="visible"
