@@ -2,6 +2,7 @@ import { useCallback, useMemo } from 'react';
 import ReactFlow, {
   Controls,
   MiniMap,
+  ConnectionMode,
   type Connection,
   type Edge,
   type Node,
@@ -20,9 +21,9 @@ import {
 
 /**
  * The class wheel, exactly as players see it, but editable: click a node to
- * inspect it, drag from one node's handle to another to link them, click a link
- * to remove it. Node positions come from the shared wheel layout, so there is
- * nothing to drag around.
+ * inspect it, drag from anywhere on one node to another to link them, click a
+ * link to remove it. Node positions come from the shared wheel layout, so there
+ * is nothing to drag around.
  */
 
 interface CombinedTreeCanvasProps {
@@ -111,6 +112,10 @@ const CombinedTreeCanvas = ({
         onNodeClick={handleNodeClick}
         onEdgeClick={handleEdgeClick}
         onConnect={handleConnect}
+        // Handles cover the whole node while editing, so a drop lands on
+        // whichever handle happens to be on top; loose mode accepts either.
+        connectionMode={ConnectionMode.Loose}
+        connectionLineStyle={{ stroke: '#f0d95c', strokeWidth: 2 }}
         nodesDraggable={false}
         nodesConnectable
         elementsSelectable

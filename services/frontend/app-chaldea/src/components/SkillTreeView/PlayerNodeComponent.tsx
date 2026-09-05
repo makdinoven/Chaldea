@@ -108,13 +108,30 @@ const CENTRED_HANDLE_STYLE = {
   border: 0,
 } as const;
 
-/** Same anchor point, but big enough to drag a connection out of. */
+/**
+ * While editing, the handle covers the whole node instead of being a dot at its
+ * centre: a 12px target inside a 40px hex was near impossible to hit. Dragging
+ * anywhere on a node now pulls a connection out of it, and dropping anywhere on
+ * another node lands it — the canvas runs in ConnectionMode.Loose so either
+ * handle accepts the drop. Clicks still reach the node underneath, so selecting
+ * a node to edit it works as before.
+ *
+ * The anchor point ReactFlow draws edges from is the handle's centre, which is
+ * the node's centre either way.
+ */
 const ADMIN_HANDLE_STYLE = {
-  ...CENTRED_HANDLE_STYLE,
-  width: 12,
-  height: 12,
-  background: 'rgba(240,217,92,0.55)',
-  border: '1px solid rgba(240,217,92,0.9)',
+  top: 0,
+  left: 0,
+  bottom: 'auto',
+  transform: 'none',
+  width: '100%',
+  height: '100%',
+  minWidth: 0,
+  minHeight: 0,
+  borderRadius: '50%',
+  background: 'transparent',
+  border: 0,
+  zIndex: 5,
 } as const;
 
 /* ========== Hexagon SVG clip path (used inline) ========== */
@@ -167,7 +184,12 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
       }
     >
       {/* Handles — both centred, see CENTRED_HANDLE_STYLE */}
-      <Handle type="target" position={Position.Top} style={handleStyle} />
+      <Handle
+        type="target"
+        position={Position.Top}
+        style={handleStyle}
+        className={isAdmin ? '!cursor-crosshair' : undefined}
+      />
 
       {/* Hexagon shape via SVG */}
       <svg
@@ -278,7 +300,12 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
         />
       )}
 
-      <Handle type="source" position={Position.Bottom} style={handleStyle} />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        style={handleStyle}
+        className={isAdmin ? '!cursor-crosshair hover:!bg-gold/15' : undefined}
+      />
     </div>
   );
 };
