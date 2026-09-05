@@ -8,7 +8,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import PlayerNodeComponent from './PlayerNodeComponent';
-import { computeNodeState } from './utils/computeNodeState';
+import { computeTreeStates } from './utils/computeNodeState';
 import { combineTrees } from './utils/combineTrees';
 import { GradientEdge, BridgeEdge, classGradientColors, defaultGradient } from './treeEdges';
 import { playerNodeSize } from './nodeSizes';
@@ -52,6 +52,9 @@ const WHEEL_EDGE_PADDING = 50;
  */
 const WHEEL_BACKDROP_DIM = 0.12;
 
+/** A link running into a branch the player can no longer take. */
+const DEAD_LINK_COLORS: [string, string] = ['rgba(255,255,255,0.2)', 'rgba(255,255,255,0.12)'];
+
 /** Admin nodes are 100px boxes positioned by their top-left corner. */
 const ADMIN_NODE_SIZE = 100;
 
@@ -81,6 +84,12 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
         (progress?.chosen_nodes ?? []).map((cn) => cn.node_id),
       );
       const characterLevel = progress?.character_level ?? 0;
+      const states = computeTreeStates(
+        tree.nodes,
+        tree.connections,
+        chosenNodeIds,
+        characterLevel,
+      );
 
       for (const apiNode of tree.nodes) {
         // A foreign tree carries no progress, so every node in it would come
@@ -88,13 +97,7 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
         // that, so a foreign root never pulses as if it were available.
         const visualState: NodeVisualState = readOnly
           ? 'locked'
-          : computeNodeState(
-              apiNode,
-              tree.connections,
-              chosenNodeIds,
-              characterLevel,
-              tree.nodes,
-            );
+          : states.state.get(apiNode.id) ?? 'locked';
 
         // The wheel hands back node centres; the single-tree view uses the
         // authored top-left coordinates, whose centre is half an admin node in.
@@ -121,7 +124,6 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
 
       /* ---------- Edges with gradient styling ---------- */
       const gradient = classGradientColors[tree.class_id] ?? defaultGradient;
-      const ringOf = new Map(tree.nodes.map((n) => [String(n.id), n.level_ring ?? 1]));
       for (const conn of tree.connections) {
         const sourceChosen = chosenNodeIds.has(Number(conn.from_node_id));
         const targetChosen = chosenNodeIds.has(Number(conn.to_node_id));
@@ -129,8 +131,13 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
         const oneChosen = sourceChosen || targetChosen;
 
         // A link has to show the player where a branch leads, over a painted
-        // backdrop, so even an untouched one is drawn in full class colour.
-        // The tiers separate by weight, not by fading towards invisible.
+        // backdrop, so every branch still on the table is drawn in full class
+        // colour whether or not it has been walked. What goes dark is only what
+        // the player has closed off — a link into a dead branch, on either end.
+        const deadEnd =
+          states.dead.has(Number(conn.from_node_id)) ||
+          states.dead.has(Number(conn.to_node_id));
+
         let colors: [string, string] = gradient.strong;
         let strokeWidth = 2;
         let glowing = false;
@@ -140,25 +147,18 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
           colors = gradient.bright;
           strokeWidth = 3;
           glowing = true;
-        } else if (oneChosen) {
-          strokeWidth = 2.5;
         } else if (readOnly) {
           // Another class's branches are always the faintest thing on screen:
-          // fainter than anything in the player's own sector, reachable or not.
+          // fainter than anything in the player's own sector.
           colors = gradient.faint;
           strokeWidth = 1.5;
           opacity = 0.45;
-        } else {
-          // Rings the character cannot reach yet recede, so the branches that
-          // are actually in play stand out from the rest of their own sector.
-          const reach = Math.max(
-            ringOf.get(String(conn.from_node_id)) ?? 0,
-            ringOf.get(String(conn.to_node_id)) ?? 0,
-          );
-          if (reach > characterLevel) {
-            strokeWidth = 1.75;
-            opacity = 0.7;
-          }
+        } else if (deadEnd) {
+          colors = DEAD_LINK_COLORS;
+          strokeWidth = 1.25;
+          opacity = 0.35;
+        } else if (oneChosen) {
+          strokeWidth = 2.5;
         }
 
         rfEdges.push({

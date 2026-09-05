@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import { useAppDispatch } from '../../redux/store';
 import { chooseNode, resetTree } from '../../redux/actions/playerTreeActions';
-import { computeNodeState } from './utils/computeNodeState';
+import { computeTreeStates } from './utils/computeNodeState';
 import SkillPurchaseCard from './SkillPurchaseCard';
 import type {
   TreeNodeInTreeResponse,
@@ -55,13 +55,8 @@ const NodeDetailPanel = ({
 
   const visualState: NodeVisualState = readOnly
     ? 'locked'
-    : computeNodeState(
-        node,
-        tree.connections,
-        chosenNodeIds,
-        characterLevel,
-        tree.nodes
-      );
+    : computeTreeStates(tree.nodes, tree.connections, chosenNodeIds, characterLevel)
+        .state.get(node.id) ?? 'locked';
 
   const handleChooseNode = async () => {
     setChoosing(true);
@@ -107,6 +102,7 @@ const NodeDetailPanel = ({
     available: 'Доступен для выбора',
     locked: `Требуется уровень ${node.level_ring}`,
     blocked: 'Альтернативная ветка уже выбрана',
+    unreachable: 'Путь сюда перекрыт выбранной веткой',
   };
 
   return (

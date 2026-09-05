@@ -51,7 +51,21 @@ interface ClassColors {
   available: StateColors;
   locked: StateColors;
   blocked: StateColors;
+  unreachable: StateColors;
 }
+
+/**
+ * What a node that can never be taken again looks like: no class colour, no
+ * glow, no weight. Everything still on the table keeps its class hue, so the
+ * only thing that goes dark on the wheel is what the player has closed off.
+ */
+const DEAD_COLORS: StateColors = {
+  border: 'rgba(255,255,255,0.14)',
+  fill: 'rgba(255,255,255,0.03)',
+  glow: 'none',
+  rune: 'rgba(255,255,255,0.22)',
+  badge: 'rgba(255,255,255,0.1)',
+};
 
 /* DB class IDs: 1=Warrior (red), 2=Rogue (emerald), 3=Mage (cyan) */
 const CLASS_ACCENTS: Record<number, { base: string; light: string; rgb: string }> = {
@@ -93,13 +107,9 @@ const buildClassColors = ({ base, light, rgb }: { base: string; light: string; r
     rune: light,
     badge: `rgba(${rgb},0.25)`,
   },
-  blocked: {
-    border: 'rgba(239,68,68,0.75)',
-    fill: 'rgba(239,68,68,0.14)',
-    glow: 'drop-shadow(0 0 5px rgba(239,68,68,0.4))',
-    rune: 'rgba(252,165,165,0.75)',
-    badge: 'rgba(239,68,68,0.25)',
-  },
+  // Both dead states look the same; the ✕ overlay is what says which is which.
+  blocked: DEAD_COLORS,
+  unreachable: DEAD_COLORS,
 });
 
 const classColors: Record<number, ClassColors> = Object.fromEntries(
@@ -175,6 +185,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   // Foreign nodes stay clickable: the panel they open is read-only, and being
   // able to inspect another class's branches is the whole point of showing them.
   const isClickable = isForeign || state === 'available' || state === 'chosen';
+
   const colors = classColors[d.classId] ?? defaultColors;
   const stateColors = colors[state];
 
@@ -185,9 +196,11 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   // The admin is editing, not playing: nothing there is dimmed or pulsing.
   // Otherwise another class's node is always fainter than anything in the
   // player's own sector — a locked node of your own class still outranks it.
-  // Nodes stay at full strength: they have to read against the painted wheel.
-  // Only another class's nodes step back, and only enough to rank below yours.
-  const opacity = isAdmin ? 1 : isForeign ? 0.65 : state === 'blocked' ? 0.5 : 1;
+  // Everything still obtainable stays at full strength — it has to read against
+  // the painted wheel. Only what the player has closed off goes dark, plus
+  // another class's nodes, which rank below anything in your own sector.
+  const isDead = state === 'blocked' || state === 'unreachable';
+  const opacity = isAdmin ? 1 : isForeign ? 0.65 : isDead ? 0.35 : 1;
   // Nothing in another class's tree should pulse as if it were waiting to be taken.
   const animClass = !isForeign && !isAdmin && state === 'available' ? 'animate-pulse' : '';
 
@@ -207,7 +220,9 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
             ? `Требуется уровень ${d.level_ring}`
             : state === 'blocked'
               ? 'Альтернативная ветка выбрана'
-              : d.name
+              : state === 'unreachable'
+                ? 'Путь сюда перекрыт выбранной веткой'
+                : d.name
       }
     >
       {/* Handles — both centred, see CENTRED_HANDLE_STYLE */}
