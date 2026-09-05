@@ -1,78 +1,35 @@
-import React, { useMemo, useId } from 'react';
+import React, { useMemo } from 'react';
 import { motion } from 'motion/react';
 import { isPerkActive } from '../../../types/perks';
 import type { CharacterPerk } from '../../../types/perks';
 import PerkNode, { HEX_SIZE } from './PerkNode';
+import perksBackdrop from '../../../assets/perksBackdrop.png';
 
-/* ── Starfield background ── */
+/* ── Backdrop ── */
 
-const STAR_LAYERS = [
-  { count: 80, size: 1, opacity: 0.6, duration: 4 },
-  { count: 40, size: 1.5, opacity: 0.8, duration: 6 },
-  { count: 15, size: 2, opacity: 1, duration: 8 },
-] as const;
-
-function generateStars(count: number, seed: number) {
-  const stars: Array<{ x: number; y: number; delay: number }> = [];
-  for (let i = 0; i < count; i++) {
-    const a = Math.sin(i * 127.1 + seed * 311.7) * 43758.5453;
-    const b = Math.sin(i * 269.5 + seed * 183.3) * 28935.3127;
-    const c = Math.sin(i * 419.2 + seed * 77.9) * 17624.9871;
-    stars.push({
-      x: (a - Math.floor(a)) * 100,
-      y: (b - Math.floor(b)) * 100,
-      delay: (c - Math.floor(c)) * 10,
-    });
-  }
-  return stars;
-}
-
-const StarfieldBg = () => {
-  const id = useId();
-  return (
-    <div className="absolute inset-0 overflow-hidden rounded-card">
-      <div
-        className="absolute inset-0"
-        style={{
-          background:
-            'radial-gradient(ellipse at 30% 20%, rgba(25,20,60,0.95) 0%, rgba(8,8,24,0.98) 50%, rgba(4,4,16,1) 100%)',
-        }}
-      />
-      <div
-        className="absolute inset-0 opacity-30"
-        style={{
-          background:
-            'radial-gradient(ellipse at 70% 60%, rgba(80,40,120,0.4) 0%, transparent 50%), ' +
-            'radial-gradient(ellipse at 20% 80%, rgba(30,60,120,0.3) 0%, transparent 40%), ' +
-            'radial-gradient(ellipse at 50% 30%, rgba(120,80,30,0.15) 0%, transparent 35%)',
-        }}
-      />
-      {STAR_LAYERS.map((layer, li) => {
-        const stars = generateStars(layer.count, li + 1);
-        return stars.map((star, si) => (
-          <div
-            key={`${id}-${li}-${si}`}
-            className="absolute rounded-full"
-            style={{
-              width: layer.size,
-              height: layer.size,
-              left: `${star.x}%`,
-              top: `${star.y}%`,
-              backgroundColor: `rgba(255, 255, 240, ${layer.opacity})`,
-              animation: `perk-star-twinkle ${layer.duration}s ease-in-out ${star.delay}s infinite`,
-            }}
-          />
-        ));
-      })}
-      <style>{`
-        @keyframes perk-star-twinkle {
-          0%, 100% { opacity: 0.2; }
-          50% { opacity: 1; }
-        }
-      `}</style>
-    </div>
-  );
-};
+/**
+ * The painted backdrop behind the perk constellation.
+ *
+ * The art is 1560x1008 with no margin to speak of — its composition runs to the
+ * edges — so it is fitted with cover and centred: the panel is as wide as the
+ * profile page and as tall as the constellation inside it, which is a shape
+ * nothing can be letterboxed into cleanly. Cover crops evenly instead, and the
+ * artwork's corners carry nothing that matters.
+ */
+const PerkBackdrop = ({ dim = 0.5 }: { dim?: number }) => (
+  <div className="absolute inset-0 overflow-hidden rounded-card">
+    <div
+      className="absolute inset-0"
+      style={{
+        backgroundImage: `url(${perksBackdrop})`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+      }}
+    />
+    {/* Darkening, so the perk nodes and their labels stay legible over it */}
+    <div className="absolute inset-0" style={{ background: `rgba(4,4,16,${dim})` }} />
+  </div>
+);
 
 /* ── Config ── */
 
@@ -422,7 +379,7 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
   if (perks.length === 0) {
     return (
       <div className="relative rounded-card overflow-hidden p-8 text-center">
-        <StarfieldBg />
+        <PerkBackdrop />
         <p className="relative text-white/40 text-lg">Перки пока не добавлены</p>
       </div>
     );
@@ -430,7 +387,7 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
 
   return (
     <div className="relative rounded-card overflow-hidden">
-      <StarfieldBg />
+      <PerkBackdrop />
       <div className="relative z-10">
         {/* Desktop: SVG constellation */}
         <div className="hidden md:block py-4">
