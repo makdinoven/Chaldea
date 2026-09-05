@@ -158,9 +158,11 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   const runeSize = isLarge ? 'text-[22px]' : 'text-[16px]';
 
   // The admin is editing, not playing: nothing there is dimmed or pulsing.
+  // Otherwise another class's node is always fainter than anything in the
+  // player's own sector — a locked node of your own class still outranks it.
   const opacity = isAdmin
     ? 1
-    : isForeign ? 0.45 : state === 'locked' ? 0.4 : state === 'blocked' ? 0.3 : 1;
+    : isForeign ? 0.3 : state === 'locked' ? 0.5 : state === 'blocked' ? 0.3 : 1;
   // Nothing in another class's tree should pulse as if it were waiting to be taken.
   const animClass = !isForeign && !isAdmin && state === 'available' ? 'animate-pulse' : '';
 
