@@ -59,11 +59,16 @@ const STAT_LABELS: Record<string, string> = {
 };
 
 const PRIMARY_STATS = ['strength', 'agility', 'intelligence', 'endurance', 'charisma', 'luck'];
+const BASE_RESOURCE_STATS = ['health', 'mana', 'energy', 'stamina'];
 const RESOURCE_STATS = ['max_health', 'current_health', 'max_mana', 'current_mana', 'max_energy', 'current_energy', 'max_stamina', 'current_stamina'];
 const COMBAT_STATS = ['damage', 'dodge', 'critical_hit_chance', 'critical_damage'];
 const RESISTANCE_STATS = ['res_physical', 'res_magic', 'res_fire', 'res_ice', 'res_watering', 'res_electricity', 'res_wind', 'res_sainting', 'res_damning', 'res_catting', 'res_crushing', 'res_piercing', 'res_effects'];
 
 const BASE_ATTR_KEYS = ['strength', 'agility', 'intelligence', 'endurance', 'health', 'mana', 'energy', 'stamina', 'charisma', 'luck'];
+
+/** Stats bought with level-up points. A mob has no subrace preset, so its baseline is 0. */
+const POINT_STATS = [...PRIMARY_STATS, ...BASE_RESOURCE_STATS];
+const POINTS_PER_LEVEL = 10;
 
 const MobStatsEditor = ({ templateId, templateName, idClass, baseAttributes }: MobStatsEditorProps) => {
   const [activeMobs, setActiveMobs] = useState<ActiveMob[]>([]);
@@ -172,6 +177,12 @@ const MobStatsEditor = ({ templateId, templateName, idClass, baseAttributes }: M
 
   const hasBaseAttrs = baseAttributes && Object.keys(baseAttributes).length > 0;
 
+  const totalPoints = (selectedMob?.level ?? 0) * POINTS_PER_LEVEL;
+  const spentPoints = attributes
+    ? POINT_STATS.reduce((sum, key) => sum + Math.max(0, Number(attributes[key] ?? 0)), 0)
+    : 0;
+  const remainingPoints = totalPoints - spentPoints;
+
   return (
     <div className="flex flex-col gap-6">
       {/* Class info */}
@@ -268,7 +279,28 @@ const MobStatsEditor = ({ templateId, templateName, idClass, baseAttributes }: M
             <p className="text-white/50 text-sm">Атрибуты не найдены для этого экземпляра.</p>
           ) : (
             <>
+              {/* Stat points counter */}
+              <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-card px-4 py-3 text-sm ${
+                remainingPoints < 0 ? 'bg-yellow-500/10 border border-yellow-500/30' : 'bg-white/[0.05]'
+              }`}>
+                <span className="text-white font-medium">
+                  Очки статов: {spentPoints} / {totalPoints}
+                </span>
+                {remainingPoints >= 0 ? (
+                  <span className="text-white/50">(осталось: {remainingPoints})</span>
+                ) : (
+                  <span className="text-yellow-400 font-medium">
+                    Превышен лимит на {Math.abs(remainingPoints)}!
+                  </span>
+                )}
+                <span className="text-white/40 text-xs">
+                  ур. {selectedMob.level} × {POINTS_PER_LEVEL}, стартовые статы моба — 0
+                </span>
+              </div>
+
               {renderStatGroup('Основные', PRIMARY_STATS)}
+              <div className="gradient-divider-h relative pb-1" />
+              {renderStatGroup('Базовые ресурсы', BASE_RESOURCE_STATS)}
               <div className="gradient-divider-h relative pb-1" />
               {renderStatGroup('Ресурсы', RESOURCE_STATS)}
               <div className="gradient-divider-h relative pb-1" />
