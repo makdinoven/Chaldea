@@ -12,6 +12,7 @@ import {
   type WheelLayoutConfig,
 } from '../../SkillTreeView/utils/combineTrees';
 import { reactFlowToApi } from '../utils/treeTransforms';
+import { playerNodeSize } from '../../SkillTreeView/nodeSizes';
 import { untangleRings } from '../utils/untangleRings';
 
 /**
@@ -92,7 +93,7 @@ export const useCombinedTreeEditor = (
         const id = String(apiNode.id);
         const centre = placement.positions.get(id);
         if (!centre) continue;
-        const half = (apiNode.node_type === 'root' || apiNode.node_type === 'subclass_choice' ? 70 : 40) / 2;
+        const half = playerNodeSize(apiNode.node_type) / 2;
         const data: WheelNodeData = {
           ...apiNode,
           treeId: tree.id,

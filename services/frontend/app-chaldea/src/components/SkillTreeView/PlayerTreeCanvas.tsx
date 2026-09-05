@@ -11,6 +11,7 @@ import PlayerNodeComponent from './PlayerNodeComponent';
 import { computeNodeState } from './utils/computeNodeState';
 import { combineTrees } from './utils/combineTrees';
 import { GradientEdge, BridgeEdge, classGradientColors, defaultGradient } from './treeEdges';
+import { playerNodeSize } from './nodeSizes';
 import type {
   FullClassTreeResponse,
   CharacterTreeProgressResponse,
@@ -45,9 +46,6 @@ const WHEEL_EDGE_PADDING = 50;
 
 /** Admin nodes are 100px boxes positioned by their top-left corner. */
 const ADMIN_NODE_SIZE = 100;
-/** Player hex nodes are 40px, or 70px for roots and subclass choices. */
-const playerNodeSize = (nodeType: string) =>
-  nodeType === 'root' || nodeType === 'subclass_choice' ? 70 : 40;
 
 const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
   const nodeTypes = useMemo(() => ({

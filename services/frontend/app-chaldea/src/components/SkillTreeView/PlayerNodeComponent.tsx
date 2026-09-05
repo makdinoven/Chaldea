@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from 'reactflow';
 import type { TreeNodeInTreeResponse, NodeVisualState } from './types';
+import { playerNodeSize } from './nodeSizes';
 
 interface PlayerNodeData extends TreeNodeInTreeResponse {
   visualState: NodeVisualState;
@@ -134,8 +135,11 @@ const ADMIN_HANDLE_STYLE = {
   zIndex: 5,
 } as const;
 
-/* ========== Hexagon SVG clip path (used inline) ========== */
-const HEX_POINTS = '50,0 93.3,25 93.3,75 50,100 6.7,75 6.7,25';
+/* ========== Node shape ==========
+   Drawn on a 0..100 viewBox and scaled to the node's size, so the stroke
+   weights below read the same whatever that size is. */
+const OUTER_RADIUS = 48;
+const INNER_RADIUS = 37;
 
 /* ========== Component ========== */
 const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
@@ -153,9 +157,9 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   const colors = classColors[d.classId] ?? defaultColors;
   const stateColors = colors[state];
 
-  const size = isLarge ? 70 : 40;
+  const size = playerNodeSize(nodeType);
   const rune = getRune(d.level_ring, d.sort_order ?? 0);
-  const runeSize = isLarge ? 'text-[22px]' : 'text-[16px]';
+  const runeSize = isLarge ? 'text-[28px]' : 'text-[19px]';
 
   // The admin is editing, not playing: nothing there is dimmed or pulsing.
   // Otherwise another class's node is always fainter than anything in the
@@ -201,25 +205,25 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
       >
         {/* Glow background for chosen */}
         {state === 'chosen' && (
-          <polygon
-            points={HEX_POINTS}
-            fill={stateColors.fill}
-            stroke="none"
-          />
+          <circle cx={50} cy={50} r={OUTER_RADIUS} fill={stateColors.fill} stroke="none" />
         )}
 
-        {/* Main hexagon border */}
-        <polygon
-          points={HEX_POINTS}
+        {/* Main ring */}
+        <circle
+          cx={50}
+          cy={50}
+          r={OUTER_RADIUS}
           fill={stateColors.fill}
           stroke={stateColors.border}
           strokeWidth={state === 'chosen' ? 3 : state === 'available' ? 2.5 : 1.5}
         />
 
-        {/* Inner hexagon line (decorative) */}
+        {/* Inner ring (decorative) */}
         {isLarge && (
-          <polygon
-            points="50,12 83,30 83,70 50,88 17,70 17,30"
+          <circle
+            cx={50}
+            cy={50}
+            r={INNER_RADIUS}
             fill="none"
             stroke={stateColors.border}
             strokeWidth={0.8}
@@ -248,7 +252,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
       {/* Level badge — large nodes always, every node while editing */}
       {(isLarge || isAdmin) && (
         <span
-          className="absolute -top-1.5 -right-1.5 z-10 text-[8px] font-medium rounded-full w-[16px] h-[16px] flex items-center justify-center border"
+          className="absolute -top-1 -right-1 z-10 text-[9px] font-medium rounded-full w-[18px] h-[18px] flex items-center justify-center border"
           style={{
             background: '#0e0e1a',
             borderColor: stateColors.border,
@@ -262,7 +266,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
       {/* Skills count badge */}
       {skillsCount > 0 && (
         <span
-          className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 z-10 text-[7px] font-bold rounded-full px-1 min-w-[14px] text-center leading-[13px]"
+          className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 z-10 text-[8px] font-bold rounded-full px-1.5 min-w-[16px] text-center leading-[15px]"
           style={{
             background: state === 'chosen' ? (colors.chosen.badge) : 'rgba(100,130,255,0.2)',
             color: state === 'chosen' ? stateColors.rune : 'rgba(100,130,255,0.8)',
@@ -282,7 +286,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
       {/* Name label below — subclass picks always, every node while editing */}
       {(nodeType === 'subclass_choice' || isAdmin) && d.name && (
         <span
-          className="absolute -bottom-5 left-1/2 -translate-x-1/2 z-10 whitespace-nowrap select-none text-[9px] font-bold uppercase tracking-[0.15em]"
+          className="absolute -bottom-[18px] left-1/2 -translate-x-1/2 z-10 whitespace-nowrap select-none text-[10px] font-bold uppercase tracking-[0.15em]"
           style={{
             color: state === 'chosen' ? stateColors.rune : 'rgba(255,255,255,0.35)',
             textShadow: state === 'chosen'
@@ -298,7 +302,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
       {/* Selected ring */}
       {selected && (
         <div
-          className="absolute inset-[-4px] rounded-full border-2 border-site-blue/60 pointer-events-none"
+          className="absolute inset-[-5px] rounded-full border-2 border-site-blue/60 pointer-events-none"
         />
       )}
 
