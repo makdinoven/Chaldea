@@ -225,11 +225,18 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
     and centring on it is exactly what used to push the picture off to one side.
   */
   const half = useMemo(() => {
+    // Measured radially, not by how far a node strays along an axis. Taking
+    // the larger of dx and dy let whichever branch happened to point straight
+    // up set the size, so that branch ended up against the rim while the ones
+    // pointing diagonally stopped well short of it. Radius treats every
+    // bearing alike.
     const reach = nodePositions.reduce(
-      (worst, p) => Math.max(worst, Math.abs(p.x - CENTER), Math.abs(p.y - CENTER)),
+      (worst, p) => Math.max(worst, Math.hypot(p.x - CENTER, p.y - CENTER)),
       0,
     );
-    return reach + 90;
+    // A margin that grows with the tree, with a floor for the small ones, so
+    // the outermost nodes always sit about a sixth of the radius inside.
+    return Math.max(reach * 1.18, reach + 70);
   }, [nodePositions]);
 
   const viewBox = `${CENTER - half} ${CENTER - half} ${half * 2} ${half * 2}`;
