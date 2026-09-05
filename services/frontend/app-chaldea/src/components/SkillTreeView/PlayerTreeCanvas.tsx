@@ -2,7 +2,6 @@ import { useMemo, useCallback, memo, useState } from 'react';
 import ReactFlow, {
   Controls,
   BaseEdge,
-  getSmoothStepPath,
   getStraightPath,
   type Node,
   type Edge,
@@ -55,19 +54,11 @@ const GradientEdge = memo(({
   sourceY,
   targetX,
   targetY,
-  sourcePosition,
-  targetPosition,
   data,
 }: EdgeProps) => {
-  const [edgePath] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-    borderRadius: 16,
-  });
+  // Straight, centre-to-centre. Orthogonal routing turned the rotated sectors
+  // of the combined wheel into staircases.
+  const [edgePath] = getStraightPath({ sourceX, sourceY, targetX, targetY });
 
   const gradientId = `gradient-${id}`;
   const colors = (data?.colors ?? defaultGradient.dim) as [string, string];
@@ -140,8 +131,9 @@ interface PlayerTreeCanvasProps {
   onNodeClick: (nodeId: number) => void;
 }
 
-/** Admin nodes are 100px; player hex nodes are 40px, or 70px when large. */
+/** Admin nodes are 100px boxes positioned by their top-left corner. */
 const ADMIN_NODE_SIZE = 100;
+/** Player hex nodes are 40px, or 70px for roots and subclass choices. */
 const playerNodeSize = (nodeType: string) =>
   nodeType === 'root' || nodeType === 'subclass_choice' ? 70 : 40;
 
@@ -186,16 +178,17 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
               tree.nodes,
             );
 
+        // The wheel hands back node centres; the single-tree view uses the
+        // authored top-left coordinates, whose centre is half an admin node in.
         const placed = layout?.positions.get(apiNode.id);
-        const baseX = placed?.x ?? apiNode.position_x;
-        const baseY = placed?.y ?? apiNode.position_y;
-        // Centre the (smaller) player node on the admin node's slot.
-        const offset = (ADMIN_NODE_SIZE - playerNodeSize(apiNode.node_type ?? 'regular')) / 2;
+        const centreX = placed?.x ?? apiNode.position_x + ADMIN_NODE_SIZE / 2;
+        const centreY = placed?.y ?? apiNode.position_y + ADMIN_NODE_SIZE / 2;
+        const half = playerNodeSize(apiNode.node_type ?? 'regular') / 2;
 
         rfNodes.push({
           id: String(apiNode.id),
           type: 'playerNode',
-          position: { x: baseX + offset, y: baseY + offset },
+          position: { x: centreX - half, y: centreY - half },
           data: {
             ...apiNode,
             visualState,

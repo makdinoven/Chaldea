@@ -64,6 +64,24 @@ const classColors: Record<number, ClassColors> = {
 
 const defaultColors = classColors[1];
 
+/**
+ * Both handles sit dead centre of the hex, so the straight edges the player
+ * view draws run centre-to-centre instead of hanging off the top and bottom
+ * points. They stay invisible either way.
+ */
+const CENTRED_HANDLE_STYLE = {
+  top: '50%',
+  bottom: 'auto',
+  left: '50%',
+  transform: 'translate(-50%, -50%)',
+  width: 3,
+  height: 3,
+  minWidth: 0,
+  minHeight: 0,
+  background: 'transparent',
+  border: 0,
+} as const;
+
 /* ========== Hexagon SVG clip path (used inline) ========== */
 const HEX_POINTS = '50,0 93.3,25 93.3,75 50,100 6.7,75 6.7,25';
 
@@ -108,12 +126,8 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
               : d.name
       }
     >
-      {/* Handle top */}
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!w-[3px] !h-[3px] !bg-transparent !border-0 !-top-px"
-      />
+      {/* Handles — both centred, see CENTRED_HANDLE_STYLE */}
+      <Handle type="target" position={Position.Top} style={CENTRED_HANDLE_STYLE} />
 
       {/* Hexagon shape via SVG */}
       <svg
@@ -224,12 +238,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
         />
       )}
 
-      {/* Handle bottom */}
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!w-[3px] !h-[3px] !bg-transparent !border-0 !-bottom-px"
-      />
+      <Handle type="source" position={Position.Bottom} style={CENTRED_HANDLE_STYLE} />
     </div>
   );
 };

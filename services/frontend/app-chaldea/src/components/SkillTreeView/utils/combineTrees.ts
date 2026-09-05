@@ -4,16 +4,29 @@ import type {
 } from '../types';
 
 /**
- * Lays the three class trees out as one Path-of-Exile-style wheel.
+ * Lays the class trees out as one Path-of-Exile-style wheel.
  *
- * Each tree keeps the layout its author drew in the admin editor — we only
- * apply a rigid transform (rotate + translate) so that the tree's root sits on
- * an inner ring and the rest of it grows outward into its own 120° sector.
+ * The stored ``position_x`` / ``position_y`` are a grid meant for the admin
+ * editor and do not survive being packed into a 120° wedge, so the wheel
+ * derives its own polar layout instead: ``level_ring`` becomes the distance
+ * from the centre, and each class fans out across its own sector. The authored
+ * left-to-right order within a ring is preserved, so branches still sit where
+ * their author put them relative to each other.
+ *
  * Nothing here mutates the source data or the stored coordinates.
  */
 
-/** Distance from the wheel's centre to each tree's root node. */
-const INNER_RADIUS = 420;
+/** Radius of the innermost ring (where the root nodes sit). */
+const INNER_RADIUS = 260;
+
+/** Distance between two consecutive rings. */
+const RING_SPACING = 150;
+
+/** Target gap, in pixels, between neighbouring nodes on the same ring. */
+const ARC_SPACING = 120;
+
+/** Share of a sector left empty, so neighbouring classes stay visually apart. */
+const SECTOR_GAP = 0.2;
 
 /** Sector of the first tree. -90° puts it straight up. */
 const FIRST_SECTOR_ANGLE = -Math.PI / 2;
@@ -23,7 +36,7 @@ const BRIDGES_PER_SECTOR_PAIR = 2;
 
 export interface CombinedNode {
   node: TreeNodeInTreeResponse;
-  /** Position in the combined coordinate space. */
+  /** Centre of the node in the combined coordinate space. */
   x: number;
   y: number;
 }
@@ -45,69 +58,63 @@ export interface SectorBridge {
 export interface CombinedLayout {
   trees: CombinedTree[];
   bridges: SectorBridge[];
-  /** Node id -> its position in the combined space. */
+  /** Node id -> its centre in the combined space. */
   positions: Map<number, { x: number; y: number }>;
 }
 
-const centroidOf = (nodes: TreeNodeInTreeResponse[]) => {
-  const sum = nodes.reduce(
-    (acc, n) => ({ x: acc.x + n.position_x, y: acc.y + n.position_y }),
-    { x: 0, y: 0 },
-  );
-  return { x: sum.x / nodes.length, y: sum.y / nodes.length };
+/** Groups a tree's nodes by level_ring, innermost ring first. */
+const byRing = (nodes: TreeNodeInTreeResponse[]): TreeNodeInTreeResponse[][] => {
+  const groups = new Map<number, TreeNodeInTreeResponse[]>();
+  for (const node of nodes) {
+    const ring = node.level_ring ?? 1;
+    const bucket = groups.get(ring);
+    if (bucket) bucket.push(node);
+    else groups.set(ring, [node]);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, ringNodes]) =>
+      // Keep the order the author laid out left-to-right; fall back to
+      // sort_order and id so the result is stable for identical coordinates.
+      [...ringNodes].sort(
+        (a, b) =>
+          a.position_x - b.position_x ||
+          (a.sort_order ?? 0) - (b.sort_order ?? 0) ||
+          a.id - b.id,
+      ),
+    );
 };
 
-/**
- * The node the tree hangs from: its root, else the lowest ring, else the first
- * node. This is what gets pinned to the inner ring.
- */
-const anchorOf = (nodes: TreeNodeInTreeResponse[]): TreeNodeInTreeResponse => {
-  const root = nodes.find((n) => n.node_type === 'root');
-  if (root) return root;
-  return nodes.reduce((best, n) => (n.level_ring < best.level_ring ? n : best), nodes[0]);
-};
-
-/**
- * Places one tree into its sector.
- *
- * The tree is rotated so the direction "root -> rest of the tree" points
- * radially outward, which keeps hand-drawn layouts readable whichever way they
- * were originally drawn (top-down, bottom-up, sideways).
- */
-const placeTree = (tree: FullClassTreeResponse, sector: number, sectorCount: number): CombinedTree => {
+/** Fans one tree out across its sector, ring by ring. */
+const placeTree = (
+  tree: FullClassTreeResponse,
+  sector: number,
+  sectorCount: number,
+): CombinedTree => {
   if (tree.nodes.length === 0) return { tree, sector, nodes: [] };
 
-  const sectorAngle = FIRST_SECTOR_ANGLE + (2 * Math.PI * sector) / sectorCount;
-  const outward = { x: Math.cos(sectorAngle), y: Math.sin(sectorAngle) };
+  const sectorCentre = FIRST_SECTOR_ANGLE + (2 * Math.PI * sector) / sectorCount;
+  const maxSpan = ((2 * Math.PI) / sectorCount) * (1 - SECTOR_GAP);
 
-  const anchor = anchorOf(tree.nodes);
-  const centroid = centroidOf(tree.nodes);
+  const placed: CombinedNode[] = [];
+  byRing(tree.nodes).forEach((ringNodes, ringIndex) => {
+    const radius = INNER_RADIUS + ringIndex * RING_SPACING;
+    const count = ringNodes.length;
+    // Even pixel spacing along the arc, but never wider than the sector.
+    const step =
+      count > 1 ? Math.min(ARC_SPACING / radius, maxSpan / (count - 1)) : 0;
 
-  // Direction the tree grows in, in its own coordinate space.
-  const growth = { x: centroid.x - anchor.position_x, y: centroid.y - anchor.position_y };
-  const growthLength = Math.hypot(growth.x, growth.y);
-  // A single-node tree (or a perfectly symmetric one) has no growth direction;
-  // treat it as growing "up", which is how the editor lays trees out.
-  const growthAngle = growthLength < 1e-6 ? -Math.PI / 2 : Math.atan2(growth.y, growth.x);
-
-  const rotation = sectorAngle - growthAngle;
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-
-  const originX = outward.x * INNER_RADIUS;
-  const originY = outward.y * INNER_RADIUS;
-
-  const nodes = tree.nodes.map((node) => {
-    const localX = node.position_x - anchor.position_x;
-    const localY = node.position_y - anchor.position_y;
-    return {
-      node,
-      x: originX + localX * cos - localY * sin,
-      y: originY + localX * sin + localY * cos,
-    };
+    ringNodes.forEach((node, i) => {
+      const angle = sectorCentre + (i - (count - 1) / 2) * step;
+      placed.push({
+        node,
+        x: Math.cos(angle) * radius,
+        y: Math.sin(angle) * radius,
+      });
+    });
   });
 
-  return { tree, sector, nodes };
+  return { tree, sector, nodes: placed };
 };
 
 /**
