@@ -44,7 +44,7 @@ interface WheelBackdropProps {
   blur?: number;
 }
 
-const WheelBackdrop = ({ dim = 0.45, blur = 2 }: WheelBackdropProps) => (
+const WheelBackdrop = ({ dim = 0.45, blur = 1 }: WheelBackdropProps) => (
   <div className="absolute inset-0 grid place-items-center overflow-hidden pointer-events-none">
     {/* A square that fits the frame whichever way round it is, so the art stays
         circular even on the admin's wide panel. */}
