@@ -16,8 +16,14 @@ import type {
  * Nothing here mutates the source data or the stored coordinates.
  */
 
-/** Radius of the innermost ring (where the root nodes sit). */
-const INNER_RADIUS = 260;
+/**
+ * Radius of the innermost ring, where the root nodes sit.
+ *
+ * Kept small on purpose: the three class starts should almost touch at the
+ * centre of the wheel, parted just enough not to overlap. At 90px with 70px
+ * root nodes, neighbouring roots stand 156px apart — an 86px gap.
+ */
+const INNER_RADIUS = 90;
 
 /** Distance between two consecutive rings. */
 const RING_SPACING = 150;

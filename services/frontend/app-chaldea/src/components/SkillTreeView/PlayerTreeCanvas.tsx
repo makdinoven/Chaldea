@@ -29,19 +29,31 @@ const classArtMap: Record<number, string> = {
   3: mageArt,
 };
 
-/* Map class_id -> gradient colors (DB: 1=Warrior, 2=Rogue, 3=Mage) */
-const classGradientColors: Record<number, { bright: [string, string]; dim: [string, string] }> = {
+/**
+ * Map class_id -> edge gradients (DB: 1=Warrior, 2=Rogue, 3=Mage).
+ *
+ * Three tiers: `bright` when both ends are taken, `dim` when one is, `faint`
+ * for untouched branches. Untouched links used to be the same neutral white for
+ * every class, which left the combined wheel looking like one grey web.
+ */
+const classGradientColors: Record<
+  number,
+  { bright: [string, string]; dim: [string, string]; faint: [string, string] }
+> = {
   1: {
     bright: ['#fbbf24', '#ef4444'],  // Warrior — gold → red
     dim: ['rgba(251,191,36,0.3)', 'rgba(239,68,68,0.2)'],
+    faint: ['rgba(248,113,113,0.4)', 'rgba(248,113,113,0.22)'],
   },
   2: {
     bright: ['#fbbf24', '#34d399'],  // Rogue — gold → green
     dim: ['rgba(251,191,36,0.3)', 'rgba(52,211,153,0.2)'],
+    faint: ['rgba(52,211,153,0.4)', 'rgba(52,211,153,0.22)'],
   },
   3: {
     bright: ['#a78bfa', '#38bdf8'],  // Mage — purple → blue
     dim: ['rgba(167,139,250,0.3)', 'rgba(56,189,248,0.2)'],
+    faint: ['rgba(56,189,248,0.4)', 'rgba(56,189,248,0.22)'],
   },
 };
 
@@ -209,10 +221,9 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
         const bothChosen = sourceChosen && targetChosen;
         const oneChosen = sourceChosen || targetChosen;
 
-        // Unchosen connections must still read on the dark class art — the old
-        // 0.06/0.03 white was effectively invisible. Keep a clear tier:
-        // none chosen -> visible neutral, one -> dim class color, both -> bright.
-        let colors: [string, string] = ['rgba(255,255,255,0.32)', 'rgba(255,255,255,0.2)'];
+        // Untouched links still carry the class hue so the three sectors read
+        // apart at a glance; another class's branches sit a step further back.
+        let colors: [string, string] = gradient.faint;
         let strokeWidth = 1.5;
         let glowing = false;
 
@@ -222,10 +233,9 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
           glowing = true;
         } else if (oneChosen) {
           colors = gradient.dim;
-          strokeWidth = 1.5;
         } else if (readOnly) {
-          // Another class's branches sit behind the player's own.
-          colors = ['rgba(255,255,255,0.16)', 'rgba(255,255,255,0.1)'];
+          colors = gradient.faint;
+          strokeWidth = 1;
         }
 
         rfEdges.push({
