@@ -21,7 +21,7 @@ import type {
 import warriorArt from '../../assets/skillTreeWarrior.png';
 import mageArt from '../../assets/skillTreeMage.png';
 import rogueArt from '../../assets/skillTreeRogue.png';
-import wheelBackdrop from '../../assets/skillWheelBackdrop.png';
+import WheelBackdrop from './WheelBackdrop';
 
 /* Map class_id -> art image (DB: 1=Warrior, 2=Rogue, 3=Mage) */
 const classArtMap: Record<number, string> = {
@@ -244,25 +244,12 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
   return (
     <div ref={wrapperRef} className="relative w-full h-full min-h-[400px] overflow-hidden">
       {combined ? (
-        <>
-          {/*
-            The backdrop is drawn as one circle split into the same three
-            sectors in the same order — red warrior up, green rogue lower right,
-            blue mage lower left — so it lines up with the layout rather than
-            sitting behind it. The frame is square and so is the art, so a plain
-            cover fit keeps both circles concentric.
-          */}
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              backgroundImage: `url(${wheelBackdrop})`,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-            }}
-          />
-          {/* Just enough darkening for the nodes to hold their own over the art */}
-          <div className="absolute inset-0 pointer-events-none bg-[#0a0a12]/45" />
-        </>
+        /*
+          The backdrop is one circle split into the same three sectors in the
+          same order — red warrior up, green rogue lower right, blue mage lower
+          left — so it registers with the layout rather than sitting behind it.
+        */
+        <WheelBackdrop />
       ) : (
         <>
           {/* ---- Class art as fixed background ---- */}
