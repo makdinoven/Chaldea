@@ -21,6 +21,7 @@ import type {
 import warriorArt from '../../assets/skillTreeWarrior.png';
 import mageArt from '../../assets/skillTreeMage.png';
 import rogueArt from '../../assets/skillTreeRogue.png';
+import wheelBackdrop from '../../assets/skillWheelBackdrop.png';
 
 /* Map class_id -> art image (DB: 1=Warrior, 2=Rogue, 3=Mage) */
 const classArtMap: Record<number, string> = {
@@ -242,37 +243,61 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
 
   return (
     <div ref={wrapperRef} className="relative w-full h-full min-h-[400px] overflow-hidden">
-      {/* ---- Class art as fixed background ---- */}
-      {classArt && (
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backgroundImage: `url(${classArt})`,
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-            opacity: 0.25,
-          }}
-        />
+      {combined ? (
+        <>
+          {/*
+            The backdrop is drawn as one circle split into the same three
+            sectors in the same order — red warrior up, green rogue lower right,
+            blue mage lower left — so it lines up with the layout rather than
+            sitting behind it. The frame is square and so is the art, so a plain
+            cover fit keeps both circles concentric.
+          */}
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              backgroundImage: `url(${wheelBackdrop})`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+            }}
+          />
+          {/* Just enough darkening for the nodes to hold their own over the art */}
+          <div className="absolute inset-0 pointer-events-none bg-[#0a0a12]/45" />
+        </>
+      ) : (
+        <>
+          {/* ---- Class art as fixed background ---- */}
+          {classArt && (
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                backgroundImage: `url(${classArt})`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                opacity: 0.25,
+              }}
+            />
+          )}
+
+          {/* ---- Dark radial vignette over the art ---- */}
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              background:
+                'radial-gradient(circle at 50% 50%, rgba(10,10,18,0.15) 0%, rgba(10,10,18,0.6) 55%, rgba(10,10,18,0.9) 80%)',
+            }}
+          />
+
+          {/* ---- Subtle grid overlay ---- */}
+          <div
+            className="absolute inset-0 pointer-events-none opacity-[0.04]"
+            style={{
+              backgroundImage:
+                'linear-gradient(rgba(255,255,255,0.15) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.15) 1px, transparent 1px)',
+              backgroundSize: '40px 40px',
+            }}
+          />
+        </>
       )}
-
-      {/* ---- Dark radial vignette over the art ---- */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            'radial-gradient(circle at 50% 50%, rgba(10,10,18,0.15) 0%, rgba(10,10,18,0.6) 55%, rgba(10,10,18,0.9) 80%)',
-        }}
-      />
-
-      {/* ---- Subtle grid overlay ---- */}
-      <div
-        className="absolute inset-0 pointer-events-none opacity-[0.04]"
-        style={{
-          backgroundImage:
-            'linear-gradient(rgba(255,255,255,0.15) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.15) 1px, transparent 1px)',
-          backgroundSize: '40px 40px',
-        }}
-      />
 
       {/* ---- ReactFlow canvas ---- */}
       <ReactFlow

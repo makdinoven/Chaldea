@@ -18,6 +18,7 @@ import {
   classGradientColors,
   defaultGradient,
 } from '../SkillTreeView/treeEdges';
+import wheelBackdrop from '../../assets/skillWheelBackdrop.png';
 
 /**
  * The class wheel, exactly as players see it, but editable: click a node to
@@ -91,22 +92,18 @@ const CombinedTreeCanvas = ({
 
   return (
     <div className="w-full h-full relative bg-[#12121e]" style={{ minHeight: 400 }}>
-      {/* Same vignette the player view uses, so the preview is honest */}
+      {/* Same backdrop the players get, so the preview is honest. The editor's
+          frame is not clipped to a circle, so it is fitted rather than covered. */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
-          background:
-            'radial-gradient(circle at 50% 50%, rgba(10,10,18,0.15) 0%, rgba(10,10,18,0.6) 55%, rgba(10,10,18,0.9) 80%)',
+          backgroundImage: `url(${wheelBackdrop})`,
+          backgroundSize: 'contain',
+          backgroundPosition: 'center',
+          backgroundRepeat: 'no-repeat',
         }}
       />
-      <div
-        className="absolute inset-0 pointer-events-none opacity-[0.04]"
-        style={{
-          backgroundImage:
-            'linear-gradient(rgba(255,255,255,0.15) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.15) 1px, transparent 1px)',
-          backgroundSize: '40px 40px',
-        }}
-      />
+      <div className="absolute inset-0 pointer-events-none bg-[#0a0a12]/45" />
 
       <ReactFlow
         nodes={nodes}
