@@ -7,6 +7,12 @@ interface PlayerNodeData extends TreeNodeInTreeResponse {
   classId: number;
   /** Node belongs to another class's tree: readable, but never choosable. */
   foreign?: boolean;
+  /**
+   * Rendered inside the admin wheel editor: same look the players get, but
+   * every node keeps its name and ring visible, nothing is dimmed, and the
+   * connection handles are grabbable.
+   */
+  adminView?: boolean;
 }
 
 /* ========== Rune symbols by level_ring ========== */
@@ -102,6 +108,15 @@ const CENTRED_HANDLE_STYLE = {
   border: 0,
 } as const;
 
+/** Same anchor point, but big enough to drag a connection out of. */
+const ADMIN_HANDLE_STYLE = {
+  ...CENTRED_HANDLE_STYLE,
+  width: 12,
+  height: 12,
+  background: 'rgba(240,217,92,0.55)',
+  border: '1px solid rgba(240,217,92,0.9)',
+} as const;
+
 /* ========== Hexagon SVG clip path (used inline) ========== */
 const HEX_POINTS = '50,0 93.3,25 93.3,75 50,100 6.7,75 6.7,25';
 
@@ -113,6 +128,8 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   const nodeType = d.node_type ?? 'regular';
   const isLarge = nodeType === 'root' || nodeType === 'subclass_choice';
   const isForeign = d.foreign ?? false;
+  const isAdmin = d.adminView ?? false;
+  const handleStyle = isAdmin ? ADMIN_HANDLE_STYLE : CENTRED_HANDLE_STYLE;
   // Foreign nodes stay clickable: the panel they open is read-only, and being
   // able to inspect another class's branches is the whole point of showing them.
   const isClickable = isForeign || state === 'available' || state === 'chosen';
@@ -123,9 +140,12 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
   const rune = getRune(d.level_ring, d.sort_order ?? 0);
   const runeSize = isLarge ? 'text-[22px]' : 'text-[16px]';
 
-  const opacity = isForeign ? 0.45 : state === 'locked' ? 0.4 : state === 'blocked' ? 0.3 : 1;
+  // The admin is editing, not playing: nothing there is dimmed or pulsing.
+  const opacity = isAdmin
+    ? 1
+    : isForeign ? 0.45 : state === 'locked' ? 0.4 : state === 'blocked' ? 0.3 : 1;
   // Nothing in another class's tree should pulse as if it were waiting to be taken.
-  const animClass = !isForeign && state === 'available' ? 'animate-pulse' : '';
+  const animClass = !isForeign && !isAdmin && state === 'available' ? 'animate-pulse' : '';
 
   return (
     <div
@@ -147,7 +167,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
       }
     >
       {/* Handles — both centred, see CENTRED_HANDLE_STYLE */}
-      <Handle type="target" position={Position.Top} style={CENTRED_HANDLE_STYLE} />
+      <Handle type="target" position={Position.Top} style={handleStyle} />
 
       {/* Hexagon shape via SVG */}
       <svg
@@ -201,8 +221,8 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
         {rune}
       </span>
 
-      {/* Level badge (large nodes only) */}
-      {isLarge && (
+      {/* Level badge — large nodes always, every node while editing */}
+      {(isLarge || isAdmin) && (
         <span
           className="absolute -top-1.5 -right-1.5 z-10 text-[8px] font-medium rounded-full w-[16px] h-[16px] flex items-center justify-center border"
           style={{
@@ -235,8 +255,8 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
         </span>
       )}
 
-      {/* Subclass name label below */}
-      {nodeType === 'subclass_choice' && d.name && (
+      {/* Name label below — subclass picks always, every node while editing */}
+      {(nodeType === 'subclass_choice' || isAdmin) && d.name && (
         <span
           className="absolute -bottom-5 left-1/2 -translate-x-1/2 z-10 whitespace-nowrap select-none text-[9px] font-bold uppercase tracking-[0.15em]"
           style={{
@@ -258,7 +278,7 @@ const PlayerNodeComponent = ({ data, selected }: NodeProps) => {
         />
       )}
 
-      <Handle type="source" position={Position.Bottom} style={CENTRED_HANDLE_STYLE} />
+      <Handle type="source" position={Position.Bottom} style={handleStyle} />
     </div>
   );
 };

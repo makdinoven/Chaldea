@@ -1,17 +1,15 @@
-import { useMemo, useCallback, memo, useState } from 'react';
+import { useMemo, useCallback, useState } from 'react';
 import ReactFlow, {
   Controls,
-  BaseEdge,
-  getStraightPath,
   type Node,
   type Edge,
-  type EdgeProps,
   type NodeMouseHandler,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import PlayerNodeComponent from './PlayerNodeComponent';
 import { computeNodeState } from './utils/computeNodeState';
 import { combineTrees } from './utils/combineTrees';
+import { GradientEdge, BridgeEdge, classGradientColors, defaultGradient } from './treeEdges';
 import type {
   FullClassTreeResponse,
   CharacterTreeProgressResponse,
@@ -28,108 +26,6 @@ const classArtMap: Record<number, string> = {
   2: rogueArt,
   3: mageArt,
 };
-
-/**
- * Map class_id -> edge gradients (DB: 1=Warrior, 2=Rogue, 3=Mage).
- *
- * Three tiers: `bright` when both ends are taken, `dim` when one is, `faint`
- * for untouched branches. Untouched links used to be the same neutral white for
- * every class, which left the combined wheel looking like one grey web.
- */
-const classGradientColors: Record<
-  number,
-  { bright: [string, string]; dim: [string, string]; faint: [string, string] }
-> = {
-  1: {
-    bright: ['#fbbf24', '#ef4444'],  // Warrior — gold → red
-    dim: ['rgba(251,191,36,0.3)', 'rgba(239,68,68,0.2)'],
-    faint: ['rgba(248,113,113,0.4)', 'rgba(248,113,113,0.22)'],
-  },
-  2: {
-    bright: ['#fbbf24', '#34d399'],  // Rogue — gold → green
-    dim: ['rgba(251,191,36,0.3)', 'rgba(52,211,153,0.2)'],
-    faint: ['rgba(52,211,153,0.4)', 'rgba(52,211,153,0.22)'],
-  },
-  3: {
-    bright: ['#a78bfa', '#38bdf8'],  // Mage — purple → blue
-    dim: ['rgba(167,139,250,0.3)', 'rgba(56,189,248,0.2)'],
-    faint: ['rgba(56,189,248,0.4)', 'rgba(56,189,248,0.22)'],
-  },
-};
-
-const defaultGradient = classGradientColors[1];
-
-/* Custom gradient edge component */
-const GradientEdge = memo(({
-  id,
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
-  data,
-}: EdgeProps) => {
-  // Straight, centre-to-centre. Orthogonal routing turned the rotated sectors
-  // of the combined wheel into staircases.
-  const [edgePath] = getStraightPath({ sourceX, sourceY, targetX, targetY });
-
-  const gradientId = `gradient-${id}`;
-  const colors = (data?.colors ?? defaultGradient.dim) as [string, string];
-  const strokeWidth = (data?.strokeWidth ?? 1) as number;
-  const glowing = (data?.glowing ?? false) as boolean;
-
-  return (
-    <>
-      <defs>
-        <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor={colors[0]} />
-          <stop offset="100%" stopColor={colors[1]} />
-        </linearGradient>
-      </defs>
-      {/* Glow layer */}
-      {glowing && (
-        <BaseEdge
-          id={`${id}-glow`}
-          path={edgePath}
-          style={{
-            stroke: `url(#${gradientId})`,
-            strokeWidth: strokeWidth + 4,
-            opacity: 0.3,
-            filter: 'blur(3px)',
-          }}
-        />
-      )}
-      {/* Main line */}
-      <BaseEdge
-        id={id}
-        path={edgePath}
-        style={{
-          stroke: `url(#${gradientId})`,
-          strokeWidth,
-        }}
-      />
-    </>
-  );
-});
-
-/**
- * Link between two class sectors of the combined wheel. Purely scenic — a
- * character can only ever choose nodes in its own class tree, so these are
- * drawn as severed, dashed lines rather than as a walkable path.
- */
-const BridgeEdge = memo(({ id, sourceX, sourceY, targetX, targetY }: EdgeProps) => {
-  const [edgePath] = getStraightPath({ sourceX, sourceY, targetX, targetY });
-  return (
-    <BaseEdge
-      id={id}
-      path={edgePath}
-      style={{
-        stroke: 'rgba(255,255,255,0.14)',
-        strokeWidth: 1.5,
-        strokeDasharray: '2 10',
-      }}
-    />
-  );
-});
 
 export interface TreeView {
   tree: FullClassTreeResponse;
@@ -192,7 +88,7 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
 
         // The wheel hands back node centres; the single-tree view uses the
         // authored top-left coordinates, whose centre is half an admin node in.
-        const placed = layout?.positions.get(apiNode.id);
+        const placed = layout?.positions.get(String(apiNode.id));
         const centreX = placed?.x ?? apiNode.position_x + ADMIN_NODE_SIZE / 2;
         const centreY = placed?.y ?? apiNode.position_y + ADMIN_NODE_SIZE / 2;
         const half = playerNodeSize(apiNode.node_type ?? 'regular') / 2;
@@ -251,8 +147,8 @@ const PlayerTreeCanvas = ({ views, onNodeClick }: PlayerTreeCanvasProps) => {
     for (const bridge of layout?.bridges ?? []) {
       rfEdges.push({
         id: bridge.id,
-        source: String(bridge.fromNodeId),
-        target: String(bridge.toNodeId),
+        source: bridge.fromNodeId,
+        target: bridge.toNodeId,
         type: 'bridge',
         focusable: false,
         interactionWidth: 0,

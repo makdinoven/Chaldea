@@ -57,15 +57,18 @@ export interface CombinedTree {
 /** A decorative, always-locked link between two neighbouring sectors. */
 export interface SectorBridge {
   id: string;
-  fromNodeId: number;
-  toNodeId: number;
+  fromNodeId: string;
+  toNodeId: string;
 }
 
 export interface CombinedLayout {
   trees: CombinedTree[];
   bridges: SectorBridge[];
-  /** Node id -> its centre in the combined space. */
-  positions: Map<number, { x: number; y: number }>;
+  /**
+   * Node id -> its centre in the combined space. Keyed by string because the
+   * admin editor gives unsaved nodes temporary ids like "temp-6-1".
+   */
+  positions: Map<string, { x: number; y: number }>;
 }
 
 /** Groups a tree's nodes by level_ring, innermost ring first. */
@@ -80,13 +83,14 @@ const byRing = (nodes: TreeNodeInTreeResponse[]): TreeNodeInTreeResponse[][] => 
   return [...groups.entries()]
     .sort(([a], [b]) => a - b)
     .map(([, ringNodes]) =>
-      // Keep the order the author laid out left-to-right; fall back to
-      // sort_order and id so the result is stable for identical coordinates.
+      // sort_order is the author's explicit knob, so it wins. A ring that never
+      // set it (all zeros) ties and falls through to the left-to-right order
+      // drawn in the editor, which is how older trees stay put.
       [...ringNodes].sort(
         (a, b) =>
-          a.position_x - b.position_x ||
           (a.sort_order ?? 0) - (b.sort_order ?? 0) ||
-          a.id - b.id,
+          a.position_x - b.position_x ||
+          String(a.id).localeCompare(String(b.id), undefined, { numeric: true }),
       ),
     );
 };
@@ -137,18 +141,16 @@ const bridgeSectors = (a: CombinedTree, b: CombinedTree, limit: number): SectorB
   }
   pairs.sort((p, q) => p.distance - q.distance);
 
-  const used = new Set<number>();
+  const used = new Set<string>();
   const bridges: SectorBridge[] = [];
   for (const pair of pairs) {
     if (bridges.length >= limit) break;
-    if (used.has(pair.from.node.id) || used.has(pair.to.node.id)) continue;
-    used.add(pair.from.node.id);
-    used.add(pair.to.node.id);
-    bridges.push({
-      id: `bridge-${pair.from.node.id}-${pair.to.node.id}`,
-      fromNodeId: pair.from.node.id,
-      toNodeId: pair.to.node.id,
-    });
+    const fromId = String(pair.from.node.id);
+    const toId = String(pair.to.node.id);
+    if (used.has(fromId) || used.has(toId)) continue;
+    used.add(fromId);
+    used.add(toId);
+    bridges.push({ id: `bridge-${fromId}-${toId}`, fromNodeId: fromId, toNodeId: toId });
   }
   return bridges;
 };
@@ -157,9 +159,9 @@ const bridgeSectors = (a: CombinedTree, b: CombinedTree, limit: number): SectorB
 export const combineTrees = (trees: FullClassTreeResponse[]): CombinedLayout => {
   const placed = trees.map((tree, i) => placeTree(tree, i, trees.length));
 
-  const positions = new Map<number, { x: number; y: number }>();
+  const positions = new Map<string, { x: number; y: number }>();
   for (const t of placed) {
-    for (const n of t.nodes) positions.set(n.node.id, { x: n.x, y: n.y });
+    for (const n of t.nodes) positions.set(String(n.node.id), { x: n.x, y: n.y });
   }
 
   const bridges: SectorBridge[] = [];
