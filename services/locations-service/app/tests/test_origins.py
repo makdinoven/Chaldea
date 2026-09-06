@@ -77,16 +77,16 @@ async def session():
             OriginCountry(
                 id=1, name="Belyi Klin", summary="Northern republic.",
                 skitaltsy_attitude="Revered as heroes.", archive_slug="belyi-klin",
-                is_playable=True, is_active=True, sort_order=30,
+                is_active=True, sort_order=30,
             ),
             OriginCountry(
                 id=2, name="Aldergard", summary="Old kingdom.",
-                is_playable=False, is_active=True, sort_order=10,
+                is_active=True, sort_order=10,
             ),
             # Soft-deleted: hidden from the public list, visible to admins.
             OriginCountry(
                 id=3, name="Forgotten Duchy", summary="Hidden.",
-                is_playable=False, is_active=False, sort_order=20,
+                is_active=False, sort_order=20,
             ),
         ])
         await s.commit()
@@ -219,8 +219,7 @@ def _origin_obj(**kwargs):
     defaults = dict(
         id=7, name="Belyi Klin", emblem_url=None, map_image_url=None,
         summary="Northern republic.", skitaltsy_attitude="Revered.",
-        archive_slug="belyi-klin", country_id=None, is_playable=False,
-        sort_order=30, is_active=True,
+        archive_slug="belyi-klin", sort_order=30, is_active=True,
     )
     defaults.update(kwargs)
     obj = MagicMock()
@@ -284,8 +283,7 @@ class TestPublicOriginsRoute:
         assert "description" not in body
         assert set(body.keys()) == {
             "id", "name", "emblem_url", "map_image_url", "summary",
-            "skitaltsy_attitude", "archive_slug", "country_id",
-            "is_playable", "sort_order",
+            "skitaltsy_attitude", "archive_slug", "sort_order",
         }
 
 

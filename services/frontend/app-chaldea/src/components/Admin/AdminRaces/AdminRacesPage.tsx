@@ -133,10 +133,14 @@ const AdminRacesPage = () => {
     setShowSubraceForm(true);
   };
 
-  const handleEditSubrace = (e: React.MouseEvent, subrace: Subrace) => {
+  // `GET /characters/races` nests subraces without `id_race`, so the owning
+  // race is taken from the row we are rendering under — otherwise the form's
+  // race picker fell back to the first race ("Человек") and saving re-parented
+  // the subrace to it.
+  const handleEditSubrace = (e: React.MouseEvent, subrace: Subrace, raceId: number) => {
     e.stopPropagation();
     setEditingSubrace(subrace);
-    setDefaultRaceIdForSubrace(subrace.id_race);
+    setDefaultRaceIdForSubrace(subrace.id_race ?? raceId);
     setShowSubraceForm(true);
   };
 
@@ -300,7 +304,7 @@ const AdminRacesPage = () => {
                           <button
                             className="px-2 py-1 bg-site-blue/20 text-site-blue border-none rounded cursor-pointer text-xs
                               transition-colors hover:bg-site-blue/30"
-                            onClick={(e) => handleEditSubrace(e, subrace)}
+                            onClick={(e) => handleEditSubrace(e, subrace, race.id_race)}
                           >
                             Редактировать
                           </button>

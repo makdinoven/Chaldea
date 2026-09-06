@@ -12,10 +12,10 @@ import {
   selectAdminOriginsError,
 } from '../../../redux/slices/originsSlice';
 import type { OriginCountryAdmin, OriginCountryCreatePayload } from '../../../api/origins';
-import { fetchCountriesList } from '../../../redux/actions/adminLocationsActions';
 import { selectPermissions, selectRole } from '../../../redux/slices/userSlice';
 import { hasPermission } from '../../../utils/permissions';
 import OriginForm from './OriginForm';
+import OriginStartingPoints from './OriginStartingPoints';
 
 /**
  * FEAT-154 (rules 8-10, task #23) — admin registry of origin countries.
@@ -24,6 +24,13 @@ import OriginForm from './OriginForm';
  * list but keeps existing, and the admin listing includes hidden rows by
  * default (note N5) precisely so a hidden origin can be found and restored.
  * The UI therefore says «скрыть» / «вернуть», never «удалить».
+ *
+ * FEAT-155: each origin also carries a curated set of recommended starting
+ * points, edited here (rule 5) — the location tree cannot express that relation
+ * at all, and walking five levels to flip one flag was the whole complaint.
+ * The «Страна на карте» caption and the `is_playable` marker are gone with
+ * their columns (rules 10-11), and with them the country list this page used to
+ * load solely to resolve that caption.
  */
 
 type VisibilityFilter = 'all' | 'visible' | 'hidden';
@@ -39,8 +46,6 @@ const AdminOriginsPage = () => {
   const origins = useAppSelector(selectAdminOrigins);
   const loading = useAppSelector(selectAdminOriginsLoading);
   const error = useAppSelector(selectAdminOriginsError);
-  const countries = useAppSelector((state) => state.adminLocations.countries);
-  const countriesError = useAppSelector((state) => state.adminLocations.error);
   const role = useAppSelector(selectRole);
   const permissions = useAppSelector(selectPermissions);
 
@@ -49,6 +54,7 @@ const AdminOriginsPage = () => {
   const [editing, setEditing] = useState<OriginCountryAdmin | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmHide, setConfirmHide] = useState<OriginCountryAdmin | null>(null);
+  const [pointsFor, setPointsFor] = useState<OriginCountryAdmin | null>(null);
 
   // Admin always holds every permission, so the role short-circuit matches
   // the rest of the admin surface (see AdminPage).
@@ -56,11 +62,12 @@ const AdminOriginsPage = () => {
   const canCreate = isAdmin || hasPermission(permissions, 'origins:create');
   const canUpdate = isAdmin || hasPermission(permissions, 'origins:update');
   const canDelete = isAdmin || hasPermission(permissions, 'origins:delete');
+  // Reading the set needs `origins:read`; changing it needs `origins:update`.
+  const canReadPoints = isAdmin || hasPermission(permissions, 'origins:read');
 
   useEffect(() => {
     // N5 — include_inactive defaults to true; hidden rows must stay findable.
     dispatch(fetchOriginsAdminThunk(true));
-    dispatch(fetchCountriesList());
   }, [dispatch]);
 
   const visibleOrigins = useMemo(() => {
@@ -75,12 +82,6 @@ const AdminOriginsPage = () => {
   }, [origins, filter]);
 
   const hiddenCount = useMemo(() => origins.filter((o) => !o.is_active).length, [origins]);
-
-  const countryNameById = useMemo(() => {
-    const map = new Map<number, string>();
-    countries.forEach((country) => map.set(country.id, country.name));
-    return map;
-  }, [countries]);
 
   const handleCreate = () => {
     setEditing(null);
@@ -143,7 +144,8 @@ const AdminOriginsPage = () => {
       <p className="text-white/50 text-sm text-center max-w-[720px] mx-auto mb-8">
         Справочник родных стран для создания персонажа. Он шире карты мира: сюда входят и страны,
         которых на карте нет. Скрытое происхождение не удаляется — оно просто перестаёт
-        показываться игрокам и может быть возвращено.
+        показываться игрокам и может быть возвращено. Кнопка «Стартовые точки» задаёт, какие
+        места игра предложит игроку с этой родиной в первую очередь.
       </p>
 
       <div className="max-w-[1200px] mx-auto">
@@ -233,11 +235,6 @@ const AdminOriginsPage = () => {
                           Скрыто от игроков
                         </span>
                       )}
-                      {origin.is_playable && (
-                        <span className="text-xs px-2 py-0.5 rounded-full border border-white/20 text-white/60">
-                          На карте мира
-                        </span>
-                      )}
                       <span className="text-xs text-white/40">#{origin.sort_order}</span>
                     </div>
 
@@ -252,16 +249,24 @@ const AdminOriginsPage = () => {
                         {origin.skitaltsy_attitude}
                       </p>
                     )}
-                    <p className="mt-2 text-white/35 text-xs break-words">
-                      {origin.country_id
-                        ? `Страна на карте: ${countryNameById.get(origin.country_id) ?? `#${origin.country_id}`}`
-                        : 'Страны на карте нет'}
-                      {origin.archive_slug ? ` · Архив: /${origin.archive_slug}` : ''}
-                    </p>
+                    {origin.archive_slug && (
+                      <p className="mt-2 text-white/35 text-xs break-words">
+                        Архив: /{origin.archive_slug}
+                      </p>
+                    )}
                   </div>
                 </div>
 
                 <div className="flex flex-wrap gap-2 lg:justify-end lg:flex-shrink-0">
+                  {canReadPoints && (
+                    <button
+                      type="button"
+                      onClick={() => setPointsFor(origin)}
+                      className="px-3 py-1.5 bg-site-blue/20 text-site-blue rounded text-sm transition-colors hover:bg-site-blue/30"
+                    >
+                      Стартовые точки
+                    </button>
+                  )}
                   {canUpdate && (
                     <button
                       type="button"
@@ -300,14 +305,21 @@ const AdminOriginsPage = () => {
       {showForm && (
         <OriginForm
           origin={editing}
-          countries={countries}
-          countriesError={countriesError}
           onSave={handleSave}
           onCancel={() => {
             setShowForm(false);
             setEditing(null);
           }}
           loading={saving}
+        />
+      )}
+
+      {pointsFor && (
+        <OriginStartingPoints
+          originId={pointsFor.id}
+          originName={pointsFor.name}
+          canUpdate={canUpdate}
+          onClose={() => setPointsFor(null)}
         />
       )}
 

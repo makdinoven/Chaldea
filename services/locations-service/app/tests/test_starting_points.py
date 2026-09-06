@@ -153,6 +153,8 @@ class TestGetStartingPoints:
         assert set(rows[0].keys()) == {
             "id", "name", "image_url", "starting_blurb",
             "district_name", "region_name", "country_name", "sort_order",
+            # FEAT-155 — additive: false unless ?origin_id is supplied
+            "is_recommended",
         }
 
 
@@ -200,7 +202,8 @@ class TestStartingPointRoutes:
     def test_list_returns_200_without_auth(self, mock_crud, client):
         resp = client.get("/locations/starting-points")
         assert resp.status_code == 200
-        assert resp.json() == [_POINT]
+        # FEAT-155 — the response model now carries an additive is_recommended
+        assert resp.json() == [{**_POINT, "is_recommended": False}]
 
     @patch("crud.get_starting_points", new_callable=AsyncMock, return_value=[])
     def test_list_can_be_empty(self, mock_crud, client):

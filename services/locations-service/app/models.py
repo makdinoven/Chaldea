@@ -654,9 +654,12 @@ class OriginCountry(Base):
     """Справочник происхождения персонажа (FEAT-154).
 
     Шире, чем игровые страны на карте: сюда входят и неигровые державы.
-    ``country_id`` — мягкая связь с ``Countries`` (для переиспользования герба),
     ``archive_slug`` — мягкая ссылка на ``archive_articles.slug`` (без FK,
     статьи — контент и могут быть переименованы).
+
+    FEAT-155: связь с игровой картой (``country_id``) и флаг ``is_playable``
+    удалены — они дублировали друг друга и могли противоречить. Связь
+    происхождения с миром выражается только через ``origin_starting_points``.
     """
 
     __tablename__ = 'origin_countries'
@@ -668,13 +671,47 @@ class OriginCountry(Base):
     emblem_url = Column(String(255), nullable=True)
     map_image_url = Column(String(255), nullable=True)
     archive_slug = Column(String(255), nullable=True)
-    country_id = Column(BigInteger, ForeignKey('Countries.id', ondelete='SET NULL'), nullable=True)
-    is_playable = Column(Boolean, nullable=False, default=False, server_default='0')
     is_active = Column(Boolean, nullable=False, default=True, server_default='1')
     sort_order = Column(Integer, nullable=False, default=0, server_default='0')
 
     __table_args__ = (
         UniqueConstraint('name', name='uq_origin_countries_name'),
         Index('ix_origin_countries_active_sort', 'is_active', 'sort_order'),
+        {'mysql_engine': 'InnoDB'},
+    )
+
+
+class OriginStartingPoint(Base):
+    """Рекомендованные стартовые точки происхождения (FEAT-155).
+
+    Полноценная таблица связи, а не JSON-колонка: обе стороны (``origin_countries``
+    и ``Locations``) принадлежат locations-service и лежат в одной БД, поэтому
+    внешние ключи технически возможны — в отличие от ``subraces.typical_origin_ids``,
+    где связь пересекала границу сервисов.
+
+    ``ON DELETE CASCADE`` с обеих сторон закрывает правило 9 брифа: удалённая
+    локация исчезает из набора сама, без «висячих» идентификаторов и без
+    фильтрации на чтении.
+    """
+
+    __tablename__ = 'origin_starting_points'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    origin_id = Column(
+        BigInteger,
+        ForeignKey('origin_countries.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    location_id = Column(
+        BigInteger,
+        ForeignKey('Locations.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    sort_order = Column(Integer, nullable=False, default=0, server_default='0')
+
+    __table_args__ = (
+        UniqueConstraint('origin_id', 'location_id', name='uq_origin_starting_point'),
+        Index('ix_origin_starting_points_origin', 'origin_id', 'sort_order'),
+        Index('ix_origin_starting_points_location', 'location_id'),
         {'mysql_engine': 'InnoDB'},
     )

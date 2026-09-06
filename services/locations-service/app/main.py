@@ -3494,9 +3494,24 @@ registration_router = APIRouter(prefix="/locations", tags=["registration"])
 @registration_router.get(
     "/starting-points", response_model=List[schemas.StartingPointRead]
 )
-async def list_starting_points_route(session: AsyncSession = Depends(get_db)):
-    """Публично. Курируемый список стартовых точек (rule 19)."""
-    return await crud.get_starting_points(session)
+async def list_starting_points_route(
+    origin_id: Optional[int] = Query(
+        None,
+        description=(
+            "FEAT-155: пометить точки, рекомендованные этому происхождению, "
+            "и поднять их наверх. Список остаётся полным — это подсказка, "
+            "а не фильтр."
+        ),
+    ),
+    session: AsyncSession = Depends(get_db),
+):
+    """Публично. Курируемый список стартовых точек (rule 19).
+
+    Без ``origin_id`` поведение ровно прежнее (FEAT-154): весь список,
+    ``is_recommended`` везде false. С ``origin_id`` — тот же список,
+    но рекомендованные точки идут первыми и помечены.
+    """
+    return await crud.get_starting_points(session, origin_id=origin_id)
 
 
 @registration_router.get(
@@ -3572,6 +3587,90 @@ async def admin_delete_origin_route(
     """
     origin = await crud.deactivate_origin_country(session, origin_id)
     return {"id": origin.id, "is_active": origin.is_active}
+
+
+# --------------------------------------------------------------------
+# FEAT-155 — РЕКОМЕНДОВАННЫЕ СТАРТОВЫЕ ТОЧКИ ПРОИСХОЖДЕНИЯ
+# --------------------------------------------------------------------
+
+
+@registration_router.get(
+    "/admin/location-search", response_model=List[schemas.LocationSearchResult]
+)
+async def admin_location_search_route(
+    q: str = Query(..., min_length=1, max_length=255),
+    limit: int = Query(20, ge=1, le=50),
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("origins:update")),
+):
+    """Поиск локации по названию (rule 6) — без хождения по дереву.
+
+    Отдаёт хлебные крошки (район / регион / страна), иначе десяток
+    одноимённых «Ворот» неразличим. Числовой запрос ищет ещё и по id.
+    """
+    return await crud.search_locations_with_breadcrumbs(session, q=q, limit=limit)
+
+
+@registration_router.get(
+    "/admin/origins/{origin_id}/starting-points",
+    response_model=List[schemas.StartingPointRead],
+)
+async def admin_list_origin_starting_points_route(
+    origin_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("origins:read")),
+):
+    """Набор рекомендованных точек происхождения — для экрана /admin/origins."""
+    return await crud.get_origin_starting_points(session, origin_id)
+
+
+@registration_router.put(
+    "/admin/origins/{origin_id}/starting-points",
+    response_model=List[schemas.StartingPointRead],
+)
+async def admin_set_origin_starting_points_route(
+    origin_id: int,
+    body: schemas.OriginStartingPointsUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("origins:update")),
+):
+    """Полная замена набора (порядок в ``location_ids`` сохраняется).
+
+    Rule 7: локации, ещё не помеченные как стартовые, становятся ими
+    этим же действием.
+    """
+    return await crud.set_origin_starting_points(
+        session, origin_id, body.location_ids
+    )
+
+
+@registration_router.post(
+    "/admin/origins/{origin_id}/starting-points/{location_id}",
+    response_model=List[schemas.StartingPointRead],
+)
+async def admin_add_origin_starting_point_route(
+    origin_id: int,
+    location_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("origins:update")),
+):
+    """Добавить одну точку в набор. Повторный вызов не ошибка (rule 7)."""
+    return await crud.add_origin_starting_point(session, origin_id, location_id)
+
+
+@registration_router.delete(
+    "/admin/origins/{origin_id}/starting-points/{location_id}",
+    response_model=List[schemas.StartingPointRead],
+)
+async def admin_remove_origin_starting_point_route(
+    origin_id: int,
+    location_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("origins:update")),
+):
+    """Убрать точку из набора. Флаг ``is_starting`` у локации сохраняется
+    (rule 8) — она могла быть стартовой и сама по себе."""
+    return await crud.remove_origin_starting_point(session, origin_id, location_id)
 
 
 # --------------------------------------------------------------------

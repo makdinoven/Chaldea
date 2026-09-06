@@ -4,19 +4,19 @@ import type {
   OriginCountryAdmin,
   OriginCountryCreatePayload,
 } from '../../../api/origins';
-import type { Country } from '../../../redux/actions/adminLocationsActions';
 
 /**
  * FEAT-154 (rules 8-10) — create/edit one origin country.
  *
- * The registry is deliberately wider than the playable `Countries` (rule 9):
- * `country_id` is optional, and an origin with no playable country behind it
- * (Железный Пояс, Эльфийские Сады, Республика Белый Клин) is perfectly valid.
+ * FEAT-155 (rules 10-12): the «страна на карте мира» select and the
+ * «играбельная страна» checkbox are gone. They described the same thing twice
+ * and could contradict each other, and the registry is deliberately wider than
+ * the playable `Countries` anyway. An origin's link to the world is now
+ * expressed only through its recommended starting points, curated on the
+ * listing page.
  */
 interface OriginFormProps {
   origin: OriginCountryAdmin | null;
-  countries: Country[];
-  countriesError: string | null;
   onSave: (data: OriginCountryCreatePayload) => void;
   onCancel: () => void;
   loading: boolean;
@@ -35,24 +35,13 @@ const trimmedOrNull = (value: string): string | null => {
   return trimmed ? trimmed : null;
 };
 
-const OriginForm = ({
-  origin,
-  countries,
-  countriesError,
-  onSave,
-  onCancel,
-  loading,
-}: OriginFormProps) => {
+const OriginForm = ({ origin, onSave, onCancel, loading }: OriginFormProps) => {
   const [name, setName] = useState(origin?.name || '');
   const [summary, setSummary] = useState(origin?.summary || '');
   const [attitude, setAttitude] = useState(origin?.skitaltsy_attitude || '');
   const [archiveSlug, setArchiveSlug] = useState(origin?.archive_slug || '');
   const [emblemUrl, setEmblemUrl] = useState(origin?.emblem_url || '');
   const [mapImageUrl, setMapImageUrl] = useState(origin?.map_image_url || '');
-  const [countryId, setCountryId] = useState<string>(
-    origin?.country_id != null ? String(origin.country_id) : ''
-  );
-  const [isPlayable, setIsPlayable] = useState(origin?.is_playable ?? false);
   const [sortOrder, setSortOrder] = useState(String(origin?.sort_order ?? 0));
 
   const slugError = useMemo(() => {
@@ -81,8 +70,6 @@ const OriginForm = ({
       archive_slug: trimmedOrNull(archiveSlug),
       emblem_url: trimmedOrNull(emblemUrl),
       map_image_url: trimmedOrNull(mapImageUrl),
-      country_id: countryId ? Number(countryId) : null,
-      is_playable: isPlayable,
       sort_order: sortOrder.trim() ? Number(sortOrder) : 0,
     });
   };
@@ -198,53 +185,22 @@ const OriginForm = ({
             />
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className={LABEL_CLASS}>Страна на карте мира</label>
-              <select
-                value={countryId}
-                onChange={(e) => setCountryId(e.target.value)}
-                className={FIELD_CLASS}
-              >
-                <option value="" className="bg-site-dark text-white">
-                  Нет (страна вне карты)
-                </option>
-                {countries.map((country) => (
-                  <option key={country.id} value={country.id} className="bg-site-dark text-white">
-                    {country.name}
-                  </option>
-                ))}
-              </select>
-              {countriesError ? (
-                <p className="mt-1 text-site-red text-xs">{countriesError}</p>
-              ) : (
-                <p className="mt-1 text-white/40 text-xs">
-                  Список происхождений шире списка играбельных стран — связь необязательна.
-                </p>
-              )}
-            </div>
-
-            <div>
-              <label className={LABEL_CLASS}>Порядок сортировки</label>
-              <input
-                type="number"
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value)}
-                className={FIELD_CLASS}
-              />
-              {sortOrderError && <p className="mt-1 text-site-red text-xs">{sortOrderError}</p>}
-            </div>
-          </div>
-
-          <label className="flex items-start gap-2 text-white cursor-pointer">
+          <div className="sm:max-w-[50%]">
+            <label className={LABEL_CLASS}>Порядок сортировки</label>
             <input
-              type="checkbox"
-              checked={isPlayable}
-              onChange={(e) => setIsPlayable(e.target.checked)}
-              className="w-4 h-4 mt-0.5 flex-shrink-0"
+              type="number"
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value)}
+              className={FIELD_CLASS}
             />
-            <span className="text-sm">Играбельная страна (есть на карте мира)</span>
-          </label>
+            {sortOrderError ? (
+              <p className="mt-1 text-site-red text-xs">{sortOrderError}</p>
+            ) : (
+              <p className="mt-1 text-white/40 text-xs">
+                Порядок в списке при создании персонажа. Меньше — выше.
+              </p>
+            )}
+          </div>
 
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-2">
             <button

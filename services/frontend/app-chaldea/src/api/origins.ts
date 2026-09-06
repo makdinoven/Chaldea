@@ -7,6 +7,10 @@ import { apiErrorMessage } from './errors';
  * The list is deliberately WIDER than the playable `Countries` (rule 9) and
  * never exposes `Countries.description` (rule 4) — it carries its own `summary`
  * and `skitaltsy_attitude`.
+ *
+ * FEAT-155 (rules 10-12): `is_playable` and `country_id` are gone — from the
+ * form, the API and the database. The link to the world is expressed only
+ * through the origin's recommended starting points (see `startingPoints.ts`).
  */
 
 /** Public card of one origin (`GET /locations/origins`). */
@@ -18,8 +22,6 @@ export interface OriginCountry {
   summary: string | null;
   skitaltsy_attitude: string | null;
   archive_slug: string | null;
-  country_id: number | null;
-  is_playable: boolean;
   sort_order: number;
 }
 
@@ -44,8 +46,6 @@ export interface OriginCountryCreatePayload {
   skitaltsy_attitude?: string | null;
   /** Must match `^[a-z0-9-]+$` — validated server-side. */
   archive_slug?: string | null;
-  country_id?: number | null;
-  is_playable?: boolean;
   is_active?: boolean;
   sort_order?: number;
 }
