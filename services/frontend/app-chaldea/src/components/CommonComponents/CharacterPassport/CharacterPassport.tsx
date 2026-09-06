@@ -427,7 +427,11 @@ const CharacterPassport = ({
           {/* Column two — what this Скиталец is worth and what he carries */}
           {hasLedger ? (
             <div className="flex flex-col gap-5">
-              <PassportStatBlock stats={data.stats} derived={data.derived} />
+              <PassportStatBlock
+                stats={data.stats}
+                derived={data.derived}
+                isSnapshot={data.statsIsSnapshot}
+              />
               {showRecruitmentRecord ? (
                 <PassportKitBlock kit={data.starterKit} isSnapshot={data.starterKitIsSnapshot} />
               ) : null}

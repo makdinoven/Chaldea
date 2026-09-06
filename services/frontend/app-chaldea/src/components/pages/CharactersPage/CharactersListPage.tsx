@@ -226,9 +226,9 @@ const CharactersListPage = () => {
       typicalOriginIds: detail.character.id_subrace
         ? typicalBySubrace.get(detail.character.id_subrace) ?? null
         : null,
-      // `null` when character-attributes-service was unreachable (N31) — the
-      // passport then just omits the stat block.
-      stats: detail.character.stats,
+      // Stats are NOT passed in: `fromCharacterPublic` reads the frozen
+      // `starting_attributes` snapshot off the character itself (FEAT-155).
+      // The endpoint no longer carries current stats at all.
       items: detail.items,
       skills: detail.skills,
     });

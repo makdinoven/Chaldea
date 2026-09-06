@@ -132,7 +132,20 @@ export interface PassportData {
   /** `false` → «редкий выбор» badge (rule 11). `null` = unknown, no badge. */
   originIsTypical?: boolean | null;
 
+  /**
+   * The stat preset the character STARTED with — never their current build.
+   * For an existing character this is the frozen
+   * `characters.starting_attributes` snapshot (FEAT-155); in the wizard it is
+   * the subrace preset, because nothing has been earned yet.
+   */
   stats?: PassportStats | null;
+  /**
+   * `true` = frozen record of the assessment made at recruitment.
+   * `false` = reconstructed from the subrace preset for a pre-FEAT-155
+   * character — the block says so in a muted caption.
+   * `null` / omitted = not applicable (the wizard, a pending request).
+   */
+  statsIsSnapshot?: boolean | null;
   derived?: DerivedStats | null;
 
   starterKit?: PassportKit | null;
@@ -180,7 +193,12 @@ export interface PassportExtras {
   origins?: readonly OriginCountry[] | ReadonlyMap<number, OriginCountry> | null;
   /** `typical_origin_ids` of the character's subrace → drives the rare badge. */
   typicalOriginIds?: readonly number[] | null;
-  /** Stats live in character-attributes-service, not on the character row. */
+  /**
+   * The STARTING preset, for sources that do not carry it themselves (the list
+   * row, a moderation request). `fromCharacterPublic` ignores this and reads
+   * the frozen snapshot off the character instead — a caller must not be able
+   * to inject a live build into a passport.
+   */
   stats?: PassportStats | null;
   /** Results of `GET /inventory/items/bulk` for the kit's frozen item ids. */
   items?: readonly ItemBulk[] | ReadonlyMap<number, ItemBulk> | null;

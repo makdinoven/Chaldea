@@ -171,10 +171,15 @@ class CharacterPublicResponse(BaseModel):
     user_id: Optional[int] = None
     username: Optional[str] = None
 
-    # Пресет статов из character-attributes-service (правило 27 / N26).
-    # None, если сервис атрибутов недоступен или атрибутов у персонажа нет:
-    # паспорт в этом случае рисуется без блока статов, но не падает.
-    stats: Optional[Dict[str, int]] = None
+    # FEAT-155: ЗАМОРОЖЕННЫЕ стартовые характеристики — то, с чем персонаж
+    # вступил в Скитальцы (правило 27, по образцу granted_kit / правило 12d).
+    # Текущие статы здесь НЕ отдаются намеренно: паспорт это запись о вступлении,
+    # а актуальный билд игрока не должен утекать в чужую анкету.
+    # None -> блок «Оценка при вступлении» просто не рисуется.
+    starting_attributes: Optional[Dict[str, int]] = None
+    # True — слепок, снятый при одобрении. False — реконструкция из пресета
+    # подрасы для персонажа, созданного до FEAT-155 (по образцу D18).
+    starting_attributes_is_snapshot: bool = False
 
     # Замороженный слепок выданного набора (rule 12d / D17). Если слепка нет —
     # здесь живой resolve, а granted_kit_is_snapshot = False (D18).

@@ -71,11 +71,24 @@ export interface CharacterPublic {
   granted_kit_is_snapshot: boolean;
 
   /**
-   * The ten base characteristics, read from character-attributes-service
-   * (rule 27, N31). `null` when that service is unreachable — the passport
-   * then simply renders without the stat block, it never fails.
+   * The ten base characteristics **as of recruitment** — the frozen
+   * `characters.starting_attributes` snapshot (rule 27, FEAT-155).
+   *
+   * Deliberately NOT the character's current stats: the passport is a record
+   * of what a Скиталец arrived with, and a stranger's live build must not leak
+   * through a public questionnaire. The endpoint no longer talks to
+   * character-attributes-service at all, so there is nothing current to read.
+   *
+   * `null` → the passport simply renders without the stat block.
    */
-  stats: Record<string, number> | null;
+  starting_attributes: Record<string, number> | null;
+  /**
+   * `true` = frozen record written at approval.
+   * `false` = reconstructed from the subrace preset for a character created
+   * before FEAT-155 — the passport marks it as a reconstruction rather than
+   * passing it off as the original.
+   */
+  starting_attributes_is_snapshot: boolean;
 }
 
 /**
