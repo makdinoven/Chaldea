@@ -1,9 +1,16 @@
 from inspect import classify_class_attrs
 from typing import Optional, Dict, List, Any
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, Field, validator
 from datetime import datetime
 
 # Базовая схема для заявки на создание персонажа
+# Максимальная длина имени персонажа (правило 32, по образцу 30b).
+# Колонка character_requests.name — String(20). Проверка длины вынесена из
+# Pydantic-схемы в доменную валидацию (crud.validate_character_request_payload),
+# чтобы игрок получал 400 с русским сообщением, а не стандартный 422 от FastAPI.
+MAX_CHARACTER_NAME_LENGTH = 20
+
+
 class CharacterRequestBase(BaseModel):
     name: str
     id_subrace: int
@@ -18,7 +25,14 @@ class CharacterRequestBase(BaseModel):
     id_class: int
     id_race: int
     user_id: Optional[int]
-    avatar : str
+    # FEAT-154 (D5): аватар больше не обязателен — загрузка может не состояться,
+    # это не должно блокировать подачу заявки.
+    avatar: Optional[str] = None
+    # FEAT-154: новые поля заявки, все необязательные (R3)
+    origin_id: Optional[int] = None
+    start_location_id: Optional[int] = None
+    skitaltsy_since_year: Optional[int] = None
+    skitaltsy_since_segment: Optional[int] = None
 
 # Схема для создания заявки на персонажа
 class CharacterRequestCreate(CharacterRequestBase):
@@ -28,9 +42,145 @@ class CharacterRequestCreate(CharacterRequestBase):
 class CharacterRequest(CharacterRequestBase):
     id: int
     status: str
+    # FEAT-154: раньше эти поля не возвращались, из-за чего клиент не узнавал
+    # ни времени подачи, ни типа заявки, ни причины отказа.
+    created_at: Optional[datetime] = None
+    request_type: Optional[str] = None
+    character_id: Optional[int] = None
+    rejection_reason: Optional[str] = None
 
     class Config:
         orm_mode = True
+
+# Максимальная длина причины отклонения заявки (правило 30b).
+# Проверка вынесена из Pydantic-валидатора в эндпоинт, чтобы игрок/модератор
+# получал 400 с русским сообщением, а не стандартный 422 от FastAPI.
+MAX_REJECTION_REASON_LENGTH = 1000
+
+
+# Схема тела запроса на отклонение заявки (тело необязательно)
+class CharacterRequestReject(BaseModel):
+    reason: Optional[str] = None
+
+    @validator("reason")
+    def validate_reason(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return None
+        # Длина НЕ проверяется здесь намеренно: см. MAX_REJECTION_REASON_LENGTH.
+        return v
+
+    class Config:
+        orm_mode = True
+
+
+# ===== FEAT-154: заявки игрока и публичный паспорт персонажа =====
+
+class ClassResponse(BaseModel):
+    """Игровой класс. Публичный справочник для мастера создания персонажа."""
+
+    id_class: int
+    name: str
+    description: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+class CharacterRequestMy(BaseModel):
+    """Заявка текущего пользователя (GET /characters/requests/my, PUT /characters/requests/{id})."""
+
+    id: int
+    status: str
+    request_type: Optional[str] = None
+    created_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
+
+    name: Optional[str] = None
+    id_race: Optional[int] = None
+    id_subrace: Optional[int] = None
+    id_class: Optional[int] = None
+    race_name: Optional[str] = None
+    subrace_name: Optional[str] = None
+    class_name: Optional[str] = None
+
+    avatar: Optional[str] = None
+    origin_id: Optional[int] = None
+    start_location_id: Optional[int] = None
+
+    biography: Optional[str] = None
+    personality: Optional[str] = None
+    appearance: Optional[str] = None
+    background: Optional[str] = None
+
+    sex: Optional[str] = None
+    age: Optional[int] = None
+    weight: Optional[str] = None
+    height: Optional[str] = None
+
+    skitaltsy_since_year: Optional[int] = None
+    skitaltsy_since_segment: Optional[int] = None
+    character_id: Optional[int] = None
+
+
+class CharacterRequestUpdate(CharacterRequestBase):
+    """
+    Тело PUT /characters/requests/{id} — то же, что и при создании, но без user_id:
+    владелец определяется по токену, подменить его нельзя.
+    """
+
+    user_id: Optional[int] = None
+
+
+class CharacterPublicResponse(BaseModel):
+    """Публичный паспорт персонажа (GET /characters/{character_id}/public)."""
+
+    id: int
+    name: str
+    avatar: Optional[str] = None
+    level: Optional[int] = None
+
+    id_race: Optional[int] = None
+    id_subrace: Optional[int] = None
+    id_class: Optional[int] = None
+    race_name: Optional[str] = None
+    subrace_name: Optional[str] = None
+    class_name: Optional[str] = None
+    subrace_image: Optional[str] = None
+    subrace_distinctive_features: Optional[str] = None
+
+    sex: Optional[str] = None
+    age: Optional[int] = None
+    weight: Optional[str] = None
+    height: Optional[str] = None
+
+    appearance: Optional[str] = None
+    biography: Optional[str] = None
+    personality: Optional[str] = None
+    background: Optional[str] = None
+
+    origin_id: Optional[int] = None
+    registered_at: Optional[datetime] = None
+    skitaltsy_since_year: Optional[int] = None
+    skitaltsy_since_segment: Optional[int] = None
+    current_location_id: Optional[int] = None
+
+    is_npc: bool = False
+    user_id: Optional[int] = None
+    username: Optional[str] = None
+
+    # Пресет статов из character-attributes-service (правило 27 / N26).
+    # None, если сервис атрибутов недоступен или атрибутов у персонажа нет:
+    # паспорт в этом случае рисуется без блока статов, но не падает.
+    stats: Optional[Dict[str, int]] = None
+
+    # Замороженный слепок выданного набора (rule 12d / D17). Если слепка нет —
+    # здесь живой resolve, а granted_kit_is_snapshot = False (D18).
+    granted_kit: Optional[Dict[str, Any]] = None
+    granted_kit_is_snapshot: bool = False
+
 
 # Схема для создания персонажа (эквивалент CharacterCreate)
 class CharacterCreate(BaseModel):
@@ -305,7 +455,8 @@ class ClaimRequestResponse(BaseModel):
 
 class CharacterCountResponse(BaseModel):
     count: int
-    limit: int
+    # None = лимита нет (settings.MAX_CHARACTERS_PER_USER <= 0, значение по умолчанию)
+    limit: Optional[int] = None
 
 
 # Starter Kit schemas
@@ -321,6 +472,9 @@ class StarterKitSkill(BaseModel):
 class StarterKitResponse(BaseModel):
     id: int
     class_id: int
+    # FEAT-154 (D16): 0 = набор класса по умолчанию, >0 = переопределение под происхождение.
+    # Ключ аддитивный — старые клиенты его просто игнорируют.
+    origin_id: int = 0
     items: List[StarterKitItem]
     skills: List[StarterKitSkill]
     currency_amount: int
@@ -333,6 +487,33 @@ class StarterKitUpdate(BaseModel):
     items: List[StarterKitItem] = []
     skills: List[StarterKitSkill] = []
     currency_amount: int = 0
+
+
+class StarterKitResolved(BaseModel):
+    """Результат crud.resolve_starter_kit: точная пара -> дефолт класса -> пусто."""
+
+    class_id: int
+    origin_id: int
+    resolved_from: str  # "exact" | "class_default" | "none"
+    items: List[StarterKitItem] = []
+    skills: List[StarterKitSkill] = []
+    currency_amount: int = 0
+
+
+class StarterKitCoverageClass(BaseModel):
+    id_class: int
+    name: str
+    has_default: bool
+
+
+class StarterKitCoverageOverride(BaseModel):
+    class_id: int
+    origin_id: int
+
+
+class StarterKitCoverageResponse(BaseModel):
+    classes: List[StarterKitCoverageClass] = []
+    overrides: List[StarterKitCoverageOverride] = []
 
 
 # Admin character management schemas
@@ -430,12 +611,20 @@ class SubraceCreate(BaseModel):
     name: str
     description: Optional[str] = None
     stat_preset: StatPreset
+    distinctive_features: Optional[str] = None
+    height_min: Optional[int] = None
+    height_max: Optional[int] = None
+    typical_origin_ids: Optional[List[int]] = None
 
 class SubraceUpdate(BaseModel):
     id_race: Optional[int] = None
     name: Optional[str] = None
     description: Optional[str] = None
     stat_preset: Optional[StatPreset] = None
+    distinctive_features: Optional[str] = None
+    height_min: Optional[int] = None
+    height_max: Optional[int] = None
+    typical_origin_ids: Optional[List[int]] = None
 
 class SubraceResponse(BaseModel):
     id_subrace: int
@@ -444,6 +633,10 @@ class SubraceResponse(BaseModel):
     description: Optional[str] = None
     stat_preset: Optional[Dict] = None
     image: Optional[str] = None
+    distinctive_features: Optional[str] = None
+    height_min: Optional[int] = None
+    height_max: Optional[int] = None
+    typical_origin_ids: Optional[List[int]] = None
 
     class Config:
         orm_mode = True
@@ -457,6 +650,10 @@ class SubraceWithPreset(BaseModel):
     description: Optional[str] = None
     stat_preset: Optional[Dict] = None
     image: Optional[str] = None
+    distinctive_features: Optional[str] = None
+    height_min: Optional[int] = None
+    height_max: Optional[int] = None
+    typical_origin_ids: Optional[List[int]] = None
 
     class Config:
         orm_mode = True

@@ -735,6 +735,250 @@
     background: linear-gradient(176.46deg, #BCAB4C 2.91%, #FFF9B8 237.31%);
   }
 
+  /* ============================================
+     LORE / BOOK SURFACES (FEAT-154)
+     Parchment pages: the Skitaltsy passport, the Archive.
+     These are the ONLY light surfaces in the app — never mix them
+     with the dark-UI tokens (gray-bg, gold-text, site-blue).
+     See docs/DESIGN-SYSTEM.md section 16.
+     ============================================ */
+
+  /* --- Book Page (parchment sheet) --- */
+  /* Usage: <div className="book-page rounded-card shadow-page p-5">...</div> */
+  .book-page {
+    position: relative;
+    color: #3b2f1c;
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    background-color: #f5e6c8;
+    /* Age spots + uneven paper tone, CSS-only (no bitmap dependency) */
+    background-image:
+      radial-gradient(ellipse at 18% 14%, rgba(160, 130, 80, 0.10) 0%, transparent 55%),
+      radial-gradient(ellipse at 84% 80%, rgba(140, 110, 60, 0.09) 0%, transparent 55%),
+      linear-gradient(170deg, #faf1dc 0%, #f5e6c8 25%, #e3d0aa 55%, #f5e6c8 80%, #efe0bf 100%);
+  }
+
+  /* --- Book Page Gutter (the binding seam of a two-page spread) --- */
+  /* Usage: <div className="book-page book-page-gutter grid md:grid-cols-2 gap-6"> */
+  /* The seam only appears once the spread is actually side by side (md+). */
+  .book-page-gutter::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 5%;
+    bottom: 5%;
+    width: 26px;
+    transform: translateX(-50%);
+    pointer-events: none;
+    display: none;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(90, 66, 30, 0.08) 32%,
+      rgba(90, 66, 30, 0.20) 50%,
+      rgba(90, 66, 30, 0.08) 68%,
+      transparent 100%
+    );
+  }
+  @media (min-width: 768px) {
+    .book-page-gutter::before {
+      display: block;
+    }
+  }
+
+  /* --- Lore Heading (MedievalSharp, ink) --- */
+  /* Usage: <h2 className="lore-heading text-2xl">Паспорт Скитальца</h2> */
+  .lore-heading {
+    font-family: 'MedievalSharp', Georgia, serif;
+    color: #3b2f1c;
+    letter-spacing: 0.02em;
+    line-height: 1.25;
+  }
+
+  /* --- Lore Body (free text on parchment) --- */
+  /* Usage: <p className="lore-body whitespace-pre-wrap">{biography}</p> */
+  .lore-body {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    color: #3b2f1c;
+    line-height: 1.65;
+  }
+
+  /* --- Lore Divider (faded ink rule with a diamond) --- */
+  /* Usage: <div className="lore-divider my-4" /> */
+  .lore-divider {
+    position: relative;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, rgba(59, 47, 28, 0.40) 50%, transparent 100%);
+  }
+  .lore-divider::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    transform: translate(-50%, -50%) rotate(45deg);
+    background: rgba(59, 47, 28, 0.5);
+  }
+
+  /* --- Wax Seal (Skitaltsy stamp; put the sigil/initials inside) --- */
+  /* Usage: <div className="wax-seal"><span>СК</span></div> */
+  .wax-seal {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    text-align: center;
+    font-family: 'MedievalSharp', Georgia, serif;
+    color: #f7e6d0;
+    background: radial-gradient(circle at 32% 28%, #a52a2a 0%, #8b1a1a 48%, #6a1010 100%);
+    border: 2px solid rgba(106, 16, 16, 0.7);
+    box-shadow:
+      0 2px 5px rgba(0, 0, 0, 0.35),
+      inset 0 -2px 4px rgba(0, 0, 0, 0.35),
+      inset 0 2px 3px rgba(255, 255, 255, 0.18);
+    transform: rotate(-6deg);
+  }
+  @media (min-width: 640px) {
+    .wax-seal {
+      width: 76px;
+      height: 76px;
+    }
+  }
+
+  /* --- Passport Field (label + value on a dashed ruling) --- */
+  /* Usage:
+     <div className="passport-field">
+       <span className="passport-field-label">Раса</span>
+       <span className="passport-field-value">Рюджин</span>
+     </div> */
+  .passport-field {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 0.5rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px dashed rgba(59, 47, 28, 0.25);
+  }
+  .passport-field-label {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6b5a3e;
+  }
+  /* The value must never read weaker than its own label. Two things made it:
+     Cormorant defaults to OLD-STYLE figures, so «1» sits at x-height and looks
+     like a footnote next to the uppercase label, and the regular weight at the
+     inherited body size is thinner than the label's letter-spaced caps. Lining
+     tabular figures put numbers back on the cap line; the extra weight and one
+     size step restore the hierarchy. Ink stays #3b2f1c (§16) — no new colour. */
+  .passport-field-value {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: #3b2f1c;
+    font-variant-numeric: lining-nums tabular-nums;
+  }
+
+  /* --- Lore Badge (small marker ON PARCHMENT) --- */
+  /* The dark-UI `chip-outline` is invisible on paper — this is its ink twin.
+     Usage: <span className="lore-badge lore-badge-warn">Редкий выбор</span> */
+  .lore-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.125rem 0.5rem;
+    border: 1px solid rgba(59, 47, 28, 0.35);
+    border-radius: 9999px;
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    color: #3b2f1c;
+    background: rgba(59, 47, 28, 0.07);
+  }
+  /* Attention, not failure: a rare-but-allowed choice (rule 11). */
+  .lore-badge-warn {
+    border-color: rgba(150, 100, 20, 0.55);
+    color: #6b4a0f;
+    background: rgba(196, 138, 32, 0.16);
+  }
+  /* Accepted / approved. */
+  .lore-badge-ok {
+    border-color: rgba(60, 105, 55, 0.5);
+    color: #33582f;
+    background: rgba(74, 122, 66, 0.14);
+  }
+  /* Rejected. Matches the wax-seal red, not the dark UI's site-red. */
+  .lore-badge-danger {
+    border-color: rgba(139, 26, 26, 0.5);
+    color: #7a1616;
+    background: rgba(139, 26, 26, 0.12);
+  }
+
+  /* --- Field hint (FEAT-154) ---------------------------------------------- */
+  /*
+    The small explanatory line under (or beside) a control: what to write in a
+    field, what a control does, what a step is for. Used across the whole
+    character-creation wizard, where much of it is spoken in the voice of the
+    Координатор Скитальцев.
+
+    It is meant to be read, not skimmed: a `text-white/40 text-[11px]` footnote
+    is invisible, and on this wizard a missed instruction costs the player a
+    rejected application. Soft gold — the `gold` token (#f0d95c) at 0.8 alpha,
+    not the `gold-text` gradient, which is tuned for short uppercase headings
+    and shouts across a paragraph. Size stays one notch under the field's own
+    label, so the form keeps its hierarchy.
+  */
+  .field-hint {
+    position: relative;
+    padding-left: 12px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: rgba(240, 217, 92, 0.8);
+  }
+  .field-hint::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 2px;
+    bottom: 2px;
+    width: 2px;
+    border-radius: 2px;
+    background: linear-gradient(180deg, #fff9b8 0%, #bcab4c 100%);
+    opacity: 0.5;
+  }
+  /*
+    The hint that states a requirement — the one whose omission gets the
+    application sent back. Its backing is what keeps it distinct now that every
+    hint is gold. Exactly one per surface: if everything is backed, nothing is.
+  */
+  .field-hint-strong {
+    padding: 10px 14px 10px 16px;
+    border-radius: 15px;
+    color: #fff9b8;
+    background: rgba(240, 217, 92, 0.07);
+  }
+  .field-hint-strong::before {
+    top: 10px;
+    bottom: 10px;
+    left: 8px;
+    opacity: 1;
+  }
+  @media (min-width: 640px) {
+    .field-hint {
+      font-size: 14px;
+    }
+    .field-hint-strong {
+      font-size: 15px;
+    }
+  }
+
 }
 
 @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap');

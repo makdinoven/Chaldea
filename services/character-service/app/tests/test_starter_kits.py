@@ -126,9 +126,10 @@ def _seed_character_request(db, user_id=42, class_id=1, race_id=1, subrace_id=1,
     return req
 
 
-def _seed_starter_kit(db, class_id=1, items=None, skills=None, currency=100):
+def _seed_starter_kit(db, class_id=1, items=None, skills=None, currency=100, origin_id=0):
     kit = models.StarterKit(
         class_id=class_id,
+        origin_id=origin_id,
         items=items or [{"item_id": 4, "quantity": 1}],
         skills=skills or [{"skill_id": 1}],
         currency_amount=currency,
@@ -229,6 +230,22 @@ class TestGetStarterKitsEndpoint:
         assert data[0]["currency_amount"] == 100
         assert data[0]["items"] == [{"item_id": 4, "quantity": 1}]
         assert data[0]["skills"] == [{"skill_id": 1}]
+        # FEAT-154: additive key, 0 = class default
+        assert data[0]["origin_id"] == 0
+
+    def test_get_starter_kits_hides_origin_overrides_by_default(self, db_session, client):
+        """Backward compatibility: without params only class defaults come back."""
+        _seed_class(db_session, 1, "Воин")
+        _seed_starter_kit(db_session, class_id=1, currency=100, origin_id=0)
+        _seed_starter_kit(db_session, class_id=1, currency=250, origin_id=7)
+
+        data = client.get("/characters/starter-kits").json()
+        assert len(data) == 1
+        assert data[0]["origin_id"] == 0
+        assert data[0]["currency_amount"] == 100
+
+        everything = client.get("/characters/starter-kits?include_origins=true").json()
+        assert {(k["class_id"], k["origin_id"]) for k in everything} == {(1, 0), (1, 7)}
 
 
 class TestPutStarterKitEndpoint:
@@ -280,6 +297,18 @@ class TestPutStarterKitEndpoint:
         # Verify only one row exists
         kits = client.get("/characters/starter-kits").json()
         assert len(kits) == 1
+
+    def test_put_starter_kit_writes_class_default(self, db_session, client):
+        """FEAT-154: the legacy route keeps writing the class default (origin_id = 0)."""
+        _seed_class(db_session, 1, "Воин")
+
+        payload = {"items": [], "skills": [], "currency_amount": 42}
+        response = client.put("/characters/starter-kits/1", json=payload)
+        assert response.status_code == 200
+        assert response.json()["origin_id"] == 0
+
+        kit = db_session.query(models.StarterKit).filter_by(class_id=1).one()
+        assert kit.origin_id == 0
 
 
 # ===========================================================================

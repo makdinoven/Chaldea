@@ -129,7 +129,7 @@ from models import (
     NpcShopItem, Quest, QuestObjective, CharacterQuest, CharacterQuestProgress,
     ArchiveCategory, ArchiveArticle, ArchiveArticleCategory,
     RegionTransitionArrow, ArrowNeighbor, FloatingStructure,
-    GatheringNode, GatheringSession,
+    GatheringNode, GatheringSession, OriginCountry,
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -139,6 +139,7 @@ from schemas import (
     ArchiveArticleCreate, ArchiveArticleUpdate,
     TransitionArrowCreate, TransitionArrowUpdate, ArrowNeighborCreate,
     GatheringNodeAdminCreate, GatheringNodeAdminUpdate,
+    OriginCountryCreate, OriginCountryUpdate,
 )
 
 # -------------------------------
@@ -719,6 +720,9 @@ async def update_location(session: AsyncSession, location_id: int, location_data
             update_data['image_url'] = ""
         if 'description' in update_data and update_data['description'] is None:
             update_data['description'] = ""
+        # is_starting is NOT NULL — an explicit null in the body means "leave as is".
+        if 'is_starting' in update_data and update_data['is_starting'] is None:
+            update_data.pop('is_starting')
             
         for field, value in update_data.items():
             setattr(location, field, value)
@@ -920,6 +924,8 @@ async def get_location_details(session: AsyncSession, location_id: int) -> Optio
         "region_id": loc.region_id,
         "marker_type": loc.marker_type,
         "map_icon_url": loc.map_icon_url,
+        "is_starting": bool(getattr(loc, 'is_starting', False)),
+        "starting_blurb": getattr(loc, 'starting_blurb', None),
         "neighbors": [
             {"neighbor_id": n.neighbor_id, "energy_cost": n.energy_cost}
             for n in neighbors
@@ -6637,3 +6643,145 @@ async def get_active_gathering_for_character(
     }
 
 
+
+
+# ---------------------------------------------------------------------------
+#   FEAT-154 — STARTING POINTS & ORIGIN COUNTRIES
+# ---------------------------------------------------------------------------
+
+def _starting_point_row_to_dict(loc: Location, district_name, region_name, country_name) -> dict:
+    return {
+        "id": loc.id,
+        "name": loc.name,
+        "image_url": loc.image_url or None,
+        "starting_blurb": loc.starting_blurb,
+        "district_name": district_name,
+        "region_name": region_name,
+        "country_name": country_name,
+        "sort_order": loc.sort_order or 0,
+    }
+
+
+def _starting_points_query():
+    """Curated starting points joined up the world hierarchy.
+
+    A location hangs either off a district or straight off a region, so the
+    region is resolved via ``COALESCE(District.region_id, Location.region_id)``.
+    Every join is an OUTER join — an orphaned starting point still shows up,
+    just without its breadcrumbs.
+    """
+    return (
+        select(Location, District.name, Region.name, Country.name)
+        .outerjoin(District, District.id == Location.district_id)
+        .outerjoin(
+            Region,
+            Region.id == sa_func.coalesce(District.region_id, Location.region_id),
+        )
+        .outerjoin(Country, Country.id == Region.country_id)
+        .where(Location.is_starting.is_(True))
+    )
+
+
+async def get_starting_points(session: AsyncSession) -> List[dict]:
+    """Rule 19 — the curated list only, never the full location catalogue."""
+    stmt = _starting_points_query().order_by(Location.sort_order.asc(), Location.name.asc())
+    result = await session.execute(stmt)
+    return [_starting_point_row_to_dict(*row) for row in result.all()]
+
+
+async def get_starting_point(session: AsyncSession, location_id: int) -> Optional[dict]:
+    """Validation probe used by character-service on submit and on approve.
+
+    Returns ``None`` when the location does not exist *or* is not flagged as a
+    starting point — the caller turns both cases into a 404.
+    """
+    stmt = _starting_points_query().where(Location.id == location_id)
+    result = await session.execute(stmt)
+    row = result.first()
+    if row is None:
+        return None
+    return _starting_point_row_to_dict(*row)
+
+
+async def get_origin_countries(
+    session: AsyncSession, include_inactive: bool = False
+) -> List[OriginCountry]:
+    """Rules 8-10. The public list hides soft-deleted rows."""
+    stmt = select(OriginCountry)
+    if not include_inactive:
+        stmt = stmt.where(OriginCountry.is_active.is_(True))
+    stmt = stmt.order_by(OriginCountry.sort_order.asc(), OriginCountry.name.asc())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_origin_country_by_id(
+    session: AsyncSession, origin_id: int
+) -> Optional[OriginCountry]:
+    result = await session.execute(
+        select(OriginCountry).where(OriginCountry.id == origin_id)
+    )
+    return result.scalars().first()
+
+
+async def create_origin_country(
+    session: AsyncSession, data: OriginCountryCreate
+) -> OriginCountry:
+    origin = OriginCountry(**data.dict())
+    session.add(origin)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Происхождение с таким названием уже существует.",
+        )
+    await session.refresh(origin)
+    return origin
+
+
+async def update_origin_country(
+    session: AsyncSession, origin_id: int, data: OriginCountryUpdate
+) -> OriginCountry:
+    origin = await get_origin_country_by_id(session, origin_id)
+    if not origin:
+        raise HTTPException(status_code=404, detail="Происхождение не найдено.")
+
+    update_data = data.dict(exclude_unset=True)
+    # These columns are NOT NULL — an explicit null means "leave as is".
+    for not_null_field in ("name", "is_playable", "is_active", "sort_order"):
+        if update_data.get(not_null_field, "sentinel") is None:
+            update_data.pop(not_null_field)
+
+    for field, value in update_data.items():
+        setattr(origin, field, value)
+
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Происхождение с таким названием уже существует.",
+        )
+    await session.refresh(origin)
+    return origin
+
+
+async def deactivate_origin_country(
+    session: AsyncSession, origin_id: int
+) -> OriginCountry:
+    """Soft delete (§3.1): the row is hidden, never removed.
+
+    ``characters.origin_id`` and ``character_requests.origin_id`` live in
+    character-service, so a hard delete could not be checked for references
+    without querying across a service boundary. Hiding the row sidesteps that.
+    """
+    origin = await get_origin_country_by_id(session, origin_id)
+    if not origin:
+        raise HTTPException(status_code=404, detail="Происхождение не найдено.")
+    origin.is_active = False
+    await session.commit()
+    await session.refresh(origin)
+    return origin

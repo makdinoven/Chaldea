@@ -107,6 +107,33 @@ locations-service/app/
 |-------|------|----------|
 | POST | `/locations/internal/cancel-gathering` | Вызывается battle-service из `pvp_attack` ДО создания боя. Отмечает status=`interrupted_by_battle`, рефанд стамины |
 
+### Регистрация персонажа: стартовые точки и происхождение (FEAT-154)
+
+Маршруты живут в **отдельном роутере** `registration_router` с тем же префиксом `/locations`, который подключается **первым** — иначе литеральные пути `/starting-points` и `/origins` проиграли бы параметрическим маршрутам основного роутера.
+
+#### Публичные
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/locations/starting-points` | Курируемый список стартовых точек (`is_starting = 1`), отсортирован по `sort_order`. Полный каталог из 2260 локаций через этот контракт не публикуется. Поля: `id`, `name`, `image_url`, `starting_blurb`, `district_name`, `region_name`, `country_name`, `sort_order` |
+| GET | `/locations/starting-points/{location_id}` | Проверочный запрос character-service при подаче и одобрении заявки. **404**, если локации нет **или** она не помечена как стартовая |
+| GET | `/locations/origins` | Справочник происхождения без мягко удалённых записей. Поля: `id`, `name`, `emblem_url`, `map_image_url`, `summary`, `skitaltsy_attitude`, `archive_slug`, `country_id`, `is_playable`, `sort_order` |
+
+Справочник происхождения **шире** списка играбельных стран на карте (в него входят Железный Пояс, Эльфийские Сады, Республика Белый Клин) и **никогда не читает `Countries.description`** — описания стран в `Countries` являются админскими заглушками и игроку не показываются. Лорные тексты справочник несёт сам (`summary`, `skitaltsy_attitude`) и ссылкой на статью Архива (`archive_slug`).
+
+#### Admin (`require_permission("origins:<action>")`)
+| Метод | Путь | Permission |
+|-------|------|-----------|
+| GET | `/locations/admin/origins` | `origins:read` — возвращает `OriginCountryAdminRead` (публичные поля + `is_active`) и по умолчанию **включает мягко удалённые** (`include_inactive=true`), иначе скрытую запись нельзя было бы найти и вернуть |
+| POST | `/locations/admin/origins` | `origins:create` |
+| PUT | `/locations/admin/origins/{id}` | `origins:update` — восстановление скрытой записи делается здесь через `is_active: true`, отдельного restore-эндпоинта нет |
+| DELETE | `/locations/admin/origins/{id}` | `origins:delete` — **мягкое удаление** (`is_active = 0`), возвращает `{id, is_active}`. Жёсткое потребовало бы проверки ссылок на `characters.origin_id` / `character_requests.origin_id` в чужом сервисе |
+
+Разрешения `origins:*` заводятся миграцией **user-service `0026`**; до её применения админские маршруты отвечают 403 даже администратору.
+
+#### Изменённые контракты
+- **Создание/обновление локации** принимает два дополнительных поля: `is_starting: bool` (по умолчанию `false`) и `starting_blurb: Optional[str]` (≤2000 символов). Новое разрешение не заводилось — действует существующий модуль `locations:*`. ⚠️ В **response**-схемы локации эти поля намеренно не добавлены (это ломало 8 тестов, мокающих объект локации, а возврат жёсткого `false`/`null` дезинформировал бы); текущие значения админская форма читает из `GET /locations/{id}/details`.
+- **`GET /locations/game-time`** (публичный) дополнен блоком `computed: {year, segment_name, segment_type, week, is_transition}` — тем самым, что уже отдавался админскому варианту. Существующие ключи не тронуты, `frontend/src/utils/gameTime.ts` продолжает считать время сам. Блок нужен character-service, чтобы проверять внутримировой стаж, **не реализуя календарь третий раз**.
+
 ## Иерархия мира
 
 ```
@@ -122,7 +149,8 @@ Country -> Region -> District -> Location
 - **Countries** - id, name, description, leader_id, map_image_url
 - **Regions** - id, name, country_id (FK), description, map_image_url, image_url, entrance_location_id, x, y
 - **Districts** - id, name, region_id (FK CASCADE), description, image_url, entrance_location_id, recommended_level, x, y
-- **Locations** - id, name, district_id (FK CASCADE), type (location/subdistrict), image_url, recommended_level, quick_travel_marker, parent_id (FK self CASCADE), description
+- **Locations** - id, name, district_id (FK CASCADE), type (location/subdistrict), image_url, recommended_level, quick_travel_marker, parent_id (FK self CASCADE), description, **is_starting** BOOLEAN NOT NULL DEFAULT 0 (+ индекс `ix_locations_is_starting`), **starting_blurb** TEXT NULL (FEAT-154)
+- **origin_countries** (FEAT-154) - id, name (UNIQUE), summary, skitaltsy_attitude, emblem_url, map_image_url, archive_slug, country_id (FK `Countries.id` ON DELETE SET NULL), is_playable, is_active (мягкое удаление), sort_order; индекс `ix_origin_countries_active_sort (is_active, sort_order)`. `archive_slug` — **мягкая** ссылка на `archive_articles.slug` без FK: статьи это контент и могут переименовываться, «висячий» slug деградирует до «нет ссылки на лор», а не до ошибки
 - **LocationNeighbors** - id, location_id (FK CASCADE), neighbor_id (FK CASCADE), energy_cost
 - **posts** - id, character_id, location_id (FK CASCADE), content, created_at
 - **gathering_nodes** (FEAT-128) - id, location_id (FK Locations CASCADE), node_name, category enum(ore/herb/wood), result_item_id (cross-service, no FK), result_quantity_per_gather, stamina_per_gather, daily_bank_max, current_bank, allow_concurrent_gather, depleted_at, restore_at (= depleted_at+24h), is_enabled, created_at, updated_at
@@ -139,6 +167,9 @@ Country -> Region -> District -> Location
 7. HTTP -> attributes-service: списать стамину
 
 ## Коммуникация
+
+### HTTP (входящие, важные для межсервисных контрактов)
+- `character-service:8005` -> GET `/locations/starting-points`, GET `/locations/starting-points/{id}`, GET `/locations/game-time` (FEAT-154). Со стороны character-service все три вызова graceful: недоступность locations-service не блокирует подачу заявки и не проваливает одобрение — персонаж просто остаётся без стартовой локации, а `move_and_post` трактует `current_location_id IS NULL` как «куда угодно бесплатно»
 
 ### HTTP (исходящие)
 - `character-service:8005` -> GET `/characters/{id}/profile`, GET `/characters/by_location`, PUT `/characters/{id}/update_location`, GET `/characters/{id}/short_info` (для имени/аватара активных gatherers в client/details)

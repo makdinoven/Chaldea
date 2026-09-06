@@ -457,3 +457,20 @@ class PurchaseSkillRequest(BaseModel):
 
 class ResetTreeRequest(BaseModel):
     character_id: int
+
+# ----------------------------------------------------
+# Bulk skill resolve (FEAT-154) — compact card used by the character wizard
+# ----------------------------------------------------
+class SkillBulkResponse(BaseModel):
+    """
+    Компактная карточка навыка для массового резолва по списку id.
+    `class_limitations` отдаётся вместо несуществующего в модели `class_id`.
+    """
+    id: int
+    name: str
+    description: Optional[str] = None
+    icon_url: Optional[str] = None
+    class_limitations: Optional[str] = None
+
+    class Config:
+        orm_mode = True

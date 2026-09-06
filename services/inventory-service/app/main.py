@@ -155,6 +155,73 @@ def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db), curr
     db.refresh(db_item)
     return db_item
 
+MAX_BULK_IDS = 100
+
+
+def _parse_bulk_ids(raw: str) -> List[int]:
+    """
+    Разбирает параметр ?ids=1,2,3 в дедуплицированный список int.
+    Бросает HTTPException(400) при некорректном вводе или превышении лимита.
+    """
+    parts = [p.strip() for p in (raw or "").split(",")]
+    parts = [p for p in parts if p]
+    if not parts:
+        raise HTTPException(status_code=400, detail="Параметр ids не должен быть пустым")
+
+    # Лимит считается по сырым токенам (до дедупликации), иначе строка вида
+    # ?ids=1,1,1,... любой длины проходила бы проверку.
+    if len(parts) > MAX_BULK_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Слишком много идентификаторов: максимум {MAX_BULK_IDS}",
+        )
+
+    seen = set()
+    ids: List[int] = []
+    for part in parts:
+        try:
+            value = int(part)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Параметр ids должен содержать только целые числа через запятую")
+        if value <= 0:
+            raise HTTPException(status_code=400, detail="Идентификаторы должны быть положительными числами")
+        if value not in seen:
+            seen.add(value)
+            ids.append(value)
+
+    return ids
+
+
+# Registered BEFORE "/items/{item_id}" so "bulk" is not parsed as an item id.
+@router.get("/items/bulk", response_model=List[schemas.ItemBulkResponse])
+def get_items_bulk(
+    ids: str = Query(..., description="Идентификаторы предметов через запятую, максимум 100"),
+    db: Session = Depends(get_db),
+):
+    """
+    Массовый резолв предметов по списку id (публичный эндпоинт).
+    Неизвестные id молча опускаются. Запрос параметризован (IN), SQL не строится строками.
+    """
+    item_ids = _parse_bulk_ids(ids)
+    rows = (
+        db.query(models.Items)
+        .filter(models.Items.id.in_(item_ids))
+        .order_by(models.Items.id.asc())
+        .all()
+    )
+    return [
+        schemas.ItemBulkResponse(
+            id=row.id,
+            name=row.name,
+            description=row.description,
+            image_url=row.image,
+            rarity=row.item_rarity,
+            type=row.item_type,
+        )
+        for row in rows
+    ]
+
+
 @router.get("/items/{item_id}", response_model=schemas.Item)
 def get_item(item_id: int, db: Session = Depends(get_db)):
     db_item = db.query(models.Items).get(item_id)

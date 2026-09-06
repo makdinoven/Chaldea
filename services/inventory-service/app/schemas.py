@@ -1381,3 +1381,23 @@ class AdminNpcEquipRequest(BaseModel):
     """Запрос на экипировку предмета NPC (admin-only)."""
     slot_type: str
     item_id: int
+
+
+# -----------------------------------------------------------------------------
+# Bulk item resolve (FEAT-154) — compact card used by the character wizard
+# -----------------------------------------------------------------------------
+
+class ItemBulkResponse(BaseModel):
+    """
+    Компактная карточка предмета для массового резолва по списку id.
+    Поля переименованы под контракт фронтенда (§3.1 FEAT-154).
+    """
+    id: int
+    name: str
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    rarity: Optional[str] = None
+    type: Optional[str] = None
+
+    class Config:
+        orm_mode = True

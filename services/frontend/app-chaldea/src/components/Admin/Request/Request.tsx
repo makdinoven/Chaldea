@@ -1,150 +1,244 @@
+import { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import UserAvatar from '../../CommonComponents/UserAvatar/UserAvatar';
-import CharacterInfo from '../../CreateCharacterPage/SubmitPage/CharacterInfo/CharacterInfo';
-import axios from 'axios';
-import RequestButton from './RequestButton/RequestButton';
-import CharacterInfoSmall from '../../CreateCharacterPage/SubmitPage/CharacterInfoSmall/CharacterInfoSmall';
+import {
+  MAX_REJECTION_REASON_LENGTH,
+  approveCharacterRequest,
+  rejectCharacterRequest,
+} from '../../../api/characterRequests';
+import type { OriginCountry } from '../../../api/origins';
+import CharacterPassport, {
+  fromModerationRequest,
+} from '../../CommonComponents/CharacterPassport';
 
-interface RequestData {
+/**
+ * FEAT-154 (task #21) — the moderator's view of one character request.
+ *
+ * The ad-hoc avatar + three text blocks are replaced by the shared
+ * `CharacterPassport` (rule 26): the moderator now judges exactly the document
+ * the player will carry, including the «редкий выбор» badge for an origin that
+ * is untypical for the chosen subrace (rule 11).
+ *
+ * Rejection now carries a reason (rule 28), entered in a modal and capped at
+ * `MAX_REJECTION_REASON_LENGTH` in the UI so the 400 of rule 30b is never hit.
+ */
+
+/**
+ * One moderation row. The FEAT-154 keys are optional because
+ * `GET /characters/moderation-requests` does not serialize them yet — the
+ * passport simply prints «—» for whatever is missing.
+ */
+export interface RequestData {
   request_id: number;
   name: string;
   avatar: string | null;
-  biography: string;
-  background: string;
-  appearance: string;
-  race_name: string;
-  subrace_name: string;
-  class_name: string;
+  biography: string | null;
+  background: string | null;
+  appearance: string | null;
+  personality?: string | null;
+  race_name: string | null;
+  subrace_name: string | null;
+  class_name: string | null;
   age: number | null;
   height: string | null;
+  weight?: string | null;
   sex: string | null;
+  status?: string | null;
+  created_at?: string | null;
+  character_id?: number | null;
+  id_subrace?: number | null;
+  // FEAT-154 additive keys
+  origin_id?: number | null;
+  start_location_id?: number | null;
+  skitaltsy_since_year?: number | null;
+  skitaltsy_since_segment?: number | null;
+  rejection_reason?: string | null;
 }
 
 interface RequestProps {
   data: RequestData;
   requestType?: string;
   onStatusChange?: (requestId: number) => void;
+  /** Origin registry, loaded ONCE by the page — never per request row. */
+  origins?: readonly OriginCountry[] | null;
+  /** `typical_origin_ids` of this request's subrace — drives the rare badge. */
+  typicalOriginIds?: readonly number[] | null;
+  /** Name of `start_location_id`, resolved by the page from the curated list. */
+  startLocationName?: string | null;
+  /** In-game year from `selectCurrentGameYear`. Never a literal. */
+  currentGameYear?: number | null;
 }
 
-const Request = ({ data, requestType, onStatusChange }: RequestProps) => {
+/** Ink-language action button — the passport sheet is parchment, not dark UI. */
+const PassportAction = ({
+  text,
+  onClick,
+  disabled = false,
+  tone = 'neutral',
+}: {
+  text: string;
+  onClick: () => void;
+  disabled?: boolean;
+  tone?: 'neutral' | 'danger';
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    className={`
+      font-lore rounded-card border px-5 py-2 text-base
+      transition-colors duration-200 ease-site
+      disabled:cursor-not-allowed disabled:opacity-50
+      ${
+        tone === 'danger'
+          ? 'border-[#8b1a1a]/50 text-[#8b1a1a] hover:bg-[#8b1a1a]/10'
+          : 'border-ink/40 text-ink hover:bg-ink/10'
+      }
+    `}
+  >
+    {text}
+  </button>
+);
+
+const Request = ({
+  data,
+  requestType,
+  onStatusChange,
+  origins,
+  typicalOriginIds,
+  startLocationName,
+  currentGameYear = null,
+}: RequestProps) => {
   const isClaim = requestType === 'claim';
-  const biographyItems = [
-    { title: 'Биография', text: data.biography },
-    { title: 'Личность', text: data.background },
-    { title: 'Внешность', text: data.appearance },
-  ];
 
-  const buttons = [
-    { type: 'confirm', text: 'Одобрить' },
-    { type: 'cancel', text: 'Отклонить' },
-  ];
+  const [busy, setBusy] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [reason, setReason] = useState('');
 
-  const characterItemsSmall = [
-    { text: `${data.race_name} - ${data.subrace_name}` },
-    { text: data.class_name },
-    { text: data.age ? `Возраст : ${data.age}` : null },
-    { text: data.height ? `Рост : ${data.height}` : null },
-    { text: data.sex ? `Пол : ${data.sex}` : null },
-    { text: data.background || null },
-  ];
+  const passport = useMemo(
+    () =>
+      fromModerationRequest(
+        { ...data, id: data.request_id },
+        { origins, typicalOriginIds, startLocationName },
+      ),
+    [data, origins, typicalOriginIds, startLocationName],
+  );
 
-  const handleButtonClick = (type: string) => {
-    if (type === 'confirm') {
-      axios
-        .post(`/characters/requests/${data.request_id}/approve`)
-        .then((res) => {
-          if (res.status === 200) {
-            toast.success('Заявка одобрена');
-            onStatusChange?.(data.request_id);
-          }
-        })
-        .catch(() => {
-          toast.error('Не удалось одобрить заявку');
-        });
-    }
-    if (type === 'cancel') {
-      axios
-        .post(`/characters/requests/${data.request_id}/reject`)
-        .then((res) => {
-          if (res.status === 200) {
-            toast.success('Заявка отклонена');
-            onStatusChange?.(data.request_id);
-          }
-        })
-        .catch(() => {
-          toast.error('Не удалось отклонить заявку');
-        });
+  const handleApprove = async () => {
+    setBusy(true);
+    try {
+      const result = await approveCharacterRequest(data.request_id);
+      toast.success(result.message || 'Заявка одобрена');
+      // The backend degrades the start location instead of failing (§3.6).
+      if (result.location_warning) toast(result.location_warning, { icon: '⚠️' });
+      onStatusChange?.(data.request_id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Не удалось одобрить заявку');
+    } finally {
+      setBusy(false);
     }
   };
 
-  if (isClaim) {
-    return (
-      <div className="w-full bg-[rgba(24,30,32,0.7)] rounded-[15px] flex gap-5">
-        <div className="py-[21px] pl-9 flex flex-col items-center">
-          <UserAvatar img={data.avatar} name={data.name} />
-          <div className="mt-2">
-            {characterItemsSmall.map(
-              (item, index) =>
-                item.text && (
-                  <CharacterInfoSmall
-                    key={index}
-                    text={item.text}
-                  />
-                )
-            )}
-          </div>
-        </div>
-        <div className="py-5 flex flex-col gap-4 w-full justify-center">
-          <h3 className="gold-text text-lg font-medium uppercase">
+  const handleReject = async () => {
+    const trimmed = reason.trim();
+    setBusy(true);
+    try {
+      const result = await rejectCharacterRequest(data.request_id, trimmed || null);
+      toast.success(result.message || 'Заявка отклонена');
+      setRejectOpen(false);
+      setReason('');
+      onStatusChange?.(data.request_id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Не удалось отклонить заявку');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const footer = (
+    <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+      <PassportAction text="Одобрить" onClick={handleApprove} disabled={busy} />
+      <PassportAction
+        text="Отклонить"
+        tone="danger"
+        onClick={() => setRejectOpen(true)}
+        disabled={busy}
+      />
+    </div>
+  );
+
+  const remaining = MAX_REJECTION_REASON_LENGTH - reason.length;
+
+  return (
+    <div className="flex w-full flex-col gap-3">
+      {isClaim && (
+        <div className="gray-bg flex flex-col gap-1 p-4">
+          <h3 className="gold-text text-base font-medium uppercase sm:text-lg">
             Заявка на присвоение персонажа
           </h3>
           <p className="text-white text-sm">
-            Игрок хочет получить персонажа <span className="text-gold font-medium">{data.name}</span>
+            Игрок хочет получить персонажа{' '}
+            <span className="text-gold font-medium">{data.name}</span>
           </p>
         </div>
-        <div className="relative pt-2.5 w-[208px] shrink-0 flex flex-col gap-2.5 before:content-[''] before:absolute before:top-0 before:left-0 before:h-full before:w-px before:bg-gradient-to-b before:from-transparent before:via-[#999] before:to-transparent before:z-[1]">
-          {buttons.map((button) => (
-            <RequestButton
-              key={button.type}
-              text={button.text}
-              onClick={() => handleButtonClick(button.type)}
-            />
-          ))}
-        </div>
-      </div>
-    );
-  }
+      )}
 
-  return (
-    <div className="w-full bg-[rgba(24,30,32,0.7)] rounded-[15px] flex gap-5">
-      <div className="py-[21px] pl-9">
-        <UserAvatar img={data.avatar} name={data.name} />
-        <div className="mt-2">
-          {characterItemsSmall.map(
-            (item, index) =>
-              item.text && (
-                <CharacterInfoSmall
-                  key={index}
-                  text={item.text}
-                />
-              )
-          )}
+      <CharacterPassport
+        data={passport}
+        variant="full"
+        currentGameYear={currentGameYear}
+        // The moderator judges the whole record, first posting included.
+        audience="self"
+        footer={footer}
+      />
+
+      {rejectOpen && (
+        <div className="modal-overlay" onClick={() => !busy && setRejectOpen(false)}>
+          <div
+            className="modal-content gold-outline gold-outline-thick relative mx-4 w-full max-w-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="gold-text mb-4 text-lg font-medium uppercase sm:text-xl">
+              Отклонить заявку
+            </h2>
+            <p className="text-white/70 mb-3 text-sm">
+              Причина будет отправлена игроку вместе с уведомлением. Поле можно оставить пустым.
+            </p>
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value.slice(0, MAX_REJECTION_REASON_LENGTH))}
+              maxLength={MAX_REJECTION_REASON_LENGTH}
+              rows={5}
+              placeholder="Например: описание внешности не соответствует выбранной подрасе"
+              className="textarea-bordered w-full !text-sm"
+            />
+            <p
+              className={`mt-1 text-right text-xs ${
+                remaining === 0 ? 'text-site-red' : 'text-white/40'
+              }`}
+            >
+              Осталось символов: {remaining}
+            </p>
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-center">
+              <button
+                type="button"
+                onClick={handleReject}
+                disabled={busy}
+                className="btn-blue !text-sm disabled:opacity-50"
+              >
+                {busy ? 'Отправка...' : 'Отклонить заявку'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setRejectOpen(false)}
+                disabled={busy}
+                className="btn-line !text-sm disabled:opacity-50"
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
-      <div className="py-5 flex flex-col gap-10 w-full">
-        {biographyItems.map((item, index) => (
-          <CharacterInfo key={index} title={item.title} text={item.text} />
-        ))}
-      </div>
-      <div className="relative pt-2.5 w-[208px] flex flex-col gap-2.5 before:content-[''] before:absolute before:top-0 before:left-0 before:h-full before:w-px before:bg-gradient-to-b before:from-transparent before:via-[#999] before:to-transparent before:z-[1]">
-        {buttons.map((button) => (
-          <RequestButton
-            key={button.type}
-            text={button.text}
-            onClick={() => handleButtonClick(button.type)}
-          />
-        ))}
-      </div>
+      )}
     </div>
   );
 };

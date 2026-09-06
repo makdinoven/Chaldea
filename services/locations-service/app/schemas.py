@@ -1,4 +1,4 @@
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, Field, validator
 from typing import Optional, List, Literal, Dict, Any
 from datetime import datetime
 
@@ -81,6 +81,9 @@ class LocationCreate(BaseModel):
     map_x: Optional[float] = None
     map_y: Optional[float] = None
     sort_order: int = 0
+    # FEAT-154 rule 18 — curated starting points for character creation.
+    is_starting: bool = False
+    starting_blurb: Optional[str] = Field(None, max_length=2000)
 
 class LocationCreateResponse(BaseModel):
     id: int
@@ -113,6 +116,9 @@ class LocationUpdate(BaseModel):
     map_icon_url: Optional[str] = None
     map_x: Optional[float] = None
     map_y: Optional[float] = None
+    # FEAT-154 rule 18 — curated starting points for character creation.
+    is_starting: Optional[bool] = None
+    starting_blurb: Optional[str] = Field(None, max_length=2000)
 
 class LocationRead(BaseModel):
     id: int
@@ -647,18 +653,19 @@ class GameRuleReorder(BaseModel):
 # -------------------------------
 #   GAME TIME SCHEMAS
 # -------------------------------
-class GameTimePublicResponse(BaseModel):
-    epoch: datetime
-    offset_days: int
-    server_time: datetime
-
-
 class ComputedGameTime(BaseModel):
     year: int
     segment_name: str
     segment_type: str
     week: Optional[int] = None
     is_transition: bool
+
+
+class GameTimePublicResponse(BaseModel):
+    epoch: datetime
+    offset_days: int
+    server_time: datetime
+    computed: ComputedGameTime
 
 
 class GameTimeAdminResponse(BaseModel):
@@ -1732,3 +1739,99 @@ class ActiveGatheringResponse(BaseModel):
         orm_mode = True
 
 
+
+
+# ---------------------------------------------------------------------------
+#   FEAT-154 — STARTING POINTS & ORIGIN COUNTRIES
+# ---------------------------------------------------------------------------
+ARCHIVE_SLUG_REGEX = r"^[a-z0-9-]+$"
+
+
+class StartingPointRead(BaseModel):
+    """Одна курируемая стартовая точка (rule 19).
+
+    Отдаётся только для локаций с ``is_starting = 1`` — полный каталог
+    локаций через этот контракт не публикуется.
+    """
+    id: int
+    name: str
+    image_url: Optional[str] = None
+    starting_blurb: Optional[str] = None
+    district_name: Optional[str] = None
+    region_name: Optional[str] = None
+    country_name: Optional[str] = None
+    sort_order: int = 0
+
+    class Config:
+        orm_mode = True
+
+
+class OriginCountryRead(BaseModel):
+    """Публичная карточка происхождения (rules 8-10).
+
+    Поле ``Countries.description`` здесь принципиально не используется
+    (rule 4) — справочник несёт собственный ``summary``.
+    """
+    id: int
+    name: str
+    emblem_url: Optional[str] = None
+    map_image_url: Optional[str] = None
+    summary: Optional[str] = None
+    skitaltsy_attitude: Optional[str] = None
+    archive_slug: Optional[str] = None
+    country_id: Optional[int] = None
+    is_playable: bool = False
+    sort_order: int = 0
+
+    class Config:
+        orm_mode = True
+
+
+class OriginCountryAdminRead(OriginCountryRead):
+    """То же самое плюс флаг мягкого удаления — только для админки."""
+    is_active: bool = True
+
+    class Config:
+        orm_mode = True
+
+
+class OriginCountryCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    emblem_url: Optional[str] = Field(None, max_length=255)
+    map_image_url: Optional[str] = Field(None, max_length=255)
+    summary: Optional[str] = Field(None, max_length=5000)
+    skitaltsy_attitude: Optional[str] = Field(None, max_length=5000)
+    archive_slug: Optional[str] = Field(None, max_length=255, regex=ARCHIVE_SLUG_REGEX)
+    country_id: Optional[int] = None
+    is_playable: bool = False
+    is_active: bool = True
+    sort_order: int = 0
+
+    @validator("name")
+    def _name_not_blank(cls, v):
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Название происхождения не может быть пустым.")
+        return v
+
+
+class OriginCountryUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    emblem_url: Optional[str] = Field(None, max_length=255)
+    map_image_url: Optional[str] = Field(None, max_length=255)
+    summary: Optional[str] = Field(None, max_length=5000)
+    skitaltsy_attitude: Optional[str] = Field(None, max_length=5000)
+    archive_slug: Optional[str] = Field(None, max_length=255, regex=ARCHIVE_SLUG_REGEX)
+    country_id: Optional[int] = None
+    is_playable: Optional[bool] = None
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+    @validator("name")
+    def _name_not_blank(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("Название происхождения не может быть пустым.")
+        return v

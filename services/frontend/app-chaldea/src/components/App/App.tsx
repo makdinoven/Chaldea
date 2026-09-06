@@ -27,6 +27,7 @@ import RulesPage from "../RulesPage/RulesPage";
 import RulesAdminPage from "../Admin/RulesAdminPage/RulesAdminPage";
 import RbacAdminPage from "../Admin/RbacAdminPage/RbacAdminPage";
 import AdminRacesPage from "../Admin/AdminRaces/AdminRacesPage";
+import AdminOriginsPage from "../Admin/AdminOrigins/AdminOriginsPage";
 import UserProfilePage from "../UserProfilePage/UserProfilePage";
 import AllUsersPage from "../pages/AllUsersPage/AllUsersPage";
 import OnlineUsersPage from "../pages/OnlineUsersPage/OnlineUsersPage";
@@ -46,6 +47,7 @@ import SkillTreePage from "../SkillTreeView/SkillTreePage";
 import CharactersHubPage from "../pages/CharactersPage/CharactersHubPage";
 import CharactersListPage from "../pages/CharactersPage/CharactersListPage";
 import SelectCharacterPage from "../pages/SelectCharacterPage/SelectCharacterPage";
+import MyRequestsPage from "../pages/MyRequestsPage/MyRequestsPage";
 import BestiaryPage from "../Bestiary/BestiaryPage";
 import ArchivePage from "../pages/ArchivePage/ArchivePage";
 import ArchiveArticlePage from "../pages/ArchivePage/ArchiveArticlePage";
@@ -121,6 +123,11 @@ const App = () => {
             <Route path="characters/list" element={<CharactersListPage />} />
             <Route path="createCharacter" element={<CreateCharacterPage />} />
             <Route path="selectCharacter" element={<SelectCharacterPage />} />
+            <Route path="my-requests" element={
+              <ProtectedRoute>
+                <MyRequestsPage />
+              </ProtectedRoute>
+            } />
             <Route path="requestsPage" element={
               <ProtectedRoute requiredPermission="characters:approve">
                 <RequestsPage />
@@ -199,6 +206,11 @@ const App = () => {
             <Route path="admin/races" element={
               <ProtectedRoute requiredPermission="races:create">
                 <AdminRacesPage />
+              </ProtectedRoute>
+            } />
+            <Route path="admin/origins" element={
+              <ProtectedRoute requiredPermission="origins:read">
+                <AdminOriginsPage />
               </ProtectedRoute>
             } />
             <Route path="admin/game-time" element={

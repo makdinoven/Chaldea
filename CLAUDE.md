@@ -90,7 +90,7 @@ services/<service>/app/
 ### Граф HTTP-зависимостей
 
 ```
-character-service ──> inventory-service, skills-service, character-attributes-service, user-service
+character-service ──> inventory-service, skills-service, character-attributes-service, user-service, locations-service
 locations-service ──> character-service, character-attributes-service
 inventory-service ──> character-attributes-service
 battle-service ──> character-attributes-service, character-service, skills-service, inventory-service
@@ -193,10 +193,12 @@ All services (admin endpoints) ──> user-service `/users/me` (RBAC: role + pe
 - character-service — Alembic DONE (auto-migration, sync, `alembic_version_character`)
 - inventory-service — Alembic DONE (auto-migration, sync, `alembic_version_inventory`)
 - photo-service — Alembic DONE (auto-migration, mirror models, no own migrations, `alembic_version_photo`)
+- battle-service — Alembic DONE (auto-migration, async, `alembic_version_battle`)
+- notification-service — Alembic DONE (auto-migration, sync, `alembic_version_notification`)
 
-Сервисы без Alembic (нужно добавить при первой работе с ними): notification-service, battle-service.
+Alembic настроен во всех backend-сервисах. У autobattle-service своих таблиц нет — миграции ему не нужны.
 
-**Правило (см. T2 в `docs/ISSUES.md`):** если задача затрагивает сервис без Alembic — добавить его в рамках текущей работы (init, initial-миграция, `alembic` в requirements.txt). Отдельным коммитом от основной задачи.
+**Правило (см. T2 в `docs/ISSUES.md`):** если появится новый сервис без Alembic — добавить его в рамках текущей работы (init, initial-миграция, `alembic` в requirements.txt). Отдельным коммитом от основной задачи.
 
 **Правила auto-migration:**
 - **При добавлении Alembic в сервис** — настроить автоматический запуск миграций при старте контейнера: в Dockerfile CMD добавить `alembic upgrade head && uvicorn ...` (fail-fast — если миграция падает, сервис не стартует).
@@ -270,7 +272,7 @@ All services (admin endpoints) ──> user-service `/users/me` (RBAC: role + pe
 1. **Pydantic <2.0** — все backend-сервисы используют Pydantic v1 синтаксис (`class Config: orm_mode = True`, а не `model_config`).
 2. **Смешанный sync/async** — user-service, character-service, inventory-service, character-attributes-service используют sync SQLAlchemy. locations-service, skills-service, battle-service используют async (aiomysql).
 3. **photo-service — особый** — использует SQLAlchemy ORM с mirror-моделями (таблицы принадлежат другим сервисам). Alembic настроен, но initial-миграция пустая (photo-service не владеет таблицами).
-4. **RabbitMQ consumers закомментированы** в character-service, skills-service, inventory-service, character-attributes-service. Вместо них используются прямые HTTP-вызовы.
+4. **RabbitMQ consumers** — запускаются штатно в skills-service (`app/main.py:57`, `asyncio.create_task`), inventory-service (`app/main.py:44`, daemon-поток) и character-attributes-service (`app/main.py:40`, daemon-поток). Закомментирован только в character-service — он вызывает соседей напрямую по HTTP. При этом одобрение заявки шлёт одни и те же данные **и** по HTTP, **и** в очередь; консьюмеры идемпотентны, но узкая гонка остаётся (см. запись про двойную выдачу в `docs/ISSUES.md`).
 5. **Единая БД** — все сервисы подключены к одному MySQL-инстансу. Нет изоляции на уровне БД.
 6. **CORS** — origins захардкожены в каждом сервисе отдельно (не централизованно).
 7. **Аутентификация** — JWT реализована только в user-service и notification-service. Остальные сервисы не проверяют токены.

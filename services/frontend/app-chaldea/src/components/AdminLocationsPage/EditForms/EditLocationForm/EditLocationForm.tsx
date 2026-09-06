@@ -33,6 +33,17 @@ interface LocationFormData {
   marker_type: 'safe' | 'dangerous' | 'dungeon';
   image_url?: string;
   id?: number | string;
+  /**
+   * FEAT-154 (rules 18, 19) — a curated starting point plus the short
+   * «почему герои начинают здесь» blurb.
+   *
+   * ⚠️ Note N6: both fields are accepted by the create/update request bodies
+   * but are NOT part of the location response schemas — the only place they can
+   * be read back is `GET /locations/{id}/details`, which is what
+   * `fetchLocationDetails` calls.
+   */
+  is_starting: boolean;
+  starting_blurb: string;
   [key: string]: unknown;
 }
 
@@ -48,6 +59,8 @@ interface InitialData {
   image_url?: string;
   map_icon_url?: string;
   id?: number;
+  is_starting?: boolean;
+  starting_blurb?: string | null;
 }
 
 interface EditLocationFormProps {
@@ -86,6 +99,8 @@ const EditLocationForm = ({
     no_quick_move: false,
     marker_type: 'safe',
     ...initialData,
+    is_starting: initialData?.is_starting ?? false,
+    starting_blurb: initialData?.starting_blurb ?? '',
   });
 
   const [isUploading, setIsUploading] = useState(false);
@@ -120,6 +135,9 @@ const EditLocationForm = ({
         quick_travel_marker: (currentLocation.quick_travel_marker as boolean) ?? false,
         no_quick_move: (currentLocation.no_quick_move as boolean) ?? false,
         marker_type: (currentLocation.marker_type as 'safe' | 'dangerous' | 'dungeon') || 'safe',
+        // N6: these two only ever come back from `/details`.
+        is_starting: (currentLocation.is_starting as boolean) ?? false,
+        starting_blurb: (currentLocation.starting_blurb as string | null) ?? '',
       });
       if (currentLocation.map_icon_url && !iconFile) {
         setIconPreview(currentLocation.map_icon_url as string);
@@ -167,6 +185,13 @@ const EditLocationForm = ({
     setFormData((prev) => ({
       ...prev,
       no_quick_move: e.target.checked,
+    }));
+  };
+
+  const handleIsStartingChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData((prev) => ({
+      ...prev,
+      is_starting: e.target.checked,
     }));
   };
 
@@ -224,6 +249,9 @@ const EditLocationForm = ({
         no_quick_move: Boolean(formData.no_quick_move),
         district_id: formData.district_id ? Number(formData.district_id) : null,
         marker_type: formData.marker_type || 'safe',
+        is_starting: Boolean(formData.is_starting),
+        // An empty blurb is sent as null so the backend stores NULL, not ''.
+        starting_blurb: formData.starting_blurb?.trim() ? formData.starting_blurb.trim() : null,
       };
 
       const action = locationId !== 'new' ? updateLocation : createLocation;
@@ -376,6 +404,39 @@ const EditLocationForm = ({
               />
               Запретить быстрое перемещение
             </label>
+          </div>
+
+          <div className="mb-4 p-3 sm:p-4 rounded border border-white/10 bg-black/20">
+            <label className="flex items-start gap-2 text-[#d4e6f3] cursor-pointer">
+              <input
+                type="checkbox"
+                name="is_starting"
+                checked={Boolean(formData.is_starting)}
+                onChange={handleIsStartingChange}
+                className="w-4 h-4 mt-0.5 flex-shrink-0"
+              />
+              <span>Стартовая точка Скитальцев</span>
+            </label>
+            <p className="mt-1 ml-6 text-[#8ab3d5]/70 text-xs">
+              Локация попадёт в курируемый список первого назначения при создании персонажа.
+            </p>
+
+            {formData.is_starting && (
+              <div className="mt-4">
+                <label className="block mb-2 text-[#8ab3d5] font-medium">
+                  ПОЧЕМУ ГЕРОИ НАЧИНАЮТ ЗДЕСЬ:
+                </label>
+                <textarea
+                  name="starting_blurb"
+                  value={(formData.starting_blurb as string) || ''}
+                  onChange={handleChange}
+                  rows={3}
+                  maxLength={1000}
+                  placeholder="Короткий текст, который увидит игрок на шаге «Контракт»"
+                  className="w-full p-2.5 bg-black/30 border border-white/10 rounded text-[#d4e6f3] transition-colors focus:border-site-blue/50 focus:outline-none resize-y"
+                />
+              </div>
+            )}
           </div>
 
           <div className="mb-4">

@@ -59,16 +59,16 @@ const ArchiveLinkPreviewTooltip = ({
         maxWidth: `${TOOLTIP_MAX_WIDTH}px`,
       }}
     >
-      <div className="bg-[#f5e6c8] border border-gold-dark/50 rounded-card shadow-card p-3 text-sm">
+      <div className="book-page border border-gold-dark/50 rounded-card shadow-card p-3 text-sm">
         {entry?.loading && (
-          <div className="flex items-center gap-2 text-black/60">
+          <div className="flex items-center gap-2 text-ink-muted">
             <div className="w-4 h-4 border-2 border-gold-dark/30 border-t-gold-dark rounded-full animate-spin" />
             <span>Загрузка...</span>
           </div>
         )}
 
         {entry?.notFound && (
-          <p className="text-black/50 italic text-xs">Статья не найдена</p>
+          <p className="text-ink-muted/80 italic text-xs">Статья не найдена</p>
         )}
 
         {entry?.data && !entry.loading && (
@@ -81,14 +81,11 @@ const ArchiveLinkPreviewTooltip = ({
               />
             )}
             <div className="min-w-0 flex-1">
-              <h4
-                className="font-semibold text-sm leading-tight mb-1 text-black/90"
-                style={{ fontFamily: "'MedievalSharp', cursive" }}
-              >
+              <h4 className="lore-heading font-semibold text-sm leading-tight mb-1">
                 {entry.data.title}
               </h4>
               {entry.data.summary && (
-                <p className="text-xs text-black/70 line-clamp-3 leading-relaxed">
+                <p className="font-montserrat text-xs text-ink/80 line-clamp-3 leading-relaxed">
                   {entry.data.summary}
                 </p>
               )}

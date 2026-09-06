@@ -6,8 +6,12 @@ import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import { getMe } from '../../../redux/slices/userSlice';
 import { BASE_URL_DEFAULT } from '../../../api/api';
-
-const MAX_CHARACTERS = 5;
+import {
+  NO_CHARACTER_LIMIT,
+  fetchMyCharacterCount,
+  isCharacterLimitReached,
+} from '../../../api/characterRequests';
+import type { MyCharacterCount } from '../../../api/characterRequests';
 
 interface CharacterItem {
   id: number;
@@ -49,6 +53,10 @@ const SelectCharacterPage = () => {
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The cap comes from the backend; `limit: null` means there is none, and then
+  // neither the counter nor the «Создать нового» button is capped.
+  const [characterCount, setCharacterCount] =
+    useState<MyCharacterCount>(NO_CHARACTER_LIMIT);
 
   useEffect(() => {
     if (!userId) return;
@@ -73,6 +81,27 @@ const SelectCharacterPage = () => {
 
     fetchCharacters();
   }, [userId]);
+
+  // Character cap (`MAX_CHARACTERS_PER_USER`), disabled by default.
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    fetchMyCharacterCount()
+      .then((info) => {
+        if (!cancelled) setCharacterCount(info);
+      })
+      .catch((err) => {
+        toast.error(
+          err instanceof Error ? err.message : 'Не удалось проверить лимит персонажей.'
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  const characterLimit = characterCount.limit;
+  const isAtCharacterLimit = isCharacterLimitReached(characterCount);
 
   const handleSwitch = async (characterId: number) => {
     if (!userId) return;
@@ -115,10 +144,12 @@ const SelectCharacterPage = () => {
         <div>
           <h1 className="text-2xl font-bold gold-text">Выбор персонажа</h1>
           <p className="text-white/50 text-sm mt-1">
-            Персонажи: {characters.length}/{MAX_CHARACTERS}
+            {characterLimit === null
+              ? `Персонажей: ${characters.length}`
+              : `Персонажи: ${characters.length}/${characterLimit}`}
           </p>
         </div>
-        {characters.length < MAX_CHARACTERS && (
+        {!isAtCharacterLimit && (
           <Link
             to="/createCharacter"
             className="btn-blue flex items-center gap-2 px-4 py-2 text-sm"

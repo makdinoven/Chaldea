@@ -9,6 +9,10 @@ export default {
       fontFamily: {
         montserrat: ['Montserrat', 'sans-serif'],
         mono: ['Anonymous Pro', 'monospace'],
+        // Lore / book surfaces (FEAT-154). Both faces are already loaded by
+        // index.html — do not add another font link.
+        lore: ['MedievalSharp', 'Georgia', 'serif'],
+        serif: ['"Cormorant Garamond"', 'Georgia', 'serif'],
       },
       maxWidth: {
         // Site-wide content container width (FEAT-148). Use `max-w-container`
@@ -28,6 +32,17 @@ export default {
           dark: '#1a1a2e',
         },
         input: '#c6c4c4',
+        // Lore / book surfaces (FEAT-154): parchment paper + ink writing.
+        // Only for book-like surfaces (passport, Archive), never for the dark UI.
+        parchment: {
+          light: '#faf1dc',
+          DEFAULT: '#f5e6c8',
+          dark: '#e3d0aa',
+        },
+        ink: {
+          DEFAULT: '#3b2f1c',
+          muted: '#6b5a3e',
+        },
         rarity: {
           common: '#FFFFFF',
           rare: '#76A6BD',
@@ -54,6 +69,8 @@ export default {
         'pressed': '0 2px 4px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.1)',
         'modal': '0 0 12px rgba(0, 0, 0, 0.2)',
         'dropdown': '0 4px 8px rgba(0, 0, 0, 0.3)',
+        // Parchment page: aged inner vignette + outer lift (FEAT-154)
+        'page': 'inset 0 0 40px rgba(90, 66, 30, 0.18), 4px 6px 10px rgba(0, 0, 0, 0.35)',
       },
       transitionDuration: {
         '200': '200ms',

@@ -6,6 +6,14 @@ export interface GameTimePublicResponse {
   epoch: string;
   offset_days: number;
   server_time: string;
+  /**
+   * FEAT-154 (D15) — server-computed calendar snapshot. Additive: the
+   * frontend keeps its own ticking computation in `utils/gameTime.ts`.
+   *
+   * ⚠️ `computed.year` is the ONLY source of the current in-game year.
+   * Never hardcode a year — the clock is moved before launch.
+   */
+  computed: ComputedGameTime;
 }
 
 export interface ComputedGameTime {
