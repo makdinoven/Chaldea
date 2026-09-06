@@ -21,6 +21,24 @@ import httpx
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Id the stubbed locations-service reports as the default starting point.
+DEFAULT_START_LOCATION_ID = 700
+
+@pytest.fixture(autouse=True)
+def stub_locations_client():
+    """Never let the approval tests reach a real locations-service.
+
+    The start-location chain of FEAT-154 §3.6 is graceful, so an unpatched client
+    would merely time out and fall to step 3 — but slowly, and over the network.
+    Default here: the service answers, the curated list has a default point.
+    Individual tests override the two AsyncMocks as needed.
+    """
+    with patch("main.locations_client") as mock_client:
+        mock_client.probe_starting_point = AsyncMock(return_value=True)
+        mock_client.get_default_starting_point_id = AsyncMock(return_value=DEFAULT_START_LOCATION_ID)
+        yield mock_client
+
+
 def _make_character_request_mock(request_id=1, user_id=42, status="pending",
                                   id_class=1, id_subrace=1, id_race=1):
     """Create a mock CharacterRequest object."""
@@ -41,6 +59,13 @@ def _make_character_request_mock(request_id=1, user_id=42, status="pending",
     req.id_class = id_class
     req.sex = "male"
     req.appearance = "Высокий блондин"
+    # FEAT-154 fields — MagicMock would hand back a truthy mock otherwise
+    req.origin_id = None
+    req.start_location_id = None
+    req.skitaltsy_since_year = None
+    req.skitaltsy_since_segment = None
+    req.request_type = "creation"
+    req.character_id = None
     return req
 
 
@@ -54,14 +79,33 @@ def _make_character_mock(character_id=100, user_id=42):
     return char
 
 
-def _make_starter_kit_mock(class_id=1):
-    """Create a mock StarterKit object."""
-    kit = MagicMock()
-    kit.class_id = class_id
-    kit.items = [{"item_id": 10, "quantity": 1}]
-    kit.skills = [{"skill_id": 5}]
-    kit.currency_amount = 500
-    return kit
+def _make_resolved_kit(class_id=1, origin_id=0, resolved_from="exact"):
+    """Build what crud.resolve_starter_kit returns (FEAT-154 N10).
+
+    Approve no longer queries starter_kits itself: it calls the shared resolver
+    exactly once and uses that single result both to grant the kit and to write
+    the characters.granted_kit snapshot (rules 12a-12d, D17).
+    """
+    return {
+        "class_id": class_id,
+        "origin_id": origin_id,
+        "resolved_from": resolved_from,
+        "items": [{"item_id": 10, "quantity": 1}],
+        "skills": [{"skill_id": 5}],
+        "currency_amount": 500,
+    }
+
+
+def _empty_resolved_kit(class_id=1, origin_id=0):
+    """The resolver's "no kit at all" answer."""
+    return {
+        "class_id": class_id,
+        "origin_id": origin_id,
+        "resolved_from": "none",
+        "items": [],
+        "skills": [],
+        "currency_amount": 0,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -89,15 +133,16 @@ class TestTokenForwarding:
         """Token from admin auth must be passed to crud.assign_character_to_user."""
         db_request = _make_character_request_mock()
         character = _make_character_mock()
-        starter_kit = _make_starter_kit_mock()
 
         # DB queries
+        # Only ONE query is left in the handler: finding the request.
+        # The starter kit comes from crud.resolve_starter_kit, not from a query here.
         mock_db_session.query.return_value.filter.return_value.first.side_effect = [
-            db_request,   # Step 1: find request
-            starter_kit,  # Step 2: find starter kit
+            db_request,
         ]
 
         # CRUD functions
+        mock_crud.resolve_starter_kit.return_value = _make_resolved_kit()
         mock_crud.create_preliminary_character.return_value = character
         mock_crud.generate_attributes_for_subrace.return_value = {"strength": 10}
         mock_crud.send_inventory_request = AsyncMock(return_value={"status": "ok"})
@@ -141,13 +186,12 @@ class TestTokenForwarding:
         """
         db_request = _make_character_request_mock()
         character = _make_character_mock()
-        starter_kit = _make_starter_kit_mock()
 
         mock_db_session.query.return_value.filter.return_value.first.side_effect = [
             db_request,
-            starter_kit,
         ]
 
+        mock_crud.resolve_starter_kit.return_value = _make_resolved_kit()
         mock_crud.create_preliminary_character.return_value = character
         mock_crud.generate_attributes_for_subrace.return_value = {"strength": 10}
         mock_crud.send_inventory_request = AsyncMock(return_value={"status": "ok"})
@@ -194,13 +238,12 @@ class TestAtomicityOnFailure:
         db.rollback() MUST be called instead."""
         db_request = _make_character_request_mock()
         character = _make_character_mock()
-        starter_kit = _make_starter_kit_mock()
 
         mock_db_session.query.return_value.filter.return_value.first.side_effect = [
             db_request,
-            starter_kit,
         ]
 
+        mock_crud.resolve_starter_kit.return_value = _make_resolved_kit()
         mock_crud.create_preliminary_character.return_value = character
         mock_crud.generate_attributes_for_subrace.return_value = {"strength": 10}
         mock_crud.send_inventory_request = AsyncMock(return_value={"status": "ok"})
@@ -238,13 +281,12 @@ class TestAtomicityOnFailure:
         """When attributes-service returns None (step 7), db.rollback() is called."""
         db_request = _make_character_request_mock()
         character = _make_character_mock()
-        starter_kit = _make_starter_kit_mock()
 
         mock_db_session.query.return_value.filter.return_value.first.side_effect = [
             db_request,
-            starter_kit,
         ]
 
+        mock_crud.resolve_starter_kit.return_value = _make_resolved_kit()
         mock_crud.create_preliminary_character.return_value = character
         mock_crud.generate_attributes_for_subrace.return_value = {"strength": 10}
         mock_crud.send_inventory_request = AsyncMock(return_value={"status": "ok"})
@@ -279,13 +321,12 @@ class TestAtomicityOnFailure:
         """CRUD functions must be called with auto_commit=False in the approval flow."""
         db_request = _make_character_request_mock()
         character = _make_character_mock()
-        starter_kit = _make_starter_kit_mock()
 
         mock_db_session.query.return_value.filter.return_value.first.side_effect = [
             db_request,
-            starter_kit,
         ]
 
+        mock_crud.resolve_starter_kit.return_value = _make_resolved_kit()
         mock_crud.create_preliminary_character.return_value = character
         mock_crud.generate_attributes_for_subrace.return_value = {"strength": 10}
         mock_crud.send_inventory_request = AsyncMock(return_value={"status": "ok"})
@@ -339,13 +380,12 @@ class TestHappyPath:
         """Successful approval returns 200 with a success message."""
         db_request = _make_character_request_mock()
         character = _make_character_mock()
-        starter_kit = _make_starter_kit_mock()
 
         mock_db_session.query.return_value.filter.return_value.first.side_effect = [
             db_request,
-            starter_kit,
         ]
 
+        mock_crud.resolve_starter_kit.return_value = _make_resolved_kit()
         mock_crud.create_preliminary_character.return_value = character
         mock_crud.generate_attributes_for_subrace.return_value = {"strength": 10}
         mock_crud.send_inventory_request = AsyncMock(return_value={"status": "ok"})
@@ -361,6 +401,31 @@ class TestHappyPath:
         data = response.json()
         assert "message" in data
         assert str(character.id) in data["message"]
+        # FEAT-154: the response now also carries the resolved start location
+        assert data["current_location_id"] == DEFAULT_START_LOCATION_ID
+        assert "location_warning" in data
+
+        # Rules 12a-12d / D17: the resolver is called EXACTLY ONCE, with the
+        # request's (class, origin) pair, and approve runs no kit query of its own.
+        mock_crud.resolve_starter_kit.assert_called_once_with(
+            mock_db_session, db_request.id_class, 0
+        )
+
+        # The kit granted and the kit snapshotted come from that one result.
+        resolved = _make_resolved_kit()
+        snapshot = mock_crud.create_preliminary_character.call_args.kwargs["granted_kit"]
+        assert snapshot["items"] == resolved["items"]
+        assert snapshot["skills"] == resolved["skills"]
+        assert snapshot["currency_amount"] == resolved["currency_amount"]
+        assert snapshot["resolved_from"] == resolved["resolved_from"]
+        assert "granted_at" in snapshot
+
+        granted_items = mock_crud.send_inventory_request.call_args.args[1]
+        assert granted_items == [{"item_id": 10, "quantity": 1}]
+        assert [i["item_id"] for i in snapshot["items"]] == [i["item_id"] for i in granted_items]
+
+        granted_skills = mock_crud.send_skills_presets_request.call_args.kwargs["skill_ids"]
+        assert [s["skill_id"] for s in snapshot["skills"]] == granted_skills[:-1]
 
     @patch("main.send_character_approved_notification", new_callable=AsyncMock)
     @patch("main.publish_character_attributes", new_callable=AsyncMock)
@@ -380,13 +445,12 @@ class TestHappyPath:
         """On success, db.commit() must be called exactly once (at the end)."""
         db_request = _make_character_request_mock()
         character = _make_character_mock()
-        starter_kit = _make_starter_kit_mock()
 
         mock_db_session.query.return_value.filter.return_value.first.side_effect = [
             db_request,
-            starter_kit,
         ]
 
+        mock_crud.resolve_starter_kit.return_value = _make_resolved_kit()
         mock_crud.create_preliminary_character.return_value = character
         mock_crud.generate_attributes_for_subrace.return_value = {"strength": 10}
         mock_crud.send_inventory_request = AsyncMock(return_value={"status": "ok"})
@@ -423,13 +487,12 @@ class TestHappyPath:
         """RabbitMQ notification is sent after successful commit."""
         db_request = _make_character_request_mock()
         character = _make_character_mock()
-        starter_kit = _make_starter_kit_mock()
 
         mock_db_session.query.return_value.filter.return_value.first.side_effect = [
             db_request,
-            starter_kit,
         ]
 
+        mock_crud.resolve_starter_kit.return_value = _make_resolved_kit()
         mock_crud.create_preliminary_character.return_value = character
         mock_crud.generate_attributes_for_subrace.return_value = {"strength": 10}
         mock_crud.send_inventory_request = AsyncMock(return_value={"status": "ok"})
@@ -491,12 +554,10 @@ class TestEdgeCases:
         db_request = _make_character_request_mock()
         character = _make_character_mock()
 
-        # First query returns the request, second returns None (no starter kit)
         mock_db_session.query.return_value.filter.return_value.first.side_effect = [
             db_request,
-            None,  # No starter kit
         ]
-
+        mock_crud.resolve_starter_kit.return_value = _empty_resolved_kit()
         mock_crud.create_preliminary_character.return_value = character
         mock_crud.generate_attributes_for_subrace.return_value = {"strength": 10}
         mock_crud.send_inventory_request = AsyncMock(return_value=None)

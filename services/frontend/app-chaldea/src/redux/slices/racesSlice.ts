@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import axios from 'axios';
+import { apiErrorMessage } from '../../api/errors';
 
 // --- Types ---
 
@@ -23,6 +24,17 @@ export interface Subrace {
   description: string;
   image: string | null;
   stat_preset: StatPreset | null;
+  // FEAT-154 (rules 11, 14, 15, 17) — additive, all optional.
+  // `GET /characters/races` serializes all four (task #36), but they stay
+  // optional: rows created before migration 019 carry NULLs. Consumers must
+  // fall back to `description` when `distinctive_features` is missing (rule 17).
+  /** Appearance-only notes: skin, height, scales, horns, tail, eyes. */
+  distinctive_features?: string | null;
+  /** Typical height range, in cm. A value outside it is a soft warning only. */
+  height_min?: number | null;
+  height_max?: number | null;
+  /** Ids of `origin_countries` typical for this subrace (rule 11). */
+  typical_origin_ids?: number[] | null;
 }
 
 export interface Race {
@@ -48,6 +60,10 @@ export interface SubraceCreateData {
   name: string;
   description: string;
   stat_preset: StatPreset;
+  distinctive_features?: string | null;
+  height_min?: number | null;
+  height_max?: number | null;
+  typical_origin_ids?: number[] | null;
 }
 
 export interface SubraceUpdateData {
@@ -55,6 +71,10 @@ export interface SubraceUpdateData {
   name?: string;
   description?: string;
   stat_preset?: StatPreset;
+  distinctive_features?: string | null;
+  height_min?: number | null;
+  height_max?: number | null;
+  typical_origin_ids?: number[] | null;
 }
 
 interface RacesState {
@@ -81,8 +101,8 @@ export const fetchRaces = createAsyncThunk<
     try {
       const response = await axios.get('/characters/races');
       return response.data;
-    } catch {
-      return rejectWithValue('Ошибка загрузки списка рас');
+    } catch (error) {
+      return rejectWithValue(apiErrorMessage(error, 'Не удалось загрузить список рас.'));
     }
   }
 );

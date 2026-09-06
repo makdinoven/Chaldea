@@ -719,3 +719,53 @@ async def upload_ticket_attachment(
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/photo/upload_character_request_avatar")
+async def upload_character_request_avatar(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user_via_http),
+):
+    """
+    Загружает аватар для заявки на создание персонажа (FEAT-154).
+
+    Персонажа ещё не существует, поэтому запись в БД не делается — файл кладётся
+    в S3 и возвращается постоянный URL, который клиент передаёт в теле заявки.
+    Доступно любому авторизованному пользователю.
+    """
+    validate_image_mime(file)
+    try:
+        result = convert_to_webp(file.file)
+        timestamp = int(time.time())
+        unique_filename = f"char_draft_{uuid4().hex}_{timestamp}{result.extension}"
+        avatar_url = upload_file_to_s3(
+            result.data,
+            unique_filename,
+            subdirectory="character_avatar_drafts",
+            content_type=result.content_type,
+        )
+
+        return {"avatar_url": avatar_url}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        # convert_to_webp сигнализирует о превышении лимита размера через ValueError.
+        # Отличаем его от «битого» изображения, чтобы вернуть корректный статус.
+        if "exceeds" in str(e).lower():
+            raise HTTPException(
+                status_code=413,
+                detail="Файл слишком большой. Максимальный размер — 15 МБ.",
+            )
+        raise HTTPException(
+            status_code=400,
+            detail="Не удалось обработать изображение. Загрузите корректный файл изображения.",
+        )
+    except Exception as e:
+        # Полный текст исключения — только в лог: наружу не должны утекать
+        # внутренности boto3/S3/Pillow (имена бакетов, пути, стектрейсы).
+        print(f"upload_character_request_avatar failed: {e!r}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail="Не удалось загрузить изображение. Попробуйте позже.",
+        )

@@ -28,6 +28,7 @@ const sections: AdminSection[] = [
   { label: 'Правила', path: '/admin/rules', description: 'Управление блоками правил игры', module: 'rules' },
   { label: 'Пользователи и роли', path: '/admin/users-roles', description: 'Управление ролями, правами доступа и разрешениями', module: 'users' },
   { label: 'Расы', path: '/admin/races', description: 'Управление расами, подрасами и пресетами статов', module: 'races' },
+  { label: 'Происхождения', path: '/admin/origins', description: 'Справочник родных стран для создания персонажа', module: 'origins' },
   { label: 'Игровое время', path: '/admin/game-time', description: 'Настройка внутриигрового календаря', module: 'gametime' },
   { label: 'Модерация постов', path: '/admin/moderation', description: 'Жалобы и запросы на удаление постов локаций', module: 'moderation' },
   { label: 'НПС', path: '/admin/npcs', description: 'Управление НПС: создание, редактирование, размещение на локациях', module: 'npcs' },

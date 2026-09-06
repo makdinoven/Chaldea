@@ -12,7 +12,7 @@ import {
   uploadRaceImage,
   uploadSubraceImage,
 } from '../../../redux/slices/racesSlice';
-import type { Race, Subrace, StatPreset } from '../../../redux/slices/racesSlice';
+import type { Race, Subrace, SubraceCreateData } from '../../../redux/slices/racesSlice';
 import RaceForm from './RaceForm';
 import SubraceForm from './SubraceForm';
 import { STAT_FIELDS } from './StatPresetEditor';
@@ -141,7 +141,7 @@ const AdminRacesPage = () => {
   };
 
   const handleSaveSubrace = async (
-    data: { id_race: number; name: string; description: string; stat_preset: StatPreset },
+    data: SubraceCreateData,
     imageFile: File | null
   ) => {
     try {

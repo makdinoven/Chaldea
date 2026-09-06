@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON, Boolean, Float, Index, UniqueConstraint, DateTime
+from sqlalchemy import Column, Integer, SmallInteger, String, Text, Enum, TIMESTAMP, ForeignKey, func, BigInteger, JSON, Boolean, Float, Index, UniqueConstraint, DateTime
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -24,6 +24,12 @@ class CharacterRequest(Base):
     avatar = Column(String(255), nullable=True)
     character_id = Column(Integer, nullable=True)
     request_type = Column(Enum('creation', 'claim'), nullable=False, server_default='creation')
+    # FEAT-154: registration overhaul (all nullable, no backfill)
+    origin_id = Column(Integer, nullable=True)  # -> locations-service origin_countries.id (no FK)
+    start_location_id = Column(BigInteger, nullable=True)
+    skitaltsy_since_year = Column(Integer, nullable=True)
+    skitaltsy_since_segment = Column(SmallInteger, nullable=True)
+    rejection_reason = Column(Text, nullable=True)
 
 
 
@@ -57,6 +63,14 @@ class Character(Base):
     npc_status = Column(Enum('alive', 'dead', name='npc_status_enum'), nullable=False, default='alive', server_default='alive')
     last_teleport_at = Column(DateTime, nullable=True)
     travel_cooldown_until = Column(TIMESTAMP, nullable=True, default=None)
+    # FEAT-154: registration overhaul (all nullable, no backfill)
+    origin_id = Column(Integer, nullable=True)  # -> locations-service origin_countries.id (no FK)
+    registered_at = Column(TIMESTAMP, nullable=True, default=None)
+    skitaltsy_since_year = Column(Integer, nullable=True)
+    skitaltsy_since_segment = Column(SmallInteger, nullable=True)
+    # FEAT-154 rule 12d / D17-D18: замороженный слепок выданного стартового набора.
+    # NULL = персонаж создан до фичи, паспорт реконструирует набор живым resolve.
+    granted_kit = Column(JSON, nullable=True)
 
     titles = relationship("CharacterTitle", back_populates="character")
     current_title = relationship("Title")
@@ -83,6 +97,11 @@ class Subrace(Base):
     description = Column(Text, nullable=True)
     stat_preset = Column(JSON, nullable=True)
     image = Column(String(255), nullable=True)
+    # FEAT-154: registration overhaul (all nullable, no backfill)
+    distinctive_features = Column(Text, nullable=True)
+    height_min = Column(Integer, nullable=True)
+    height_max = Column(Integer, nullable=True)
+    typical_origin_ids = Column(JSON, nullable=True)  # -> origin_countries.id list (no FK)
 
     # Связь с расами
     race = relationship("Race", back_populates="subraces")
@@ -139,13 +158,26 @@ class LevelThreshold(Base):
 
 
 class StarterKit(Base):
+    """Стартовый набор, заданный парой (класс x происхождение) — FEAT-154, rules 12a-12c.
+
+    origin_id = 0 означает «набор класса по умолчанию» (D16). Ноль, а не NULL,
+    потому что MySQL считает NULL-ы различными внутри UNIQUE-индекса, и с
+    nullable-колонкой два конкурирующих дефолта для одного класса были бы
+    возможны. origin_countries.id — AUTO_INCREMENT и никогда не выдаёт 0.
+    """
+
     __tablename__ = "starter_kits"
 
     id = Column(Integer, primary_key=True, index=True)
-    class_id = Column(Integer, ForeignKey("classes.id_class"), unique=True, nullable=False)
+    class_id = Column(Integer, ForeignKey("classes.id_class"), nullable=False)
+    origin_id = Column(Integer, nullable=False, default=0, server_default="0")
     items = Column(JSON, nullable=False, default=list)
     skills = Column(JSON, nullable=False, default=list)
     currency_amount = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint('class_id', 'origin_id', name='uq_starter_kits_class_origin'),
+    )
 
 
 class MobTemplate(Base):

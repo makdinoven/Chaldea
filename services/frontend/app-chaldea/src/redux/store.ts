@@ -33,6 +33,7 @@ import dungeonReducer from './slices/dungeonSlice';
 import floatingStructuresReducer from './slices/floatingStructuresSlice';
 import teleportReducer from './slices/teleportSlice';
 import gatheringReducer from './slices/gatheringSlice';
+import originsReducer from './slices/originsSlice';
 
 export const store = configureStore({
   reducer: {
@@ -69,6 +70,7 @@ export const store = configureStore({
     floatingStructures: floatingStructuresReducer,
     teleport: teleportReducer,
     gathering: gatheringReducer,
+    origins: originsReducer,
   },
 });
 

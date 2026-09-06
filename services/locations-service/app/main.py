@@ -1672,16 +1672,15 @@ async def get_game_time_public(session: AsyncSession = Depends(get_db)):
     config = await crud.get_game_time_config(session)
     now = datetime.utcnow()
     if config:
-        return {
-            "epoch": config.epoch,
-            "offset_days": config.offset_days,
-            "server_time": now,
-        }
-    # Fallback to defaults if no row exists
+        epoch, offset_days = config.epoch, config.offset_days
+    else:
+        # Fallback to defaults if no row exists
+        epoch, offset_days = datetime(2026, 3, 19, 0, 0, 0), 0
     return {
-        "epoch": datetime(2026, 3, 19, 0, 0, 0),
-        "offset_days": 0,
+        "epoch": epoch,
+        "offset_days": offset_days,
         "server_time": now,
+        "computed": crud.compute_game_time(epoch, offset_days, now),
     }
 
 
@@ -3484,8 +3483,101 @@ async def get_active_gathering_route(
 
 
 # --------------------------------------------------------------------
+# FEAT-154 — СТАРТОВЫЕ ТОЧКИ И СПРАВОЧНИК ПРОИСХОЖДЕНИЯ
+# --------------------------------------------------------------------
+# Отдельный роутер с тем же префиксом /locations, подключается ПЕРВЫМ:
+# так литеральные пути /starting-points и /origins гарантированно
+# выигрывают у параметрических маршрутов основного роутера.
+registration_router = APIRouter(prefix="/locations", tags=["registration"])
+
+
+@registration_router.get(
+    "/starting-points", response_model=List[schemas.StartingPointRead]
+)
+async def list_starting_points_route(session: AsyncSession = Depends(get_db)):
+    """Публично. Курируемый список стартовых точек (rule 19)."""
+    return await crud.get_starting_points(session)
+
+
+@registration_router.get(
+    "/starting-points/{location_id}", response_model=schemas.StartingPointRead
+)
+async def get_starting_point_route(
+    location_id: int, session: AsyncSession = Depends(get_db)
+):
+    """Публично. Проверочный запрос character-service при подаче и одобрении заявки.
+
+    404 — если локации нет ИЛИ она не помечена как стартовая.
+    """
+    data = await crud.get_starting_point(session, location_id)
+    if not data:
+        raise HTTPException(
+            status_code=404,
+            detail="Выбранная точка не входит в список стартовых.",
+        )
+    return data
+
+
+@registration_router.get("/origins", response_model=List[schemas.OriginCountryRead])
+async def list_origins_route(session: AsyncSession = Depends(get_db)):
+    """Публично. Справочник происхождения без скрытых записей (rules 8-10)."""
+    return await crud.get_origin_countries(session, include_inactive=False)
+
+
+@registration_router.get(
+    "/admin/origins", response_model=List[schemas.OriginCountryAdminRead]
+)
+async def admin_list_origins_route(
+    include_inactive: bool = Query(True),
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("origins:read")),
+):
+    """Админский список: по умолчанию включает мягко удалённые записи."""
+    return await crud.get_origin_countries(session, include_inactive=include_inactive)
+
+
+@registration_router.post(
+    "/admin/origins", response_model=schemas.OriginCountryAdminRead, status_code=201
+)
+async def admin_create_origin_route(
+    body: schemas.OriginCountryCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("origins:create")),
+):
+    return await crud.create_origin_country(session, body)
+
+
+@registration_router.put(
+    "/admin/origins/{origin_id}", response_model=schemas.OriginCountryAdminRead
+)
+async def admin_update_origin_route(
+    origin_id: int,
+    body: schemas.OriginCountryUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("origins:update")),
+):
+    return await crud.update_origin_country(session, origin_id, body)
+
+
+@registration_router.delete("/admin/origins/{origin_id}", response_model=dict)
+async def admin_delete_origin_route(
+    origin_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("origins:delete")),
+):
+    """Мягкое удаление: запись скрывается (is_active = 0), но не стирается.
+
+    На origin_id ссылаются characters/character_requests в другом сервисе,
+    поэтому физическое удаление проверить на ссылки невозможно.
+    """
+    origin = await crud.deactivate_origin_country(session, origin_id)
+    return {"id": origin.id, "is_active": origin.is_active}
+
+
+# --------------------------------------------------------------------
 # Подключаем маршруты
 # --------------------------------------------------------------------
+app.include_router(registration_router)
 app.include_router(router)
 app.include_router(rules_router)
 app.include_router(archive_router)

@@ -1,38 +1,45 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../../api/api';
-import { useAppSelector } from '../../../redux/store';
+import { apiErrorMessage } from '../../../api/errors';
+import { fetchItemsBulk, fetchSkillsBulk } from '../../../api/bulk';
+import type { ItemBulk, SkillBulk } from '../../../api/bulk';
+import {
+  fetchCharacterPublic,
+  fetchCharactersList,
+} from '../../../api/charactersPublic';
+import type { CharacterListItem, CharacterPublic } from '../../../api/charactersPublic';
+import {
+  NO_CHARACTER_LIMIT,
+  fetchMyCharacterCount,
+  isCharacterLimitReached,
+} from '../../../api/characterRequests';
+import type { MyCharacterCount } from '../../../api/characterRequests';
+import { fetchOrigins } from '../../../api/origins';
+import type { OriginCountry } from '../../../api/origins';
+import { fetchGameTime } from '../../../redux/actions/gameTimeActions';
+import { selectCurrentGameYear } from '../../../redux/slices/gameTimeSlice';
+import { fetchRaces } from '../../../redux/slices/racesSlice';
+import { useAppDispatch, useAppSelector } from '../../../redux/store';
+import CharacterPassport, {
+  fromCharacterListItem,
+  fromCharacterPublic,
+} from '../../CommonComponents/CharacterPassport';
 
-interface CharacterItem {
-  id: number;
-  name: string;
-  avatar: string | null;
-  level: number;
-  class_name: string | null;
-  race_name: string | null;
-  subrace_name: string | null;
-  sex: string | null;
-  age: number | null;
-  is_npc: boolean;
-  user_id: number | null;
-  username: string | null;
-}
-
-interface CharacterDetail extends CharacterItem {
-  biography: string | null;
-  personality: string | null;
-  appearance: string | null;
-  background: string | null;
-}
-
-const SEX_LABELS: Record<string, string> = {
-  male: 'Мужской',
-  female: 'Женский',
-  genderless: 'Бесполый',
-};
+/**
+ * FEAT-154 (task #22) — the public character list.
+ *
+ * The grid renders the COMPACT passport, the detail modal the FULL one
+ * (rule 26). The reference data every card needs — the origin registry and the
+ * subraces' typical origins — is loaded ONCE per page, so the grid costs zero
+ * requests per card. The old `page_size: 1` refetch-by-name hack is replaced by
+ * `GET /characters/{id}/public`, which is also the only source of the frozen
+ * `granted_kit` snapshot (rule 12d).
+ */
 
 const CLASS_OPTIONS = [
   { value: 1, label: 'Воин' },
@@ -40,41 +47,64 @@ const CLASS_OPTIONS = [
   { value: 3, label: 'Маг' },
 ];
 
+interface CharacterDetail {
+  character: CharacterPublic;
+  items: ItemBulk[];
+  skills: SkillBulk[];
+}
+
 const CharactersListPage = () => {
   const navigate = useNavigate();
+  const dispatch = useAppDispatch();
   const userId = useAppSelector((state) => state.user.id);
   const isAuthenticated = userId !== null;
 
-  const [characters, setCharacters] = useState<CharacterItem[]>([]);
+  const races = useAppSelector((state) => state.races.races);
+  const racesError = useAppSelector((state) => state.races.error);
+  const currentGameYear = useAppSelector(selectCurrentGameYear);
+  const gameTimeLoaded = useAppSelector((state) => state.gameTime.computed !== null);
+
+  const [characters, setCharacters] = useState<CharacterListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [classFilter, setClassFilter] = useState('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const pageSize = 20;
 
+  // Origin registry — one request for the whole page (rule 26).
+  const [origins, setOrigins] = useState<OriginCountry[]>([]);
+
   // Detail modal
-  const [selectedChar, setSelectedChar] = useState<CharacterDetail | null>(null);
+  const [detail, setDetail] = useState<CharacterDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
   // Claim functionality
-  const [claimTarget, setClaimTarget] = useState<CharacterItem | null>(null);
+  const [claimTarget, setClaimTarget] = useState<CharacterListItem | null>(null);
   const [claimLoading, setClaimLoading] = useState(false);
-  const [characterCount, setCharacterCount] = useState(0);
-  const [characterLimit, setCharacterLimit] = useState(5);
+  // `limit: null` — no cap is configured; claiming stays open (see
+  // `isCharacterLimitReached`).
+  const [characterCount, setCharacterCount] =
+    useState<MyCharacterCount>(NO_CHARACTER_LIMIT);
 
   const fetchCharacters = useCallback(async () => {
     setLoading(true);
+    setListError(null);
     try {
-      const params: Record<string, string | number> = { page, page_size: pageSize };
-      if (search) params.q = search;
-      if (classFilter) params.id_class = Number(classFilter);
-      const res = await axios.get(`${BASE_URL}/characters/list`, { params });
-      const data = res.data;
+      const data = await fetchCharactersList({
+        page,
+        page_size: pageSize,
+        ...(search ? { q: search } : {}),
+        ...(classFilter ? { id_class: Number(classFilter) } : {}),
+      });
       setCharacters(data.items ?? []);
       setTotal(data.total ?? 0);
-    } catch {
-      toast.error('Не удалось загрузить список персонажей');
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Не удалось загрузить список персонажей';
+      setListError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -88,22 +118,52 @@ const CharactersListPage = () => {
     setPage(1);
   }, [search, classFilter]);
 
+  useEffect(() => {
+    fetchOrigins()
+      .then(setOrigins)
+      .catch((err: unknown) => {
+        toast.error(err instanceof Error ? err.message : 'Не удалось загрузить происхождения.');
+      });
+  }, []);
+
+  // Typical origins live on the subrace — one cached request, not one per card.
+  useEffect(() => {
+    if (races.length === 0) dispatch(fetchRaces());
+  }, [dispatch, races.length]);
+
+  useEffect(() => {
+    if (racesError) toast.error(racesError);
+  }, [racesError]);
+
+  /** subrace id → `typical_origin_ids` (rule 11 — the «редкий выбор» badge). */
+  const typicalBySubrace = useMemo(() => {
+    const map = new Map<number, number[]>();
+    races.forEach((race) => {
+      race.subraces?.forEach((subrace) => {
+        if (subrace.typical_origin_ids?.length) {
+          map.set(subrace.id_subrace, subrace.typical_origin_ids);
+        }
+      });
+    });
+    return map;
+  }, [races]);
+
   // Fetch character count for limit check
   useEffect(() => {
     if (!isAuthenticated) return;
-    const token = localStorage.getItem('accessToken');
-    if (!token) return;
-    axios
-      .get(`${BASE_URL}/characters/my-character-count`, {
-        headers: { Authorization: `Bearer ${token}` },
+    let cancelled = false;
+    fetchMyCharacterCount()
+      .then((info) => {
+        if (!cancelled) setCharacterCount(info);
       })
-      .then((res) => {
-        setCharacterCount(res.data.count ?? 0);
-        setCharacterLimit(res.data.limit ?? 5);
-      })
-      .catch(() => {
-        // silently fail — button will remain enabled by default
+      .catch((err) => {
+        toast.error(
+          err instanceof Error ? err.message : 'Не удалось проверить лимит персонажей.'
+        );
       });
+    return () => {
+      cancelled = true;
+    };
   }, [isAuthenticated]);
 
   const handleClaimConfirm = async () => {
@@ -119,38 +179,110 @@ const CharactersListPage = () => {
       toast.success('Заявка успешно подана');
       setClaimTarget(null);
     } catch (err: unknown) {
-      const error = err as { response?: { data?: { detail?: string } } };
-      toast.error(error.response?.data?.detail || 'Ошибка при подаче заявки');
+      toast.error(apiErrorMessage(err, 'Ошибка при подаче заявки'));
     } finally {
       setClaimLoading(false);
     }
   };
 
-  const isAtCharacterLimit = characterCount >= characterLimit;
+  const isAtCharacterLimit = isCharacterLimitReached(characterCount);
 
   const openDetail = async (charId: number) => {
     setDetailLoading(true);
+    // The in-game year is only needed by the full passport («в строю N лет»).
+    if (!gameTimeLoaded) dispatch(fetchGameTime());
     try {
-      const params: Record<string, string | number> = { page: 1, page_size: 1 };
-      // Fetch full data — the list already has it, find in current list or re-fetch
-      const found = characters.find((c) => c.id === charId);
-      if (found) {
-        // Re-fetch single character for full biography/personality
-        const res = await axios.get(`${BASE_URL}/characters/list`, {
-          params: { q: found.name, page: 1, page_size: 1 },
-        });
-        const items = res.data.items ?? [];
-        const full = items.find((c: CharacterDetail) => c.id === charId) ?? found;
-        setSelectedChar(full as CharacterDetail);
+      const character = await fetchCharacterPublic(charId);
+      let items: ItemBulk[] = [];
+      let skills: SkillBulk[] = [];
+      const kit = character.granted_kit;
+      if (kit) {
+        // The kit is stored id-only (D19) — names and icons are resolved live.
+        // A bulk failure must not hide the passport, so it is reported and the
+        // kit degrades to «Предмет #id».
+        try {
+          [items, skills] = await Promise.all([
+            fetchItemsBulk((kit.items ?? []).map((line) => line.item_id)),
+            fetchSkillsBulk((kit.skills ?? []).map((line) => line.skill_id)),
+          ]);
+        } catch (err) {
+          toast.error(
+            err instanceof Error ? err.message : 'Не удалось загрузить стартовый набор.'
+          );
+        }
       }
-    } catch {
-      toast.error('Не удалось загрузить анкету');
+      setDetail({ character, items, skills });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось загрузить анкету');
     } finally {
       setDetailLoading(false);
     }
   };
 
+  const detailPassport = useMemo(() => {
+    if (!detail) return null;
+    return fromCharacterPublic(detail.character, {
+      origins,
+      typicalOriginIds: detail.character.id_subrace
+        ? typicalBySubrace.get(detail.character.id_subrace) ?? null
+        : null,
+      // `null` when character-attributes-service was unreachable (N31) — the
+      // passport then just omits the stat block.
+      stats: detail.character.stats,
+      items: detail.items,
+      skills: detail.skills,
+    });
+  }, [detail, origins, typicalBySubrace]);
+
   const totalPages = Math.ceil(total / pageSize);
+
+  /** Owner link / claim button — rendered inside the compact passport card. */
+  const cardFooter = (char: CharacterListItem) => {
+    if (char.is_npc) return null;
+    return (
+      <div className="mt-1 flex w-full flex-col items-center gap-1 border-t border-ink/15 pt-2">
+        {char.user_id && char.username ? (
+          <Link
+            to={`/user-profile/${char.user_id}`}
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-full truncate text-xs text-ink-muted underline decoration-ink/40 underline-offset-2 hover:decoration-ink"
+          >
+            {char.username}
+          </Link>
+        ) : (
+          <>
+            <span className="text-xs italic text-ink-muted">Свободен</span>
+            {isAuthenticated && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!isAtCharacterLimit) setClaimTarget(char);
+                }}
+                disabled={isAtCharacterLimit}
+                title={
+                  isAtCharacterLimit
+                    ? `Достигнут лимит персонажей (${characterCount.limit})`
+                    : undefined
+                }
+                className={`
+                  font-lore rounded-card border px-3 py-1 text-xs
+                  transition-colors duration-200 ease-site
+                  ${
+                    isAtCharacterLimit
+                      ? 'cursor-not-allowed border-ink/20 text-ink-muted/60'
+                      : 'border-ink/40 text-ink hover:bg-ink/10'
+                  }
+                `}
+              >
+                Подать заявку
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
 
   return (
     <motion.div
@@ -198,100 +330,36 @@ const CharactersListPage = () => {
         </select>
       </div>
 
-      {/* Character grid */}
+      {/* Character grid — compact passports (rule 26) */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
         </div>
+      ) : listError ? (
+        <div className="flex flex-col items-center gap-3 py-8">
+          <p className="text-site-red text-sm text-center">{listError}</p>
+          <button onClick={fetchCharacters} className="btn-line !text-sm">
+            Повторить
+          </button>
+        </div>
       ) : characters.length === 0 ? (
         <p className="text-white/50 text-sm text-center py-8">Персонажи не найдены</p>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
           {characters.map((char) => (
-            <button
+            <CharacterPassport
               key={char.id}
+              variant="compact"
               onClick={() => openDetail(char.id)}
-              className="
-                flex flex-col items-center gap-2 p-3 sm:p-4
-                bg-black/40 rounded-card border border-white/10
-                hover:bg-black/50 hover:border-gold/40
-                transition-all duration-200 text-left
-              "
-            >
-              <div className="gold-outline relative w-16 h-16 sm:w-20 sm:h-20 rounded-full overflow-hidden bg-black/40 shrink-0">
-                {char.avatar ? (
-                  <img src={char.avatar} alt={char.name} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-white/20">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                  </div>
-                )}
-              </div>
-              <span className="text-white text-xs sm:text-sm font-medium text-center truncate w-full">
-                {char.name}
-              </span>
-              <div className="flex items-center gap-1.5 flex-wrap justify-center">
-                <span className="gold-text text-[10px] sm:text-xs font-medium">
-                  LVL {char.level}
-                </span>
-                {char.class_name && (
-                  <span className="text-white/40 text-[10px]">•</span>
-                )}
-                {char.class_name && (
-                  <span className="text-white/50 text-[10px] sm:text-xs">
-                    {char.class_name}
-                  </span>
-                )}
-              </div>
-              {char.race_name && (
-                <span className="text-white/40 text-[10px] sm:text-xs">
-                  {char.race_name}{char.subrace_name ? ` (${char.subrace_name})` : ''}
-                </span>
-              )}
-
-              {/* Owner / claim section */}
-              {!char.is_npc && (
-                <div className="w-full mt-1 flex flex-col items-center gap-1">
-                  {char.user_id && char.username ? (
-                    <Link
-                      to={`/user-profile/${char.user_id}`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="text-site-blue text-[10px] sm:text-xs hover:underline transition-colors truncate max-w-full"
-                    >
-                      {char.username}
-                    </Link>
-                  ) : (
-                    <>
-                      <span className="text-white/30 text-[10px] sm:text-xs italic">Свободен</span>
-                      {isAuthenticated && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (!isAtCharacterLimit) {
-                              setClaimTarget(char);
-                            }
-                          }}
-                          disabled={isAtCharacterLimit}
-                          title={isAtCharacterLimit ? 'Достигнут лимит персонажей' : undefined}
-                          className={`
-                            text-[9px] sm:text-[11px] px-2 py-0.5 rounded-card
-                            transition-all duration-200
-                            ${isAtCharacterLimit
-                              ? 'text-white/30 border border-white/10 cursor-not-allowed'
-                              : 'text-site-blue border border-site-blue/40 hover:bg-site-blue/10 hover:border-site-blue/60'
-                            }
-                          `}
-                        >
-                          Подать заявку
-                        </button>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-            </button>
+              currentGameYear={currentGameYear}
+              data={fromCharacterListItem(char, {
+                origins,
+                typicalOriginIds: char.id_subrace
+                  ? typicalBySubrace.get(char.id_subrace) ?? null
+                  : null,
+              })}
+              footer={cardFooter(char)}
+            />
           ))}
         </div>
       )}
@@ -319,10 +387,19 @@ const CharactersListPage = () => {
         </div>
       )}
 
-      {/* Claim confirmation modal */}
-      <AnimatePresence>
-        {claimTarget && (
-          <div className="modal-overlay" onClick={() => setClaimTarget(null)}>
+      {/*
+        Every overlay on this page is portalled to `document.body`, following
+        `ItemDetailModal` / `ConfirmationModal`. It is not cosmetic: this page's
+        root is a `motion.div` that animates `y`, and a transformed ancestor
+        becomes the containing block for `position: fixed` descendants — so
+        `.modal-overlay`'s `inset: 0` would resolve against the whole scrolling
+        page instead of the viewport. That is what let the passport modal grow
+        past the top of the screen and hide under the site header.
+      */}
+      {createPortal(
+        <AnimatePresence>
+          {claimTarget && (
+            <div className="modal-overlay" onClick={() => setClaimTarget(null)}>
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -355,115 +432,60 @@ const CharactersListPage = () => {
                 </button>
               </div>
             </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Character detail modal */}
-      {selectedChar && (
-        <div className="modal-overlay" onClick={() => setSelectedChar(null)}>
-          <div
-            className="modal-content gold-outline gold-outline-thick relative max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto gold-scrollbar"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              onClick={() => setSelectedChar(null)}
-              className="absolute top-4 right-4 text-white/50 hover:text-white transition-colors z-10"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-
-            <div className="flex flex-col items-center gap-4">
-              {/* Avatar */}
-              <div className="gold-outline relative w-28 h-28 sm:w-36 sm:h-36 rounded-full overflow-hidden bg-black/40">
-                {selectedChar.avatar ? (
-                  <img src={selectedChar.avatar} alt={selectedChar.name} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-white/20">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-14 h-14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                  </div>
-                )}
-              </div>
-
-              {/* Name */}
-              <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase text-center">
-                {selectedChar.name}
-              </h2>
-
-              {/* Info grid */}
-              <div className="w-full grid grid-cols-2 sm:grid-cols-3 gap-3">
-                <div className="flex flex-col items-center gap-1 bg-white/5 rounded-card p-3">
-                  <span className="text-white/50 text-xs uppercase">Уровень</span>
-                  <span className="text-white text-sm font-medium">{selectedChar.level}</span>
-                </div>
-                {selectedChar.class_name && (
-                  <div className="flex flex-col items-center gap-1 bg-white/5 rounded-card p-3">
-                    <span className="text-white/50 text-xs uppercase">Класс</span>
-                    <span className="text-white text-sm font-medium">{selectedChar.class_name}</span>
-                  </div>
-                )}
-                {selectedChar.race_name && (
-                  <div className="flex flex-col items-center gap-1 bg-white/5 rounded-card p-3">
-                    <span className="text-white/50 text-xs uppercase">Раса</span>
-                    <span className="text-white text-sm font-medium">{selectedChar.race_name}</span>
-                  </div>
-                )}
-                {selectedChar.subrace_name && (
-                  <div className="flex flex-col items-center gap-1 bg-white/5 rounded-card p-3">
-                    <span className="text-white/50 text-xs uppercase">Подраса</span>
-                    <span className="text-white text-sm font-medium">{selectedChar.subrace_name}</span>
-                  </div>
-                )}
-                {selectedChar.sex && (
-                  <div className="flex flex-col items-center gap-1 bg-white/5 rounded-card p-3">
-                    <span className="text-white/50 text-xs uppercase">Пол</span>
-                    <span className="text-white text-sm font-medium">{SEX_LABELS[selectedChar.sex] || selectedChar.sex}</span>
-                  </div>
-                )}
-                {selectedChar.age != null && (
-                  <div className="flex flex-col items-center gap-1 bg-white/5 rounded-card p-3">
-                    <span className="text-white/50 text-xs uppercase">Возраст</span>
-                    <span className="text-white text-sm font-medium">{selectedChar.age}</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Sections */}
-              {selectedChar.appearance && (
-                <div className="w-full mt-2">
-                  <h3 className="text-white/50 text-xs font-medium uppercase tracking-wide mb-2">Внешность</h3>
-                  <p className="text-white/80 text-sm leading-relaxed whitespace-pre-wrap">{selectedChar.appearance}</p>
-                </div>
-              )}
-
-              {selectedChar.biography && (
-                <div className="w-full mt-2">
-                  <h3 className="text-white/50 text-xs font-medium uppercase tracking-wide mb-2">Биография</h3>
-                  <p className="text-white/80 text-sm leading-relaxed whitespace-pre-wrap">{selectedChar.biography}</p>
-                </div>
-              )}
-
-              {selectedChar.personality && (
-                <div className="w-full mt-2">
-                  <h3 className="text-white/50 text-xs font-medium uppercase tracking-wide mb-2">Характер</h3>
-                  <p className="text-white/80 text-sm leading-relaxed whitespace-pre-wrap">{selectedChar.personality}</p>
-                </div>
-              )}
-
-              {selectedChar.background && (
-                <div className="w-full mt-2">
-                  <h3 className="text-white/50 text-xs font-medium uppercase tracking-wide mb-2">Предыстория</h3>
-                  <p className="text-white/80 text-sm leading-relaxed whitespace-pre-wrap">{selectedChar.background}</p>
-                </div>
-              )}
             </div>
-          </div>
-        </div>
+          )}
+        </AnimatePresence>,
+        document.body,
       )}
+
+      {/* Loading indicator while the full passport is fetched */}
+      {detailLoading &&
+        createPortal(
+          <div className="modal-overlay">
+            <div className="w-10 h-10 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
+          </div>,
+          document.body,
+        )}
+
+      {/* Character detail modal — the FULL passport */}
+      {detail &&
+        detailPassport &&
+        createPortal(
+          <div className="modal-overlay" onClick={() => setDetail(null)}>
+            {/*
+              Two boxes on purpose. The outer one is the modal frame: it never
+              scrolls, so «Закрыть» stays pinned to its corner no matter how far
+              down the chronicle the reader is. The inner one is the viewport
+              cap — the passport is now tall enough (identity band + ledger +
+              full-width chronicle) to outgrow any screen, so it scrolls
+              INSIDE 90vh instead of growing off the top of the display. The
+              overlay centres it, which leaves ~5vh of clearance top and bottom
+              and puts the identity band on screen the moment it opens.
+            */}
+            <div
+              className="relative mx-4 my-auto w-full max-w-4xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                onClick={() => setDetail(null)}
+                aria-label="Закрыть"
+                className="absolute right-3 top-3 z-10 text-ink/60 hover:text-ink transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <div className="max-h-[90vh] overflow-y-auto overflow-x-hidden gold-scrollbar rounded-card">
+                <CharacterPassport
+                  data={detailPassport}
+                  variant="full"
+                  currentGameYear={currentGameYear}
+                />
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </motion.div>
   );
 };

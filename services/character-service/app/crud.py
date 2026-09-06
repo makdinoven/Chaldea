@@ -2,6 +2,7 @@ import httpx
 import math
 import re
 import models, schemas
+import locations_client
 from config import settings
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
@@ -14,10 +15,180 @@ from models import (
     MobPack, MobPackMember, ActiveMobPack,
 )
 from datetime import datetime, timedelta
+from typing import Optional
 from fastapi import HTTPException
 import logging
 
 logger = logging.getLogger("character-service.crud")
+
+# Максимальное число персонажей на пользователя (D13, правило 31).
+# Настраивается переменной окружения MAX_CHARACTERS_PER_USER (config.Settings).
+# Значение 0 (по умолчанию) или отрицательное = лимита нет, проверка выключена.
+CHARACTER_LIMIT_DISABLED = 0
+
+
+def get_character_limit() -> Optional[int]:
+    """
+    Действующий лимит персонажей на аккаунт или ``None``, если лимита нет.
+
+    Читается из настроек при каждом вызове, чтобы значение можно было
+    переопределить переменной окружения (и подменить в тестах).
+    """
+    try:
+        limit = int(getattr(settings, "MAX_CHARACTERS_PER_USER", CHARACTER_LIMIT_DISABLED) or 0)
+    except (TypeError, ValueError):
+        return None
+    return limit if limit > CHARACTER_LIMIT_DISABLED else None
+
+# Допустимые значения пола (совпадают с Enum в models.CharacterRequest.sex)
+ALLOWED_SEX_VALUES = ("male", "female", "genderless")
+
+# Границы возраста персонажа
+MIN_CHARACTER_AGE = 1
+MAX_CHARACTER_AGE = 100000
+
+# Число сегментов игрового года (YEAR_SEGMENTS в locations-service: 4 сезона + 4 перехода)
+GAME_YEAR_SEGMENT_COUNT = 8
+
+
+
+async def validate_character_request_payload(
+    db: Session,
+    request: schemas.CharacterRequestBase,
+    user_id: int,
+    check_character_limit: bool = True,
+    exclude_request_id: Optional[int] = None,
+) -> None:
+    """
+    Общая доменная валидация заявки на персонажа (FEAT-154, §3.2).
+
+    Используется и при создании заявки (POST /characters/requests/),
+    и при редактировании отклонённой заявки (PUT /characters/requests/{id}).
+
+    ВАЖНО: проверка владельца (403) выполняется в эндпоинте ДО вызова этой
+    функции — порядок проверок нагруженный (ownership 403 -> Pydantic 422 -> домен 400).
+
+    :param db: сессия БД
+    :param request: тело заявки (схема CharacterRequestBase или её наследник)
+    :param user_id: id пользователя-владельца заявки (уже проверенный)
+    :param check_character_limit: проверять ли лимит персонажей (правило 31, D13)
+    :param exclude_request_id: id заявки, которую не учитывать в лимите
+                              (сценарий редактирования собственной заявки)
+    :raises HTTPException: 400 с русским сообщением при нарушении любого правила
+    """
+    # --- Имя -----------------------------------------------------------------
+    name = (request.name or "").strip()
+    if not name or len(name) > schemas.MAX_CHARACTER_NAME_LENGTH:
+        raise HTTPException(status_code=400, detail="Имя обязательно и не длиннее 20 символов.")
+    # Длина больше не ограничивается Pydantic-схемой, поэтому в БД (String(20))
+    # должно уйти именно очищенное значение, а не исходное с пробелами по краям.
+    request.name = name
+
+    # --- Внешность -----------------------------------------------------------
+    if not (request.appearance or "").strip():
+        raise HTTPException(status_code=400, detail="Опишите внешность персонажа.")
+
+    # --- Раса ----------------------------------------------------------------
+    race = db.query(models.Race).filter(models.Race.id_race == request.id_race).first()
+    if not race:
+        raise HTTPException(status_code=400, detail="Указанная раса не найдена.")
+
+    # --- Подраса и её принадлежность расе (правило 34) ------------------------
+    subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == request.id_subrace).first()
+    if not subrace or subrace.id_race != request.id_race:
+        raise HTTPException(status_code=400, detail="Подраса не принадлежит выбранной расе.")
+
+    # --- Класс ---------------------------------------------------------------
+    character_class = db.query(models.Class).filter(models.Class.id_class == request.id_class).first()
+    if not character_class:
+        raise HTTPException(status_code=400, detail="Указанный класс не найден.")
+
+    # --- Возраст -------------------------------------------------------------
+    if request.age is not None and not (MIN_CHARACTER_AGE <= request.age <= MAX_CHARACTER_AGE):
+        raise HTTPException(status_code=400, detail="Возраст указан некорректно.")
+
+    # --- Пол -----------------------------------------------------------------
+    if request.sex is not None and request.sex not in ALLOWED_SEX_VALUES:
+        raise HTTPException(status_code=400, detail="Некорректное значение пола.")
+
+    # --- Происхождение -------------------------------------------------------
+    # Существование origin_id намеренно НЕ проверяется межсервисно (§3.2):
+    # реестр происхождений живёт в locations-service, а решение принимает модератор.
+    if request.origin_id is not None and request.origin_id <= 0:
+        raise HTTPException(status_code=400, detail="Указано некорректное происхождение.")
+
+    # --- Сегмент игрового года ------------------------------------------------
+    if request.skitaltsy_since_segment is not None and not (
+        0 <= request.skitaltsy_since_segment < GAME_YEAR_SEGMENT_COUNT
+    ):
+        raise HTTPException(status_code=400, detail="Некорректный сезон.")
+
+    # --- Стартовая локация (мягкая межсервисная проверка) ---------------------
+    if request.start_location_id is not None:
+        probe = await locations_client.probe_starting_point(request.start_location_id)
+        if probe is False:
+            raise HTTPException(status_code=400, detail="Выбранная точка не входит в список стартовых.")
+        # probe is None -> locations-service недоступен, проверка пропускается (graceful)
+
+    # --- Стаж «в Скитальцах с» (правило 23, §3.5) -----------------------------
+    if request.skitaltsy_since_year is not None:
+        # Год НИКОГДА не хардкодится — читается из locations-service в рантайме.
+        current_year = await locations_client.get_current_game_year()
+        if current_year is not None:
+            if request.skitaltsy_since_year > current_year:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Нельзя вступить в Скитальцы позже текущей игровой даты.",
+                )
+            if request.age is not None and (current_year - request.skitaltsy_since_year) > request.age:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Указанный стаж больше возраста персонажа.",
+                )
+
+    # --- Лимит персонажей (правило 31, D13) -----------------------------------
+    if check_character_limit:
+        _assert_character_limit_not_reached(db, user_id, exclude_request_id=exclude_request_id)
+
+
+def _assert_character_limit_not_reached(db: Session, user_id: int,
+                                        exclude_request_id: Optional[int] = None) -> None:
+    """
+    Проверка лимита персонажей при подаче заявки (правило 31, D13).
+
+    Считаются активные персонажи пользователя (таблица user-service ``users_character``)
+    и его собственные заявки на создание в статусе ``pending``.
+    Счёт по ``users_character`` graceful — как в POST /requests/claim: если таблица
+    недоступна, ошибка логируется и лимит по ней не применяется.
+    """
+    limit = get_character_limit()
+    if limit is None:
+        return
+
+    pending_query = db.query(models.CharacterRequest).filter(
+        models.CharacterRequest.user_id == user_id,
+        models.CharacterRequest.request_type == 'creation',
+        models.CharacterRequest.status == 'pending',
+    )
+    if exclude_request_id is not None:
+        pending_query = pending_query.filter(models.CharacterRequest.id != exclude_request_id)
+    pending_count = pending_query.count()
+
+    char_count = 0
+    try:
+        char_count = db.execute(
+            sa_text("SELECT COUNT(*) FROM users_character WHERE user_id = :uid"),
+            {"uid": user_id},
+        ).scalar() or 0
+    except Exception as e:
+        logger.warning(f"Не удалось проверить количество персонажей пользователя {user_id}: {e}")
+
+    if char_count + pending_count >= limit:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Достигнут лимит персонажей (максимум {limit}).",
+        )
+
 
 # Функция для создания заявки на персонажа
 def create_character_request(db: Session, request: schemas.CharacterRequestCreate, user_id: int):
@@ -39,7 +210,11 @@ def create_character_request(db: Session, request: schemas.CharacterRequestCreat
         personality=request.personality,
         id_class=request.id_class,
         sex=request.sex,
-        appearance=request.appearance
+        appearance=request.appearance,
+        origin_id=request.origin_id,
+        start_location_id=request.start_location_id,
+        skitaltsy_since_year=request.skitaltsy_since_year,
+        skitaltsy_since_segment=request.skitaltsy_since_segment,
     )
     db.add(db_request)
     db.commit()
@@ -48,11 +223,49 @@ def create_character_request(db: Session, request: schemas.CharacterRequestCreat
 
 
 ## Функция для создания предварительного персонажа (с указанием user_id)
-def create_preliminary_character(db: Session, character_request: models.CharacterRequest, currency_balance: int = 0, auto_commit: bool = True):
+def resolve_character_avatar(db: Session, character_request: models.CharacterRequest) -> str:
+    """
+    Аватар персонажа при одобрении заявки (FEAT-154, решение D5).
+
+    `characters.avatar` — NOT NULL, а в заявке аватар опционален (загрузка могла
+    не состояться и это не должно блокировать подачу). Цепочка:
+    аватар заявки -> изображение подрасы (`subraces.image`) -> пустая строка.
+    """
+    avatar = getattr(character_request, "avatar", None)
+    if avatar:
+        return avatar
+
+    try:
+        subrace = (
+            db.query(models.Subrace)
+            .filter(models.Subrace.id_subrace == character_request.id_subrace)
+            .first()
+        )
+        if subrace and subrace.image:
+            logger.info(
+                f"Аватар не задан в заявке {character_request.id}, "
+                f"используется изображение подрасы {character_request.id_subrace}"
+            )
+            return subrace.image
+    except SQLAlchemyError as e:
+        logger.warning(f"Не удалось прочитать изображение подрасы для запасного аватара: {e}")
+
+    logger.warning(f"Для заявки {character_request.id} не найден ни аватар, ни изображение подрасы")
+    return ""
+
+
+def create_preliminary_character(db: Session, character_request: models.CharacterRequest, currency_balance: int = 0,
+                                 auto_commit: bool = True, granted_kit: Optional[dict] = None):
     """
     Создает предварительную запись персонажа с указанием user_id из заявки.
     currency_balance задаётся из стартового набора класса.
     При auto_commit=False вызывает flush вместо commit (для использования в транзакции).
+
+    FEAT-154: сюда же переносится момент «вступления в Скитальцы» — проставляется
+    `registered_at`, из заявки копируются `origin_id` и `skitaltsy_since_*`,
+    а `granted_kit` записывается замороженным слепком выданного набора (правило 12d,
+    решение D17). Слепок приходит снаружи: резолвер вызывается в хендлере ровно
+    один раз, и один и тот же результат идёт и на выдачу, и в паспорт.
     """
     new_character = models.Character(
         id_attributes=None,
@@ -65,13 +278,19 @@ def create_preliminary_character(db: Session, character_request: models.Characte
         age=character_request.age,
         weight=character_request.weight,
         height=character_request.height,
-        avatar=character_request.avatar,
+        avatar=resolve_character_avatar(db, character_request),
         biography=character_request.biography,
         personality=character_request.personality,
         id_class=character_request.id_class,
         sex=character_request.sex,
         appearance=character_request.appearance,
-        currency_balance=currency_balance
+        currency_balance=currency_balance,
+        # FEAT-154: паспортные поля «Регистрации Скитальца»
+        origin_id=getattr(character_request, "origin_id", None),
+        skitaltsy_since_year=getattr(character_request, "skitaltsy_since_year", None),
+        skitaltsy_since_segment=getattr(character_request, "skitaltsy_since_segment", None),
+        registered_at=datetime.utcnow(),
+        granted_kit=granted_kit,
     )
     db.add(new_character)
     if auto_commit:
@@ -82,15 +301,24 @@ def create_preliminary_character(db: Session, character_request: models.Characte
     return new_character
 
 
+# Сентинел: отличает "аргумент не передан" от явного None (сброс причины)
+_UNSET = object()
+
+
 # Обновление статуса заявки
-def update_character_request_status(db: Session, request_id: int, status: str, auto_commit: bool = True):
+def update_character_request_status(db: Session, request_id: int, status: str, auto_commit: bool = True,
+                                    rejection_reason=_UNSET):
     """
     Обновляет статус заявки на персонажа.
     При auto_commit=False вызывает flush вместо commit (для использования в транзакции).
+    rejection_reason: если аргумент передан — записывается в заявку
+    (в том числе None, чтобы сбросить причину). Если не передан — поле не трогаем.
     """
     db_request = db.query(models.CharacterRequest).filter(models.CharacterRequest.id == request_id).first()
     if db_request:
         db_request.status = status
+        if rejection_reason is not _UNSET:
+            db_request.rejection_reason = rejection_reason
         if auto_commit:
             db.commit()
         else:
@@ -98,6 +326,161 @@ def update_character_request_status(db: Session, request_id: int, status: str, a
         db.refresh(db_request)
         return db_request
     return None
+
+
+# ===== FEAT-154: заявки игрока и публичный паспорт персонажа =====
+
+# Поля заявки, которые игрок может изменить при переотправке (правило 30).
+# user_id, status, request_type, character_id и created_at сюда намеренно не входят.
+EDITABLE_REQUEST_FIELDS = (
+    "name",
+    "id_race",
+    "id_subrace",
+    "id_class",
+    "biography",
+    "personality",
+    "appearance",
+    "background",
+    "sex",
+    "age",
+    "weight",
+    "height",
+    "avatar",
+    "origin_id",
+    "start_location_id",
+    "skitaltsy_since_year",
+    "skitaltsy_since_segment",
+)
+
+
+def _reference_names(db: Session, race_id, subrace_id, class_id):
+    """Разворачивает id расы/подрасы/класса в имена (и подрасу целиком)."""
+    race = db.query(models.Race).filter(models.Race.id_race == race_id).first() if race_id else None
+    subrace = db.query(models.Subrace).filter(models.Subrace.id_subrace == subrace_id).first() if subrace_id else None
+    character_class = db.query(models.Class).filter(models.Class.id_class == class_id).first() if class_id else None
+    return race, subrace, character_class
+
+
+def serialize_user_request(db: Session, db_request: models.CharacterRequest) -> dict:
+    """
+    Заявка в виде, ожидаемом схемой CharacterRequestMy (§3.1).
+    Имена расы/подрасы/класса разворачиваются здесь, чтобы клиент не делал N+1.
+    """
+    race, subrace, character_class = _reference_names(
+        db, db_request.id_race, db_request.id_subrace, db_request.id_class
+    )
+    return {
+        "id": db_request.id,
+        "status": db_request.status,
+        "request_type": db_request.request_type,
+        "created_at": db_request.created_at,
+        "rejection_reason": db_request.rejection_reason,
+        "name": db_request.name,
+        "id_race": db_request.id_race,
+        "id_subrace": db_request.id_subrace,
+        "id_class": db_request.id_class,
+        "race_name": race.name if race else None,
+        "subrace_name": subrace.name if subrace else None,
+        "class_name": character_class.name if character_class else None,
+        "avatar": db_request.avatar,
+        "origin_id": db_request.origin_id,
+        "start_location_id": db_request.start_location_id,
+        "biography": db_request.biography,
+        "personality": db_request.personality,
+        "appearance": db_request.appearance,
+        "background": db_request.background,
+        "sex": db_request.sex,
+        "age": db_request.age,
+        "weight": db_request.weight,
+        "height": db_request.height,
+        "skitaltsy_since_year": db_request.skitaltsy_since_year,
+        "skitaltsy_since_segment": db_request.skitaltsy_since_segment,
+        "character_id": db_request.character_id,
+    }
+
+
+def get_user_requests(db: Session, user_id: int) -> list:
+    """Все заявки пользователя, новые сверху. Выборка всегда ограничена своим user_id."""
+    requests = (
+        db.query(models.CharacterRequest)
+        .filter(models.CharacterRequest.user_id == user_id)
+        .order_by(models.CharacterRequest.id.desc())
+        .all()
+    )
+    return [serialize_user_request(db, r) for r in requests]
+
+
+def resubmit_character_request(db: Session, db_request: models.CharacterRequest,
+                               payload: schemas.CharacterRequestBase) -> models.CharacterRequest:
+    """
+    Обновляет отклонённую заявку и возвращает её в статус 'pending' (правило 30).
+
+    Причина отказа сбрасывается явным None — иначе игрок увидел бы у новой
+    заявки причину отклонения предыдущей версии.
+    """
+    for field in EDITABLE_REQUEST_FIELDS:
+        setattr(db_request, field, getattr(payload, field))
+    db_request.status = "pending"
+    db_request.rejection_reason = None
+    db.commit()
+    db.refresh(db_request)
+    return db_request
+
+
+def get_character_public(db: Session, character_id: int) -> Optional[dict]:
+    """
+    Публичный паспорт персонажа (§3.1, правило 12d / D18).
+
+    granted_kit возвращается дословно, если слепок есть (granted_kit_is_snapshot=True).
+    Если колонка NULL — персонаж создан до FEAT-154, и паспорт честно реконструирует
+    набор живым resolve_starter_kit с флагом granted_kit_is_snapshot=False.
+    """
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        return None
+
+    race, subrace, character_class = _reference_names(
+        db, character.id_race, character.id_subrace, character.id_class
+    )
+
+    granted_kit = character.granted_kit
+    granted_kit_is_snapshot = granted_kit is not None
+    if not granted_kit_is_snapshot:
+        granted_kit = resolve_starter_kit(db, character.id_class, character.origin_id)
+
+    return {
+        "id": character.id,
+        "name": character.name,
+        "avatar": character.avatar,
+        "level": character.level,
+        "id_race": character.id_race,
+        "id_subrace": character.id_subrace,
+        "id_class": character.id_class,
+        "race_name": race.name if race else None,
+        "subrace_name": subrace.name if subrace else None,
+        "class_name": character_class.name if character_class else None,
+        "subrace_image": subrace.image if subrace else None,
+        "subrace_distinctive_features": subrace.distinctive_features if subrace else None,
+        "sex": character.sex,
+        "age": character.age,
+        "weight": character.weight,
+        "height": character.height,
+        "appearance": character.appearance,
+        "biography": character.biography,
+        "personality": character.personality,
+        "background": character.background,
+        "origin_id": character.origin_id,
+        "registered_at": character.registered_at,
+        "skitaltsy_since_year": character.skitaltsy_since_year,
+        "skitaltsy_since_segment": character.skitaltsy_since_segment,
+        "current_location_id": character.current_location_id,
+        "is_npc": bool(character.is_npc),
+        "user_id": character.user_id,
+        "username": None,  # заполняется в эндпоинте: имя живёт в user-service
+        "stats": None,  # заполняется в эндпоинте: статы живут в character-attributes-service
+        "granted_kit": granted_kit,
+        "granted_kit_is_snapshot": granted_kit_is_snapshot,
+    }
 
 
 # Функция для обновления персонажа после получения зависимостей
@@ -279,6 +662,13 @@ def get_moderation_requests(db: Session):
                 CharacterRequest.avatar,  # добавляем поле avatar
                 CharacterRequest.request_type,
                 CharacterRequest.character_id,
+                # FEAT-154 (N25): паспорт модератора печатает происхождение,
+                # первое назначение, стаж в Скитальцах и причину отказа.
+                CharacterRequest.origin_id,
+                CharacterRequest.start_location_id,
+                CharacterRequest.skitaltsy_since_year,
+                CharacterRequest.skitaltsy_since_segment,
+                CharacterRequest.rejection_reason,
             )
             .join(Race, CharacterRequest.id_race == Race.id_race, isouter=True)
             .join(Subrace, CharacterRequest.id_subrace == Subrace.id_subrace, isouter=True)
@@ -312,6 +702,11 @@ def get_moderation_requests(db: Session):
             avatar,  # поле avatar
             request_type,
             character_id,
+            origin_id,
+            start_location_id,
+            skitaltsy_since_year,
+            skitaltsy_since_segment,
+            rejection_reason,
         ) in moderation_requests:
             created_at_str = created_at.strftime('%Y-%m-%dT%H:%M:%S') if created_at else None
 
@@ -339,6 +734,12 @@ def get_moderation_requests(db: Session):
                 "avatar": avatar if avatar else "",  # возвращаем пустую строку, если avatar нет
                 "request_type": request_type if request_type else "creation",
                 "character_id": character_id,
+                # FEAT-154 (N25) — аддитивные ключи, существующие не тронуты.
+                "origin_id": origin_id,
+                "start_location_id": start_location_id,
+                "skitaltsy_since_year": skitaltsy_since_year,
+                "skitaltsy_since_segment": skitaltsy_since_segment,
+                "rejection_reason": rejection_reason,
             }
 
         # Возвращаем результат как словарь с ключом id заявки
@@ -690,19 +1091,45 @@ async def get_character_experience(character_id: int):
         logger.error(f"Ошибка при отправке запроса на получение опыта персонажа {character_id}: {e}")
         return None
 
-def get_all_starter_kits(db: Session):
-    """
-    Возвращает все стартовые наборы (по одному на каждый класс).
-    """
-    return db.query(models.StarterKit).all()
+# FEAT-154 (D16): origin_id = 0 — это «набор класса по умолчанию».
+# origin_countries.id в locations-service — AUTO_INCREMENT и никогда не равен 0.
+DEFAULT_ORIGIN_ID = 0
 
 
-def upsert_starter_kit(db: Session, class_id: int, data: schemas.StarterKitUpdate):
+def get_all_starter_kits(db: Session, include_origins: bool = False):
     """
-    Создаёт или обновляет стартовый набор для указанного класса.
-    Если запись для class_id уже существует — обновляет, иначе создаёт новую.
+    Возвращает стартовые наборы.
+
+    По умолчанию — только наборы классов по умолчанию (origin_id = 0), то есть
+    ровно тот набор строк, который существовал до FEAT-154 (обратная совместимость).
+    include_origins=True возвращает и переопределения под происхождение.
     """
-    db_kit = db.query(models.StarterKit).filter(models.StarterKit.class_id == class_id).first()
+    query = db.query(models.StarterKit)
+    if not include_origins:
+        query = query.filter(models.StarterKit.origin_id == DEFAULT_ORIGIN_ID)
+    return query.all()
+
+
+def upsert_starter_kit(
+    db: Session,
+    class_id: int,
+    data: schemas.StarterKitUpdate,
+    origin_id: int = DEFAULT_ORIGIN_ID,
+):
+    """
+    Создаёт или обновляет стартовый набор для пары (класс, происхождение).
+
+    origin_id по умолчанию 0 — набор класса по умолчанию, поведение до FEAT-154.
+    """
+    origin_id = origin_id or DEFAULT_ORIGIN_ID
+    db_kit = (
+        db.query(models.StarterKit)
+        .filter(
+            models.StarterKit.class_id == class_id,
+            models.StarterKit.origin_id == origin_id,
+        )
+        .first()
+    )
     if db_kit:
         db_kit.items = [item.dict() for item in data.items]
         db_kit.skills = [skill.dict() for skill in data.skills]
@@ -710,6 +1137,7 @@ def upsert_starter_kit(db: Session, class_id: int, data: schemas.StarterKitUpdat
     else:
         db_kit = models.StarterKit(
             class_id=class_id,
+            origin_id=origin_id,
             items=[item.dict() for item in data.items],
             skills=[skill.dict() for skill in data.skills],
             currency_amount=data.currency_amount,
@@ -718,6 +1146,126 @@ def upsert_starter_kit(db: Session, class_id: int, data: schemas.StarterKitUpdat
     db.commit()
     db.refresh(db_kit)
     return db_kit
+
+
+def delete_starter_kit_override(db: Session, class_id: int, origin_id: int) -> bool:
+    """
+    Удаляет переопределение набора для пары (класс, происхождение).
+
+    Возвращает True, если строка была удалена, False — если её не было.
+    Набор класса по умолчанию (origin_id = 0) через эту функцию не удаляется.
+    """
+    if not origin_id or origin_id == DEFAULT_ORIGIN_ID:
+        return False
+    db_kit = (
+        db.query(models.StarterKit)
+        .filter(
+            models.StarterKit.class_id == class_id,
+            models.StarterKit.origin_id == origin_id,
+        )
+        .first()
+    )
+    if not db_kit:
+        return False
+    db.delete(db_kit)
+    db.commit()
+    return True
+
+
+def resolve_starter_kit(db: Session, class_id: int, origin_id: Optional[int] = None) -> dict:
+    """
+    Единственная точка разрешения стартового набора (FEAT-154, rules 12a-12c).
+
+    Цепочка:
+      1) точная пара (class_id, origin_id) -> resolved_from = "exact"
+      2) набор класса по умолчанию (class_id, 0) -> resolved_from = "class_default"
+      3) иначе пустой набор -> resolved_from = "none"
+
+    Вызывается из трёх мест и никем не дублируется: превью мастера создания,
+    одобрение заявки (ровно один раз — результат идёт и на выдачу, и в слепок
+    characters.granted_kit) и паспорт, когда слепка нет (D18).
+
+    Возвращает обычный dict, пригодный и как ответ API, и как JSON-слепок.
+    """
+    origin_id = int(origin_id or DEFAULT_ORIGIN_ID)
+
+    db_kit = None
+    resolved_from = "none"
+
+    if origin_id != DEFAULT_ORIGIN_ID:
+        db_kit = (
+            db.query(models.StarterKit)
+            .filter(
+                models.StarterKit.class_id == class_id,
+                models.StarterKit.origin_id == origin_id,
+            )
+            .first()
+        )
+        if db_kit:
+            resolved_from = "exact"
+
+    if db_kit is None:
+        db_kit = (
+            db.query(models.StarterKit)
+            .filter(
+                models.StarterKit.class_id == class_id,
+                models.StarterKit.origin_id == DEFAULT_ORIGIN_ID,
+            )
+            .first()
+        )
+        if db_kit:
+            # Точное совпадение с дефолтом — это тоже "exact", а не фолбэк.
+            resolved_from = "exact" if origin_id == DEFAULT_ORIGIN_ID else "class_default"
+
+    if db_kit is None:
+        return {
+            "class_id": class_id,
+            "origin_id": origin_id,
+            "resolved_from": "none",
+            "items": [],
+            "skills": [],
+            "currency_amount": 0,
+        }
+
+    return {
+        "class_id": class_id,
+        "origin_id": origin_id,
+        "resolved_from": resolved_from,
+        "items": list(db_kit.items or []),
+        "skills": list(db_kit.skills or []),
+        "currency_amount": db_kit.currency_amount or 0,
+    }
+
+
+def get_starter_kit_coverage(db: Session) -> dict:
+    """
+    Матрица заполненности наборов: у каких классов есть набор по умолчанию
+    и какие пары (класс, происхождение) переопределены. Чеклист наполнения
+    контентом для админки (FEAT-154, §3.10).
+    """
+    kits = db.query(models.StarterKit).all()
+    classes_with_default = {
+        kit.class_id for kit in kits if (kit.origin_id or DEFAULT_ORIGIN_ID) == DEFAULT_ORIGIN_ID
+    }
+    overrides = [
+        {"class_id": kit.class_id, "origin_id": kit.origin_id}
+        for kit in kits
+        if (kit.origin_id or DEFAULT_ORIGIN_ID) != DEFAULT_ORIGIN_ID
+    ]
+    overrides.sort(key=lambda row: (row["class_id"], row["origin_id"]))
+
+    classes = db.query(models.Class).order_by(models.Class.id_class).all()
+    return {
+        "classes": [
+            {
+                "id_class": cls.id_class,
+                "name": cls.name,
+                "has_default": cls.id_class in classes_with_default,
+            }
+            for cls in classes
+        ],
+        "overrides": overrides,
+    }
 
 
 async def send_skills_presets_request(character_id: int, skill_ids: list[int]):

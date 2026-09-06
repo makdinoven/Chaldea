@@ -36,6 +36,47 @@ async def send_character_approved_notification(user_id: int, character_name: str
         logger.warning(f"Failed to send approval notification: {e}")
 
 
+async def send_character_request_rejected_notification(user_id: int, request_id: int, reason=None):
+    """Publish notification to general_notifications when a character request is rejected.
+
+    Adds ws_type/ws_data so notification-service delivers a structured WebSocket
+    message (no notification-service change required). Handles RabbitMQ
+    unavailability gracefully — logs a warning and does not crash the request.
+    """
+    try:
+        message_text = "Ваша заявка на персонажа отклонена."
+        if reason:
+            message_text = f"Ваша заявка на персонажа отклонена: {reason}"
+
+        connection = await aio_pika.connect_robust(
+            settings.RABBITMQ_URL,
+            timeout=5,
+        )
+        async with connection:
+            channel = await connection.channel()
+            await channel.declare_queue("general_notifications", durable=True)
+            message_body = json.dumps({
+                "target_type": "user",
+                "target_value": user_id,
+                "message": message_text,
+                "ws_type": "character_request_rejected",
+                "ws_data": {
+                    "request_id": request_id,
+                    "reason": reason,
+                },
+            })
+            await channel.default_exchange.publish(
+                aio_pika.Message(
+                    body=message_body.encode(),
+                    delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                ),
+                routing_key="general_notifications",
+            )
+            logger.info(f"Published rejection notification for request {request_id}")
+    except Exception as e:
+        logger.warning(f"Failed to send rejection notification for request {request_id}: {e}")
+
+
 async def publish_character_inventory(character_id: int, items: list):
     """Publish to character_inventory_queue.
 

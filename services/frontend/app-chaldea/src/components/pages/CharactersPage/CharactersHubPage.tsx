@@ -16,7 +16,7 @@ const CharactersHubPage = () => {
         Создайте нового персонажа или просмотрите все игровые роли
       </p>
 
-      <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 w-full max-w-lg">
+      <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 w-full max-w-lg sm:max-w-4xl">
         <Link
           to="/createCharacter"
           className="
@@ -54,6 +54,26 @@ const CharactersHubPage = () => {
           </span>
           <span className="text-white/40 text-xs sm:text-sm text-center">
             Просмотр всех игровых ролей
+          </span>
+        </Link>
+
+        <Link
+          to="/my-requests"
+          className="
+            flex-1 flex flex-col items-center gap-3 p-6 sm:p-8
+            bg-black/40 rounded-card border border-white/20
+            hover:bg-black/50 hover:border-white/40
+            transition-all duration-200 group
+          "
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 sm:w-12 sm:h-12 text-white/50 group-hover:text-white/80 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          <span className="text-white text-base sm:text-lg font-medium uppercase tracking-wide">
+            Мои заявки
+          </span>
+          <span className="text-white/40 text-xs sm:text-sm text-center">
+            Статус заявок и правка отклонённых
           </span>
         </Link>
       </div>

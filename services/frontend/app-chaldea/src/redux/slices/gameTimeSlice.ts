@@ -24,6 +24,9 @@ interface GameTimeState {
   epoch: string | null;
   offsetDays: number;
   serverTime: string | null;
+  /** FEAT-154 (D15): server-computed calendar snapshot — the only source of
+   *  the current in-game year. Never hardcode a year. */
+  computed: ComputedGameTime | null;
   loading: boolean;
   error: string | null;
   admin: GameTimeAdminState;
@@ -33,6 +36,7 @@ const initialState: GameTimeState = {
   epoch: null,
   offsetDays: 0,
   serverTime: null,
+  computed: null,
   loading: false,
   error: null,
   admin: {
@@ -65,6 +69,7 @@ const gameTimeSlice = createSlice({
         state.epoch = action.payload.epoch;
         state.offsetDays = action.payload.offset_days;
         state.serverTime = action.payload.server_time;
+        state.computed = action.payload.computed ?? null;
       })
       .addCase(fetchGameTime.rejected, (state, action) => {
         state.loading = false;
@@ -117,5 +122,13 @@ const gameTimeSlice = createSlice({
 
 export const selectGameTimePublic = (state: RootState) => state.gameTime;
 export const selectGameTimeAdmin = (state: RootState) => state.gameTime.admin;
+/** Current in-game year as computed by the server (FEAT-154, D15).
+ *  `null` until `fetchGameTime` has resolved — never substitute a literal. */
+export const selectCurrentGameYear = (state: RootState): number | null =>
+  state.gameTime.computed?.year ?? null;
+/** Why the clock has no year: the failure of `fetchGameTime`, or `null` while
+ *  it is simply still in flight. Consumers must tell those two apart. */
+export const selectGameTimeError = (state: RootState): string | null =>
+  state.gameTime.error;
 
 export default gameTimeSlice.reducer;

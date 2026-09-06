@@ -366,6 +366,9 @@ services:
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      LOCATIONS_SERVICE_URL: http://locations-service:8006
+      # Лимит персонажей на аккаунт. 0 = без ограничений (значение по умолчанию).
+      MAX_CHARACTERS_PER_USER: ${MAX_CHARACTERS_PER_USER:-0}
     depends_on:
       mysql:
         condition: service_healthy

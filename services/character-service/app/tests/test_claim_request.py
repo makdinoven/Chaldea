@@ -16,6 +16,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from unittest.mock import patch, AsyncMock, MagicMock
 import pytest
 
+import crud
+
+
+# ---------------------------------------------------------------------------
+# Character limit — configurable via settings.MAX_CHARACTERS_PER_USER
+# (0 / negative = no limit, which is the default). See config.py.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def character_limit(monkeypatch):
+    """Set the character limit for one test; restores the default afterwards."""
+    def _set(value):
+        monkeypatch.setattr(crud.settings, "MAX_CHARACTERS_PER_USER", value)
+    return _set
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -206,9 +221,11 @@ class TestClaimRequestCharacterIsNpc:
 
 
 class TestClaimRequestUserAtLimit:
-    """User already has 5 characters — returns 400."""
+    """Character limit on claim — enforced only when a limit is configured."""
 
-    def test_user_at_character_limit(self, admin_mock_client, mock_db_session):
+    def test_user_at_character_limit(self, admin_mock_client, mock_db_session, character_limit):
+        """With a configured limit of 5, a user who already has 5 gets a 400."""
+        character_limit(5)
         character = _make_character_mock(character_id=15)
         mock_db_session.query.return_value.filter.return_value.first.return_value = character
 
@@ -222,6 +239,56 @@ class TestClaimRequestUserAtLimit:
 
         assert response.status_code == 400
         assert "лимит" in response.json()["detail"].lower()
+
+    def test_no_limit_by_default(self, admin_mock_client, mock_db_session):
+        """Default configuration (0 = unlimited): the same claim goes through."""
+        assert crud.get_character_limit() is None
+
+        character = _make_character_mock(character_id=15)
+        mock_db_session.query.return_value.filter.return_value.first.side_effect = [
+            character,  # Step 1: find character
+            None,       # Step 5: no existing pending claim
+        ]
+        # Way over the old hardcoded limit of 5
+        mock_db_session.execute.return_value.scalar.return_value = 99
+
+        def fake_refresh(obj):
+            if getattr(obj, 'id', None) is None:
+                obj.id = 42
+            if getattr(obj, 'status', None) is None:
+                obj.status = 'pending'
+        mock_db_session.refresh.side_effect = fake_refresh
+
+        response = admin_mock_client.post(
+            "/characters/requests/claim",
+            json={"character_id": 15},
+        )
+
+        assert response.status_code == 200, response.text
+
+    def test_below_configured_limit_is_accepted(self, admin_mock_client, mock_db_session,
+                                                character_limit):
+        character_limit(5)
+        character = _make_character_mock(character_id=15)
+        mock_db_session.query.return_value.filter.return_value.first.side_effect = [
+            character,
+            None,
+        ]
+        mock_db_session.execute.return_value.scalar.return_value = 4
+
+        def fake_refresh(obj):
+            if getattr(obj, 'id', None) is None:
+                obj.id = 42
+            if getattr(obj, 'status', None) is None:
+                obj.status = 'pending'
+        mock_db_session.refresh.side_effect = fake_refresh
+
+        response = admin_mock_client.post(
+            "/characters/requests/claim",
+            json={"character_id": 15},
+        )
+
+        assert response.status_code == 200, response.text
 
 
 class TestClaimRequestDuplicatePending:
@@ -263,9 +330,24 @@ class TestClaimRequestAuth:
 # ===========================================================================
 
 class TestMyCharacterCount:
-    """GET /characters/my-character-count returns correct count and limit."""
+    """GET /characters/my-character-count returns the count and the active limit.
 
-    def test_returns_count_and_limit(self, admin_mock_client, mock_db_session):
+    Contract: ``limit`` is the configured maximum, or ``null`` when there is no
+    limit (settings.MAX_CHARACTERS_PER_USER <= 0 — the default).
+    """
+
+    def test_returns_count_and_null_limit_by_default(self, admin_mock_client, mock_db_session):
+        mock_db_session.execute.return_value.scalar.return_value = 3
+
+        response = admin_mock_client.get("/characters/my-character-count")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 3
+        assert data["limit"] is None
+
+    def test_returns_configured_limit(self, admin_mock_client, mock_db_session, character_limit):
+        character_limit(5)
         mock_db_session.execute.return_value.scalar.return_value = 3
 
         response = admin_mock_client.get("/characters/my-character-count")
@@ -283,7 +365,7 @@ class TestMyCharacterCount:
         assert response.status_code == 200
         data = response.json()
         assert data["count"] == 0
-        assert data["limit"] == 5
+        assert data["limit"] is None
 
     def test_unauthenticated_returns_error(self, client):
         """Character count endpoint requires auth."""

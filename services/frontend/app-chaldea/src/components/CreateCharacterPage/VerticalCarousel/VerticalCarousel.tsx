@@ -69,7 +69,7 @@ const VerticalCarousel = ({ items, selectedId, onSelect }: VerticalCarouselProps
               transition={{ duration: 0.25, ease: 'easeOut' }}
               className={`flex items-center gap-3 p-2 rounded-card cursor-pointer
                 transition-colors shrink-0 w-full text-left
-                ${isSelected ? 'gold-outline relative' : 'hover:bg-white/5'}`}
+                ${isSelected ? '' : 'hover:bg-white/5'}`}
             >
               {/* Thumbnail */}
               <div className="w-16 h-16 md:w-20 md:h-20 rounded-full overflow-hidden shrink-0 bg-white/10">

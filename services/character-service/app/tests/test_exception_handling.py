@@ -59,8 +59,11 @@ class TestRejectCharacterRequest:
     """Test that reject endpoint returns 404 when request not found."""
 
     @patch("main.crud")
-    def test_returns_404_when_request_not_found(self, mock_crud, admin_mock_client):
-        """When crud.update_character_request_status returns None, expect 404."""
+    def test_returns_404_when_request_not_found(self, mock_crud, admin_mock_client, mock_db_session):
+        """When the character request does not exist, expect 404."""
+        # FEAT-154 (rule 30a): the endpoint now looks the request up itself
+        # before rejecting, to enforce the pending-only precondition.
+        mock_db_session.query.return_value.filter.return_value.first.return_value = None
         mock_crud.update_character_request_status.return_value = None
 
         response = admin_mock_client.post("/characters/requests/99999/reject")
@@ -69,8 +72,11 @@ class TestRejectCharacterRequest:
         assert "найдена" in response.json()["detail"]
 
     @patch("main.crud")
-    def test_returns_200_when_request_exists(self, mock_crud, admin_mock_client):
+    def test_returns_200_when_request_exists(self, mock_crud, admin_mock_client, mock_db_session):
         """When crud returns a valid object, expect success."""
+        mock_db_session.query.return_value.filter.return_value.first.return_value = MagicMock(
+            status="pending", user_id=1
+        )
         mock_crud.update_character_request_status.return_value = MagicMock()
 
         response = admin_mock_client.post("/characters/requests/1/reject")
@@ -79,8 +85,11 @@ class TestRejectCharacterRequest:
         assert "отклонена" in response.json()["message"]
 
     @patch("main.crud")
-    def test_returns_500_on_sqlalchemy_error(self, mock_crud, admin_mock_client):
+    def test_returns_500_on_sqlalchemy_error(self, mock_crud, admin_mock_client, mock_db_session):
         """When a DB error occurs, expect 500."""
+        mock_db_session.query.return_value.filter.return_value.first.return_value = MagicMock(
+            status="pending", user_id=1
+        )
         mock_crud.update_character_request_status.side_effect = SQLAlchemyError(
             "Deadlock detected"
         )

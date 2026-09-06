@@ -1,11 +1,12 @@
 import os
 import httpx
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Depends, APIRouter, HTTPException, Query
+from fastapi import FastAPI, Depends, APIRouter, HTTPException, Query, Body
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import Session
 import asyncio
 import models, schemas, crud
+import locations_client
 from database import SessionLocal, engine
 from config import settings
 from producer import (
@@ -14,6 +15,7 @@ from producer import (
     publish_character_skills,
     publish_character_attributes,
     send_title_unlocked_notification,
+    send_character_request_rejected_notification,
 )
 from typing import List, Dict, Optional
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +26,8 @@ import logging
 # Universal subrace skill applied to all subraces (1-16)
 SUBRACE_SKILL_ID = 7  # "Выживание"
 
-MAX_CHARACTERS_PER_USER = 5
+# Лимит персонажей на аккаунт настраивается через settings.MAX_CHARACTERS_PER_USER
+# (0 = без ограничений). Читается через crud.get_character_limit() в момент проверки.
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("character-service")
@@ -64,10 +67,16 @@ async def create_character_request(request: schemas.CharacterRequestCreate, db: 
     """
     Создание заявки на персонажа.
     """
+    # ВАЖНО (§3.1, test_endpoint_auth.py): проверка владельца идёт ПЕРВОЙ,
+    # до любой доменной валидации — иначе вместо 403 вернётся 400/404.
     if request.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Вы можете создавать заявки только для себя")
+
+    user_id = request.user_id
+    # Доменная валидация (§3.2): 400 с русским сообщением
+    await crud.validate_character_request_payload(db, request, user_id)
+
     try:
-        user_id = request.user_id
         db_request = crud.create_character_request(db, request, user_id)
         return db_request
     except SQLAlchemyError as e:
@@ -98,21 +107,23 @@ def create_claim_request(
     if character.user_id is not None:
         raise HTTPException(status_code=400, detail="Персонаж уже принадлежит другому пользователю")
 
-    # 4. User under character limit
-    try:
-        char_count = db.execute(
-            text("SELECT COUNT(*) FROM users_character WHERE user_id = :uid"),
-            {"uid": current_user.id}
-        ).scalar() or 0
-        if char_count >= MAX_CHARACTERS_PER_USER:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Достигнут лимит персонажей (максимум {MAX_CHARACTERS_PER_USER})"
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning(f"Could not check character limit: {e}")
+    # 4. User under character limit (пропускается, если лимит не задан)
+    character_limit = crud.get_character_limit()
+    if character_limit is not None:
+        try:
+            char_count = db.execute(
+                text("SELECT COUNT(*) FROM users_character WHERE user_id = :uid"),
+                {"uid": current_user.id}
+            ).scalar() or 0
+            if char_count >= character_limit:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Достигнут лимит персонажей (максимум {character_limit})"
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not check character limit: {e}")
 
     # 5. No duplicate pending claim
     existing_claim = db.query(models.CharacterRequest).filter(
@@ -173,7 +184,138 @@ def get_my_character_count(
         logger.warning(f"Could not get character count: {e}")
         count = 0
 
-    return {"count": count, "limit": MAX_CHARACTERS_PER_USER}
+    # limit == null означает, что ограничения нет (settings.MAX_CHARACTERS_PER_USER <= 0)
+    return {"count": count, "limit": crud.get_character_limit()}
+
+
+# ВАЖНО (§3.1): /requests/my объявлен ДО всех маршрутов вида /requests/{request_id},
+# иначе "my" будет разобран как значение int-параметра и эндпоинт вернёт 422.
+@router.get("/requests/my", response_model=List[schemas.CharacterRequestMy])
+async def get_my_character_requests(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """
+    Заявки текущего пользователя (правило 29).
+
+    Выборка жёстко ограничена current_user.id — назвать чужой id невозможно,
+    параметра для этого нет.
+    """
+    try:
+        return crud.get_user_requests(db, current_user.id)
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении заявок пользователя: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при получении заявок.")
+
+
+@router.put("/requests/{request_id}", response_model=schemas.CharacterRequestMy)
+async def update_character_request(
+    request_id: int,
+    payload: schemas.CharacterRequestUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """
+    Редактирование и переотправка отклонённой заявки (правило 30).
+
+    Порядок проверок нагруженный: 404 -> владелец (403) -> статус (409) ->
+    доменная валидация (400). Проверка владельца всегда идёт до доменной.
+    """
+    db_request = db.query(models.CharacterRequest).filter(
+        models.CharacterRequest.id == request_id
+    ).first()
+    if not db_request:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+
+    if db_request.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Вы можете редактировать только свои заявки")
+
+    if db_request.status != "rejected":
+        raise HTTPException(
+            status_code=409,
+            detail="Редактировать можно только отклонённую заявку.",
+        )
+
+    # Лимит персонажей считается без учёта самой редактируемой заявки:
+    # переотправка не создаёт новую заявку и не должна упираться в лимит из-за себя же.
+    await crud.validate_character_request_payload(
+        db, payload, current_user.id, exclude_request_id=request_id
+    )
+
+    try:
+        db_request = crud.resubmit_character_request(db, db_request, payload)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении заявки {request_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении заявки.")
+
+    return crud.serialize_user_request(db, db_request)
+
+
+# --- Стартовая локация при одобрении (FEAT-154 §3.6) --------------------------
+
+# Шаг 2 цепочки: игрок выбрал точку, но она не подошла — назначена точка по умолчанию.
+# Если игрок ничего не выбирал, предупреждение не выдаётся вовсе: назначение точки
+# по умолчанию — штатный путь, а не деградация (см. N14).
+START_LOCATION_FALLBACK_WARNING = "Выбранная стартовая точка недоступна, назначена точка по умолчанию."
+# Шаг 3 цепочки: назначать нечего — это статус-кво (NULL), а не ошибка.
+START_LOCATION_UNASSIGNED_WARNING = "Стартовая локация не назначена — обратитесь к администратору."
+
+
+async def _resolve_start_location(db_request) -> tuple:
+    """
+    Цепочка разрешения стартовой локации при одобрении заявки (§3.6, D7, D8).
+
+    1. Заявка указывает точку и locations-service подтверждает её -> берём её.
+    2. Иначе -> первая точка из курируемого списка. Предупреждение выдаётся только
+       если игрок точку выбирал и она не подошла; если выбора не было — это штатный
+       путь, и ``location_warning`` остаётся ``None``.
+    3. Иначе (список пуст или locations-service недоступен) -> NULL + предупреждение.
+
+    Шаг 3 безопасен: `move_and_post` трактует NULL как «может перемещаться куда
+    угодно бесплатно», поэтому персонаж не застревает. Именно поэтому вызов
+    классифицирован как graceful, а не критический — функция никогда не бросает
+    исключение и никогда не приводит к откату транзакции одобрения.
+
+    :return: кортеж ``(current_location_id, location_warning)``.
+    """
+    requested_id = getattr(db_request, "start_location_id", None)
+    try:
+        requested_id = int(requested_id) if requested_id else None
+    except (TypeError, ValueError):
+        requested_id = None
+
+    try:
+        # Шаг 1 — проверяем выбор игрока
+        if requested_id:
+            is_starting_point = await locations_client.probe_starting_point(requested_id)
+            if is_starting_point:
+                return requested_id, None
+            logger.warning(
+                f"Стартовая точка {requested_id} из заявки недоступна "
+                f"(ответ проверки: {is_starting_point}), пробуем точку по умолчанию"
+            )
+
+        # Шаг 2 — точка по умолчанию
+        default_id = await locations_client.get_default_starting_point_id()
+        if default_id:
+            if requested_id:
+                # Игрок выбирал точку, но она не подошла — это деградация.
+                return default_id, START_LOCATION_FALLBACK_WARNING
+            # Игрок ничего не выбирал: назначение точки по умолчанию штатно,
+            # предупреждать модератора не о чем.
+            logger.info(
+                f"Заявка без выбранной стартовой точки: назначена точка по умолчанию {default_id}"
+            )
+            return default_id, None
+    except Exception as e:  # pragma: no cover - defensive, шаг обязан быть graceful
+        logger.warning(f"Не удалось разрешить стартовую локацию: {e}")
+
+    # Шаг 3 — статус-кво: локация не назначена
+    logger.warning(
+        "Стартовая локация не назначена: не подтверждена выбранная точка и нет точки по умолчанию"
+    )
+    return None, START_LOCATION_UNASSIGNED_WARNING
 
 
 # Эндпоинт для одобрения заявки
@@ -182,16 +324,19 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
     """
     Одобряет заявку на создание персонажа:
     1) Проверяем, что заявка существует и имеет статус 'pending'.
-    2) Читаем стартовый набор из БД (таблица starter_kits) по class_id.
-    3) Создаем запись персонажа в БД с currency_balance из стартового набора.
-    4) Генерируем атрибуты (через SUBRACE_ATTRIBUTES).
+    2) Разрешаем стартовый набор по паре (class_id, origin_id) — crud.resolve_starter_kit,
+       ровно один вызов: результат идёт и на выдачу, и в слепок characters.granted_kit.
+    3) Создаем запись персонажа в БД с currency_balance из стартового набора,
+       registered_at, origin_id, skitaltsy_since_* и слепком granted_kit.
+    4) Генерируем атрибуты по колонке subraces.stat_preset (presets.py — мёртвый код).
     5) Отправляем стартовые предметы в inventory-service (graceful).
     6) Формируем список навыков: класс + подрасовый (SUBRACE_SKILL_ID=7), вызываем skills-service (graceful).
     7) Создаем атрибуты через attributes-service.
     8) Обновляем персонажа (id_attributes).
+    8.5) Разрешаем стартовую локацию по цепочке §3.6 (graceful).
     9) Меняем статус заявки на "approved".
     10) Привязываем персонажа к пользователю (через user-service).
-    11) Отправляем SSE-уведомление через RabbitMQ.
+    11) Отправляем уведомление через RabbitMQ.
     """
     try:
         logger.info(f"Начало обработки заявки с ID {request_id}")
@@ -205,21 +350,23 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
 
         logger.info(f"Заявка с ID {request_id} найдена, статус: {db_request.status}")
 
-        # 1.5) Проверка лимита персонажей (максимум 5 на аккаунт)
-        try:
-            char_count = db.execute(
-                text("SELECT COUNT(*) FROM users_character WHERE user_id = :uid"),
-                {"uid": db_request.user_id}
-            ).scalar() or 0
-            if char_count >= MAX_CHARACTERS_PER_USER:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Достигнут лимит персонажей (максимум {MAX_CHARACTERS_PER_USER})"
-                )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.warning(f"Could not check character limit: {e}")
+        # 1.5) Проверка лимита персонажей (пропускается, если лимит не задан)
+        character_limit = crud.get_character_limit()
+        if character_limit is not None:
+            try:
+                char_count = db.execute(
+                    text("SELECT COUNT(*) FROM users_character WHERE user_id = :uid"),
+                    {"uid": db_request.user_id}
+                ).scalar() or 0
+                if char_count >= character_limit:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Достигнут лимит персонажей (максимум {character_limit})"
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"Could not check character limit: {e}")
 
         # --- CLAIM approval branch ---
         if getattr(db_request, 'request_type', 'creation') == 'claim':
@@ -257,23 +404,38 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
 
             return {"message": f"Персонаж с ID {character_id} успешно присвоен пользователю."}
 
-        # 2) Читаем стартовый набор из БД
+        # 2) Разрешаем стартовый набор — ЕДИНСТВЕННЫЙ вызов резолвера в этом хендлере
+        #    (правила 12a-12d, решение D17). Один и тот же результат идёт и на выдачу,
+        #    и в слепок characters.granted_kit, поэтому паспорт не может разойтись
+        #    с тем, что персонажу действительно выдали.
         class_id = db_request.id_class
-        starter_kit = db.query(models.StarterKit).filter(models.StarterKit.class_id == class_id).first()
+        origin_id = getattr(db_request, "origin_id", None) or 0
+        resolved_kit = crud.resolve_starter_kit(db, class_id, origin_id)
 
-        if starter_kit:
-            kit_items = starter_kit.items or []
-            kit_skills = starter_kit.skills or []
-            currency_amount = starter_kit.currency_amount or 0
-            logger.info(f"Стартовый набор для класса {class_id}: {len(kit_items)} предметов, {len(kit_skills)} навыков, {currency_amount} валюты")
-        else:
-            kit_items = []
-            kit_skills = []
-            currency_amount = 0
-            logger.warning(f"Стартовый набор для класса {class_id} не найден, персонаж создаётся без предметов/навыков")
+        kit_items = list(resolved_kit.get("items") or [])
+        kit_skills = list(resolved_kit.get("skills") or [])
+        currency_amount = resolved_kit.get("currency_amount") or 0
+
+        # Слепок = результат резолвера + момент выдачи (N10)
+        granted_kit_snapshot = dict(resolved_kit)
+        granted_kit_snapshot["items"] = kit_items
+        granted_kit_snapshot["skills"] = kit_skills
+        granted_kit_snapshot["currency_amount"] = currency_amount
+        granted_kit_snapshot["granted_at"] = datetime.utcnow().isoformat()
+
+        logger.info(
+            f"Стартовый набор для класса {class_id} / происхождения {origin_id} "
+            f"(источник: {resolved_kit.get('resolved_from')}): {len(kit_items)} предметов, "
+            f"{len(kit_skills)} навыков, {currency_amount} валюты"
+        )
 
         # 3) Создаем предварительную запись персонажа с currency_balance (flush, не commit)
-        new_character = crud.create_preliminary_character(db, db_request, currency_balance=currency_amount, auto_commit=False)
+        new_character = crud.create_preliminary_character(
+            db, db_request,
+            currency_balance=currency_amount,
+            auto_commit=False,
+            granted_kit=granted_kit_snapshot,
+        )
         logger.info(f"Создан персонаж с ID {new_character.id}, currency_balance={currency_amount}")
 
         # Log starter kit gold transaction
@@ -284,7 +446,7 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
                 balance_after=currency_amount,
                 transaction_type="starter_kit",
                 source="character_creation",
-                metadata={"class_id": class_id},
+                metadata={"class_id": class_id, "origin_id": origin_id},
             )
 
         # 4) Генерируем атрибуты по подрасе (из БД)
@@ -343,6 +505,16 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
         )
         logger.info(f"Персонаж с ID {new_character.id} обновлен с id_attributes={attributes_response['id']}")
 
+        # 8.5) Стартовая локация — graceful-цепочка §3.6 (решения D7, D8).
+        # Ни один шаг не откатывает транзакцию: если locations-service недоступен,
+        # персонаж создаётся с current_location_id = NULL и предупреждением.
+        current_location_id, location_warning = await _resolve_start_location(db_request)
+        try:
+            updated_character.current_location_id = current_location_id
+            db.flush()
+        except SQLAlchemyError as e:
+            logger.warning(f"Не удалось записать стартовую локацию персонажу {new_character.id}: {e}")
+
         # 9) Ставим заявке статус "approved" (flush, не commit)
         crud.update_character_request_status(db, request_id, "approved", auto_commit=False)
         logger.info(f"Заявка с ID {request_id} одобрена")
@@ -390,7 +562,11 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             logger.warning(f"Не удалось опубликовать атрибуты в RabbitMQ: {e}")
 
         logger.info(f"Завершение обработки заявки с ID {request_id}")
-        return {"message": f"Персонаж с ID {new_character.id} успешно создан и присвоен пользователю."}
+        return {
+            "message": f"Персонаж с ID {new_character.id} успешно создан и присвоен пользователю.",
+            "current_location_id": current_location_id,
+            "location_warning": location_warning,
+        }
 
     except HTTPException:
         db.rollback()
@@ -1071,20 +1247,65 @@ async def update_user_with_character(user_id: int, character_id: int):
 
 
 @router.post("/requests/{request_id}/reject")
-async def reject_character_request(request_id: int, db: Session = Depends(get_db), current_user = Depends(require_permission("characters:approve"))):
+async def reject_character_request(
+    request_id: int,
+    payload: Optional[schemas.CharacterRequestReject] = Body(None),
+    db: Session = Depends(get_db),
+    current_user = Depends(require_permission("characters:approve")),
+):
     """
     Отклоняет заявку на создание персонажа и обновляет статус на 'rejected'.
+
+    Тело запроса необязательно. Если передана причина отклонения, она
+    сохраняется в заявке и отправляется игроку в уведомлении.
     """
+    reason = payload.reason if payload else None
+
+    # Правило 30b: слишком длинная причина -> 400 с русским сообщением,
+    # а не 422 от Pydantic (все ошибки API, видимые пользователю, на русском).
+    if reason is not None and len(reason) > schemas.MAX_REJECTION_REASON_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Причина отклонения не должна превышать "
+                f"{schemas.MAX_REJECTION_REASON_LENGTH} символов."
+            ),
+        )
+
+    # Правило 30a: отклонить можно только заявку в статусе 'pending'.
+    # Без этой проверки можно было отклонить уже одобренную заявку, оставив
+    # созданного персонажа привязанным к отклонённой заявке.
+    existing = db.query(models.CharacterRequest).filter(
+        models.CharacterRequest.id == request_id
+    ).first()
+    if not existing:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    if existing.status != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail="Отклонить можно только заявку, ожидающую рассмотрения.",
+        )
+
     try:
-        db_request = crud.update_character_request_status(db, request_id, "rejected")
+        db_request = crud.update_character_request_status(
+            db, request_id, "rejected", rejection_reason=reason
+        )
         if not db_request:
             raise HTTPException(status_code=404, detail="Заявка не найдена")
-
-        return {"message": f"Заявка с ID {request_id} была отклонена."}
 
     except SQLAlchemyError as e:
         logger.error(f"Ошибка при отклонении заявки: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при отклонении заявки")
+
+    # Уведомление игрока (не блокирует отклонение заявки)
+    try:
+        await send_character_request_rejected_notification(
+            db_request.user_id, request_id, reason
+        )
+    except Exception as e:
+        logger.warning(f"Не удалось отправить уведомление об отклонении заявки: {e}")
+
+    return {"message": f"Заявка с ID {request_id} была отклонена."}
 
 #Возвращает список всех рас, их подрас и атрибуты для каждой подрасы.
 @router.get("/metadata", response_model=List[dict])
@@ -1122,22 +1343,70 @@ async def get_moderation_requests(db: Session = Depends(get_db), current_user = 
 
 
 @router.get("/starter-kits", response_model=List[schemas.StarterKitResponse])
-async def get_starter_kits(db: Session = Depends(get_db)):
+async def get_starter_kits(
+    include_origins: bool = Query(False, description="Вернуть и переопределения под происхождение"),
+    db: Session = Depends(get_db),
+):
     """
-    Возвращает все стартовые наборы (по одному на каждый класс).
+    Возвращает стартовые наборы.
+
+    Без параметров — только наборы классов по умолчанию (origin_id = 0), то есть
+    ровно тот набор строк, который возвращался до FEAT-154 (обратная совместимость).
+    include_origins=true добавляет переопределения под происхождение.
     """
     try:
-        kits = crud.get_all_starter_kits(db)
+        kits = crud.get_all_starter_kits(db, include_origins=include_origins)
         return kits
     except SQLAlchemyError as e:
         logger.error(f"Ошибка при получении стартовых наборов: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при получении стартовых наборов.")
 
 
+@router.get("/starter-kits/resolve", response_model=schemas.StarterKitResolved)
+async def resolve_starter_kit_endpoint(
+    class_id: int = Query(..., description="ID класса"),
+    origin_id: Optional[int] = Query(None, description="ID происхождения; 0 или пусто — набор класса по умолчанию"),
+    db: Session = Depends(get_db),
+):
+    """
+    Разрешает стартовый набор для пары (класс, происхождение):
+    точное совпадение -> набор класса по умолчанию -> пустой набор.
+
+    Это то, что показывает игроку шаг «Путь» мастера создания персонажа.
+    """
+    try:
+        db_class = db.query(models.Class).filter(models.Class.id_class == class_id).first()
+        if not db_class:
+            raise HTTPException(status_code=404, detail=f"Класс с ID {class_id} не найден")
+
+        return crud.resolve_starter_kit(db, class_id, origin_id)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при разрешении стартового набора (класс {class_id}, происхождение {origin_id}): {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при получении стартового набора.")
+
+
+@router.get("/starter-kits/coverage", response_model=schemas.StarterKitCoverageResponse)
+async def get_starter_kits_coverage(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_permission("characters:update")),
+):
+    """
+    Матрица заполненности стартовых наборов: у каких классов есть набор
+    по умолчанию и какие пары (класс, происхождение) переопределены.
+    """
+    try:
+        return crud.get_starter_kit_coverage(db)
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении покрытия стартовых наборов: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при получении покрытия стартовых наборов.")
+
+
 @router.put("/starter-kits/{class_id}", response_model=schemas.StarterKitResponse)
 async def upsert_starter_kit(class_id: int, data: schemas.StarterKitUpdate, db: Session = Depends(get_db), current_user = Depends(require_permission("characters:update"))):
     """
-    Создаёт или обновляет стартовый набор для указанного класса.
+    Создаёт или обновляет стартовый набор класса по умолчанию (origin_id = 0).
     """
     try:
         # Validate that the class exists
@@ -1152,6 +1421,76 @@ async def upsert_starter_kit(class_id: int, data: schemas.StarterKitUpdate, db: 
     except SQLAlchemyError as e:
         logger.error(f"Ошибка при обновлении стартового набора для класса {class_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при обновлении стартового набора.")
+
+
+@router.put("/starter-kits/{class_id}/origins/{origin_id}", response_model=schemas.StarterKitResponse)
+async def upsert_starter_kit_for_origin(
+    class_id: int,
+    origin_id: int,
+    data: schemas.StarterKitUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_permission("characters:update")),
+):
+    """
+    Создаёт или обновляет стартовый набор для пары (класс, происхождение).
+
+    origin_id = 0 здесь запрещён: набор класса по умолчанию пишется через
+    PUT /starter-kits/{class_id} — способ записать дефолт должен быть один.
+    """
+    try:
+        if origin_id <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Для набора класса по умолчанию используйте PUT /characters/starter-kits/{class_id}.",
+            )
+
+        db_class = db.query(models.Class).filter(models.Class.id_class == class_id).first()
+        if not db_class:
+            raise HTTPException(status_code=404, detail=f"Класс с ID {class_id} не найден")
+
+        kit = crud.upsert_starter_kit(db, class_id, data, origin_id=origin_id)
+        return kit
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        logger.error(
+            f"Ошибка при обновлении стартового набора для класса {class_id} и происхождения {origin_id}: {e}"
+        )
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении стартового набора.")
+
+
+@router.delete("/starter-kits/{class_id}/origins/{origin_id}")
+async def delete_starter_kit_for_origin(
+    class_id: int,
+    origin_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_permission("characters:update")),
+):
+    """
+    Удаляет переопределение набора для пары (класс, происхождение).
+    После удаления пара снова разрешается в набор класса по умолчанию.
+    """
+    try:
+        if origin_id <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Набор класса по умолчанию удалить нельзя.",
+            )
+
+        deleted = crud.delete_starter_kit_override(db, class_id, origin_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail="Переопределение стартового набора для этой пары не найдено.",
+            )
+        return {"message": "Стартовый набор для пары класс/происхождение удалён."}
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        logger.error(
+            f"Ошибка при удалении стартового набора для класса {class_id} и происхождения {origin_id}: {e}"
+        )
+        raise HTTPException(status_code=500, detail="Ошибка при удалении стартового набора.")
 
 
 @router.post("/titles/", response_model=schemas.Title)
@@ -1679,13 +2018,127 @@ def list_characters(
             "class_name": cls.name if cls else None,
             "race_name": race.name if race else None,
             "subrace_name": subrace.name if subrace else None,
+            # FEAT-154: аддитивные ключи для компактной карточки-паспорта.
+            # Существующие ключи выше не тронуты — только добавление.
+            "origin_id": ch.origin_id,
+            "registered_at": ch.registered_at,
+            "skitaltsy_since_year": ch.skitaltsy_since_year,
+            "skitaltsy_since_segment": ch.skitaltsy_since_segment,
+            "height": ch.height,
+            "weight": ch.weight,
+            "current_location_id": ch.current_location_id,
+            "subrace_image": subrace.image if subrace else None,
         })
     return {"items": result, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/classes", response_model=List[schemas.ClassResponse])
+def get_all_classes(db: Session = Depends(get_db)):
+    """
+    Публичный справочник игровых классов (правило 12).
+    Заменяет фиктивный INITIAL_CLASSES на фронтенде.
+    """
+    try:
+        return db.query(models.Class).order_by(models.Class.id_class).all()
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении списка классов: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при получении списка классов.")
+
+
+# Пресет статов, который печатает паспорт (правило 27). Порядок и состав
+# совпадают с PASSPORT_STAT_ORDER на фронтенде; всё остальное, что отдаёт
+# character-attributes-service (текущие/максимальные пулы, резисты), паспорту
+# не нужно — производные значения он считает сам.
+PASSPORT_STAT_KEYS = (
+    "strength", "agility", "intelligence", "endurance", "health",
+    "mana", "energy", "stamina", "charisma", "luck",
+)
+
+
+def _fetch_character_stats(character_id: int):
+    """
+    Забирает пресет статов из character-attributes-service (N26).
+
+    Graceful: любая проблема (сервис недоступен, 404, битый ответ) — это None,
+    паспорт рисуется без блока статов, а не 500. Атрибуты живут в соседнем
+    сервисе, и его падение не должно ломать публичную страницу персонажа.
+    """
+    try:
+        resp = httpx.get(
+            f"{settings.ATTRIBUTES_SERVICE_URL.rstrip('/')}/{character_id}",
+            timeout=5.0,
+        )
+        if resp.status_code != 200:
+            return None
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            return None
+        stats = {}
+        for key in PASSPORT_STAT_KEYS:
+            value = payload.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            stats[key] = int(value)
+        return stats or None
+    except Exception as e:
+        logger.warning(f"Не удалось получить атрибуты персонажа {character_id}: {e}")
+        return None
+
+
+# Путь именно /{character_id}/public, а не голый /{character_id}: так он не
+# конфликтует со статическими сегментами /list, /races, /metadata, /classes,
+# /starter-kits (§3.1).
+@router.get("/{character_id}/public", response_model=schemas.CharacterPublicResponse)
+def get_character_public(character_id: int, db: Session = Depends(get_db)):
+    """
+    Публичный паспорт персонажа: данные анкеты, подраса и выданный стартовый набор.
+
+    granted_kit — замороженный слепок (правило 12d). Если слепка нет (персонаж
+    создан до FEAT-154), возвращается живой resolve и granted_kit_is_snapshot=False (D18).
+    """
+    try:
+        data = crud.get_character_public(db, character_id)
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при получении персонажа.")
+
+    if not data:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    # Имя владельца живёт в user-service; его недоступность не должна ломать паспорт.
+    if data.get("user_id"):
+        try:
+            resp = httpx.get(f"{settings.USER_SERVICE_URL}/users/{data['user_id']}", timeout=5.0)
+            if resp.status_code == 200:
+                data["username"] = resp.json().get("username")
+        except Exception as e:
+            logger.warning(f"Не удалось получить username для user_id {data['user_id']}: {e}")
+
+    # Статы живут в character-attributes-service; их отсутствие лишь убирает
+    # блок статов из паспорта (правило 27, N26).
+    data["stats"] = _fetch_character_stats(character_id)
+
+    return data
 
 
 # ============================================================
 # Public races endpoint
 # ============================================================
+
+def _normalize_origin_ids(raw):
+    """Приводит JSON-колонку typical_origin_ids к списку int (или None)."""
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple)):
+        result = []
+        for value in raw:
+            try:
+                result.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        return result
+    return None
+
 
 @router.get("/races", response_model=List[schemas.RaceWithSubraces])
 def get_all_races(db: Session = Depends(get_db)):
@@ -1705,6 +2158,10 @@ def get_all_races(db: Session = Depends(get_db)):
                     description=sr.description,
                     stat_preset=sr.stat_preset,
                     image=sr.image,
+                    distinctive_features=sr.distinctive_features,
+                    height_min=sr.height_min,
+                    height_max=sr.height_max,
+                    typical_origin_ids=_normalize_origin_ids(sr.typical_origin_ids),
                 ))
             result.append(schemas.RaceWithSubraces(
                 id_race=race.id_race,
@@ -1837,6 +2294,10 @@ def admin_create_subrace(
         name=data.name,
         description=data.description,
         stat_preset=data.stat_preset.dict(),
+        distinctive_features=data.distinctive_features,
+        height_min=data.height_min,
+        height_max=data.height_max,
+        typical_origin_ids=data.typical_origin_ids,
     )
     db.add(subrace)
     try:

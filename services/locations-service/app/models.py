@@ -120,6 +120,12 @@ class Location(Base):
     map_y = Column(Float, nullable=True)
     sort_order = Column(Integer, nullable=False, default=0)
     no_quick_move = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_starting = Column(Boolean, nullable=False, default=False, server_default="0")
+    starting_blurb = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index('ix_locations_is_starting', 'is_starting'),
+    )
 
     # ЯВНО указываем, какие колонке использовать в ForeignKey для district:
     district = relationship(
@@ -640,5 +646,35 @@ class GatheringSession(Base):
         Index('ix_gathering_sessions_node', 'node_id'),
         Index('ix_gathering_sessions_status', 'status'),
         Index('ix_gathering_sessions_complete_at', 'complete_at'),
+        {'mysql_engine': 'InnoDB'},
+    )
+
+
+class OriginCountry(Base):
+    """Справочник происхождения персонажа (FEAT-154).
+
+    Шире, чем игровые страны на карте: сюда входят и неигровые державы.
+    ``country_id`` — мягкая связь с ``Countries`` (для переиспользования герба),
+    ``archive_slug`` — мягкая ссылка на ``archive_articles.slug`` (без FK,
+    статьи — контент и могут быть переименованы).
+    """
+
+    __tablename__ = 'origin_countries'
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    summary = Column(Text, nullable=True)
+    skitaltsy_attitude = Column(Text, nullable=True)
+    emblem_url = Column(String(255), nullable=True)
+    map_image_url = Column(String(255), nullable=True)
+    archive_slug = Column(String(255), nullable=True)
+    country_id = Column(BigInteger, ForeignKey('Countries.id', ondelete='SET NULL'), nullable=True)
+    is_playable = Column(Boolean, nullable=False, default=False, server_default='0')
+    is_active = Column(Boolean, nullable=False, default=True, server_default='1')
+    sort_order = Column(Integer, nullable=False, default=0, server_default='0')
+
+    __table_args__ = (
+        UniqueConstraint('name', name='uq_origin_countries_name'),
+        Index('ix_origin_countries_active_sort', 'is_active', 'sort_order'),
         {'mysql_engine': 'InnoDB'},
     )

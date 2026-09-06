@@ -627,6 +627,143 @@ Equipment icons located in `src/assets/icons/equipment/`:
 
 ---
 
+## 16. Lore / Book Surfaces (FEAT-154)
+
+**The one exception to the dark UI.** Parchment surfaces represent in-world documents:
+the Скиталец passport (`CharacterPassport`) and the Архив (lore wiki). Everything else in
+the app stays dark. **Never mix the two languages** — no `gold-text`, `gray-bg`, `site-blue`
+or `text-white` on a parchment page; use the `ink` tokens instead.
+
+Both faces are already loaded by `index.html` — **do not add another font link.**
+
+### Tokens (`tailwind.config.js`)
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| `bg-parchment-light` | `#faf1dc` | Lightest paper, highlights |
+| `bg-parchment` | `#f5e6c8` | Base parchment |
+| `bg-parchment-dark` | `#e3d0aa` | Aged paper, insets, borders |
+| `text-ink` | `#3b2f1c` | Body text on parchment |
+| `text-ink-muted` | `#6b5a3e` | Labels, captions, secondary text |
+| `font-lore` | `MedievalSharp, Georgia, serif` | Headings, seals, in-world titles |
+| `font-serif` | `Cormorant Garamond, Georgia, serif` | Body text on parchment |
+| `shadow-page` | `inset 0 0 40px rgba(90,66,30,.18), 4px 6px 10px rgba(0,0,0,.35)` | Aged vignette + page lift |
+
+`font-serif` intentionally overrides Tailwind's default serif stack — the whole app's serif
+is Cormorant Garamond.
+
+### Component classes (`src/index.css` → `@layer components`)
+
+| Class | What it does |
+|-------|--------------|
+| `book-page` | The parchment sheet: ink text color, serif font, paper gradient with age spots. `position: relative` (so absolute children and the gutter anchor to it). CSS-only — no bitmap texture, no extra DOM layers. |
+| `book-page-gutter` | Binding seam down the middle of a two-page spread. Renders **only from `md:` up**, so a spread that stacks on mobile shows no stray line. Requires a positioned parent — pair it with `book-page`. ⚠️ **Currently unused.** `CharacterPassport` dropped it: with the long free-text sections running full width under the identity block, the sheet is one page with two columns, not a spread, and the spine read as a leftover. Apply it only to a surface that really is a two-page spread; prefer `lore-divider` for separation. |
+| `lore-heading` | MedievalSharp heading in ink. Size stays with Tailwind (`text-xl`, `text-2xl`, …). |
+| `lore-body` | Free-text block on parchment: serif, ink, `line-height: 1.65`. Combine with `whitespace-pre-wrap` for user-entered text — **never `dangerouslySetInnerHTML`**. |
+| `lore-divider` | Faded ink rule with a small diamond in the middle. |
+| `wax-seal` | Round red wax stamp, 64px (76px from `sm:`), tilted −6°. Put the sigil or initials inside. |
+| `passport-field` + `passport-field-label` + `passport-field-value` | Label/value row on a dashed ruling. Wraps on narrow screens, so it survives 360px. |
+| `lore-badge` | Small pill marker **on parchment** — the ink twin of `chip-outline`, which is built for the dark UI and is invisible on paper. Neutral ink by default. |
+| `lore-badge-warn` | Ochre variant. Attention, **not** failure — an allowed-but-unusual choice (e.g. «Редкий выбор», rule 11). |
+| `lore-badge-ok` | Green-ink variant — accepted / approved. |
+| `lore-badge-danger` | Red-ink variant, matched to `wax-seal` red (never `site-red`) — rejected. |
+
+### Usage
+
+```tsx
+<article className="book-page rounded-card shadow-page p-5 sm:p-8
+                    grid gap-6 md:grid-cols-2">
+  <div>
+    <h2 className="lore-heading text-2xl">Паспорт Скитальца</h2>
+    <div className="lore-divider my-4" />
+
+    <div className="passport-field">
+      <span className="passport-field-label">Раса</span>
+      <span className="passport-field-value">Рюджин</span>
+    </div>
+    <div className="passport-field mt-3">
+      <span className="passport-field-label">Мегалинк</span>
+      <span className="passport-field-value">СК-000501</span>
+    </div>
+  </div>
+
+  <div className="flex flex-col items-center gap-4">
+    <div className="wax-seal"><span className="text-lg">СК</span></div>
+    <div className="flex flex-wrap gap-2">
+      <span className="lore-badge lore-badge-warn">Редкий выбор</span>
+      <span className="lore-badge lore-badge-ok">Одобрена</span>
+    </div>
+    <p className="lore-body whitespace-pre-wrap">{biography}</p>
+  </div>
+</article>
+```
+
+### Rules
+
+- **Airy still applies** — one parchment sheet per surface. Don't nest `book-page` inside
+  `book-page`, and don't stack extra beige panels on it; use `lore-divider` and
+  `passport-field` rulings to separate content instead of more backgrounds.
+- **Responsive from 360px** — the seal shrinks below `sm`, and
+  `passport-field` wraps its value under its label. Keep spreads as `grid md:grid-cols-2`.
+- **No dark-UI chips on paper** — `chip-outline` is designed for the dark background and
+  disappears on parchment. Use the `lore-badge` family instead.
+- **Reference surfaces:** `CommonComponents/CharacterPassport/` (the full spread and the
+  compact card — the reference use of this section, `book-page-gutter` excepted) and
+  `ArchiveLinkPreview.tsx` (the hover preview), built on
+  `book-page` + `lore-heading`. The full Archive pages
+  (`pages/ArchivePage/ArchiveArticlePage.tsx`) keep their own richer, texture-layered
+  parchment — that treatment is deliberately page-specific and is not part of the system.
+
+---
+
+## 17. Field Hints (FEAT-154)
+
+The small explanatory line under (or beside) a control: what to write in a field, what a
+control does, what a step is for. On the character-creation wizard most of it is spoken in
+the voice of the Координатор Скитальцев.
+
+Hints are meant to be **read, not skimmed**. A `text-white/40 text-[11px]` footnote is
+invisible, and on this wizard a missed instruction costs the player a rejected application.
+
+### Classes (`src/index.css` → `@layer components`)
+
+| Class | What it does |
+|-------|--------------|
+| `field-hint` | The hint line: 13px (14px from `sm:`), soft gold — the `gold` token `#f0d95c` at 0.8 alpha — `line-height: 1.5`, with a faded gold hairline down the left edge. Soft gold, **not** the `gold-text` gradient: that gradient is tuned for short uppercase headings and shouts across a multi-line paragraph. Sized **one notch under** the field's own label (`text-white text-sm sm:text-base`) on purpose — noticeable, still auxiliary. |
+| `field-hint-strong` | Modifier on `field-hint` for a hint that states a **requirement** — the instruction whose absence gets the application sent back. Adds a faint gold wash and `rounded-card` backing (with the rule inset to match). The backing, not the colour, is what makes it stand out now that every hint is gold. |
+
+### Usage
+
+```tsx
+<span className="field-hint">
+  Нрав, привычки, с чем вы не миритесь.
+</span>
+
+<span className="field-hint field-hint-strong">
+  Обязательно напишите, как вы стали Скитальцем — без этого заявку вернут.
+</span>
+```
+
+### Rules
+
+- **Gold marks the hint, not emphasis.** Only explanatory hint lines go gold. Data
+  annotations, counters (`12/20`), kickers and empty states stay `text-white/40–60`.
+- **One backed hint per surface.** `field-hint-strong` is for a stated requirement, not
+  for emphasis. If every hint is backed, none of them reads as required.
+- **Never louder than the field label.** The label stays pure white at
+  `text-sm sm:text-base`; the hint stays below it in size.
+- **Not for errors, warnings or blockers.** A validation error is `text-site-red`; a
+  «why can't I continue» status stays neutral white (`text-white/50 text-[13px] sm:text-sm`);
+  an allowed-but-unusual choice keeps its gold-bordered box. This family is for instructions.
+- **Dark UI only.** On parchment use `lore-body` / `text-ink-muted` (§16) — the gold text
+  and gold rule disappear on paper.
+- **Reference surface:** `components/CreateCharacterPage/` (all six steps) and
+  `components/pages/MyRequestsPage/RequestEditor.tsx`, which reuses those steps.
+  ⚠️ The rest of the app still uses the old `text-white/40 text-[11px]` footnote pattern —
+  bringing it onto `field-hint` is a separate, larger pass.
+
+---
+
 ## 15. For AI Agents
 
 When creating or modifying frontend components:

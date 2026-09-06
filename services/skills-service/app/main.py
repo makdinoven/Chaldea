@@ -369,6 +369,75 @@ async def list_subclasses(class_id: Optional[int] = None):
 
 
 # -----------------------------------------------------------
+# 6a-bis) (FEAT-154) Public: bulk skill resolve
+# Registered BEFORE "/{skill_id}" so "bulk" is not parsed as a skill id.
+# -----------------------------------------------------------
+MAX_BULK_IDS = 100
+
+
+def _parse_bulk_ids(raw: str) -> List[int]:
+    """
+    Разбирает параметр ?ids=1,2,3 в дедуплицированный список int.
+    Бросает HTTPException(400) при некорректном вводе или превышении лимита.
+    """
+    parts = [p.strip() for p in (raw or "").split(",")]
+    parts = [p for p in parts if p]
+    if not parts:
+        raise HTTPException(status_code=400, detail="Параметр ids не должен быть пустым")
+
+    # Лимит считается по сырым токенам (до дедупликации), иначе строка вида
+    # ?ids=1,1,1,... любой длины проходила бы проверку.
+    if len(parts) > MAX_BULK_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Слишком много идентификаторов: максимум {MAX_BULK_IDS}",
+        )
+
+    seen = set()
+    ids: List[int] = []
+    for part in parts:
+        try:
+            value = int(part)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Параметр ids должен содержать только целые числа через запятую")
+        if value <= 0:
+            raise HTTPException(status_code=400, detail="Идентификаторы должны быть положительными числами")
+        if value not in seen:
+            seen.add(value)
+            ids.append(value)
+
+    return ids
+
+
+@router.get("/bulk", response_model=List[schemas.SkillBulkResponse])
+async def get_skills_bulk(
+    ids: str = Query(..., description="Идентификаторы навыков через запятую, максимум 100"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Массовый резолв навыков по списку id (публичный эндпоинт).
+    Неизвестные id молча опускаются. Запрос параметризован (IN), SQL не строится строками.
+    """
+    skill_ids = _parse_bulk_ids(ids)
+    result = await db.execute(
+        select(models.Skill)
+        .where(models.Skill.id.in_(skill_ids))
+        .order_by(models.Skill.id.asc())
+    )
+    rows = result.scalars().all()
+    return [
+        schemas.SkillBulkResponse(
+            id=row.id,
+            name=row.name,
+            description=row.description,
+            icon_url=row.skill_image,
+            class_limitations=row.class_limitations,
+        )
+        for row in rows
+    ]
+
+
+# -----------------------------------------------------------
 # 6b) (FEAT-125) Public: skill base + perk pool
 # -----------------------------------------------------------
 @router.get("/{skill_id}", response_model=schemas.SkillWithPerksRead)
