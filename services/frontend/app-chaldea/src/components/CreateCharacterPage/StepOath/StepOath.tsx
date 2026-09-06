@@ -19,9 +19,15 @@ import StartingPointPicker from './StartingPointPicker';
 interface StepOathProps {
   startLocation: StartingPoint | null;
   onSelectStartLocation: (point: StartingPoint | null) => void;
+  /** FEAT-155 — origin from step «Родина»; drives the recommendations. */
+  selectedOriginId: number | null;
 }
 
-const StepOath = ({ startLocation, onSelectStartLocation }: StepOathProps) => (
+const StepOath = ({
+  startLocation,
+  onSelectStartLocation,
+  selectedOriginId,
+}: StepOathProps) => (
   <div className="w-full flex flex-col gap-8 px-4 md:px-[60px]">
     {/* Point of first assignment (rules 19-20) */}
     <section className="flex flex-col gap-3">
@@ -34,6 +40,7 @@ const StepOath = ({ startLocation, onSelectStartLocation }: StepOathProps) => (
       <StartingPointPicker
         selectedId={startLocation?.id ?? null}
         onSelect={onSelectStartLocation}
+        originId={selectedOriginId}
       />
     </section>
 

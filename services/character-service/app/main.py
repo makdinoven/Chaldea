@@ -2154,6 +2154,7 @@ def get_all_races(db: Session = Depends(get_db)):
             for sr in race.subraces:
                 subraces_data.append(schemas.SubraceWithPreset(
                     id_subrace=sr.id_subrace,
+                    id_race=race.id_race,
                     name=sr.name,
                     description=sr.description,
                     stat_preset=sr.stat_preset,

@@ -25,6 +25,11 @@ import type { SubraceData } from '../types';
  * The dossier is rendered on parchment because it IS an in-world document — an
  * extract from the Архив (DESIGN-SYSTEM §16). The rare-choice marker is
  * therefore `lore-badge-warn`, the ink twin of `chip-outline`.
+ *
+ * FEAT-155 (rules 10-11): the «На карте мира» / «За пределами карты» markers are
+ * gone together with `is_playable` — the distinction meant nothing to the
+ * player. «Характерная родина» stays: that one is the subrace mechanic, and it
+ * is now the only reason a country carries a caption at all.
  */
 
 /** How much of the article is pulled into the dossier before «Читать дальше». */
@@ -230,9 +235,9 @@ const StepOrigin = ({ selectedOriginId, onSelectOrigin, selectedSubrace }: StepO
                   >
                     {origin.name}
                   </span>
-                  <span className="text-white/40 text-[11px]">
-                    {isTypical ? 'Характерная родина' : origin.is_playable ? 'На карте мира' : 'За пределами карты'}
-                  </span>
+                  {isTypical && (
+                    <span className="text-white/40 text-[11px]">Характерная родина</span>
+                  )}
                 </span>
               </motion.button>
             );
@@ -287,9 +292,6 @@ const StepOrigin = ({ selectedOriginId, onSelectOrigin, selectedSubrace }: StepO
                 {isRareChoice && <span className="lore-badge lore-badge-warn">Редкий выбор</span>}
                 {!isRareChoice && typicalIds && typicalIds.length > 0 && (
                   <span className="lore-badge lore-badge-ok">Характерная родина</span>
-                )}
-                {!selectedOrigin.is_playable && (
-                  <span className="lore-badge">За пределами игровой карты</span>
                 )}
               </div>
 
