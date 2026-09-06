@@ -169,6 +169,8 @@ export const fromWizardDraft = (draft: PassportWizardDraft): PassportData => ({
   originIsTypical: resolveOriginIsTypical(draft.origin?.id, draft.subrace?.typicalOriginIds),
 
   stats: toStats(draft.stats),
+  // Nothing has been assessed yet — no record, no reconstruction caption.
+  statsIsSnapshot: null,
   derived: draft.stats ? computeDerivedStats(draft.stats) : undefined,
 
   starterKit: draft.kitPreview ?? undefined,
@@ -197,6 +199,11 @@ export const fromWizardDraft = (draft: PassportWizardDraft): PassportData => ({
  * `GET /characters/{id}/public`. The kit comes from the frozen snapshot on the
  * character row — the resolver is never consulted here (rule 12d), so editing
  * a starter kit in the admin cannot rewrite an existing passport.
+ *
+ * The stat block reads `starting_attributes` off the same row for the same
+ * reason (FEAT-155): it is the assessment made at recruitment, not the
+ * character's current build. `extras.stats` is deliberately ignored here so no
+ * call site can push a live build into a public passport.
  */
 export const fromCharacterPublic = (
   character: CharacterPublic,
@@ -204,6 +211,7 @@ export const fromCharacterPublic = (
 ): PassportData => {
   const origin = resolveOrigin(character.origin_id, extras);
   const grantedKit: GrantedKit | null = character.granted_kit;
+  const startingStats = toStats(character.starting_attributes);
 
   return {
     name: character.name,
@@ -219,8 +227,10 @@ export const fromCharacterPublic = (
     origin: toPassportOrigin(origin),
     originIsTypical: resolveOriginIsTypical(character.origin_id, extras?.typicalOriginIds),
 
-    stats: toStats(extras?.stats),
-    derived: extras?.stats ? computeDerivedStats(extras.stats) : undefined,
+    stats: startingStats,
+    // `false` = reconstructed from the subrace preset (pre-FEAT-155 character).
+    statsIsSnapshot: startingStats ? character.starting_attributes_is_snapshot : null,
+    derived: startingStats ? computeDerivedStats(startingStats) : undefined,
 
     starterKit: buildKit(grantedKit, extras),
     // `false` = reconstructed for a pre-feature character (D18).
@@ -279,6 +289,7 @@ export const fromCharacterListItem = (
     originIsTypical: resolveOriginIsTypical(row.origin_id, extras?.typicalOriginIds),
 
     stats: toStats(extras?.stats),
+    statsIsSnapshot: null,
     derived: extras?.stats ? computeDerivedStats(extras.stats) : undefined,
 
     // The list row has no `granted_kit`; the detail modal fetches the full
@@ -339,6 +350,7 @@ export const fromModerationRequest = (
     originIsTypical: resolveOriginIsTypical(request.origin_id, extras?.typicalOriginIds),
 
     stats: toStats(extras?.stats),
+    statsIsSnapshot: null,
     derived: extras?.stats ? computeDerivedStats(extras.stats) : undefined,
 
     starterKit: undefined,

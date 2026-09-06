@@ -255,7 +255,8 @@ def resolve_character_avatar(db: Session, character_request: models.CharacterReq
 
 
 def create_preliminary_character(db: Session, character_request: models.CharacterRequest, currency_balance: int = 0,
-                                 auto_commit: bool = True, granted_kit: Optional[dict] = None):
+                                 auto_commit: bool = True, granted_kit: Optional[dict] = None,
+                                 starting_attributes: Optional[dict] = None):
     """
     Создает предварительную запись персонажа с указанием user_id из заявки.
     currency_balance задаётся из стартового набора класса.
@@ -266,6 +267,11 @@ def create_preliminary_character(db: Session, character_request: models.Characte
     а `granted_kit` записывается замороженным слепком выданного набора (правило 12d,
     решение D17). Слепок приходит снаружи: резолвер вызывается в хендлере ровно
     один раз, и один и тот же результат идёт и на выдачу, и в паспорт.
+
+    FEAT-155: тем же способом замораживаются и стартовые характеристики
+    (`starting_attributes`) — пресет подрасы разрешается в хендлере ровно один
+    раз, и один и тот же результат уходит и в character-attributes-service, и в
+    паспорт. Разойтись они не могут по построению.
     """
     new_character = models.Character(
         id_attributes=None,
@@ -291,6 +297,7 @@ def create_preliminary_character(db: Session, character_request: models.Characte
         skitaltsy_since_segment=getattr(character_request, "skitaltsy_since_segment", None),
         registered_at=datetime.utcnow(),
         granted_kit=granted_kit,
+        starting_attributes=starting_attributes,
     )
     db.add(new_character)
     if auto_commit:
@@ -427,6 +434,63 @@ def resubmit_character_request(db: Session, db_request: models.CharacterRequest,
     return db_request
 
 
+# Десять базовых характеристик, из которых состоит пресет подрасы и которые
+# печатает паспорт (правило 27). Всё остальное, что хранит
+# character-attributes-service (текущие/максимальные пулы, резисты, вложенные
+# игроком очки), к записи о вступлении отношения не имеет.
+PASSPORT_STAT_KEYS = (
+    "strength", "agility", "intelligence", "endurance", "health",
+    "mana", "energy", "stamina", "charisma", "luck",
+)
+
+
+def normalize_starting_attributes(raw) -> Optional[dict]:
+    """
+    Приводит пресет/слепок к десяти целым ключам паспорта.
+
+    Всё, что не число, отбрасывается; пустой результат — это None, и тогда блок
+    «Оценка при вступлении» просто не рисуется. Никаких выдуманных значений.
+    """
+    if not isinstance(raw, dict):
+        return None
+    result = {}
+    for key in PASSPORT_STAT_KEYS:
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        result[key] = int(value)
+    return result or None
+
+
+def resolve_passport_starting_attributes(db: Session, character: models.Character):
+    """
+    Стартовые характеристики для паспорта: слепок, а если его нет — реконструкция.
+
+    Возвращает `(attributes, is_snapshot)`.
+
+    * Слепок есть -> он и возвращается, `is_snapshot=True`.
+    * Слепка нет (персонаж создан до FEAT-155) -> берём `stat_preset` его
+      подрасы: он известен, и по смыслу это ровно то, с чем персонаж вступал.
+      `is_snapshot=False` — паспорт помечает это как реконструкцию (D18).
+    * Ни слепка, ни пресета -> `(None, False)`, блок не рисуется.
+
+    **Текущие характеристики персонажа не читаются ни при каком раскладе** —
+    character-attributes-service здесь принципиально не опрашивается: паспорт
+    это запись о вступлении, а не текущее состояние, и чужой актуальный билд
+    не должен утекать через публичный эндпоинт.
+    """
+    snapshot = normalize_starting_attributes(getattr(character, "starting_attributes", None))
+    if snapshot:
+        return snapshot, True
+
+    subrace = (
+        db.query(models.Subrace)
+        .filter(models.Subrace.id_subrace == character.id_subrace)
+        .first()
+    )
+    return normalize_starting_attributes(subrace.stat_preset if subrace else None), False
+
+
 def get_character_public(db: Session, character_id: int) -> Optional[dict]:
     """
     Публичный паспорт персонажа (§3.1, правило 12d / D18).
@@ -434,6 +498,10 @@ def get_character_public(db: Session, character_id: int) -> Optional[dict]:
     granted_kit возвращается дословно, если слепок есть (granted_kit_is_snapshot=True).
     Если колонка NULL — персонаж создан до FEAT-154, и паспорт честно реконструирует
     набор живым resolve_starter_kit с флагом granted_kit_is_snapshot=False.
+
+    starting_attributes устроены так же (FEAT-155): слепок, а при его отсутствии —
+    пресет подрасы с флагом starting_attributes_is_snapshot=False. Текущие статы
+    персонажа эндпоинт не отдаёт вовсе.
     """
     character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if not character:
@@ -447,6 +515,10 @@ def get_character_public(db: Session, character_id: int) -> Optional[dict]:
     granted_kit_is_snapshot = granted_kit is not None
     if not granted_kit_is_snapshot:
         granted_kit = resolve_starter_kit(db, character.id_class, character.origin_id)
+
+    starting_attributes, starting_attributes_is_snapshot = (
+        resolve_passport_starting_attributes(db, character)
+    )
 
     return {
         "id": character.id,
@@ -477,7 +549,10 @@ def get_character_public(db: Session, character_id: int) -> Optional[dict]:
         "is_npc": bool(character.is_npc),
         "user_id": character.user_id,
         "username": None,  # заполняется в эндпоинте: имя живёт в user-service
-        "stats": None,  # заполняется в эндпоинте: статы живут в character-attributes-service
+        # Замороженные стартовые характеристики (FEAT-155). Это НЕ текущие статы:
+        # паспорт их не показывает и эндпоинт их не запрашивает.
+        "starting_attributes": starting_attributes,
+        "starting_attributes_is_snapshot": starting_attributes_is_snapshot,
         "granted_kit": granted_kit,
         "granted_kit_is_snapshot": granted_kit_is_snapshot,
     }

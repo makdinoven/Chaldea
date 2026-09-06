@@ -71,6 +71,12 @@ class Character(Base):
     # FEAT-154 rule 12d / D17-D18: замороженный слепок выданного стартового набора.
     # NULL = персонаж создан до фичи, паспорт реконструирует набор живым resolve.
     granted_kit = Column(JSON, nullable=True)
+    # FEAT-155 (правило 12d по образцу granted_kit): замороженный слепок
+    # стартовых характеристик — пресет подрасы в момент одобрения заявки.
+    # Паспорт — запись о вступлении, а не текущее состояние персонажа, поэтому
+    # он читает слепок, а не character-attributes-service.
+    # NULL = персонаж создан до фичи, паспорт реконструирует пресет подрасы.
+    starting_attributes = Column(JSON, nullable=True)
 
     titles = relationship("CharacterTitle", back_populates="character")
     current_title = relationship("Title")

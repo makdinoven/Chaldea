@@ -429,12 +429,22 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
             f"{len(kit_skills)} навыков, {currency_amount} валюты"
         )
 
+        # 2.5) Разрешаем пресет подрасы — ЕДИНСТВЕННЫЙ вызов в этом хендлере
+        #      (FEAT-155, по образцу D17). Один и тот же результат уходит и в
+        #      character-attributes-service (шаг 7), и в слепок
+        #      characters.starting_attributes, поэтому паспорт не может
+        #      разойтись с тем, что персонажу действительно начислили.
+        attributes = crud.generate_attributes_for_subrace(db, db_request.id_subrace)
+        logger.info(f"Сгенерированы атрибуты для подрасы {db_request.id_subrace}")
+        starting_attributes_snapshot = crud.normalize_starting_attributes(attributes)
+
         # 3) Создаем предварительную запись персонажа с currency_balance (flush, не commit)
         new_character = crud.create_preliminary_character(
             db, db_request,
             currency_balance=currency_amount,
             auto_commit=False,
             granted_kit=granted_kit_snapshot,
+            starting_attributes=starting_attributes_snapshot,
         )
         logger.info(f"Создан персонаж с ID {new_character.id}, currency_balance={currency_amount}")
 
@@ -449,9 +459,7 @@ async def approve_character_request(request_id: int, db: Session = Depends(get_d
                 metadata={"class_id": class_id, "origin_id": origin_id},
             )
 
-        # 4) Генерируем атрибуты по подрасе (из БД)
-        attributes = crud.generate_attributes_for_subrace(db, db_request.id_subrace)
-        logger.info(f"Сгенерированы атрибуты для подрасы {db_request.id_subrace}")
+        # 4) Атрибуты уже разрешены на шаге 2.5 — второй раз резолвер не зовём.
 
         # 5) Отправка запроса на создание инвентаря (graceful — не блокирует одобрение)
         if kit_items:
@@ -2045,46 +2053,6 @@ def get_all_classes(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Ошибка при получении списка классов.")
 
 
-# Пресет статов, который печатает паспорт (правило 27). Порядок и состав
-# совпадают с PASSPORT_STAT_ORDER на фронтенде; всё остальное, что отдаёт
-# character-attributes-service (текущие/максимальные пулы, резисты), паспорту
-# не нужно — производные значения он считает сам.
-PASSPORT_STAT_KEYS = (
-    "strength", "agility", "intelligence", "endurance", "health",
-    "mana", "energy", "stamina", "charisma", "luck",
-)
-
-
-def _fetch_character_stats(character_id: int):
-    """
-    Забирает пресет статов из character-attributes-service (N26).
-
-    Graceful: любая проблема (сервис недоступен, 404, битый ответ) — это None,
-    паспорт рисуется без блока статов, а не 500. Атрибуты живут в соседнем
-    сервисе, и его падение не должно ломать публичную страницу персонажа.
-    """
-    try:
-        resp = httpx.get(
-            f"{settings.ATTRIBUTES_SERVICE_URL.rstrip('/')}/{character_id}",
-            timeout=5.0,
-        )
-        if resp.status_code != 200:
-            return None
-        payload = resp.json()
-        if not isinstance(payload, dict):
-            return None
-        stats = {}
-        for key in PASSPORT_STAT_KEYS:
-            value = payload.get(key)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                continue
-            stats[key] = int(value)
-        return stats or None
-    except Exception as e:
-        logger.warning(f"Не удалось получить атрибуты персонажа {character_id}: {e}")
-        return None
-
-
 # Путь именно /{character_id}/public, а не голый /{character_id}: так он не
 # конфликтует со статическими сегментами /list, /races, /metadata, /classes,
 # /starter-kits (§3.1).
@@ -2095,6 +2063,11 @@ def get_character_public(character_id: int, db: Session = Depends(get_db)):
 
     granted_kit — замороженный слепок (правило 12d). Если слепка нет (персонаж
     создан до FEAT-154), возвращается живой resolve и granted_kit_is_snapshot=False (D18).
+
+    starting_attributes — такой же замороженный слепок стартовых характеристик
+    (FEAT-155). Эндпоинт НЕ ходит в character-attributes-service и не отдаёт
+    текущие статы персонажа: паспорт это запись о вступлении, а актуальный билд
+    игрока не должен утекать через публичную анкету.
     """
     try:
         data = crud.get_character_public(db, character_id)
@@ -2113,10 +2086,6 @@ def get_character_public(character_id: int, db: Session = Depends(get_db)):
                 data["username"] = resp.json().get("username")
         except Exception as e:
             logger.warning(f"Не удалось получить username для user_id {data['user_id']}: {e}")
-
-    # Статы живут в character-attributes-service; их отсутствие лишь убирает
-    # блок статов из паспорта (правило 27, N26).
-    data["stats"] = _fetch_character_stats(character_id)
 
     return data
 
