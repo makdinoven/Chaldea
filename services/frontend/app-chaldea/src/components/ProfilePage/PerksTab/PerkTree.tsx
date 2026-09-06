@@ -50,6 +50,37 @@ const CATEGORY_CONFIG: Record<string, { label: string; color: string }> = {
 
 const CATEGORY_ORDER = ['combat', 'trade', 'exploration', 'progression', 'usage'];
 
+/**
+ * Where each branch points, in degrees, 0 = right and growing clockwise.
+ *
+ * Not simply five even steps of 72°: these are the bearings of the painted
+ * zones behind them, measured off the backdrop as the centroid of each zone's
+ * colour. The artwork's lobes are hand-composed and sit a few degrees off a
+ * perfect star — trade by -8.5°, exploration by -6.8°, the rest within three —
+ * so an evenly spread tree left some perks over the edge of their own zone.
+ * Aiming each branch at its zone instead is what puts them back inside it.
+ *
+ * These belong to this backdrop. Replace the picture and they must be measured
+ * again, or dropped back to `index * 72 - 90`.
+ */
+const BRANCH_BEARING: Record<string, number> = {
+  combat: -88.4,        // красный, вверх
+  trade: -26.5,         // золотой, вправо-вверх
+  exploration: 47.2,    // синий, вправо-вниз
+  progression: 128.5,   // зелёный, влево-вниз
+  usage: -155.3,        // фиолетовый, влево-вверх
+};
+
+/**
+ * How far the backdrop is nudged to bring its composition onto the hub, as a
+ * fraction of its own size. The artwork sits a little high in its file — the
+ * measurements put it between half and one percent, depending on how you pick
+ * the centre out of a hand-painted rosette — which showed up as the "Перки"
+ * label sitting below the middle of the art. Positive moves the picture down.
+ */
+const ART_NUDGE_X = 0;
+const ART_NUDGE_Y = 0.008;
+
 const RARITY_LABELS: Record<string, string> = {
   common: 'Обычный',
   rare: 'Редкий',
@@ -111,7 +142,13 @@ function computePositions(
   const sectorAngle = (2 * Math.PI) / catCount;
 
   categories.forEach(([cat, catPerks], catIdx) => {
-    const sectorCenter = catIdx * sectorAngle - Math.PI / 2;
+    // The painted zone's bearing where there is one; an even share otherwise,
+    // so an unknown category still gets a place rather than piling up at 0.
+    const bearing = BRANCH_BEARING[cat];
+    const sectorCenter =
+      bearing === undefined
+        ? catIdx * sectorAngle - Math.PI / 2
+        : (bearing * Math.PI) / 180;
 
     // Distribute perks into rings
     const rings: CharacterPerk[][] = [];
@@ -273,8 +310,8 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
                   it lands where the branches are without any fitting to do */}
               <image
                 href={perksBackdrop}
-                x={CENTER - half}
-                y={CENTER - half}
+                x={CENTER - half + ART_NUDGE_X * half * 2}
+                y={CENTER - half + ART_NUDGE_Y * half * 2}
                 width={half * 2}
                 height={half * 2}
                 preserveAspectRatio="xMidYMid slice"
