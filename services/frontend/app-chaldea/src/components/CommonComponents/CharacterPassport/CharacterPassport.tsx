@@ -222,8 +222,26 @@ const CharacterPassport = ({
       (showRecruitmentRecord && data.starterKit),
   );
 
+  /**
+   * УР in the header, beside the status marks — NOT a row in «Информация о
+   * персонаже» (it used to be one, and it is deliberately not both).
+   *
+   * УР is the organisation's own rating of a Скиталец: it is how this world
+   * measures a person, not a line of the questionnaire like height or weight.
+   * That puts it next to the name, where the reader looks first.
+   *
+   * Falls back to `1`, not to «—»: an unregistered character in the wizard is
+   * still a first-level Скиталец, so the badge reads correctly there too.
+   */
+  const levelBadge = (
+    <span className="lore-badge" title="Уровень развития — оценка Скитальца Цитаделью">
+      УР {data.level ?? 1}
+    </span>
+  );
+
   const badges = (
     <div className="flex flex-wrap items-center gap-2">
+      {levelBadge}
       {data.status ? (
         <span className={STATUS_BADGE_CLASS[data.status]}>{STATUS_LABELS[data.status]}</span>
       ) : null}
@@ -300,9 +318,24 @@ const CharacterPassport = ({
         </div>
 
         <div className="flex flex-col gap-1">
-          <Field label="УР" value={data.level ?? undefined} />
           <Field label="Путь" value={data.className ?? undefined} />
         </div>
+
+        {/*
+          Rejection, collapsed. The card is a summary, so the reason is NOT
+          reproduced in full here — but the fact that the Coordinator wrote one
+          must survive the collapse, otherwise the player has to open every
+          application to find out which of them says anything. Two lines, then
+          the full text waits behind the card.
+        */}
+        {data.status === 'rejected' && data.rejectionReason ? (
+          <div className="rounded-card border border-[#8b1a1a]/40 bg-[#8b1a1a]/10 px-2.5 py-2">
+            <p className="passport-field-label">Причина отказа</p>
+            <p className="lore-body mt-0.5 line-clamp-2 break-words text-sm">
+              {data.rejectionReason}
+            </p>
+          </div>
+        ) : null}
 
         <div className="mt-auto flex flex-wrap items-center justify-between gap-2 pt-1">
           <PassportSeal characterId={data.characterId} compact />
@@ -364,8 +397,8 @@ const CharacterPassport = ({
             <h3 className="lore-heading text-lg sm:text-xl">Информация о персонаже</h3>
 
             <div className="flex flex-col gap-2">
+              {/* No «УР» row — it is a header badge now (see `levelBadge`). */}
               <Field label="Мегалинк" value={megalinkValue} />
-              <Field label="УР" value={data.level ?? undefined} />
               <Field label="Раса" value={data.raceName ?? undefined} />
               <Field label="Подраса" value={data.subraceName ?? undefined} />
               <Field label="Родина" value={originValue} />

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
@@ -23,10 +24,25 @@ import RequestEditor from './RequestEditor';
  * application they filed, its status, and — when the Coordinator refused — the
  * reason he wrote, verbatim.
  *
- * The card is the same `CharacterPassport` the moderator judges and every other
- * player sees (rule 26); the status badge and the rejection block are already
- * part of it, so this page adds only what the passport cannot know: what the
- * player may *do* with each application.
+ * The list is COLLAPSED: one `variant="compact"` card per application, the
+ * same card the characters grid uses (rule 26), opening the full passport in a
+ * modal. A full sheet per row cost ~2000px each — seventeen applications made a
+ * 34000px page on which the older ones were simply unreachable. Collapsed, the
+ * page is a fixed grid and the reader chooses what to unfold.
+ *
+ * Compact, not a third view: the card already carries the portrait, the name,
+ * the lineage and — the two things the player comes here for — the status badge
+ * and (added for this page) a two-line preview of the Coordinator's reason.
+ *
+ * A modal rather than in-place expansion, because in-place expansion IS the
+ * problem: an unfolded passport is taller than the viewport, so it would push
+ * every following card off the screen and put the reader back to scrolling
+ * thousands of pixels. The modal keeps the list stationary and reuses exactly
+ * the overlay `CharactersListPage` opens the same passport in.
+ *
+ * The status badge and the rejection block are already part of the passport, so
+ * this page adds only what the passport cannot know: what the player may *do*
+ * with each application.
  *
  * ⚠️ Rule 30a — only a `rejected` application can be edited and resubmitted.
  * A pending or approved one shows no edit button at all; the backend would
@@ -59,6 +75,8 @@ export default function MyRequestsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
+  /** Which application is unfolded in the modal. `null` = the list only. */
+  const [openId, setOpenId] = useState<number | null>(null);
 
   /** `start_location_id` → name, from the curated list (the row carries only the id). */
   const [locationNames, setLocationNames] = useState<Map<number, string>>(new Map());
@@ -130,16 +148,71 @@ export default function MyRequestsPage() {
     return map;
   }, [races]);
 
+  /**
+   * One adapter call site for both the collapsed card and the modal, so the two
+   * can never drift apart — the modal must show the same application the card
+   * summarises, only in full.
+   */
+  const toPassport = useCallback(
+    (request: MyCharacterRequest) =>
+      fromModerationRequest(request, {
+        origins,
+        typicalOriginIds: request.id_subrace
+          ? typicalBySubrace.get(request.id_subrace) ?? null
+          : null,
+        startLocationName: request.start_location_id
+          ? locationNames.get(request.start_location_id) ?? null
+          : null,
+      }),
+    [origins, typicalBySubrace, locationNames],
+  );
+
   const editing = useMemo(
     () => requests.find((request) => request.id === editingId) ?? null,
     [requests, editingId],
   );
+
+  const opened = useMemo(
+    () => requests.find((request) => request.id === openId) ?? null,
+    [requests, openId],
+  );
+
+  // Escape closes the unfolded application — the modal is a reading view.
+  useEffect(() => {
+    if (!opened) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenId(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [opened]);
+
+  /**
+   * Rule 30a — ONLY a rejected application may be reworked. Rendered on the
+   * collapsed card (so the player can act without opening it) and again inside
+   * the modal (where the reason he is acting on is being read).
+   */
+  const editButton = (request: MyCharacterRequest) =>
+    request.status === 'rejected' ? (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpenId(null);
+          setEditingId(request.id);
+        }}
+        className="font-lore rounded-card border border-ink/40 px-4 py-1.5 text-sm text-ink transition-colors duration-200 ease-site hover:bg-ink/10 sm:px-5 sm:py-2 sm:text-base"
+      >
+        Исправить и отправить заново
+      </button>
+    ) : null;
 
   const handleSaved = (updated: MyCharacterRequest) => {
     setRequests((prev) =>
       prev.map((request) => (request.id === updated.id ? updated : request)).sort(byNewest),
     );
     setEditingId(null);
+    setOpenId(null);
   };
 
   const header = (
@@ -199,44 +272,86 @@ export default function MyRequestsPage() {
           </Link>
         </div>
       ) : (
-        <div className="flex w-full max-w-container flex-col gap-10 px-2 sm:gap-16 sm:px-4">
+        <div className="grid w-full max-w-container grid-cols-1 gap-4 px-2 sm:grid-cols-2 sm:px-4 lg:grid-cols-3">
           {requests.map((request) => (
             <CharacterPassport
               key={request.id}
-              data={fromModerationRequest(request, {
-                origins,
-                typicalOriginIds: request.id_subrace
-                  ? typicalBySubrace.get(request.id_subrace) ?? null
-                  : null,
-                startLocationName: request.start_location_id
-                  ? locationNames.get(request.start_location_id) ?? null
-                  : null,
-              })}
-              variant="full"
+              data={toPassport(request)}
+              variant="compact"
               currentGameYear={currentGameYear}
               // The player's own request — the posting they chose stays visible.
               audience="self"
+              onClick={() => setOpenId(request.id)}
               footer={
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="lore-body text-ink-muted text-sm">
+                <div className="mt-3 flex flex-col gap-2 border-t border-ink/15 pt-3">
+                  <p className="lore-body text-ink-muted text-xs">
                     {STATUS_HINTS[request.status] ?? ''}
                   </p>
-                  {/* Rule 30a — only a rejected application may be reworked. */}
-                  {request.status === 'rejected' ? (
-                    <button
-                      type="button"
-                      onClick={() => setEditingId(request.id)}
-                      className="font-lore rounded-card border border-ink/40 px-5 py-2 text-base text-ink transition-colors duration-200 ease-site hover:bg-ink/10"
-                    >
-                      Исправить и отправить заново
-                    </button>
-                  ) : null}
+                  {editButton(request)}
                 </div>
               }
             />
           ))}
         </div>
       )}
+
+      {/*
+        The unfolded application. Portalled to `document.body` on purpose, the
+        same fix `CharactersListPage` and `AdminOrigins` carry: this page sits
+        inside a transformed ancestor, which becomes the containing block for
+        `position: fixed` children — `.modal-overlay`'s `inset: 0` would then
+        resolve against the scrolling page instead of the viewport and the sheet
+        would climb out of the top of the screen, under the site header.
+      */}
+      {opened &&
+        createPortal(
+          <div className="modal-overlay" onClick={() => setOpenId(null)}>
+            {/*
+              Two boxes, as on the characters grid: the outer one is the frame,
+              so «Закрыть» stays pinned while the inner one scrolls the passport
+              inside 90vh instead of growing off the display.
+            */}
+            <div
+              className="relative mx-4 my-auto w-full max-w-4xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={() => setOpenId(null)}
+                aria-label="Закрыть"
+                className="absolute right-3 top-3 z-10 text-ink/60 transition-colors hover:text-ink"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-6 w-6"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <div className="gold-scrollbar max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-card">
+                <CharacterPassport
+                  data={toPassport(opened)}
+                  variant="full"
+                  currentGameYear={currentGameYear}
+                  audience="self"
+                  footer={
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="lore-body text-ink-muted text-sm">
+                        {STATUS_HINTS[opened.status] ?? ''}
+                      </p>
+                      {editButton(opened)}
+                    </div>
+                  }
+                />
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
