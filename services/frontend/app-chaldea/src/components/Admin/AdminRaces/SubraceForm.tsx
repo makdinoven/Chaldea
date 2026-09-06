@@ -46,7 +46,7 @@ const SubraceForm = ({ subrace, races, defaultRaceId, onSave, onCancel, loading 
   const [name, setName] = useState(subrace?.name || '');
   const [description, setDescription] = useState(subrace?.description || '');
   const [raceId, setRaceId] = useState<number>(
-    subrace?.id_race || defaultRaceId || (races[0]?.id_race ?? 0)
+    subrace?.id_race ?? defaultRaceId ?? races[0]?.id_race ?? 0
   );
   const [statPreset, setStatPreset] = useState<StatPreset>(
     subrace?.stat_preset || { ...DEFAULT_PRESET }

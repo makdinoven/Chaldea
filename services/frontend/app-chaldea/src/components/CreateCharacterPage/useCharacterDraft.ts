@@ -98,6 +98,9 @@ const parseStartLocation = (raw: unknown): StartingPoint | null => {
     region_name: asStringOrNull(source.region_name),
     country_name: asStringOrNull(source.country_name),
     sort_order: asNumber(source.sort_order, 0),
+    // FEAT-155 — a draft only remembers WHICH point was picked; whether it is
+    // recommended is re-derived from the origin on the next load.
+    is_recommended: false,
   };
 };
 

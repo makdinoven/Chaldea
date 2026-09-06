@@ -1761,9 +1761,41 @@ class StartingPointRead(BaseModel):
     region_name: Optional[str] = None
     country_name: Optional[str] = None
     sort_order: int = 0
+    # FEAT-155 — подсказка, а не ограничение: точка рекомендована происхождению
+    # из ?origin_id. Без этого параметра поле всегда False.
+    is_recommended: bool = False
 
     class Config:
         orm_mode = True
+
+
+class LocationSearchResult(BaseModel):
+    """FEAT-155 rule 6 — поиск локации по названию для админского экрана.
+
+    Хлебные крошки обязательны: без них десяток «Ворот» неразличим.
+    """
+    id: int
+    name: str
+    image_url: Optional[str] = None
+    district_name: Optional[str] = None
+    region_name: Optional[str] = None
+    country_name: Optional[str] = None
+    is_starting: bool = False
+
+    class Config:
+        orm_mode = True
+
+
+class OriginStartingPointsUpdate(BaseModel):
+    """Полная замена набора рекомендованных точек происхождения (FEAT-155)."""
+    location_ids: List[int] = Field(default_factory=list, max_items=200)
+
+    @validator("location_ids")
+    def _positive_ids(cls, v):
+        for loc_id in v or []:
+            if loc_id is None or loc_id <= 0:
+                raise ValueError("Идентификатор локации должен быть положительным.")
+        return v
 
 
 class OriginCountryRead(BaseModel):
@@ -1779,8 +1811,6 @@ class OriginCountryRead(BaseModel):
     summary: Optional[str] = None
     skitaltsy_attitude: Optional[str] = None
     archive_slug: Optional[str] = None
-    country_id: Optional[int] = None
-    is_playable: bool = False
     sort_order: int = 0
 
     class Config:
@@ -1802,8 +1832,6 @@ class OriginCountryCreate(BaseModel):
     summary: Optional[str] = Field(None, max_length=5000)
     skitaltsy_attitude: Optional[str] = Field(None, max_length=5000)
     archive_slug: Optional[str] = Field(None, max_length=255, regex=ARCHIVE_SLUG_REGEX)
-    country_id: Optional[int] = None
-    is_playable: bool = False
     is_active: bool = True
     sort_order: int = 0
 
@@ -1822,8 +1850,6 @@ class OriginCountryUpdate(BaseModel):
     summary: Optional[str] = Field(None, max_length=5000)
     skitaltsy_attitude: Optional[str] = Field(None, max_length=5000)
     archive_slug: Optional[str] = Field(None, max_length=255, regex=ARCHIVE_SLUG_REGEX)
-    country_id: Optional[int] = None
-    is_playable: Optional[bool] = None
     is_active: Optional[bool] = None
     sort_order: Optional[int] = None
 

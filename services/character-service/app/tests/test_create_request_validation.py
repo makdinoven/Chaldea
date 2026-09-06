@@ -683,6 +683,7 @@ class TestRacesEndpointSubraceFields:
         sub = self._forest_elf(anon_client)
         assert sub["id_subrace"] == 4
         assert sub["name"] == "Лесной"
+        assert sub["id_race"] == 2  # родитель, а не undefined
         assert sub["description"] == "Лесные эльфы"
         assert sub["stat_preset"] == {"strength": 10}
         assert sub["image"] == "https://example.com/elf.webp"
@@ -693,6 +694,29 @@ class TestRacesEndpointSubraceFields:
         assert sub["height_min"] is None
         assert sub["height_max"] is None
         assert sub["typical_origin_ids"] is None
+
+    def test_id_race_points_at_the_parent_race(self, db_session, anon_client):
+        """Публичный ответ обязан называть настоящего родителя подрасы."""
+        races = anon_client.get("/characters/races").json()
+        for race in races:
+            for sub in race["subraces"]:
+                assert sub["id_race"] == race["id_race"]
+
+    def test_key_set_is_exactly_the_contract(self, db_session, anon_client):
+        """Аддитивность: новый ключ появился, ни один старый не пропал."""
+        sub = self._forest_elf(anon_client)
+        assert set(sub.keys()) == {
+            "id_subrace",
+            "id_race",
+            "name",
+            "description",
+            "stat_preset",
+            "image",
+            "distinctive_features",
+            "height_min",
+            "height_max",
+            "typical_origin_ids",
+        }
 
     def test_endpoint_stays_public(self, db_session, anon_client):
         assert anon_client.get("/characters/races").status_code == 200

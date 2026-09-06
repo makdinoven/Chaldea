@@ -316,6 +316,7 @@ const RequestEditor = ({
           <StartingPointPicker
             selectedId={startLocationId}
             onSelect={handleSelectStartLocation}
+            originId={selectedOriginId}
           />
         </div>
       </EditorSection>

@@ -129,7 +129,7 @@ from models import (
     NpcShopItem, Quest, QuestObjective, CharacterQuest, CharacterQuestProgress,
     ArchiveCategory, ArchiveArticle, ArchiveArticleCategory,
     RegionTransitionArrow, ArrowNeighbor, FloatingStructure,
-    GatheringNode, GatheringSession, OriginCountry,
+    GatheringNode, GatheringSession, OriginCountry, OriginStartingPoint,
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -6649,7 +6649,9 @@ async def get_active_gathering_for_character(
 #   FEAT-154 — STARTING POINTS & ORIGIN COUNTRIES
 # ---------------------------------------------------------------------------
 
-def _starting_point_row_to_dict(loc: Location, district_name, region_name, country_name) -> dict:
+def _starting_point_row_to_dict(
+    loc: Location, district_name, region_name, country_name, is_recommended=False
+) -> dict:
     return {
         "id": loc.id,
         "name": loc.name,
@@ -6659,16 +6661,17 @@ def _starting_point_row_to_dict(loc: Location, district_name, region_name, count
         "region_name": region_name,
         "country_name": country_name,
         "sort_order": loc.sort_order or 0,
+        "is_recommended": bool(is_recommended),
     }
 
 
-def _starting_points_query():
-    """Curated starting points joined up the world hierarchy.
+def _location_breadcrumbs_query():
+    """Locations joined up the world hierarchy (district -> region -> country).
 
     A location hangs either off a district or straight off a region, so the
     region is resolved via ``COALESCE(District.region_id, Location.region_id)``.
-    Every join is an OUTER join — an orphaned starting point still shows up,
-    just without its breadcrumbs.
+    Every join is an OUTER join — an orphaned location still shows up, just
+    without its breadcrumbs.
     """
     return (
         select(Location, District.name, Region.name, Country.name)
@@ -6678,15 +6681,119 @@ def _starting_points_query():
             Region.id == sa_func.coalesce(District.region_id, Location.region_id),
         )
         .outerjoin(Country, Country.id == Region.country_id)
-        .where(Location.is_starting.is_(True))
     )
 
 
-async def get_starting_points(session: AsyncSession) -> List[dict]:
-    """Rule 19 — the curated list only, never the full location catalogue."""
-    stmt = _starting_points_query().order_by(Location.sort_order.asc(), Location.name.asc())
+def _starting_points_query():
+    """Curated starting points only."""
+    return _location_breadcrumbs_query().where(Location.is_starting.is_(True))
+
+
+async def get_starting_points(
+    session: AsyncSession, origin_id: Optional[int] = None
+) -> List[dict]:
+    """Rule 19 — the curated list only, never the full location catalogue.
+
+    FEAT-155: with ``origin_id`` the very same list comes back, only annotated
+    with ``is_recommended`` and reordered so the recommended points lead. The
+    wizard needs the *whole* list with a marker, not just the recommended
+    subset — hence a query parameter here rather than a second endpoint.
+    Without ``origin_id`` the behaviour is byte-for-byte what it was before.
+    """
+    if origin_id is None:
+        stmt = _starting_points_query().order_by(
+            Location.sort_order.asc(), Location.name.asc()
+        )
+        result = await session.execute(stmt)
+        return [_starting_point_row_to_dict(*row) for row in result.all()]
+
+    link = OriginStartingPoint
+    stmt = (
+        _starting_points_query()
+        .add_columns(link.id, link.sort_order)
+        .outerjoin(
+            link,
+            (link.location_id == Location.id) & (link.origin_id == origin_id),
+        )
+        .order_by(
+            # recommended first: IS NULL sorts 0 for a matched link, 1 otherwise
+            link.id.is_(None).asc(),
+            sa_func.coalesce(link.sort_order, 0).asc(),
+            Location.sort_order.asc(),
+            Location.name.asc(),
+        )
+    )
     result = await session.execute(stmt)
-    return [_starting_point_row_to_dict(*row) for row in result.all()]
+    rows = []
+    for loc, district_name, region_name, country_name, link_id, _link_sort in result.all():
+        rows.append(
+            _starting_point_row_to_dict(
+                loc, district_name, region_name, country_name, link_id is not None
+            )
+        )
+    return rows
+
+
+# LIKE wildcard escaping for the admin location search.
+# "!" instead of the more usual "\": a backslash is itself an escape character
+# inside MySQL string literals, so rendering ESCAPE '\' is dialect-dependent,
+# while ESCAPE '!' is plain text in both MySQL and SQLite.
+_LIKE_ESCAPE_CHAR = "!"
+
+
+def _escape_like(value: str) -> str:
+    """Turn user input into a LIKE pattern fragment that matches literally.
+
+    The escape character goes first, otherwise the "!" we insert in front of a
+    "%" would itself get escaped on the next pass.
+    """
+    for char in (_LIKE_ESCAPE_CHAR, "%", "_"):
+        value = value.replace(char, _LIKE_ESCAPE_CHAR + char)
+    return value
+
+
+async def search_locations_with_breadcrumbs(
+    session: AsyncSession, q: str, limit: int = 20
+) -> List[dict]:
+    """FEAT-155 rule 6 — find a location by name without walking the tree.
+
+    Reuses the same OUTER-JOIN breadcrumb query as the starting-point list, so
+    the admin sees *where* each match sits and can tell ten «Ворота» apart.
+    """
+    q_stripped = (q or "").strip()
+    if not q_stripped:
+        return []
+
+    limit = max(1, min(int(limit or 20), 50))
+    # "%" and "_" typed into the search box are ordinary characters, not a
+    # pattern the admin is writing — escape them before they reach LIKE.
+    name_filter = sa_func.lower(Location.name).like(
+        f"%{_escape_like(q_stripped.lower())}%", escape=_LIKE_ESCAPE_CHAR
+    )
+    if q_stripped.isdigit():
+        condition = (Location.id == int(q_stripped)) | name_filter
+    else:
+        condition = name_filter
+
+    stmt = (
+        _location_breadcrumbs_query()
+        .where(condition)
+        .order_by(Location.name.asc(), Location.id.asc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return [
+        {
+            "id": loc.id,
+            "name": loc.name,
+            "image_url": loc.image_url or None,
+            "district_name": district_name,
+            "region_name": region_name,
+            "country_name": country_name,
+            "is_starting": bool(loc.is_starting),
+        }
+        for loc, district_name, region_name, country_name in result.all()
+    ]
 
 
 async def get_starting_point(session: AsyncSession, location_id: int) -> Optional[dict]:
@@ -6750,7 +6857,7 @@ async def update_origin_country(
 
     update_data = data.dict(exclude_unset=True)
     # These columns are NOT NULL — an explicit null means "leave as is".
-    for not_null_field in ("name", "is_playable", "is_active", "sort_order"):
+    for not_null_field in ("name", "is_active", "sort_order"):
         if update_data.get(not_null_field, "sentinel") is None:
             update_data.pop(not_null_field)
 
@@ -6785,3 +6892,163 @@ async def deactivate_origin_country(
     await session.commit()
     await session.refresh(origin)
     return origin
+
+
+# ---------------------------------------------------------------------------
+#   FEAT-155 — РЕКОМЕНДОВАННЫЕ СТАРТОВЫЕ ТОЧКИ ПРОИСХОЖДЕНИЯ
+# ---------------------------------------------------------------------------
+
+async def _require_origin(session: AsyncSession, origin_id: int) -> OriginCountry:
+    origin = await get_origin_country_by_id(session, origin_id)
+    if not origin:
+        raise HTTPException(status_code=404, detail="Происхождение не найдено.")
+    return origin
+
+
+async def _promote_to_starting_points(
+    session: AsyncSession, location_ids: List[int]
+) -> List[int]:
+    """Rule 7 — recommending a location makes it a starting point.
+
+    The admin must not be sent to another screen just to tick a flag, so the
+    promotion happens right here, in the link handler. Returns the ids that
+    were actually flipped (for the response / logs).
+    """
+    if not location_ids:
+        return []
+    result = await session.execute(
+        select(Location).where(Location.id.in_(location_ids))
+    )
+    found = {loc.id: loc for loc in result.scalars().all()}
+    missing = [lid for lid in location_ids if lid not in found]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Локация не найдена: {missing[0]}.",
+        )
+    promoted = []
+    for loc in found.values():
+        if not loc.is_starting:
+            loc.is_starting = True
+            promoted.append(loc.id)
+    return promoted
+
+
+async def get_origin_starting_points(
+    session: AsyncSession, origin_id: int
+) -> List[dict]:
+    """The recommended set of one origin, in its curated order.
+
+    A location deleted from the world takes its link with it (ON DELETE
+    CASCADE), so nothing dangling can ever reach this list — rule 9.
+
+    An unknown origin is a 404, not an empty set: an empty array would tell the
+    admin "the set is empty" when the truth is "there is no such origin". The
+    three writing handlers already answer 404 through the same helper.
+    """
+    await _require_origin(session, origin_id)
+    link = OriginStartingPoint
+    stmt = (
+        _location_breadcrumbs_query()
+        .add_columns(link.sort_order)
+        .join(link, link.location_id == Location.id)
+        .where(link.origin_id == origin_id)
+        .order_by(link.sort_order.asc(), Location.name.asc())
+    )
+    result = await session.execute(stmt)
+    return [
+        _starting_point_row_to_dict(loc, d_name, r_name, c_name, True)
+        for loc, d_name, r_name, c_name, _sort in result.all()
+    ]
+
+
+async def set_origin_starting_points(
+    session: AsyncSession, origin_id: int, location_ids: List[int]
+) -> List[dict]:
+    """Replace the whole recommended set of an origin (ordered)."""
+    await _require_origin(session, origin_id)
+
+    ordered: List[int] = []
+    for loc_id in location_ids or []:
+        if loc_id not in ordered:
+            ordered.append(int(loc_id))
+
+    await _promote_to_starting_points(session, ordered)
+
+    await session.execute(
+        delete(OriginStartingPoint).where(OriginStartingPoint.origin_id == origin_id)
+    )
+    for index, loc_id in enumerate(ordered):
+        session.add(
+            OriginStartingPoint(
+                origin_id=origin_id, location_id=loc_id, sort_order=index
+            )
+        )
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Не удалось сохранить набор стартовых точек.",
+        )
+    return await get_origin_starting_points(session, origin_id)
+
+
+async def add_origin_starting_point(
+    session: AsyncSession, origin_id: int, location_id: int
+) -> List[dict]:
+    """Add one recommended point. Idempotent — a repeat is not an error."""
+    await _require_origin(session, origin_id)
+    await _promote_to_starting_points(session, [location_id])
+
+    existing = await session.execute(
+        select(OriginStartingPoint).where(
+            OriginStartingPoint.origin_id == origin_id,
+            OriginStartingPoint.location_id == location_id,
+        )
+    )
+    if existing.scalars().first() is None:
+        max_sort = await session.execute(
+            select(sa_func.max(OriginStartingPoint.sort_order)).where(
+                OriginStartingPoint.origin_id == origin_id
+            )
+        )
+        next_sort = (max_sort.scalar() or 0) + 1
+        session.add(
+            OriginStartingPoint(
+                origin_id=origin_id, location_id=location_id, sort_order=next_sort
+            )
+        )
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Эта локация уже рекомендована данному происхождению.",
+        )
+    return await get_origin_starting_points(session, origin_id)
+
+
+async def remove_origin_starting_point(
+    session: AsyncSession, origin_id: int, location_id: int
+) -> List[dict]:
+    """Drop one recommended point. The location keeps its ``is_starting`` flag
+    — it may well be a starting point on its own account (rule 8)."""
+    await _require_origin(session, origin_id)
+    result = await session.execute(
+        select(OriginStartingPoint).where(
+            OriginStartingPoint.origin_id == origin_id,
+            OriginStartingPoint.location_id == location_id,
+        )
+    )
+    link = result.scalars().first()
+    if link is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Эта локация не входит в набор рекомендованных.",
+        )
+    await session.delete(link)
+    await session.commit()
+    return await get_origin_starting_points(session, origin_id)

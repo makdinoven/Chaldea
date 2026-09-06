@@ -19,7 +19,14 @@ export interface StatPreset {
 
 export interface Subrace {
   id_subrace: number;
-  id_race: number;
+  /**
+   * Present on `SubraceResponse` (admin create/update) and, since FEAT-155, on
+   * the nested rows of `GET /characters/races` too — `SubraceWithPreset` now
+   * carries it as a required field. Kept optional here as a historical
+   * safeguard: callers that read a subrace out of `Race.subraces` still fall
+   * back to the parent race's id, so an older payload cannot regress them.
+   */
+  id_race?: number;
   name: string;
   description: string;
   image: string | null;

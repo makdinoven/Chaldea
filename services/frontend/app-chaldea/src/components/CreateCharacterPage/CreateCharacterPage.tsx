@@ -336,6 +336,7 @@ export default function CreateCharacterPage() {
           <StepOath
             startLocation={startLocation}
             onSelectStartLocation={setStartLocation}
+            selectedOriginId={selectedOriginId}
           />
         );
       case 5:

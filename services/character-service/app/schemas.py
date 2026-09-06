@@ -646,6 +646,9 @@ class SubraceResponse(BaseModel):
 
 class SubraceWithPreset(BaseModel):
     id_subrace: int
+    # Родительская раса. Раньше поля здесь не было, и потребители, читавшие
+    # `subrace.id_race` из этого ответа, молча получали undefined.
+    id_race: int
     name: str
     description: Optional[str] = None
     stat_preset: Optional[Dict] = None
