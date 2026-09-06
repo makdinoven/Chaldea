@@ -80,8 +80,18 @@ const StepBlood = ({
               transition={{ duration: 0.25, ease: 'easeOut' }}
               className="flex flex-col gap-6"
             >
-              {/* Race card — text only: the portrait lives in the subrace card below */}
-              <div className="gray-bg rounded-card p-4 sm:p-6 flex flex-col gap-4 min-w-0">
+              {/*
+                Race blurb — deliberately NO panel. With the portrait moved into
+                the subrace card, what is left here is a heading, a paragraph and
+                the branch chips: an explanation of the choice, not the choice
+                itself. The panel belongs to what the player actually picks (the
+                subrace card below), and the dark page background carries this.
+                Readability is held by size and weight instead of a backdrop:
+                the heading keeps `gold-text`, the description stays full-opacity
+                `text-white` (never `/70`), and `sm:text-base` keeps it above the
+                app's small-print sizes.
+              */}
+              <div className="flex flex-col gap-4 min-w-0 pt-1">
                 <h3 className="gold-text text-xl sm:text-2xl font-medium uppercase break-words">
                   {selectedRace.name}
                 </h3>
