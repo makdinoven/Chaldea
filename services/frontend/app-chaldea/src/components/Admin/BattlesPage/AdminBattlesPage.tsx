@@ -11,6 +11,7 @@ import {
 import type { AdminJoinRequestItem } from '../../../api/battles';
 import PvpRequestsPanel from './PvpRequestsPanel';
 import AdminPagination from '../AdminPagination/AdminPagination';
+import { formatServerDateTime } from '../../../utils/serverDate';
 
 // --- Types ---
 
@@ -126,13 +127,16 @@ const PER_PAGE = 20;
 
 // --- Helpers ---
 
-const formatDate = (dateStr: string) => {
-  try {
-    return new Date(dateStr).toLocaleString('ru-RU');
-  } catch {
-    return dateStr;
-  }
-};
+/**
+ * FEAT-161: `runtime.deadline_at` is the one field here that arrives in two
+ * shapes — `battle-service` writes it offset-aware (`+03:00`) when a turn
+ * starts and naive UTC after a resume. `formatServerDateTime` parses an
+ * offset-carrying string as-is and treats a naive one as UTC, so both forms of
+ * the same instant render identically, including for battles already in flight
+ * across a deploy.
+ */
+const formatDate = (dateStr: string | null | undefined) =>
+  formatServerDateTime(dateStr, {});
 
 const getHpBarColor = (percent: number) => {
   if (percent < 20) return 'bg-red-500';

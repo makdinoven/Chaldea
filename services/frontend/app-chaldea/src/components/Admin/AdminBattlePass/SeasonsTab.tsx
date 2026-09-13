@@ -12,6 +12,7 @@ import type {
   SeasonCreatePayload,
   SeasonUpdatePayload,
 } from "../../../api/battlePassAdmin";
+import { formatServerDate } from "../../../utils/serverDate";
 
 /* ── Constants ── */
 
@@ -35,18 +36,12 @@ const emptyForm: SeasonCreatePayload = {
 };
 
 /* ── Helper: format datetime for display ── */
-const fmtDate = (iso: string) => {
-  if (!iso) return "\u2014";
-  try {
-    return new Date(iso).toLocaleDateString("ru-RU", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-    });
-  } catch {
-    return iso;
-  }
-};
+const fmtDate = (iso: string | null | undefined) =>
+  formatServerDate(iso, {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
 
 /* ── Helper: format datetime for input[type=datetime-local] ── */
 const toInputDateTime = (iso: string) => {

@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
 import { GATE_LABEL, GATE_STYLE } from '../pages/LocationPage/gateConstants';
+import { formatServerDateTime } from '../../utils/serverDate';
 
 /**
  * Flat shape returned by the moderation queues. Mirrors the backend
@@ -97,19 +98,14 @@ const GATE_REQUEST_LABEL: Record<string, string> = {
 const gateLabel = (actionType: string): string =>
   GATE_REQUEST_LABEL[actionType] ?? `Намерение «${actionType}»`;
 
-const formatDate = (dateStr: string): string => {
-  try {
-    return new Date(dateStr).toLocaleString('ru-RU', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return dateStr;
-  }
-};
+const formatDate = (dateStr: string | null | undefined): string =>
+  formatServerDateTime(dateStr, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 
 /**
  * The post row is gone (deleted, or orphaned by an earlier decision).

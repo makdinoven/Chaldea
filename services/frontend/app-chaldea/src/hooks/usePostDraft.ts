@@ -5,6 +5,10 @@ import {
   getActiveDraft,
   saveDraft,
 } from '../api/postDrafts';
+// FEAT-161: the zone-tolerant parse this hook used to hand-roll now lives in
+// one shared place. `serverDateMs` keeps the same contract: 0 when the value is
+// absent or unparseable, so the local mirror wins the newer-of-the-two race.
+import { serverDateMs } from '../utils/serverDate';
 
 /**
  * FEAT-156 (task T11) — autosave of an RP post draft, per section 3.5 of the
@@ -128,19 +132,6 @@ const isContentEmpty = (html: string): boolean =>
 
 const isUsableId = (value: number | null | undefined): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0;
-
-/**
- * FastAPI/Pydantic v1 serialises the naive MySQL `TIMESTAMP` without a zone
- * designator, while `crud` writes `datetime.now(timezone.utc)`. `Date.parse`
- * would read such a string as **local** time and skew the server-vs-local
- * comparison by the browser's offset, so a missing zone is read as UTC.
- */
-const parseServerTimestamp = (raw: string | null | undefined): number => {
-  if (!raw) return 0;
-  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
-  const parsed = Date.parse(hasZone ? raw : `${raw}Z`);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
 
 interface LocalMirror {
   content: string;
@@ -389,7 +380,7 @@ export const usePostDraft = (
         const draft = await getActiveDraft(locId, charId);
         if (draft && typeof draft.content === 'string') {
           serverContent = draft.content;
-          serverAt = parseServerTimestamp(draft.updated_at);
+          serverAt = serverDateMs(draft.updated_at);
         }
       } catch (err) {
         // The draft API being down must not stop the player from writing —

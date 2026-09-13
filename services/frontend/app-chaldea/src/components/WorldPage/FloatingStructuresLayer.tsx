@@ -3,10 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { useAppSelector } from '../../redux/store';
 import {
   selectFloatingStructures,
-  selectServerNowOffsetMs,
   type FloatingStructure,
   type RouteWaypoint,
 } from '../../redux/slices/floatingStructuresSlice';
+import { parseServerDate } from '../../utils/serverDate';
 
 /**
  * Computes the (x, y) position along an OPEN polyline at fractional progress in [0, 1].
@@ -61,21 +61,24 @@ const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
 interface FloatingStructureMarkerProps {
   structure: FloatingStructure;
-  serverNowOffsetMs: number;
   onClick: (id: number) => void;
 }
 
 const FloatingStructureMarker = ({
   structure,
-  serverNowOffsetMs,
   onClick,
 }: FloatingStructureMarkerProps) => {
   const computePosition = (): RouteWaypoint => {
-    const startedAtMs = new Date(structure.started_at).getTime();
-    if (Number.isNaN(startedAtMs) || !structure.route_json || structure.route_json.length === 0) {
+    // FEAT-161: `started_at` arrives zone-less (naive UTC). It used to be read
+    // as local time and the resulting error was cancelled again by subtracting
+    // a `serverNowOffsetMs` derived from an equally mis-parsed `server_now`.
+    // Parsing in the server's frame removes both halves of that pair: the
+    // correction is now applied exactly once, here.
+    const startedAt = parseServerDate(structure.started_at);
+    if (!startedAt || !structure.route_json || structure.route_json.length === 0) {
       return { x: 0, y: 0 };
     }
-    const tSeconds = (Date.now() - serverNowOffsetMs - startedAtMs) / 1000;
+    const tSeconds = (Date.now() - startedAt.getTime()) / 1000;
     // One-way: progress goes 0 → 1 and stays at 1 (structure stops at the end).
     const progress = clamp01(tSeconds * structure.speed);
     return interpolatePolyline(structure.route_json, progress);
@@ -90,7 +93,7 @@ const FloatingStructureMarker = ({
     }, 1000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [structure.id, structure.started_at, structure.speed, structure.route_json, serverNowOffsetMs]);
+  }, [structure.id, structure.started_at, structure.speed, structure.route_json]);
 
   const handleClick = () => onClick(structure.id);
 
@@ -122,7 +125,6 @@ const FloatingStructureMarker = ({
 const FloatingStructuresLayer = () => {
   const navigate = useNavigate();
   const structures = useAppSelector(selectFloatingStructures);
-  const serverNowOffsetMs = useAppSelector(selectServerNowOffsetMs);
 
   if (!structures || structures.length === 0) return null;
 
@@ -137,7 +139,6 @@ const FloatingStructuresLayer = () => {
           <FloatingStructureMarker
             key={s.id}
             structure={s}
-            serverNowOffsetMs={serverNowOffsetMs}
             onClick={handleClick}
           />
         ))}

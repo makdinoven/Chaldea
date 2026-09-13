@@ -11,6 +11,7 @@
  *  - Tailwind only, mobile responsive at 360px+.
  */
 import { useState } from 'react';
+import { formatServerDateTime } from '../../../../../utils/serverDate';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../../../redux/store';
 import {
@@ -54,14 +55,7 @@ const CATEGORY_OPTIONS: { value: GatheringCategory; label: string }[] = [
   { value: 'wood', label: 'Дерево' },
 ];
 
-const formatDate = (iso: string | null): string => {
-  if (!iso) return '—';
-  try {
-    return new Date(iso).toLocaleString('ru-RU');
-  } catch {
-    return iso;
-  }
-};
+const formatDate = (iso: string | null): string => formatServerDateTime(iso, {});
 
 const NodeRow = ({ locationId, node, canEdit }: NodeRowProps) => {
   const dispatch = useAppDispatch();

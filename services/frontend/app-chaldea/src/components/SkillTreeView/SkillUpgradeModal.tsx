@@ -9,6 +9,7 @@ import type {
   CharacterSkillState,
 } from './types';
 import PerkCard, { type PerkCardState } from './PerkCard';
+import { parseServerDate } from '../../utils/serverDate';
 import { ruDamageType, ruEffectName, ruTargetSide } from './skillLabels';
 
 interface SkillUpgradeModalProps {
@@ -23,9 +24,13 @@ const extractError = (err: unknown, fallback: string): string => {
   return e.response?.data?.detail || e.message || fallback;
 };
 
+// FEAT-161: `reset_available_at` comes from skills-service as naive UTC, so it
+// must be read in the server's frame — the same instant the server uses when it
+// decides whether a skill reset is allowed.
 const formatCountdown = (target: string | null): string | null => {
-  if (!target) return null;
-  const ms = new Date(target).getTime() - Date.now();
+  const targetDate = parseServerDate(target);
+  if (!targetDate) return null;
+  const ms = targetDate.getTime() - Date.now();
   if (ms <= 0) return null;
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);
@@ -143,11 +148,15 @@ const SkillUpgradeModal = ({
   const canUpgrade = !!charState && !atMaxLevel && freePoints === 0 && !busy;
 
   const resetCountdown = formatCountdown(charState?.reset_available_at ?? null);
+  // FEAT-161: same server frame as `formatCountdown` above, so the button
+  // unlocks at exactly the moment the countdown reaches zero.
+  const resetAvailableAtMs = charState?.reset_available_at
+    ? (parseServerDate(charState.reset_available_at)?.getTime() ?? NaN)
+    : null;
   const resetAvailable =
     !!charState &&
     charState.level > 0 &&
-    (!charState.reset_available_at ||
-      new Date(charState.reset_available_at).getTime() <= now);
+    (resetAvailableAtMs === null || resetAvailableAtMs <= now);
 
   const getPerkState = (perkId: number): PerkCardState => {
     if (selectedPerkIds.has(perkId)) return 'selected';

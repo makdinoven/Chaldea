@@ -18,6 +18,34 @@ import {
   updateGameTimeAdminThunk,
 } from '../../redux/actions/gameTimeActions';
 import { SEGMENT_LABELS, YEAR_SEGMENTS } from '../../utils/gameTime';
+import { formatServerDate, parseServerDate } from '../../utils/serverDate';
+
+const pad = (value: number, length = 2): string => String(value).padStart(length, '0');
+
+/**
+ * FEAT-161: `<input type="datetime-local">` carries no zone, so it is filled
+ * from — and read back into — the player's local wall clock. The epoch is
+ * stored and returned by the backend as naive **UTC**, so both directions must
+ * cross that boundary explicitly. Getting only one of them right is what used
+ * to shift the stored epoch by the admin's UTC offset on every save.
+ */
+const toDateTimeLocalInput = (raw: string | null): string => {
+  const date = parseServerDate(raw);
+  if (!date) return '';
+  return (
+    `${pad(date.getFullYear(), 4)}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    + `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+};
+
+/**
+ * Serialise back in the exact shape the backend already emits: naive UTC, no
+ * zone designator. Sending an offset-carrying string would make Pydantic build
+ * an aware datetime, which `compute_game_time` (naive arithmetic) cannot mix.
+ */
+const toNaiveUtcIso = (date: Date): string =>
+  `${pad(date.getUTCFullYear(), 4)}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`
+  + `T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
 
 const SEGMENT_ICON_MAP: Record<string, FeatherIcon> = {
   spring: Droplet,
@@ -42,8 +70,11 @@ const GameTimeAdminPage = () => {
   const [targetSegment, setTargetSegment] = useState('spring');
   const [targetWeek, setTargetWeek] = useState(1);
 
-  // Change epoch state
+  // Change epoch state. `loadedEpoch` keeps the raw string exactly as the API
+  // returned it so an untouched Save can send it back byte-for-byte instead of
+  // re-serialising it (which would silently drop sub-minute precision).
   const [epochInput, setEpochInput] = useState('');
+  const [loadedEpoch, setLoadedEpoch] = useState<{ raw: string; input: string } | null>(null);
 
   useEffect(() => {
     dispatch(fetchGameTimeAdmin());
@@ -51,16 +82,10 @@ const GameTimeAdminPage = () => {
 
   // Sync epoch input when admin data arrives
   useEffect(() => {
-    if (admin.epoch) {
-      // Convert ISO string to datetime-local format (YYYY-MM-DDTHH:mm)
-      const dt = new Date(admin.epoch);
-      const local = dt.getFullYear().toString().padStart(4, '0')
-        + '-' + (dt.getMonth() + 1).toString().padStart(2, '0')
-        + '-' + dt.getDate().toString().padStart(2, '0')
-        + 'T' + dt.getHours().toString().padStart(2, '0')
-        + ':' + dt.getMinutes().toString().padStart(2, '0');
-      setEpochInput(local);
-    }
+    if (!admin.epoch) return;
+    const local = toDateTimeLocalInput(admin.epoch);
+    setEpochInput(local);
+    setLoadedEpoch({ raw: admin.epoch, input: local });
   }, [admin.epoch]);
 
   // Sync computed values into set-date form when admin data loads
@@ -108,9 +133,22 @@ const GameTimeAdminPage = () => {
       toast.error('Укажите дату точки отсчёта');
       return;
     }
+    // Untouched input → send back exactly what we were given, so an
+    // open-and-save with no edit is a provably lossless round trip.
+    let epoch: string;
+    if (loadedEpoch && epochInput === loadedEpoch.input) {
+      epoch = loadedEpoch.raw;
+    } else {
+      const parsed = new Date(epochInput);
+      if (Number.isNaN(parsed.getTime())) {
+        toast.error('Некорректная дата точки отсчёта');
+        return;
+      }
+      epoch = toNaiveUtcIso(parsed);
+    }
     try {
       await dispatch(
-        updateGameTimeAdminThunk({ epoch: new Date(epochInput).toISOString() }),
+        updateGameTimeAdminThunk({ epoch }),
       ).unwrap();
       toast.success('Точка отсчёта обновлена');
     } catch (err) {
@@ -170,7 +208,7 @@ const GameTimeAdminPage = () => {
               </div>
               <div className="text-white/60 text-sm flex flex-wrap gap-x-4 gap-y-1">
                 <span>
-                  Epoch: {admin.epoch ? new Date(admin.epoch).toLocaleDateString('ru-RU') : '—'}
+                  Epoch: {formatServerDate(admin.epoch, {})}
                 </span>
                 <span>
                   Offset: {admin.offsetDays >= 0 ? '+' : ''}

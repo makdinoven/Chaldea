@@ -10,6 +10,7 @@ import {
   UserCharacterItem,
 } from '../../redux/slices/userProfileSlice';
 import { buildColorEffectStyle } from './ProfileSettingsModal';
+import { formatServerDate } from '../../utils/serverDate';
 
 /** Mapping race IDs to Tailwind ring colors */
 const RACE_BORDER_COLORS: Record<number, string> = {
@@ -121,7 +122,7 @@ const CharacterCard = ({ char }: { char: UserCharacterItem }) => {
         </span>
         <span className="text-white/30 text-xs">
           {char.last_rp_post_date
-            ? new Date(char.last_rp_post_date).toLocaleDateString('ru-RU')
+            ? formatServerDate(char.last_rp_post_date, {})
             : 'Нет данных'}
         </span>
       </div>

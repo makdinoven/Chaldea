@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { listDrafts, getDraftById, deleteDraftById } from '../../../api/postDrafts';
 import type { PostDraftListItem } from '../../../types/postDrafts';
 import ConfirmDialog from './ConfirmDialog';
+import { parseServerDate } from '../../../utils/serverDate';
 
 export interface DraftsPanelProps {
   /** Owner of the history. Only this character's texts are listed. */
@@ -37,8 +38,8 @@ export interface DraftsPanelProps {
 
 /** Russian date + time of a history row, e.g. «13 сент. 2026, 14:30». */
 const formatDraftDate = (iso: string): string => {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
+  const date = parseServerDate(iso);
+  if (!date) return '';
   const sameYear = date.getFullYear() === new Date().getFullYear();
   return date.toLocaleString('ru-RU', {
     day: 'numeric',

@@ -13,6 +13,7 @@ import {
 import type { TicketStatus, TicketCategory } from '../../types/ticket';
 import AdminPagination from '../Admin/AdminPagination/AdminPagination';
 import toast from 'react-hot-toast';
+import { parseServerDate } from '../../utils/serverDate';
 
 const STATUS_LABELS: Record<TicketStatus, string> = {
   open: 'Открыт',
@@ -47,7 +48,10 @@ const CATEGORY_OPTIONS: { value: TicketCategory | ''; label: string }[] = [
 
 const formatDate = (dateStr: string): string => {
   try {
-    const date = new Date(dateStr);
+    // FEAT-161: the sibling TicketListPage was migrated to the shared parser;
+    // this copy was missed. `updated_at` arrives zone-less (naive UTC).
+    const date = parseServerDate(dateStr);
+    if (!date) return '';
     const day = date.getDate().toString().padStart(2, '0');
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const hours = date.getHours().toString().padStart(2, '0');

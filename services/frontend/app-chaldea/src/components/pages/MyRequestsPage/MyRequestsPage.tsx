@@ -16,6 +16,7 @@ import CharacterPassport, {
   fromModerationRequest,
 } from '../../CommonComponents/CharacterPassport';
 import RequestEditor from './RequestEditor';
+import { serverDateMs } from '../../../utils/serverDate';
 
 /**
  * FEAT-154 (task #20) — «Мои заявки» (rules 28-30).
@@ -62,7 +63,7 @@ const STATUS_HINTS: Record<string, string> = {
 /** Newest first: `created_at` when both rows have it, id otherwise. */
 const byNewest = (a: MyCharacterRequest, b: MyCharacterRequest): number => {
   if (a.created_at && b.created_at) {
-    const diff = new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    const diff = serverDateMs(b.created_at) - serverDateMs(a.created_at);
     if (Number.isFinite(diff) && diff !== 0) return diff;
   }
   return b.id - a.id;

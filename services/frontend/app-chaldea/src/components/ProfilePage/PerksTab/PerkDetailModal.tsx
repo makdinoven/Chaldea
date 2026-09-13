@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from 'motion/react';
 import { X } from 'react-feather';
 import type { CharacterPerk } from '../../../types/perks';
+import { formatServerDate } from '../../../utils/serverDate';
 
 interface PerkDetailModalProps {
   perk: CharacterPerk | null;
@@ -361,7 +362,7 @@ const PerkDetailModal = ({ perk, onClose }: PerkDetailModalProps) => {
                 <span className="text-emerald-400 text-sm font-medium">Разблокирован</span>
                 {perk.unlocked_at && (
                   <span className="text-white/30 text-xs">
-                    {new Date(perk.unlocked_at).toLocaleDateString('ru-RU')}
+                    {formatServerDate(perk.unlocked_at, {})}
                   </span>
                 )}
                 {perk.is_custom && (

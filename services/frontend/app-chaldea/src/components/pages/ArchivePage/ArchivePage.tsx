@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { motion } from 'motion/react';
+import { parseServerDate } from '../../../utils/serverDate';
 import {
   fetchArticles,
   fetchCategories,
@@ -238,7 +239,9 @@ const ArchivePage = () => {
 
   const formatDate = (dateStr: string) => {
     try {
-      return new Date(dateStr).toLocaleDateString('ru-RU', {
+      const date = parseServerDate(dateStr);
+      if (!date) return dateStr;
+      return date.toLocaleDateString('ru-RU', {
         day: 'numeric',
         month: 'long',
         year: 'numeric',

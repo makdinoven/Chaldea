@@ -3,14 +3,14 @@ import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { fetchAllUsers } from '../../../api/usersApi';
 import type { UserPublicItem } from '../../../types/users';
+import { formatServerDate } from '../../../utils/serverDate';
 
 const DEFAULT_AVATAR = 'assets/avatars/avatar.png';
 const PAGE_SIZE = 50;
 
 const formatDate = (dateStr: string | null): string => {
   if (!dateStr) return '—';
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('ru-RU', {
+  return formatServerDate(dateStr, {
     day: 'numeric',
     month: 'long',
     year: 'numeric',

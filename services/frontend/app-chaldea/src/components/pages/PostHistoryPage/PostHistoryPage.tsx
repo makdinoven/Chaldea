@@ -3,9 +3,11 @@ import { useParams, Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import toast from 'react-hot-toast';
 import { fetchPostHistory, PostHistoryItem } from '../../../api/characterLogs';
+import { EMPTY_DATE_PLACEHOLDER, parseServerDate } from '../../../utils/serverDate';
 
 const formatDate = (isoDate: string): string => {
-  const date = new Date(isoDate);
+  const date = parseServerDate(isoDate);
+  if (!date) return EMPTY_DATE_PLACEHOLDER;
   const months = [
     'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
     'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',

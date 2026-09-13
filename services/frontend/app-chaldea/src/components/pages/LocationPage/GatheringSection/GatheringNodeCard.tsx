@@ -27,6 +27,7 @@ import type {
   GatheringNode,
 } from '../../../../types/gathering';
 import type { NodeStatusVm } from './gatheringSection.types';
+import { parseServerDate } from '../../../../utils/serverDate';
 import ToolSelectionModal from './ToolSelectionModal';
 
 interface GatheringNodeCardProps {
@@ -71,7 +72,10 @@ const deriveStatus = (
   if (!node.is_enabled) {
     return { status: 'disabled', restoreRemainingSeconds: 0, occupiedBy: null };
   }
-  const restoreMs = node.restore_at ? Date.parse(node.restore_at) : NaN;
+  // FEAT-161: `restore_at` is naive UTC; parse it in the server's frame so the
+  // "восстановится через" countdown matches the moment the node really refills.
+  const restoreDate = parseServerDate(node.restore_at);
+  const restoreMs = restoreDate ? restoreDate.getTime() : NaN;
   const isOnRestore = Number.isFinite(restoreMs) && restoreMs > nowMs;
   if (isOnRestore || node.current_bank <= 0) {
     return {

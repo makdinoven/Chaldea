@@ -4,6 +4,7 @@ import { Post, Player } from './types';
 import PlayerActionsMenu from './PlayerActionsMenu';
 import useNpcAttack from '../../../hooks/useNpcAttack';
 import ArchiveLinkPreview from '../../CommonComponents/ArchiveLinkPreview/ArchiveLinkPreview';
+import { formatRelativeTime, parseServerDate, serverDateMs } from '../../../utils/serverDate';
 
 interface PostCardProps {
   post: Post;
@@ -30,29 +31,6 @@ interface PostCardProps {
   onEdit?: (post: Post) => void;
 }
 
-const formatRelativeTime = (dateStr: string): string => {
-  try {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMin < 1) return 'только что';
-    if (diffMin < 60) return `${diffMin} мин. назад`;
-    if (diffHours < 24) return `${diffHours} ч. назад`;
-    if (diffDays < 7) return `${diffDays} дн. назад`;
-
-    return date.toLocaleDateString('ru-RU', {
-      day: 'numeric',
-      month: 'short',
-      year: diffDays > 365 ? 'numeric' : undefined,
-    });
-  } catch {
-    return dateStr;
-  }
-};
 
 /**
  * FEAT-159: the edit window is one hour from PUBLICATION.
@@ -60,27 +38,27 @@ const formatRelativeTime = (dateStr: string): string => {
  * `posts.created_at` is a naive MySQL `TIMESTAMP` written by the server's own
  * `NOW()` and serialised without an offset, so it must be read as UTC — letting
  * `new Date()` interpret it as *local* time would shift the window by the
- * viewer's offset and hide the button from everyone east of UTC.
+ * viewer's offset and hide the button from everyone east of UTC. FEAT-161 moved
+ * that reading into the shared `utils/serverDate` helper; the local copy is gone.
  *
  * This is only a convenience check: the server re-decides both limits at save
  * time (section 3.4), and a stale client state degrades into a visible Russian
  * error in the modal, never into a silent no-op.
  */
-const parseServerDate = (dateStr: string): Date =>
-  new Date(/[Z+]|-\d{2}:\d{2}$/.test(dateStr) ? dateStr : `${dateStr}Z`);
-
 const EDIT_WINDOW_MS = 60 * 60 * 1000;
 
 const isWithinEditWindow = (createdAt: string): boolean => {
-  const ts = parseServerDate(createdAt).getTime();
-  if (Number.isNaN(ts)) return false;
+  // `serverDateMs` yields 0 for an absent/unparseable value, i.e. "older than
+  // anything" — which closes the window, exactly as the previous NaN guard did.
+  const ts = serverDateMs(createdAt);
+  if (!ts) return false;
   return Date.now() - ts < EDIT_WINDOW_MS;
 };
 
 /** Exact moment of the edit for the marker's `title`. */
 const formatExactTime = (dateStr: string): string => {
   const date = parseServerDate(dateStr);
-  if (Number.isNaN(date.getTime())) return dateStr;
+  if (!date) return dateStr;
   return date.toLocaleString('ru-RU', {
     day: 'numeric',
     month: 'long',

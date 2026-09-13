@@ -1,6 +1,7 @@
 import type { ConversationListItem } from '../../types/messenger';
 import { useAppSelector } from '../../redux/store';
 import AvatarWithFrame from '../common/AvatarWithFrame';
+import { formatRelativeTime } from '../../utils/serverDate';
 
 interface ConversationItemProps {
   conversation: ConversationListItem;
@@ -9,25 +10,6 @@ interface ConversationItemProps {
   onTogglePin: (id: number, pinned: boolean) => void;
 }
 
-const formatRelativeTime = (dateStr: string): string => {
-  try {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    const diffHr = Math.floor(diffMin / 60);
-    const diffDay = Math.floor(diffHr / 24);
-
-    if (diffMin < 1) return 'сейчас';
-    if (diffMin < 60) return `${diffMin} мин`;
-    if (diffHr < 24) return `${diffHr} ч`;
-    if (diffDay < 7) return `${diffDay} д`;
-
-    return date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-  } catch {
-    return '';
-  }
-};
 
 const PinIcon = ({ className }: { className?: string }) => (
   <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
@@ -88,7 +70,7 @@ const ConversationItem = ({ conversation, isActive, onClick, onTogglePin }: Conv
             </span>
             {lastMessageTime && (
               <span className="text-white/30 text-xs flex-shrink-0">
-                {formatRelativeTime(lastMessageTime)}
+                {formatRelativeTime(lastMessageTime, { style: 'compact', invalid: '' })}
               </span>
             )}
           </div>

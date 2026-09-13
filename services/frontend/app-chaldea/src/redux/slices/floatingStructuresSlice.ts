@@ -26,8 +26,15 @@ export interface FloatingStructure {
 
 /**
  * Shape returned by the public `GET /map/floating-structures` endpoint.
- * Same as FloatingStructure, plus a per-item `server_now` used by the client
- * to compute a clock-skew offset for position interpolation.
+ * Same as FloatingStructure, plus a per-item `server_now`.
+ *
+ * FEAT-161: `server_now` is no longer used. It used to feed a
+ * "client ↔ server clock offset", but that number was never a clock offset —
+ * both `server_now` and `started_at` were parsed with `new Date()`, which reads
+ * a zone-less server timestamp as *local* time, so the subtraction only ever
+ * measured the browser's own UTC offset and then cancelled it again downstream.
+ * Now that timestamps are parsed in the server's frame the offset is
+ * structurally zero, so it is gone rather than left to double-correct.
  */
 export interface FloatingStructurePublic extends FloatingStructure {
   server_now: string; // ISO
@@ -50,8 +57,6 @@ export type FloatingStructureUpdatePayload = Partial<FloatingStructureCreatePayl
 
 export interface FloatingStructuresState {
   items: FloatingStructure[];
-  /** client_now_ms - server_now_ms, used to interpolate positions. */
-  serverNowOffsetMs: number;
   loading: boolean;
   error: string | null;
   saving: boolean;
@@ -59,7 +64,6 @@ export interface FloatingStructuresState {
 
 const initialState: FloatingStructuresState = {
   items: [],
-  serverNowOffsetMs: 0,
   loading: false,
   error: null,
   saving: false,
@@ -67,13 +71,8 @@ const initialState: FloatingStructuresState = {
 
 // --- Thunks: public ---
 
-interface FetchFloatingStructuresResult {
-  items: FloatingStructure[];
-  serverNowOffsetMs: number;
-}
-
 export const fetchFloatingStructures = createAsyncThunk<
-  FetchFloatingStructuresResult,
+  FloatingStructure[],
   number | undefined,
   { rejectValue: string }
 >(
@@ -85,14 +84,6 @@ export const fetchFloatingStructures = createAsyncThunk<
         : '/locations/map/floating-structures';
       const { data } = await axios.get<FloatingStructurePublic[]>(url);
       const list = Array.isArray(data) ? data : [];
-      const clientNow = Date.now();
-      let offset = 0;
-      if (list.length > 0 && list[0].server_now) {
-        const serverNow = new Date(list[0].server_now).getTime();
-        if (!Number.isNaN(serverNow)) {
-          offset = clientNow - serverNow;
-        }
-      }
       const items: FloatingStructure[] = list.map((it) => ({
         id: it.id,
         name: it.name,
@@ -104,7 +95,7 @@ export const fetchFloatingStructures = createAsyncThunk<
         internal_district_id: it.internal_district_id,
         area_id: it.area_id,
       }));
-      return { items, serverNowOffsetMs: offset };
+      return items;
     } catch {
       toast.error('Не удалось загрузить плавающие структуры');
       return thunkAPI.rejectWithValue('Не удалось загрузить плавающие структуры');
@@ -211,10 +202,9 @@ const floatingStructuresSlice = createSlice({
       })
       .addCase(
         fetchFloatingStructures.fulfilled,
-        (state, action: PayloadAction<FetchFloatingStructuresResult>) => {
+        (state, action: PayloadAction<FloatingStructure[]>) => {
           state.loading = false;
-          state.items = action.payload.items;
-          state.serverNowOffsetMs = action.payload.serverNowOffsetMs;
+          state.items = action.payload;
         },
       )
       .addCase(fetchFloatingStructures.rejected, (state, action) => {
@@ -305,9 +295,6 @@ export const selectFloatingStructuresError = (state: RootState): string | null =
 
 export const selectFloatingStructuresSaving = (state: RootState): boolean =>
   state.floatingStructures.saving;
-
-export const selectServerNowOffsetMs = (state: RootState): number =>
-  state.floatingStructures.serverNowOffsetMs;
 
 export const selectFloatingStructureById = (id: number) =>
   (state: RootState): FloatingStructure | undefined =>

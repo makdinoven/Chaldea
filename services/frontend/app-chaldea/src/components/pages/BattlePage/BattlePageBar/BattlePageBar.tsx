@@ -10,7 +10,7 @@ import {
 import axios from "axios";
 import toast from "react-hot-toast";
 import { BASE_URL_BATTLES, postAutobattleSpeed } from "../../../../api/api";
-import { formatDateTime } from "../../../../helpers/helpers";
+import { formatServerDateTime } from "../../../../utils/serverDate";
 import { DAMAGE_TYPES } from "../../../AdminSkillsPage/skillConstants";
 import { describeEffect, type EffectLike } from "../battleEffects";
 import SkillPicker, {
@@ -153,6 +153,24 @@ interface BattlePageBarProps {
 }
 
 // --- Constants ---
+
+/**
+ * FEAT-161: replaces the date formatter deleted from `helpers/helpers.js`,
+ * which appended `Z` unconditionally (turning any already-zoned value into
+ * `Invalid Date` -> `NaN.NaN.NaN NaN:NaN`) and threw on `null`. The shared helper is
+ * offset-tolerant and total; the `ru-RU` «, » between date and time is dropped
+ * so the battle log keeps its previous `dd.mm.yyyy hh:mm` look.
+ */
+const BATTLE_LOG_TIME_FORMAT: Intl.DateTimeFormatOptions = {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+};
+
+const formatLogTime = (raw: string | null | undefined): string =>
+  formatServerDateTime(raw, BATTLE_LOG_TIME_FORMAT).replace(", ", " ");
 
 const AUTOBATTLE_MODE_BTNS = [
   {
@@ -900,7 +918,7 @@ const BattlePageBar = ({
                         return null;
                       }
                     })()}
-                  <div className="ml-auto">{formatDateTime(log.timestamp)}</div>
+                  <div className="ml-auto">{formatLogTime(log.timestamp)}</div>
                 </div>
                 {isTurnLikeTextShown &&
                   isAutoBattleOn &&

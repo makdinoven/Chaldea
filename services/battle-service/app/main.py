@@ -43,7 +43,8 @@ from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, b
     first_cycle_limit_skills
 from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, fetch_weapons, compute_damage_with_rolls, roll_chance, roll_dodge
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
-    get_cached_snapshot, KEY_BATTLE_TURNS, state_key, compute_initiative
+    get_cached_snapshot, KEY_BATTLE_TURNS, state_key, compute_initiative, \
+    utc_now, parse_deadline, deadline_epoch
 from config import settings
 from mongo_helpers import save_snapshot, load_snapshot
 from tasks import save_log
@@ -611,10 +612,7 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id):
     )
 
     first_actor_pid = participant_objs[0].id
-    moscow_tz = timezone(timedelta(hours=3))
-    deadline = datetime.now(timezone.utc).astimezone(moscow_tz) + timedelta(
-        hours=settings.TURN_TIMEOUT_HOURS
-    )
+    deadline = utc_now() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
 
     participants_info = []
     for p in participant_objs:
@@ -1604,9 +1602,11 @@ async def pause_battle(db: AsyncSession, battle_id: int) -> None:
     # 2. Redis state: set paused, store remaining deadline seconds
     state = await load_state(battle_id)
     if state:
-        now = datetime.utcnow()
-        deadline_at = datetime.fromisoformat(state["deadline_at"])
-        remaining = max(0, (deadline_at - now).total_seconds())
+        now = utc_now()
+        # Состояние боя могло быть создано до FEAT-161 и нести смещение +03:00 —
+        # parse_deadline приводит обе формы к наивному UTC.
+        deadline_at = parse_deadline(state.get("deadline_at"))
+        remaining = max(0, (deadline_at - now).total_seconds()) if deadline_at else 0
         state["paused"] = True
         state["remaining_deadline_seconds"] = remaining
         await save_state(battle_id, state)
@@ -1657,7 +1657,7 @@ async def resume_battle_if_ready(db: AsyncSession, battle_id: int) -> bool:
     state = await load_state(battle_id)
     if state:
         remaining_secs = state.get("remaining_deadline_seconds", 60)
-        now = datetime.utcnow()
+        now = utc_now()
         new_deadline = now + timedelta(seconds=remaining_secs)
 
         state["paused"] = False
@@ -1669,7 +1669,7 @@ async def resume_battle_if_ready(db: AsyncSession, battle_id: int) -> bool:
         rds = await get_redis_client()
         next_actor = state["next_actor"]
         member = f"{battle_id}:{next_actor}"
-        await rds.zadd(ZSET_DEADLINES, {member: new_deadline.timestamp()})
+        await rds.zadd(ZSET_DEADLINES, {member: deadline_epoch(new_deadline)})
 
     # Notify all participants: "Бой продолжается!"
     participants_result = await db.execute(
@@ -2477,8 +2477,7 @@ async def _make_action_core(
     # 10. Записываем ход в БД
     # ------------------------------------------------------------------------------
     new_turn_number = battle_state["turn_number"] + 1
-    moscow_tz = timezone(timedelta(hours=3))
-    started_at = datetime.now(timezone.utc).astimezone(moscow_tz)
+    started_at = utc_now()
     new_deadline = started_at + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
     await write_turn(
         db_session,
@@ -2825,7 +2824,7 @@ async def _make_action_core(
 
     await redis.zadd(
         ZSET_DEADLINES,
-        {f"{battle_id}:{next_actor_participant_id}": new_deadline.timestamp()},
+        {f"{battle_id}:{next_actor_participant_id}": deadline_epoch(new_deadline)},
     )
     await redis.publish(
         f"battle:{battle_id}:your_turn", str(next_actor_participant_id)
@@ -3225,8 +3224,7 @@ async def respond_to_pvp_invitation(
     # Initialize Redis state (same pattern as create_battle_endpoint)
     from datetime import timedelta
     first_actor_pid = participant_objs[0].id
-    moscow_tz = timezone(timedelta(hours=3))
-    deadline = datetime.now(timezone.utc).astimezone(moscow_tz) + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
+    deadline = utc_now() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
 
     participants_info = []
     for p in participant_objs:
@@ -3523,8 +3521,7 @@ async def pvp_attack(
     # Initialize Redis state (same pattern as create_battle_endpoint)
     from datetime import timedelta
     first_actor_pid = participant_objs[0].id
-    moscow_tz = timezone(timedelta(hours=3))
-    deadline = datetime.now(timezone.utc).astimezone(moscow_tz) + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
+    deadline = utc_now() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
 
     participants_info = []
     for p in participant_objs:

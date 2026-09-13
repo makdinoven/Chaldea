@@ -5,6 +5,22 @@
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm certbot \
 #     certonly --webroot -w /var/www/certbot -d fallofgods.top
 
+# ВРЕМЯ: все контейнеры работают в UTC. НЕ ЗАДАВАЙТЕ здесь переменную TZ —
+# ни в этом overlay, ни в базовом docker-compose.yml. Prod особенно уязвим:
+# игроки живут в UTC+3, и дописать сюда TZ=Europe/Moscow, «чтобы время на
+# сервере совпадало с реальным», выглядит разумной настройкой. Это тихо
+# сломает все даты в игре.
+#
+# Бэкенд отдаёт метки БЕЗ пояса ("2026-03-23T10:23:58"), клиент
+# (services/frontend/app-chaldea/src/utils/serverDate.ts) читает строку без
+# пояса как UTC. Задав TZ, вы заставите MySQL NOW() и Python datetime писать
+# местное время в те же колонки, а клиент всё равно прочитает его как UTC —
+# возраст постов, онлайн-статус, кулдауны, таймер хода и игровой календарь
+# сместятся на величину пояса. Ни исключения, ни записи в логах не будет.
+#
+# То же про ENV TZ в Dockerfile, /etc/localtime и default-time-zone в MySQL.
+# Подробности: docs/ARCHITECTURE.md, раздел "Time & Timezones".
+
 # Auto-restart policy: containers come back up after a host reboot
 # (e.g. VPS restarted by the provider). Merged into every prod service below.
 x-restart: &restart

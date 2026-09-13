@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import type { AdminSession } from '../../../api/dungeons';
+import { formatServerDateTime } from '../../../utils/serverDate';
 
 const STATUS_LABELS: Record<string, string> = {
   forming: 'Формируется',
@@ -70,14 +71,11 @@ const AdminDungeonSessions = () => {
     }
   };
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '—';
-    const d = new Date(dateStr);
-    return d.toLocaleString('ru-RU', {
+  const formatDate = (dateStr: string | null) =>
+    formatServerDateTime(dateStr, {
       day: '2-digit', month: '2-digit', year: '2-digit',
       hour: '2-digit', minute: '2-digit',
     });
-  };
 
   return (
     <div className="flex flex-col gap-4">

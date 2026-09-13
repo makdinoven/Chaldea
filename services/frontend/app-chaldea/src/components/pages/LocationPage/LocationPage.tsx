@@ -7,6 +7,7 @@ import { useBodyBackground } from '../../../hooks/useBodyBackground';
 import { useAppSelector, useAppDispatch } from '../../../redux/store';
 import { setCharacterLocation, getMe } from '../../../redux/slices/userSlice';
 import { isStaff } from '../../../utils/permissions';
+import { parseServerDate } from '../../../utils/serverDate';
 import { LocationData, Post } from './types';
 import type { PostGate } from './gateConstants';
 import LocationHeader from './LocationHeader';
@@ -66,9 +67,14 @@ const LocationPage = () => {
 
   // Sync from server value (getMe response)
   useEffect(() => {
-    const cooldownUntil = character?.travel_cooldown_until;
+    // FEAT-161: `travel_cooldown_until` is serialised without a zone. The
+    // server enforces it as UTC (locations-service/app/main.py:1194 —
+    // `fromisoformat` + `tzinfo is None -> utc`, compared with
+    // `datetime.now(timezone.utc)`), so the client must read it the same way;
+    // otherwise the timer disagrees with the 400 the server returns.
+    const cooldownUntil = parseServerDate(character?.travel_cooldown_until);
     if (!cooldownUntil) return;
-    const diff = new Date(cooldownUntil).getTime() - Date.now();
+    const diff = cooldownUntil.getTime() - Date.now();
     const remaining = Math.max(0, Math.ceil(diff / 1000));
     if (remaining > 0) {
       setCooldownRemaining(remaining);

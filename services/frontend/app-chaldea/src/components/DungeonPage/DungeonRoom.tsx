@@ -11,6 +11,7 @@ import {
 } from '../../redux/slices/dungeonSlice';
 import useCountdown from '../../hooks/useCountdown';
 import type { RoomView, InteractResponse, SessionMember } from '../../api/dungeons';
+import { formatServerDateTime } from '../../utils/serverDate';
 
 // --- Types ---
 
@@ -259,7 +260,7 @@ const BattleRoomContent = ({
         </div>
         {clearedAt && (
           <p className="text-white/30 text-xs mt-1">
-            {new Date(clearedAt).toLocaleString('ru-RU')}
+            {formatServerDateTime(clearedAt, {})}
           </p>
         )}
       </div>
