@@ -348,6 +348,30 @@ class PostLikeRequest(BaseModel):
     character_id: int
 
 
+class PostEditRequest(BaseModel):
+    """Body of ``PUT /locations/posts/{post_id}`` (FEAT-159, Phase A).
+
+    Text only. There is deliberately no ``post_type`` / ``targets`` here: the
+    legacy single-gate shape is not accepted on this new path, and gates are a
+    Phase-B addition (an optional ``gates`` field) that does not break this
+    contract.
+    """
+    content: str
+
+
+class PostEditResponse(BaseModel):
+    id: int
+    content: str
+    length: int
+    created_at: datetime
+    edited_at: datetime
+    # Derived, never stored: True only when the editor is not the post's author.
+    edited_by_admin: bool = False
+
+    class Config:
+        orm_mode = True
+
+
 # -------------------------------
 #   LOOKUP SCHEMAS
 # -------------------------------
@@ -539,6 +563,12 @@ class ClientPost(BaseModel):
     liked_by: List[int] = []
     # FEAT-145 item 7: intent gates declared in this post, {action_type: count}.
     gates: dict = {}
+    # FEAT-159: the «изменено» marker. None on posts that were never edited.
+    edited_at: Optional[datetime] = None
+    # Derived in crud.get_post_details by comparing posts.edited_by_user_id with
+    # the author's user_id. Degrades to False when that lookup fails, so a
+    # character-service outage never falsely accuses an admin.
+    edited_by_admin: bool = False
 
 class LatestPostResponse(ClientPost):
     """A recent roleplay post enriched with its location, for the homepage

@@ -167,6 +167,13 @@ class Post(Base):
     # dungeon | npc_dialogue. Non-regular posts gate the matching action.
     post_type = Column(String(20), server_default='regular', nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    # FEAT-159: the «изменено» marker. NULL until the post is edited for the
+    # first time; the hour-long edit window is always measured from created_at,
+    # never from edited_at, so repeated edits cannot extend it.
+    edited_at = Column(TIMESTAMP, nullable=True, server_default=None)
+    # Who performed the last edit (the author, or an admin). Audit trail only —
+    # never sent to clients; get_post_details derives `edited_by_admin` from it.
+    edited_by_user_id = Column(Integer, nullable=True, server_default=None)
 
     __table_args__ = (
         Index('idx_posts_character_id', 'character_id'),

@@ -19,6 +19,15 @@ interface PostCardProps {
   onTagPlayer: (targetUserId: number) => void;
   onReport: (postId: number, reason: string) => void;
   onRequestDeletion: (postId: number, reason: string) => void;
+  /**
+   * FEAT-159: this post is the newest one in the location (index 0 of the
+   * `id DESC` feed). One of the two owner-path conditions for editing.
+   */
+  isLatestPostInLocation?: boolean;
+  /** Current user's role — only the literal `admin` may edit someone else's post. */
+  currentUserRole?: string | null;
+  /** Opens the edit modal. Absent -> the «Редактировать» entry is never shown. */
+  onEdit?: (post: Post) => void;
 }
 
 const formatRelativeTime = (dateStr: string): string => {
@@ -43,6 +52,42 @@ const formatRelativeTime = (dateStr: string): string => {
   } catch {
     return dateStr;
   }
+};
+
+/**
+ * FEAT-159: the edit window is one hour from PUBLICATION.
+ *
+ * `posts.created_at` is a naive MySQL `TIMESTAMP` written by the server's own
+ * `NOW()` and serialised without an offset, so it must be read as UTC — letting
+ * `new Date()` interpret it as *local* time would shift the window by the
+ * viewer's offset and hide the button from everyone east of UTC.
+ *
+ * This is only a convenience check: the server re-decides both limits at save
+ * time (section 3.4), and a stale client state degrades into a visible Russian
+ * error in the modal, never into a silent no-op.
+ */
+const parseServerDate = (dateStr: string): Date =>
+  new Date(/[Z+]|-\d{2}:\d{2}$/.test(dateStr) ? dateStr : `${dateStr}Z`);
+
+const EDIT_WINDOW_MS = 60 * 60 * 1000;
+
+const isWithinEditWindow = (createdAt: string): boolean => {
+  const ts = parseServerDate(createdAt).getTime();
+  if (Number.isNaN(ts)) return false;
+  return Date.now() - ts < EDIT_WINDOW_MS;
+};
+
+/** Exact moment of the edit for the marker's `title`. */
+const formatExactTime = (dateStr: string): string => {
+  const date = parseServerDate(dateStr);
+  if (Number.isNaN(date.getTime())) return dateStr;
+  return date.toLocaleString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 };
 
 const getRarityColorClass = (rarity?: string | null): string => {
@@ -112,6 +157,9 @@ const PostCard = ({
   onTagPlayer,
   onReport,
   onRequestDeletion,
+  isLatestPostInLocation = false,
+  currentUserRole = null,
+  onEdit,
 }: PostCardProps) => {
   const isLiked = currentCharacterId !== null && post.liked_by.includes(currentCharacterId);
   const [animating, setAnimating] = useState(false);
@@ -126,6 +174,14 @@ const PostCard = ({
   const isAuthor = currentCharacterId !== null && post.character_id === currentCharacterId;
   // System / NPC-authored posts have no user account behind them.
   const isNpcPost = !post.user_id;
+
+  // FEAT-159: «Редактировать» is offered to the author while the post is the
+  // location's newest and still inside the hour, and to role `admin` always
+  // (moderators are NOT admins here — the server answers them 403).
+  const canEdit =
+    !!onEdit &&
+    (currentUserRole === 'admin' ||
+      (isAuthor && isLatestPostInLocation && isWithinEditWindow(post.created_at)));
 
   // Filter out the current user from players list (prevent self-tagging)
   const taggablePlayers = players.filter((p) => p.user_id !== currentUserId);
@@ -247,6 +303,16 @@ const PostCard = ({
             <span className="text-white/40 text-[11px] shrink-0">
               {formatRelativeTime(post.created_at)}
             </span>
+            {/* FEAT-159: an edit must be visible — a line may have been quoted
+                before it was changed. The exact moment lives in the tooltip. */}
+            {post.edited_at && (
+              <span
+                className="text-white/35 text-[11px] italic shrink-0"
+                title={`Отредактировано: ${formatExactTime(post.edited_at)}`}
+              >
+                · {post.edited_by_admin ? 'изменено администратором' : 'изменено'}
+              </span>
+            )}
           </div>
         </div>
 
@@ -301,6 +367,20 @@ const PostCard = ({
                       </svg>
                       Пожаловаться
                     </button>
+                    {canEdit && (
+                      <button
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onEdit?.(post);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-white/70 hover:bg-white/10 hover:text-white transition-colors text-left text-xs"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-site-blue/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                        Редактировать
+                      </button>
+                    )}
                     {isAuthor && (
                       <button
                         onClick={() => openModal('deletion')}

@@ -985,6 +985,45 @@ async def unlike_post(
     return {"status": "unliked", "post_id": post_id, "character_id": character_id}
 
 
+@router.put("/posts/{post_id}", response_model=schemas.PostEditResponse)
+async def edit_post_route(
+    post_id: int,
+    body: schemas.PostEditRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Edit the text of a post (FEAT-159, Phase A).
+
+    A non-admin author may edit their own post only while nobody has posted
+    after it in that location and only within an hour of PUBLICATION (never of
+    the last edit — otherwise the window renews itself forever). Role ``admin``
+    bypasses both limits unconditionally — on their own posts as well as on
+    other people's; **moderators do not** — this route deliberately does not use
+    ``get_admin_user``, which admits them, and checks
+    ``current_user.role == "admin"`` instead.
+
+    Both limits are re-decided server-side at save time inside one transaction
+    holding ``SELECT ... FOR UPDATE`` on the post row; the client-side check is
+    a convenience only. The residual race (another player's post committing in
+    the milliseconds around Save) is accepted and documented in
+    ``crud.edit_post`` — locking the whole location would serialise all posting
+    there to protect a check nothing else reads.
+
+    XP is **not** recomputed: it was awarded at publication, and recomputing it
+    would turn "keep appending text" into a farming route.
+
+    Phase B will add an optional ``gates`` field to this same endpoint; this
+    contract is not broken by it.
+    """
+    return await crud.edit_post(
+        session,
+        post_id=post_id,
+        content=body.content,
+        user_id=current_user.id,
+        is_admin=getattr(current_user, "role", None) == "admin",
+    )
+
+
 @router.get("/admin/data", response_model=schemas.AdminPanelData)
 async def get_admin_panel_data_route(session: AsyncSession = Depends(get_db), current_user=Depends(require_permission("locations:read"))):
     """

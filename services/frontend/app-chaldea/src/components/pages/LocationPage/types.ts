@@ -35,6 +35,17 @@ export interface Post {
   liked_by: number[];
   // FEAT-145 item 7: intent gates declared in this post, {action_type: count}.
   gates?: Record<string, number>;
+  /**
+   * FEAT-159: set when the post's text was edited after publication.
+   * `null` / absent for an untouched post. ISO timestamp from the server.
+   */
+  edited_at?: string | null;
+  /**
+   * FEAT-159: the edit was made by an administrator, not by the author.
+   * Derived server-side; degrades to `false` when the author's profile could
+   * not be resolved, so it never falsely accuses an admin.
+   */
+  edited_by_admin?: boolean;
 }
 
 export interface LocationLootItem {

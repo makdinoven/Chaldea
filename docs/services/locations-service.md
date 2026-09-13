@@ -78,6 +78,75 @@ locations-service/app/
 |-------|------|----------|
 | POST | `/locations/posts/` | Создать пост в локации |
 | GET | `/locations/{id}/posts/` | Посты в локации (newest first) |
+| PUT | `/locations/posts/{post_id}` | Редактировать текст своего поста (FEAT-159, см. ниже) |
+
+### Редактирование поста (FEAT-159, Phase A)
+
+`PUT /locations/posts/{post_id}` (`main.py:988`, логика — `crud.edit_post`, `crud.py:1167`). Аутентификация: `Depends(get_current_user_via_http)`. Правится **только текст**: тело — `schemas.PostEditRequest` (`schemas.py:351`) с единственным полем `content`. Ни `post_type`, ни `targets`, ни `gates` эндпоинт не принимает — легаси-форма одиночного гейта на новом пути не поддерживается сознательно, чтобы не появился второй, иначе валидируемый способ объявлять намерения.
+
+Ответ — `schemas.PostEditResponse` (`schemas.py:362`): `id, content, length, created_at, edited_at, edited_by_admin`. `length` считается по сырому (с HTML) содержимому, как и в `get_post_details`; проверки длины — по тексту после `strip_html_tags`.
+
+#### Кто и когда может править
+
+Порядок ветвлений в `crud.edit_post` — часть контракта:
+
+1. **Роль `admin`** — обходит **оба** ограничения (час и «после поста уже написали) **безусловно**, в том числе на **своих собственных** постах. Ветка проверяется **первой** (решение пользователя от 2026-09-13). Проверяется буквально `current_user.role == "admin"`; `get_admin_user` **не** используется намеренно — он пускает и модераторов, а модератор на чужом посту получает 403.
+2. **Автор поста** (не админ) — правит, только если после его поста в локации никто не писал и только в течение `POST_EDIT_WINDOW_HOURS = 1` (`crud.py:1164`) с момента **публикации**.
+3. Кто угодно ещё — 403.
+
+Обход админом касается **только этих двух ограничений**, а не проверок содержимого: минимальная длина и бюджет символов применяются к админу ровно так же.
+
+| Код | Условие | `detail` |
+|-----|---------|----------|
+| 200 | успешно | — |
+| 400 | текст короче `MIN_POST_LENGTH` | `Минимальная длина поста — 300 символов (сейчас: N)` |
+| 400 | текст короче бюджета гейтов поста | `Для всех действий этого поста нужно минимум N символов (сейчас: M)` |
+| 403 | не админ и не автор | `Вы можете редактировать только свои посты` |
+| 403 | час истёк (путь автора) | `Редактировать пост можно в течение часа после публикации` |
+| 403 | после поста уже написали (путь автора) | `После этого поста уже написали — редактирование недоступно` |
+| 404 | поста нет (или его удалили между UPDATE и перечитыванием) | `Пост не найден` |
+
+#### Два ограничения и то, как они проверяются
+
+Оба перепроверяются **на сервере, в момент сохранения, в той же транзакции**, что и `UPDATE`, под `SELECT ... FOR UPDATE` на строке поста. Клиентская проверка — только удобство.
+
+- **«После поста уже написали» — по `id >`, а не по `created_at >`.** `posts.id` — монотонный автоинкремент и упорядочивает ленту ровно так же, как `get_posts_by_location` (`ORDER BY id DESC`), поэтому два поста с одинаковой посекундной `TIMESTAMP` не проскочат.
+- **Час считается MySQL против `NOW()`**, а не в Python: `created_at > NOW() - INTERVAL :hours HOUR` вычисляется прямо в том же `SELECT`, что читает пост. `posts.created_at` — наивный MySQL `TIMESTAMP`, записанный серверным `NOW()`; сравнение его с `datetime.now(timezone.utc)` — классический баг naive/aware и сдвинуло бы окно на смещение контейнера. Окно всегда измеряется от `created_at` и **никогда** не смотрит на `edited_at`, поэтому повторные правки его не продлевают.
+- **Опыт не пересчитывается** и фоновая задача начисления не ставится: XP выдан при публикации, иначе «дописывай текст» стало бы способом фарма.
+- **Принятая остаточная гонка:** `FOR UPDATE` берётся на строку поста, а не на локацию. Блокировка локации сериализовала бы всё написание постов там ради проверки, которую читает только этот эндпоинт. Остаётся окно в миллисекунды: правка может лечь сразу после чужого ответа. Последствие косметическое, это осознанный размен (задокументирован в докстринге `crud.edit_post`).
+
+#### Бюджет символов при редактировании
+
+Гейты покупаются длиной текста (`GATE_SYMBOL_COST`, `crud.py:25-27`: `combat` — 200 за цель, остальные — 500; пол — `MIN_POST_LENGTH`). Правка **не может** сократить пост ниже той длины, которую уже стоят его гейты.
+
+- `crud.gate_list_for_post` (`crud.py:1128`) читает **все** строки `action_gates` этого поста — статуса `open`, `consumed` **и** `expired`, без фильтра по статусу. Это принципиально: гейты истекают при выходе персонажа из локации, поэтому счёт только `open` означал бы «купи пять гейтов, выйди и вернись — и тот же текст снова свободен». Пост эти гейты купил, бюджет остаётся потраченным.
+- `crud.merge_gate_lists(*gate_lists)` (`crud.py:55`) — **чистая** функция: группирует по `action_type` и **объединяет** множества целей (`None` как цель сохраняется отдельным элементом). Объединение, а не конкатенация: `required_symbols_for_gates` берёт `cost * max(1, len(targets))`, и цель, названная дважды, была бы посчитана дважды.
+- `crud.required_symbols_for_gates` (`crud.py:92`) переиспользуется без изменений, так что сервер и клиентское зеркало (`gateConstants.ts`) не могут разойтись.
+- Проверка идёт **после** проверки `MIN_POST_LENGTH` и применяется **и к админам**. У поста без гейтов работает только минимальная длина — со своей формулировкой ошибки.
+
+`merge_gate_lists` принимает **произвольное число списков** намеренно: Phase B (T8) добавит к нему список гейтов из ожидающих заявок и список запрашиваемых сейчас, **расширив** этот код, а не заменив его. В Phase A передаётся ровно один список — гейты, которые пост уже имеет.
+
+#### «Изменено»
+
+Две новые nullable-колонки в `posts` (миграция `038_post_edit_columns`, модель — `models.py:173,176`):
+
+- `edited_at TIMESTAMP NULL DEFAULT NULL` — когда пост правили в последний раз. `NULL` = не правили ни разу.
+- `edited_by_user_id INT NULL DEFAULT NULL` — кто правил. **Только аудит, клиенту не отдаётся никогда.**
+
+**Почему не generic `updated_at ... ON UPDATE CURRENT_TIMESTAMP`:** такой столбец срабатывал бы на **любую** будущую запись в строку — бэкфилл, админский скрипт, добавленная позже колонка — и пометил бы «изменено» всю таблицу. Эти две колонки пишет ровно один путь кода (`crud.edit_post`) и значат они ровно одно. Откат миграции — `DROP COLUMN`, теряется только сама пометка.
+
+`schemas.ClientPost` (`schemas.py:549`) получил два аддитивных поля, которые наследует и `LatestPostResponse`:
+
+- `edited_at: Optional[datetime] = None`;
+- `edited_by_admin: bool = False` — **производное, не хранится**. Считается в `crud.get_post_details` (`crud.py:2024-2036`) как «`edited_at` не пуст **и** `edited_by_user_id` не пуст **и** `user_id` автора не пуст **и** они не равны». `user_id` автора берётся из уже запрашиваемого профиля character-service, то есть лишних запросов нет. **Если вызов профиля упал**, `profile_data["user_id"]` = `None`, флаг = `False`, и UI показывает обычное «изменено»: сбой никогда не обвиняет админа ложно. По той же причине админ, правящий **свой** пост, даёт `false` — он и есть автор.
+
+`PostResponse` (сырая ORM-форма из `GET /{location_id}/posts/`) намеренно не тронут.
+
+#### Rate limit
+
+`PUT /locations/posts/{id}` ограничен на Nginx в обоих конфигах: `limit_req_zone ... zone=post_edit_limit:10m rate=20r/m` (`nginx.conf:49`, `nginx.prod.conf:51`) и `limit_req zone=post_edit_limit burst=10 nodelay; limit_req_status 429` в regex-локации `~ ^/locations/posts/[0-9]+$` (`nginx.conf:289`, `nginx.prod.conf:304`). Ключ — `$binary_remote_addr` (на IP). Паттерн строго на числовой id без хвоста, поэтому `/posts/{id}/like`, `/unlike`, `/request-deletion`, `/report`, а также литеральные `/posts/as-npc`, `/posts/latest`, `/posts/character-stats` под лимит **не** попадают. Тело 429 отдаёт Nginx как HTML — у фронтенда для этого статуса отдельная ветка с русским сообщением.
+
+> Заявки на ретро-добавленные гейты (`post_gate_requests`, раздел модерации) — **Phase B, ещё не реализовано**. В коде их нет.
 
 ### Черновики ролевых постов (FEAT-156)
 
@@ -185,7 +254,9 @@ Country -> Region -> District -> Location
 - **Locations** - id, name, district_id (FK CASCADE), type (location/subdistrict), image_url, recommended_level, quick_travel_marker, parent_id (FK self CASCADE), description, **is_starting** BOOLEAN NOT NULL DEFAULT 0 (+ индекс `ix_locations_is_starting`), **starting_blurb** TEXT NULL (FEAT-154)
 - **origin_countries** (FEAT-154) - id, name (UNIQUE), summary, skitaltsy_attitude, emblem_url, map_image_url, archive_slug, is_active (мягкое удаление), sort_order; индекс `ix_origin_countries_active_sort (is_active, sort_order)`. `archive_slug` — **мягкая** ссылка на `archive_articles.slug` без FK: статьи это контент и могут переименовываться, «висячий» slug деградирует до «нет ссылки на лор», а не до ошибки
 - **LocationNeighbors** - id, location_id (FK CASCADE), neighbor_id (FK CASCADE), energy_cost
-- **posts** - id, character_id, location_id (FK CASCADE), content (`TEXT` — см. «Известные проблемы»), post_type (regular/gated, FEAT-145), created_at
+- **posts** - id, character_id, location_id (FK CASCADE), content (`TEXT` — см. «Известные проблемы»), post_type (regular/gated, FEAT-145), created_at, **edited_at** TIMESTAMP NULL, **edited_by_user_id** INT NULL (FEAT-159, миграция `038_post_edit_columns`)
+  - `edited_at` / `edited_by_user_id` пишет ровно один путь кода — `crud.edit_post`. `NULL` в `edited_at` = пост не редактировали. Generic `updated_at ... ON UPDATE CURRENT_TIMESTAMP` отвергнут намеренно: он срабатывал бы на любую будущую запись в строку и пометил бы «изменено» всю таблицу.
+  - `edited_by_user_id` — **чисто аудит**, клиенту не отдаётся. Клиент получает только производный `edited_by_admin` (см. «Редактирование поста»).
 - **post_drafts** (FEAT-156) - id, character_id (cross-service, **без FK**), location_id (FK `Locations.id` CASCADE), content **MEDIUMTEXT**, active TINYINT NULL, sent_at TIMESTAMP NULL, created_at, updated_at; `UNIQUE (character_id, location_id, active)` = `uq_post_drafts_active`, индекс `idx_post_drafts_char_updated (character_id, updated_at)`
   - `content` — `MEDIUMTEXT`, а не `TEXT`: кириллица в `utf8mb4` стоит 2 байта на символ плюс разметка TipTap, длинный ролевой пост упёрся бы в 64 КБ и молча обрезался.
   - `active` — намеренно **nullable-флаг**, а не boolean. MySQL не умеет частично уникальные индексы, но считает `NULL` различными внутри UNIQUE-ключа, поэтому `UNIQUE (character_id, location_id, active)` даёт ровно один живой черновик на пару «персонаж + локация» и не ограничивает число архивных строк. Код пишет только `1` или `NULL`, никогда `0`.

@@ -52,6 +52,43 @@ def normalize_gates(post_type, targets, gates) -> list:
     return out
 
 
+def merge_gate_lists(*gate_lists) -> list:
+    """Merge several gate lists into one canonical set: group by ``action_type``,
+    union the targets (FEAT-159, section 3.6).
+
+    Pure on purpose: this is the single point where a post's symbol budget is
+    assembled, so it must be unit-testable on its own rather than only through
+    an endpoint. ``required_symbols_for_gates`` charges
+    ``cost * max(1, len(targets))`` per entry, so two entries of the same
+    ``action_type`` would double-charge a target named in both — merging with a
+    union makes the sum exact.
+
+    A ``None`` target (a gate created with no targets at all) is kept as a
+    distinct member so such a gate still costs its one target's worth.
+
+    Phase A passes a single list — the gates the post already owns. Phase B (T8)
+    passes the pending-request and newly-requested lists alongside it; nothing
+    else has to change.
+    """
+    merged: Dict[str, list] = {}
+    for gate_list in gate_lists:
+        for g in (gate_list or []):
+            if isinstance(g, dict):
+                at = g.get("action_type")
+                tg = g.get("targets")
+            else:
+                at = getattr(g, "action_type", None)
+                tg = getattr(g, "targets", None)
+            if at is None:
+                continue
+            bucket = merged.setdefault(at, [])
+            for t in (tg or []):
+                tv = None if t is None else int(t)
+                if tv not in bucket:
+                    bucket.append(tv)
+    return [{"action_type": at, "targets": targets} for at, targets in merged.items()]
+
+
 def required_symbols_for_gates(gate_list) -> int:
     """Required post length for a set of gates (FEAT-145 v2). Sum of per-target
     costs, floored at the general minimum."""
@@ -1088,6 +1125,25 @@ async def expire_action_gates(session, character_id: int, location_id: int) -> N
     await session.commit()
 
 
+async def gate_list_for_post(session, post_id: int) -> list:
+    """The gates a post has ALREADY bought, as a gate list of
+    ``{"action_type", "targets"}`` ready for ``required_symbols_for_gates``.
+
+    **Every status counts — ``open``, ``consumed`` and ``expired``.** Gates
+    expire when their character leaves the location
+    (``expire_action_gates``), so counting only ``open`` rows would mean: buy
+    five gates, step next door and back, and the text that paid for them is
+    suddenly free again. The post bought those gates; the budget stays spent.
+    """
+    rows = (await session.execute(
+        text("SELECT action_type, target_ref FROM action_gates WHERE post_id = :pid"),
+        {"pid": post_id},
+    )).fetchall()
+    return merge_gate_lists([
+        {"action_type": at, "targets": [tref]} for at, tref in rows
+    ])
+
+
 async def expire_action_gates_for_post(session, post_id: int) -> None:
     """Revoke rights granted by a post that is being removed (FEAT-158).
 
@@ -1102,6 +1158,173 @@ async def expire_action_gates_for_post(session, post_id: int) -> None:
         ),
         {"p": post_id},
     )
+
+
+# FEAT-159: how long after PUBLICATION a post stays editable by its author.
+POST_EDIT_WINDOW_HOURS = 1
+
+
+async def edit_post(
+    session: AsyncSession,
+    post_id: int,
+    content: str,
+    user_id: int,
+    is_admin: bool,
+) -> dict:
+    """Edit a post's text (FEAT-159, Phase A). Returns the PostEditResponse dict.
+
+    Authorisation and the two limits (see FEAT-159 sections 3.3 / 3.4):
+
+    * role ``admin`` (moderators explicitly excluded — the caller must not use
+      ``get_admin_user``) bypasses both limits **unconditionally**: on their own
+      posts as well as on other people's. This branch is therefore evaluated
+      *before* the ownership branch;
+    * the post's author, when not an admin, may edit it **only** while nobody
+      has posted after it in that location and **only** within
+      ``POST_EDIT_WINDOW_HOURS`` of publication;
+    * anybody else gets 403.
+
+    The minimum-length check applies to everyone, admins included — the bypass
+    covers the two editing limits, not content validation.
+
+    ``edited_by_admin`` in the response is ``not is_owner``: an admin editing
+    their **own** post is the author, so the post is marked plainly «изменено»,
+    not «изменено администратором». ``get_post_details`` derives the same flag
+    the same way (editor vs author).
+
+    Both limits are re-checked here, server-side, at save time, inside the same
+    transaction as the UPDATE — the client-side check is a convenience, not the
+    rule. Two details are load-bearing:
+
+    * "nobody posted after it" uses ``id >``, not ``created_at >``. ``posts.id``
+      is a monotonic autoincrement and orders the feed exactly
+      (``get_posts_by_location`` sorts by ``id DESC``), so two posts sharing a
+      one-second ``TIMESTAMP`` cannot slip through.
+    * the hour is evaluated **by MySQL against NOW()**, never in Python.
+      ``posts.created_at`` is a naive MySQL ``TIMESTAMP``; comparing it to
+      ``datetime.now(timezone.utc)`` is the classic naive/aware bug and would
+      silently shift the window by the container's UTC offset. The window is
+      measured from ``created_at`` and never consults ``edited_at``, so repeated
+      edits cannot extend it.
+
+    **Accepted residual race.** The ``FOR UPDATE`` lock is taken on the post row
+    only, not on the location. Locking the location would serialise all posting
+    there to protect a check that only this endpoint reads. The remaining window
+    is one player pressing Save in the milliseconds while another player's post
+    commits: the edit can land a moment after a reply appears. The consequence
+    is cosmetic and this is a deliberate trade, not an oversight.
+
+    XP is **not** recomputed and no XP background task is scheduled — XP was
+    awarded at publication, and recomputing it would make "keep appending text"
+    a farming route.
+
+    The symbol budget of the post's existing gates is re-checked here as well
+    (section 3.6): an edit may never leave the text shorter than the gates it
+    already bought. See ``gate_list_for_post``.
+    """
+    post_row = (await session.execute(
+        text(
+            "SELECT id, character_id, location_id, created_at, "
+            "       (created_at > NOW() - INTERVAL :hours HOUR) AS within_window "
+            "FROM posts WHERE id = :pid FOR UPDATE"
+        ),
+        {"pid": post_id, "hours": POST_EDIT_WINDOW_HOURS},
+    )).fetchone()
+    if not post_row:
+        raise HTTPException(status_code=404, detail="Пост не найден")
+
+    author_row = (await session.execute(
+        text("SELECT user_id FROM characters WHERE id = :cid"),
+        {"cid": post_row.character_id},
+    )).fetchone()
+    author_user_id = author_row[0] if author_row else None
+
+    is_owner = author_user_id is not None and int(author_user_id) == int(user_id)
+
+    # The admin branch is tested FIRST, on purpose: role ``admin`` bypasses both
+    # limits unconditionally — on their own posts as well as on other people's.
+    # Testing ownership first would leave an admin subject to both limits on
+    # their own post, which is not what the rules say.
+    if is_admin:
+        pass
+    elif is_owner:
+        # Limit 1 — nobody posted after it in this location.
+        later = (await session.execute(
+            text(
+                "SELECT 1 FROM posts "
+                "WHERE location_id = :loc AND id > :pid LIMIT 1"
+            ),
+            {"loc": post_row.location_id, "pid": post_id},
+        )).fetchone()
+        if later:
+            raise HTTPException(
+                status_code=403,
+                detail="После этого поста уже написали — редактирование недоступно",
+            )
+        # Limit 2 — within an hour of publication (evaluated by MySQL).
+        if not post_row.within_window:
+            raise HTTPException(
+                status_code=403,
+                detail="Редактировать пост можно в течение часа после публикации",
+            )
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="Вы можете редактировать только свои посты",
+        )
+
+    char_count = len(strip_html_tags(content))
+    if char_count < MIN_POST_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Минимальная длина поста — {MIN_POST_LENGTH} символов (сейчас: {char_count})",
+        )
+
+    # The symbol budget (FEAT-159, section 3.6). Gates are bought with text
+    # length, so an edit may not strip the text that paid for the gates the post
+    # already holds — otherwise a 1000-character post buys five combat gates and
+    # is then cut back to 307. The budget is read from ``action_gates``, never
+    # from a request payload, which makes it immune to which path created the
+    # post. It applies to admins too: the 2026-09-13 ruling lets an admin bypass
+    # the hour and the "someone posted after" limits, not content validation —
+    # exactly like the minimum-length check just above.
+    existing_gates = await gate_list_for_post(session, post_id)
+    if existing_gates:
+        required = required_symbols_for_gates(existing_gates)
+        if char_count < required:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Для всех действий этого поста нужно минимум {required} "
+                    f"символов (сейчас: {char_count})"
+                ),
+            )
+
+    await session.execute(
+        text(
+            "UPDATE posts SET content = :content, edited_at = NOW(), "
+            "edited_by_user_id = :uid WHERE id = :pid"
+        ),
+        {"content": content, "uid": user_id, "pid": post_id},
+    )
+    await session.commit()
+
+    saved = (await session.execute(
+        text("SELECT content, created_at, edited_at FROM posts WHERE id = :pid"),
+        {"pid": post_id},
+    )).fetchone()
+    if not saved:
+        # Deleted by moderation between the UPDATE and the re-read.
+        raise HTTPException(status_code=404, detail="Пост не найден")
+
+    return {
+        "id": post_id,
+        "content": saved.content,
+        "length": len(saved.content),
+        "created_at": saved.created_at,
+        "edited_at": saved.edited_at,
+        "edited_by_admin": not is_owner,
+    }
 
 
 async def get_posts_by_location(session: AsyncSession, location_id: int) -> list:
@@ -1798,6 +2021,20 @@ async def get_post_details(post: Post) -> dict:
                 "user_nickname": "",
                 "character_name": ""
             }
+    # FEAT-159: «изменено». `edited_by_admin` is derived rather than stored —
+    # the author's user_id is already in the profile payload above. If the
+    # profile call failed, profile_data["user_id"] is None and the flag is
+    # False, so the UI falls back to a plain «изменено» and never falsely
+    # accuses an admin.
+    edited_by_user_id = getattr(post, "edited_by_user_id", None)
+    author_user_id = profile_data.get("user_id")
+    edited_by_admin = bool(
+        getattr(post, "edited_at", None) is not None
+        and edited_by_user_id is not None
+        and author_user_id is not None
+        and edited_by_user_id != author_user_id
+    )
+
     return {
         "post_id": post.id,
         "character_id": post.character_id,
@@ -1811,6 +2048,8 @@ async def get_post_details(post: Post) -> dict:
         "content": post.content,
         "length": len(post.content),
         "created_at": post.created_at,
+        "edited_at": getattr(post, "edited_at", None),
+        "edited_by_admin": edited_by_admin,
     }
 
 async def get_players_in_location(location_id: int) -> List[dict]:

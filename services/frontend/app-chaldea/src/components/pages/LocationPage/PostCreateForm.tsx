@@ -12,40 +12,21 @@ import { useAppSelector } from '../../../redux/store';
 import { NpcInLocation } from './types';
 import ConfirmDialog from './ConfirmDialog';
 import DraftsPanel from './DraftsPanel';
-
-const MIN_POST_LENGTH = 300;
-// FEAT-145 v2: symbol cost per gate target.
-const GATE_COST: Record<string, number> = {
-  combat: 200,
-  npc_dialogue: 500,
-  gathering: 500,
-  dungeon: 500,
-};
-const GATE_LABEL: Record<string, string> = {
-  combat: 'Нападение на мобов',
-  npc_dialogue: 'Диалог с НПС',
-  gathering: 'Сбор ресурсов',
-  dungeon: 'Вход в подземелье',
-};
-// FEAT-152: per-action visual accents for the gate grid (mock language).
-const GATE_STYLE: Record<string, { icon: string; activeCls: string }> = {
-  combat: { icon: '⚔', activeCls: 'border-stat-hp/40 bg-stat-hp/10 text-stat-hp' },
-  npc_dialogue: { icon: '💬', activeCls: 'border-site-blue/40 bg-site-blue/10 text-site-blue' },
-  gathering: { icon: '⛏', activeCls: 'border-stat-energy/40 bg-stat-energy/10 text-stat-energy' },
-  dungeon: { icon: '🏰', activeCls: 'border-rarity-epic/40 bg-rarity-epic/10 text-rarity-epic' },
-};
-const GATE_ORDER = ['combat', 'npc_dialogue', 'gathering', 'dungeon'] as const;
-
-export interface GateOption {
-  id: number;
-  name: string;
-}
-export type GateOptions = Partial<Record<string, GateOption[]>>;
-
-export interface PostGate {
-  action_type: string;
-  targets: number[];
-}
+import {
+  MIN_POST_LENGTH,
+  GATE_COST,
+  GATE_LABEL,
+  GATE_STYLE,
+  GATE_ORDER,
+  stripHtmlTags,
+  isContentEmpty,
+  requiredSymbolsForGates,
+} from './gateConstants';
+// FEAT-159 (T5a): the gate cost table, labels, styles and `stripHtmlTags` moved
+// to `gateConstants.ts` so `PostEditModal` shares one counter with this form.
+// Re-exported here because they were part of this module's public surface.
+export type { GateOption, GateOptions, PostGate } from './gateConstants';
+import type { GateOptions, PostGate } from './gateConstants';
 
 interface PostCreateFormProps {
   onSubmit: (content: string, gates?: PostGate[]) => Promise<void>;
@@ -59,24 +40,6 @@ interface PostCreateFormProps {
   locationName?: string;
 }
 
-/**
- * Plain length of the post **exactly as the backend counts it**.
- *
- * This deliberately mirrors `crud.strip_html_tags`
- * (`services/locations-service/app/crud.py`) byte-for-byte, including its two
- * known defects: no separator at block boundaries (`<p>Один</p><p>Два</p>` ->
- * `"ОдинДва"`) and no entity decoding. It feeds `charCount`, which drives the
- * minimum-length and gate thresholds, so if it stopped matching the server the
- * UI would promise gates the server then refuses.
- *
- * Do NOT "fix" it and do NOT replace it with `htmlToSpellText` — that walker is
- * the correct model and is used only for spell-checking (FEAT-157, section 3.3).
- * Correcting the backend twin changes post XP and every gate threshold, i.e. it
- * is a balance decision; it is tracked in `docs/ISSUES.md`.
- */
-const stripHtmlTags = (html: string) => html.replace(/<[^>]*>/g, '').trim();
-
-const isContentEmpty = (html: string) => stripHtmlTags(html).length === 0;
 
 /** «Черновик сохранён · 14:30» — time only, the draft is always recent. */
 const formatSavedAt = (epochMs: number): string =>
@@ -188,10 +151,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
   const activeGates: PostGate[] = GATE_ORDER
     .filter((t) => (selectedGates[t]?.length ?? 0) > 0)
     .map((t) => ({ action_type: t, targets: selectedGates[t] }));
-  const requiredSymbols = Math.max(
-    MIN_POST_LENGTH,
-    activeGates.reduce((sum, g) => sum + GATE_COST[g.action_type] * g.targets.length, 0),
-  );
+  const requiredSymbols = requiredSymbolsForGates(activeGates);
   const meetsMinLength = charCount >= requiredSymbols;
   const xpPreview = charCount >= MIN_POST_LENGTH ? Math.round(charCount / 100) : 0;
   const progressPct = Math.min(100, Math.round((charCount / requiredSymbols) * 100));

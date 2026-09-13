@@ -7,12 +7,13 @@ import { useBodyBackground } from '../../../hooks/useBodyBackground';
 import { useAppSelector, useAppDispatch } from '../../../redux/store';
 import { setCharacterLocation, getMe } from '../../../redux/slices/userSlice';
 import { isStaff } from '../../../utils/permissions';
-import { LocationData } from './types';
+import { LocationData, Post } from './types';
 import LocationHeader from './LocationHeader';
 import LocationTopBar from './LocationTopBar';
 import PlayersSection from './PlayersSection';
 import PostCard from './PostCard';
 import PostCreateForm from './PostCreateForm';
+import PostEditModal from './PostEditModal';
 import NeighborsSection from './NeighborsSection';
 import LootSection from './LootSection';
 import PendingInvitationsPanel from './PendingInvitationsPanel';
@@ -40,6 +41,10 @@ const LocationPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [quickMoving, setQuickMoving] = useState(false);
   const [showPostForm, setShowPostForm] = useState(false);
+  // FEAT-159: the post currently open in the edit modal (null = closed).
+  // Held here, not inside PostCard, so the modal is a single instance that
+  // survives feed re-renders.
+  const [editingPost, setEditingPost] = useState<Post | null>(null);
 
   const character = useAppSelector((state) => state.user.character);
   const userId = useAppSelector((state) => state.user.id);
@@ -324,6 +329,47 @@ const LocationPage = () => {
       }
     },
     []
+  );
+
+  // --- Post edit (FEAT-159) ---
+
+  /**
+   * `PUT /locations/posts/{id}`.
+   *
+   * Rejects with an `Error` carrying a ready-to-show Russian message so
+   * `PostEditModal` can render it inline **without closing or clearing the
+   * editor**. The server's own `detail` is preferred verbatim — it names the
+   * rule that was broken (not last / past the hour / not the owner / gone),
+   * which a generic client message could not.
+   */
+  const handleEditPost = useCallback(
+    async (postId: number, content: string) => {
+      try {
+        await axios.put(`${BASE_URL}/locations/posts/${postId}`, { content });
+        toast.success('Пост изменён');
+        await fetchLocationData();
+      } catch (err) {
+        let message = 'Не удалось сохранить изменения. Текст остался в редакторе.';
+        if (axios.isAxiosError(err)) {
+          const detail = err.response?.data?.detail;
+          if (typeof detail === 'string' && detail.trim()) {
+            message = detail;
+          } else if (Array.isArray(detail) && detail.length > 0) {
+            // FastAPI validation shape — never expected here, but never swallowed.
+            message = 'Сервер отклонил текст поста. Проверьте содержимое и попробуйте ещё раз.';
+          } else if (!err.response) {
+            message = 'Нет связи с сервером — изменения не сохранены. Текст остался в редакторе.';
+          } else if (err.response.status === 429) {
+            // Nginx rate limit (T6) answers with its own body, not a JSON detail.
+            message = 'Слишком много правок подряд. Подождите немного и попробуйте снова — текст остался в редакторе.';
+          } else {
+            message = `Не удалось сохранить изменения (ошибка ${err.response.status}). Текст остался в редакторе.`;
+          }
+        }
+        throw new Error(message);
+      }
+    },
+    [fetchLocationData]
   );
 
   // --- Post submit ---
@@ -846,6 +892,9 @@ const LocationPage = () => {
                   onTagPlayer={handleTagPlayer}
                   onReport={handleReport}
                   onRequestDeletion={handleRequestDeletion}
+                  isLatestPostInLocation={post.post_id === location.posts[0]?.post_id}
+                  currentUserRole={userRole}
+                  onEdit={setEditingPost}
                 />
               ))}
             </div>
@@ -865,6 +914,16 @@ const LocationPage = () => {
           </div>
         )}
       </div>
+
+      {/* FEAT-159: post editor. Rendered at page level so a feed re-render
+          cannot unmount it mid-edit; it closes only on «Отмена» or a 200. */}
+      {editingPost && (
+        <PostEditModal
+          post={editingPost}
+          onSave={handleEditPost}
+          onClose={() => setEditingPost(null)}
+        />
+      )}
     </div>
   );
 };
