@@ -7,7 +7,7 @@ import WysiwygEditor from '../../CommonComponents/WysiwygEditor/WysiwygEditor';
 import SpellCheckPanel from '../../CommonComponents/SpellCheckPanel/SpellCheckPanel';
 import { useSpellCheck } from '../../../hooks/useSpellCheck';
 import { usePostDraft } from '../../../hooks/usePostDraft';
-import { replaceWordInHtml } from '../../../api/spellcheck';
+import { htmlToSpellText, replaceWordInHtml } from '../../../api/spellcheck';
 import { useAppSelector } from '../../../redux/store';
 import { NpcInLocation } from './types';
 import ConfirmDialog from './ConfirmDialog';
@@ -59,6 +59,21 @@ interface PostCreateFormProps {
   locationName?: string;
 }
 
+/**
+ * Plain length of the post **exactly as the backend counts it**.
+ *
+ * This deliberately mirrors `crud.strip_html_tags`
+ * (`services/locations-service/app/crud.py`) byte-for-byte, including its two
+ * known defects: no separator at block boundaries (`<p>Один</p><p>Два</p>` ->
+ * `"ОдинДва"`) and no entity decoding. It feeds `charCount`, which drives the
+ * minimum-length and gate thresholds, so if it stopped matching the server the
+ * UI would promise gates the server then refuses.
+ *
+ * Do NOT "fix" it and do NOT replace it with `htmlToSpellText` — that walker is
+ * the correct model and is used only for spell-checking (FEAT-157, section 3.3).
+ * Correcting the backend twin changes post XP and every gate threshold, i.e. it
+ * is a balance decision; it is tracked in `docs/ISSUES.md`.
+ */
 const stripHtmlTags = (html: string) => html.replace(/<[^>]*>/g, '').trim();
 
 const isContentEmpty = (html: string) => stripHtmlTags(html).length === 0;
@@ -254,21 +269,34 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
   };
 
   const handleSpellCheck = async () => {
-    const plainText = stripHtmlTags(content);
-    if (!plainText) return;
-    try {
-      await spellCheck.runCheck(plainText);
-    } catch {
-      toast.error('Сервис проверки правописания недоступен');
-    }
+    // FEAT-157 (T4): the speller gets the text from the same walker that later
+    // resolves the correction back into the HTML — and, crucially, WITHOUT a
+    // trim(). Trimming here while `replaceWordInHtml` counted over the untrimmed
+    // HTML shifted every offset and duplicated the first corrected word.
+    const plainText = htmlToSpellText(content).text;
+    if (!plainText.trim()) return;
+    // The hook no longer rethrows (the panel keeps the message); `runCheck`
+    // hands the message back so the toast can fire too.
+    const failure = await spellCheck.runCheck(plainText);
+    if (failure) toast.error(failure);
   };
 
   const handleApplySuggestion = (errorIndex: number, suggestion: string) => {
     const error = spellCheck.errors[errorIndex];
     if (!error) return;
     const updated = replaceWordInHtml(content, error.pos, error.len, suggestion);
+    if (updated === content && suggestion !== error.word) {
+      // The range could not be resolved — the post is left untouched on purpose
+      // rather than corrupted. Surface it instead of failing silently.
+      const message =
+        'Не удалось применить исправление: текст изменился. Запустите проверку правописания заново.';
+      spellCheck.setError(message);
+      toast.error(message);
+      return;
+    }
     replaceContent(updated);
-    spellCheck.dismissError(errorIndex);
+    // Every remaining error after this word moves by the length difference.
+    spellCheck.applyFix(errorIndex, suggestion.length);
   };
 
   const resetForm = () => {
@@ -596,6 +624,7 @@ const PostCreateForm = ({ onSubmit, onSubmitAsNpc, disabled, isStaff, npcs = [],
               errors={spellCheck.errors}
               loading={spellCheck.loading}
               checked={spellCheck.checked}
+              error={spellCheck.error}
               onApplySuggestion={handleApplySuggestion}
               onDismissError={spellCheck.dismissError}
             />

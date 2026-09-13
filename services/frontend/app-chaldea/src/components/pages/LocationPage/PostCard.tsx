@@ -320,12 +320,14 @@ const PostCard = ({
         </div>
       </div>
 
-      {/* Content — RP body styling per mock: gold quotes, tinted emphasis */}
+      {/* Content — RP body styling per mock: gold quotes. Bold/italic carry no colour
+          of their own (FEAT-157): they inherit the post colour unless the author
+          coloured them, so a player-chosen colour is never overridden. */}
       <ArchiveLinkPreview>
         <div
           className="text-white/[0.88] text-sm sm:text-[14.5px] leading-relaxed whitespace-pre-wrap break-words prose-rules
             [&_blockquote]:border-l-2 [&_blockquote]:border-gold/50 [&_blockquote]:pl-3.5 [&_blockquote]:my-2 [&_blockquote]:italic [&_blockquote]:text-white/75
-            [&_em]:italic [&_em]:text-rarity-epic [&_b]:text-gold-light [&_strong]:text-gold-light"
+            [&_em]:italic"
           dangerouslySetInnerHTML={{
             __html: DOMPurify.sanitize(post.content, {
               ADD_ATTR: ['data-archive-slug'],
