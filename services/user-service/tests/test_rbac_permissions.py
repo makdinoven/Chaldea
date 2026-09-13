@@ -1010,3 +1010,154 @@ class TestProfessionsPermissions:
         with pytest.raises(HTTPException) as exc_info:
             require_permission(db, mod, "professions:delete")
         assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# 10. FEAT-158: Moderation RBAC permissions (migration 0027)
+# ---------------------------------------------------------------------------
+
+MODERATION_PERMISSIONS = [
+    ("moderation", "read"),
+    ("moderation", "review"),
+]
+
+# Mirrors ROLE_ACTIONS from migration 0027.
+# Admin (4) is intentionally absent — it receives every row of `permissions`
+# automatically. Editor (2) gets nothing: editors have no moderation access.
+MODERATION_ROLE_ACTIONS = {
+    3: ["read", "review"],   # Moderator — must keep the access get_admin_user gave it
+}
+
+
+def _seed_moderation_permissions(db):
+    """Seed the 2 moderation permissions and their role grants (mirrors migration 0027)."""
+    perm_objects = []
+    for module, action in MODERATION_PERMISSIONS:
+        perm = models.Permission(module=module, action=action,
+                                 description=f"Moderation: {action}")
+        db.add(perm)
+        perm_objects.append(perm)
+    db.flush()  # assigns IDs
+
+    for perm in perm_objects:
+        for role_id, actions in MODERATION_ROLE_ACTIONS.items():
+            if perm.action in actions:
+                db.add(models.RolePermission(role_id=role_id, permission_id=perm.id))
+    db.commit()
+    return perm_objects
+
+
+@pytest.fixture()
+def rbac_db_with_moderation(rbac_db):
+    """DB session with base RBAC seed data + moderation permissions from migration 0027."""
+    _seed_moderation_permissions(rbac_db)
+    return rbac_db
+
+
+class TestModerationPermissions:
+    """FEAT-158 Task #7: Verify moderation RBAC permissions from migration 0027."""
+
+    def test_moderation_permissions_exist(self, rbac_db_with_moderation):
+        """Both moderation permissions must exist in the DB after migration."""
+        db = rbac_db_with_moderation
+        for module, action in MODERATION_PERMISSIONS:
+            perm = db.query(models.Permission).filter(
+                models.Permission.module == module,
+                models.Permission.action == action,
+            ).first()
+            assert perm is not None, f"Permission {module}:{action} not found in DB"
+
+    def test_moderation_permissions_count(self, rbac_db_with_moderation):
+        """Exactly 2 moderation permissions should exist."""
+        db = rbac_db_with_moderation
+        count = db.query(models.Permission).filter(
+            models.Permission.module == "moderation"
+        ).count()
+        assert count == 2
+
+    def test_admin_has_all_moderation_permissions(self, rbac_db_with_moderation):
+        """Admin (role_id=4) gets both moderation permissions via auto-permissions.
+
+        This is the mechanism FEAT-158 tripped over: admin permissions come from a
+        SELECT over the `permissions` table, so an unregistered string is a
+        permission the admin does NOT have.
+        """
+        db = rbac_db_with_moderation
+        admin = _make_user(db, id=400, username="modadmin", email="modadmin@test.com",
+                           role_id=4, role_str="admin")
+        perms = get_effective_permissions(db, admin)
+        for module, action in MODERATION_PERMISSIONS:
+            perm_str = f"{module}:{action}"
+            assert perm_str in perms, f"Admin missing {perm_str}"
+        # 8 base + 2 moderation = 10 total
+        assert len(perms) == 10
+
+    def test_moderator_keeps_full_moderation_access(self, rbac_db_with_moderation):
+        """Moderator (role_id=3) must keep BOTH actions.
+
+        The four admin endpoints previously used `get_admin_user`, which admitted
+        admin *and* moderator. Moving them onto `require_permission` must not
+        narrow that — a moderator without `moderation:review` would silently lose
+        the ability to act on the queue.
+        """
+        db = rbac_db_with_moderation
+        mod = _make_user(db, id=401, username="modmod", email="modmod@test.com",
+                         role_id=3, role_str="moderator")
+        perms = get_effective_permissions(db, mod)
+        assert "moderation:read" in perms
+        assert "moderation:review" in perms
+        # 4 base items:* + 2 moderation = 6 total
+        assert len(perms) == 6
+
+    def test_editor_has_no_moderation_permissions(self, rbac_db_with_moderation):
+        """Editor (role_id=2) gets nothing — editors have no moderation access today."""
+        db = rbac_db_with_moderation
+        editor = _make_user(db, id=402, username="modeditor", email="modeditor@test.com",
+                            role_id=2, role_str="editor")
+        perms = get_effective_permissions(db, editor)
+        assert not any(p.startswith("moderation:") for p in perms)
+        # 2 base *:read, unchanged
+        assert len(perms) == 2
+
+    def test_regular_user_has_no_moderation_permissions(self, rbac_db_with_moderation):
+        """Regular user (role_id=1) must not reach the moderation queue."""
+        db = rbac_db_with_moderation
+        user = _make_user(db, id=403, username="moduser", email="moduser@test.com",
+                          role_id=1, role_str="user")
+        perms = get_effective_permissions(db, user)
+        assert not any(p.startswith("moderation:") for p in perms)
+        assert perms == []
+
+    def test_require_permission_moderation_admin(self, rbac_db_with_moderation):
+        """Admin passes require_permission for both moderation permissions."""
+        db = rbac_db_with_moderation
+        admin = _make_user(db, id=404, username="modadmin2", email="modadmin2@test.com",
+                           role_id=4, role_str="admin")
+        for module, action in MODERATION_PERMISSIONS:
+            require_permission(db, admin, f"{module}:{action}")
+
+    def test_require_permission_moderation_moderator(self, rbac_db_with_moderation):
+        """Moderator passes require_permission for both moderation permissions."""
+        db = rbac_db_with_moderation
+        mod = _make_user(db, id=405, username="modmod2", email="modmod2@test.com",
+                         role_id=3, role_str="moderator")
+        for module, action in MODERATION_PERMISSIONS:
+            require_permission(db, mod, f"{module}:{action}")
+
+    def test_require_permission_moderation_editor_blocked(self, rbac_db_with_moderation):
+        """Editor is blocked from the moderation queue."""
+        db = rbac_db_with_moderation
+        editor = _make_user(db, id=406, username="modeditor2", email="modeditor2@test.com",
+                            role_id=2, role_str="editor")
+        with pytest.raises(HTTPException) as exc_info:
+            require_permission(db, editor, "moderation:read")
+        assert exc_info.value.status_code == 403
+
+    def test_require_permission_moderation_user_blocked(self, rbac_db_with_moderation):
+        """A regular player is blocked from reviewing moderation rows."""
+        db = rbac_db_with_moderation
+        user = _make_user(db, id=407, username="moduser2", email="moduser2@test.com",
+                          role_id=1, role_str="user")
+        with pytest.raises(HTTPException) as exc_info:
+            require_permission(db, user, "moderation:review")
+        assert exc_info.value.status_code == 403

@@ -2151,7 +2151,7 @@ async def report_post(
 @router.get("/admin/moderation/deletion-requests", response_model=List[schemas.PostDeletionRequestRead])
 async def get_deletion_requests(
     session: AsyncSession = Depends(get_db),
-    current_user: UserRead = Depends(get_admin_user),
+    current_user: UserRead = Depends(require_permission("moderation:read")),
 ):
     """Список всех ожидающих запросов на удаление постов."""
     return await crud.get_pending_deletion_requests(session)
@@ -2160,7 +2160,7 @@ async def get_deletion_requests(
 @router.get("/admin/moderation/reports", response_model=List[schemas.PostReportRead])
 async def get_reports(
     session: AsyncSession = Depends(get_db),
-    current_user: UserRead = Depends(get_admin_user),
+    current_user: UserRead = Depends(require_permission("moderation:read")),
 ):
     """Список всех ожидающих жалоб на посты."""
     return await crud.get_pending_reports(session)
@@ -2171,7 +2171,7 @@ async def review_deletion_request(
     request_id: int,
     body: schemas.PostModerationReview,
     session: AsyncSession = Depends(get_db),
-    current_user: UserRead = Depends(get_admin_user),
+    current_user: UserRead = Depends(require_permission("moderation:review")),
 ):
     """Модератор рассматривает запрос на удаление поста (approve/reject)."""
     req = await crud.review_deletion_request(session, request_id, body.action, current_user.id)
@@ -2191,7 +2191,7 @@ async def review_report(
     report_id: int,
     body: schemas.PostModerationReview,
     session: AsyncSession = Depends(get_db),
-    current_user: UserRead = Depends(get_admin_user),
+    current_user: UserRead = Depends(require_permission("moderation:review")),
 ):
     """Модератор рассматривает жалобу на пост (resolve/dismiss)."""
     report = await crud.review_report(session, report_id, body.action, current_user.id)

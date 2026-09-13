@@ -1088,6 +1088,22 @@ async def expire_action_gates(session, character_id: int, location_id: int) -> N
     await session.commit()
 
 
+async def expire_action_gates_for_post(session, post_id: int) -> None:
+    """Revoke rights granted by a post that is being removed (FEAT-158).
+
+    Only `open` gates are expired: `consumed` rows stay as the audit trail of an
+    action that already fired. Intentionally does NOT commit — the caller deletes
+    the post in the same transaction, so revocation and deletion are atomic.
+    """
+    await session.execute(
+        text(
+            "UPDATE action_gates SET status='expired' "
+            "WHERE post_id = :p AND status = 'open'"
+        ),
+        {"p": post_id},
+    )
+
+
 async def get_posts_by_location(session: AsyncSession, location_id: int) -> list:
     result = await session.execute(select(Post).where(Post.location_id == location_id).order_by(Post.id.desc()))
     return result.scalars().all()
@@ -2568,6 +2584,43 @@ async def create_report(
     return report
 
 
+async def _enrich_moderation_items(items: List[dict]) -> List[dict]:
+    """Resolve post-author and requester names for a moderation queue page.
+
+    Runs **after** the SQL query, once per request on deduped id sets, so the
+    outbound call count equals the number of distinct ids — not the row count —
+    and a slow downstream service never holds a DB session open. Every lookup
+    degrades to `None` (the UI renders «Персонаж #id» / «Пользователь #id»);
+    it must never turn a queue listing into a 500.
+    """
+    if not items:
+        return items
+
+    character_ids = [
+        it["post_character_id"] for it in items if it.get("post_character_id")
+    ]
+    user_ids = [it["user_id"] for it in items if it.get("user_id")]
+
+    try:
+        char_map = await _fetch_character_brief_map(character_ids)
+    except Exception as exc:
+        logger.warning("moderation character enrichment failed: %s", exc)
+        char_map = {}
+    try:
+        user_map = await _fetch_username_map(user_ids)
+    except Exception as exc:
+        logger.warning("moderation username enrichment failed: %s", exc)
+        user_map = {}
+
+    for it in items:
+        cid = it.get("post_character_id")
+        brief = char_map.get(cid) if cid else None
+        # An empty name from character-service means "not resolved" -> None.
+        it["post_character_name"] = (brief or {}).get("name") or None
+        it["requester_username"] = user_map.get(it.get("user_id")) or None
+    return items
+
+
 async def get_pending_deletion_requests(session: AsyncSession) -> List[dict]:
     """List all pending deletion requests with post content."""
     result = await session.execute(
@@ -2590,8 +2643,9 @@ async def get_pending_deletion_requests(session: AsyncSession) -> List[dict]:
             "post_content": post.content if post else None,
             "post_character_id": post.character_id if post else None,
             "post_location_id": post.location_id if post else None,
+            "post_created_at": post.created_at if post else None,
         })
-    return items
+    return await _enrich_moderation_items(items)
 
 
 async def get_pending_reports(session: AsyncSession) -> List[dict]:
@@ -2616,8 +2670,43 @@ async def get_pending_reports(session: AsyncSession) -> List[dict]:
             "post_content": post.content if post else None,
             "post_character_id": post.character_id if post else None,
             "post_location_id": post.location_id if post else None,
+            "post_created_at": post.created_at if post else None,
         })
-    return items
+    return await _enrich_moderation_items(items)
+
+
+async def _close_sibling_moderation_rows(
+    session: AsyncSession,
+    post_id: int,
+    skip_request_id: Optional[int],
+    skip_report_id: Optional[int],
+    admin_user_id: int,
+) -> None:
+    """Close the other pending moderation rows about a post that was just deleted.
+
+    Two players can report the same post. Under the old `ON DELETE CASCADE` the
+    siblings were silently destroyed; under `SET NULL` (migration 037) they
+    would survive as `pending` rows pointing at nothing — dead work in the
+    queue. The outcome they asked for (the post is gone) has in fact been
+    achieved by a real moderator decision, so we record it as such and attribute
+    it to that moderator. Runs in the caller's transaction — no commit here.
+    """
+    await session.execute(
+        text(
+            "UPDATE post_deletion_requests "
+            "SET status='approved', reviewed_by_user_id=:u, reviewed_at=NOW() "
+            "WHERE post_id = :p AND status = 'pending' AND (:skip IS NULL OR id <> :skip)"
+        ),
+        {"p": post_id, "u": admin_user_id, "skip": skip_request_id},
+    )
+    await session.execute(
+        text(
+            "UPDATE post_reports "
+            "SET status='resolved', reviewed_by_user_id=:u, reviewed_at=NOW() "
+            "WHERE post_id = :p AND status = 'pending' AND (:skip IS NULL OR id <> :skip)"
+        ),
+        {"p": post_id, "u": admin_user_id, "skip": skip_report_id},
+    )
 
 
 async def review_deletion_request(
@@ -2636,9 +2725,18 @@ async def review_deletion_request(
     if req.status != "pending":
         raise HTTPException(status_code=400, detail="Запрос уже рассмотрен")
 
+    # Capture the post id before the delete: afterwards the FK sets the column
+    # to NULL (migration 037) and the in-session attribute goes stale.
+    post_id = req.post_id
+
     if action == "approve":
-        # Delete the post
-        await session.execute(delete(Post).where(Post.id == req.post_id))
+        if post_id is not None:
+            # Revoke the rights the post granted, then delete it (same transaction)
+            await expire_action_gates_for_post(session, post_id)
+            # Siblings must be closed BEFORE the delete: afterwards the FK has
+            # already nulled their post_id and they can no longer be found.
+            await _close_sibling_moderation_rows(session, post_id, req.id, None, admin_user_id)
+            await session.execute(delete(Post).where(Post.id == post_id))
         req.status = "approved"
     else:
         req.status = "rejected"
@@ -2666,9 +2764,16 @@ async def review_report(
     if report.status != "pending":
         raise HTTPException(status_code=400, detail="Жалоба уже рассмотрена")
 
+    # See review_deletion_request: read post_id before the delete nulls it.
+    post_id = report.post_id
+
     if action == "resolve":
-        # Delete the post when report is resolved
-        await session.execute(delete(Post).where(Post.id == report.post_id))
+        if post_id is not None:
+            # Revoke the rights the post granted, then delete it (same transaction)
+            await expire_action_gates_for_post(session, post_id)
+            # Close siblings before the delete — see review_deletion_request.
+            await _close_sibling_moderation_rows(session, post_id, None, report.id, admin_user_id)
+            await session.execute(delete(Post).where(Post.id == post_id))
         report.status = "resolved"
     else:
         report.status = "dismissed"
@@ -5518,6 +5623,31 @@ async def _fetch_character_brief_map(
                     "short_info lookup failed for character %s: %s", cid, exc,
                 )
                 out[int(cid)] = {"name": "", "avatar": None}
+    return out
+
+
+async def _fetch_username_map(user_ids: List[int]) -> Dict[int, Optional[str]]:
+    """Batch-fetch `{user_id: username}` from user-service.
+
+    Mirrors `_fetch_character_brief_map`: user-service has no batch users
+    endpoint, so we call `GET /users/{id}` once per **distinct** id. Failures
+    are non-fatal — the id maps to `None` and the caller renders a fallback.
+    """
+    if not user_ids:
+        return {}
+    out: Dict[int, Optional[str]] = {}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for uid in set(user_ids):
+            try:
+                resp = await client.get(f"{settings.USER_SERVICE_URL}/users/{uid}")
+                if resp.status_code == 200:
+                    data = resp.json() or {}
+                    out[int(uid)] = data.get("username") or None
+                else:
+                    out[int(uid)] = None
+            except Exception as exc:
+                logger.warning("username lookup failed for user %s: %s", uid, exc)
+                out[int(uid)] = None
     return out
 
 

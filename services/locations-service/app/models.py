@@ -260,7 +260,13 @@ class PostDeletionRequest(Base):
     __tablename__ = "post_deletion_requests"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
+    # post_id survives post deletion as NULL (migration 037, FEAT-158 bug 4):
+    # moderation decision history must outlive the post it is about.
+    post_id = Column(
+        Integer,
+        ForeignKey("posts.id", ondelete="SET NULL", name="fk_post_deletion_requests_post_id"),
+        nullable=True,
+    )
     user_id = Column(Integer, nullable=False)
     reason = Column(String(500), nullable=True)
     status = Column(String(20), default="pending", nullable=False)
@@ -273,7 +279,13 @@ class PostReport(Base):
     __tablename__ = "post_reports"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
+    # post_id survives post deletion as NULL (migration 037, FEAT-158 bug 4):
+    # moderation decision history must outlive the post it is about.
+    post_id = Column(
+        Integer,
+        ForeignKey("posts.id", ondelete="SET NULL", name="fk_post_reports_post_id"),
+        nullable=True,
+    )
     user_id = Column(Integer, nullable=False)
     reason = Column(String(500), nullable=True)
     status = Column(String(20), default="pending", nullable=False)

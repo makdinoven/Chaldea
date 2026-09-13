@@ -722,7 +722,9 @@ class PostReportCreate(BaseModel):
 
 class PostDeletionRequestRead(BaseModel):
     id: int
-    post_id: int
+    # Nullable since migration 037: deleting the post sets this to NULL instead
+    # of cascading the moderation row away (FEAT-158, bug 4).
+    post_id: Optional[int] = None
     user_id: int
     reason: Optional[str] = None
     status: str
@@ -731,13 +733,17 @@ class PostDeletionRequestRead(BaseModel):
     post_content: Optional[str] = None
     post_character_id: Optional[int] = None
     post_location_id: Optional[int] = None
+    post_character_name: Optional[str] = None
+    post_created_at: Optional[datetime] = None
+    requester_username: Optional[str] = None
 
     class Config:
         orm_mode = True
 
 class PostReportRead(BaseModel):
     id: int
-    post_id: int
+    # Nullable since migration 037 — see PostDeletionRequestRead.
+    post_id: Optional[int] = None
     user_id: int
     reason: Optional[str] = None
     status: str
@@ -746,6 +752,9 @@ class PostReportRead(BaseModel):
     post_content: Optional[str] = None
     post_character_id: Optional[int] = None
     post_location_id: Optional[int] = None
+    post_character_name: Optional[str] = None
+    post_created_at: Optional[datetime] = None
+    requester_username: Optional[str] = None
 
     class Config:
         orm_mode = True
