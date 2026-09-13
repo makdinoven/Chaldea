@@ -290,7 +290,8 @@ D7 намеренно **не** проверяет владельца: строк
 #### Internal (Header `X-Internal-Token: ${INTERNAL_SERVICE_TOKEN}`)
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/locations/internal/cancel-gathering` | Вызывается battle-service из `pvp_attack` ДО создания боя. Отмечает status=`interrupted_by_battle`, рефанд стамины |
+| POST | `/locations/internal/cancel-gathering` | Вызывается battle-service из `pvp_attack` ДО создания боя. Отмечает status=`interrupted_by_battle`, рефанд стамины. Необязательный `reason` (FEAT-162) меняет статус на `cancelled` для неигровых причин (админ-телепорт); без него поведение прежнее |
+| POST | `/locations/internal/character-left-location` | FEAT-162. Общая очистка при уходе персонажа из локации: `expire_action_gates` + `expire_gate_requests` (пропускаются при `from_location_id = null`), затем best-effort `leave-on-move` в battle-service. Защищён `X-Internal-Token` (пустой env -> 503). Идемпотентен: повторный вызов возвращает нули |
 
 ### Регистрация персонажа: стартовые точки и происхождение (FEAT-154)
 
@@ -377,7 +378,7 @@ Country -> Region -> District -> Location
 - `character-service:8005` -> DELETE `/locations/admin/drafts/by_character/{character_id}` (FEAT-156, эндпоинт D7). Шаг 4.5 внутри `delete_character` (`character-service/app/main.py:1209-1221`), под `require_permission("locations:delete")` с проброшенным Bearer-токеном вызывающего. Вызов graceful: `try/except` + `logger.warning`, недоступность locations-service **не отменяет** удаление персонажа
 
 ### HTTP (исходящие)
-- `character-service:8005` -> GET `/characters/{id}/profile`, GET `/characters/by_location`, PUT `/characters/{id}/update_location`, GET `/characters/{id}/short_info` (для имени/аватара активных gatherers в client/details)
+- `character-service:8005` -> GET `/characters/{id}/profile`, GET `/characters/by_location`, PUT `/characters/internal/{id}/update_location` (+ `X-Internal-Token`), POST `/characters/internal/{id}/set_travel_cooldown` (+ `X-Internal-Token`), GET `/characters/{id}/short_info` (для имени/аватара активных gatherers в client/details)
 - `character-attributes-service:8002` -> GET `/attributes/{id}`, POST `/attributes/{id}/consume_stamina`, POST `/attributes/{id}/refund_stamina` (FEAT-128: 50% возврат при cancel/battle-interrupt)
 - `inventory-service:8004` -> POST `/inventory/internal/characters/{cid}/free_slots_check` (preflight на старте), POST `/inventory/internal/characters/{cid}/gathering/award` (атомарный award на finalize: ресурс + XP + ранг + прочность инструмента), GET `/inventory/characters/{cid}/gathering-skills` (ранговые бонусы для расчёта effective_*)
 

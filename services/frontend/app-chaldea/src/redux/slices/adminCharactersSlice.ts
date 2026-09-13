@@ -1,4 +1,5 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
+import axios from 'axios';
 import toast from 'react-hot-toast';
 import type { RootState, AppDispatch } from '../store';
 import * as api from '../../api/adminCharacters';
@@ -12,6 +13,7 @@ import type {
   CharacterSkill,
   AdminCharacterFilters,
   AdminCharactersState,
+  AdminMoveCharacterResponse,
 } from '../../components/Admin/CharactersPage/types';
 
 // --- Initial State ---
@@ -119,6 +121,62 @@ export const deleteAdminCharacter = createAsyncThunk<
     } catch {
       toast.error('Не удалось удалить персонажа');
       return thunkAPI.rejectWithValue('Не удалось удалить персонажа');
+    }
+  },
+);
+
+// --- Move (admin teleport) ---
+
+/**
+ * Разбор ошибки переноса. Сообщения сервера уже на русском,
+ * для 404/409 показываем их дословно — они объясняют причину отказа.
+ */
+const buildMoveErrorMessage = (error: unknown): string => {
+  if (axios.isAxiosError(error)) {
+    if (!error.response) {
+      return 'Нет связи с сервером. Перенос не выполнен.';
+    }
+    const data = error.response.data as { detail?: unknown } | undefined;
+    const detail = typeof data?.detail === 'string' ? data.detail : null;
+    switch (error.response.status) {
+      case 401:
+        return 'Сессия истекла. Войдите заново и повторите перенос.';
+      case 403:
+        return detail ?? 'Недостаточно прав';
+      case 404:
+      case 409:
+        return detail ?? 'Не удалось перенести персонажа';
+      case 422:
+        return 'Некорректная локация назначения';
+      case 502:
+        return 'Не удалось подготовить перенос. Персонаж остался на месте.';
+      default:
+        return 'Не удалось перенести персонажа';
+    }
+  }
+  return 'Не удалось перенести персонажа';
+};
+
+export const moveAdminCharacter = createAsyncThunk<
+  AdminMoveCharacterResponse,
+  { characterId: number; newLocationId: number },
+  { rejectValue: string }
+>(
+  'adminCharacters/move',
+  async ({ characterId, newLocationId }, thunkAPI) => {
+    try {
+      const result = await api.moveAdminCharacter(characterId, newLocationId);
+      if (result.moved) {
+        toast.success(result.detail || 'Персонаж перенесён');
+      } else {
+        // 200, но ничего не произошло — это не успех и не ошибка
+        toast(result.detail || 'Персонаж уже находится в этой локации');
+      }
+      return result;
+    } catch (error) {
+      const message = buildMoveErrorMessage(error);
+      toast.error(message);
+      return thunkAPI.rejectWithValue(message);
     }
   },
 );
@@ -435,6 +493,22 @@ const adminCharactersSlice = createSlice({
       })
       .addCase(deleteAdminCharacter.rejected, (state, action) => {
         state.detailError = action.payload ?? 'Не удалось удалить персонажа';
+      })
+
+      // --- Move (admin teleport) ---
+      .addCase(moveAdminCharacter.fulfilled, (state, action) => {
+        if (!action.payload.moved) return;
+        const { character_id: id, to_location_id: locationId } = action.payload;
+        const idx = state.characters.findIndex((c) => c.id === id);
+        if (idx !== -1) {
+          state.characters[idx].current_location_id = locationId;
+        }
+        if (state.selectedCharacter?.id === id) {
+          state.selectedCharacter.current_location_id = locationId;
+        }
+      })
+      .addCase(moveAdminCharacter.rejected, (state, action) => {
+        state.detailError = action.payload ?? 'Не удалось перенести персонажа';
       })
 
       // --- Attributes ---

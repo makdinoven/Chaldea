@@ -13,5 +13,9 @@ class Settings(BaseSettings):
     USER_SERVICE_URL: str = "http://user-service:8000"
     CHARACTER_SERVICE_URL: str = "http://character-service:8005"
     LOCATIONS_SERVICE_URL: str = "http://locations-service:8006"
+    # Shared service-to-service secret (FEAT-162 §3.4). Empty by default so a
+    # missing env var is visible as a 401 from the callee rather than silently
+    # authenticating. Never logged.
+    INTERNAL_SERVICE_TOKEN: str = ""
 
 settings = Settings()

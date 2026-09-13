@@ -141,6 +141,9 @@ services:
       LOCATIONS_SERVICE_URL: http://locations-service:8006
       # Лимит персонажей на аккаунт. 0 = без ограничений (значение по умолчанию).
       MAX_CHARACTERS_PER_USER: ${MAX_CHARACTERS_PER_USER:-0}
+      # FEAT-162: общий токен для internal service-to-service эндпоинтов
+      # (/characters/internal/...). Значение — только из окружения.
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
     depends_on:
       mysql:
         condition: service_healthy

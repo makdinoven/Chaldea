@@ -1289,9 +1289,14 @@ async def move_and_post(
             logger.warning(f"create_action_gates failed for post {new_post.id}: {e}")
 
     # 6. Обновляем текущую локацию персонажа через Character‑service
+    # FEAT-162 §3.4: internal-эндпоинт, требует X-Internal-Token.
     async with httpx.AsyncClient(timeout=5.0) as client:
-        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/update_location"
-        update_resp = await client.put(update_url, json={"new_location_id": destination_location_id})
+        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{movement.character_id}/update_location"
+        update_resp = await client.put(
+            update_url,
+            json={"new_location_id": destination_location_id},
+            headers=_internal_token_headers(),
+        )
         if update_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
 
@@ -1299,8 +1304,9 @@ async def move_and_post(
     if movement_cost > 0:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
-                f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/set_travel_cooldown",
+                f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{movement.character_id}/set_travel_cooldown",
                 json={"minutes": movement_cost},
+                headers=_internal_token_headers(),
             )
 
     # 7. Списываем выносливость (вызываем эндпоинт consume_stamina в Attributes‑service)
@@ -1532,9 +1538,14 @@ async def quick_move(
     new_post = await crud.create_post(session, post_in)
 
     # 6. Обновляем текущую локацию персонажа
+    # FEAT-162 §3.4: internal-эндпоинт, требует X-Internal-Token.
     async with httpx.AsyncClient(timeout=5.0) as client:
-        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/update_location"
-        update_resp = await client.put(update_url, json={"new_location_id": destination_location_id})
+        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{body.character_id}/update_location"
+        update_resp = await client.put(
+            update_url,
+            json={"new_location_id": destination_location_id},
+            headers=_internal_token_headers(),
+        )
         if update_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
 
@@ -1553,8 +1564,9 @@ async def quick_move(
     if base_energy_cost > 0:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
-                f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/set_travel_cooldown",
+                f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{body.character_id}/set_travel_cooldown",
                 json={"minutes": base_energy_cost},
+                headers=_internal_token_headers(),
             )
 
     # 7. Списываем удвоенную выносливость
@@ -3631,6 +3643,15 @@ async def action_gate_status(
 INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
 
 
+def _internal_token_headers() -> dict:
+    """Headers for outgoing internal service-to-service calls (FEAT-162 §3.4).
+
+    Reads the module-level constant so tests can override it the same way they
+    already do for `verify_internal_token`.
+    """
+    return {"X-Internal-Token": INTERNAL_SERVICE_TOKEN}
+
+
 def verify_internal_token(
     x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
 ) -> None:
@@ -3694,8 +3715,92 @@ async def cancel_gathering_internal_route(
     payload = await crud.cancel_gathering_internal(
         session,
         character_id=body.character_id,
+        reason=body.reason,
     )
     return schemas.CancelGatheringResponse(**payload)
+
+
+# --------------------------------------------------------------------
+# FEAT-162 task #4 — shared "a character left a location" cleanup
+# --------------------------------------------------------------------
+# Single code path for everything that must happen when a character stops
+# being in a location, wherever the move came from: the normal move, the
+# admin teleport (task 5) and the in-game Teleport Master (task 6).
+#
+# Ordering mirrors the normal move path: gates first (a DB failure there is
+# fatal — the caller aborts the move on a 500), then the party prune, which is
+# fire-and-forget there and therefore best-effort here.
+
+
+@router.post(
+    "/internal/character-left-location",
+    response_model=schemas.CharacterLeftLocationResponse,
+)
+async def character_left_location_route(
+    body: schemas.CharacterLeftLocationRequest,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Погасить всё, что персонаж оставил за собой в покидаемой локации.
+
+    Порядок:
+      1. `expire_action_gates`  — открытые «намерения» в старой локации;
+      2. `expire_gate_requests` — заявки на намерения, ожидающие рассмотрения;
+      3. роспуск/выход из формирующейся группы в battle-service — best-effort.
+
+    Оба шага 1-2 пропускаются, если `from_location_id` не передан: гасить
+    нечего. Шаг 3 никогда не валит запрос — ровно как в обычном перемещении.
+
+    Идемпотентен: повторный вызов вернёт нули, ошибки не будет.
+    """
+    gates_expired = 0
+    gate_requests_expired = 0
+
+    if body.from_location_id is not None:
+        try:
+            gates_expired = await crud.expire_action_gates(
+                session, body.character_id, int(body.from_location_id),
+            )
+            gate_requests_expired = await crud.expire_gate_requests(
+                session, body.character_id, int(body.from_location_id),
+            )
+        except Exception as e:
+            logger.error(
+                "character-left-location cleanup failed for char %s at loc %s: %s",
+                body.character_id, body.from_location_id, e,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Не удалось погасить намерения персонажа в покидаемой локации",
+            )
+
+    # Best-effort: a pre-battle party is location-bound, so leaving the
+    # location leaves the party (the leader leaving disbands it). A failure
+    # here must never block a move that has already been decided.
+    party_pruned = False
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{settings.BATTLE_SERVICE_URL}/battles/internal/party/leave-on-move",
+                params={"character_id": body.character_id},
+            )
+        party_pruned = resp.status_code < 400
+        if not party_pruned:
+            logger.warning(
+                "party leave-on-move for char %s returned %s",
+                body.character_id, resp.status_code,
+            )
+    except Exception as e:
+        logger.warning(
+            "party leave-on-move failed for char %s: %s", body.character_id, e,
+        )
+
+    return schemas.CharacterLeftLocationResponse(
+        ok=True,
+        gates_expired=gates_expired,
+        gate_requests_expired=gate_requests_expired,
+        party_pruned=party_pruned,
+    )
 
 
 # --------------------------------------------------------------------

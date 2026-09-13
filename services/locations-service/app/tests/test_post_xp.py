@@ -18,6 +18,7 @@ from datetime import datetime
 
 import pytest
 
+import crud
 from crud import strip_html_tags, calculate_post_xp, MIN_POST_LENGTH, award_post_xp_and_log
 
 
@@ -231,7 +232,8 @@ class TestAwardPostXpAndLog:
             # Verify log creation call (post is now also used for the party
             # xp-bonus, so use assert_any_call rather than once).
             mock_client.post.assert_any_call(
-                "http://chars:8005/characters/1/logs",
+                "http://chars:8005/characters/internal/1/logs",
+                headers=crud._internal_token_headers(),
                 json={
                     "event_type": "rp_post",
                     "description": "Написал пост в Таверна, получил 4 XP",

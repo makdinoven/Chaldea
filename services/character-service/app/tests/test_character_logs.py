@@ -26,6 +26,13 @@ from database import Base
 from main import app, get_db
 from fastapi.testclient import TestClient
 import models
+import auth_http
+
+# FEAT-162 §3.4: POST /characters/{id}/logs moved to /characters/internal/{id}/logs
+# and now requires the X-Internal-Token header. Pin the module constant so the suite
+# does not depend on INTERNAL_SERVICE_TOKEN being set in the environment.
+auth_http.INTERNAL_SERVICE_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +113,7 @@ def _create_character(db_session, char_id=1, name="TestChar"):
 def test_create_log_entry(client, db_session):
     _create_character(db_session, char_id=1)
 
-    response = client.post("/characters/1/logs", json={
+    response = client.post("/characters/internal/1/logs", headers=INTERNAL_HEADERS, json={
         "event_type": "rp_post",
         "description": "Wrote a post in Tavern",
         "metadata": {"xp_earned": 3, "location": "Tavern"},
@@ -129,7 +136,7 @@ def test_create_log_entry(client, db_session):
 def test_create_log_null_metadata(client, db_session):
     _create_character(db_session, char_id=1)
 
-    response = client.post("/characters/1/logs", json={
+    response = client.post("/characters/internal/1/logs", headers=INTERNAL_HEADERS, json={
         "event_type": "level_up",
         "description": "Reached level 5",
     })
@@ -146,7 +153,7 @@ def test_create_log_null_metadata(client, db_session):
 # ---------------------------------------------------------------------------
 
 def test_create_log_nonexistent_character(client):
-    response = client.post("/characters/99999/logs", json={
+    response = client.post("/characters/internal/99999/logs", headers=INTERNAL_HEADERS, json={
         "event_type": "rp_post",
         "description": "Should fail",
     })

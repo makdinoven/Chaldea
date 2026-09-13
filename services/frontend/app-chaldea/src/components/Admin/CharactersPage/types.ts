@@ -47,6 +47,30 @@ export interface AdminCharacterUpdateResponse {
   character_id: number;
 }
 
+// --- Move (admin teleport) ---
+
+/** Один вариант локации из GET /locations/locations/lookup */
+export interface LocationOption {
+  id: number;
+  name: string;
+}
+
+export interface AdminMoveCharacterRequest {
+  new_location_id: number;
+}
+
+export interface AdminMoveCharacterResponse {
+  detail: string;
+  character_id: number;
+  /** false = перенос не потребовался (персонаж уже в этой локации) */
+  moved: boolean;
+  from_location_id: number | null;
+  from_location_name: string | null;
+  to_location_id: number;
+  to_location_name: string | null;
+  gathering_cancelled: boolean;
+}
+
 // --- Unlink ---
 
 export interface UnlinkCharacterResponse {

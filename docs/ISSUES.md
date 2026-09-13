@@ -44,6 +44,14 @@
 **Случай:** В FEAT-123 миграция character-service имела id `015_add_teleport_links_and_cooldown` (35 символов) → переименована в `015_teleport_cooldown` (21).
 **Правило:** Все новые revision id — ≤32 символов. Желательно ≤24, чтобы оставить запас. Формат: `NNN_short_slug`.
 
+### ~~Баг: Мастер Телепорта (FEAT-123) был полностью нерабочим — SELECT по несуществующей колонке~~ DONE (2026-09-14, FEAT-162 task #6)
+**Сервис:** character-service
+**Файлы:** `services/character-service/app/crud.py` (`execute_teleport`), `services/character-service/app/main.py` (`get_teleport_options`)
+**Описание:** Оба места читали активного персонажа запросом `SELECT current_character_id FROM users WHERE id = :uid`, тогда как колонка в таблице `users` называется `current_character` (имя `current_character_id` существует только в ответе `GET /users/me` user-service, где оно формируется на лету). Любой вызов `POST /characters/npcs/{id}/teleport` падал с 500: `(1054, "Unknown column 'current_character_id' in 'field list'")`. То есть вся фича «Мастер Телепорта» не работала с момента выпуска.
+**Обнаружено:** FEAT-162 task #6 — при живой проверке гашения намерений после телепорта (баг блокировал проверку, поэтому исправлен в рамках задачи).
+**Исправление:** имя колонки в обоих запросах приведено к фактическому (`current_character`), с поясняющим комментарием. Проверено вживую: телепорт 523 → 1173 вернул 200.
+**Правило на будущее:** имя поля в схеме ответа сервиса-владельца не обязано совпадать с именем колонки в общей БД; сырой SQL по чужой таблице сверять со `SHOW COLUMNS`, а не с API-схемой.
+
 ---
 
 ## CRITICAL
@@ -63,6 +71,14 @@
 
 ## HIGH
 
+### Долг: `INTERNAL_SERVICE_TOKEN` имеет публично известный fallback `dev-internal-token-change-me`
+**Сервисы:** character-service, character-attributes-service, locations-service, battle-service, inventory-service, party-service (все, кому токен задан в compose)
+**Файлы:** `docker-compose.yml:135,311,338,396,427,486`, `docker-compose.prod.yml:127,146,215,276`
+**Обнаружено:** FEAT-162 (Reviewer, 2026-09-14). Долг **пред­существующий** — дефолт был прописан ещё до FEAT-162 для четырёх сервисов; фича лишь распространила ту же строку на ещё два и сделала её несущей.
+**Описание:** во всех compose-файлах токен объявлен как `${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}`. Если переменная не задана в prod `.env` на VPS, все сервисы поднимутся с дефолтом, прописанным прямо в публичном репозитории. После FEAT-162 на этом токене держится второй (и для шести эндпоинтов — фактически единственный прикладной) слой защиты internal-маршрутов: `verify_internal_token` сравнивает заголовок именно с ним. Тот же класс проблемы, что и запись 27 про `JWT_SECRET_KEY`.
+**Почему не CRITICAL:** первый слой (nginx `return 403` на всех `/internal/`-префиксах) остаётся, и порты сервисов в prod наружу не открыты — эксплуатация требует доступа внутрь compose-сети либо ошибки в ingress.
+**Возможное решение:** сгенерировать криптостойкое значение (`openssl rand -hex 32`), прописать `INTERNAL_SERVICE_TOKEN` в prod `.env`, добавить в `.env.example` маскированную заглушку и рассмотреть удаление fallback-значения из `docker-compose.prod.yml` (fail-closed: без токена сервис отдаёт 503 — механизм уже реализован).
+
 ### Баг: ZSET `battle:deadlines` никто не читает — таймаут хода не срабатывает сам по себе
 **Сервис:** battle-service
 **Файлы:** `services/battle-service/app/redis_state.py:50,227` (`ZSET_DEADLINES`, `zadd`), `services/battle-service/app/main.py:1617,1672,2554,2826,3909`
@@ -70,13 +86,6 @@
 **Описание:** Дедлайн каждого хода кладётся в отсортированное множество `battle:deadlines` со score = абсолютный unix-timestamp и снимается оттуда при ходе/паузе/завершении боя. Но **ни одного читателя по score во всём репозитории нет**: `grep -rn "zrangebyscore\|zpopmin\|battle:deadlines" services/` даёт только `zadd`/`zrem` и объявление константы (`zrange` в `redis_state.py:251` — это другой ключ, `KEY_BATTLE_TURNS`). Ни celery-beat, ни autobattle-service, ни фоновая задача это множество не опрашивают. То есть просроченный ход не завершается автоматически: бой висит, пока игрок не сходит сам. Структура данных для таймаутов построена и поддерживается, а механизм, ради которого она существует, не реализован.
 **Тяжесть:** не косметика — `TURN_TIMEOUT_HOURS` фактически не действует, и множество растёт без верхней границы (элементы удаляются только по «счастливым» путям; брошенные бои оставляют записи навсегда).
 **Возможное решение:** периодическая задача (celery-beat) `ZRANGEBYSCORE battle:deadlines 0 <now>` -> авто-пас/авто-завершение хода, плюс уборка элементов завершённых боёв.
-
-### Баг: state-мутирующие эндпоинты character-service без аутентификации и проверки владельца
-**Сервис:** character-service
-**Файлы:** `app/main.py:1266` (`PUT /characters/{id}/deduct_points`), `app/main.py:1493` (`PUT /characters/{id}/update_location`), `app/main.py:3204` (`POST /characters/{id}/set_travel_cooldown`)
-**Обнаружено:** FEAT-154 (Codebase Analyst, 2026-09-06)
-**Описание:** У трёх изменяющих состояние эндпоинтов нет ни `Depends` на аутентификацию, ни проверки принадлежности персонажа вызывающему. Любой может списать очки характеристик, выставить кулдаун перемещения или переместить **чужого** персонажа в произвольную локацию. Опасность `update_location` резко вырастет, когда локация начнёт что-то значить (FEAT-154 назначает стартовую локацию).
-**Исправление:** добавить `get_current_user_via_http` + проверку владельца, либо пометить как internal-only и закрыть на уровне Nginx.
 
 ### Баг: `settings.EQUIPMENT_SERVICE_URL` не существует, падение маскируется тестом
 **Сервис:** character-service
@@ -177,6 +186,39 @@
 **Почему это не одна правка:** (1) ~160 блоков `class Config:` в 10 сервисах, которым нужен общий базовый класс с `json_encoders`; (2) **22 места с ручным `.isoformat()` в обход Pydantic**, которые `json_encoders` не покроет вообще: `notification-service/app/messenger_routes.py:652,796`, `notification-service/app/messenger_ws_handler.py:221,325,327,342`, `inventory-service/app/crud.py:2089,2090,2448,2984`, `inventory-service/app/main.py:1120,1333,3437`, `character-service/app/main.py:424,1975,3674`, `battle-service/app/main.py:1665,2817,3795`, `battle-service/app/redis_state.py:133`, `dungeon-service/app/gameplay.py:3627`, `skills-service/app/crud.py:557`; (3) выкатывается не атомарно — во время раскатки часть эндпоинтов отдаёт смещение, часть нет, поэтому клиент обязан быть терпимым к смещению **до** правки бэкенда (это и сделала FEAT-161, так что Stage 1 — предпосылка для Stage 2, а не замена ему).
 **Побочные эффекты, которые надо учесть:** `skills-service/app/tests/test_character_skill_reset.py:128` вычитает наивное время из разобранного ответа — при появлении смещения упадёт с `TypeError`. `locations-service/app/main.py:1194,1457` уже терпимы к обеим формам, ломать межсервисные вызовы Stage 2 не должен.
 **Возможное решение:** общий Pydantic-базовый класс с `json_encoders={datetime: lambda v: v.replace(tzinfo=timezone.utc).isoformat()}` + отдельный проход по 22 ручным местам; выкатывать сервис за сервисом.
+
+### Долг: большинство внутренних эндпоинтов защищены только nginx, без `X-Internal-Token`
+**Сервисы:** все, у кого есть `/internal/`-маршруты
+**Обнаружено:** FEAT-162 (DevSecOps, аудит internal-префиксов 2026-09-14).
+**Описание:** после FEAT-162 все internal-префиксы закрыты в обоих nginx-конфигах (`return 403`), но второй слой — проверка `X-Internal-Token` через `Depends(verify_internal_token)` — стоит лишь на 6 эндпоинтах из ~33: `character-service` (`/characters/internal/{id}/update_location`, `/characters/internal/{id}/set_travel_cooldown`, `/characters/internal/{id}/deduct_points`, `POST /characters/internal/{id}/logs`) и `locations-service` (`/locations/internal/cancel-gathering`, `/locations/internal/character-left-location`). Остальные (`/attributes/internal/{id}/reconcile-perks`, `/locations/internal/gathering-status`, `/locations/internal/action-gate*`, `/locations/quests/internal/*`, `/users/internal/*`, `/inventory/internal/*`, `/battles/internal/*`, `/dungeons/internal/*`, `/party/internal/*`, `/battle-pass/internal/track-event`, `/autobattle/internal/register`) не проверяют ничего: любой контейнер в compose-сети (или скомпрометированный сервис) может их дёргать. Проверено вживую: до правки nginx `POST /attributes/internal/1/reconcile-perks` через gateway без каких-либо заголовков возвращал `200`.
+**Почему не критично:** снаружи всё закрыто gateway'ем (`403`), порты сервисов в prod наружу не открыты — эксплуатация требует доступа внутрь compose-сети.
+**Возможное решение:** добавить `Depends(verify_internal_token)` на оставшиеся internal-эндпоинты, вынеся хелпер в общий модуль; выкатывать сервис за сервисом, синхронно с `INTERNAL_SERVICE_TOKEN` у вызывающих.
+**Дополнено (FEAT-162, задача 14, 2026-09-14):** полный аудит всех 99 роутов `character-service/app/main.py` (см. §3.4) не нашёл больше ни одного *публично маршрутизируемого* незащищённого write-эндпоинта. Отдельно стоит `POST /characters/{character_id}/add_rewards` — он **не** под префиксом `/internal/`, его закрывает точечное правило nginx (`location ~ ^/characters/\d+/add_rewards$ { return 403; }` в обоих конфигах), но `verify_internal_token` на нём нет, то есть он держится ровно на одном слое и относится к этому же долгу.
+
+### Баг: отвязка персонажа не очищает `users.current_character` — UPDATE по несуществующей колонке
+**Сервис:** character-service
+**Файл:** `services/character-service/app/main.py:1053-1062` (`POST /characters/internal/unlink`)
+**Описание:** после удаления связи в `user_characters` код выполняет
+`UPDATE users SET current_character_id = NULL WHERE id = :uid AND current_character_id = :cid`.
+Колонки `current_character_id` в таблице `users` **не существует** — реальное имя `current_character`
+(то же самое расхождение «имя поля в API user-service ≠ имя колонки в общей БД», из-за которого
+FEAT-123 Мастер Телепорта возвращал 500, см. запись в DONE выше). Запрос всегда падает с
+`(1054, "Unknown column 'current_character_id' in 'where clause'")`, но исключение проглочено
+`except Exception` c `logger.warning`, поэтому отвязка формально «успешна»: `characters.user_id`
+обнуляется, а `users.current_character` продолжает указывать на отвязанного персонажа.
+**Проверено вживую (2026-09-14):** тот же UPDATE, выполненный напрямую через движок character-service
+на dev-БД, падает с `Unknown column 'current_character_id' in 'where clause'`;
+`inspect(engine).get_columns('users')` подтверждает единственную колонку `current_character`.
+**Почему тесты это не поймали:** `tests/test_internal_unlink.py` не создаёт зеркальную таблицу `users`
+вовсе, так что в SQLite запрос падает ровно так же и точно так же проглатывается — тест зелёный
+при полностью неработающем шаге.
+**Обнаружено:** FEAT-162, задачи QA #9-#11 (при проверке, что фикстура `users` в `test_teleport.py`
+теперь отражает реальную схему).
+**Приоритет:** MEDIUM (тихая рассинхронизация данных, а не отказ).
+**Возможное решение:** переименовать колонку в обоих условиях на `current_character`; заодно не
+проглатывать ошибку молча (хотя бы `logger.error`), и добавить в `test_internal_unlink.py`
+зеркальную таблицу `users` с фактическим именем колонки — иначе следующая такая опечатка снова
+пройдёт через зелёные тесты.
 
 ### Баг: `POST /skills/assign_multiple` обрывает весь батч на первом ненайденном навыке
 **Сервис:** skills-service (потребитель — character-service)

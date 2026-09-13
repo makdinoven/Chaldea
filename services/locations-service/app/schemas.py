@@ -1740,8 +1740,14 @@ class CancelGatheringRequest(BaseModel):
 class CancelGatheringInternalRequest(BaseModel):
     """Request body for the internal cancel-gathering endpoint (called by
     battle-service when a battle interrupts the victim's gathering).
+
+    `reason` (FEAT-162 §3.8) lets a non-battle caller — the admin teleport —
+    say why the session died, so the row is not mislabelled
+    `interrupted_by_battle`. Omitting it preserves today's behaviour exactly,
+    which is what keeps the battle-service caller unchanged.
     """
     character_id: int
+    reason: Optional[str] = None
 
     @validator('character_id')
     def _vcid(cls, v):
@@ -1759,6 +1765,43 @@ class CancelGatheringResponse(BaseModel):
     session_id: Optional[int] = None
     stamina_refunded: Optional[int] = None
     reason: Optional[str] = None
+
+
+# -------------------------------
+#   CHARACTER LEFT LOCATION — SHARED CLEANUP (FEAT-162 task #4)
+# -------------------------------
+class CharacterLeftLocationRequest(BaseModel):
+    """Body of `POST /locations/internal/character-left-location`.
+
+    `from_location_id` is the location the character is leaving. It is
+    optional because a character may have had no location at all (freshly
+    created, or pulled out of a dungeon) — in that case there is nothing to
+    expire and both cleanups are skipped.
+    """
+    character_id: int
+    from_location_id: Optional[int] = None
+
+    @validator('character_id')
+    def _v_char(cls, v):
+        if v is None or v <= 0:
+            raise ValueError("character_id должен быть положительным числом")
+        return v
+
+    @validator('from_location_id')
+    def _v_loc(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("from_location_id должен быть положительным числом")
+        return v
+
+
+class CharacterLeftLocationResponse(BaseModel):
+    """Result of the shared cleanup. The counts are how many rows this very
+    call flipped, so a repeated (idempotent) call reports zeros.
+    """
+    ok: bool
+    gates_expired: int
+    gate_requests_expired: int
+    party_pruned: bool
 
 
 # -------------------------------

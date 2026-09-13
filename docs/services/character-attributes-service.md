@@ -77,7 +77,8 @@ character-attributes-service/app/
 
 ### HTTP (исходящие)
 - `character-service:8005` -> GET `/characters/{id}/full_profile` (stat points)
-- `character-service:8005` -> PUT `/characters/{id}/deduct_points` (списание points)
+- `character-service:8005` -> PUT `/characters/internal/{id}/deduct_points` (списание points, заголовок `X-Internal-Token`)
+- `character-service:8005` -> POST `/characters/internal/{id}/logs` (запись в журнал персонажа, заголовок `X-Internal-Token`)
 
 ### RabbitMQ
 Полностью закомментирован.

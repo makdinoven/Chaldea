@@ -11,12 +11,21 @@ Covers:
   teleport_master (covered via direct CRUD purge — endpoint hits cross-service
   HTTP that is out of scope here).
 - Concurrency smoke: cooldown blocks the second teleport.
+- FEAT-162 task #6/#11: the shared "character left a location" cleanup is now
+  called after every successful teleport, with the PRE-teleport location, and
+  is best-effort — a failing locations-service must not fail the teleport.
+
+Note on `requests` (FEAT-162 task #11): `crud.execute_teleport` now makes a real
+outbound HTTP call through `locations_client.notify_character_left_location_sync`.
+The autouse `_stub_internal_http` fixture below intercepts it, so the suite never
+touches a live locations-service — before that fixture existed, running these
+tests inside the compose network expired real gates in the dev database.
 """
 
 import sys
 import os
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -45,7 +54,8 @@ from auth_http import (
 
 # ---------------------------------------------------------------------------
 # Extra tables required by raw SQL inside crud.execute_teleport / options
-#   - users (current_character_id lookup)
+#   - users (current_character lookup — ЭТО НАСТОЯЩЕЕ имя колонки в БД;
+#     `current_character_id` существует только в ответе user-service /users/me)
 #   - Locations (location name lookup)
 # Both belong to other services in production but live in the same DB.
 # ---------------------------------------------------------------------------
@@ -55,7 +65,7 @@ class _UsersTable(Base):
     __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    current_character_id = Column(Integer, nullable=True)
+    current_character = Column(Integer, nullable=True)
     username = Column(String(80), nullable=True)
 
 
@@ -186,7 +196,7 @@ def world(db_session):
     # users row pointing at our player
     db_session.execute(
         sa_text(
-            "INSERT INTO users (id, current_character_id, username) "
+            "INSERT INTO users (id, current_character, username) "
             "VALUES (:id, :cid, :u)"
         ),
         {"id": PLAYER_USER_ID, "cid": player.id, "u": "player"},
@@ -231,6 +241,21 @@ def _admin_overrides(db_session):
     app.dependency_overrides[get_admin_user] = override_admin
     app.dependency_overrides[get_current_user_via_http] = override_admin
     app.dependency_overrides[OAUTH2_SCHEME] = override_token
+
+
+@pytest.fixture(autouse=True)
+def _stub_internal_http():
+    """Intercept the outbound cleanup POST of `execute_teleport`.
+
+    Patched at the `requests` level rather than at
+    `locations_client.notify_character_left_location_sync`, so the helper's own
+    contract — never raise, return a bool — stays under test instead of being
+    mocked away. Tests that need a failing locations-service simply re-patch
+    `requests.post` inside their own body.
+    """
+    with patch("requests.post") as mock_post:
+        mock_post.return_value = MagicMock(status_code=200)
+        yield mock_post
 
 
 @pytest.fixture
@@ -630,3 +655,140 @@ class TestTeleportConcurrencySmoke:
         )
         assert resp2.status_code == 409
         assert resp2.json()["detail"]["error"] == "cooldown_active"
+
+
+# ===========================================================================
+# 8. FEAT-162 task #6 — the shared cleanup after a Teleport Master jump
+# ===========================================================================
+
+class TestTeleportLeavesNoGatesBehind:
+    """Before FEAT-162 the Teleport Master wrote `current_location_id` and did
+    nothing else, so a teleported character kept live action gates in the
+    location they had left — they could still attack, and be attacked by,
+    people who were no longer anywhere near them. The fix routes the teleport
+    through the same `POST /locations/internal/character-left-location` cleanup
+    the admin move uses.
+
+    Unlike the admin move, this call is deliberately best-effort and runs
+    AFTER the commit (§3.5): the player has already been charged gold and the
+    function holds a row lock it must not carry across the network. So the
+    tests here assert two different things — that the call is made with the
+    right arguments, and that failing it never costs the player their teleport.
+    """
+
+    def test_cleanup_is_called_with_the_pre_teleport_location(
+        self, player_client, db_session, world, _stub_internal_http,
+    ):
+        resp = player_client.post(
+            f"/characters/npcs/{world['npc_a'].id}/teleport",
+            json={"link_id": world["link_ab"].id},
+        )
+        assert resp.status_code == 200, resp.text
+
+        assert _stub_internal_http.call_count == 1
+        call = _stub_internal_http.call_args
+        assert "/locations/internal/character-left-location" in call.args[0]
+        payload = call.kwargs["json"]
+        assert payload["character_id"] == world["player"].id
+        # The location being LEFT (A), never the destination (B). Sending B
+        # would expire the gates the character has just arrived to use.
+        assert payload["from_location_id"] == LOC_A_ID
+        assert "X-Internal-Token" in call.kwargs["headers"]
+
+    def test_cleanup_is_not_called_when_the_teleport_is_refused(
+        self, player_client, db_session, world, _stub_internal_http,
+    ):
+        """A refused teleport leaves the character where they are, so their
+        gates there must stay alive."""
+        world["player"].currency_balance = 1
+        db_session.commit()
+
+        resp = player_client.post(
+            f"/characters/npcs/{world['npc_a'].id}/teleport",
+            json={"link_id": world["link_ab"].id},
+        )
+        assert resp.status_code == 402
+        _stub_internal_http.assert_not_called()
+
+    def test_teleport_succeeds_when_locations_service_is_down(
+        self, player_client, db_session, world,
+    ):
+        """locations-service unreachable: the player paid, so the teleport
+        completes anyway and the failure is only logged."""
+        with patch("requests.post", side_effect=OSError("connection refused")):
+            resp = player_client.post(
+                f"/characters/npcs/{world['npc_a'].id}/teleport",
+                json={"link_id": world["link_ab"].id},
+            )
+
+        assert resp.status_code == 200, resp.text
+        db_session.expire_all()
+        player = db_session.query(models.Character).filter_by(
+            id=world["player"].id,
+        ).first()
+        assert player.current_location_id == LOC_B_ID
+        assert player.currency_balance == 400
+
+    def test_teleport_succeeds_when_the_cleanup_returns_an_error_status(
+        self, player_client, db_session, world,
+    ):
+        with patch("requests.post", return_value=MagicMock(status_code=500)):
+            resp = player_client.post(
+                f"/characters/npcs/{world['npc_a'].id}/teleport",
+                json={"link_id": world["link_ab"].id},
+            )
+        assert resp.status_code == 200, resp.text
+        db_session.expire_all()
+        player = db_session.query(models.Character).filter_by(
+            id=world["player"].id,
+        ).first()
+        assert player.current_location_id == LOC_B_ID
+
+    def test_helper_never_raises_and_reports_the_outcome(self):
+        """The contract `execute_teleport` relies on, tested directly."""
+        import locations_client
+
+        with patch("requests.post", side_effect=RuntimeError("boom")):
+            assert locations_client.notify_character_left_location_sync(1, 2) is False
+        with patch("requests.post", return_value=MagicMock(status_code=401)):
+            assert locations_client.notify_character_left_location_sync(1, 2) is False
+        with patch("requests.post", return_value=MagicMock(status_code=200)):
+            assert locations_client.notify_character_left_location_sync(1, 2) is True
+
+
+# ===========================================================================
+# 9. The fixture itself — it must model the REAL database
+# ===========================================================================
+
+class TestFixtureMirrorsProductionSchema:
+    """`crud.execute_teleport` reads `users.current_character` with raw SQL.
+    This suite once declared that mirror column as `current_character_id`,
+    a name that exists only in the user-service `/users/me` response — so the
+    tests passed green against a schema the database does not have while the
+    Teleport Master returned 500 in production for the whole life of FEAT-123.
+
+    A fixture that models a different database than production tests nothing,
+    so the column name is pinned here explicitly rather than left implicit in
+    a table definition nobody re-reads.
+    """
+
+    def test_users_mirror_has_the_production_column_name(self, db_session):
+        columns = {
+            row[1] for row in db_session.execute(
+                sa_text("PRAGMA table_info(users)")
+            ).fetchall()
+        }
+        assert "current_character" in columns
+        assert "current_character_id" not in columns
+
+    def test_the_raw_sql_of_execute_teleport_runs_against_the_fixture(
+        self, db_session, world,
+    ):
+        """The exact statement from `crud.execute_teleport` — if the mirror
+        table drifts from the real schema again, this is where it shows."""
+        row = db_session.execute(
+            sa_text("SELECT current_character FROM users WHERE id = :uid"),
+            {"uid": PLAYER_USER_ID},
+        ).fetchone()
+        assert row is not None
+        assert row[0] == world["player"].id

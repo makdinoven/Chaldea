@@ -13,7 +13,18 @@ from typing import List, Optional, Dict, Tuple
 from sqlalchemy.orm import selectinload
 from sqlalchemy import text, delete, func as sa_func
 from sqlalchemy.exc import IntegrityError
+import os
 from config import settings
+
+
+# FEAT-162 §3.4: shared secret for service-to-service calls into character-service's
+# /characters/internal/ routes. Read from env, never logged.
+INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
+
+
+def _internal_token_headers() -> dict:
+    """Headers for outgoing internal service-to-service calls (FEAT-162 §3.4)."""
+    return {"X-Internal-Token": INTERNAL_SERVICE_TOKEN}
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +191,8 @@ async def award_post_xp_and_log(
                     logger.warning(f"party xp-bonus (post) failed for {character_id}: {e}")
             description = f"Написал пост в {location_name}, получил {xp} XP"
             await client.post(
-                f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/logs",
+                f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/logs",
+                headers=_internal_token_headers(),
                 json={
                     "event_type": "rp_post",
                     "description": description,
@@ -1140,9 +1152,14 @@ async def gates_for_posts(session, post_ids: list) -> dict:
     return out
 
 
-async def expire_action_gates(session, character_id: int, location_id: int) -> None:
-    """Expire a character's open gates on a location when they leave it (FEAT-145)."""
-    await session.execute(
+async def expire_action_gates(session, character_id: int, location_id: int) -> int:
+    """Expire a character's open gates on a location when they leave it (FEAT-145).
+
+    Returns how many gates THIS call expired — naturally 0 on a repeat, which
+    is what makes the shared cleanup endpoint (FEAT-162 §3.8) idempotent.
+    Only `open` gates are touched; `consumed` and `expired` ones are history.
+    """
+    res = await session.execute(
         text(
             "UPDATE action_gates SET status='expired' "
             "WHERE character_id = :c AND location_id = :l AND status = 'open'"
@@ -1150,9 +1167,10 @@ async def expire_action_gates(session, character_id: int, location_id: int) -> N
         {"c": character_id, "l": location_id},
     )
     await session.commit()
+    return int(res.rowcount or 0)
 
 
-async def expire_gate_requests(session, character_id: int, location_id: int) -> None:
+async def expire_gate_requests(session, character_id: int, location_id: int) -> int:
     """Expire a character's **pending** gate requests on a location when they
     leave it (FEAT-159, section 3.8).
 
@@ -1163,7 +1181,7 @@ async def expire_gate_requests(session, character_id: int, location_id: int) -> 
     "character is still in the location" re-check inside
     ``review_gate_request``.
     """
-    await session.execute(
+    res = await session.execute(
         text(
             "UPDATE post_gate_requests SET status='expired', reviewed_at=NOW() "
             "WHERE character_id = :c AND location_id = :l AND status = 'pending'"
@@ -1171,6 +1189,7 @@ async def expire_gate_requests(session, character_id: int, location_id: int) -> 
         {"c": character_id, "l": location_id},
     )
     await session.commit()
+    return int(res.rowcount or 0)
 
 
 async def gate_list_for_post(session, post_id: int) -> list:
@@ -7440,15 +7459,36 @@ async def cancel_gathering_manual(
     }
 
 
+# FEAT-162 §3.8 — why the session ended -> the status it is closed with.
+# `None` is the historical (battle-service) caller and MUST keep today's
+# `interrupted_by_battle`. Everything else closes as the generic `cancelled`,
+# the closest existing value in the `gathering_session_status` enum — the
+# enum is deliberately NOT widened for this.
+_CANCEL_REASON_TO_STATUS = {
+    None: "interrupted_by_battle",
+    "battle": "interrupted_by_battle",
+}
+_CANCEL_DEFAULT_STATUS = "cancelled"
+
+
+def _gathering_status_for_reason(reason: Optional[str]) -> str:
+    return _CANCEL_REASON_TO_STATUS.get(reason, _CANCEL_DEFAULT_STATUS)
+
+
 async def cancel_gathering_internal(
     db: AsyncSession,
     *,
     character_id: int,
+    reason: Optional[str] = None,
 ) -> Dict:
-    """Internal cancel — called by battle-service when a battle starts.
+    """Internal cancel — called by battle-service when a battle starts, and
+    (FEAT-162) by the admin teleport before relocating a character.
 
     Idempotent: if no active session exists, returns
     `{cancelled: False, reason: 'no_active_session'}` rather than raising.
+
+    `reason=None` keeps the pre-FEAT-162 behaviour byte-for-byte: the session
+    is closed as `interrupted_by_battle`.
     """
     sess = await _lock_active_session_for_character(
         db, character_id=character_id, node_id=None,
@@ -7470,11 +7510,11 @@ async def cancel_gathering_internal(
     await db.execute(
         text(
             "UPDATE gathering_sessions "
-            "SET status = 'interrupted_by_battle', finished_at = NOW(), "
+            "SET status = :st, finished_at = NOW(), "
             "    result_quantity = 0, xp_awarded = 0 "
             "WHERE id = :sid AND status = 'active'"
         ),
-        {"sid": sess["id"]},
+        {"sid": sess["id"], "st": _gathering_status_for_reason(reason)},
     )
     await db.commit()
 

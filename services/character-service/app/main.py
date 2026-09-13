@@ -19,7 +19,13 @@ from producer import (
 )
 from typing import List, Dict, Optional
 from fastapi.middleware.cors import CORSMiddleware
-from auth_http import get_admin_user, get_current_user_via_http, require_permission, OAUTH2_SCHEME
+from auth_http import (
+    get_admin_user,
+    get_current_user_via_http,
+    require_permission,
+    verify_internal_token,
+    OAUTH2_SCHEME,
+)
 from sqlalchemy import text
 import logging
 
@@ -783,6 +789,164 @@ async def admin_update_character(
             logger.warning(f"Ошибка при оценке титулов после изменения уровня для персонажа {character_id}: {e}")
 
     return {"detail": "Character updated", "character_id": character.id}
+
+
+# ============================================================
+# FEAT-162 — перенос персонажа администратором
+# ============================================================
+# Порядок операций — это и есть суть фичи (§3.3): КАЖДАЯ очистка выполняется
+# ДО изменения состояния, а само изменение — одна локальная транзакция.
+#
+#   сбой отмены сбора      -> 502, не записано ничего
+#   сбой гашения намерений -> 502, персонаж НЕ перенесён
+#   сбой коммита           -> намерения погашены, персонаж НЕ перенесён
+#                             (эквивалент «вышел и вернулся»)
+#
+# Нет такого порядка, при котором персонаж окажется в новой локации, сохранив
+# живые намерения в старой.
+
+
+def _is_in_battle(db: Session, character_id: int) -> bool:
+    """Активный бой по общей БД (таблицы battle-service, только чтение)."""
+    row = db.execute(
+        text(
+            "SELECT 1 FROM battles b "
+            "JOIN battle_participants bp ON b.id = bp.battle_id "
+            "WHERE bp.character_id = :cid "
+            "AND b.status IN ('pending', 'in_progress') LIMIT 1"
+        ),
+        {"cid": character_id},
+    ).fetchone()
+    return row is not None
+
+
+def _is_in_dungeon_run(db: Session, character_id: int) -> bool:
+    """Незавершённый забег в подземелье (таблицы dungeon-service, только чтение)."""
+    row = db.execute(
+        text(
+            "SELECT 1 FROM dungeon_sessions ds "
+            "JOIN dungeon_session_members dsm ON ds.id = dsm.session_id "
+            "WHERE dsm.character_id = :cid "
+            "AND ds.status IN ('forming', 'active') LIMIT 1"
+        ),
+        {"cid": character_id},
+    ).fetchone()
+    return row is not None
+
+
+@router.post("/admin/{character_id}/move", response_model=schemas.AdminMoveCharacterResponse)
+async def admin_move_character(
+    character_id: int,
+    data: schemas.AdminMoveCharacterRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("characters:teleport")),
+):
+    """Перенести персонажа в произвольную локацию (только админ).
+
+    Игнорирует обычные правила перемещения (соседство локаций, выносливость,
+    кулдаун), но воспроизводит все побочные эффекты ухода из локации.
+
+    Разрешение `characters:teleport` намеренно не выдано ни одной роли:
+    админ получает его автоматически, модератор — нет (`characters:update`
+    для этого не годится, он есть и у модератора).
+    """
+    if data.new_location_id is None or data.new_location_id <= 0:
+        raise HTTPException(status_code=422, detail="Некорректный идентификатор локации")
+
+    # 1. Персонаж. Блокировка строки здесь НЕ берётся: дальше идут HTTP-вызовы,
+    #    и держать `FOR UPDATE` через сеть нельзя. Строка перечитывается под
+    #    блокировкой в `crud.apply_admin_move`, уже без внешних вызовов.
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    from_location_id = character.current_location_id
+
+    # 2. Локация назначения должна существовать (заодно даёт имя для журнала).
+    to_location_name = crud._get_location_name(db, data.new_location_id)
+    if to_location_name is None:
+        raise HTTPException(status_code=404, detail="Локация назначения не найдена")
+
+    # 3. Та же локация — безусловный no-op ДО любых проверок и очисток:
+    #    ни записи в журнале, ни гашения намерений, ни сброса кулдауна.
+    if from_location_id is not None and int(from_location_id) == int(data.new_location_id):
+        return schemas.AdminMoveCharacterResponse(
+            detail="Персонаж уже находится в этой локации",
+            character_id=character_id,
+            moved=False,
+            from_location_id=from_location_id,
+            from_location_name=to_location_name,
+            to_location_id=data.new_location_id,
+            to_location_name=to_location_name,
+            gathering_cancelled=False,
+        )
+
+    from_location_name = crud._get_location_name(db, from_location_id)
+
+    # 4. Бой — отказ: выдёргивание из боя оставило бы бой неразрешимым.
+    if _is_in_battle(db, character_id):
+        raise HTTPException(status_code=409, detail="Персонаж находится в бою — перенос невозможен")
+
+    # 5. Подземелье — отказ: забег привязан к локации подземелья и несёт
+    #    состояние для остальных участников.
+    if _is_in_dungeon_run(db, character_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Персонаж находится в подземелье — перенос невозможен",
+        )
+
+    # 6. Сбор ресурсов отменяем (идемпотентно, с возвратом 50% выносливости).
+    try:
+        cancel_payload = await locations_client.cancel_gathering(
+            character_id, reason="admin_teleport",
+        )
+    except locations_client.LocationsServiceError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Не удалось подготовить перенос: {e}. Перенос отменён.",
+        )
+    gathering_cancelled = bool(cancel_payload.get("cancelled"))
+
+    # 7. Гашение намерений и заявок в покидаемой локации + роспуск группы.
+    #    Критический шаг: при сбое персонаж НЕ переносится.
+    try:
+        await locations_client.notify_character_left_location(character_id, from_location_id)
+    except locations_client.LocationsServiceError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Не удалось подготовить перенос: {e}. Перенос отменён.",
+        )
+
+    # 8. Одна локальная транзакция: локация + сброс кулдауна + запись в журнал.
+    try:
+        crud.apply_admin_move(
+            db,
+            character_id=character_id,
+            from_location_id=from_location_id,
+            from_location_name=from_location_name,
+            to_location_id=data.new_location_id,
+            to_location_name=to_location_name,
+            admin_user_id=current_user.id,
+            admin_username=current_user.username,
+            gathering_cancelled=gathering_cancelled,
+        )
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при переносе персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+    return schemas.AdminMoveCharacterResponse(
+        detail="Персонаж перенесён",
+        character_id=character_id,
+        moved=True,
+        from_location_id=from_location_id,
+        from_location_name=from_location_name,
+        to_location_id=data.new_location_id,
+        to_location_name=to_location_name,
+        gathering_cancelled=gathering_cancelled,
+    )
 
 
 @router.post("/admin/{character_id}/unlink")
@@ -1624,10 +1788,20 @@ async def get_titles_for_character(character_id: int, db: Session = Depends(get_
         logger.error(f"Ошибка при получении титулов для персонажа {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при получении титулов для персонажа.")
 
-@router.put("/{character_id}/deduct_points")
-def deduct_points(character_id: int, data: dict, db: Session = Depends(get_db)):
+@router.put("/internal/{character_id}/deduct_points")
+def deduct_points(
+    character_id: int,
+    data: dict,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
     """
-    Списание stat_points у персонажа.
+    Списание stat_points у персонажа (internal, service-to-service).
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт наружу как 403, и дополнительно требует заголовок X-Internal-Token.
+    Раньше эндпоинт был публичным, и любой мог обнулить чужие очки характеристик.
+    Единственный вызывающий — character-attributes-service (upgrade_attributes).
     """
     points_to_deduct = data.get("points_to_deduct", 0)
     logger.info(f"Получен запрос на списание {points_to_deduct} stat_points для персонажа ID {character_id}")
@@ -1851,10 +2025,18 @@ def get_characters_by_location(location_id: int, db: Session = Depends(get_db)):
     return result
 
 
-@router.put("/{character_id}/update_location")
-def update_location(character_id: int, payload: dict, db: Session = Depends(get_db)):
+@router.put("/internal/{character_id}/update_location")
+def update_location(
+    character_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
     """
-    Обновляет текущую локацию персонажа.
+    Обновляет текущую локацию персонажа (internal, service-to-service).
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт наружу как 403, и дополнительно требует заголовок X-Internal-Token.
 
     Запрос:
       {
@@ -3459,15 +3641,22 @@ def get_bestiary_endpoint(
 # Character Logs (FEAT-095)
 # ============================================================
 
-@router.post("/{character_id}/logs", response_model=schemas.CharacterLogResponse, status_code=201)
+@router.post("/internal/{character_id}/logs", response_model=schemas.CharacterLogResponse, status_code=201)
 def create_character_log_endpoint(
     character_id: int,
     data: schemas.CreateCharacterLogRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth) — creates a log entry for the character.
-    Called by other services to record events (battles, rewards, travel, etc.).
+    Запись события в журнал персонажа (internal, service-to-service).
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/ (nginx отдаёт 403
+    снаружи) и требует заголовок X-Internal-Token. Раньше эндпоинт был публичным,
+    и кто угодно мог подделать записи в журнале любого персонажа.
+    Вызывающие: character-attributes-service, locations-service.
+    GET /characters/{character_id}/logs остаётся публичным чтением — его читает
+    фронтенд (api/characterLogs.ts).
     """
     character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if not character:
@@ -3551,7 +3740,7 @@ def get_teleport_options(
     # Cooldown belongs to the player's active character (if any)
     cooldown = 0
     row = db.execute(
-        text("SELECT current_character_id FROM users WHERE id = :uid"),
+        text("SELECT current_character FROM users WHERE id = :uid"),  # столбец в users называется current_character
         {"uid": current_user.id},
     ).fetchone()
     if row and row[0]:
@@ -3646,13 +3835,19 @@ def admin_delete_teleport_link(
 # Travel Cooldown (internal, service-to-service)
 # ============================================================
 
-@router.post("/{character_id}/set_travel_cooldown")
+@router.post("/internal/{character_id}/set_travel_cooldown")
 def set_travel_cooldown(
     character_id: int,
     body: schemas.SetTravelCooldownRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
-    """Set or clear travel cooldown for a character (internal endpoint)."""
+    """Set or clear travel cooldown for a character (internal endpoint).
+
+    FEAT-162 §3.4: nginx блокирует /characters/internal/ снаружи (403), плюс
+    обязательный заголовок X-Internal-Token. Раньше эндпоинт был публичным,
+    и любой игрок мог обнулить себе кулдаун перемещения.
+    """
     character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if not character:
         raise HTTPException(status_code=404, detail="Персонаж не найден")
