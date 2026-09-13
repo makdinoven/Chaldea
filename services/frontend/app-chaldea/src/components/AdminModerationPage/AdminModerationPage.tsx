@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, type ReactNode } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
+import { GATE_LABEL, GATE_STYLE } from '../pages/LocationPage/gateConstants';
 
 /**
  * Flat shape returned by the moderation queues. Mirrors the backend
@@ -19,7 +20,11 @@ interface ModerationItem {
   post_id: number | null;
   /** The account that asked for the action — a user, not a character. */
   user_id: number;
-  reason: string | null;
+  /**
+   * Deletion requests and reports carry a reason; gate requests do not
+   * (`PostGateRequestRead` has no such field), hence optional.
+   */
+  reason?: string | null;
   status: string;
   created_at: string;
   reviewed_at: string | null;
@@ -36,7 +41,61 @@ interface ModerationItem {
 type DeletionRequest = ModerationItem;
 type Report = ModerationItem;
 
-type TabType = 'deletions' | 'reports';
+/** One gate the player asks to add retroactively. Mirrors the `gates` JSON. */
+interface RequestedGate {
+  action_type: string;
+  targets?: (number | null)[] | null;
+}
+
+/**
+ * One target of a requested gate, resolved server-side to a real name and a
+ * current state (`crud._resolve_gate_targets`, FEAT-159 section 3.9).
+ *
+ * Resolution is **enrichment, never validation**: a target that could not be
+ * found comes back with `name: null` and `state: "цель не найдена"` instead of
+ * the request being auto-rejected. The admin must see that uncertainty — it is
+ * the whole reason a human reviews this queue.
+ */
+interface ResolvedTarget {
+  /** `null` when the gate was filed without a target at all. */
+  id: number | null;
+  /** `null` when the lookup found nothing — render the id and the state. */
+  name: string | null;
+  state: string;
+}
+
+/**
+ * Mirrors the backend `PostGateRequestRead` (locations-service
+ * `app/schemas.py`), verified against the live `/openapi.json`. Same card
+ * fields as the other two queues plus the gate payload.
+ */
+interface GateRequest extends ModerationItem {
+  /** The character the gate would be granted to. */
+  character_id: number;
+  /** The location the gate would be granted on. */
+  location_id: number;
+  gates: RequestedGate[];
+  post_edited_at: string | null;
+  post_location_name: string | null;
+  /** `{action_type: [...]}` — empty when enrichment could not run at all. */
+  targets_resolved: Record<string, ResolvedTarget[]>;
+}
+
+type TabType = 'deletions' | 'reports' | 'gates';
+
+/**
+ * `pvp` exists server-side (`crud.GATED_POST_TYPES`) but is not offered in the
+ * post editor, so `GATE_LABEL` has no entry for it. The moderation queue can
+ * receive any gate type, so it needs the full table plus a loud fallback for
+ * anything added later on the backend alone.
+ */
+const GATE_REQUEST_LABEL: Record<string, string> = {
+  ...GATE_LABEL,
+  pvp: 'Нападение на игрока',
+};
+
+const gateLabel = (actionType: string): string =>
+  GATE_REQUEST_LABEL[actionType] ?? `Намерение «${actionType}»`;
 
 const formatDate = (dateStr: string): string => {
   try {
@@ -82,6 +141,33 @@ const errorMessage = (error: unknown, fallback: string): string => {
   return fallback;
 };
 
+/**
+ * The Russian `detail` the server sends for the *business* outcomes of a gate
+ * review — 400 «Заявка уже рассмотрена» and the three 409s of FEAT-159 T9
+ * («Пост удалён…», «Персонаж покинул локацию…», «Текст поста больше не
+ * оплачивает эти действия…»). These are not failures of the request, they are
+ * the world having moved between the request and the review, and the server's
+ * wording says exactly what moved — so it must reach the admin verbatim.
+ *
+ * Deliberately limited to 400/409: 401/403/404/5xx keep `errorMessage`'s
+ * wording, which is Russian, whereas FastAPI's own details there are not
+ * (e.g. «Not authenticated»).
+ */
+const serverDetail = (error: unknown): string | null => {
+  if (!axios.isAxiosError(error)) return null;
+  const status = error.response?.status;
+  if (status !== 400 && status !== 409) return null;
+  const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
+  return typeof detail === 'string' && detail.trim() ? detail : null;
+};
+
+/** A decided/stale row must disappear from the queue, so the list is refetched. */
+const isStaleQueueError = (error: unknown): boolean => {
+  if (!axios.isAxiosError(error)) return false;
+  const status = error.response?.status;
+  return status === 400 || status === 404 || status === 409;
+};
+
 interface ModerationCardProps {
   item: ModerationItem;
   /** «Запросил» for deletion requests, «Пожаловался» for reports. */
@@ -91,6 +177,15 @@ interface ModerationCardProps {
   busy: boolean;
   onApprove: () => void;
   onReject: () => void;
+  /**
+   * Show the post in full instead of clamping it to three lines. Gate requests
+   * need it: the admin's decision *is* a judgement of the text — whether it
+   * really voices the intent being asked for — and a clamped preview would
+   * hide the part that decides it.
+   */
+  showFullPost?: boolean;
+  /** Queue-specific detail rendered between the reason and the actions. */
+  extra?: ReactNode;
 }
 
 const ModerationCard = ({
@@ -101,6 +196,8 @@ const ModerationCard = ({
   busy,
   onApprove,
   onReject,
+  showFullPost = false,
+  extra,
 }: ModerationCardProps) => {
   const postMissing = isPostMissing(item);
 
@@ -127,7 +224,11 @@ const ModerationCard = ({
             Пост уже удалён
           </p>
         ) : (
-          <p className="text-white/70 text-sm bg-black/30 rounded p-2 line-clamp-3 whitespace-pre-wrap break-words">
+          <p
+            className={`text-white/70 text-sm bg-black/30 rounded p-2 whitespace-pre-wrap break-words ${
+              showFullPost ? 'max-h-64 overflow-y-auto' : 'line-clamp-3'
+            }`}
+          >
             {item.post_content}
           </p>
         )}
@@ -148,6 +249,9 @@ const ModerationCard = ({
           <span className="text-white/70 break-words">{item.reason}</span>
         </div>
       )}
+
+      {/* Queue-specific detail (gate requests: the intents being asked for) */}
+      {extra}
 
       {/* Actions */}
       <div className="flex flex-wrap gap-2 mt-1">
@@ -170,14 +274,137 @@ const ModerationCard = ({
   );
 };
 
+/** A target the backend could not resolve to a real entity. */
+const isUnresolved = (target: ResolvedTarget): boolean => target.name === null;
+
+interface GateRequestDetailsProps {
+  item: GateRequest;
+}
+
+/**
+ * The part of a gate-request card an admin actually decides on: which intents
+ * are being asked for, and what each named target really is right now.
+ *
+ * FEAT-159 section 3.9 ruled that target resolution **shows, never blocks** —
+ * there is no reliable way to know when a target entered a location, so a
+ * human judges. That makes the failure case load-bearing: an unresolved target
+ * is rendered loudly («цель не найдена»), never as a silent blank, because the
+ * uncertainty is exactly what the admin is here to weigh.
+ */
+const GateRequestDetails = ({ item }: GateRequestDetailsProps) => {
+  // The payload may list the same action_type more than once; merge so each
+  // intent is shown once, the way the server charges for it.
+  const actionTypes: string[] = [];
+  const rawTargets: Record<string, (number | null)[]> = {};
+  for (const gate of item.gates ?? []) {
+    const type = gate.action_type;
+    if (!actionTypes.includes(type)) actionTypes.push(type);
+    rawTargets[type] = [...(rawTargets[type] ?? []), ...(gate.targets ?? [])];
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-white/10 pt-3">
+      {/* Where the gate would be granted, and whether the post was edited */}
+      <div className="flex flex-col sm:flex-row sm:flex-wrap gap-1 sm:gap-3 text-xs">
+        <span className="text-white/40 break-words">
+          Локация:{' '}
+          <span className="text-white/70">
+            {item.post_location_name ?? `#${item.location_id}`}
+          </span>
+        </span>
+        {item.post_edited_at && (
+          <span className="text-white/40 break-words">
+            Пост изменён:{' '}
+            <span className="text-white/70">{formatDate(item.post_edited_at)}</span>
+          </span>
+        )}
+      </div>
+
+      <p className="text-white/40 text-xs">Запрошенные намерения:</p>
+
+      {actionTypes.length === 0 ? (
+        <p className="text-site-red text-xs">
+          В заявке не указано ни одного намерения
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {actionTypes.map((type) => {
+            const style = GATE_STYLE[type];
+            const resolved = item.targets_resolved?.[type];
+            // No enrichment for this intent at all (the lookup itself failed) —
+            // fall back to the bare ids rather than showing nothing.
+            const targets: ResolvedTarget[] =
+              resolved && resolved.length > 0
+                ? resolved
+                : (rawTargets[type] ?? []).map((id) => ({
+                    id: id ?? null,
+                    name: null,
+                    state: id === null ? 'цель не указана' : 'не удалось определить цель',
+                  }));
+
+            return (
+              <div
+                key={type}
+                className="flex flex-col gap-1.5 bg-black/30 rounded p-2"
+              >
+                <span
+                  className={`inline-flex items-center gap-1.5 text-xs font-medium self-start px-2 py-1 rounded border ${
+                    style?.activeCls ?? 'border-white/20 text-white/70'
+                  }`}
+                >
+                  {style?.icon && <span aria-hidden="true">{style.icon}</span>}
+                  {gateLabel(type)}
+                </span>
+
+                {targets.length === 0 ? (
+                  <span className="text-site-red text-xs">Цели не указаны</span>
+                ) : (
+                  <ul className="flex flex-col gap-1">
+                    {targets.map((target, index) => (
+                      <li
+                        key={`${type}-${target.id ?? 'none'}-${index}`}
+                        className="flex flex-col sm:flex-row sm:items-baseline sm:gap-2 text-xs break-words"
+                      >
+                        <span
+                          className={
+                            isUnresolved(target) ? 'text-site-red' : 'text-white'
+                          }
+                        >
+                          {target.name ??
+                            (target.id === null ? 'Цель не указана' : `Цель #${target.id}`)}
+                        </span>
+                        <span
+                          className={
+                            isUnresolved(target) ? 'text-site-red/70' : 'text-white/40'
+                          }
+                        >
+                          {target.state}
+                          {target.name !== null && target.id !== null && ` · #${target.id}`}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const AdminModerationPage = () => {
   const [activeTab, setActiveTab] = useState<TabType>('deletions');
   const [deletionRequests, setDeletionRequests] = useState<DeletionRequest[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
+  const [gateRequests, setGateRequests] = useState<GateRequest[]>([]);
   const [loadingDeletions, setLoadingDeletions] = useState(false);
   const [loadingReports, setLoadingReports] = useState(false);
+  const [loadingGates, setLoadingGates] = useState(false);
   const [deletionsError, setDeletionsError] = useState<string | null>(null);
   const [reportsError, setReportsError] = useState<string | null>(null);
+  const [gatesError, setGatesError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
 
   const fetchDeletionRequests = useCallback(async () => {
@@ -216,10 +443,29 @@ const AdminModerationPage = () => {
     }
   }, []);
 
+  const fetchGateRequests = useCallback(async () => {
+    setLoadingGates(true);
+    try {
+      const res = await axios.get<GateRequest[]>(
+        `${BASE_URL}/locations/admin/moderation/gate-requests`
+      );
+      setGateRequests(res.data);
+      setGatesError(null);
+    } catch (error) {
+      const message = errorMessage(error, 'Не удалось загрузить заявки на намерения');
+      setGateRequests([]);
+      setGatesError(message);
+      toast.error(message);
+    } finally {
+      setLoadingGates(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchDeletionRequests();
     fetchReports();
-  }, [fetchDeletionRequests, fetchReports]);
+    fetchGateRequests();
+  }, [fetchDeletionRequests, fetchReports, fetchGateRequests]);
 
   const handleDeletionAction = async (id: number, action: 'approve' | 'reject') => {
     setActionLoading(id);
@@ -253,15 +499,62 @@ const AdminModerationPage = () => {
     }
   };
 
+  /**
+   * Approve or reject a retro-added gate (FEAT-159, T9).
+   *
+   * Approval re-checks the world server-side and can legitimately refuse with a
+   * 409 — the post was deleted, the character left the location, or the text was
+   * shortened below what the gates cost. Those are outcomes, not bugs, so the
+   * server's own Russian `detail` is shown verbatim and the queue is refetched:
+   * the row's fate has already changed and a stale card must not stay clickable.
+   */
+  const handleGateAction = async (id: number, action: 'approve' | 'reject') => {
+    setActionLoading(id);
+    try {
+      await axios.put(
+        `${BASE_URL}/locations/admin/moderation/gate-requests/${id}/review`,
+        { action }
+      );
+      toast.success(
+        action === 'approve'
+          ? 'Заявка одобрена, намерение активно'
+          : 'Заявка отклонена, намерение не выдано'
+      );
+      await fetchGateRequests();
+    } catch (error) {
+      toast.error(
+        serverDetail(error) ?? errorMessage(error, 'Не удалось рассмотреть заявку')
+      );
+      if (isStaleQueueError(error)) await fetchGateRequests();
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const tabs: { key: TabType; label: string; count: number }[] = [
     { key: 'deletions', label: 'Запросы на удаление', count: deletionRequests.length },
     { key: 'reports', label: 'Жалобы', count: reports.length },
+    { key: 'gates', label: 'Заявки на намерения', count: gateRequests.length },
   ];
 
-  const isLoading = activeTab === 'deletions' ? loadingDeletions : loadingReports;
-  const activeError = activeTab === 'deletions' ? deletionsError : reportsError;
+  const isLoading =
+    activeTab === 'deletions'
+      ? loadingDeletions
+      : activeTab === 'reports'
+        ? loadingReports
+        : loadingGates;
+  const activeError =
+    activeTab === 'deletions'
+      ? deletionsError
+      : activeTab === 'reports'
+        ? reportsError
+        : gatesError;
   const retryActiveTab =
-    activeTab === 'deletions' ? fetchDeletionRequests : fetchReports;
+    activeTab === 'deletions'
+      ? fetchDeletionRequests
+      : activeTab === 'reports'
+        ? fetchReports
+        : fetchGateRequests;
 
   return (
     <div className="w-full max-w-container mx-auto">
@@ -356,6 +649,32 @@ const AdminModerationPage = () => {
                 busy={actionLoading === report.id}
                 onApprove={() => handleReportAction(report.id, 'resolve')}
                 onReject={() => handleReportAction(report.id, 'dismiss')}
+              />
+            ))
+          )}
+        </div>
+      )}
+
+      {/* Gate Requests Tab — retro-added intents awaiting a human decision */}
+      {activeTab === 'gates' && !loadingGates && !gatesError && (
+        <div className="flex flex-col gap-3">
+          {gateRequests.length === 0 ? (
+            <p className="text-white/50 text-sm py-8 text-center">
+              Нет заявок на намерения
+            </p>
+          ) : (
+            gateRequests.map((req) => (
+              <ModerationCard
+                key={req.id}
+                item={req}
+                requesterCaption="Запросил"
+                approveLabel="Одобрить"
+                rejectLabel="Отклонить"
+                busy={actionLoading === req.id}
+                showFullPost
+                extra={<GateRequestDetails item={req} />}
+                onApprove={() => handleGateAction(req.id, 'approve')}
+                onReject={() => handleGateAction(req.id, 'reject')}
               />
             ))
           )}

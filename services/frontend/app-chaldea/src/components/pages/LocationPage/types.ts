@@ -36,6 +36,18 @@ export interface Post {
   // FEAT-145 item 7: intent gates declared in this post, {action_type: count}.
   gates?: Record<string, number>;
   /**
+   * FEAT-159 (Phase B): gates added while editing that are still awaiting a
+   * moderator's decision, `{action_type: count}` — the count is the number of
+   * targets, exactly like `gates` above. Present only while a request is
+   * `pending`; approved gates move into `gates`, rejected/expired ones vanish.
+   *
+   * They grant NOTHING yet. The UI must never present them as usable rights —
+   * they are shown as «на рассмотрении» and they still cost their symbols in
+   * the edit counter, because the server charges them toward the post's budget
+   * (`crud.edit_post`, section 3.6 rule 2).
+   */
+  pending_gates?: Record<string, number>;
+  /**
    * FEAT-159: set when the post's text was edited after publication.
    * `null` / absent for an untouched post. ISO timestamp from the server.
    */

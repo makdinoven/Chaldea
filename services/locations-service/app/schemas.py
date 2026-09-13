@@ -351,12 +351,18 @@ class PostLikeRequest(BaseModel):
 class PostEditRequest(BaseModel):
     """Body of ``PUT /locations/posts/{post_id}`` (FEAT-159, Phase A).
 
-    Text only. There is deliberately no ``post_type`` / ``targets`` here: the
-    legacy single-gate shape is not accepted on this new path, and gates are a
-    Phase-B addition (an optional ``gates`` field) that does not break this
-    contract.
+    There is deliberately no ``post_type`` / ``targets`` here: the legacy
+    single-gate shape is not accepted on this new path — there is no legacy
+    client to support, and accepting it would open a second, differently
+    validated way to name gates.
+
+    ``gates`` (FEAT-159, Phase B) are gates to **add**. They do not fire: the
+    edit files a moderation request and the mechanic unlocks only on approval.
+    Gates the post already owns are never named here and can be neither changed
+    nor removed.
     """
     content: str
+    gates: List[GateSpec] = []
 
 
 class PostEditResponse(BaseModel):
@@ -367,6 +373,9 @@ class PostEditResponse(BaseModel):
     edited_at: datetime
     # Derived, never stored: True only when the editor is not the post's author.
     edited_by_admin: bool = False
+    # FEAT-159 Phase B — present only when the edit asked for new gates.
+    gate_request_id: Optional[int] = None
+    gate_request_status: Optional[str] = None   # always "pending" on creation
 
     class Config:
         orm_mode = True
@@ -563,6 +572,10 @@ class ClientPost(BaseModel):
     liked_by: List[int] = []
     # FEAT-145 item 7: intent gates declared in this post, {action_type: count}.
     gates: dict = {}
+    # FEAT-159: gates added during an edit that are still awaiting moderation,
+    # {action_type: count}. They grant nothing yet — only `gates` above does.
+    # Only `pending` requests appear here.
+    pending_gates: dict = {}
     # FEAT-159: the «изменено» marker. None on posts that were never edited.
     edited_at: Optional[datetime] = None
     # Derived in crud.get_post_details by comparing posts.edited_by_user_id with
@@ -785,6 +798,40 @@ class PostReportRead(BaseModel):
     post_character_name: Optional[str] = None
     post_created_at: Optional[datetime] = None
     requester_username: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+class PostGateRequestRead(BaseModel):
+    """A retro-added-gate moderation request (FEAT-159, T9).
+
+    Mirrors `PostDeletionRequestRead` — same card fields, same «degrade to
+    `None`» enrichment contract — plus the gate payload and `targets_resolved`.
+    """
+    id: int
+    # Nullable since migration 039 follows the policy of 037: deleting the post
+    # sets this to NULL instead of cascading the moderation row away.
+    post_id: Optional[int] = None
+    user_id: int
+    character_id: int
+    location_id: int
+    # [{"action_type": "...", "targets": [...]}] — the gates to grant on approval.
+    gates: List[dict] = []
+    status: str
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+    post_content: Optional[str] = None
+    post_character_id: Optional[int] = None
+    post_location_id: Optional[int] = None
+    post_character_name: Optional[str] = None
+    post_created_at: Optional[datetime] = None
+    post_edited_at: Optional[datetime] = None
+    post_location_name: Optional[str] = None
+    requester_username: Optional[str] = None
+    # {action_type: [{"id", "name", "state"}]} — best-effort enrichment so the
+    # admin can judge the request (FEAT-159 section 3.9: show, never block).
+    # Degrades to bare ids with «цель не найдена»; never rejects, never 500s.
+    targets_resolved: dict = {}
 
     class Config:
         orm_mode = True

@@ -416,10 +416,15 @@ const PostCard = ({
         />
       </ArchiveLinkPreview>
 
-      {/* FEAT-145 item 7: intent-gate marks declared in this post */}
-      {post.gates && Object.keys(post.gates).length > 0 && (
+      {/* FEAT-145 item 7: intent-gate marks declared in this post.
+          FEAT-159 (T12): gates added during an edit sit in `pending_gates` until
+          a moderator rules on them. They are rendered in the same row but must
+          read as *not yet granted* — dashed outline, hourglass, «на
+          рассмотрении» — because they unlock nothing until approval. */}
+      {((post.gates && Object.keys(post.gates).length > 0) ||
+        (post.pending_gates && Object.keys(post.pending_gates).length > 0)) && (
         <div className="flex flex-wrap gap-1.5">
-          {Object.entries(post.gates).map(([at, count]) => {
+          {Object.entries(post.gates ?? {}).map(([at, count]) => {
             const m = GATE_BADGE_META[at] ?? { icon: '•', label: at, cls: 'border-gold/20 bg-gold/10 text-gold/90' };
             return (
               <span
@@ -428,6 +433,22 @@ const PostCard = ({
               >
                 {m.icon} {m.label}
                 {(count as number) > 1 ? ` ×${count}` : ''}
+              </span>
+            );
+          })}
+          {Object.entries(post.pending_gates ?? {}).map(([at, count]) => {
+            const m = GATE_BADGE_META[at] ?? { icon: '•', label: at, cls: '' };
+            return (
+              <span
+                key={`pending-${at}`}
+                title="Намерение добавлено при редактировании и ждёт решения администратора — действие пока недоступно"
+                className="flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-0.5 rounded-full
+                           border border-dashed border-gold/40 bg-gold/[0.06] text-gold/80 break-words"
+              >
+                <span aria-hidden="true">⏳</span>
+                {m.icon} {m.label}
+                {(count as number) > 1 ? ` ×${count}` : ''}
+                <span className="text-white/45">· на рассмотрении</span>
               </span>
             );
           })}

@@ -8,6 +8,7 @@ import { useAppSelector, useAppDispatch } from '../../../redux/store';
 import { setCharacterLocation, getMe } from '../../../redux/slices/userSlice';
 import { isStaff } from '../../../utils/permissions';
 import { LocationData, Post } from './types';
+import type { PostGate } from './gateConstants';
 import LocationHeader from './LocationHeader';
 import LocationTopBar from './LocationTopBar';
 import PlayersSection from './PlayersSection';
@@ -331,46 +332,6 @@ const LocationPage = () => {
     []
   );
 
-  // --- Post edit (FEAT-159) ---
-
-  /**
-   * `PUT /locations/posts/{id}`.
-   *
-   * Rejects with an `Error` carrying a ready-to-show Russian message so
-   * `PostEditModal` can render it inline **without closing or clearing the
-   * editor**. The server's own `detail` is preferred verbatim — it names the
-   * rule that was broken (not last / past the hour / not the owner / gone),
-   * which a generic client message could not.
-   */
-  const handleEditPost = useCallback(
-    async (postId: number, content: string) => {
-      try {
-        await axios.put(`${BASE_URL}/locations/posts/${postId}`, { content });
-        toast.success('Пост изменён');
-        await fetchLocationData();
-      } catch (err) {
-        let message = 'Не удалось сохранить изменения. Текст остался в редакторе.';
-        if (axios.isAxiosError(err)) {
-          const detail = err.response?.data?.detail;
-          if (typeof detail === 'string' && detail.trim()) {
-            message = detail;
-          } else if (Array.isArray(detail) && detail.length > 0) {
-            // FastAPI validation shape — never expected here, but never swallowed.
-            message = 'Сервер отклонил текст поста. Проверьте содержимое и попробуйте ещё раз.';
-          } else if (!err.response) {
-            message = 'Нет связи с сервером — изменения не сохранены. Текст остался в редакторе.';
-          } else if (err.response.status === 429) {
-            // Nginx rate limit (T6) answers with its own body, not a JSON detail.
-            message = 'Слишком много правок подряд. Подождите немного и попробуйте снова — текст остался в редакторе.';
-          } else {
-            message = `Не удалось сохранить изменения (ошибка ${err.response.status}). Текст остался в редакторе.`;
-          }
-        }
-        throw new Error(message);
-      }
-    },
-    [fetchLocationData]
-  );
 
   // --- Post submit ---
 
@@ -419,6 +380,65 @@ const LocationPage = () => {
   useEffect(() => {
     refetchGates();
   }, [refetchGates]);
+
+  // --- Post edit (FEAT-159) ---
+
+  /**
+   * `PUT /locations/posts/{id}`.
+   *
+   * Rejects with an `Error` carrying a ready-to-show Russian message so
+   * `PostEditModal` can render it inline **without closing or clearing the
+   * editor**. The server's own `detail` is preferred verbatim — it names the
+   * rule that was broken (not last / past the hour / not the owner / gone),
+   * which a generic client message could not.
+   */
+  const handleEditPost = useCallback(
+    async (postId: number, content: string, gates: PostGate[] = []) => {
+      try {
+        const { data } = await axios.put(`${BASE_URL}/locations/posts/${postId}`, {
+          content,
+          gates,
+        });
+        // FEAT-159 Phase B: a retro-added gate does NOT fire. The server answers
+        // with the id of the moderation request it filed, and the player is told
+        // plainly that the mechanic stays locked until an admin approves it —
+        // a generic «Пост изменён» would read as "the intent now works".
+        if (data?.gate_request_id) {
+          toast.success(
+            'Пост изменён. Заявка на новое намерение отправлена администратору — ' +
+              'действие станет доступно только после одобрения.',
+            { duration: 7000 },
+          );
+        } else {
+          toast.success('Пост изменён');
+        }
+        await fetchLocationData();
+        // A gate may have been requested; the location's gate status is what
+        // unlocks the action buttons, and it must not go stale after an edit.
+        refetchGates();
+      } catch (err) {
+        let message = 'Не удалось сохранить изменения. Текст остался в редакторе.';
+        if (axios.isAxiosError(err)) {
+          const detail = err.response?.data?.detail;
+          if (typeof detail === 'string' && detail.trim()) {
+            message = detail;
+          } else if (Array.isArray(detail) && detail.length > 0) {
+            // FastAPI validation shape — never expected here, but never swallowed.
+            message = 'Сервер отклонил текст поста. Проверьте содержимое и попробуйте ещё раз.';
+          } else if (!err.response) {
+            message = 'Нет связи с сервером — изменения не сохранены. Текст остался в редакторе.';
+          } else if (err.response.status === 429) {
+            // Nginx rate limit (T6) answers with its own body, not a JSON detail.
+            message = 'Слишком много правок подряд. Подождите немного и попробуйте снова — текст остался в редакторе.';
+          } else {
+            message = `Не удалось сохранить изменения (ошибка ${err.response.status}). Текст остался в редакторе.`;
+          }
+        }
+        throw new Error(message);
+      }
+    },
+    [fetchLocationData, refetchGates]
+  );
 
   // Gate targets available on this location for the post editor (FEAT-145 v2).
   const dungeonsAtLocation = useAppSelector(selectDungeonsAtLocation);
@@ -920,6 +940,12 @@ const LocationPage = () => {
       {editingPost && (
         <PostEditModal
           post={editingPost}
+          gateOptions={gateOptions}
+          /* The server demands the post's character still stand in the post's
+             location before it accepts a gate request (403). Only the author
+             can satisfy that, so an admin editing someone else's post is not
+             offered the picker. */
+          canAddGates={isCharacterHere && editingPost.character_id === (character?.id ?? -1)}
           onSave={handleEditPost}
           onClose={() => setEditingPost(null)}
         />

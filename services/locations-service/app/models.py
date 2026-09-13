@@ -305,6 +305,51 @@ class PostReport(Base):
     )
 
 
+class PostGateRequest(Base):
+    """A moderation request to grant intent gates that were added to a post
+    *after* publication, during an edit (FEAT-159, Phase B).
+
+    A retro-added gate never fires on its own: the edit writes a row here and
+    nothing else. ``action_gates`` rows are created only when an admin approves
+    (see the review endpoint), so a rejected request leaves no rights behind.
+
+    Deliberately NOT folded into ``post_deletion_requests``: that table's
+    approve branch deletes the post, and a "grant rights" conditional has no
+    business living next to it (FEAT-159 section 3.7).
+    """
+    __tablename__ = "post_gate_requests"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    # post_id survives post deletion as NULL — the policy of migration 037:
+    # a moderation decision must outlive the post it is about.
+    post_id = Column(
+        Integer,
+        ForeignKey("posts.id", ondelete="SET NULL", name="fk_post_gate_requests_post_id"),
+        nullable=True,
+    )
+    character_id = Column(Integer, nullable=False)
+    location_id = Column(
+        BigInteger,
+        ForeignKey("Locations.id", ondelete="CASCADE", name="fk_post_gate_requests_location_id"),
+        nullable=False,
+    )
+    # The requester. Not derivable from character_id: an admin may file a
+    # request while editing somebody else's post.
+    user_id = Column(Integer, nullable=False)
+    # [{"action_type": "...", "targets": [...]}] — the gates to grant on approval.
+    gates = Column(JSON, nullable=False)
+    # pending | approved | rejected | expired
+    status = Column(String(20), server_default='pending', nullable=False)
+    reviewed_by_user_id = Column(Integer, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    reviewed_at = Column(TIMESTAMP, nullable=True, server_default=None)
+
+    __table_args__ = (
+        Index('idx_pgr_queue', 'status', 'created_at'),
+        Index('idx_pgr_post', 'post_id'),
+    )
+
+
 class GameTimeConfig(Base):
     __tablename__ = 'game_time_config'
 

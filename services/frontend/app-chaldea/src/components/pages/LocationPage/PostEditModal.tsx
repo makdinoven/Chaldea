@@ -8,9 +8,12 @@ import {
   GATE_LABEL,
   GATE_STYLE,
   GATE_ORDER,
+  DEFAULT_GATE_COST,
+  FALLBACK_GATE_STYLE,
   MIN_POST_LENGTH,
   stripHtmlTags,
   requiredSymbolsForGates,
+  type GateOptions,
   type PostGate,
 } from './gateConstants';
 
@@ -18,17 +21,31 @@ export interface PostEditModalProps {
   /** The post being edited — supplies the initial text and its locked gates. */
   post: Post;
   /**
-   * Persists the new text. **Must reject with an `Error` whose `message` is a
-   * ready-to-show Russian string** — that message is rendered inline and the
-   * editor keeps the player's text. Resolving means the server returned 200.
+   * Targets available on this location, keyed by `action_type` — the menu for
+   * **new** intents only. Existing gates are never edited through it.
    */
-  onSave: (postId: number, content: string) => Promise<void>;
+  gateOptions?: GateOptions;
+  /**
+   * Whether this player may file a gate request at all: the server demands the
+   * post's character still be standing in the post's location
+   * (403 «Чтобы добавить намерение, нужно находиться в этой локации»). When
+   * `false` the picker is replaced by that explanation instead of offering a
+   * choice that is guaranteed to fail.
+   */
+  canAddGates?: boolean;
+  /**
+   * Persists the new text and any newly requested gates. **Must reject with an
+   * `Error` whose `message` is a ready-to-show Russian string** — that message
+   * is rendered inline and the editor keeps the player's text. Resolving means
+   * the server returned 200.
+   */
+  onSave: (postId: number, content: string, gates: PostGate[]) => Promise<void>;
   /** Closes the modal. Called only on an explicit user action or after a 200. */
   onClose: () => void;
 }
 
 /**
- * Post editor for FEAT-159 (Phase A).
+ * Post editor for FEAT-159 (Phase A text editing + Phase B gate requests).
  *
  * **Deliberately NOT an `editMode` prop on `PostCreateForm`.** That form is
  * wired end-to-end into the FEAT-156 draft system (`usePostDraft`, autosave,
@@ -39,66 +56,132 @@ export interface PostEditModalProps {
  *
  * The second invariant is the same one, stated for failures: **no code path
  * that is not a confirmed success may unmount the editor.** Every rejection
- * (403 / 404 / 409 / 5xx / network) renders the server's Russian `detail` in
- * the inline error area with the text untouched. A feature whose whole purpose
- * is recovering from a mistake must not invent a new way to lose text.
+ * (400 / 403 / 404 / 409 / 5xx / network) renders the server's Russian `detail`
+ * in the inline error area with the text untouched. A feature whose whole
+ * purpose is recovering from a mistake must not invent a new way to lose text.
  *
- * Phase A edits text only. The post's existing gates are shown as locked,
- * non-interactive chips: a declared intent can be neither changed nor removed
- * (section 3.6), and it still costs its symbols, so the counter charges for
- * them. Adding new gates is Phase B (T12).
+ * Gates come in three kinds here and they are visually different on purpose:
+ *
+ * - **already declared** (`post.gates`) — locked, ticked, non-interactive. A
+ *   declared intent can be neither changed nor removed (section 3.6); the chip
+ *   must not read as "disabled, maybe clickable later";
+ * - **awaiting moderation** (`post.pending_gates`) — an earlier edit already
+ *   filed a request. Also locked, marked «на рассмотрении», and it blocks a
+ *   second request (the server answers 409);
+ * - **newly ticked** — selectable, and explicitly labelled as taking effect
+ *   only after an administrator approves it. The player must understand that
+ *   *before* saving, not from a surprise afterwards.
+ *
+ * All three cost symbols, and the counter charges for all three together —
+ * the client mirror of the merged budget the server recomputes in
+ * `crud.edit_post`.
  */
-const PostEditModal = ({ post, onSave, onClose }: PostEditModalProps) => {
+const PostEditModal = ({
+  post,
+  gateOptions = {},
+  canAddGates = false,
+  onSave,
+  onClose,
+}: PostEditModalProps) => {
   const [content, setContent] = useState(post.content);
   const [saving, setSaving] = useState(false);
   /** Russian, user-visible. Never cleared by anything but a new attempt. */
   const [error, setError] = useState<string | null>(null);
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+  /** Newly requested intents: action_type → chosen target ids. */
+  const [selectedGates, setSelectedGates] = useState<Record<string, number[]>>({});
 
   const charCount = useMemo(() => stripHtmlTags(content).length, [content]);
 
-  /**
-   * The post's already-declared gates, as `{action_type: count}` from
-   * `ClientPost.gates`. They are locked, but they are still paid for — the
-   * server recomputes the budget over the post's entire gate set, so shortening
-   * the text below their cost is rejected. The counter mirrors that rule.
-   */
-  const lockedGates: PostGate[] = useMemo(
-    () =>
-      GATE_ORDER.filter((at) => (post.gates?.[at] ?? 0) > 0).map((at) => ({
-        action_type: at,
-        // Only the count is on the wire in Phase A; the cost formula needs a
-        // target list of the same length, and the ids are irrelevant to it.
-        targets: Array.from({ length: post.gates?.[at] ?? 0 }, (_, i) => i),
-      })),
-    [post.gates],
-  );
-  /** Gate types the server knows nothing about here — shown, never priced. */
-  const unknownGates = useMemo(
-    () =>
-      Object.entries(post.gates ?? {}).filter(
-        ([at, count]) => (count ?? 0) > 0 && !(GATE_ORDER as readonly string[]).includes(at),
-      ),
-    [post.gates],
-  );
+  /** `{action_type: count}` → a sorted, displayable list. */
+  const toEntries = (map: Record<string, number> | undefined) =>
+    Object.entries(map ?? {})
+      .filter(([, count]) => (count ?? 0) > 0)
+      .sort(
+        (a, b) =>
+          (GATE_ORDER as readonly string[]).indexOf(a[0]) -
+          (GATE_ORDER as readonly string[]).indexOf(b[0]),
+      );
 
-  const requiredSymbols = requiredSymbolsForGates(lockedGates);
+  /** Gates the post already owns — locked, ticked, and still paid for. */
+  const lockedEntries = useMemo(() => toEntries(post.gates), [post.gates]);
+  /** Gates from an earlier edit that a moderator has not ruled on yet. */
+  const pendingEntries = useMemo(() => toEntries(post.pending_gates), [post.pending_gates]);
+  const hasPendingRequest = pendingEntries.length > 0;
+
+  const newGates: PostGate[] = useMemo(
+    () =>
+      Object.entries(selectedGates)
+        .filter(([, ids]) => ids.length > 0)
+        .map(([action_type, targets]) => ({ action_type, targets })),
+    [selectedGates],
+  );
+  const hasNewGates = newGates.length > 0;
+
+  /**
+   * The merged gate set the server will charge for: existing rows of **every**
+   * status + the gates inside a pending request + the ones being ticked now
+   * (`crud.edit_post`, section 3.6). Counts are summed per `action_type`
+   * because that is what the server's `merge_gate_lists` union amounts to here
+   * — the wire carries only counts for the first two sources, and a target that
+   * appeared in two of them is rejected outright (400 «Гейт на эту цель уже
+   * есть в посте») rather than merged.
+   *
+   * The target ids are irrelevant to the cost, so synthetic ones are used: the
+   * real ids of a locked gate are not on the wire, and mixing them with the
+   * picked ids could collide and silently under-count.
+   */
+  const mergedGates: PostGate[] = useMemo(() => {
+    const totals: Record<string, number> = {};
+    const add = (at: string, n: number) => {
+      totals[at] = (totals[at] ?? 0) + n;
+    };
+    lockedEntries.forEach(([at, count]) => add(at, count));
+    pendingEntries.forEach(([at, count]) => add(at, count));
+    newGates.forEach((g) => add(g.action_type, g.targets.length));
+    return Object.entries(totals).map(([action_type, count]) => ({
+      action_type,
+      targets: Array.from({ length: count }, (_, i) => i),
+    }));
+  }, [lockedEntries, pendingEntries, newGates]);
+
+  const requiredSymbols = requiredSymbolsForGates(mergedGates);
   const meetsMinLength = charCount >= requiredSymbols;
   const progressPct = Math.min(100, Math.round((charCount / requiredSymbols) * 100));
   const isDirty = content !== post.content;
+  const canSubmit = isDirty || hasNewGates;
+
+  /** Which action types still have something to pick on this location. */
+  const pickableTypes = useMemo(
+    () => GATE_ORDER.filter((at) => (gateOptions[at]?.length ?? 0) > 0),
+    [gateOptions],
+  );
+  const showGatePicker = canAddGates && !hasPendingRequest && pickableTypes.length > 0;
+
+  const gateCost = (actionType: string) => GATE_COST[actionType] ?? DEFAULT_GATE_COST;
+  const gateStyle = (actionType: string) => GATE_STYLE[actionType] ?? FALLBACK_GATE_STYLE;
+  const gateLabel = (actionType: string) => GATE_LABEL[actionType] ?? actionType;
+
+  const toggleGateTarget = (actionType: string, id: number) => {
+    setSelectedGates((prev) => {
+      const cur = prev[actionType] ?? [];
+      const next = cur.includes(id) ? cur.filter((t) => t !== id) : [...cur, id];
+      return { ...prev, [actionType]: next };
+    });
+  };
 
   const handleSave = async () => {
     if (saving) return;
     if (!meetsMinLength) {
       setError(
-        `Минимальная длина — ${requiredSymbols} символов (сейчас: ${charCount}).`,
+        `Для всех действий этого поста нужно минимум ${requiredSymbols} символов (сейчас: ${charCount}).`,
       );
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      await onSave(post.post_id, content);
+      await onSave(post.post_id, content, newGates);
       // The ONLY path that closes the editor: a confirmed 200.
       onClose();
     } catch (err) {
@@ -113,7 +196,7 @@ const PostEditModal = ({ post, onSave, onClose }: PostEditModalProps) => {
 
   const requestClose = () => {
     if (saving) return;
-    if (isDirty) {
+    if (isDirty || hasNewGates) {
       setConfirmCancelOpen(true);
       return;
     }
@@ -163,36 +246,46 @@ const PostEditModal = ({ post, onSave, onClose }: PostEditModalProps) => {
           </p>
 
           {/* Locked intent gates — declared once, never changed or removed. */}
-          {(lockedGates.length > 0 || unknownGates.length > 0) && (
+          {(lockedEntries.length > 0 || pendingEntries.length > 0) && (
             <div className="flex flex-col gap-2">
               <span className="text-white/40 text-[10.5px] uppercase tracking-[0.06em]">
                 Объявленные намерения
               </span>
               <div className="flex flex-wrap gap-1.5">
-                {lockedGates.map((g) => {
-                  const style = GATE_STYLE[g.action_type];
+                {lockedEntries.map(([at, count]) => {
+                  const style = gateStyle(at);
                   return (
                     <span
-                      key={g.action_type}
+                      key={`locked-${at}`}
+                      role="checkbox"
+                      aria-checked="true"
+                      aria-disabled="true"
+                      aria-label={`${gateLabel(at)} — намерение уже объявлено и не может быть изменено`}
                       title="Уже объявленное намерение нельзя изменить или снять"
                       className={`flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-0.5 rounded-full border
-                                  opacity-70 cursor-not-allowed break-words ${style.activeCls}`}
+                                  cursor-not-allowed select-none break-words ${style.activeCls}`}
                     >
-                      {style.icon} {GATE_LABEL[g.action_type]}
-                      {g.targets.length > 1 ? ` ×${g.targets.length}` : ''}
-                      <span className="text-white/40">· {GATE_COST[g.action_type] * g.targets.length} симв.</span>
+                      <span aria-hidden="true">🔒</span>
+                      <span aria-hidden="true">✓</span>
+                      {style.icon} {gateLabel(at)}
+                      {count > 1 ? ` ×${count}` : ''}
+                      <span className="text-white/40">· {gateCost(at) * count} симв.</span>
                     </span>
                   );
                 })}
-                {unknownGates.map(([at, count]) => (
+                {pendingEntries.map(([at, count]) => (
                   <span
-                    key={at}
-                    title="Уже объявленное намерение нельзя изменить или снять"
+                    key={`pending-${at}`}
+                    aria-label={`${gateLabel(at)} — заявка на намерение на рассмотрении`}
+                    title="Заявка на это намерение уже отправлена и ждёт решения администратора"
                     className="flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-0.5 rounded-full
-                               border border-gold/20 bg-gold/10 text-gold/90 opacity-70 cursor-not-allowed break-words"
+                               border border-dashed border-gold/40 bg-gold/[0.06] text-gold/90
+                               cursor-not-allowed select-none break-words"
                   >
-                    {at}
+                    <span aria-hidden="true">⏳</span>
+                    {gateStyle(at).icon} {gateLabel(at)}
                     {count > 1 ? ` ×${count}` : ''}
+                    <span className="text-white/40">· на рассмотрении · {gateCost(at) * count} симв.</span>
                   </span>
                 ))}
               </div>
@@ -201,6 +294,81 @@ const PostEditModal = ({ post, onSave, onClose }: PostEditModalProps) => {
                 оплачиваются длиной текста.
               </span>
             </div>
+          )}
+
+          {/* Phase B: add an intent forgotten at publication. It does NOT fire —
+              it files a moderation request, and the player is told so here,
+              before saving, not after. */}
+          {showGatePicker && (
+            <div className="flex flex-col gap-2.5 p-3 sm:p-3.5 rounded-card bg-white/[0.02] border border-white/[0.06]">
+              <span className="text-xs font-medium text-white/70 break-words">
+                Добавить забытое намерение{' '}
+                <span className="text-white/40 font-normal">— увеличивает минимум символов</span>
+              </span>
+              <p className="text-gold/80 text-[11px] leading-relaxed break-words">
+                Новое намерение <b>не сработает сразу</b>: оно уходит заявкой в модерацию и
+                появится после одобрения администратором. До решения механика остаётся
+                недоступной.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {pickableTypes.map((at) => {
+                  const opts = gateOptions[at] ?? [];
+                  const sel = selectedGates[at] ?? [];
+                  return (
+                    <div
+                      key={at}
+                      className="flex flex-col gap-2 p-2.5 rounded-[10px] bg-white/[0.02] border border-white/[0.05]"
+                    >
+                      <span className="text-[11.5px] text-white/80 flex items-center gap-1.5 flex-wrap">
+                        {gateStyle(at).icon} {gateLabel(at)}{' '}
+                        <span className="text-white/35">· {gateCost(at)} симв./цель</span>
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {opts.map((o) => {
+                          const on = sel.includes(o.id);
+                          return (
+                            <button
+                              key={o.id}
+                              type="button"
+                              aria-pressed={on}
+                              onClick={() => toggleGateTarget(at, o.id)}
+                              disabled={saving}
+                              className={`text-[11.5px] px-3 py-1 rounded-full border transition-all duration-200 ease-site
+                                          disabled:opacity-40 disabled:cursor-not-allowed break-words ${
+                                            on
+                                              ? gateStyle(at).activeCls
+                                              : 'border-white/[0.16] text-white/60 hover:bg-white/5 hover:text-white/80'
+                                          }`}
+                            >
+                              {on ? '✓ ' : ''}
+                              {o.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {sel.length > 0 && (
+                        <span className="text-gold/70 text-[10.5px] break-words">
+                          Появится после одобрения администратором
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Why the picker is absent — never a silently missing control. */}
+          {!showGatePicker && hasPendingRequest && (
+            <p className="text-white/45 text-[11px] leading-relaxed break-words">
+              По этому посту уже есть заявка на намерение — она на рассмотрении. Добавить ещё
+              одно можно будет после решения администратора.
+            </p>
+          )}
+          {!showGatePicker && !hasPendingRequest && !canAddGates && (
+            <p className="text-white/45 text-[11px] leading-relaxed break-words">
+              Добавить забытое намерение можно, только находясь в локации этого поста.
+            </p>
           )}
 
           <WysiwygEditor content={post.content} onChange={setContent} enableArchiveLinks />
@@ -252,16 +420,20 @@ const PostEditModal = ({ post, onSave, onClose }: PostEditModalProps) => {
               type="button"
               className="btn-blue !py-2 !px-5 !text-xs disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={handleSave}
-              disabled={saving || !meetsMinLength || !isDirty}
+              disabled={saving || !meetsMinLength || !canSubmit}
               title={
-                !isDirty
+                !canSubmit
                   ? 'Текст не изменён'
                   : !meetsMinLength
                     ? `Минимум ${Math.max(MIN_POST_LENGTH, requiredSymbols)} символов`
                     : undefined
               }
             >
-              {saving ? 'Сохраняем…' : 'Сохранить'}
+              {saving
+                ? 'Сохраняем…'
+                : hasNewGates
+                  ? 'Сохранить и отправить заявку'
+                  : 'Сохранить'}
             </button>
           </div>
         </motion.div>
@@ -270,7 +442,11 @@ const PostEditModal = ({ post, onSave, onClose }: PostEditModalProps) => {
       {confirmCancelOpen && (
         <ConfirmDialog
           title="Отменить редактирование?"
-          message="Внесённые правки не будут сохранены, а исходный текст поста останется прежним."
+          message={
+            hasNewGates
+              ? 'Внесённые правки не будут сохранены, а заявка на новое намерение не будет отправлена.'
+              : 'Внесённые правки не будут сохранены, а исходный текст поста останется прежним.'
+          }
           confirmLabel="Отменить правки"
           cancelLabel="Продолжить"
           danger

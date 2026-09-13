@@ -68,7 +68,7 @@ os.environ.setdefault("DB_DATABASE", "testdb")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import crud  # noqa: E402
-from models import ActionGate, Location, Post  # noqa: E402
+from models import ActionGate, Location, Post, PostGateRequest  # noqa: E402
 from main import app  # noqa: E402
 from database import get_db  # noqa: E402
 
@@ -162,7 +162,12 @@ async def session():
             "CREATE TABLE characters (id INTEGER PRIMARY KEY, user_id INTEGER)",
         ):
             await conn.execute(sa_text(ddl))
-        for table in (Location.__table__, Post.__table__, ActionGate.__table__):
+        for table in (
+            Location.__table__, Post.__table__, ActionGate.__table__,
+            # Phase B: `edit_post` reads pending gate requests for the budget
+            # (section 3.6 rule 2) and writes one when gates are requested.
+            PostGateRequest.__table__,
+        ):
             await conn.run_sync(table.create)
 
     Session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -1162,11 +1167,17 @@ class TestEditRouteContract:
 
         assert r.status_code == 200
         body = r.json()
+        # The exact key set is the point of this test — an extra field is a
+        # contract change, not a detail. Phase B added exactly two, both
+        # additive and both `None` when the edit asked for no gates (3.2).
         assert set(body) == {
             "id", "content", "length", "created_at", "edited_at", "edited_by_admin",
+            "gate_request_id", "gate_request_status",
         }
         assert body["id"] == 77
         assert body["edited_by_admin"] is False
+        assert body["gate_request_id"] is None
+        assert body["gate_request_status"] is None
         # edited_by_user_id is an audit field and must never reach the client.
         assert "edited_by_user_id" not in body
 

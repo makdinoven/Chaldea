@@ -99,6 +99,33 @@ def required_symbols_for_gates(gate_list) -> int:
     return max(MIN_POST_LENGTH, total)
 
 
+# Russian names of the intent types, used in the "choose a target" error. Lives
+# here so the create path (`main._validate_intent_post`) and the edit path
+# (`edit_post`) share one wording instead of drifting apart.
+GATE_LABELS = {
+    "combat": "нападения на мобов", "npc_dialogue": "диалога с НПС",
+    "gathering": "сбора", "dungeon": "входа в подземелье", "pvp": "PvP",
+}
+
+
+def validate_gate_shape(gate_list) -> None:
+    """FEAT-145 v2: every gate must name a known action type and at least one
+    target. Raises 400 with the wording both post paths use.
+
+    Shape only — the symbol budget is checked separately, because the create
+    path charges for the post's own gates while the edit path charges for the
+    merged set of all of them (FEAT-159, section 3.6).
+    """
+    for g in gate_list:
+        if g["action_type"] not in GATED_POST_TYPES:
+            raise HTTPException(status_code=400, detail="Неизвестный тип гейта")
+        if not g["targets"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Для {GATE_LABELS.get(g['action_type'], g['action_type'])} выберите цель в посте",
+            )
+
+
 def strip_html_tags(html: str) -> str:
     """Remove HTML tags, returning plain text."""
     return re.sub(r'<[^>]*>', '', html).strip()
@@ -176,7 +203,7 @@ from models import (
     ArchiveCategory, ArchiveArticle, ArchiveArticleCategory,
     RegionTransitionArrow, ArrowNeighbor, FloatingStructure,
     GatheringNode, GatheringSession, OriginCountry, OriginStartingPoint,
-    PostDraft,
+    PostDraft, PostGateRequest,
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -1125,6 +1152,27 @@ async def expire_action_gates(session, character_id: int, location_id: int) -> N
     await session.commit()
 
 
+async def expire_gate_requests(session, character_id: int, location_id: int) -> None:
+    """Expire a character's **pending** gate requests on a location when they
+    leave it (FEAT-159, section 3.8).
+
+    Leaving the location is the event that kills gates
+    (``expire_action_gates``), so a request that outlived it must not become a
+    way to resurrect one. This is the proactive half of that rule — it also
+    keeps the moderation queue free of dead work; the defensive half is the
+    "character is still in the location" re-check inside
+    ``review_gate_request``.
+    """
+    await session.execute(
+        text(
+            "UPDATE post_gate_requests SET status='expired', reviewed_at=NOW() "
+            "WHERE character_id = :c AND location_id = :l AND status = 'pending'"
+        ),
+        {"c": character_id, "l": location_id},
+    )
+    await session.commit()
+
+
 async def gate_list_for_post(session, post_id: int) -> list:
     """The gates a post has ALREADY bought, as a gate list of
     ``{"action_type", "targets"}`` ready for ``required_symbols_for_gates``.
@@ -1142,6 +1190,94 @@ async def gate_list_for_post(session, post_id: int) -> list:
     return merge_gate_lists([
         {"action_type": at, "targets": [tref]} for at, tref in rows
     ])
+
+
+def _decode_gates_json(raw) -> list:
+    """``post_gate_requests.gates`` as a gate list, whatever the driver handed
+    back (MySQL JSON arrives as a decoded list through the ORM but as a string
+    through ``text()``). Never raises: a malformed payload degrades to an empty
+    list, which only ever makes a budget check *stricter* than reality if it
+    hides gates, and cannot grant anything on its own."""
+    if raw is None:
+        return []
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", "replace")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            logger.warning("post_gate_requests.gates is not valid JSON: %r", raw[:200])
+            return []
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for g in raw:
+        if not isinstance(g, dict):
+            continue
+        at = g.get("action_type")
+        if at is None:
+            continue
+        targets = []
+        for t in (g.get("targets") or []):
+            try:
+                targets.append(None if t is None else int(t))
+            except (TypeError, ValueError):
+                continue
+        out.append({"action_type": at, "targets": targets})
+    return out
+
+
+async def pending_gate_requests_for_post(session, post_id: int) -> list:
+    """``[(request_id, gate_list), ...]`` of the post's **pending** gate
+    requests (FEAT-159, section 3.6 rule 2).
+
+    They count toward the symbol budget even though no ``action_gates`` row
+    exists yet: otherwise two edits in a row, each filing a request and each
+    validated against an unchanged ``action_gates``, would double the budget
+    through the request queue instead of through the gate table.
+    """
+    rows = (await session.execute(
+        text(
+            "SELECT id, gates FROM post_gate_requests "
+            "WHERE post_id = :pid AND status = 'pending'"
+        ),
+        {"pid": post_id},
+    )).fetchall()
+    return [(int(rid), _decode_gates_json(raw)) for rid, raw in rows]
+
+
+async def pending_gates_for_posts(session, post_ids: list) -> dict:
+    """``{post_id: {action_type: count}}`` of gates awaiting moderation
+    (FEAT-159, T10) — the counterpart of ``gates_for_posts`` for requests that
+    have not been approved yet, so the client can mark a post «на рассмотрении».
+
+    One batch query for the whole feed, like ``gates_for_posts``; a per-post
+    query here would put N round-trips on every location page. Only ``pending``
+    rows are surfaced: approved requests already show up through
+    ``action_gates``, and rejected / expired ones grant nothing.
+
+    The count is the number of *targets* per action type, matching how
+    ``gates_for_posts`` counts one ``action_gates`` row per target.
+    """
+    if not post_ids:
+        return {}
+    from sqlalchemy import bindparam
+    rows = (await session.execute(
+        text(
+            "SELECT post_id, gates FROM post_gate_requests "
+            "WHERE post_id IN :ids AND status = 'pending'"
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"ids": list(post_ids)},
+    )).fetchall()
+    out: dict = {}
+    for pid, raw in rows:
+        if pid is None:
+            continue
+        bucket = out.setdefault(int(pid), {})
+        for g in _decode_gates_json(raw):
+            at = g["action_type"]
+            bucket[at] = bucket.get(at, 0) + max(1, len(g["targets"]))
+    return out
 
 
 async def expire_action_gates_for_post(session, post_id: int) -> None:
@@ -1170,8 +1306,9 @@ async def edit_post(
     content: str,
     user_id: int,
     is_admin: bool,
+    gates: Optional[list] = None,
 ) -> dict:
-    """Edit a post's text (FEAT-159, Phase A). Returns the PostEditResponse dict.
+    """Edit a post's text (FEAT-159). Returns the PostEditResponse dict.
 
     Authorisation and the two limits (see FEAT-159 sections 3.3 / 3.4):
 
@@ -1218,9 +1355,19 @@ async def edit_post(
     awarded at publication, and recomputing it would make "keep appending text"
     a farming route.
 
-    The symbol budget of the post's existing gates is re-checked here as well
-    (section 3.6): an edit may never leave the text shorter than the gates it
-    already bought. See ``gate_list_for_post``.
+    The symbol budget is re-checked here over the post's ENTIRE gate set
+    (section 3.6): every ``action_gates`` row of **every** status, plus the
+    gates inside any **pending** ``post_gate_requests`` row, plus the gates
+    being requested now — merged by ``action_type`` with a union of targets.
+    Validating only the newly requested gates is the single most exploitable
+    path in this feature: a 1000-character post that already spent its budget on
+    five gates could otherwise "add" five more for free.
+
+    **Phase B — retro-added gates never fire here.** ``gates`` are *requested*,
+    not granted: this function writes a ``post_gate_requests`` row and
+    deliberately never calls ``create_action_gates``. The mechanic unlocks only
+    when an admin approves the request. Gates the post already owns cannot be
+    named, changed or removed through this path at all.
     """
     post_row = (await session.execute(
         text(
@@ -1280,17 +1427,92 @@ async def edit_post(
             detail=f"Минимальная длина поста — {MIN_POST_LENGTH} символов (сейчас: {char_count})",
         )
 
-    # The symbol budget (FEAT-159, section 3.6). Gates are bought with text
-    # length, so an edit may not strip the text that paid for the gates the post
-    # already holds — otherwise a 1000-character post buys five combat gates and
-    # is then cut back to 307. The budget is read from ``action_gates``, never
-    # from a request payload, which makes it immune to which path created the
-    # post. It applies to admins too: the 2026-09-13 ruling lets an admin bypass
-    # the hour and the "someone posted after" limits, not content validation —
-    # exactly like the minimum-length check just above.
+    # ------------------------------------------------------------------
+    #  Retro-added gates (FEAT-159, section 3.7) — validated, then requested.
+    # ------------------------------------------------------------------
+    requested_gates: list = []
+    for g in (gates or []):
+        if isinstance(g, dict):
+            at, tg = g.get("action_type"), g.get("targets")
+        else:
+            at, tg = getattr(g, "action_type", None), getattr(g, "targets", None)
+        requested_gates.append(
+            {"action_type": at, "targets": [int(t) for t in (tg or [])]}
+        )
+    # Unknown action type / no target — the same wording the create path uses.
+    validate_gate_shape(requested_gates)
+
     existing_gates = await gate_list_for_post(session, post_id)
-    if existing_gates:
-        required = required_symbols_for_gates(existing_gates)
+    pending_requests = await pending_gate_requests_for_post(session, post_id)
+    pending_gates = merge_gate_lists(*[gl for _, gl in pending_requests])
+
+    if requested_gates:
+        # One pending request per post. No unique index enforces this (MySQL has
+        # no partial unique index and UNIQUE(post_id, status) would forbid a
+        # second *rejected* row), so the guard is code-level. It is only a
+        # convenience: a duplicate that slipped through still could not buy
+        # anything, because pending requests count toward the budget below.
+        if pending_requests:
+            raise HTTPException(
+                status_code=409,
+                detail="Заявка на намерение по этому посту уже на рассмотрении",
+            )
+        # A gate is granted to the post's character on the post's location, so
+        # asking for one after walking away is asking to resurrect a right that
+        # leaving the location destroys.
+        char_loc = (await session.execute(
+            text("SELECT current_location_id FROM characters WHERE id = :cid"),
+            {"cid": post_row.character_id},
+        )).fetchone()
+        if not char_loc or char_loc[0] is None or int(char_loc[0]) != int(post_row.location_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Чтобы добавить намерение, нужно находиться в этой локации",
+            )
+        # Existing gates can neither be changed nor removed through this
+        # endpoint, and naming one again is either a client bug or an attempt to
+        # re-buy a consumed gate. Reject it loudly rather than merging silently.
+        already: Dict[str, set] = {
+            g["action_type"]: set(g["targets"])
+            for g in merge_gate_lists(existing_gates, pending_gates)
+        }
+        for g in requested_gates:
+            seen = set()
+            for t in g["targets"]:
+                if t in seen:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Цель указана дважды в одном намерении",
+                    )
+                seen.add(t)
+                if t in already.get(g["action_type"], set()):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Гейт на эту цель уже есть в посте",
+                    )
+
+    # The symbol budget (FEAT-159, section 3.6). Gates are bought with text
+    # length, so an edit may neither strip the text that paid for the gates the
+    # post already holds — otherwise a 1000-character post buys five combat
+    # gates and is then cut back to 307 — nor buy new ones the existing text has
+    # already been spent on. The three sources are merged by ``action_type``
+    # with a UNION of targets, so nothing is double-charged and nothing is free:
+    #
+    #   1. every ``action_gates`` row of the post, of EVERY status — `expired`
+    #      included, so leaving and re-entering the location cannot refund it;
+    #   2. the gates inside any pending ``post_gate_requests`` row — otherwise
+    #      the budget doubles through the request queue instead of the gate
+    #      table;
+    #   3. the gates being requested right now.
+    #
+    # Read from the database, never from a request payload, which makes it
+    # immune to which path created the post. It applies to admins too: the
+    # 2026-09-13 ruling lets an admin bypass the hour and the "someone posted
+    # after" limits, not content validation — exactly like the minimum-length
+    # check just above.
+    merged_gates = merge_gate_lists(existing_gates, pending_gates, requested_gates)
+    if merged_gates:
+        required = required_symbols_for_gates(merged_gates)
         if char_count < required:
             raise HTTPException(
                 status_code=400,
@@ -1307,6 +1529,29 @@ async def edit_post(
         ),
         {"content": content, "uid": user_id, "pid": post_id},
     )
+
+    # The request row, written in the SAME transaction as the text it is about:
+    # an edit that files a request but whose text fails to save would leave the
+    # admin approving gates for content that was never published.
+    #
+    # NOTE: no ``create_action_gates`` call here, on purpose. A retro-added gate
+    # grants nothing until an admin approves the request (section 3.7).
+    gate_request_id = None
+    if requested_gates:
+        gate_request = PostGateRequest(
+            post_id=post_id,
+            character_id=post_row.character_id,
+            location_id=post_row.location_id,
+            user_id=user_id,
+            gates=requested_gates,
+            status="pending",
+        )
+        session.add(gate_request)
+        await session.flush()
+        # Read the id BEFORE the commit: with expire_on_commit the attribute
+        # would need a lazy refresh afterwards, which async SQLAlchemy forbids.
+        gate_request_id = int(gate_request.id)
+
     await session.commit()
 
     saved = (await session.execute(
@@ -1324,6 +1569,10 @@ async def edit_post(
         "created_at": saved.created_at,
         "edited_at": saved.edited_at,
         "edited_by_admin": not is_owner,
+        # Present only when the edit asked for new gates; always "pending" on
+        # creation — approval happens on the moderation side.
+        "gate_request_id": gate_request_id,
+        "gate_request_status": "pending" if gate_request_id is not None else None,
     }
 
 
@@ -1370,12 +1619,14 @@ async def get_latest_posts_details(session: AsyncSession, limit: int = 5) -> Lis
     # Batch-fetch likes for all surfaced posts.
     post_ids = [d["post_id"] for d in detailed_posts]
     likes_map = await get_likes_for_posts(session, post_ids)
+    pending_gates_map = await pending_gates_for_posts(session, post_ids)
 
     for detailed, post in zip(detailed_posts, posts):
         detailed["location_id"] = post.location_id
         detailed["location_name"] = location_names.get(post.id, "")
         detailed["likes_count"] = likes_map.get(post.id, {}).get("likes_count", 0)
         detailed["liked_by"] = likes_map.get(post.id, {}).get("liked_by", [])
+        detailed["pending_gates"] = pending_gates_map.get(post.id, {})
 
     return detailed_posts
 
@@ -1920,11 +2171,16 @@ async def get_client_location_details(session: AsyncSession, location_id: int, u
     post_ids = [p["post_id"] for p in detailed_posts]
     likes_map = await get_likes_for_posts(session, post_ids)
     gates_map = await gates_for_posts(session, post_ids)
+    # FEAT-159 (T10): gates still awaiting moderation, fetched in ONE batch
+    # alongside the granted ones — a per-post query here would put N round-trips
+    # on every location page.
+    pending_gates_map = await pending_gates_for_posts(session, post_ids)
     for post_dict in detailed_posts:
         pid = post_dict["post_id"]
         post_dict["likes_count"] = likes_map.get(pid, {}).get("likes_count", 0)
         post_dict["liked_by"] = likes_map.get(pid, {}).get("liked_by", [])
         post_dict["gates"] = gates_map.get(pid, {})
+        post_dict["pending_gates"] = pending_gates_map.get(pid, {})
 
     # 6. Получаем лут в локации
     loot_items = await get_location_loot(session, location_id)
@@ -2946,6 +3202,19 @@ async def _close_sibling_moderation_rows(
         ),
         {"p": post_id, "u": admin_user_id, "skip": skip_report_id},
     )
+    # FEAT-159: a pending gate request about a post that no longer exists can
+    # only ever be rejected — approving it would call `create_action_gates`
+    # with a dangling `post_id`, handing out rights the text that paid for them
+    # no longer backs. FEAT-158's rule stands: a post removed by moderation
+    # leaves no rights behind.
+    await session.execute(
+        text(
+            "UPDATE post_gate_requests "
+            "SET status='rejected', reviewed_by_user_id=:u, reviewed_at=NOW() "
+            "WHERE post_id = :p AND status = 'pending'"
+        ),
+        {"p": post_id, "u": admin_user_id},
+    )
 
 
 async def review_deletion_request(
@@ -3022,6 +3291,343 @@ async def review_report(
     await session.commit()
     await session.refresh(report)
     return report
+
+
+# -------------------------------
+#   GATE REQUEST MODERATION (FEAT-159, T9)
+# -------------------------------
+
+# Which kind of entity a gate target id points at. combat / pvp / npc_dialogue
+# all name a row in `characters` (mobs and NPCs are characters with is_npc=1 —
+# see battle-service `_validate_location_mob`); gathering names a local
+# `gathering_nodes` row; dungeon names a `dungeons` row owned by
+# dungeon-service in the same database.
+_GATE_TARGET_KIND = {
+    "combat": "character",
+    "pvp": "character",
+    "npc_dialogue": "character",
+    "gathering": "gathering_node",
+    "dungeon": "dungeon",
+}
+
+
+async def _resolve_gate_targets(session: AsyncSession, items: List[dict]) -> List[dict]:
+    """Fill ``targets_resolved`` on a gate-request queue page (FEAT-159, 3.9).
+
+    ``{action_type: [{"id", "name", "state"}]}`` — the admin sees each target's
+    real name and current state so a human can judge whether the retro-added
+    intent is honest. Section 3.9 ruled that we **show, not block**: there is no
+    reliable way to know when a target entered a location, so a human decides.
+
+    Therefore it must never reject a request and never 500. Every lookup is
+    wrapped; on failure the target degrades to a bare id with an unknown state,
+    exactly the way ``_enrich_moderation_items`` degrades to «Персонаж #id». A
+    mob legitimately killed between the request and the review must not
+    auto-deny an otherwise valid request.
+    """
+    if not items:
+        return items
+
+    char_ids, node_ids, dungeon_ids = set(), set(), set()
+    for it in items:
+        for g in (it.get("gates") or []):
+            kind = _GATE_TARGET_KIND.get(g.get("action_type"))
+            for t in (g.get("targets") or []):
+                if t is None:
+                    continue
+                if kind == "character":
+                    char_ids.add(int(t))
+                elif kind == "gathering_node":
+                    node_ids.add(int(t))
+                elif kind == "dungeon":
+                    dungeon_ids.add(int(t))
+
+    async def _rows(sql: str, ids: set):
+        """One best-effort batch read. A failure (missing table, driver error)
+        rolls the read-only transaction back so the next lookup still works."""
+        if not ids:
+            return []
+        from sqlalchemy import bindparam
+        try:
+            res = await session.execute(
+                text(sql).bindparams(bindparam("ids", expanding=True)),
+                {"ids": list(ids)},
+            )
+            return res.fetchall()
+        except Exception as exc:
+            logger.warning("gate target resolution failed (%s...): %s", sql[:40], exc)
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            return []
+
+    chars = {}
+    for r in await _rows(
+        "SELECT id, name, is_npc, npc_status, current_location_id "
+        "FROM characters WHERE id IN :ids",
+        char_ids,
+    ):
+        chars[int(r[0])] = {
+            "name": r[1], "is_npc": bool(r[2]),
+            "npc_status": r[3], "location_id": r[4],
+        }
+    # Mob liveness lives in active_mobs, not in characters.npc_status.
+    mobs = {}
+    for r in await _rows(
+        "SELECT character_id, status FROM active_mobs WHERE character_id IN :ids",
+        char_ids,
+    ):
+        mobs[int(r[0])] = r[1]
+
+    nodes = {}
+    for r in await _rows(
+        "SELECT id, node_name, location_id, is_enabled FROM gathering_nodes WHERE id IN :ids",
+        node_ids,
+    ):
+        nodes[int(r[0])] = {"name": r[1], "location_id": r[2], "enabled": bool(r[3])}
+
+    dungeons = {}
+    for r in await _rows(
+        "SELECT id, name, location_id, is_active FROM dungeons WHERE id IN :ids",
+        dungeon_ids,
+    ):
+        dungeons[int(r[0])] = {"name": r[1], "location_id": r[2], "active": bool(r[3])}
+
+    def _where(entity_location_id, loc_id) -> str:
+        if entity_location_id is None or loc_id is None:
+            return ", локация неизвестна"
+        return (
+            ", в этой локации"
+            if int(entity_location_id) == int(loc_id)
+            else ", в другой локации"
+        )
+
+    for it in items:
+        loc_id = it.get("location_id")
+        resolved = {}
+        for g in (it.get("gates") or []):
+            at = g.get("action_type")
+            kind = _GATE_TARGET_KIND.get(at)
+            bucket = resolved.setdefault(at, [])
+            for t in (g.get("targets") or []):
+                if t is None:
+                    bucket.append({"id": None, "name": None, "state": "цель не указана"})
+                    continue
+                tid = int(t)
+                name, state = None, "цель не найдена"
+                if kind == "character":
+                    info = chars.get(tid)
+                    if info:
+                        name = info["name"]
+                        if tid in mobs:
+                            state = {
+                                "alive": "моб, жив",
+                                "in_battle": "моб, в бою",
+                                "dead": "моб, мёртв",
+                            }.get(mobs[tid], "моб")
+                        elif info["is_npc"]:
+                            state = "НПС, мёртв" if info["npc_status"] == "dead" else "НПС"
+                        else:
+                            state = "игрок"
+                        state += _where(info["location_id"], loc_id)
+                elif kind == "gathering_node":
+                    info = nodes.get(tid)
+                    if info:
+                        name = info["name"]
+                        state = "узел сбора" if info["enabled"] else "узел сбора, отключён"
+                        state += _where(info["location_id"], loc_id)
+                elif kind == "dungeon":
+                    info = dungeons.get(tid)
+                    if info:
+                        name = info["name"]
+                        state = "подземелье" if info["active"] else "подземелье, отключено"
+                        state += _where(info["location_id"], loc_id)
+                else:
+                    state = "неизвестный тип намерения"
+                bucket.append({"id": tid, "name": name, "state": state})
+        it["targets_resolved"] = resolved
+    return items
+
+
+async def get_pending_gate_requests(session: AsyncSession) -> List[dict]:
+    """List pending retro-gate requests for the moderation queue (FEAT-159).
+
+    Same shape and the same enrichment helper as the deletion-request and report
+    queues (``_enrich_moderation_items``), plus the gate payload and
+    ``targets_resolved``.
+    """
+    result = await session.execute(
+        select(PostGateRequest, Post, Location)
+        .outerjoin(Post, PostGateRequest.post_id == Post.id)
+        .outerjoin(Location, PostGateRequest.location_id == Location.id)
+        .where(PostGateRequest.status == "pending")
+        .order_by(PostGateRequest.created_at.desc())
+    )
+    items = []
+    for req, post, location in result.all():
+        items.append({
+            "id": req.id,
+            "post_id": req.post_id,
+            "user_id": req.user_id,
+            "character_id": req.character_id,
+            "location_id": req.location_id,
+            "gates": _decode_gates_json(req.gates),
+            "status": req.status,
+            "created_at": req.created_at,
+            "reviewed_at": req.reviewed_at,
+            "post_content": post.content if post else None,
+            # `post_character_id` is what `_enrich_moderation_items` resolves;
+            # it falls back to the request's own character because an admin may
+            # have filed the request while editing somebody else's post.
+            "post_character_id": post.character_id if post else req.character_id,
+            "post_location_id": post.location_id if post else req.location_id,
+            "post_created_at": post.created_at if post else None,
+            "post_edited_at": post.edited_at if post else None,
+            "post_location_name": location.name if location else None,
+        })
+    items = await _enrich_moderation_items(items)
+    return await _resolve_gate_targets(session, items)
+
+
+async def review_gate_request(
+    session: AsyncSession, request_id: int, action: str, admin_user_id: int
+) -> dict:
+    """Approve or reject a retro-gate request (FEAT-159, sections 3.7 / 3.8).
+
+    **Approval re-checks everything, in this order, and refuses rather than
+    grants if any step fails:**
+
+    1. the request is still ``pending`` — a second reviewer must not grant twice;
+    2. the post still exists (``post_id`` survives deletion as NULL, migration
+       037) — gates for a deleted post would be rights nothing backs;
+    3. the character is still in the request's location — leaving a location is
+       what kills gates (``expire_gate_requests``), and an approval must not
+       resurrect one;
+    4. **the full merged symbol budget again**, over the post's *current* text.
+       The post can have been edited and shortened between the request and the
+       review, and approving then would hand out gates the text no longer pays
+       for. Assembled by the same ``merge_gate_lists`` +
+       ``required_symbols_for_gates`` pair as ``edit_post`` — deliberately not a
+       second, drifting summation.
+
+    Only then are the gates created. **Rejection leaves nothing behind** — the
+    status, the reviewer and the timestamp, and no ``action_gates`` row at all
+    (FEAT-158's rule: a rejected decision grants no rights).
+
+    The status UPDATE is issued *before* ``create_action_gates`` so that the
+    commit inside that function makes both writes atomic: there is no window in
+    which gates exist against a request still marked ``pending``.
+    """
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="Действие должно быть 'approve' или 'reject'")
+
+    row = (await session.execute(
+        text(
+            "SELECT id, post_id, character_id, location_id, user_id, gates, status "
+            "FROM post_gate_requests WHERE id = :rid FOR UPDATE"
+        ),
+        {"rid": request_id},
+    )).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    # 1. still pending
+    if row.status != "pending":
+        raise HTTPException(status_code=400, detail="Заявка уже рассмотрена")
+
+    post_id = row.post_id
+    requested_gates = _decode_gates_json(row.gates)
+
+    if action == "approve":
+        # 2. the post still exists
+        if post_id is None:
+            raise HTTPException(
+                status_code=409, detail="Пост удалён — заявку можно только отклонить"
+            )
+        post = (await session.execute(
+            text("SELECT id, content FROM posts WHERE id = :pid FOR UPDATE"),
+            {"pid": post_id},
+        )).fetchone()
+        if not post:
+            raise HTTPException(
+                status_code=409, detail="Пост удалён — заявку можно только отклонить"
+            )
+
+        # 3. the character is still in the location the gate would be granted on
+        char_loc = (await session.execute(
+            text("SELECT current_location_id FROM characters WHERE id = :cid"),
+            {"cid": row.character_id},
+        )).fetchone()
+        if (
+            not char_loc
+            or char_loc[0] is None
+            or int(char_loc[0]) != int(row.location_id)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Персонаж покинул локацию — заявка больше не действительна",
+            )
+
+        # 4. the full merged budget, against the post's CURRENT text
+        existing_gates = await gate_list_for_post(session, post_id)
+        other_pending = [
+            gl for rid, gl in await pending_gate_requests_for_post(session, post_id)
+            if int(rid) != int(request_id)
+        ]
+        merged_gates = merge_gate_lists(existing_gates, *other_pending, requested_gates)
+        char_count = len(strip_html_tags(post.content or ""))
+        required = required_symbols_for_gates(merged_gates)
+        if char_count < required:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Текст поста больше не оплачивает эти действия: нужно минимум "
+                    f"{required} символов (сейчас: {char_count})"
+                ),
+            )
+
+        await session.execute(
+            text(
+                "UPDATE post_gate_requests SET status='approved', "
+                "reviewed_by_user_id=:u, reviewed_at=NOW() WHERE id = :rid"
+            ),
+            {"u": admin_user_id, "rid": request_id},
+        )
+        # The only place approval differs from a normal post: the existing
+        # function, unchanged. Its commit commits the status update too.
+        await create_action_gates(
+            session, row.character_id, row.location_id, post_id, requested_gates
+        )
+    else:
+        # Rejection: status, reviewer, timestamp — and nothing else.
+        await session.execute(
+            text(
+                "UPDATE post_gate_requests SET status='rejected', "
+                "reviewed_by_user_id=:u, reviewed_at=NOW() WHERE id = :rid"
+            ),
+            {"u": admin_user_id, "rid": request_id},
+        )
+
+    await session.commit()
+
+    saved = (await session.execute(
+        text(
+            "SELECT id, post_id, character_id, location_id, user_id, gates, status, "
+            "       created_at, reviewed_at FROM post_gate_requests WHERE id = :rid"
+        ),
+        {"rid": request_id},
+    )).fetchone()
+    return {
+        "id": int(saved.id),
+        "post_id": saved.post_id,
+        "user_id": saved.user_id,
+        "character_id": saved.character_id,
+        "location_id": saved.location_id,
+        "gates": _decode_gates_json(saved.gates),
+        "status": saved.status,
+        "created_at": saved.created_at,
+        "reviewed_at": saved.reviewed_at,
+    }
 
 
 # -------------------------------

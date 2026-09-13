@@ -771,19 +771,11 @@ async def update_location_neighbors(
 # --------------------------------------------------------------------
 def _validate_intent_post(char_count: int, gate_list: list) -> None:
     """FEAT-145 v2: every gate needs at least one target, and the post must be
-    long enough for the summed per-target cost (floored at the 300 minimum)."""
-    _labels = {
-        "combat": "нападения на мобов", "npc_dialogue": "диалога с НПС",
-        "gathering": "сбора", "dungeon": "входа в подземелье", "pvp": "PvP",
-    }
-    for g in gate_list:
-        if g["action_type"] not in crud.GATED_POST_TYPES:
-            raise HTTPException(status_code=400, detail="Неизвестный тип гейта")
-        if not g["targets"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Для {_labels.get(g['action_type'], g['action_type'])} выберите цель в посте",
-            )
+    long enough for the summed per-target cost (floored at the 300 minimum).
+
+    The shape half lives in ``crud.validate_gate_shape`` so the edit path
+    (FEAT-159) rejects a malformed gate with exactly the same wording."""
+    crud.validate_gate_shape(gate_list)
     required = crud.required_symbols_for_gates(gate_list)
     if char_count < required:
         raise HTTPException(
@@ -1012,8 +1004,14 @@ async def edit_post_route(
     XP is **not** recomputed: it was awarded at publication, and recomputing it
     would turn "keep appending text" into a farming route.
 
-    Phase B will add an optional ``gates`` field to this same endpoint; this
-    contract is not broken by it.
+    **Gates (Phase B).** ``body.gates`` are gates to ADD, and they do not fire:
+    the edit writes a ``post_gate_requests`` row and nothing else, so a gate the
+    player forgot at publication unlocks its mechanic only once an admin
+    approves the request. Gates the post already owns cannot be named, changed
+    or removed here. The symbol budget is recomputed over ALL of them at once —
+    existing ``action_gates`` rows of every status, the gates of any pending
+    request, and the newly requested ones — so a post cannot buy a second set of
+    gates with text it has already spent.
     """
     return await crud.edit_post(
         session,
@@ -1021,6 +1019,7 @@ async def edit_post_route(
         content=body.content,
         user_id=current_user.id,
         is_admin=getattr(current_user, "role", None) == "admin",
+        gates=body.gates,
     )
 
 
@@ -1380,6 +1379,13 @@ async def move_and_post(
             await crud.expire_action_gates(session, movement.character_id, int(current_location))
         except Exception as e:
             logger.warning(f"expire_action_gates failed for {movement.character_id}: {e}")
+        # ...and with them any gate request still awaiting moderation there
+        # (FEAT-159, section 3.8): leaving the location is what kills gates,
+        # so a pending request must not survive as a way to resurrect one.
+        try:
+            await crud.expire_gate_requests(session, movement.character_id, int(current_location))
+        except Exception as e:
+            logger.warning(f"expire_gate_requests failed for {movement.character_id}: {e}")
         # Count unique locations visited (by posts) and use set_max
         unique_count = await _count_unique_locations(session, movement.character_id)
         if unique_count > 0:
@@ -1603,6 +1609,13 @@ async def quick_move(
             await crud.expire_action_gates(session, body.character_id, int(current_location))
         except Exception as e:
             logger.warning(f"expire_action_gates failed for {body.character_id}: {e}")
+        # ...and with them any gate request still awaiting moderation there
+        # (FEAT-159, section 3.8): leaving the location is what kills gates,
+        # so a pending request must not survive as a way to resurrect one.
+        try:
+            await crud.expire_gate_requests(session, body.character_id, int(current_location))
+        except Exception as e:
+            logger.warning(f"expire_gate_requests failed for {body.character_id}: {e}")
         unique_count = await _count_unique_locations(session, body.character_id)
         if unique_count > 0:
             move_set_max["locations_visited"] = unique_count
@@ -2243,6 +2256,51 @@ async def review_report(
         "created_at": report.created_at,
         "reviewed_at": report.reviewed_at,
     }
+
+
+# --------------------------------------------------------------------
+# GATE REQUEST MODERATION — Admin endpoints (FEAT-159)
+# --------------------------------------------------------------------
+@router.get(
+    "/admin/moderation/gate-requests",
+    response_model=List[schemas.PostGateRequestRead],
+)
+async def get_gate_requests(
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("moderation:read")),
+):
+    """Список заявок на намерения, добавленные при редактировании поста.
+
+    Та же секция модерации и те же разрешения, что у запросов на удаление и
+    жалоб (FEAT-158) — новых разрешений не заводим. Каждая заявка приходит с
+    `targets_resolved`: имя и состояние каждой цели, чтобы админ мог оценить
+    намерение. Это подсказка, а не проверка (FEAT-159, раздел 3.9) — сбой
+    резолва не отклоняет заявку и не ломает список.
+    """
+    return await crud.get_pending_gate_requests(session)
+
+
+@router.put(
+    "/admin/moderation/gate-requests/{request_id}/review",
+    response_model=schemas.PostGateRequestRead,
+)
+async def review_gate_request(
+    request_id: int,
+    body: schemas.PostModerationReview,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("moderation:review")),
+):
+    """Модератор рассматривает заявку на намерение (approve/reject).
+
+    При одобрении заявка перепроверяется заново, по порядку: она всё ещё
+    `pending` -> пост на месте -> персонаж всё ещё в локации -> общий бюджет
+    символов по всем гейтам поста снова сходится. Только после этого гейты
+    создаются. Отклонение не оставляет ничего — ни строк в `action_gates`, ни
+    частичных прав (правило FEAT-158).
+    """
+    return await crud.review_gate_request(
+        session, request_id, body.action, current_user.id
+    )
 
 
 # --------------------------------------------------------------------

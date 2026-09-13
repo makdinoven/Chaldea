@@ -61,6 +61,7 @@ from models import (  # noqa: E402
     Location,
     Post,
     PostDeletionRequest,
+    PostGateRequest,
     PostReport,
 )
 from main import app  # noqa: E402
@@ -141,6 +142,9 @@ async def session():
             ActionGate.__table__,
             PostDeletionRequest.__table__,
             PostReport.__table__,
+            # FEAT-159: `_close_sibling_moderation_rows` now also closes pending
+            # gate requests, so the table must exist for the delete paths.
+            PostGateRequest.__table__,
         ):
             await conn.run_sync(table.create)
 

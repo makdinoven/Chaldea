@@ -82,7 +82,7 @@ Chaldea - это браузерная RPG-игра с микросервисно
 | character-attributes-service | `character_attributes` |
 | skills-service | `skills`, `skill_ranks`, `skill_rank_damages`, `skill_rank_effects`, `character_skills` |
 | inventory-service | `items`, `character_inventory`, `equipment_slots`, `gathering_skills`, `gathering_skill_ranks`, `character_gathering_skills` (FEAT-128) |
-| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154), `post_drafts` (FEAT-156) |
+| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154), `post_drafts` (FEAT-156), `post_gate_requests` (FEAT-159) |
 | notification-service | `notifications` |
 | battle-service | `battles`, `battle_participants`, `battle_turns` |
 

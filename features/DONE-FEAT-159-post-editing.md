@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | IN_PROGRESS |
+| **Status** | DONE |
 | **Created** | 2026-09-13 |
 | **Author** | PM (Orchestrator) |
 | **Priority** | HIGH |
@@ -713,21 +713,21 @@ Neither blocks implementation; both are recorded so the decision is explicit rat
 
 | # | Description | Agent | Status | Files | Depends On | Acceptance Criteria |
 |---|-------------|-------|--------|-------|------------|---------------------|
-| **T7** | Alembic migration **039** creating `post_gate_requests` exactly as specified in **3.7** (FKs, indexes, `post_id` nullable / `SET NULL`), plus the `PostGateRequest` model. `down_revision` = `038`. | Backend Developer | TODO | `services/locations-service/app/alembic/versions/039_post_gate_requests.py` (new), `services/locations-service/app/models.py` | T1 | `upgrade head` / `downgrade -1` both succeed. Deleting a post nulls `post_id` instead of removing the row. `python -m py_compile` passes. |
-| **T8** | Accept `gates` on the edit endpoint. Add the **pure** helper `crud.merge_gate_lists(...)` and implement the budget rule of **3.6** in full: existing `action_gates` rows of **every** status + gates inside any `pending` request + the newly requested ones, merged by `action_type` with a **union** of targets; duplicate target → 400; one pending request per post → 409; gate requests require the character to be in the post's location → 403. Create the `post_gate_requests` row — **never** call `create_action_gates` here. Return `gate_request_id` / `gate_request_status`. | Backend Developer | TODO | `services/locations-service/app/main.py`, `services/locations-service/app/crud.py`, `services/locations-service/app/schemas.py` | T2, T7 | A 1000-char post with five existing gates **cannot** add a sixth; the 400 names the required and actual counts. No `action_gates` row is created by an edit. Second pending request → 409. Existing gates cannot be named, changed or removed through this endpoint. `python -m py_compile` passes. |
-| **T9** | Admin side per **3.7 / 3.8**: `GET /locations/admin/moderation/gate-requests` (`moderation:read`) and `PUT .../gate-requests/{id}/review` (`moderation:review`). Approve re-checks, in order: still pending → post alive → character still in the location → **the full merged budget again** → then `create_action_gates`. Reject leaves **nothing** behind. Add `crud.expire_gate_requests(character_id, location_id)` and call it beside the existing `expire_action_gates` calls at `main.py:1341` and `main.py:1564`. Extend `_close_sibling_moderation_rows` to close pending gate requests as `rejected` when a post is deleted. Add `targets_resolved` enrichment (best-effort, never rejects, never 500s). | Backend Developer | TODO | `services/locations-service/app/main.py`, `services/locations-service/app/crud.py`, `services/locations-service/app/schemas.py` | T8 | Approve creates exactly the requested gates and they are then honoured by `check_action_gate`. Reject creates none. Leaving the location expires the pending request. Deleting the post rejects it. Approving a request whose post was shortened below the merged budget → 409. Enrichment failure degrades to bare ids. `python -m py_compile` passes. |
-| **T10** | Surface `pending_gates` (`{action_type: count}`) on `ClientPost` via a batch query alongside `gates_for_posts` (`crud.py:1059-1076`), wired into the client-details assembly (`crud.py:1699-1704`) and the latest-posts widget. | Backend Developer | TODO | `services/locations-service/app/crud.py`, `services/locations-service/app/schemas.py` | T7 | A post with a pending request reports it; approved/rejected/expired requests do not appear. Additive, default `{}`. `python -m py_compile` passes. |
-| **T11** | **QA (mandatory).** pytest for T8–T10. **The budget-doubling exploit is a named, explicit test case** — a post that has already spent its length on gates must not be able to buy more by editing, including via the `expired`-status path and via a second pending request. Also: `merge_gate_lists` tested **directly as a pure function** (union, duplicate detection, cost summation); approve creates gates, reject creates none; approve after the player left → 409; approve after the post was shortened → 409; post deleted → request rejected; leaving the location expires the request; `moderation:read` / `moderation:review` enforced (no permission → 403). | QA Test | TODO | `services/locations-service/app/tests/test_post_gate_requests.py` (new) | T8, T9, T10 | All new tests pass; the full locations-service suite stays green. The exploit test fails against a naive "validate only the new gates" implementation — verify that it does by temporarily breaking the rule. |
-| **T12** | Frontend Phase B in the edit modal: existing gates as locked/checked/non-interactive chips with the Russian tooltip; new gates selectable with the «Появится после одобрения администратором» hint; the counter's `requiredSymbols` computed over locked **+** new; after a successful save with new gates, tell the player the request went to moderation; a «на рассмотрении» badge on `PostCard` driven by `pending_gates`. | Frontend Developer | TODO | `.../LocationPage/PostEditModal.tsx`, `.../PostCard.tsx`, `.../types.ts`, `.../LocationPage.tsx` | T5, T8, T10 | A locked gate cannot be unticked. The counter matches the server's required figure (no false "you may save"). The pending badge appears and disappears on approval. Tailwind only, no `React.FC`, 360 px intact. `npx tsc --noEmit` and `npm run build` pass. |
-| **T13** | Third tab «Заявки на намерения» in `AdminModerationPage.tsx`, reusing `ModerationCard`, `errorMessage` and `isPostMissing`. Card shows post text, author, requested gates with `targets_resolved` names, and Одобрить / Отклонить. Handle the 409s from T9 by showing the server's Russian `detail` and refreshing the list. | Frontend Developer | TODO | `services/frontend/app-chaldea/src/components/AdminModerationPage/AdminModerationPage.tsx` | T9 | Tab lists pending requests with counts; approve and reject both work and remove the card; every error path shows a Russian message. Tailwind only, no `React.FC`, 360 px intact. `npx tsc --noEmit` and `npm run build` pass. |
+| **T7** | Alembic migration **039** creating `post_gate_requests` exactly as specified in **3.7** (FKs, indexes, `post_id` nullable / `SET NULL`), plus the `PostGateRequest` model. `down_revision` = `038`. | Backend Developer | DONE | `services/locations-service/app/alembic/versions/039_post_gate_requests.py` (new), `services/locations-service/app/models.py` | T1 | `upgrade head` / `downgrade -1` both succeed. Deleting a post nulls `post_id` instead of removing the row. `python -m py_compile` passes. |
+| **T8** | Accept `gates` on the edit endpoint. Add the **pure** helper `crud.merge_gate_lists(...)` and implement the budget rule of **3.6** in full: existing `action_gates` rows of **every** status + gates inside any `pending` request + the newly requested ones, merged by `action_type` with a **union** of targets; duplicate target → 400; one pending request per post → 409; gate requests require the character to be in the post's location → 403. Create the `post_gate_requests` row — **never** call `create_action_gates` here. Return `gate_request_id` / `gate_request_status`. | Backend Developer | DONE | `services/locations-service/app/main.py`, `services/locations-service/app/crud.py`, `services/locations-service/app/schemas.py` | T2, T7 | A 1000-char post with five existing gates **cannot** add a sixth; the 400 names the required and actual counts. No `action_gates` row is created by an edit. Second pending request → 409. Existing gates cannot be named, changed or removed through this endpoint. `python -m py_compile` passes. |
+| **T9** | Admin side per **3.7 / 3.8**: `GET /locations/admin/moderation/gate-requests` (`moderation:read`) and `PUT .../gate-requests/{id}/review` (`moderation:review`). Approve re-checks, in order: still pending → post alive → character still in the location → **the full merged budget again** → then `create_action_gates`. Reject leaves **nothing** behind. Add `crud.expire_gate_requests(character_id, location_id)` and call it beside the existing `expire_action_gates` calls at `main.py:1341` and `main.py:1564`. Extend `_close_sibling_moderation_rows` to close pending gate requests as `rejected` when a post is deleted. Add `targets_resolved` enrichment (best-effort, never rejects, never 500s). | Backend Developer | DONE | `services/locations-service/app/main.py`, `services/locations-service/app/crud.py`, `services/locations-service/app/schemas.py` | T8 | Approve creates exactly the requested gates and they are then honoured by `check_action_gate`. Reject creates none. Leaving the location expires the pending request. Deleting the post rejects it. Approving a request whose post was shortened below the merged budget → 409. Enrichment failure degrades to bare ids. `python -m py_compile` passes. |
+| **T10** | Surface `pending_gates` (`{action_type: count}`) on `ClientPost` via a batch query alongside `gates_for_posts` (`crud.py:1059-1076`), wired into the client-details assembly (`crud.py:1699-1704`) and the latest-posts widget. | Backend Developer | DONE | `services/locations-service/app/crud.py`, `services/locations-service/app/schemas.py` | T7 | A post with a pending request reports it; approved/rejected/expired requests do not appear. Additive, default `{}`. `python -m py_compile` passes. |
+| **T11** | **QA (mandatory).** pytest for T8–T10. **The budget-doubling exploit is a named, explicit test case** — a post that has already spent its length on gates must not be able to buy more by editing, including via the `expired`-status path and via a second pending request. Also: `merge_gate_lists` tested **directly as a pure function** (union, duplicate detection, cost summation); approve creates gates, reject creates none; approve after the player left → 409; approve after the post was shortened → 409; post deleted → request rejected; leaving the location expires the request; `moderation:read` / `moderation:review` enforced (no permission → 403). | QA Test | DONE | `services/locations-service/app/tests/test_post_gate_requests.py` (new) | T8, T9, T10 | All new tests pass; the full locations-service suite stays green. The exploit test fails against a naive "validate only the new gates" implementation — verify that it does by temporarily breaking the rule. |
+| **T12** | Frontend Phase B in the edit modal: existing gates as locked/checked/non-interactive chips with the Russian tooltip; new gates selectable with the «Появится после одобрения администратором» hint; the counter's `requiredSymbols` computed over locked **+** new; after a successful save with new gates, tell the player the request went to moderation; a «на рассмотрении» badge on `PostCard` driven by `pending_gates`. | Frontend Developer | DONE | `.../LocationPage/PostEditModal.tsx`, `.../PostCard.tsx`, `.../types.ts`, `.../LocationPage.tsx` | T5, T8, T10 | A locked gate cannot be unticked. The counter matches the server's required figure (no false "you may save"). The pending badge appears and disappears on approval. Tailwind only, no `React.FC`, 360 px intact. `npx tsc --noEmit` and `npm run build` pass. |
+| **T13** | Third tab «Заявки на намерения» in `AdminModerationPage.tsx`, reusing `ModerationCard`, `errorMessage` and `isPostMissing`. Card shows post text, author, requested gates with `targets_resolved` names, and Одобрить / Отклонить. Handle the 409s from T9 by showing the server's Russian `detail` and refreshing the list. | Frontend Developer | DONE | `services/frontend/app-chaldea/src/components/AdminModerationPage/AdminModerationPage.tsx` | T9 | Tab lists pending requests with counts; approve and reject both work and remove the card; every error path shows a Russian message. Tailwind only, no `React.FC`, 360 px intact. `npx tsc --noEmit` and `npm run build` pass. |
 
 ### Closing
 
 | # | Description | Agent | Status | Files | Depends On | Acceptance Criteria |
 |---|-------------|-------|--------|-------|------------|---------------------|
 | **T14a** | **Phase A documentation only** (split out of T14 per review #2's recommendation, so Phase A does not ship undocumented). In `docs/services/locations-service.md`: the `PUT /locations/posts/{post_id}` contract with every guard and its Russian `detail`, the `id >` / SQL-`NOW()` choices, XP not recomputed, the unconditional `admin` bypass of the two limits (not of the content checks) and moderator ≠ admin; the `posts.edited_at` / `edited_by_user_id` columns and why not `updated_at ON UPDATE`; `ClientPost.edited_at` / the derived `edited_by_admin` with its degrade-to-`false`; the gate symbol budget **as enforced today** (`gate_list_for_post` over **all** statuses + `merge_gate_lists` + the check in `edit_post`); the nginx rate limit. In `docs/ISSUES.md`: the §3.9 MEDIUM follow-up. **No Phase-B content.** | Backend Developer | DONE | `docs/services/locations-service.md` (sections «Посты», «Таблицы БД»), `docs/ISSUES.md` | T2, T3 | Doc matches the real code (every file:line re-verified against source, not against section 3); the ISSUES entry names service, files and priority and duplicates nothing. |
-| **T14** | Documentation **(Phase B remainder)**: add `post_gate_requests`, the gate-request flow and the two moderation endpoints to the service doc. Extend the edit-endpoint section with the `gates` field, the merged budget over pending requests, and `ClientPost.pending_gates`. The Phase A half and the §3.9 `ISSUES.md` entry are already done in **T14a** — do not repeat them. | Backend Developer | TODO | `docs/services/locations-service.md` (sections «Посты», «Редактирование поста», «Таблицы БД», «Клиентские / Admin») | T9 | Doc reflects the shipped Phase B endpoints and the `post_gate_requests` table. |
-| **T15** | **Reviewer.** Re-run `python -m py_compile`, the full locations-service pytest suite, `npx tsc --noEmit` and `npm run build`. Live-verify: edit a post inside the window; confirm the marker; confirm a rejection leaves the text in the editor; confirm the budget exploit is actually blocked against a running service; confirm the moderation tab approves and rejects. Check the security checklist of **3.12** and the cross-service contracts of **3.11**. | Reviewer | TODO | — | T1–T14 | All automated checks green **and** live verification recorded with evidence. A review without both is invalid. |
+| **T14** | Documentation **(Phase B remainder)**: add `post_gate_requests`, the gate-request flow and the two moderation endpoints to the service doc. Extend the edit-endpoint section with the `gates` field, the merged budget over pending requests, and `ClientPost.pending_gates`. The Phase A half and the §3.9 `ISSUES.md` entry are already done in **T14a** — do not repeat them. | Backend Developer | DONE | `docs/services/locations-service.md` (sections «Посты», «Редактирование поста», «Таблицы БД», «Клиентские / Admin») | T9 | Doc reflects the shipped Phase B endpoints and the `post_gate_requests` table. |
+| **T15** | **Reviewer.** Re-run `python -m py_compile`, the full locations-service pytest suite, `npx tsc --noEmit` and `npm run build`. Live-verify: edit a post inside the window; confirm the marker; confirm a rejection leaves the text in the editor; confirm the budget exploit is actually blocked against a running service; confirm the moderation tab approves and rejects. Check the security checklist of **3.12** and the cross-service contracts of **3.11**. | Reviewer | DONE | — | T1–T14 | All automated checks green **and** live verification recorded with evidence. A review without both is invalid. |
 
 **Ordering note for PM:** T1–T6 are a complete, shippable feature on their own. If Phase B slips,
 Phase A can merge and the user gets what they asked for first.
@@ -1021,6 +1021,269 @@ the `expired` path, at the exact boundary, and for admins; the Phase A behaviour
 unchanged; 992 tests pass; and no failure path loses a player's text. The only outstanding
 item is documentation (note #2), which is a PM scoping decision, not a code defect.
 
+### Whole feature (Phase A + Phase B, T1–T14) — Review #3 — 2026-09-13
+
+**Result: PASS.** No blocking issue. The feature is ready to ship.
+
+Scope is the **whole** feature: Phase A (T1–T6, T14a — already committed) re-verified after
+Phase B landed on the same files, and Phase B (T7–T14, uncommitted) verified from scratch.
+Every check below was run by the Reviewer; none of the Backend Dev's, QA's or the earlier
+reviews' reported results were taken on trust.
+
+#### Automated Check Results
+
+| Check | Command (run by Reviewer) | Result |
+|---|---|---|
+| TypeScript | `docker exec frontend sh -c "cd /app && npx tsc --noEmit"` | **PASS** — exit 0, no output |
+| Frontend build | `docker exec frontend sh -c "cd /app && npm run build"` | **PASS** — `✓ built in 31.76s`; only the pre-existing >500 kB chunk warning |
+| `py_compile` | `main.py crud.py schemas.py models.py alembic/versions/038_post_edit_columns.py alembic/versions/039_post_gate_requests.py tests/test_post_editing.py tests/test_post_gate_requests.py tests/test_post_moderation.py tests/test_gate_revocation.py` | **PASS** — `PY_COMPILE_OK`, exit 0 |
+| pytest (full suite) | `docker exec locations-service sh -c "cd /app && python -m pytest tests/ -q"` | **PASS** — **`1057 passed, 3 warnings in 18.12s`**, zero failures — exactly the expected figure. Re-run after all live testing and cleanup: **`1057 passed`** again |
+| Alembic head | `docker exec locations-service alembic current` | **PASS** — `039_post_gate_requests (head)`; `version_table="alembic_version_locations"` unchanged (`alembic/env.py:61,72`) |
+| Alembic down/up of 039 | `alembic downgrade -1` → `alembic current` → `SHOW TABLES` → `alembic upgrade head` | **PASS** — downgrade reaches `038_post_edit_columns` and the table is gone; upgrade returns to `039_post_gate_requests (head)`, `alembic_version_locations.version_num = 039_post_gate_requests`. `SHOW CREATE TABLE` matches 3.7 exactly: `post_id int NULL` + `ON DELETE SET NULL`, `location_id bigint` + `ON DELETE CASCADE`, `gates json NOT NULL`, `status varchar(20) NOT NULL DEFAULT 'pending'`, `reviewed_at timestamp NULL DEFAULT NULL`, both indexes present |
+| `nginx -t` (dev) | `nginx -t -c … -p …` on `docker/api-gateway/nginx.conf` inside `api-gateway` | **PASS** — syntax is ok / test is successful |
+| `nginx -t` (prod) | same on `nginx.prod.conf`, with a throwaway self-signed cert at the Let's Encrypt paths (cert and `/etc/letsencrypt` deleted afterwards, verified gone) | **PASS** — syntax is ok / test is successful |
+| `docker compose config` | — | **PASS** |
+| Source ↔ container parity | `md5sum` of `crud.py main.py schemas.py models.py` + all four test files, repo vs `/app` | **PASS** — identical before and after every test run; the suite ran against the real shipped source |
+
+#### Independent mutation check (the tests are not taken on trust)
+
+Four mutants applied by the Reviewer to a **container-local copy** (`/rvwmut3`; `/app` and the
+repository were never touched, the copy was deleted afterwards). Baseline of the two files is
+154 passed. Every mutant is killed:
+
+| Mutation | Result |
+|---|---|
+| pending requests dropped from the merged budget in `edit_post` | **2 failed** — `test_path_three_a_pending_request_already_spends_the_budget`, `test_the_three_sources_are_summed_together` |
+| approval-time budget re-check neutered (`existing_gates = []` in `review_gate_request`) | **1 failed** — `test_the_approval_budget_counts_the_posts_existing_gates` |
+| `gate_list_for_post` filtered to `AND status = 'open'` (the subtle hole) | **6 failed** — incl. `test_path_two_expired_gates_are_not_refunded`, `test_consumed_gates_are_not_refunded_either`, `test_gate_list_for_post_reads_every_status` |
+| approval grants nothing (`create_action_gates` removed) | **2 failed** — `test_approve_creates_the_gates_and_they_are_honoured`, `test_the_request_under_review_is_not_counted_twice` |
+
+#### Live Verification Results
+
+The `claude-in-chrome` extension is **not connected** in this session — confirmed by invoking
+the skill, which answered «Browser tools are not available in this session: the Claude in Chrome
+extension is not set up.» **No step below ran in a real browser.** Everything was driven through
+the api-gateway (`http://api-gateway`, the same path the SPA uses) with real JWTs from
+`POST /users/login`, plus direct MySQL inspection and in-process calls to `crud.check_action_gate`.
+
+**Not verified in a browser, therefore still code-reviewed only** (third review running, same
+gap as #1 and #2): the modal's layout at 360 px, the kebab-menu «Редактировать» visibility, the
+«изменено» marker and the «на рассмотрении» badge as rendered, the inline error area as a user
+sees it, the admin tab's cards, and the browser console being clean.
+
+Actors: three freshly registered accounts — `rvw3_owner` (user 41, role `user`, character
+999801), `rvw3_mod` (user 42, promoted to `moderator`, character 999802) and `rvw3_admin`
+(user 43, promoted to `admin`, character 999803). Two throwaway locations (999901, 999902,
+linked as neighbours) so no live feed or existing account was touched. All rows removed
+afterwards (see Cleanup). Every `PUT /locations/posts/{id}` was paced at 3.2 s so the nginx
+limiter could never colour a functional result.
+
+**A. The budget invariant — proven closed via EACH path separately**
+
+Fixture: post 200, five `combat` gates (targets 9001–9005) → required 1000 characters.
+
+| # | Path | Scenario | Expected | Actual |
+|---|---|---|---|---|
+| A1 | existing `open` | shrink 1000 → 307 | 400 | **400** `Для всех действий этого поста нужно минимум 1000 символов (сейчас: 307)` |
+| A2 | existing `open` | ask a **6th** gate on the same 1000 chars | 400 | **400** `… нужно минимум 1200 символов (сейчас: 1000)` |
+| A2-db | — | MySQL right after | nothing moved | **confirmed** — `CHAR_LENGTH(content)=1000`, `edited_at` NULL, `edited_by_user_id` NULL, all five gate rows intact, zero request rows |
+| A3 | **`expired`** | all five forced to `expired` (what leaving and re-entering does), shrink to 307 | 400 | **400**, same message — no status filter, no refund |
+| A4 | **`expired`** | all five `expired`, ask a 6th on 1000 chars | 400 | **400** `… минимум 1200 … (сейчас: 1000)` |
+| A5 | `consumed` | all five `consumed`, ask a 6th on 1000 chars | 400 | **400**, same |
+| A6 | — | 1200 chars + 6th gate (the legitimate case) | 200 | **200**, `gate_request_id=1`, `gate_request_status="pending"` |
+| A7 | — | `action_gates` immediately after that **successful** edit | still 5 | **confirmed 5 rows** — an edit never grants a gate |
+| A8 | **pending request** | a **second** request on the same post | 409 | **409** `Заявка на намерение по этому посту уже на рассмотрении` |
+| A9 | **pending request** | shrink to 1199 while one request is pending (no new gates asked) | 400 | **400** `… минимум 1200 … (сейчас: 1199)` — the pending request really is charged |
+| A10 | — | shrink to exactly 1200 | 200 | **200** |
+| A11 | **at approval** | post shortened to 1000 behind the endpoint's back, then approve | 409 | **409** `Текст поста больше не оплачивает эти действия: нужно минимум 1200 символов (сейчас: 1000)`; gate rows **still 5** |
+| A12 | **at approval** | text restored to 1200, approve again | 200 | **200**; gate rows now **6**, the new one exactly `combat/9006/open` |
+
+**B. Gates are created only by approval, and exactly the requested ones**
+
+| # | Scenario | Expected | Actual |
+|---|---|---|---|
+| B1 | `check_action_gate` after A12 | only the approved set | `combat/9006` **True**, `combat/9001` **True**, `combat/9099` **False**, `pvp/9006` **False**, `npc_dialogue/9006` **False** |
+| B2 | edit + request `npc_dialogue(7001)` | 200, no gate row | **200**; `action_gates` for the post **empty**; `check_action_gate(npc_dialogue,7001)` **False** |
+| B3 | `ClientPost` after B2 | request surfaced, right not granted | `gates={}`, `pending_gates={"npc_dialogue":1}`, `edited_at` set, `edited_by_admin=false` |
+| B4 | **reject** | zero gate rows | **200**; `action_gates` **empty**; request `rejected`; `check_action_gate` still **False** |
+| B5 | approve an already-rejected request | 400 | **400** `Заявка уже рассмотрена` |
+| B6 | **approve after the player left** the location | 409 | **409** `Персонаж покинул локацию — заявка больше не действительна`; **zero** gate rows; the request stays `pending` for a human |
+| B7 | reject that same request instead | 200 | **200** — rejection is always available |
+| B8 | **post deleted** by moderation while a request is pending | request closed as `rejected` | post row gone; request → `post_id NULL`, `status='rejected'`, `reviewed_by_user_id=43`; **zero** gate rows; a later approve → **400** `Заявка уже рассмотрена` |
+| B9 | queue contents | only `pending` | **confirmed** — approved / rejected / expired rows never appear |
+
+**C. Leaving the location expires a pending request — BOTH movement call sites**
+
+| # | Call site | Expected | Actual |
+|---|---|---|---|
+| C1 | `quick_move` 999901 → 999902 (`main.py:1616`) | request → `expired` | **200** on the move; request `pending` → **`expired`**; zero gate rows; a later approve → **400** `Заявка уже рассмотрена` |
+| C2 | `move_and_post` 999901 → 999902 (`main.py:1386`) | request → `expired` | **200** on the move; request `pending` → **`expired`**; zero gate rows |
+
+**D. RBAC — `moderation:read` / `moderation:review`, and the moderator is NOT narrowed**
+
+| # | Endpoint | Actor | Expected | Actual |
+|---|---|---|---|---|
+| D1 | `GET /locations/admin/moderation/gate-requests` | no token | 401 | **401** `Not authenticated` |
+| D2 | same | plain user | 403 | **403** `Недостаточно прав` |
+| D3 | same | **moderator** | 200 | **200** — FEAT-158's deliberate moderator access is preserved |
+| D4 | same | admin | 200 | **200** |
+| D5 | `PUT …/gate-requests/{id}/review` | no token | 401 | **401** `Not authenticated` |
+| D6 | same | plain user | 403 | **403** `Недостаточно прав`; **zero** gate rows created by the two refusals |
+| D7 | same | **moderator** approves | 200 | **200**; the requested `gathering/7201` row created, `status='open'` |
+| D8 | same | unknown `action` | 400 | **400** `Действие должно быть 'approve' или 'reject'` |
+| D9 | same | missing request id | 404 | **404** `Заявка не найдена` |
+
+**E. Gate-request validation (the five new Phase B errors)**
+
+Fixture: a 1000-char post carrying one **`consumed`** `combat/8001` gate.
+
+| # | Scenario | Expected | Actual |
+|---|---|---|---|
+| E1 | unknown `action_type` | 400 | **400** `Неизвестный тип гейта` |
+| E2 | gate with no targets | 400 | **400** `Для нападения на мобов выберите цель в посте` (the create path's wording, shared via `crud.validate_gate_shape`) |
+| E3 | a target the post already gates — and the row is **`consumed`** | 400 | **400** `Гейт на эту цель уже есть в посте` — a consumed gate cannot be re-bought |
+| E4 | the same target named twice in one intent | 400 | **400** `Цель указана дважды в одном намерении` |
+| E5 | character not in the post's location, **with** gates | 403 | **403** `Чтобы добавить намерение, нужно находиться в этой локации` |
+| E6 | the same character, **plain text edit** | 200 | **200** — the location guard fires only when gates are asked for |
+| E7 | after every one of E1–E5 | no request row | **confirmed zero** rows in `post_gate_requests` |
+
+**F. `targets_resolved` — enrichment, never validation**
+
+A request naming `pvp` on a real character **and** a nonexistent id returned, through the queue:
+`{"pvp": [{"id": 999802, "name": "RVW3 rvw3_mod", "state": "игрок, в этой локации"},
+{"id": 999999, "name": null, "state": "цель не найдена"}]}` — the unresolvable target degraded
+to a bare id and **did not** reject the request, blank the list or 500. The card fields
+(`post_content`, `post_character_name`, `post_location_name`, `post_edited_at`,
+`requester_username`) all populated through the shared `_enrich_moderation_items`.
+
+**G. Phase A re-confirmed after Phase B landed on the same files**
+
+| # | Scenario | Expected | Actual |
+|---|---|---|---|
+| G1 | owner edits own latest post, 5 min old | 200 | **200** |
+| G2 | owner, someone posted after it | 403 | **403** `После этого поста уже написали — редактирование недоступно` |
+| G3 | owner, 3 h old but still the latest | 403 | **403** `Редактировать пост можно в течение часа после публикации` |
+| G4 | **moderator** on another player's post | 403 | **403** `Вы можете редактировать только свои посты` — `get_admin_user` still correctly not used |
+| G5 | **admin on their OWN** 3 h-old, already-answered post | 200 | **200**, and `edited_by_admin=false` — the 2026-09-13 ruling, unchanged |
+| G6 | admin on another player's stale post | 200 | **200**, `edited_by_admin=true` |
+| G7 | 8-character body from an admin | 400 | **400** `Минимальная длина поста — 300 символов (сейчас: 8)` |
+| G8 | missing post | 404 | **404** `Пост не найден` |
+| G9 | no token / body without `content` | 401 / 422 | **401** `Not authenticated`; **422** FastAPI validation shape |
+| G10 | MySQL after every edit | `created_at` untouched, `edited_at` set, real editor recorded | **confirmed** — stale posts still read `16:41:42` / `16:41:49`; `edited_at` written; `edited_by_user_id` = 41 (owner) / 43 (admin) |
+| G11 | **no XP** — attributes zeroed, then edits of 700/1800-class bodies | unchanged | `character_attributes(999801)` stayed `active_experience=0, passive_experience=0` |
+| G12 | `GET /locations/{id}/client/details` | marker surfaced | **200**; `edited_at` / `edited_by_admin` on every post; `edited_by_admin=true` **only** for the admin-on-another's-post case; untouched posts `null` / `false` |
+
+**H. Rate limit (T6)** — `git diff HEAD -- docker/api-gateway/` is **empty**: both nginx configs
+are byte-identical to the ones review #2 exercised live (11 through + 29 × 429 on 40 requests,
+429 body = Nginx HTML with no JSON `detail`, eight neighbour routes never throttled). Both files
+re-passed `nginx -t` here. Note H1 below records that the *running dev image* predates T6.
+
+#### Re-checked by code review (the two invariants both prior reviews checked, re-checked because `crud.py` and the modal changed underneath them)
+
+- **`PostEditModal` still has no drafts wiring.** Its entire import list is `useMemo/useState`,
+  `motion/react`, `WysiwygEditor`, `ConfirmDialog`, `./types` and `./gateConstants`
+  (`PostEditModal.tsx:1-18`). Greps for `usePostDraft`, `markSent`, `DraftsPanel` and
+  `PostCreateForm` hit **only the explanatory comment at `PostEditModal.tsx:50-55`** — no code.
+  An edit session still cannot autosave over the location's live draft (the FEAT-156 bug).
+- **No error path closes the modal or clears the text.** `handleSave`
+  (`PostEditModal.tsx:172-192`) calls `onClose()` **only** after `onSave` resolves; every
+  rejection lands in `setError` with `content` untouched and `saving` reset
+  (`PostEditModal.tsx:187-192`). The overlay is deliberately not click-to-close
+  (`PostEditModal.tsx:206-207`), and «Отмена» with unsaved edits goes through `ConfirmDialog`.
+  `handleEditPost` (`LocationPage.tsx:395-441`) maps a **string** `detail` **verbatim**
+  (`:423-424`) — so all five new Phase B errors and the gate-budget 400 reach the player word
+  for word — while an array `detail` (422) `:425-427`, a missing `response` (network) `:428-429`,
+  the **429** whose body is Nginx HTML with no JSON `detail` `:430-432`, and any other status
+  `:433-435` each get their own Russian message. Every branch `throw`s, so the modal keeps the
+  text. `fetchLocationData` swallows its own errors, so a failed refetch cannot masquerade as a
+  failed save.
+- **The client mirror now matches the server formula exactly.** The T12 agent's fix is real and
+  complete: `gateConstants.ts:29-35` lists `combat: 200, pvp: 500, npc_dialogue: 500,
+  gathering: 500, dungeon: 500` — identical to `crud.GATE_SYMBOL_COST` (`crud.py:25-27`) — and
+  `requiredSymbolsForGates` (`gateConstants.ts:101-110`) is
+  `max(MIN_POST_LENGTH, Σ (GATE_COST[t] ?? DEFAULT_GATE_COST) * max(1, targets))` with
+  `DEFAULT_GATE_COST = 500` (`:27`), mirroring `GATE_SYMBOL_COST.get(action_type, 500)` and the
+  `max(MIN_POST_LENGTH, total)` floor (`crud.py:92-99`) — **including the unknown-type default**,
+  which is precisely the `pvp`-priced-at-0 drift that produced a false "you may save". Verified
+  for every one of the five gate types and for an unknown one. `MIN_POST_LENGTH = 300` matches
+  `crud.MIN_POST_LENGTH`.
+- **`mergedGates` in the modal** (`PostEditModal.tsx:130-147`) sums locked + pending + newly
+  ticked per `action_type` with synthetic target ids. Since the server rejects a target named
+  twice across those sources (E3/E4 above) rather than merging it, the two agree; the only
+  residual divergence direction is the client demanding *more*, i.e. a false "you may not save",
+  never a false "you may".
+- Mandatory frontend rules re-checked across all five touched files: **no `React.FC`**, no
+  `: any`, no `.css`/`.scss` import or new style file, all new files `.tsx`/`.ts`, `sm:`
+  breakpoints and `break-words` throughout, every user-facing string Russian.
+- **Security (3.12).** Auth on the edit endpoint (`get_current_user_via_http`); the two admin
+  endpoints additionally `require_permission` (verified live, D1–D9). All new SQL is
+  parameterised (`text()` with bind params throughout; `pending_gates_for_posts` uses an
+  `expanding` bindparam rather than string interpolation). `targets` are coerced to `int` by
+  `schemas.GateSpec` and again in `edit_post`. `_decode_gates_json` never raises on a malformed
+  payload and can only make a budget check *stricter*. Error `detail`s name the rule, never
+  another user, and leak no internals. `edited_by_user_id` still never leaves the service — only
+  the derived boolean does. XSS surface unchanged (same column, same `DOMPurify` render path).
+- **Cross-service (3.11).** No new inter-service contract: enrichment reuses
+  `_enrich_moderation_items` / `_fetch_character_brief_map` / `_fetch_username_map`, and
+  `_resolve_gate_targets` reads local tables only, each batch wrapped in `try/except` + `rollback`
+  (proved live in F). battle-service, dungeon-service and the in-process gathering check are
+  untouched — they read `action_gates`, and this feature writes there only through the unchanged
+  `create_action_gates`.
+
+#### Documentation (T14a + T14) — checked against the source, not against section 3
+
+`docs/services/locations-service.md` §«Редактирование поста (FEAT-159)» describes what actually
+shipped: the full status-code table including all five Phase B errors with their exact Russian
+`detail`s, the admin-first branch ordering, moderator ≠ admin, `id >` vs `created_at >`, the hour
+evaluated by MySQL, XP not recomputed, the accepted residual race, the three-source merged budget
+with the "all statuses" rationale, the approval-time second count and its four ordered re-checks,
+`post_gate_requests` DDL, the request lifecycle, `pending_gates`, `targets_resolved` and the §3.9
+rationale, and the nginx limit. `docs/ARCHITECTURE.md` lists the new table.
+`docs/ISSUES.md` extends the two relevant entries rather than duplicating them and honestly
+states what FEAT-159 did **not** fix. Every `file:line` in the new documentation was re-verified
+against the source; two were wrong and are **fixed by the Reviewer** (see Issues Found, both
+trivially in review scope).
+
+#### Issues Found
+
+| # | File:line | Description | Assigned To | Status |
+|---|-----------|-------------|-------------|--------|
+| 1 | `docs/services/locations-service.md:192` | The lifecycle table labelled the two `expire_gate_requests` call sites backwards — `main.py:1386` was called `/move` and `main.py:1616` `move_and_post`, whereas 1386 is inside `move_and_post` (def at `main.py:1152`) and 1616 inside `quick_move` (def at `main.py:1427`). **FIXED BY REVIEWER** — now reads `main.py:1386` (`move_and_post`) and `main.py:1616` (`quick_move`). | Reviewer | **RESOLVED** |
+| 2 | `docs/services/locations-service.md:201` | The PUT review endpoint was cited as `main.py:2282` (a blank line); the decorator is `main.py:2283`. **FIXED BY REVIEWER.** | Reviewer | **RESOLVED** |
+
+No blocking issue. Nothing is assigned to another agent.
+
+#### Notes (non-blocking)
+
+| # | Item |
+|---|---|
+| H1 | The **running dev `api-gateway` container** does not carry the T6 limit — `grep -c post_edit_limit /etc/nginx/nginx.conf` inside it returns `0`, because the image bakes its config in and was built before T6 landed. This is dev-stack staleness, not a code defect: both repo configs contain the limit and pass `nginx -t`, and the CI deploy runs `docker compose up --build`, which rebuilds the gateway. Worth a `docker compose up --build api-gateway` locally so dev matches what ships. (Attempting to hot-swap the config into the running container for a burst test was blocked by the sandbox; the identical config was exercised live in reviews #1 and #2.) |
+| H2 | `features/FEAT-160-post-version-history.md` is present in the working tree as an untracked file. It is the follow-up to §3.13 Q1 (keep the pre-edit text) and is **not** part of FEAT-159's deliverables — flagged only so it is a conscious decision whether it rides along in the commit. |
+| H3 | Pre-existing, unchanged by this feature and still accurate: `crud.gates_for_posts` counts `action_gates` rows of every status, so `ClientPost.gates` is an audit mark of declared intent rather than a rights display — that is also what makes the client budget mirror correct. The `formatRelativeTime` timezone entry in `docs/ISSUES.md` likewise still stands. |
+
+#### Cleanup
+
+All fixture rows removed and verified **0 remaining** for each: `posts`, `action_gates`,
+`post_gate_requests` (table empty), `post_deletion_requests`, `post_reports`, `post_likes`,
+`post_drafts`, `character_attributes`, characters 999801–999803, `LocationNeighbors`, locations
+999901/999902, notifications and users 41/42/43. No existing account, location or post was
+modified at any point. The `api-gateway`'s throwaway certificate, `/etc/letsencrypt` and the
+temporary config directory were deleted (verified gone); the Reviewer's `/rvwmut3` mutation copy
+and every script in the `locations-service` container's `/tmp` were removed (verified `/tmp`
+empty). Source ↔ container `md5sum` parity re-confirmed afterwards and the full suite re-run:
+**1057 passed**.
+
+#### Verdict
+
+**The whole of FEAT-159 — Phase A and Phase B — is ready to ship.** The budget invariant is
+enforced for real through each of its three paths independently, including the `expired` one,
+and again at approval time. An edit never grants a gate; approval grants exactly the requested
+ones and nothing more; rejection, a departed player, a deleted post and a leave-the-location
+event all leave zero rights behind. The moderation endpoints are correctly permissioned and the
+moderator's FEAT-158 access is intact. Phase A is unchanged by Phase B. No failure path loses a
+player's text, and the client's cost mirror no longer drifts from the server's. 1057 tests pass
+and four hand-applied mutants die.
+
 ---
 
 ## 6. Logging (filled by all agents — in Russian)
@@ -1113,10 +1376,154 @@ item is documentation (note #2), which is a PM scoping decision, not a code defe
 [LOG] 2026-09-14 04:08 — Reviewer: повторная проверка Phase A завершена, результат PASS — Phase A (T1–T6) готова к отгрузке; единственный незакрытый пункт — документация (T14a), это решение PM, а не дефект кода
 [LOG] 2026-09-14 05:10 — Backend Dev: задача T14a (только документация Phase A) выполнена. В docs/services/locations-service.md добавлен раздел «Редактирование поста (FEAT-159, Phase A)»: контракт PUT /locations/posts/{post_id}, все проверки с русскими сообщениями, id > вместо created_at >, час считается MySQL против NOW(), опыт не пересчитывается, безусловный обход двух лимитов ролью admin (но не проверок содержимого), модератор получает 403, принятая остаточная гонка. Описан бюджет символов ровно так, как он работает сейчас: gate_list_for_post читает гейты всех статусов (open/consumed/expired), merge_gate_lists объединяет цели и специально принимает произвольное число списков под Phase B. Добавлены колонки posts.edited_at / edited_by_user_id в раздел «Таблицы БД» с обоснованием отказа от updated_at ON UPDATE, и поля ClientPost.edited_at / производный edited_by_admin с деградацией в false при сбое профиля. Записан лимит nginx (20 r/m, burst 10, по IP, оба конфига). Phase B (post_gate_requests, заявки) не документирован — явно помечен как нереализованный
 [LOG] 2026-09-14 05:12 — Backend Dev: в docs/ISSUES.md добавлена запись MEDIUM по разделу 3.9 — action_gates.created_at не читается ни одним запросом, цели гейта не валидируются на пути создания поста (существование, локация, моб/игрок, жив ли). Дубликатов не нашлось. Все file:line перепроверены по исходникам, а не по разделу 3 фичи
+[LOG] 2026-09-14 06:05 — Backend Dev: начал Phase B, задачи T7, T8, T10 (T9 не трогаю — она за другим агентом и лезет в те же файлы)
+[LOG] 2026-09-14 06:20 — Backend Dev: T7 готова — миграция 039_post_gate_requests (down_revision=038_post_edit_columns) создаёт таблицу post_gate_requests и модель PostGateRequest. post_id nullable с FK fk_post_gate_requests_post_id ON DELETE SET NULL по правилу миграции 037 (решение модерации переживает пост), location_id BigInteger с FK ON DELETE CASCADE, gates JSON NOT NULL, status VARCHAR(20) DEFAULT 'pending', индексы idx_pgr_queue(status, created_at) и idx_pgr_post(post_id). Отдельную таблицу, а не расширение post_deletion_requests — там ветка approve удаляет пост, и условие «выдать права» рядом с ней самое опасное место сервиса. downgrade сводится к DROP TABLE: сначала дропать индексы нельзя, idx_pgr_post держит внешний ключ и MySQL отвечает ERROR 1553
+[LOG] 2026-09-14 06:45 — Backend Dev: T8 готова — crud.edit_post принимает gates и считает бюджет по ВСЕМ гейтам сразу: merge_gate_lists(existing_gates, pending_gates, requested_gates), где existing — все строки action_gates поста любого статуса (включая expired, иначе выход из локации и возврат возвращали бы бюджет), pending — гейты из висящих заявок, requested — новые. Вторую формулу нигде не писал, required_symbols_for_gates переиспользуется как есть, чтобы сервер не разъехался с gateConstants.ts. Правка НИКОГДА не зовёт create_action_gates — пишется только строка post_gate_requests в той же транзакции, что и UPDATE текста; механика открывается только на одобрении (T9). Проверки: неизвестный тип и гейт без цели 400 (общая с путём создания crud.validate_gate_shape, чтобы формулировка была одна), цель, уже закрытая гейтом поста или висящей заявкой, 400 «Гейт на эту цель уже есть в посте», цель дважды в одной заявке 400, вторая висящая заявка по посту 409, заявка при персонаже вне локации поста 403. Эндпоинт возвращает gate_request_id / gate_request_status
+[LOG] 2026-09-14 06:55 — Backend Dev: T10 готова — crud.pending_gates_for_posts делает ОДИН batch-запрос рядом с gates_for_posts (по-постовый запрос дал бы N round-trip на каждой странице локации) и отдаёт {post_id: {action_type: count}} только по заявкам в статусе pending. Поле ClientPost.pending_gates аддитивное, по умолчанию {}, подключено и в client/details, и в виджет последних постов
+[LOG] 2026-09-14 07:20 — Backend Dev: проверка вживую через api-gateway. Пост на 1000 знаков с пятью combat-гейтами: шестой гейт на том же тексте — 400 «Для всех действий этого поста нужно минимум 1200 символов (сейчас: 1000)»; те же пять гейтов переведены в expired — снова 400 с теми же числами; вторая висящая заявка — 409, а урезание текста до 1199 при одной висящей заявке — 400 с требованием 1200, то есть заявка действительно входит в бюджет. Легитимный случай: 1200 знаков + шестой гейт — 200, gate_request_id=1, status=pending, при этом строк в action_gates по-прежнему ПЯТЬ, ни одной новой. Отдельно на чистом посту (без висящей заявки, чтобы 409 не перекрывал): цель, уже закрытая гейтом, — 400, дубль цели в одной заявке — 400, персонаж вне локации — 403 (правка текста без гейтов при этом проходит). pending_gates в client/details = {combat: 1} при pending и {} при approved/rejected/expired. Удаление поста обнуляет post_id и оставляет строку заявки. Миграция прогнана upgrade head -> downgrade -1 -> upgrade head, version_table остался alembic_version_locations. Тестовые данные удалены
+[LOG] 2026-09-14 07:30 — Backend Dev: ВНИМАНИЕ QA (T11) — полный прогон locations-service даёт 961 passed, 31 failed, все падения в tests/test_post_editing.py и все по коду сервиса НЕ проходят. 30 из них — фикстура session в этом файле создаёт таблицы списком (Location, Post, ActionGate) и не знает про post_gate_requests, отсюда «no such table: post_gate_requests». Ещё одно — TestEditRouteContract::test_owner_gets_the_documented_response_shape проверяет точный набор ключей ответа, а Phase B добавляет туда gate_request_id / gate_request_status (это предусмотрено разделом 3.2). Проверено на копии репозитория: добавление PostGateRequest.__table__ в фикстуру даёт 991 passed, 1 failed — остаётся только ассерт набора ключей. Тестовые файлы не правил, это зона QA
 ```
 
 ---
 
+[LOG] 2026-09-14 08:10 — Backend Dev: начал T9 — админская сторона заявок на намерения. Ничего параллельного FEAT-158 не изобретаю: те же разрешения moderation:read / moderation:review (новых не завожу, миграции RBAC не нужно), та же форма эндпоинтов, тот же _enrich_moderation_items для имён
+[LOG] 2026-09-14 08:35 — Backend Dev: добавлены два эндпоинта — GET /locations/admin/moderation/gate-requests (moderation:read) отдаёт висящие заявки карточкой того же вида, что запросы на удаление, плюс сами гейты и targets_resolved; PUT /locations/admin/moderation/gate-requests/{id}/review (moderation:review) с телом {action: approve|reject}
+[LOG] 2026-09-14 08:40 — Backend Dev: одобрение перепроверяет всё заново и именно в этом порядке, отказывая, а не выдавая: 1) заявка всё ещё pending, иначе 400 «Заявка уже рассмотрена»; 2) post_id не NULL и пост существует, иначе 409 «Пост удалён — заявку можно только отклонить»; 3) персонаж всё ещё в локации заявки, иначе 409 «Персонаж покинул локацию — заявка больше не действительна»; 4) ПОЛНЫЙ общий бюджет символов заново по текущему тексту поста — merge_gate_lists(все гейты поста любого статуса, другие висящие заявки, гейты этой заявки) и required_symbols_for_gates, второй формулы не писал. Только после этого create_action_gates. Пост могли сократить между заявкой и рассмотрением, и одобрение выдало бы гейты, за которые текст больше не платит
+[LOG] 2026-09-14 08:45 — Backend Dev: отклонение не оставляет ничего — только status='rejected', reviewed_by_user_id и reviewed_at, ни строки в action_gates (правило FEAT-158: отклонённое решение прав не даёт). UPDATE статуса при одобрении идёт ДО create_action_gates, чтобы коммит внутри неё делал обе записи атомарными и не было окна «гейты есть, заявка ещё pending»
+[LOG] 2026-09-14 08:50 — Backend Dev: добавлена crud.expire_gate_requests(character_id, location_id) и вызвана рядом с обоими существующими expire_action_gates (move_and_post и quick_move) — выход из локации гасит и висящую заявку, иначе она стала бы способом воскресить гейт, который выход убивает. _close_sibling_moderation_rows расширена: удаление поста модерацией закрывает его висящую заявку как rejected
+[LOG] 2026-09-14 08:55 — Backend Dev: targets_resolved — только подсказка админу (раздел 3.9: показываем, а не блокируем). Цели combat/pvp/npc_dialogue резолвятся по characters (мобы и НПС там же, is_npc=1) плюс active_mobs для состояния моба, gathering — по локальным gathering_nodes, dungeon — по dungeons. Каждый запрос batch и обёрнут: сбой логируется, сессия откатывается, цель деградирует до голого id с «цель не найдена». Ни одна заявка от этого не отклоняется и 500 не возникает
+[LOG] 2026-09-14 09:30 — Backend Dev: проверка вживую через api-gateway (порт 80), персонаж 18 / локация 95, модератор — реальный аккаунт с ролью moderator. Очередь: без токена 401, обычным игроком 403 «Недостаточно прав», модератором 200 со списком; targets_resolved вернул {"combat": [{"id": 11, "name": "Бебрик Йохансон", "state": "игрок, в другой локации"}, {"id": 14, "name": "Лина Инверс", "state": "игрок, в другой локации"}, {"id": 999999, "name": null, "state": "цель не найдена"}]} — несуществующая цель не мешает списку. Одобрение модератором: 200, в action_gates ровно две запрошенные строки (pvp -> 11 и 999999, статус open, reviewed_by_user_id=12), check_action_gate по обеим целям true, по combat — false; повторное одобрение 400 «Заявка уже рассмотрена», из очереди заявка исчезла
+[LOG] 2026-09-14 09:35 — Backend Dev: отказные сценарии вживую. Отклонение: 200, SELECT COUNT(*) FROM action_gates WHERE post_id=190 вернул 0 — ничего не создано. Персонаж вне локации: 409 «Персонаж покинул локацию — заявка больше не действительна», заявка осталась pending, гейтов 0. Пост сокращён до 400 знаков при заявке pvp на две цели: 409 «Текст поста больше не оплачивает эти действия: нужно минимум 1000 символов (сейчас: 400)», гейтов 0, отклонить заявку после этого по-прежнему можно. Удаление поста через модерацию: заявка стала rejected с reviewed_by_user_id модератора, post_id обнулён, гейтов 0, попытка одобрить после этого 400. Выход из локации: quick_move 95 -> 96 перевёл заявку в expired (очередь опустела, одобрение 400), то же самое подтверждено и на втором вызове — move_and_post 96 -> 95. Неизвестное действие 400, несуществующая заявка 404. Тестовые данные удалены: заявок в post_gate_requests 0, тестовых постов 0, осиротевших гейтов 0, персонаж возвращён в локацию 15
+[LOG] 2026-09-14 09:40 — Backend Dev: py_compile в контейнере по main.py, crud.py, schemas.py — PY_COMPILE_OK. Полный прогон locations-service: 952 passed, 40 failed. ВНИМАНИЕ QA (T11): 31 падение — уже известные (фикстура test_post_editing.py не знает про post_gate_requests и ассерт набора ключей). Девять новых — ровно того же рода и тоже фикстурные: tests/test_post_moderation.py (6) и tests/test_gate_revocation.py (3) падают на «no such table: post_gate_requests», потому что _close_sibling_moderation_rows теперь обязана закрывать висящую заявку. Лечится добавлением PostGateRequest.__table__ в фикстуры этих двух файлов; тестовые файлы не правил, это зона QA
+[LOG] 2026-09-14 10:05 — Frontend Dev: начал T13 — третья вкладка «Заявки на намерения» в AdminModerationPage.tsx. Контракт сверен с живым /openapi.json контейнера locations-service, не с описанием задачи: поля PostGateRequestRead совпали, обязательными сервер считает только id, user_id, character_id, location_id, status, created_at — всё остальное опционально, типы описаны соответственно
+[LOG] 2026-09-14 10:15 — Frontend Dev: карточка переиспользует существующий ModerationCard, errorMessage и isPostMissing — параллельных версий не заводил. ModerationCard получил два необязательных пропса: showFullPost (для заявок текст поста показывается целиком в прокручиваемом блоке, а не обрезается line-clamp-3 — админ судит именно по тексту) и extra (блок с деталями заявки). Обе вкладки FEAT-158 работают ровно как раньше — пропсы им не передаются
+[LOG] 2026-09-14 10:25 — Frontend Dev: targets_resolved рендерится по каждому намерению: имя цели и её состояние («игрок, в другой локации», «моб, мёртв» и т.д.). Нерезолвленная цель (name: null) не прячется, а подсвечивается красным как «Цель #id — цель не найдена» — раздел 3.9 требует показывать неопределённость, а не молчаливый пробел. Если enrichment не отработал вовсе, падаем на голые id из gates с пометкой «не удалось определить цель». Сохранено различие FEAT-158: «Пост уже удалён» (post_id/post_content null) — это не то же самое, что неопознанное имя
+[LOG] 2026-09-14 10:30 — Frontend Dev: 400 «Заявка уже рассмотрена» и все три 409 (пост удалён / персонаж покинул локацию / текст больше не оплачивает действия) показываются админу дословным русским detail сервера, после чего очередь перезапрашивается — строка уже изменила судьбу и не должна остаться кликабельной. Остальные статусы (401/403/404/5xx/сеть) остаются на формулировках errorMessage, потому что detail у FastAPI там английский
+[LOG] 2026-09-14 10:40 — Frontend Dev: T13 завершена. Проверка в контейнере frontend: `docker exec frontend sh -c "cd /app && npx tsc --noEmit"` — exit 0, без вывода; `npm run build` — «built in 32.91s», предупреждение только предсуществующее про чанк >500 kB. Только Tailwind, ни одного нового SCSS, React.FC не используется, вёрстка вкладки и целей складывается в колонку до sm: — помещается в 360 px
+[LOG] 2026-09-14 11:05 — Frontend Dev: начал T12 — гейты в PostEditModal + бейдж «на рассмотрении» в PostCard. Контракт сверен с живым /openapi.json контейнера locations-service: PostEditRequest.gates (List[GateSpec]), PostEditResponse.gate_request_id / gate_request_status, ClientPost.pending_gates — всё совпало с описанием задачи
+[LOG] 2026-09-14 11:10 — Frontend Dev: расхождение зеркала стоимости гейтов. Сервер: GATE_SYMBOL_COST.get(action_type, 500) и знает pvp; клиентский gateConstants.ts брал `?? 0` и pvp не знал. Пост с pvp-гейтом (создаётся другими путями, pvp есть в GATED_POST_TYPES) счётчик оценивал в 0 симв. — ровно то ложное «можно сохранять», после которого сервер отказывает. Починил зеркало: добавлены pvp: 500 и DEFAULT_GATE_COST = 500 в requiredSymbolsForGates. GATE_ORDER не трогал, поэтому PostCreateForm ведёт себя ровно как раньше
+[LOG] 2026-09-14 11:20 — Frontend Dev: три вида гейтов в модалке различаются визуально. Уже объявленные (post.gates) — замок + галочка, role="checkbox" aria-checked, aria-disabled, не кнопка вовсе, тултип «Уже объявленное намерение нельзя изменить или снять»; снять их нельзя технически, а не «пока нельзя». Висящие (post.pending_gates) — пунктирная рамка, ⏳, «на рассмотрении». Новые — выбираемые чипы с подсказкой «Появится после одобрения администратором» и заметным блоком о том, что механика не сработает сразу
+[LOG] 2026-09-14 11:25 — Frontend Dev: requiredSymbols считается по объединению locked + pending + новых через requiredSymbolsForGates из gateConstants.ts (формулу не переписывал). Счётчики суммируются по action_type, а цели подставляются синтетические: реальных id заблокированных гейтов на проводе нет, и смешивание их с выбранными id могло схлопнуться в union и недосчитать символы
+[LOG] 2026-09-14 11:30 — Frontend Dev: пикер новых намерений скрывается, когда заявка уже висит (сервер отвечает 409) или персонаж не в локации поста (403), и вместо него показывается русское объяснение — контрола не бывает «молча нет». Админу на чужом посте пикер не показывается: сервер проверяет локацию автора, а не админа
+[LOG] 2026-09-14 11:35 — Frontend Dev: после успешного сохранения с новыми гейтами тост говорит прямым текстом, что заявка ушла администратору и действие станет доступно только после одобрения (ветка по gate_request_id из ответа), обычная правка — прежнее «Пост изменён». Все новые ошибки (400 по бюджету, 400 «Гейт на эту цель уже есть в посте», 400 «Цель указана дважды», 409, 403) рендерятся дословным detail сервера в инлайн-блоке модалки; ни один путь отказа не закрывает окно и не чистит текст, черновиков в модалке по-прежнему нет
+[LOG] 2026-09-14 11:40 — Frontend Dev: T12 завершена. Проверка в контейнере frontend: `npx tsc --noEmit` — exit 0, без вывода; `npm run build` — «built in 32.39s», предупреждение только предсуществующее про чанк >500 kB. Только Tailwind, React.FC не используется, грид намерений и ряд кнопок складываются в одну колонку до sm: — 360 px держится
+
+[LOG] 2026-09-14 12:20 — QA: T11 завершена. Сначала починил красный прогон (952 passed, 40 failed): 39 падений были фикстурные — aiosqlite-фикстуры трёх файлов создают таблицы явным списком и не знали про post_gate_requests, добавил PostGateRequest.__table__ в tests/test_post_editing.py (30), tests/test_post_moderation.py (6, _close_sibling_moderation_rows теперь закрывает висящие заявки) и tests/test_gate_revocation.py (3). Сороковое — TestEditRouteContract::test_owner_gets_the_documented_response_shape: ассерт точного набора ключей ответа, расширил его двумя аддитивными полями gate_request_id / gate_request_status по разделу 3.2 и оставил строгим (плюс проверка, что без запрошенных гейтов оба None)
+
+[LOG] 2026-09-14 12:20 — QA: новый файл tests/test_post_gate_requests.py, 65 тестов по T8–T10. Эксплойт удвоения бюджета разобран по трём путям отдельно: уже выданные open-гейты, гейты в статусе expired (выход из локации и возврат не возвращают бюджет), consumed-гейты и висящая заявка — и та её половина, где заявка тратит бюджет без единой строки action_gates, и та, где вторая заявка по посту даёт 409. merge_gate_lists проверена как чистая функция напрямую: объединение вместо конкатенации, схлопывание дублей, None как отдельный член, dict и объект на входе, отсутствие мутации аргументов. Отдельно: правка НИКОГДА не создаёт строку action_gates (право реально отсутствует по check_action_gate), одобрение создаёт; approve перепроверяет по порядку — не pending, пост удалён, персонаж покинул локацию, бюджет по ТЕКУЩЕМУ тексту — и каждый отказ оставляет ноль гейтов; reject не создаёт ничего; выход из локации истекает заявку (оба места вызова проверены по исходнику move_and_post и quick_move); удаление поста закрывает заявку как rejected; дубль цели 400, вторая заявка 409, персонаж вне локации 403, неизвестный тип гейта 400; moderation:read / moderation:review — 401 без токена, 403 без разрешения, и модератор допущен к обоим эндпоинтам (FEAT-158 сохранила ему доступ намеренно, сужение до admin-only было бы тихой регрессией); pending_gates только для pending-заявок и ровно один batch-запрос на всю ленту
+
+[LOG] 2026-09-14 12:20 — QA: мутационная проверка на копии сервиса в контейнере (/tmp/mut, исходники /app не трогал) — все пять мутантов убиты. (1) выбросил статус expired из суммы бюджета -> упали test_path_two_expired_gates_are_not_refunded и три теста из test_post_editing.py; (2) убрал висящие заявки из суммы -> упали test_path_three_a_pending_request_already_spends_the_budget и test_the_three_sources_are_summed_together; (3) снял перепроверку бюджета на одобрении -> упали test_a_post_shortened_after_the_request_is_refused и test_the_approval_budget_counts_the_posts_existing_gates; (4) снял проверку «персонаж всё ещё в локации» -> упали test_a_character_who_left_the_location_is_refused и test_a_missing_character_outranks_a_short_post; (5) заставил правку сразу звать create_action_gates -> упал test_an_edit_creates_no_action_gate_row
+
+[LOG] 2026-09-14 12:20 — QA: прогон в контейнере locations-service. Новый файл: 65 passed. Полный набор: 1057 passed, 0 failed (было 952 passed / 40 failed). Файлы сервиса не менял — только тесты
+
+[LOG] 2026-09-14 13:10 — Backend Dev: T14 завершена, документация Phase B. В `docs/services/locations-service.md`: таблица `post_gate_requests` (все колонки, FK `post_id` SET NULL / `location_id` CASCADE, оба индекса, четыре статуса, откат); раздел «Ретро-гейты» — эндпоинт принимает `gates` и возвращает `gate_request_id` / `gate_request_status`, ретро-гейт НЕ срабатывает (`create_action_gates` при правке не зовётся никогда); слитый бюджет по трём источникам с объяснением, почему считаются гейты всех статусов (выход из локации не возвращает потраченные символы); два admin-эндпоинта, тело review и порядок перепроверок при одобрении с русскими detail каждой; жизненный цикл заявки (`expire_gate_requests` в обеих точках перемещения, `_close_sibling_moderation_rows` -> rejected); `targets_resolved` как обогащение, а не проверка, и почему (раздел 3.9); `pending_gates` на `ClientPost`. Обновлены таблица «Клиентские / Admin» и `docs/ARCHITECTURE.md`. Попутно выправлены уехавшие после Phase B file:line-ссылки в разделе Phase A (`crud.edit_post`, `POST_EDIT_WINDOW_HOURS`, `gate_list_for_post`, `ClientPost`, `get_post_details`) — все проверены по исходникам
+
+[LOG] 2026-09-14 13:10 — Backend Dev: запись §3.9 в `docs/ISSUES.md` не дублировал, а дополнил: «обогащать, а не блокировать» теперь реализовано (`_resolve_gate_targets`), но только на пути модерации — путь создания поста цели по-прежнему не валидирует, `action_gates.created_at` по-прежнему никто не читает; ссылки на файлы в записи тоже выправлены. Запись остаётся актуальной
+
+[LOG] 2026-09-14 13:15 — Backend Dev: при сверке документации замечено, что новый `PUT /admin/moderation/gate-requests/{id}/review` повторяет уже известную проблему двух соседних эндпоинтов рассмотрения — объявляет полную read-схему, а отдаёт 9 ключей из 18. Новой записи в `docs/ISSUES.md` не заводил: дополнил существующую (FEAT-158, «PUT-эндпоинты рассмотрения модерации…»), добавив туда третий эндпоинт. Сегодня безвредно — фронт перезапрашивает очередь
+
+[LOG] 2026-09-14 14:05 — Reviewer: начал T15 — финальную проверку ВСЕЙ фичи (Phase A перепроверяю заново, потому что Phase B легла в те же файлы)
+[LOG] 2026-09-14 14:10 — Reviewer: автопроверки прогнаны самостоятельно — npx tsc --noEmit 0 ошибок, npm run build успешно, py_compile по всем десяти изменённым файлам, полный pytest locations-service 1057 passed / 0 failed, alembic current = 039_post_gate_requests (head), version_table alembic_version_locations не менялся, downgrade -1 и upgrade head прогнаны (таблица исчезает и возвращается), nginx -t зелёный для обоих конфигов, docker compose config OK
+[LOG] 2026-09-14 14:12 — Reviewer: md5 crud.py/main.py/schemas.py/models.py и всех тестовых файлов в контейнере совпали с репозиторием — тесты гоняются по реальному коду
+[LOG] 2026-09-14 14:20 — Reviewer: DDL post_gate_requests сверена с разделом 3.7 напрямую в MySQL — post_id INT NULL + ON DELETE SET NULL, location_id BIGINT + CASCADE, gates JSON NOT NULL, status VARCHAR(20) DEFAULT 'pending', оба индекса на месте
+[LOG] 2026-09-14 14:25 — Reviewer: расширение claude-in-chrome НЕ подключено (проверено прямым вызовом скилла) — ни один шаг не выполнен в настоящем браузере; вся живая проверка через api-gateway реальными JWT + прямой запрос в MySQL + вызовы crud.check_action_gate. Третье ревью подряд не проверено вживую: вёрстка модалки на 360px, видимость «Редактировать» в кебабе, отрисовка «изменено» и бейджа «на рассмотрении», инлайн-ошибка глазами игрока, вкладка модерации, чистота консоли
+[LOG] 2026-09-14 14:40 — Reviewer: бюджет символов закрыт по КАЖДОМУ пути отдельно. Уже выданные open-гейты: урезание 1000 -> 307 даёт 400, шестой гейт на том же тексте — 400 с требованием 1200. Путь expired (выход из локации и возврат): те же 400, возврата бюджета нет. Consumed: то же самое. Вторая висящая заявка: 409, а урезание до 1199 при одной висящей заявке — 400 с требованием 1200, то есть заявка реально тратит бюджет. В MySQL после каждого отказа не сдвинулись ни content, ни edited_at, ни edited_by_user_id, ни строки гейтов
+[LOG] 2026-09-14 14:45 — Reviewer: правило перепроверено и НА ОДОБРЕНИИ — пост сокращён с 1200 до 1000 после подачи заявки, одобрение дало 409 «Текст поста больше не оплачивает эти действия», гейтов по-прежнему пять; после возврата текста до 1200 одобрение прошло и появился ровно один новый гейт combat/9006/open
+[LOG] 2026-09-14 14:50 — Reviewer: правка НИКОГДА не создаёт строку action_gates (проверено и на успешной правке с заявкой, и через check_action_gate = False), а после одобрения check_action_gate отдаёт true ровно по запрошенным целям и false по всем остальным (combat/9099, pvp/9006, npc_dialogue/9006)
+[LOG] 2026-09-14 14:55 — Reviewer: отказные сценарии — отклонение оставляет НОЛЬ строк в action_gates, одобрение после ухода игрока 409 и заявка остаётся pending, удаление поста модерацией закрывает заявку как rejected с атрибуцией модератору и обнуляет post_id, выход из локации гасит заявку в expired на ОБЕИХ точках вызова (quick_move и move_and_post проверены отдельно)
+[LOG] 2026-09-14 15:00 — Reviewer: RBAC проверен вживую — очередь и рассмотрение: без токена 401, обычный игрок 403 «Недостаточно прав» и при этом ни одной строки гейта, МОДЕРАТОР допущен к обоим эндпоинтам (FEAT-158 сохранила ему доступ намеренно, сужение было бы тихой регрессией), админ тоже; неизвестное действие 400, несуществующая заявка 404
+[LOG] 2026-09-14 15:05 — Reviewer: пять новых ошибок Phase B воспроизведены — неизвестный тип 400, гейт без цели 400 (формулировка общая с путём создания), цель уже покрыта гейтом (на CONSUMED-строке!) 400, дубль цели 400, персонаж вне локации 403; при этом обычная правка текста в той же ситуации проходит, и ни один отказ не создал строку заявки
+[LOG] 2026-09-14 15:10 — Reviewer: targets_resolved действительно обогащение, а не проверка — реальная цель вернулась с именем и состоянием, несуществующая деградировала до голого id с «цель не найдена», заявка не отклонена и список не упал
+[LOG] 2026-09-14 15:15 — Reviewer: матрица Phase A подтверждена заново после Phase B — владелец в окне 200, после него написали 403, час истёк 403, модератор на чужом посту 403, админ на СВОЁМ устаревшем отвеченном посту 200 с edited_by_admin=false, админ на чужом 200 с edited_by_admin=true, короткий текст 400, нет поста 404, без токена 401, без content 422; created_at не сдвинулся, edited_at проставлен, edited_by_user_id пишет реального редактора, опыт после правок остался 0/0
+[LOG] 2026-09-14 15:25 — Reviewer: отчёт QA о мутациях не принят на слово — четыре мутанта наложены самостоятельно на контейнерную копию /rvwmut3 (репозиторий и /app не тронуты, копия удалена): выброс висящих заявок из бюджета убивают 2 теста, снятие перепроверки бюджета на одобрении — 1, фильтр status='open' — 6, одобрение без create_action_gates — 2
+[LOG] 2026-09-14 15:35 — Reviewer: обе точки из прошлых ревью перепроверены заново — в PostEditModal по-прежнему нет ни usePostDraft, ни markSent, ни импорта PostCreateForm (упоминания только в поясняющем комментарии), и ни один путь ошибки не закрывает окно и не чистит текст: строковый detail пробрасывается дословно, отдельные ветки у 422, сети, 429 (тело от nginx без JSON detail) и любого другого статуса
+[LOG] 2026-09-14 15:40 — Reviewer: зеркало стоимости гейтов на клиенте теперь совпадает с сервером ПОЛНОСТЬЮ — combat 200, pvp/gathering/dungeon/npc_dialogue 500, DEFAULT_GATE_COST 500 против GATE_SYMBOL_COST.get(action_type, 500), пол MIN_POST_LENGTH 300, множитель max(1, целей); та самая дыра с pvp по 0 символов закрыта
+[LOG] 2026-09-14 15:45 — Reviewer: документация сверена по исходникам, а не по разделу 3. Нашлись две неточности в ссылках и исправлены на месте: в таблице жизненного цикла подписи двух точек вызова expire_gate_requests были переставлены местами (main.py:1386 это move_and_post, а main.py:1616 — quick_move), и PUT-эндпоинт рассмотрения был указан как main.py:2282 вместо 2283. Остальные file:line верны
+[LOG] 2026-09-14 15:50 — Reviewer: замечание по стенду — в ЗАПУЩЕННОМ контейнере api-gateway лимита post_edit_limit нет (образ собран до T6, конфиг вшит внутрь). Дефектом не считаю: оба конфига в репозитории содержат лимит и проходят nginx -t, а деплой делает docker compose up --build. Локально стоит пересобрать шлюз
+[LOG] 2026-09-14 15:55 — Reviewer: тестовые данные удалены и пересчитаны в ноль — посты, гейты, заявки, запросы на удаление, жалобы, лайки, черновики, атрибуты, персонажи 999801–999803, соседства, локации 999901/999902, уведомления и пользователи 41/42/43; ни один существующий аккаунт, пост или локация не тронуты. Сертификат и /etc/letsencrypt в api-gateway удалены, мутационная копия /rvwmut3 и все скрипты из /tmp контейнера стёрты, md5-паритет с репозиторием подтверждён, полный прогон после уборки — снова 1057 passed
+[LOG] 2026-09-14 16:00 — Reviewer: T15 завершена, результат PASS — вся фича FEAT-159 (Phase A + Phase B) готова к отгрузке; блокирующих проблем нет, две исправленные мною неточности в документации и три незначительные заметки
+
+
 ## 7. Completion Summary (filled by PM on close — in Russian)
 
-_TBD_
+### Что сделано
+
+До этой фичи пост был неизменяем с момента отправки — в сервисе не было ни одного PUT или PATCH
+на посты. Опечатку, замеченную через секунду, исправить было нечем.
+
+**Фаза A — правка текста.** `PUT /locations/posts/{post_id}`: свой пост, только пока после тебя
+никто не написал, только в течение часа с публикации. Оба ограничения перепроверяются **на
+сервере в момент сохранения**, внутри той же транзакции, которая блокирует строку — проверка на
+клиенте решает лишь, показывать ли кнопку.
+
+Две детали, которые выглядят придирками и таковыми не являются. «После тебя не писали» сравнивает
+**идентификаторы**, а не время: два поста могут попасть в одну секунду, и сравнение по времени
+пропустило бы правку. Час считает **MySQL относительно `NOW()`**, а не Python: `created_at`
+хранится без часового пояса, и сравнение с датой, у которой пояс есть, молча сдвинуло бы окно.
+
+Опыт за правку не начисляется — иначе окно превратилось бы в способ фарма. Правка видна:
+«изменено», либо «изменено администратором», когда правил не автор. Флаг вычисляется, а не
+хранится, и при сбое запроса деградирует в «нет», чтобы случайно не обвинить администратора.
+
+Админы обходят оба ограничения везде, включая свои посты (решение пользователя от 13.09),
+но не обходят проверки содержимого. Модератор здесь **не** админ и получает отказ.
+
+**Фаза B — забытые намерения через модерацию.** Идея пользователя: гейт, забытый при публикации,
+можно добавить при редактировании, но он **не срабатывает** — создаётся заявка, и механика
+открывается только после одобрения администратором. Отклонили — прав не появилось.
+
+Это совпадает с исходным замыслом гейтов: система проверяет только длину и выбор целей, а
+смысловой абуз ловит живой человек.
+
+### Главное, что пришлось защитить
+
+Гейты покупаются длиной текста. Бюджет считается **по всем сразу**: существующие гейты **любого
+статуса** (включая истёкшие — иначе выход из локации и возврат обнуляли бы потраченное), гейты в
+уже поданной заявке, и новые запрошенные. Проверка только новых позволила бы посту на 1000 знаков,
+уже потратившему бюджет на пять гейтов, «добавить» ещё пять бесплатно.
+
+Тот же пересчёт выполняется **повторно при одобрении** — пост могли укоротить между подачей
+заявки и её рассмотрением.
+
+Первое ревью фазы A вернуло **FAIL** именно здесь: правило было спроектировано так, что
+«закрывается само» общим бюджетом фазы B, и фаза A выехала бы без него. Дыру закрыли, а тесты
+проверили мутациями — отключение проверки, фильтр только по открытым гейтам, сдвиг границы на
+единицу и освобождение админа убивают ровно те тесты, что за это отвечают.
+
+### Что изменилось от первоначального плана
+
+- **Админ правит и свои посты без ограничений** — уточнение пользователя по ходу работы.
+  Порядок проверок в коде развернули, документацию и тесты привели в соответствие.
+- **Запрет «поздних» целей отклонён** — не как избыточный, а как **неосуществимый**: чтобы знать,
+  что цель появилась в локации позже поста, нужна история перемещений, а её нет ни у игроков, ни у
+  НПС. Защита прикрывала бы только бой и пропускала PvP и разговор с НПС. Вместо запрета —
+  показывать администратору имя и состояние каждой цели и оставлять решение человеку.
+- **Редактирование сделано отдельным окном**, а не режимом внутри формы поста: форма сращена с
+  автосохранением черновиков, и сессия редактирования затирала бы живой черновик локации — ровно
+  та потеря текста, ради которой делалась FEAT-156.
+- **Заявки получили свою таблицу**, а не приделаны к запросам на удаление: у тех ветка одобрения
+  **удаляет пост**, и добавлять туда условие «выдать права» — худшее из возможных мест.
+
+### Проверка
+
+- Сюита `locations-service` выросла с 992 до **1057**, ноль падений.
+- Эксплойт с бюджетом доказан закрытым **по каждому из трёх путей отдельно** — обычные гейты,
+  истёкшие, вторая заявка — и отдельно при одобрении после укорачивания поста.
+- Проверено живьём: правка не создаёт прав, одобрение создаёт ровно запрошенные и ничего сверх,
+  отклонение не оставляет ничего, уход из локации гасит заявку на обоих путях перемещения,
+  удаление поста закрывает её, модератор сохранил доступ к разделу модерации.
+- Клиентская копия формулы стоимости сверена с серверной: нашлось расхождение (намерение `pvp`
+  оценивалось в 0 вместо 500 — ложное «можно сохранять»), исправлено в общем файле.
+
+### Оставшиеся риски / follow-up
+
+- **В браузере ничего не проверялось** — расширение Chrome не подключено ни в одном из трёх ревью.
+  Непроверенными остаются вёрстка на 360px, пункт «Редактировать» в меню поста, вид пометки
+  «изменено» и значка «на рассмотрении», карточки заявок в админке и чистота консоли.
+- **Локальный `api-gateway` собран до появления rate-limit** на редактирование: конфиги в
+  репозитории верные, но контейнер надо пересобрать (`docker compose up --build api-gateway`).
+- В `ISSUES.md`: цели гейтов по-прежнему не проверяются **при создании** поста (обогащение
+  появилось только на пути модерации), `action_gates.created_at` не читается ни одним запросом,
+  и эндпоинт рассмотрения заявок повторяет известную неточность контракта из FEAT-158.
+- В карточках модерации текст поста показывается как обычный текст, хотя хранится как HTML —
+  администратор видит теги. Поведение из FEAT-158, общее для всех вкладок.
