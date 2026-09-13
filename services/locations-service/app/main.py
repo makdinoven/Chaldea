@@ -374,6 +374,146 @@ async def delete_district_route(
         await session.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 # --------------------------------------------------------------------
+# POST DRAFTS (FEAT-156) — D1..D6
+# --------------------------------------------------------------------
+# Объявлены ДО маршрутов вида `/{location_id}/...`: иначе FastAPI сопоставит
+# `/locations/drafts` с одностегментным параметром и черновики станут
+# недоступны. Порядок объявления здесь — часть контракта, не стиль.
+#
+# Авторизация везде одинаковая: токен (`get_current_user_via_http`) плюс
+# `verify_character_ownership`. Для маршрутов, адресованных строкой (D2, D6),
+# сначала читаем строку и проверяем владельца по `row.character_id` —
+# `character_id` из запроса на таких маршрутах не доверяем никогда.
+
+@router.get("/drafts", response_model=List[schemas.PostDraftListItem])
+async def list_post_drafts(
+    character_id: int = Query(..., description="Персонаж, чьи черновики читаем"),
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D1. История текстов персонажа: не более десяти строк, свежие сверху."""
+    await verify_character_ownership(session, character_id, current_user.id)
+    return await crud.list_drafts(session, character_id)
+
+
+@router.get("/drafts/{draft_id}", response_model=schemas.PostDraftRead)
+async def get_post_draft(
+    draft_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D2. Один черновик целиком, вместе с текстом."""
+    draft = await crud.get_draft_by_id(session, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Черновик не найден")
+    # Владелец проверяется по строке, а не по данным из запроса.
+    await verify_character_ownership(session, draft.character_id, current_user.id)
+    return draft
+
+
+@router.delete("/drafts/{draft_id}", status_code=204)
+async def delete_post_draft(
+    draft_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D6. Удалить черновик из истории. Идемпотентно: 204 и когда строки нет."""
+    draft = await crud.get_draft_by_id(session, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Черновик не найден")
+    await verify_character_ownership(session, draft.character_id, current_user.id)
+    await crud.delete_draft_by_id(session, draft_id)
+    return None
+
+
+@router.delete("/admin/drafts/by_character/{character_id}")
+async def admin_delete_drafts_by_character(
+    character_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("locations:delete")),
+):
+    """D7. Служебная очистка черновиков удаляемого персонажа.
+
+    Зовётся из character-service внутри `delete_character` — тем же
+    graceful-паттерном, что и очистка инвентаря, навыков и характеристик.
+    Владельца здесь проверить нельзя: строка персонажа уже уничтожается, и
+    `verify_character_ownership` отдала бы 404. Поэтому доступ по RBAC —
+    токен вызывающего пробрасывается character-service'ом, то есть чистить
+    черновики может тот, кому позволено удалить персонажа.
+
+    Удаляет только `post_drafts`. Посты персонажа остаются — они часть общего
+    отыгрыша локации (раздел 3.12 FEAT-156).
+
+    Идемпотентно: 200 и `count: 0`, когда чистить нечего.
+    """
+    count = await crud.delete_drafts_by_character(session, character_id)
+    return {"detail": "All post drafts deleted", "count": count}
+
+
+@router.get("/{location_id}/draft", response_model=Optional[schemas.PostDraftRead])
+async def get_location_draft(
+    location_id: int,
+    character_id: int = Query(..., description="Персонаж, чей черновик читаем"),
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D3. Живой черновик персонажа в локации либо `null`."""
+    await verify_character_ownership(session, character_id, current_user.id)
+    return await crud.get_active_draft(session, character_id, location_id)
+
+
+@router.put("/{location_id}/draft", response_model=Optional[schemas.PostDraftRead])
+async def save_location_draft(
+    location_id: int,
+    body: schemas.PostDraftSave,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D4. Автосохранение черновика. `null` в ответе — текст был пуст и живая
+    строка удалена (пустые черновики не храним)."""
+    await verify_character_ownership(session, body.character_id, current_user.id)
+    # Дубль проверки длины из `crud.upsert_draft` — сознательный: отсекаем
+    # гигантское тело до похода в БД. Сообщение строится из той же константы,
+    # чтобы две проверки не разъехались.
+    if len(body.content or "") > crud.MAX_DRAFT_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Черновик слишком длинный — максимум {crud.MAX_DRAFT_LENGTH} символов",
+        )
+    return await crud.upsert_draft(session, body.character_id, location_id, body.content)
+
+
+@router.delete("/{location_id}/draft", status_code=204)
+async def delete_location_draft(
+    location_id: int,
+    character_id: int = Query(..., description="Персонаж, чей черновик чистим"),
+    keep_in_history: bool = Query(
+        False,
+        description="Оставить текст в истории черновиков вместо удаления",
+    ),
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D5. Освободить живой слот черновика локации.
+
+    По умолчанию — кнопка «Очистить черновик»: строка удаляется насовсем.
+
+    `keep_in_history=true` — кнопка «Отмена»: поле ввода очищается, но текст
+    остаётся в истории (`active = NULL`, `sent_at` по-прежнему `NULL`).
+    Живой слот в обоих случаях освобождается, поэтому следующий пост в этой
+    локации заводит новую строку, а не перетирает сохранённую.
+
+    Идемпотентно: 204 и когда чистить нечего.
+    """
+    await verify_character_ownership(session, character_id, current_user.id)
+    if keep_in_history:
+        await crud.archive_active_draft(session, character_id, location_id)
+    else:
+        await crud.delete_active_draft(session, character_id, location_id)
+    return None
+
+
+# --------------------------------------------------------------------
 # LOCATION
 # --------------------------------------------------------------------
 @router.post("/", response_model=schemas.LocationCreateResponse)
@@ -1001,7 +1141,7 @@ async def move_and_post(
         profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/profile"
         profile_resp = await client.get(profile_url)
         if profile_resp.status_code != 200:
-            raise HTTPException(status_code=404, detail="Character profile not found")
+            raise HTTPException(status_code=404, detail="Профиль персонажа не найден")
         profile_data = profile_resp.json()
     current_location = profile_data.get("current_location_id")  # может быть NULL
 
@@ -1047,7 +1187,7 @@ async def move_and_post(
         if not neighbor:
             raise HTTPException(
                 status_code=400,
-                detail="Destination is not adjacent to current location"
+                detail="Целевая локация не является соседней"
             )
         movement_cost = neighbor.energy_cost
 
@@ -1056,11 +1196,11 @@ async def move_and_post(
         attr_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{movement.character_id}"
         attr_resp = await client.get(attr_url)
         if attr_resp.status_code != 200:
-            raise HTTPException(status_code=404, detail="Character attributes not found")
+            raise HTTPException(status_code=404, detail="Характеристики персонажа не найдены")
         attr_data = attr_resp.json()
         current_stamina = attr_data.get("current_stamina", 0)
         if current_stamina < movement_cost:
-            raise HTTPException(status_code=400, detail="Not enough stamina to move")
+            raise HTTPException(status_code=400, detail="Недостаточно выносливости для перехода")
 
     # 4. Validate minimum post length (strip HTML before counting)
     plain_text = crud.strip_html_tags(movement.content)
@@ -1089,6 +1229,17 @@ async def move_and_post(
     post_in = schemas.PostCreate(**payload)
     new_post = await crud.create_post(session, post_in)
 
+    # 5.1. Пост отправлен — живой черновик локации уходит в архив «дописанным»
+    # (FEAT-156). `create_post` уже закоммитил строку, поэтому бухгалтерия
+    # черновиков не имеет права уронить уже принятый базой пост: тот же
+    # защитный паттерн, что и у `create_action_gates` ниже.
+    try:
+        await crud.archive_draft_on_post(
+            session, movement.character_id, destination_location_id, movement.content,
+        )
+    except Exception as e:
+        logger.warning(f"archive_draft_on_post failed for post {new_post.id}: {e}")
+
     # Grant the action gates this intent post unlocks (FEAT-145).
     if mp_gates:
         try:
@@ -1104,7 +1255,7 @@ async def move_and_post(
         update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/update_location"
         update_resp = await client.put(update_url, json={"new_location_id": destination_location_id})
         if update_resp.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to update character location")
+            raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
 
     # 6.5. Устанавливаем кулдаун перемещения (energy_cost минут)
     if movement_cost > 0:
@@ -1119,7 +1270,7 @@ async def move_and_post(
         consume_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{movement.character_id}/consume_stamina"
         consume_resp = await client.post(consume_url, json={"amount": movement_cost})
         if consume_resp.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to deduct stamina for movement")
+            raise HTTPException(status_code=500, detail="Не удалось списать выносливость за переход")
 
     # 7.5. Fire-and-forget: track location visit for battle pass
     if settings.BATTLEPASS_SERVICE_URL:

@@ -82,7 +82,7 @@ Chaldea - это браузерная RPG-игра с микросервисно
 | character-attributes-service | `character_attributes` |
 | skills-service | `skills`, `skill_ranks`, `skill_rank_damages`, `skill_rank_effects`, `character_skills` |
 | inventory-service | `items`, `character_inventory`, `equipment_slots`, `gathering_skills`, `gathering_skill_ranks`, `character_gathering_skills` (FEAT-128) |
-| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154) |
+| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154), `post_drafts` (FEAT-156) |
 | notification-service | `notifications` |
 | battle-service | `battles`, `battle_participants`, `battle_turns` |
 
@@ -111,7 +111,11 @@ character-service ──> inventory-service (создание инвентаря
                   ──> user-service (привязка персонажа к юзеру)
                   ──> locations-service (FEAT-154: проверка стартовой точки при подаче и
                       одобрении заявки, текущий игровой год из /locations/game-time;
-                      обе ссылки graceful — недоступность сервиса не блокирует заявку)
+                      FEAT-156: DELETE /locations/admin/drafts/by_character/{id} —
+                      очистка черновиков постов при удалении персонажа, шаг 4.5 в
+                      delete_character;
+                      все ссылки graceful — недоступность сервиса не блокирует заявку
+                      и не отменяет удаление персонажа)
 
 locations-service ──> character-service (игроки в локации)
                   ──> character-attributes-service (стамина для перемещения, refund_stamina при cancel/battle-interrupt — FEAT-128)

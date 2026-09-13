@@ -6,7 +6,9 @@
 
 ## Назначение
 
-Игровой мир: страны, регионы, районы, локации. Граф локаций (соседи с cost перемещения). Перемещение персонажей. Посты/чат в локациях.
+Игровой мир: страны, регионы, районы, локации. Граф локаций (соседи с cost перемещения). Перемещение персонажей. Посты/чат в локациях. Черновики ролевых постов (FEAT-156).
+
+**Аутентификация:** вопреки CLAUDE.md п.10.7, сервис **проверяет JWT сам** — `app/auth_http.py:24` `get_current_user_via_http` валидирует Bearer-токен запросом к `user-service GET /users/me`. Зависимость стоит напрямую на 26 маршрутах и ещё на 59 через `require_permission(...)` (`auth_http.py:73`), который строится поверх неё. Владелец персонажа сверяется отдельной функцией `verify_character_ownership` (`main.py:114`).
 
 ## Структура файлов
 
@@ -76,6 +78,37 @@ locations-service/app/
 |-------|------|----------|
 | POST | `/locations/posts/` | Создать пост в локации |
 | GET | `/locations/{id}/posts/` | Посты в локации (newest first) |
+
+### Черновики ролевых постов (FEAT-156)
+
+Черновик привязан к паре **персонаж + локация**. Автосохранение с фронтенда (debounce), восстановление при возврате в локацию, история из последних 10 текстов персонажа — как недописанных, так и уже отправленных.
+
+Маршруты `/locations/drafts...` объявлены в `main.py:376-496` **до** параметрических `/{location_id}/...` — иначе FastAPI сопоставил бы `/locations/drafts` с одностегментным параметром. Порядок объявления здесь часть контракта, а не стиль.
+
+#### Player-facing (JWT + `verify_character_ownership`)
+| # | Метод | Путь | Описание |
+|---|-------|------|----------|
+| D1 | GET | `/locations/drafts?character_id={id}` | История текстов персонажа: ≤10 `PostDraftListItem`, `updated_at DESC`. **Без `content`** — только `preview` (первые 180 символов чистого текста с многоточием), `char_count`, `location_name`, флаги `is_sent` / `is_active` |
+| D2 | GET | `/locations/drafts/{draft_id}` | Один черновик целиком (`PostDraftRead`, вместе с текстом). 404 «Черновик не найден» |
+| D3 | GET | `/locations/{location_id}/draft?character_id={id}` | Живой черновик персонажа в локации либо `null` |
+| D4 | PUT | `/locations/{location_id}/draft` | Автосохранение (upsert). Тело `PostDraftSave` = `{character_id, content}`. Возвращает `null`, если текст был пуст и живая строка удалена — пустые черновики не хранятся. 400 «Черновик слишком длинный — максимум 100000 символов». Rate-limit 60 r/min, burst 20 (Nginx, regex-локация `~ ^/locations/[0-9]+/draft$`) |
+| D5 | DELETE | `/locations/{location_id}/draft?character_id={id}` | Кнопка «Очистить черновик». 204, идемпотентно |
+| D6 | DELETE | `/locations/drafts/{draft_id}` | Удалить строку из истории. 204. 404 «Черновик не найден» |
+
+Для маршрутов, адресованных строкой (**D2, D6**), строка читается **первой**, и владелец проверяется по `row.character_id`, а не по `character_id` из запроса — чужой черновик отдаёт 403, а не содержимое.
+
+#### Служебный (`require_permission("locations:delete")`)
+| # | Метод | Путь | Описание |
+|---|-------|------|----------|
+| D7 | DELETE | `/locations/admin/drafts/by_character/{character_id}` | Очистка черновиков удаляемого персонажа. Возвращает `{"detail": "All post drafts deleted", "count": N}`, идемпотентно (`count: 0`, когда чистить нечего). Вызывается **character-service** из `delete_character` |
+
+D7 намеренно **не** проверяет владельца: строка персонажа в этот момент уже уничтожается, и `verify_character_ownership` отдала бы 404. Доступ по RBAC — токен вызывающего пробрасывается character-service'ом, то есть чистить черновики может тот, кому позволено удалить персонажа. Разрешение `locations:delete` уже существовало, новой RBAC-миграции не потребовалось. Удаляются **только** `post_drafts`: посты персонажа остаются, они часть общего отыгрыша локации.
+
+#### Архивация при отправке поста
+Отдельного эндпоинта нет. `move_and_post` сразу после успешного `crud.create_post` зовёт `crud.archive_draft_on_post` (`main.py:1215-1224`) — живая строка получает `active = NULL`, `sent_at = now` и текст отправленного поста. Вызов обёрнут в `try/except` + `logger.warning` по образцу соседнего `create_action_gates`: бухгалтерия черновиков не имеет права уронить пост, который база уже приняла.
+
+#### Константы (`crud.py:31-36`)
+`MAX_DRAFTS_PER_CHARACTER = 10`, `MAX_DRAFT_LENGTH = 100_000`, `DRAFT_PREVIEW_LENGTH = 180`.
 
 ### Клиентские / Admin
 | Метод | Путь | Описание |
@@ -152,7 +185,14 @@ Country -> Region -> District -> Location
 - **Locations** - id, name, district_id (FK CASCADE), type (location/subdistrict), image_url, recommended_level, quick_travel_marker, parent_id (FK self CASCADE), description, **is_starting** BOOLEAN NOT NULL DEFAULT 0 (+ индекс `ix_locations_is_starting`), **starting_blurb** TEXT NULL (FEAT-154)
 - **origin_countries** (FEAT-154) - id, name (UNIQUE), summary, skitaltsy_attitude, emblem_url, map_image_url, archive_slug, is_active (мягкое удаление), sort_order; индекс `ix_origin_countries_active_sort (is_active, sort_order)`. `archive_slug` — **мягкая** ссылка на `archive_articles.slug` без FK: статьи это контент и могут переименовываться, «висячий» slug деградирует до «нет ссылки на лор», а не до ошибки
 - **LocationNeighbors** - id, location_id (FK CASCADE), neighbor_id (FK CASCADE), energy_cost
-- **posts** - id, character_id, location_id (FK CASCADE), content, created_at
+- **posts** - id, character_id, location_id (FK CASCADE), content (`TEXT` — см. «Известные проблемы»), post_type (regular/gated, FEAT-145), created_at
+- **post_drafts** (FEAT-156) - id, character_id (cross-service, **без FK**), location_id (FK `Locations.id` CASCADE), content **MEDIUMTEXT**, active TINYINT NULL, sent_at TIMESTAMP NULL, created_at, updated_at; `UNIQUE (character_id, location_id, active)` = `uq_post_drafts_active`, индекс `idx_post_drafts_char_updated (character_id, updated_at)`
+  - `content` — `MEDIUMTEXT`, а не `TEXT`: кириллица в `utf8mb4` стоит 2 байта на символ плюс разметка TipTap, длинный ролевой пост упёрся бы в 64 КБ и молча обрезался.
+  - `active` — намеренно **nullable-флаг**, а не boolean. MySQL не умеет частично уникальные индексы, но считает `NULL` различными внутри UNIQUE-ключа, поэтому `UNIQUE (character_id, location_id, active)` даёт ровно один живой черновик на пару «персонаж + локация» и не ограничивает число архивных строк. Код пишет только `1` или `NULL`, никогда `0`.
+  - `sent_at IS NOT NULL` = текст стал настоящим постом. Архивная строка с `sent_at IS NULL` — черновик, вытесненный из живого слота, но ещё лежащий в истории.
+  - `updated_at` проставляется явно в `crud` (`datetime.now(timezone.utc)`), без MySQL `ON UPDATE` — чтобы порядок вытеснения был детерминированным и тестируемым.
+  - **Вытеснение:** после каждой вставки `evict_drafts` оставляет персонажу 10 самых свежих строк по `updated_at`, остальные удаляет. Вытеснить может и живой черновик другой локации — это корректно: он по определению самый давно не трогавшийся из десяти.
+  - Удаление локации уносит её черновики каскадом; удаление персонажа — через D7 (FK на `characters` в этом сервисе нет ни у одной таблицы).
 - **gathering_nodes** (FEAT-128) - id, location_id (FK Locations CASCADE), node_name, category enum(ore/herb/wood), result_item_id (cross-service, no FK), result_quantity_per_gather, stamina_per_gather, daily_bank_max, current_bank, allow_concurrent_gather, depleted_at, restore_at (= depleted_at+24h), is_enabled, created_at, updated_at
 - **gathering_sessions** (FEAT-128) - id, node_id (FK gathering_nodes CASCADE), character_id, tool_inventory_item_id (nullable, no FK), tool_item_id, tool_durability_at_start, started_at, complete_at, effective_speed/double/stamina_bonus_pct (snapshot), stamina_paid, base_quantity, skill_slug, status enum(active/completed/cancelled/interrupted_by_battle/inventory_full), finished_at, result_quantity, xp_awarded, rank_up_to
 
@@ -163,13 +203,17 @@ Country -> Region -> District -> Location
 3. Найти energy_cost из LocationNeighbors
 4. HTTP -> attributes-service: проверить стамину
 5. Создать пост в целевой локации
+5.1. Архивировать живой черновик локации (`archive_draft_on_post`, FEAT-156) — в `try/except`, сбой не роняет пост
 6. HTTP -> character-service: обновить current_location
 7. HTTP -> attributes-service: списать стамину
+
+⚠️ Шаг 5 **коммитит пост до** шагов 6 и 7. Если они упадут (два пути с 500), пост уже записан, а персонаж остался в старой локации с несписанной стаминой — см. «Известные проблемы».
 
 ## Коммуникация
 
 ### HTTP (входящие, важные для межсервисных контрактов)
 - `character-service:8005` -> GET `/locations/starting-points`, GET `/locations/starting-points/{id}`, GET `/locations/game-time` (FEAT-154). Со стороны character-service все три вызова graceful: недоступность locations-service не блокирует подачу заявки и не проваливает одобрение — персонаж просто остаётся без стартовой локации, а `move_and_post` трактует `current_location_id IS NULL` как «куда угодно бесплатно»
+- `character-service:8005` -> DELETE `/locations/admin/drafts/by_character/{character_id}` (FEAT-156, эндпоинт D7). Шаг 4.5 внутри `delete_character` (`character-service/app/main.py:1209-1221`), под `require_permission("locations:delete")` с проброшенным Bearer-токеном вызывающего. Вызов graceful: `try/except` + `logger.warning`, недоступность locations-service **не отменяет** удаление персонажа
 
 ### HTTP (исходящие)
 - `character-service:8005` -> GET `/characters/{id}/profile`, GET `/characters/by_location`, PUT `/characters/{id}/update_location`, GET `/characters/{id}/short_info` (для имени/аватара активных gatherers в client/details)
@@ -187,3 +231,5 @@ Country -> Region -> District -> Location
 3. **Нет валидации parent_id** при создании локации
 4. **Молчаливые ошибки** - character-service failures возвращают пустые данные без warning
 5. **CORS allow-all** в production
+6. **`posts.content` — `TEXT`** (`app/models.py:165`), то есть 64 КБ. Кириллица в `utf8mb4` стоит 2 байта на символ плюс разметка TipTap — длинный ролевой пост может молча обрезаться. `post_drafts.content` сделан `MEDIUMTEXT` именно поэтому, `posts` оставлен как был (FEAT-156, вне области)
+7. **`move_and_post` коммитит пост до обновления локации и списания стамины** (`app/main.py:1213` против `:1241` и `:1256`) — при 500 на любом из этих шагов пост остаётся, а переход не состоялся. Предсуществующее, тот же порядок в `quick_move` (`:1470` / `:1477`)

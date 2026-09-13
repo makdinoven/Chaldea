@@ -1206,6 +1206,20 @@ async def delete_character(
         except Exception as e:
             logger.warning(f"Error clearing current_character for user {user_id}: {e}")
 
+    # 4.5. Delete post drafts in locations-service (graceful)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{settings.LOCATIONS_SERVICE_URL}/locations/admin/drafts/by_character/{character_id}",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Post drafts cleared for character {character_id}")
+            else:
+                logger.warning(f"Failed to clear post drafts for character {character_id}: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        logger.warning(f"Error clearing post drafts for character {character_id}: {e}")
+
     # 5. Delete the character row
     try:
         db.delete(character)

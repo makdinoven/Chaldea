@@ -26,6 +26,15 @@ GATE_SYMBOL_COST = {
     "combat": 200, "pvp": 500, "gathering": 500, "dungeon": 500, "npc_dialogue": 500,
 }
 
+# --- Черновики ролевых постов (FEAT-156) ---
+# Сколько текстов (черновиков + отправленных) храним на персонажа.
+MAX_DRAFTS_PER_CHARACTER = 10
+# Потолок длины черновика. MEDIUMTEXT вмещает больше, но 100 000 символов —
+# заведомо выше любого реального поста и защищает от мусорной записи.
+MAX_DRAFT_LENGTH = 100_000
+# Длина превью в списке «Черновики».
+DRAFT_PREVIEW_LENGTH = 180
+
 
 def normalize_gates(post_type, targets, gates) -> list:
     """Build a list of {"action_type", "targets"} from either the multi-gate
@@ -130,6 +139,7 @@ from models import (
     ArchiveCategory, ArchiveArticle, ArchiveArticleCategory,
     RegionTransitionArrow, ArrowNeighbor, FloatingStructure,
     GatheringNode, GatheringSession, OriginCountry, OriginStartingPoint,
+    PostDraft,
 )
 from schemas import (
     DistrictCreate, LocationCreate, PostCreate, LocationNeighborCreate,
@@ -7052,3 +7062,293 @@ async def remove_origin_starting_point(
     await session.delete(link)
     await session.commit()
     return await get_origin_starting_points(session, origin_id)
+
+
+# -------------------------------
+#   POST DRAFTS (FEAT-156)
+# -------------------------------
+# Живой черновик пары «персонаж + локация» — строка с ``active = 1``.
+# Архивная строка — ``active = NULL``: либо вытесненный из живого слота черновик,
+# либо текст уже отправленного поста (``sent_at IS NOT NULL``).
+# Значение ``0`` в ``active`` не пишется никогда: уникальность
+# ``(character_id, location_id, active)`` держится именно на различимости NULL.
+DRAFT_ACTIVE = 1
+
+
+def _draft_preview(content: str) -> Tuple[str, int]:
+    """Превью и длина обычного текста черновика.
+
+    Возвращает ``(preview, char_count)``: превью обрезано до
+    ``DRAFT_PREVIEW_LENGTH`` символов с многоточием, ``char_count`` — полная
+    длина текста без HTML.
+    """
+    plain = strip_html_tags(content or "")
+    if len(plain) > DRAFT_PREVIEW_LENGTH:
+        return plain[:DRAFT_PREVIEW_LENGTH].rstrip() + "…", len(plain)
+    return plain, len(plain)
+
+
+def _validate_draft_length(content: str) -> str:
+    """Отбраковать слишком длинный черновик. Возвращает исходный текст."""
+    content = content or ""
+    if len(content) > MAX_DRAFT_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Черновик слишком длинный — максимум {MAX_DRAFT_LENGTH} символов",
+        )
+    return content
+
+
+async def get_active_draft(
+    session: AsyncSession, character_id: int, location_id: int
+) -> Optional[PostDraft]:
+    """Живой черновик персонажа в локации либо ``None``."""
+    result = await session.execute(
+        select(PostDraft).where(
+            PostDraft.character_id == character_id,
+            PostDraft.location_id == location_id,
+            PostDraft.active == DRAFT_ACTIVE,
+        )
+    )
+    return result.scalars().first()
+
+
+async def get_draft_by_id(
+    session: AsyncSession, draft_id: int
+) -> Optional[PostDraft]:
+    """Черновик по идентификатору — без проверки владельца.
+
+    Владельца проверяет вызывающая сторона по ``row.character_id``: доверять
+    ``character_id`` из запроса на маршруте, адресованном строкой, нельзя.
+    """
+    result = await session.execute(
+        select(PostDraft).where(PostDraft.id == draft_id)
+    )
+    return result.scalars().first()
+
+
+async def list_drafts(session: AsyncSession, character_id: int) -> List[dict]:
+    """История текстов персонажа: не более ``MAX_DRAFTS_PER_CHARACTER`` строк,
+    от свежих к старым. Без ``content`` — только превью и длина.
+
+    ``outerjoin`` на ``Locations``: локацию могли удалить между записью и
+    чтением (каскад её черновики снесёт, но список не должен падать на гонке).
+    """
+    result = await session.execute(
+        select(PostDraft, Location.name)
+        .outerjoin(Location, Location.id == PostDraft.location_id)
+        .where(PostDraft.character_id == character_id)
+        .order_by(PostDraft.updated_at.desc(), PostDraft.id.desc())
+        .limit(MAX_DRAFTS_PER_CHARACTER)
+    )
+    items: List[dict] = []
+    for draft, location_name in result.all():
+        preview, char_count = _draft_preview(draft.content)
+        items.append({
+            "id": draft.id,
+            "location_id": draft.location_id,
+            "location_name": location_name,
+            "preview": preview,
+            "char_count": char_count,
+            "is_sent": draft.sent_at is not None,
+            "is_active": draft.active == DRAFT_ACTIVE,
+            "created_at": draft.created_at,
+            "updated_at": draft.updated_at,
+        })
+    return items
+
+
+async def evict_drafts(session: AsyncSession, character_id: int) -> int:
+    """Оставить персонажу только ``MAX_DRAFTS_PER_CHARACTER`` самых свежих
+    текстов, остальные удалить. Возвращает число удалённых строк.
+
+    Не коммитит — вызывается внутри той же транзакции, что и запись.
+
+    Вытеснить может и живой черновик другой локации. Это правильно: под нож
+    попадает самый давно не менявшийся из десяти текстов, то есть заведомо не
+    тот, в который сейчас печатают.
+    """
+    result = await session.execute(
+        select(PostDraft.id)
+        .where(PostDraft.character_id == character_id)
+        .order_by(PostDraft.updated_at.desc(), PostDraft.id.desc())
+        .offset(MAX_DRAFTS_PER_CHARACTER)
+    )
+    stale_ids = [row[0] for row in result.all()]
+    if not stale_ids:
+        return 0
+    await session.execute(
+        delete(PostDraft).where(PostDraft.id.in_(stale_ids))
+    )
+    return len(stale_ids)
+
+
+async def upsert_draft(
+    session: AsyncSession, character_id: int, location_id: int, content: str
+) -> Optional[PostDraft]:
+    """Автосохранение: создать или обновить живой черновик локации.
+
+    Пустой текст черновиком не считается — живая строка удаляется, возвращается
+    ``None`` (правило брифа «пустой черновик не создаём и не храним»).
+
+    Гонка «две вкладки сразу» закрыта уникальным ключом: если параллельная
+    вставка успела первой, ловим ``IntegrityError``, перечитываем строку и
+    обновляем её — last-write-wins, как и договорились в брифе.
+    """
+    content = _validate_draft_length(content)
+
+    if not strip_html_tags(content):
+        await delete_active_draft(session, character_id, location_id)
+        return None
+
+    now = datetime.now(timezone.utc)
+    draft = await get_active_draft(session, character_id, location_id)
+
+    if draft is None:
+        draft = PostDraft(
+            character_id=character_id,
+            location_id=location_id,
+            content=content,
+            active=DRAFT_ACTIVE,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(draft)
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            draft = await get_active_draft(session, character_id, location_id)
+            if draft is None:
+                # Строки нет, и вставить её не вышло — дальше гадать нечего.
+                raise HTTPException(
+                    status_code=409,
+                    detail="Не удалось сохранить черновик, попробуйте ещё раз",
+                )
+            draft.content = content
+            draft.updated_at = now
+    else:
+        draft.content = content
+        draft.updated_at = now
+
+    await evict_drafts(session, character_id)
+    await session.commit()
+    await session.refresh(draft)
+    return draft
+
+
+async def delete_active_draft(
+    session: AsyncSession, character_id: int, location_id: int
+) -> int:
+    """Жёстко удалить живой черновик локации. Идемпотентно: возвращает число
+    удалённых строк (0, если черновика не было)."""
+    result = await session.execute(
+        delete(PostDraft).where(
+            PostDraft.character_id == character_id,
+            PostDraft.location_id == location_id,
+            PostDraft.active == DRAFT_ACTIVE,
+        )
+    )
+    await session.commit()
+    return int(result.rowcount or 0)
+
+
+async def archive_active_draft(
+    session: AsyncSession, character_id: int, location_id: int
+) -> int:
+    """Кнопка «Отмена»: убрать черновик из поля ввода, но сохранить текст.
+
+    Живая строка уходит в архив — ``active = NULL``. ``sent_at`` остаётся
+    ``NULL`` (текст так и не стал постом), ``content`` не трогаем. Освободить
+    живой слот обязательно: иначе следующий пост в этой же локации перезапишет
+    ту самую строку по ``uq_post_drafts_active`` — ровно та потеря текста,
+    против которой делалась вся фича (раздел 3.13 FEAT-156).
+
+    ``updated_at`` поднимается намеренно: писатель только что работал с этим
+    текстом, значит он идёт первым в списке и вытесняется последним.
+
+    Идемпотентно: живого черновика не было — возвращаем 0, сохранять нечего.
+
+    Отдельная функция, а не общий код с ``archive_draft_on_post``: та
+    перезаписывает ``content``, ставит ``sent_at`` и создаёт строку, если
+    живой не было. Здесь всё три раза наоборот.
+    """
+    draft = await get_active_draft(session, character_id, location_id)
+    if draft is None:
+        return 0
+
+    draft.active = None
+    draft.updated_at = datetime.now(timezone.utc)
+
+    await evict_drafts(session, character_id)
+    await session.commit()
+    return 1
+
+
+async def delete_draft_by_id(session: AsyncSession, draft_id: int) -> int:
+    """Удалить черновик по идентификатору. Владельца проверяет вызывающая
+    сторона — см. ``get_draft_by_id``."""
+    result = await session.execute(
+        delete(PostDraft).where(PostDraft.id == draft_id)
+    )
+    await session.commit()
+    return int(result.rowcount or 0)
+
+
+async def archive_draft_on_post(
+    session: AsyncSession, character_id: int, location_id: int, content: str
+) -> PostDraft:
+    """Пост отправлен: живой черновик локации уходит в архив «дописанным».
+
+    ``active = NULL`` освобождает живой слот, ``sent_at`` помечает текст как
+    ставший настоящим постом, ``content`` перезаписывается тем, что реально
+    отправлено (последний автосейв мог отстать от финальной правки).
+
+    Если живого черновика не было (например, API черновиков лежало во время
+    набора), архивная строка создаётся сразу.
+    """
+    now = datetime.now(timezone.utc)
+    draft = await get_active_draft(session, character_id, location_id)
+
+    if draft is None:
+        draft = PostDraft(
+            character_id=character_id,
+            location_id=location_id,
+            content=content,
+            active=None,
+            sent_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(draft)
+        await session.flush()
+    else:
+        draft.content = content
+        draft.active = None
+        draft.sent_at = now
+        draft.updated_at = now
+
+    await evict_drafts(session, character_id)
+    await session.commit()
+    await session.refresh(draft)
+    return draft
+
+
+async def delete_drafts_by_character(
+    session: AsyncSession, character_id: int
+) -> int:
+    """Снести все черновики персонажа — и живые, и архивные.
+
+    Служебная очистка при удалении персонажа (D7): character-service зовёт её
+    тем же graceful-паттерном, что и очистку инвентаря, навыков и характеристик.
+    Идемпотентна: второй вызов вернёт 0.
+
+    Трогает только ``post_drafts``. ``posts``, ``post_likes`` и ``action_gates``
+    остаются на месте — это продуктовое решение (раздел 3.12 FEAT-156), а не
+    недосмотр: посты удалённого персонажа держат общий отыгрыш локации.
+    """
+    result = await session.execute(
+        delete(PostDraft).where(PostDraft.character_id == character_id)
+    )
+    await session.commit()
+    return int(result.rowcount or 0)

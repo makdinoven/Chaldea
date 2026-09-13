@@ -4,6 +4,7 @@ from sqlalchemy import (
     Column, Integer, String, ForeignKey, Text, Boolean, Enum, BigInteger, TIMESTAMP,
     func, Float, JSON, text, UniqueConstraint, Index
 )
+from sqlalchemy.dialects.mysql import MEDIUMTEXT, TINYINT
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -715,3 +716,59 @@ class OriginStartingPoint(Base):
         Index('ix_origin_starting_points_location', 'location_id'),
         {'mysql_engine': 'InnoDB'},
     )
+
+
+class PostDraft(Base):
+    """Черновик ролевого поста — пара «персонаж + локация» (FEAT-156).
+
+    ``content`` — ``MEDIUMTEXT``, а не ``TEXT``: ``TEXT`` вмещает 64 КБ, кириллица
+    в ``utf8mb4`` стоит 2 байта на символ, плюс разметка TipTap. Длинный пост
+    упёрся бы в потолок и молча обрезался — ровно тот баг, ради которого фича и
+    делается.
+
+    ``active`` — намеренно nullable-флаг, а не boolean. MySQL не умеет частично
+    уникальные индексы, но считает ``NULL`` различными внутри UNIQUE-ключа,
+    поэтому ``UNIQUE (character_id, location_id, active)`` даёт ровно один живой
+    черновик на пару «персонаж + локация» и при этом не ограничивает число
+    архивных строк. Это гарантия на уровне БД против гонки «две вкладки сразу».
+    Код пишет только ``1`` или ``NULL``, никогда ``0``.
+
+    FK только на ``Locations.id`` — внешних ключей в таблицы чужих сервисов в
+    этом сервисе нет; очистка по персонажу делается admin-эндпоинтом (см. 3.12).
+    """
+
+    __tablename__ = "post_drafts"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    location_id = Column(
+        BigInteger, ForeignKey("Locations.id", ondelete="CASCADE"), nullable=False
+    )
+    content = Column(MEDIUMTEXT, nullable=False)
+    # 1 = живой черновик локации; NULL = архивная строка (вытесненная или отправленная)
+    active = Column(TINYINT, nullable=True)
+    # NOT NULL => этот текст стал настоящим постом («дописанный» из брифа)
+    sent_at = Column(TIMESTAMP, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    # Проставляется явно в crud (datetime.now(timezone.utc)), без MySQL ON UPDATE —
+    # чтобы порядок вытеснения был детерминированным и тестируемым.
+    updated_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'character_id', 'location_id', 'active', name='uq_post_drafts_active'
+        ),
+        Index('idx_post_drafts_char_updated', 'character_id', 'updated_at'),
+        {'mysql_engine': 'InnoDB'},
+    )
+
+    # Производные флаги для Pydantic-схем (orm_mode читает их как обычные атрибуты).
+    @property
+    def is_sent(self) -> bool:
+        """Текст стал настоящим постом («дописанный» из брифа)."""
+        return self.sent_at is not None
+
+    @property
+    def is_active(self) -> bool:
+        """Это живой черновик своей локации, а не архивная строка."""
+        return self.active == 1

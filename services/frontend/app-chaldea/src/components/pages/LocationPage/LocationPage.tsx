@@ -413,6 +413,8 @@ const LocationPage = () => {
             ? err.response.data.detail
             : 'Не удалось отправить пост';
         toast.error(message);
+        // Rethrow so PostCreateForm can tell failure from success and keep the text.
+        throw err;
       }
     },
     [locationId, character?.id, character?.current_location?.id, location, dispatch, fetchLocationData]
@@ -437,6 +439,8 @@ const LocationPage = () => {
             ? err.response.data.detail
             : 'Не удалось отправить пост от НПС';
         toast.error(message);
+        // Rethrow so PostCreateForm can tell failure from success and keep the text.
+        throw err;
       }
     },
     [locationId, fetchLocationData]

@@ -1861,3 +1861,44 @@ class OriginCountryUpdate(BaseModel):
         if not v:
             raise ValueError("Название происхождения не может быть пустым.")
         return v
+
+
+# -------------------------------
+#   POST DRAFT SCHEMAS (FEAT-156)
+# -------------------------------
+class PostDraftSave(BaseModel):
+    """Тело автосохранения черновика (PUT /locations/{location_id}/draft)."""
+    character_id: int
+    content: str
+
+
+class PostDraftRead(BaseModel):
+    """Полный черновик — отдаётся по одному, вместе с текстом."""
+    id: int
+    character_id: int
+    location_id: int
+    content: str
+    is_sent: bool      # sent_at IS NOT NULL
+    is_active: bool    # active == 1
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class PostDraftListItem(BaseModel):
+    """Строка списка «Черновики». Намеренно без ``content``: десять длинных
+    ролевых постов — слишком тяжёлый ответ для панели, где читают по одному."""
+    id: int
+    location_id: int
+    location_name: Optional[str] = None
+    preview: str       # обычный текст, первые DRAFT_PREVIEW_LENGTH символов
+    char_count: int    # длина обычного текста
+    is_sent: bool
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
