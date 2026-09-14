@@ -214,6 +214,53 @@ class PostLike(Base):
     )
 
 
+class PostVersion(Base):
+    """The text a post had BEFORE an edit (FEAT-160).
+
+    A row stores the content the edit *destroyed*, not the content it produced.
+    Storing the "after" text would lose the original at the very first edit —
+    and the original wording is exactly what gets quoted and then disputed. The
+    post's current text is never duplicated here; it is read live from
+    ``posts.content``.
+
+    Hence the deliberate off-by-one: ``edited_by_user_id`` and ``created_at``
+    describe the edit that **replaced** ``content``, not the one that wrote it.
+    ``crud.get_post_versions`` flips this once, server-side, into the shape an
+    admin thinks in.
+
+    Unlike ``post_gate_requests`` / ``post_deletion_requests`` / ``post_reports``
+    (``SET NULL``, migrations 037/039), ``post_id`` is NOT NULL and cascades: a
+    version is a copy of the post's content, not a staff decision about it. Once
+    the post is deleted — often deleted by moderation *for* that content — an
+    orphaned copy would defeat the deletion instead of documenting it.
+    """
+    __tablename__ = "post_versions"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    post_id = Column(
+        Integer,
+        ForeignKey("posts.id", ondelete="CASCADE", name="fk_post_versions_post_id"),
+        nullable=False,
+    )
+    # 1 = the oldest stored text. Assigned as MAX(version_no) + 1 under the
+    # SELECT ... FOR UPDATE in crud.edit_post; the unique key is the backstop.
+    version_no = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    # Who performed the edit that replaced `content` (author or admin).
+    edited_by_user_id = Column(Integer, nullable=False)
+    # MEANINGFUL ONLY ON version_no = 1. Set at write time to
+    # (posts.edited_at IS NULL): True when this row really holds the original,
+    # False when the post had already been edited before history existed and
+    # the true original is unrecoverable. Ignore it on every later row.
+    is_original = Column(Boolean, nullable=False, server_default=text("1"))
+    # When the edit that replaced `content` happened.
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('post_id', 'version_no', name='uq_post_versions_post_version'),
+    )
+
+
 class ClickableZone(Base):
     __tablename__ = 'ClickableZones'
 

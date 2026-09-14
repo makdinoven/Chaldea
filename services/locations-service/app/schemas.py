@@ -370,12 +370,52 @@ class PostEditResponse(BaseModel):
     content: str
     length: int
     created_at: datetime
-    edited_at: datetime
+    # Optional since FEAT-160: saving byte-identical content is a no-op and must
+    # NOT manufacture a fake «изменено», so a never-edited post that goes through
+    # the editor unchanged still answers 200 with edited_at = null. Clients
+    # already treat the post's edited_at as nullable.
+    edited_at: Optional[datetime] = None
     # Derived, never stored: True only when the editor is not the post's author.
     edited_by_admin: bool = False
     # FEAT-159 Phase B — present only when the edit asked for new gates.
     gate_request_id: Optional[int] = None
     gate_request_status: Optional[str] = None   # always "pending" on creation
+
+    class Config:
+        orm_mode = True
+
+
+class PostVersionEntry(BaseModel):
+    """One version of a post's text, in the shape an admin thinks in (FEAT-160).
+
+    The storage model is off by one — a ``post_versions`` row carries the editor
+    and timestamp of the edit that *destroyed* its text. ``crud.get_post_versions``
+    flips that once, server-side, so ``created_at`` / ``author_user_id`` here
+    describe the edit that **produced** ``content``.
+    """
+    version_no: int
+    content: str                            # raw stored HTML
+    created_at: Optional[datetime] = None   # when this text became the post's text
+    author_user_id: Optional[int] = None    # None for the post's untouched original
+    author_username: Optional[str] = None   # None when the lookup fails / account gone
+    is_current: bool = False
+
+    class Config:
+        orm_mode = True
+
+
+class PostVersionHistory(BaseModel):
+    """Full edit history of a post, ascending; the current text is last.
+
+    ``original_available`` is False for a post edited before FEAT-160 shipped:
+    its earliest wording is unrecoverable, and version 1 then carries
+    ``created_at = null``. The UI must state that plainly instead of implying
+    the post was never touched.
+    """
+    post_id: int
+    post_edited_at: Optional[datetime] = None
+    original_available: bool
+    versions: List[PostVersionEntry]
 
     class Config:
         orm_mode = True

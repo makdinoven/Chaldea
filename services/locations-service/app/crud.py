@@ -1382,6 +1382,14 @@ async def edit_post(
     path in this feature: a 1000-character post that already spent its budget on
     five gates could otherwise "add" five more for free.
 
+    **FEAT-160 — history.** Immediately before the ``UPDATE``, and inside the
+    same transaction, the text being replaced is snapshotted into
+    ``post_versions``. A failure rolls both back together: no edit without its
+    record, no record without its edit. Submitting byte-identical content is a
+    no-op — no version row, no ``edited_at`` move, still 200 — so that opening
+    and saving the editor cannot manufacture a fake «изменено». A gate request
+    is not part of that short circuit and is still filed.
+
     **Phase B — retro-added gates never fire here.** ``gates`` are *requested*,
     not granted: this function writes a ``post_gate_requests`` row and
     deliberately never calls ``create_action_gates``. The mechanic unlocks only
@@ -1390,7 +1398,12 @@ async def edit_post(
     """
     post_row = (await session.execute(
         text(
-            "SELECT id, character_id, location_id, created_at, "
+            # FEAT-160: `content`, `edited_at` and `edited_by_user_id` are read by
+            # the SAME query that already locks the row — the history write below
+            # needs them, and fetching them here costs no extra query and no
+            # extra lock.
+            "SELECT id, character_id, location_id, created_at, content, "
+            "       edited_at, edited_by_user_id, "
             "       (created_at > NOW() - INTERVAL :hours HOUR) AS within_window "
             "FROM posts WHERE id = :pid FOR UPDATE"
         ),
@@ -1541,13 +1554,60 @@ async def edit_post(
                 ),
             )
 
-    await session.execute(
-        text(
-            "UPDATE posts SET content = :content, edited_at = NOW(), "
-            "edited_by_user_id = :uid WHERE id = :pid"
-        ),
-        {"content": content, "uid": user_id, "pid": post_id},
-    )
+    # ------------------------------------------------------------------
+    #  FEAT-160 — snapshot the text this edit is about to destroy, then write.
+    # ------------------------------------------------------------------
+    # No-op short circuit (FEAT-160, 3.7): submitting byte-identical content is
+    # not an edit. Writing anything here would manufacture a fake «изменено» on
+    # a post nobody changed and an empty version row next to it, so the post
+    # table and the history are both left exactly as they were. The response is
+    # still 200 with the post as it stands. Gate requests are NOT part of this
+    # short circuit — asking for a gate is a real request even when the text is
+    # untouched, and it is handled below on its own terms.
+    content_changed = content != post_row.content
+    if content_changed:
+        # Serialised by the SELECT ... FOR UPDATE above: every writer for this
+        # post goes through that lock, so the read-modify-write of version_no is
+        # race-free by construction. uq_post_versions_post_version is the backstop.
+        next_version = (await session.execute(
+            text(
+                "SELECT COALESCE(MAX(version_no), 0) + 1 "
+                "FROM post_versions WHERE post_id = :pid"
+            ),
+            {"pid": post_id},
+        )).scalar()
+        # The row holds the text as it was BEFORE this edit, together with who
+        # replaced it. `is_original` is meaningful only on version_no = 1 and
+        # records, at write time, whether the snapshotted text really is the
+        # post's first wording: a post edited before FEAT-160 shipped has
+        # edited_at set and an unrecoverable original, and the API must be able
+        # to say so instead of implying nothing was ever edited away.
+        await session.execute(
+            text(
+                "INSERT INTO post_versions "
+                "(post_id, version_no, content, edited_by_user_id, is_original) "
+                "VALUES (:pid, :vn, :old, :uid, :orig)"
+            ),
+            {
+                "pid": post_id,
+                "vn": int(next_version or 1),
+                "old": post_row.content,
+                "uid": user_id,
+                "orig": 1 if post_row.edited_at is None else 0,
+            },
+        )
+
+        # Written in the SAME transaction as the snapshot above — and after it,
+        # so the text is recorded before it is overwritten. A failure rolls both
+        # back together: there can be no edit without its record, and no record
+        # without its edit.
+        await session.execute(
+            text(
+                "UPDATE posts SET content = :content, edited_at = NOW(), "
+                "edited_by_user_id = :uid WHERE id = :pid"
+            ),
+            {"content": content, "uid": user_id, "pid": post_id},
+        )
 
     # The request row, written in the SAME transaction as the text it is about:
     # an edit that files a request but whose text fails to save would leave the
@@ -1584,7 +1644,10 @@ async def edit_post(
     return {
         "id": post_id,
         "content": saved.content,
-        "length": len(saved.content),
+        # Plain length, the same figure the server validates against (post XP,
+        # minimum length, gate budgets all go through `strip_html_tags`). Counting
+        # the raw HTML here inflated it by ~30% on a formatted post.
+        "length": len(strip_html_tags(saved.content)),
         "created_at": saved.created_at,
         "edited_at": saved.edited_at,
         "edited_by_admin": not is_owner,
@@ -1592,6 +1655,112 @@ async def edit_post(
         # creation — approval happens on the moderation side.
         "gate_request_id": gate_request_id,
         "gate_request_status": "pending" if gate_request_id is not None else None,
+    }
+
+
+async def get_post_versions(session: AsyncSession, post_id: int) -> dict:
+    """Build the admin-facing edit history of a post (FEAT-160, section 3.6).
+
+    This is the ONE place the off-by-one of the storage model is resolved, so
+    the client never has to reason about it and QA can test the mapping
+    directly. A ``post_versions`` row stores the text an edit **destroyed**,
+    together with who destroyed it and when — so the editor and timestamp of
+    row *k* belong to the entry that comes *after* it:
+
+    ======================  ==================  ======================  ==========================
+    entry                   content             created_at              author_user_id
+    ======================  ==================  ======================  ==========================
+    version 1               row 1 content       ``posts.created_at``    ``None`` (the post's author)
+                                                (``None`` when the
+                                                original is not
+                                                available)
+    version k (1 < k <= N)  row k content       row k-1 created_at      row k-1 edited_by_user_id
+    version N+1 (current)   ``posts.content``   ``posts.edited_at``     row N edited_by_user_id
+    ======================  ==================  ======================  ==========================
+
+    With zero rows the answer is a single ``is_current`` entry — the post as it
+    stands. Its ``created_at`` is ``posts.edited_at`` when the post was edited
+    before history existed, and ``posts.created_at`` for a post that was simply
+    never edited (there was no edit that produced the current text; publication
+    produced it).
+
+    ``original_available`` is the ``is_original`` flag recorded on row 1 at
+    write time — see ``models.PostVersion``. It is ``True`` for a post with no
+    rows and no ``edited_at`` (an untouched post is missing nothing) and
+    ``False`` for a post whose ``edited_at`` predates this feature: its earliest
+    wording is genuinely gone and the UI must say so rather than imply the post
+    was never touched.
+
+    Usernames come from the existing ``_fetch_username_map`` (one call per
+    distinct editor id, degrading to ``None`` on failure — a deleted account or
+    an unreachable user-service must not turn an admin's dispute lookup into a
+    500).
+    """
+    post = (await session.execute(
+        text(
+            "SELECT id, content, created_at, edited_at "
+            "FROM posts WHERE id = :pid"
+        ),
+        {"pid": post_id},
+    )).fetchone()
+    if not post:
+        raise HTTPException(status_code=404, detail="Пост не найден")
+
+    rows = (await session.execute(
+        text(
+            "SELECT version_no, content, edited_by_user_id, is_original, created_at "
+            "FROM post_versions WHERE post_id = :pid ORDER BY version_no ASC"
+        ),
+        {"pid": post_id},
+    )).fetchall()
+
+    if rows:
+        original_available = bool(rows[0].is_original)
+    else:
+        original_available = post.edited_at is None
+
+    entries: List[dict] = []
+    for idx, row in enumerate(rows):
+        if idx == 0:
+            created_at = post.created_at if original_available else None
+            author_user_id = None
+        else:
+            prev = rows[idx - 1]
+            created_at = prev.created_at
+            author_user_id = prev.edited_by_user_id
+        entries.append({
+            "version_no": idx + 1,
+            "content": row.content,
+            "created_at": created_at,
+            "author_user_id": author_user_id,
+            "author_username": None,
+            "is_current": False,
+        })
+
+    entries.append({
+        "version_no": len(rows) + 1,
+        "content": post.content,
+        # For a post that was never edited there is no edit that produced the
+        # current text — publication did.
+        "created_at": post.edited_at if post.edited_at is not None else post.created_at,
+        "author_user_id": rows[-1].edited_by_user_id if rows else None,
+        "author_username": None,
+        "is_current": True,
+    })
+
+    username_map = await _fetch_username_map(
+        [e["author_user_id"] for e in entries if e["author_user_id"] is not None]
+    )
+    for e in entries:
+        uid = e["author_user_id"]
+        if uid is not None:
+            e["author_username"] = username_map.get(int(uid))
+
+    return {
+        "post_id": int(post.id),
+        "post_edited_at": post.edited_at,
+        "original_available": original_available,
+        "versions": entries,
     }
 
 
@@ -2321,7 +2490,10 @@ async def get_post_details(post: Post) -> dict:
         "user_nickname": profile_data.get("user_nickname", ""),
         "character_name": profile_data.get("character_name", ""),
         "content": post.content,
-        "length": len(post.content),
+        # Plain length, the same figure the server validates against (post XP,
+        # minimum length, gate budgets all go through `strip_html_tags`). Counting
+        # the raw HTML here inflated it by ~30% on a formatted post.
+        "length": len(strip_html_tags(post.content)),
         "created_at": post.created_at,
         "edited_at": getattr(post, "edited_at", None),
         "edited_by_admin": edited_by_admin,

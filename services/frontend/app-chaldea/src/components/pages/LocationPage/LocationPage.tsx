@@ -16,6 +16,7 @@ import PlayersSection from './PlayersSection';
 import PostCard from './PostCard';
 import PostCreateForm from './PostCreateForm';
 import PostEditModal from './PostEditModal';
+import PostVersionHistoryModal from './PostVersionHistoryModal';
 import NeighborsSection from './NeighborsSection';
 import LootSection from './LootSection';
 import PendingInvitationsPanel from './PendingInvitationsPanel';
@@ -47,6 +48,13 @@ const LocationPage = () => {
   // Held here, not inside PostCard, so the modal is a single instance that
   // survives feed re-renders.
   const [editingPost, setEditingPost] = useState<Post | null>(null);
+  /**
+   * FEAT-160: the post whose edit history is open (null = closed). Held here
+   * for the same reason as `editingPost` — a feed refresh must not unmount the
+   * modal while an admin is reading a diff. Only the id is needed; the modal
+   * fetches its own data.
+   */
+  const [historyPostId, setHistoryPostId] = useState<number | null>(null);
 
   const character = useAppSelector((state) => state.user.character);
   const userId = useAppSelector((state) => state.user.id);
@@ -921,6 +929,7 @@ const LocationPage = () => {
                   isLatestPostInLocation={post.post_id === location.posts[0]?.post_id}
                   currentUserRole={userRole}
                   onEdit={setEditingPost}
+                  onShowHistory={(p) => setHistoryPostId(p.post_id)}
                 />
               ))}
             </div>
@@ -954,6 +963,16 @@ const LocationPage = () => {
           canAddGates={isCharacterHere && editingPost.character_id === (character?.id ?? -1)}
           onSave={handleEditPost}
           onClose={() => setEditingPost(null)}
+        />
+      )}
+
+      {/* FEAT-160: post edit history. The kebab entry that opens it is gated on
+          the `posts:history` permission (PostCard), and the endpoint behind it
+          is guarded by the same permission server-side. */}
+      {historyPostId !== null && (
+        <PostVersionHistoryModal
+          postId={historyPostId}
+          onClose={() => setHistoryPostId(null)}
         />
       )}
     </div>

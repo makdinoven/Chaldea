@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
-import DOMPurify from 'dompurify';
 import { Post, Player } from './types';
 import PlayerActionsMenu from './PlayerActionsMenu';
 import useNpcAttack from '../../../hooks/useNpcAttack';
 import ArchiveLinkPreview from '../../CommonComponents/ArchiveLinkPreview/ArchiveLinkPreview';
 import { formatRelativeTime, parseServerDate, serverDateMs } from '../../../utils/serverDate';
+import { sanitizePostHtml } from '../../../utils/sanitizePostHtml';
+import { useAppSelector } from '../../../redux/store';
+import { selectPermissions } from '../../../redux/slices/userSlice';
+import { hasPermission } from '../../../utils/permissions';
 
 interface PostCardProps {
   post: Post;
@@ -29,6 +32,11 @@ interface PostCardProps {
   currentUserRole?: string | null;
   /** Opens the edit modal. Absent -> the «Редактировать» entry is never shown. */
   onEdit?: (post: Post) => void;
+  /**
+   * FEAT-160: opens the version-history modal. Absent -> the «История правок»
+   * entry is never shown.
+   */
+  onShowHistory?: (post: Post) => void;
 }
 
 
@@ -138,7 +146,9 @@ const PostCard = ({
   isLatestPostInLocation = false,
   currentUserRole = null,
   onEdit,
+  onShowHistory,
 }: PostCardProps) => {
+  const permissions = useAppSelector(selectPermissions);
   const isLiked = currentCharacterId !== null && post.liked_by.includes(currentCharacterId);
   const [animating, setAnimating] = useState(false);
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
@@ -160,6 +170,24 @@ const PostCard = ({
     !!onEdit &&
     (currentUserRole === 'admin' ||
       (isAuthor && isLatestPostInLocation && isWithinEditWindow(post.created_at)));
+
+  /**
+   * FEAT-160: «История правок» is gated on the `posts:history` PERMISSION, never
+   * on `role === 'admin'`.
+   *
+   * That permission is deliberately granted to no role (user-service migration
+   * 0029): admins hold it implicitly through `get_effective_permissions`,
+   * moderators do not, and it can be handed to one named person through
+   * `user_permissions` **without a deploy**. A role check would quietly break
+   * that delegation — the entry would stay hidden for someone the server would
+   * happily answer 200. The server guards the endpoint with the same
+   * permission, so the two can never disagree.
+   *
+   * There is nothing to show for a post that was never edited, hence
+   * `post.edited_at`.
+   */
+  const canViewHistory =
+    !!onShowHistory && !!post.edited_at && hasPermission(permissions, 'posts:history');
 
   // Filter out the current user from players list (prevent self-tagging)
   const taggablePlayers = players.filter((p) => p.user_id !== currentUserId);
@@ -359,6 +387,20 @@ const PostCard = ({
                         Редактировать
                       </button>
                     )}
+                    {canViewHistory && (
+                      <button
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onShowHistory?.(post);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-white/70 hover:bg-white/10 hover:text-white transition-colors text-left text-xs"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-gold/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        История правок
+                      </button>
+                    )}
                     {isAuthor && (
                       <button
                         onClick={() => openModal('deletion')}
@@ -387,9 +429,10 @@ const PostCard = ({
             [&_blockquote]:border-l-2 [&_blockquote]:border-gold/50 [&_blockquote]:pl-3.5 [&_blockquote]:my-2 [&_blockquote]:italic [&_blockquote]:text-white/75
             [&_em]:italic"
           dangerouslySetInnerHTML={{
-            __html: DOMPurify.sanitize(post.content, {
-              ADD_ATTR: ['data-archive-slug'],
-            }),
+            // Player-written HTML. `sanitizePostHtml` is the project-wide post
+            // policy (allow-list of the editor's own tags/attributes/CSS
+            // properties) — never inline a DOMPurify config here instead.
+            __html: sanitizePostHtml(post.content),
           }}
         />
       </ArchiveLinkPreview>
@@ -527,7 +570,11 @@ const PostCard = ({
           </div>
         )}
 
-        {/* Char length counter (mock: «N симв.») */}
+        {/* Char length counter — the number a player uses to judge whether the
+            post pays for its intent gates, so it MUST equal what the server
+            counts. `post.length` now IS that figure: the backend builds it with
+            `crud.strip_html_tags`, the same helper behind post XP and the gate
+            budgets, so the count lives in exactly one place. */}
         <span className="ml-auto text-white/30 text-[11px] shrink-0">
           {post.length} симв.
         </span>

@@ -4,6 +4,22 @@ import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
 import { GATE_LABEL, GATE_STYLE } from '../pages/LocationPage/gateConstants';
 import { formatServerDateTime } from '../../utils/serverDate';
+/**
+ * Posts are stored as TipTap **HTML**, so the moderation queues have to render
+ * them as markup — a moderator judging a report must see the post exactly as
+ * the players saw it, not the tags mixed into the words.
+ *
+ * The content is player-written, which makes this the one place stored XSS
+ * would land on an admin's screen. It goes through the shared post policy in
+ * `utils/sanitizePostHtml.ts` — the same function the public renderer
+ * (`pages/LocationPage/PostCard.tsx`) uses, so the two can never drift apart.
+ * **Never loosen it and never bypass it.**
+ */
+import { sanitizePostHtml } from '../../utils/sanitizePostHtml';
+import { useAppSelector } from '../../redux/store';
+import { selectPermissions } from '../../redux/slices/userSlice';
+import { hasPermission } from '../../utils/permissions';
+import PostVersionHistoryModal from '../pages/LocationPage/PostVersionHistoryModal';
 
 /**
  * Flat shape returned by the moderation queues. Mirrors the backend
@@ -220,13 +236,18 @@ const ModerationCard = ({
             Пост уже удалён
           </p>
         ) : (
-          <p
-            className={`text-white/70 text-sm bg-black/30 rounded p-2 whitespace-pre-wrap break-words ${
-              showFullPost ? 'max-h-64 overflow-y-auto' : 'line-clamp-3'
-            }`}
-          >
-            {item.post_content}
-          </p>
+          /* Rendered as HTML (sanitised — see `sanitizePostHtml`) and styled
+             like the public post body: `prose-rules` + gold quote rule. Bold
+             and italic deliberately carry no colour of their own (FEAT-157),
+             so an author's own colour is shown, not overridden. */
+          <div
+            className={`text-white/[0.88] text-sm bg-black/30 rounded p-2 whitespace-pre-wrap break-words prose-rules
+              [&_blockquote]:border-l-2 [&_blockquote]:border-gold/50 [&_blockquote]:pl-3.5 [&_blockquote]:my-2 [&_blockquote]:italic [&_blockquote]:text-white/75
+              [&_em]:italic [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 ${
+                showFullPost ? 'max-h-64 overflow-y-auto gold-scrollbar' : 'line-clamp-3'
+              }`}
+            dangerouslySetInnerHTML={{ __html: sanitizePostHtml(item.post_content ?? '') }}
+          />
         )}
       </div>
 
@@ -275,6 +296,11 @@ const isUnresolved = (target: ResolvedTarget): boolean => target.name === null;
 
 interface GateRequestDetailsProps {
   item: GateRequest;
+  /**
+   * FEAT-160 (T9): opens the post's edit history. `undefined` when the viewer
+   * does not hold `posts:history` — the link is then never rendered.
+   */
+  onShowHistory?: (postId: number) => void;
 }
 
 /**
@@ -287,7 +313,7 @@ interface GateRequestDetailsProps {
  * is rendered loudly («цель не найдена»), never as a silent blank, because the
  * uncertainty is exactly what the admin is here to weigh.
  */
-const GateRequestDetails = ({ item }: GateRequestDetailsProps) => {
+const GateRequestDetails = ({ item, onShowHistory }: GateRequestDetailsProps) => {
   // The payload may list the same action_type more than once; merge so each
   // intent is shown once, the way the server charges for it.
   const actionTypes: string[] = [];
@@ -312,6 +338,22 @@ const GateRequestDetails = ({ item }: GateRequestDetailsProps) => {
           <span className="text-white/40 break-words">
             Пост изменён:{' '}
             <span className="text-white/70">{formatDate(item.post_edited_at)}</span>
+            {/* FEAT-160 (T9): this line is exactly where an admin needs to know
+                WHAT changed — the queue has been stating that a post was edited
+                and offering no way to look. The post row must still exist
+                (`post_id !== null`), since the history cascades away with it. */}
+            {onShowHistory && item.post_id !== null && (
+              <>
+                {' · '}
+                <button
+                  type="button"
+                  onClick={() => onShowHistory(item.post_id as number)}
+                  className="text-site-blue hover:text-white transition-colors duration-200 ease-site break-words"
+                >
+                  Показать историю правок
+                </button>
+              </>
+            )}
           </span>
         )}
       </div>
@@ -391,6 +433,19 @@ const GateRequestDetails = ({ item }: GateRequestDetailsProps) => {
 };
 
 const AdminModerationPage = () => {
+  /**
+   * FEAT-160 (T9): the history link is gated on the `posts:history`
+   * PERMISSION, not on a role. The permission is granted to no role
+   * (user-service migration 0029): admins hold it implicitly, moderators — who
+   * are the usual inhabitants of this queue — do not, and the user can delegate
+   * it to one named person through `user_permissions` with no deploy. A
+   * `role === 'admin'` check would hide the link from exactly that person while
+   * the server answered them 200.
+   */
+  const permissions = useAppSelector(selectPermissions);
+  const canViewPostHistory = hasPermission(permissions, 'posts:history');
+  /** Post whose history modal is open (null = closed). */
+  const [historyPostId, setHistoryPostId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('deletions');
   const [deletionRequests, setDeletionRequests] = useState<DeletionRequest[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
@@ -668,13 +723,27 @@ const AdminModerationPage = () => {
                 rejectLabel="Отклонить"
                 busy={actionLoading === req.id}
                 showFullPost
-                extra={<GateRequestDetails item={req} />}
+                extra={
+                  <GateRequestDetails
+                    item={req}
+                    onShowHistory={canViewPostHistory ? setHistoryPostId : undefined}
+                  />
+                }
                 onApprove={() => handleGateAction(req.id, 'approve')}
                 onReject={() => handleGateAction(req.id, 'reject')}
               />
             ))
           )}
         </div>
+      )}
+
+      {/* FEAT-160: the same self-contained modal the location feed opens — it
+          takes a post id and fetches its own history, so nothing is duplicated. */}
+      {historyPostId !== null && (
+        <PostVersionHistoryModal
+          postId={historyPostId}
+          onClose={() => setHistoryPostId(null)}
+        />
       )}
     </div>
   );

@@ -76,6 +76,7 @@ from models import (  # noqa: E402
     PostDeletionRequest,
     PostGateRequest,
     PostReport,
+    PostVersion,
 )
 from main import app  # noqa: E402
 from database import get_db  # noqa: E402
@@ -168,6 +169,8 @@ async def session():
             PostDeletionRequest.__table__,
             PostReport.__table__,
             PostGateRequest.__table__,
+            # FEAT-160: `edit_post` writes the pre-edit snapshot here.
+            PostVersion.__table__,
         ):
             await conn.run_sync(table.create)
 

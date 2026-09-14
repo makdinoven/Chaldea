@@ -121,3 +121,48 @@ export interface LocationData {
 }
 
 export type MarkerType = 'safe' | 'dangerous' | 'dungeon' | 'farm';
+
+/**
+ * FEAT-160: one entry of a post's edit history.
+ *
+ * Mirrors the backend `PostVersionEntry` (locations-service `app/schemas.py`),
+ * verified field-for-field against the live `/openapi.json`. Pydantic v1 does
+ * not mark `Optional` fields nullable in the schema, so nullability here comes
+ * from the documented contract (section 3.6), not from the generated types.
+ *
+ * The server has **already resolved** the off-by-one described in 3.4: this
+ * entry's `author_user_id` / `created_at` describe the edit that *produced*
+ * this text, not the one that destroyed it. The client never re-derives that.
+ */
+export interface PostVersionEntry {
+  /** 1-based, ascending. The current text is the highest. */
+  version_no: number;
+  /** Raw stored HTML of this version. Rendered as TEXT in the history modal. */
+  content: string;
+  /**
+   * When this text became the post's text. `null` is meaningful: the post was
+   * edited before the feature shipped, so the moment is unrecoverable.
+   */
+  created_at: string | null;
+  /** Who wrote it. `null` for the post's own untouched original. */
+  author_user_id: number | null;
+  /** `null` when the account could not be resolved (deleted, lookup failed). */
+  author_username: string | null;
+  /** This entry is `posts.content` as it stands right now. */
+  is_current: boolean;
+}
+
+/** FEAT-160: response of `GET /locations/posts/{id}/versions`. */
+export interface PostVersionHistory {
+  post_id: number;
+  /** `null` for a post that was never edited. */
+  post_edited_at: string | null;
+  /**
+   * `false` — the post was edited before the history existed, so the earliest
+   * surviving entry is NOT the original wording. The modal must say so instead
+   * of implying the post was untouched.
+   */
+  original_available: boolean;
+  /** Ascending by `version_no`; the current text is last. */
+  versions: PostVersionEntry[];
+}

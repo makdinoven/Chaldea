@@ -87,6 +87,8 @@ async def _try_spawn_mob(location_id: int, character_id: int):
             resp = await client.post(
                 f"{settings.CHARACTER_SERVICE_URL}/characters/internal/try-spawn",
                 json={"location_id": location_id, "character_id": character_id},
+                # FEAT-162 §3.4: /characters/internal/try-spawn требует X-Internal-Token.
+                headers=_internal_token_headers(),
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -133,6 +135,7 @@ async def check_not_in_battle(db: AsyncSession, character_id: int, message: str 
             "SELECT b.id FROM battles b "
             "JOIN battle_participants bp ON b.id = bp.battle_id "
             "WHERE bp.character_id = :cid AND b.status IN ('pending', 'in_progress') "
+            "AND bp.dropped_out_at IS NULL "
             "LIMIT 1"
         ),
         {"cid": character_id},
@@ -1021,6 +1024,29 @@ async def edit_post_route(
         is_admin=getattr(current_user, "role", None) == "admin",
         gates=body.gates,
     )
+
+
+@router.get("/posts/{post_id}/versions", response_model=schemas.PostVersionHistory)
+async def get_post_versions_route(
+    post_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("posts:history")),
+):
+    """Edit history of a post (FEAT-160) — who changed what, and when.
+
+    Guarded by the ``posts:history`` permission, deliberately granted to **no
+    role** (user-service migration 0029). Admins hold it implicitly through
+    ``get_effective_permissions``; moderators do **not**, so neither
+    ``get_admin_user`` (which admits them) nor the hard ``get_strict_admin_user``
+    gate is used here — the permission can be delegated to one named person via
+    ``user_permissions`` without a deploy.
+
+    Versions come back ascending, the post's current text last
+    (``is_current = true``). ``original_available = false`` means the post was
+    edited before this feature shipped: the earliest wording is gone and
+    version 1 carries ``created_at = null``.
+    """
+    return await crud.get_post_versions(session, post_id)
 
 
 @router.get("/admin/data", response_model=schemas.AdminPanelData)

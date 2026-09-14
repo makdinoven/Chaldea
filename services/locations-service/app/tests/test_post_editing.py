@@ -68,7 +68,7 @@ os.environ.setdefault("DB_DATABASE", "testdb")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import crud  # noqa: E402
-from models import ActionGate, Location, Post, PostGateRequest  # noqa: E402
+from models import ActionGate, Location, Post, PostGateRequest, PostVersion  # noqa: E402
 from main import app  # noqa: E402
 from database import get_db  # noqa: E402
 
@@ -167,6 +167,10 @@ async def session():
             # Phase B: `edit_post` reads pending gate requests for the budget
             # (section 3.6 rule 2) and writes one when gates are requested.
             PostGateRequest.__table__,
+            # FEAT-160: `edit_post` snapshots the pre-edit text here, in the
+            # same transaction. Real table, not a mock — the snapshot is the
+            # whole point of the history and must be observable.
+            PostVersion.__table__,
         ):
             await conn.run_sync(table.create)
 
@@ -274,7 +278,11 @@ class TestOwnerCanEdit:
 
         assert result["id"] == 1
         assert result["content"] == LONG_TEXT
-        assert result["length"] == len(LONG_TEXT)
+        # `length` is the PLAIN length, built with `crud.strip_html_tags` — the
+        # same helper behind post XP and the gate budgets. For this plain text
+        # that differs from `len(LONG_TEXT)` only by the trailing space the
+        # helper's `.strip()` drops.
+        assert result["length"] == len(crud.strip_html_tags(LONG_TEXT))
         assert result["edited_at"] is not None
         # The author edited it — the marker must not accuse an admin.
         assert result["edited_by_admin"] is False
@@ -836,12 +844,23 @@ class TestGateSymbolBudget:
         assert result["content"] == _plain(300)
 
     async def test_exactly_the_required_length_is_accepted(self, session):
-        """The boundary is exact — 1000 characters pays for five combat gates."""
+        """The boundary is exact — 1000 characters pays for five combat gates.
+
+        The submitted text is 1000 characters of a DIFFERENT letter, not a copy
+        of the stored one: since FEAT-160 (3.7) byte-identical content is a
+        no-op, and re-submitting `_plain(1000)` verbatim would leave `edited_at`
+        null for a reason that has nothing to do with the budget rule this test
+        is about. Rewriting the whole post to exactly the required length is the
+        case that must pass — same boundary, still a real edit.
+        """
         await _add_post(session, 107, minutes_ago=5, content=_plain(1000))
         await _add_gates(session, 107, "combat", [501, 502, 503, 504, 505])
 
+        rewritten = "б" * 1000
+        assert rewritten != _plain(1000), "the edit must be a real change, not a no-op"
+
         result = await crud.edit_post(
-            session, post_id=107, content=_plain(1000),
+            session, post_id=107, content=rewritten,
             user_id=AUTHOR_USER_ID, is_admin=False,
         )
 
