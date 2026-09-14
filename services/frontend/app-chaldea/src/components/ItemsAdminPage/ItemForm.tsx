@@ -3,9 +3,12 @@ import {
   createItem,
   updateItem,
   uploadItemImage,
+  recropItemImage,
   fetchItem,
+  type ItemImageCrop,
 } from "../../api/items";
 import toast from "react-hot-toast";
+import ItemImageCropper from "./ItemImageCropper";
 
 /* ── Dictionaries ── */
 
@@ -151,6 +154,10 @@ interface ItemFormState {
   gather_double_chance_bonus: number;
   gather_speed_bonus_pct: number;
   gather_stamina_bonus_pct: number;
+  /** Icon shown in slots; read-only here, managed by photo-service */
+  image?: string | null;
+  /** Uncropped original the icon is cut from */
+  full_image?: string | null;
   [key: string]: unknown;
 }
 
@@ -196,7 +203,30 @@ interface ItemFormProps {
 const ItemForm = ({ selected, onSuccess, onCancel }: ItemFormProps) => {
   const [item, setItem] = useState<ItemFormState>(INITIAL_STATE);
   const [imgFile, setImgFile] = useState<File | undefined>();
+  const [imgFileUrl, setImgFileUrl] = useState<string | null>(null);
+  const [crop, setCrop] = useState<ItemImageCrop | null>(null);
+  /** Re-framing the icon of an already stored original */
+  const [recropping, setRecropping] = useState(false);
   const editMode = Boolean(selected);
+
+  // Object URL for previewing a freshly picked file; revoked when replaced
+  useEffect(() => {
+    if (!imgFile) {
+      setImgFileUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(imgFile);
+    setImgFileUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [imgFile]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setImgFile(e.target.files?.[0]);
+    setCrop(null);
+    setRecropping(false);
+  };
+
+  const cropperSrc = imgFileUrl ?? (recropping ? item.full_image ?? null : null);
 
   useEffect(() => {
     if (selected) {
@@ -276,11 +306,21 @@ const ItemForm = ({ selected, onSuccess, onCancel }: ItemFormProps) => {
       const saved = editMode
         ? await updateItem(selected!, payload)
         : await createItem(payload);
-      if (imgFile) await uploadItemImage(saved.id, imgFile);
+      if (imgFile) {
+        await uploadItemImage(saved.id, imgFile, crop);
+      } else if (recropping && crop) {
+        await recropItemImage(saved.id, crop);
+      }
       toast.success(editMode ? "Предмет сохранён" : "Предмет создан");
       onSuccess();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Ошибка при сохранении";
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      const msg =
+        typeof detail === "string"
+          ? detail
+          : err instanceof Error
+            ? err.message
+            : "Ошибка при сохранении";
       toast.error(msg);
     }
   };
@@ -719,18 +759,59 @@ const ItemForm = ({ selected, onSuccess, onCancel }: ItemFormProps) => {
         </>
       )}
 
-      {/* ── Image upload ── */}
-      <label className="flex flex-col gap-1">
-        <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+      {/* ── Image upload + icon framing ── */}
+      <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] flex flex-col gap-4 min-w-0">
+        <legend className="text-white/50 text-xs font-medium uppercase tracking-[0.06em] px-2">
           Изображение
-        </span>
+        </legend>
+
         <input
           type="file"
-          accept="image/*"
-          onChange={(e) => setImgFile(e.target.files?.[0])}
-          className="text-white text-sm file:mr-4 file:py-2 file:px-4 file:rounded-card file:border-0 file:text-sm file:font-medium file:bg-white/[0.07] file:text-white hover:file:bg-white/[0.12] file:cursor-pointer file:transition-colors"
+          accept="image/jpeg,image/png,image/webp,image/gif"
+          onChange={handleFileChange}
+          className="text-white text-sm max-w-full file:mr-4 file:py-2 file:px-4 file:rounded-card file:border-0 file:text-sm file:font-medium file:bg-white/[0.07] file:text-white hover:file:bg-white/[0.12] file:cursor-pointer file:transition-colors"
         />
-      </label>
+
+        {cropperSrc ? (
+          <ItemImageCropper key={cropperSrc} src={cropperSrc} onCropChange={setCrop} />
+        ) : (
+          item.image && (
+            <div className="flex flex-wrap items-center gap-4">
+              <img
+                src={item.image}
+                alt={item.name}
+                className="w-16 h-16 rounded-card object-cover bg-white/5"
+              />
+              {item.full_image ? (
+                <button
+                  type="button"
+                  onClick={() => setRecropping(true)}
+                  className="btn-line !w-auto !px-6"
+                >
+                  Изменить область иконки
+                </button>
+              ) : (
+                <p className="text-white/40 text-xs flex-1 min-w-[12rem]">
+                  Исходная картинка не сохранена — загрузите файл заново, чтобы выбрать область иконки.
+                </p>
+              )}
+            </div>
+          )
+        )}
+
+        {recropping && !imgFile && (
+          <button
+            type="button"
+            onClick={() => {
+              setRecropping(false);
+              setCrop(null);
+            }}
+            className="text-white/50 hover:text-site-blue text-sm self-start transition-colors"
+          >
+            Оставить иконку как есть
+          </button>
+        )}
+      </fieldset>
 
       {/* ── Buttons ── */}
       <div className="flex gap-4 pt-2">

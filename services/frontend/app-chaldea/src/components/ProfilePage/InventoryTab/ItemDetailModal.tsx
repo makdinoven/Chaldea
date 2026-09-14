@@ -12,6 +12,7 @@ import {
 } from '../../../redux/slices/profileSlice';
 import { STAT_LABELS, PERCENTAGE_STATS } from '../constants';
 import toast from 'react-hot-toast';
+import ItemArtwork from '../../CommonComponents/ItemArtwork';
 
 /** Russian labels for item types */
 const ITEM_TYPE_LABELS: Record<string, string> = {
@@ -373,21 +374,11 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
               </div>
             ) : (
               <div className="overflow-hidden">
-                {/* Header: image + name + rarity */}
-                <div className="flex items-start gap-4 mb-4">
-                  <div className={`w-20 h-20 sm:w-24 sm:h-24 flex-shrink-0 rounded-full overflow-hidden border-2 border-gold/40 bg-white/5 flex items-center justify-center`}>
-                    {item.image ? (
-                      <img
-                        src={item.image}
-                        alt={item.name}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <span className="text-3xl text-white/30">?</span>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
+                {/* Header: full picture + name + rarity */}
+                <div className="flex flex-col items-center gap-3 mb-4 text-center">
+                  <ItemArtwork name={item.name} fullImage={item.full_image} image={item.image} />
+                  <div className="min-w-0 max-w-full">
+                    <div className="flex items-center justify-center gap-2 flex-wrap">
                       <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase break-words">
                         {item.name}
                       </h2>
@@ -397,7 +388,7 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <div className="flex items-center justify-center gap-2 mt-1 flex-wrap">
                       <span className={`text-sm font-medium ${rarityColor}`}>
                         {rarityLabel}
                       </span>

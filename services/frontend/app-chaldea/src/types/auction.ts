@@ -20,6 +20,8 @@ export interface AuctionItemInfo {
   id: number;
   name: string;
   image: string | null;
+  /** Uncropped original; `image` is the square icon cut from it */
+  full_image?: string | null;
   item_type: string;
   item_rarity: string;
   item_level: number;

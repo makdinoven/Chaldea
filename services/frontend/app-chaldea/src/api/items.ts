@@ -64,13 +64,44 @@ export const updateItem = async (id: number, payload: Record<string, unknown>) =
 
 export const deleteItem = async (id: number) => client.delete(`/items/${id}`);
 
-export const uploadItemImage = async (itemId: number | string, file: File) => {
+/** Square area of the picture, in source-image pixels, that becomes the icon */
+export interface ItemImageCrop {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const appendCrop = (form: FormData, crop: ItemImageCrop) => {
+  form.append("crop_x", String(crop.x));
+  form.append("crop_y", String(crop.y));
+  form.append("crop_width", String(crop.width));
+  form.append("crop_height", String(crop.height));
+};
+
+/** Uploads the original picture; the icon is cut from it by `crop` (whole picture if omitted). */
+export const uploadItemImage = async (itemId: number | string, file: File, crop?: ItemImageCrop | null) => {
   const form = new FormData();
   form.append("item_id", String(itemId));
   form.append("file", file);
+  if (crop) appendCrop(form, crop);
 
   const { data } = await axios.post(
     `/photo/change_item_image`,
+    form,
+    { headers: { "Content-Type": "multipart/form-data" } }
+  );
+  return data;
+};
+
+/** Re-cuts the icon from the already stored original, no re-upload needed. */
+export const recropItemImage = async (itemId: number | string, crop: ItemImageCrop) => {
+  const form = new FormData();
+  form.append("item_id", String(itemId));
+  appendCrop(form, crop);
+
+  const { data } = await axios.post(
+    `/photo/recrop_item_image`,
     form,
     { headers: { "Content-Type": "multipart/form-data" } }
   );

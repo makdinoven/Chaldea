@@ -15,6 +15,7 @@ import {
 } from '../../redux/slices/auctionSlice';
 import { formatTimeRemaining, RARITY_COLOR_MAP } from './AuctionListingCard';
 import { STAT_LABELS } from '../ProfilePage/constants';
+import ItemArtwork from '../CommonComponents/ItemArtwork';
 
 interface AuctionListingDetailProps {
   listingId: number;
@@ -109,17 +110,24 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
 
           {listing && !loading && (
             <>
-              {/* Header */}
-              <div className="flex items-start gap-4 mb-5">
-                <div className="w-20 h-20 rounded-full bg-white/5 flex-shrink-0 flex items-center justify-center overflow-hidden">
-                  {listing.item.image ? (
-                    <img src={listing.item.image} alt={listing.item.name} className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-white/30 text-3xl">?</span>
-                  )}
+              {/* Header: full picture + name */}
+              <div className="relative flex flex-col items-center gap-3 mb-5 text-center">
+                <button
+                  onClick={handleClose}
+                  className="absolute top-0 right-0 text-white/40 hover:text-white transition-colors text-xl"
+                  aria-label="Закрыть"
+                >
+                  &times;
+                </button>
+                <div className="w-full px-6">
+                  <ItemArtwork
+                    name={listing.item.name}
+                    fullImage={listing.item.full_image}
+                    image={listing.item.image}
+                  />
                 </div>
-                <div className="flex-1 min-w-0">
-                  <h2 className={`${rarityColor} text-xl sm:text-2xl font-medium`}>
+                <div className="min-w-0 max-w-full">
+                  <h2 className={`${rarityColor} text-xl sm:text-2xl font-medium break-words`}>
                     {listing.item.name}
                   </h2>
                   {listing.quantity > 1 && (
@@ -132,13 +140,6 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
                     Ур. {listing.item.item_level} &middot; Осталось: {formatTimeRemaining(listing.time_remaining_seconds)}
                   </p>
                 </div>
-                <button
-                  onClick={handleClose}
-                  className="text-white/40 hover:text-white transition-colors text-xl flex-shrink-0"
-                  aria-label="Закрыть"
-                >
-                  &times;
-                </button>
               </div>
 
               {/* Enhancement data */}
