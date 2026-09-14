@@ -138,11 +138,19 @@ def update_skill_rank_image(db: Session, skill_rank_id: int, image_url: str):
         db.commit()
 
 
-def update_item_image(db: Session, item_id: int, image_url: str):
+def update_item_image(db: Session, item_id: int, image_url: str, full_image_url: str = None):
+    """Set the icon; also replaces the uncropped original when one is given."""
     item = db.query(Item).filter(Item.id == item_id).first()
     if item:
         item.image = image_url
+        if full_image_url is not None:
+            item.full_image = full_image_url
         db.commit()
+
+
+def get_item_full_image(db: Session, item_id: int):
+    item = db.query(Item).filter(Item.id == item_id).first()
+    return item.full_image if item else None
 
 
 def update_rule_image(db: Session, rule_id: int, image_url: str):

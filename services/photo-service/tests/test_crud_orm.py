@@ -231,6 +231,26 @@ class TestSkillAndItemUpdates:
         assert item.image == "https://s3.example.com/item.webp"
         db.commit.assert_called_once()
 
+    def test_update_item_image_with_original(self):
+        item = MagicMock(spec=Item)
+        item.full_image = "https://s3.example.com/old_full.webp"
+        db = _mock_db_with_result(item)
+
+        crud.update_item_image(db, 30, "https://s3.example.com/icon.webp", "https://s3.example.com/full.webp")
+
+        assert item.image == "https://s3.example.com/icon.webp"
+        assert item.full_image == "https://s3.example.com/full.webp"
+        db.commit.assert_called_once()
+
+    def test_update_item_image_keeps_original_when_not_given(self):
+        item = MagicMock(spec=Item)
+        item.full_image = "https://s3.example.com/full.webp"
+        db = _mock_db_with_result(item)
+
+        crud.update_item_image(db, 30, "https://s3.example.com/icon.webp")
+
+        assert item.full_image == "https://s3.example.com/full.webp"
+
     def test_update_rule_image(self):
         rule = MagicMock(spec=GameRule)
         db = _mock_db_with_result(rule)

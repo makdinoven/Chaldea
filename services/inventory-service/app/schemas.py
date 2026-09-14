@@ -255,6 +255,8 @@ class Item(ItemBase):
     name: str
     item_type: str
     blueprint_recipe_id: Optional[int] = None
+    # Read-only here: set by photo-service on upload, not accepted in ItemCreate
+    full_image: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -1149,6 +1151,7 @@ class AuctionItemInfo(BaseModel):
     id: int
     name: str
     image: Optional[str] = None
+    full_image: Optional[str] = None
     item_type: str
     item_rarity: str
     item_level: int

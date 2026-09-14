@@ -101,7 +101,7 @@ class TestColumnPresence:
 
     def test_item_columns(self):
         cols = _column_names(Item)
-        assert {"id", "image"} == cols
+        assert {"id", "image", "full_image"} == cols
 
     def test_game_rule_columns(self):
         cols = _column_names(GameRule)

@@ -85,6 +85,7 @@ class Item(Base):
 
     id = Column(Integer, primary_key=True)
     image = Column(String(500), nullable=True)
+    full_image = Column(String(500), nullable=True)
 
 
 class MobTemplate(Base):

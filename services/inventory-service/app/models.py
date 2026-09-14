@@ -10,6 +10,8 @@ class Items(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), unique=True, index=True)
     image = Column(String(255), nullable=True)
+    # Uncropped original; `image` holds the square icon cut from it
+    full_image = Column(String(255), nullable=True)
     item_level = Column(Integer, nullable=False,default=0)
     item_type = Column(Enum(
         'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet', 'main_weapon',

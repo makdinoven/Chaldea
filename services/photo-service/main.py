@@ -1,7 +1,10 @@
+import io
 import os
 import time
 import traceback
 from uuid import uuid4
+
+from typing import Optional
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends
 from sqlalchemy.orm import Session
@@ -13,7 +16,7 @@ from crud import (
     update_region_image, update_region_map_image,
     update_country_map_image,
     update_area_map_image, update_country_emblem,
-    update_skill_rank_image, update_skill_image, update_item_image, update_rule_image,
+    update_skill_rank_image, update_skill_image, update_item_image, get_item_full_image, update_rule_image,
     update_profile_bg_image, get_profile_bg_image, get_character_owner_id,
     update_race_image, update_subrace_image, update_location_icon,
     update_mob_template_avatar, update_recipe_image,
@@ -21,7 +24,10 @@ from crud import (
     update_conversation_avatar, get_conversation_avatar,
     is_conversation_participant, get_conversation_type, get_conversation_created_by,
 )
-from utils import convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime
+from utils import (
+    convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime,
+    normalize_orientation, crop_image, download_s3_file,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from auth_http import get_admin_user, get_current_user_via_http, require_permission
 
@@ -459,23 +465,105 @@ async def change_skill_rank_image(skill_rank_id: int = Form(...), file: UploadFi
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+def _item_crop_box(crop_x, crop_y, crop_width, crop_height):
+    """All four crop fields together, or none of them (= icon is the whole picture)."""
+    values = (crop_x, crop_y, crop_width, crop_height)
+    if all(v is None for v in values):
+        return None
+    if any(v is None for v in values):
+        raise HTTPException(status_code=400, detail="Область обрезки задана не полностью")
+    return values
+
+
 @app.post("/photo/change_item_image")
-async def change_item_image(item_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
+async def change_item_image(
+    item_id: int = Form(...),
+    file: UploadFile = File(...),
+    crop_x: Optional[float] = Form(None),
+    crop_y: Optional[float] = Form(None),
+    crop_width: Optional[float] = Form(None),
+    crop_height: Optional[float] = Form(None),
+    current_user = Depends(require_permission("photos:upload")),
+    db: Session = Depends(get_db),
+):
     """
-    Загружает или заменяет изображение для ранга навыка (SkillRank).
+    Загружает изображение предмета. Оригинал сохраняется в items.full_image,
+    а иконка (items.image) вырезается из него по области crop_* (в пикселях
+    оригинала). Без области иконкой становится вся картинка.
     """
     validate_image_mime(file)
+    crop_box = _item_crop_box(crop_x, crop_y, crop_width, crop_height)
     try:
-        result = convert_to_webp(file.file)
-        unique_filename = generate_unique_filename("item_image", item_id, extension=result.extension)
-        image_url = upload_file_to_s3(result.data, unique_filename, subdirectory="items", content_type=result.content_type)
+        raw = normalize_orientation(file.file.read())
+        original = convert_to_webp(io.BytesIO(raw))
+        full_image_url = upload_file_to_s3(
+            original.data,
+            generate_unique_filename("item_full_image", item_id, extension=original.extension),
+            subdirectory="items",
+            content_type=original.content_type,
+        )
 
-        update_item_image(db, item_id, image_url)
+        image_url = full_image_url
+        if crop_box:
+            icon = crop_image(raw, *crop_box)
+            image_url = upload_file_to_s3(
+                icon.data,
+                generate_unique_filename("item_image", item_id, extension=icon.extension),
+                subdirectory="items",
+                content_type=icon.content_type,
+            )
+
+        update_item_image(db, item_id, image_url, full_image_url)
 
         return {
             "message": "Изображение предмета успешно загружено",
-            "image_url": image_url
+            "image_url": image_url,
+            "full_image_url": full_image_url,
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/photo/recrop_item_image")
+async def recrop_item_image(
+    item_id: int = Form(...),
+    crop_x: float = Form(...),
+    crop_y: float = Form(...),
+    crop_width: float = Form(...),
+    crop_height: float = Form(...),
+    current_user = Depends(require_permission("photos:upload")),
+    db: Session = Depends(get_db),
+):
+    """
+    Заново вырезает иконку предмета из уже загруженного оригинала,
+    не требуя повторной загрузки файла.
+    """
+    full_image_url = get_item_full_image(db, item_id)
+    if not full_image_url:
+        raise HTTPException(
+            status_code=404,
+            detail="У предмета нет исходного изображения — загрузите картинку заново",
+        )
+    try:
+        icon = crop_image(download_s3_file(full_image_url), crop_x, crop_y, crop_width, crop_height)
+        image_url = upload_file_to_s3(
+            icon.data,
+            generate_unique_filename("item_image", item_id, extension=icon.extension),
+            subdirectory="items",
+            content_type=icon.content_type,
+        )
+        update_item_image(db, item_id, image_url)
+
+        return {
+            "message": "Иконка предмета обновлена",
+            "image_url": image_url,
+            "full_image_url": full_image_url,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

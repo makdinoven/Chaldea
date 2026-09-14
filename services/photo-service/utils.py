@@ -1,7 +1,7 @@
 import os
 import uuid
 from collections import namedtuple
-from PIL import Image, ImageSequence
+from PIL import Image, ImageOps, ImageSequence
 import io
 import boto3
 from dotenv import load_dotenv
@@ -141,6 +141,89 @@ def convert_to_webp(input_file, quality=80) -> ImageResult:
     except Exception as e:
         logging.error(f"Image processing error: {str(e)}", exc_info=True)
         raise
+
+# Longest side of a cropped item icon; icons are never shown larger than this
+ITEM_ICON_MAX_SIZE = 512
+
+
+def normalize_orientation(input_data: bytes) -> bytes:
+    """Bake the EXIF rotation into the pixels of a still image.
+
+    Browsers draw photos already rotated by EXIF, so the crop box the admin picks
+    is in rotated coordinates. Pillow ignores EXIF, so without this the stored
+    original and the crop would not line up. Animated GIFs carry no EXIF and are
+    returned untouched, as is anything that needs no rotation.
+    """
+    with Image.open(io.BytesIO(input_data)) as image:
+        if getattr(image, "is_animated", False):
+            return input_data
+        if image.getexif().get(0x0112, 1) == 1:  # 0x0112 = Orientation tag
+            return input_data
+        rotated = ImageOps.exif_transpose(image)
+        output_stream = io.BytesIO()
+        rotated.save(output_stream, format="PNG")
+        return output_stream.getvalue()
+
+
+def _clamp_crop_box(image_size, x: float, y: float, width: float, height: float):
+    """Turn a crop rectangle in pixels into a Pillow box that lies inside the image."""
+    img_w, img_h = image_size
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="Область обрезки должна иметь положительный размер")
+    left = max(0, min(int(round(x)), img_w - 1))
+    top = max(0, min(int(round(y)), img_h - 1))
+    right = max(left + 1, min(int(round(x + width)), img_w))
+    bottom = max(top + 1, min(int(round(y + height)), img_h))
+    return left, top, right, bottom
+
+
+def crop_image(input_data: bytes, x: float, y: float, width: float, height: float,
+               max_size: int = ITEM_ICON_MAX_SIZE, quality: int = 80) -> ImageResult:
+    """Cut a rectangle (in source pixels) out of an image and shrink it to max_size.
+
+    Still images come back as WebP; animated GIFs are cropped frame by frame and
+    stay GIF so the animation survives.
+    """
+    with Image.open(io.BytesIO(input_data)) as image:
+        box = _clamp_crop_box(image.size, x, y, width, height)
+
+        def fit(frame):
+            frame = frame.crop(box)
+            frame.thumbnail((max_size, max_size))
+            return frame
+
+        if image.format == "GIF" and getattr(image, "is_animated", False):
+            frames, durations = [], []
+            for frame in ImageSequence.Iterator(image):
+                frames.append(fit(frame.convert("RGBA")))
+                durations.append(frame.info.get("duration", 100))
+            output_stream = io.BytesIO()
+            frames[0].save(
+                output_stream,
+                format="GIF",
+                save_all=True,
+                append_images=frames[1:],
+                duration=durations,
+                loop=image.info.get("loop", 0),
+                disposal=2,
+            )
+            return ImageResult(output_stream.getvalue(), ".gif", "image/gif")
+
+        cropped = image.copy()
+        if cropped.mode not in ("RGB", "RGBA"):
+            cropped = cropped.convert("RGBA" if cropped.mode in ("P", "LA") else "RGB")
+        cropped = fit(cropped)
+        output_stream = io.BytesIO()
+        cropped.save(output_stream, format="WEBP", quality=quality, method=6)
+        return ImageResult(output_stream.getvalue(), ".webp", "image/webp")
+
+
+def download_s3_file(file_url: str) -> bytes:
+    """Read back a file this service uploaded, addressed by its public URL."""
+    s3_key = "/".join(file_url.split("/")[4:])
+    response = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+    return response["Body"].read()
+
 
 def generate_unique_filename(prefix: str, entity_id: int, extension: str = ".webp") -> str:
     return f"{prefix}_{entity_id}_{uuid.uuid4().hex}{extension}"

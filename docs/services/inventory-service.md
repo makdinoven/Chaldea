@@ -68,6 +68,7 @@ inventory-service/app/
 
 ### items (каталог)
 - Базовые: id, name (unique), image, item_level, description, price, max_stack_size, is_unique
+- **image / full_image** (миграция 018): `full_image` — исходная картинка, `image` — квадратная иконка, вырезанная из неё photo-service. Оба поля пишет только photo-service; `full_image` отдаётся в `GET /items/{id}` и в аукционных ответах, через `PUT /items/{id}` не меняется. У старых предметов `full_image` = NULL — окна описания показывают `image`
 - **item_type** enum: head, body, cloak, belt, ring, necklace, bracelet, main_weapon, consumable, additional_weapons, resource, scroll, misc, shield, blueprint, recipe, gem, rune, **gathering_tool** (FEAT-128)
 - **Поля для gathering_tool** (FEAT-128, NULL для других типов): `tool_category` enum(pickaxe/sickle/axe), `gather_double_chance_bonus` FLOAT, `gather_speed_bonus_pct` FLOAT, `gather_stamina_bonus_pct` FLOAT (все в диапазоне 0..50)
 - **item_rarity** enum: common, rare, epic, legendary, mythical, divine, demonic

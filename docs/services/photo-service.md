@@ -36,7 +36,8 @@ photo-service/
 | POST | `/photo/change_location_image` | Изображение локации |
 | POST | `/photo/change_skill_image` | Изображение навыка |
 | POST | `/photo/change_skill_rank_image` | Изображение ранга навыка |
-| POST | `/photo/change_item_image` | Изображение предмета |
+| POST | `/photo/change_item_image` | Изображение предмета: оригинал → `items.full_image`, иконка по `crop_x/crop_y/crop_width/crop_height` (пиксели оригинала, все четыре или ни одного) → `items.image` |
+| POST | `/photo/recrop_item_image` | Перевырезать иконку предмета из сохранённого `full_image` (404, если оригинала нет) |
 
 ## Обработка изображений
 
