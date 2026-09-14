@@ -88,7 +88,8 @@ _FOREIGN_TABLES_DDL = (
     "CREATE TABLE IF NOT EXISTS battles "
     "(id INTEGER PRIMARY KEY, status VARCHAR(20))",
     "CREATE TABLE IF NOT EXISTS battle_participants "
-    "(id INTEGER PRIMARY KEY, battle_id INTEGER, character_id INTEGER)",
+    "(id INTEGER PRIMARY KEY, battle_id INTEGER, character_id INTEGER, "
+    "dropped_out_at DATETIME)",
     "CREATE TABLE IF NOT EXISTS dungeon_sessions "
     "(id INTEGER PRIMARY KEY, status VARCHAR(20))",
     "CREATE TABLE IF NOT EXISTS dungeon_session_members "

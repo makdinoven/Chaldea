@@ -9,6 +9,13 @@ class Settings(BaseSettings):
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     MONGO_URI: str = os.getenv("MONGO_URI", "mongodb://mongo:27017")
     TURN_TIMEOUT_HOURS: int = int(os.getenv("TURN_TIMEOUT_HOURS", 24))
+    # FEAT-163 turn-timeout sweeper. Kill switch + tick cadence + how many ticks
+    # pass between the low-frequency MySQL reconciliation passes.
+    BATTLE_TIMEOUT_SWEEPER_ENABLED: int = int(os.getenv("BATTLE_TIMEOUT_SWEEPER_ENABLED", 1))
+    BATTLE_TIMEOUT_SWEEP_INTERVAL_SECONDS: int = int(
+        os.getenv("BATTLE_TIMEOUT_SWEEP_INTERVAL_SECONDS", 60)
+    )
+    BATTLE_TIMEOUT_RECONCILE_EVERY: int = int(os.getenv("BATTLE_TIMEOUT_RECONCILE_EVERY", 60))
     # Max participants allowed per team. Product target is 3v3; ceiling 5v5.
     # Engine itself is N-agnostic — this is just a create-time guard.
     BATTLE_MAX_TEAM_SIZE: int = int(os.getenv("BATTLE_MAX_TEAM_SIZE", 5))

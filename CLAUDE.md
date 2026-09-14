@@ -14,7 +14,7 @@ Chaldea — браузерная RPG-игра с микросервисной а
 
 | Слой | Технология |
 |------|-----------|
-| Backend (все 10 сервисов) | Python 3, FastAPI, SQLAlchemy, Pydantic <2.0 |
+| Backend (все 13 сервисов) | Python 3, FastAPI, SQLAlchemy, Pydantic <2.0 |
 | Frontend | React 18, Vite, Redux Toolkit, React Router v6, Axios, SCSS |
 | Основная БД | MySQL 8.0 (единая база `mydatabase` для всех сервисов) |
 | Документная БД | MongoDB 6.0 (логи и снапшоты боёв) |
@@ -41,6 +41,9 @@ Chaldea — браузерная RPG-игра с микросервисной а
 | notification-service | 8007 | `services/notification-service/` | SSE, RabbitMQ consumers, pika |
 | battle-service | 8010 | `services/battle-service/` | Async (aiomysql + Motor + aioredis), Celery |
 | autobattle-service | 8011 | `services/autobattle-service/` | Stateless, Redis Pub/Sub, httpx |
+| battle-pass-service | 8012 | `services/battle-pass-service/` | Сезоны боевого пропуска, задания |
+| dungeon-service | 8013 | `services/dungeon-service/` | Сессии подземелий, комнаты, засады |
+| party-service | 8014 | `services/party-service/` | Группы игроков |
 | frontend | 5555 | `services/frontend/app-chaldea/` | Vite dev server |
 | api-gateway (Nginx) | 80 | `docker/api-gateway/` | Роутинг по path prefix |
 
@@ -314,7 +317,7 @@ Alembic настроен во всех backend-сервисах. У autobattle-s
    - **При добавлении нового модуля/эндпоинта:** создать разрешения в таблице `permissions`, добавить в `role_permissions` для соответствующих ролей. Админ получит автоматически.
    - **При создании admin-эндпоинта:** использовать `Depends(get_admin_user)` из `auth_http.py` (принимает admin + moderator). Для гранулярной проверки — `require_permission("module:action")` в user-service.
    - **На фронтенде:** использовать `ProtectedRoute` для маршрутов, `hasModuleAccess()`/`hasPermission()` из `utils/permissions.ts` для UI-элементов.
-   - **Тест на полноту:** `test_rbac_permissions.py` проверяет, что админ имеет все разрешения — при добавлении новых разрешений тест обновится автоматически.
+   - **Тест на полноту — ВАЖНО, новое разрешение НЕ покрывается само собой.** `test_rbac_permissions.py` (класс `TestAdminAutoPermissions`) проверяет свойство «админ получает все разрешения» на **собственном синтетическом сиде из 8 разрешений** с захардкоженными счётчиками (`len(perms) == 9` и т.п.) и **не читает дерево Alembic-миграций**. Поэтому новая строка в `permissions`, добавленная миграцией, в этот тест **не попадает автоматически** — её надо засеять явно, отдельной секцией, как это сделано для остальных модулей. Добавил разрешение — добавь и тест на него.
    - Таблицы RBAC: `roles`, `permissions`, `role_permissions`, `user_permissions` (в user-service).
 
 ---

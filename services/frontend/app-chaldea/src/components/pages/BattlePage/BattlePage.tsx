@@ -724,8 +724,15 @@ const BattlePage = () => {
         {/* Pause banner */}
         {isPaused && (
           <div className="relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center bg-site-bg border border-gold-dark/50">
+            {/* FEAT-163 T13: the reason is dynamic — an admin freeze types its
+                own text, a join-request pause sends its own string. Rendered as
+                plain text only; never dangerouslySetInnerHTML. */}
             <p className="text-gold text-sm sm:text-base font-medium">
-              Бой приостановлен — рассматриваются заявки на присоединение
+              Бой приостановлен
+            </p>
+            <p className="text-gold/80 text-xs sm:text-sm mt-1 break-words">
+              {runtimeData.paused_reason?.trim() ||
+                "Рассматриваются заявки на присоединение"}
             </p>
           </div>
         )}

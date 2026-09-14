@@ -22,6 +22,14 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("inventory-service")
 
+
+def _internal_token_headers() -> dict:
+    """Headers for outgoing internal service-to-service calls (FEAT-162 §3.4).
+
+    Read from env at call time (not import time) so tests can set it up.
+    """
+    return {"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")}
+
 app = FastAPI()
 
 cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
@@ -602,6 +610,7 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
         httpx.post(
             f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
             json={"character_id": character_id},
+            headers=_internal_token_headers(),
             timeout=5.0,
         )
     except Exception as e:
@@ -704,6 +713,7 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
         httpx.post(
             f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
             json={"character_id": character_id},
+            headers=_internal_token_headers(),
             timeout=5.0,
         )
     except Exception as e:

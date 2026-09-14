@@ -182,15 +182,17 @@ class TestDraftsCleanupIsCalled:
         # without the caller's own token the cleanup would 401 and orphan the rows.
         assert drafts[0].headers == {"Authorization": f"Bearer {TOKEN}"}
 
-    def test_cleanup_runs_after_the_other_services_and_before_the_row_is_dropped(
+    def test_cleanup_runs_after_user_service_and_after_the_row_is_dropped(
         self, admin_client, db_session
     ):
         """Ordering matters: it is step 4.5, not step 0.
 
-        The character row must still exist while the fan-out runs (the far
-        services may read it), and the cleanup must come after user-service so a
-        slow locations-service cannot delay releasing the user's current
-        character.
+        The character row is dropped and committed *first*; only then does the
+        best-effort fan-out run. That is the safe failure mode — a fan-out that
+        dies leaves orphaned rows in the neighbours rather than a gutted
+        character still sitting in the admin's list. Within the fan-out, drafts
+        cleanup must still come after user-service so a slow locations-service
+        cannot delay releasing the user's current character.
         """
         _seed_character(db_session)
         client_class = _httpx_mock()
@@ -206,7 +208,7 @@ class TestDraftsCleanupIsCalled:
         ]
         assert user_service_calls, "the user-service cleanup must still run"
         assert urls.index(DRAFTS_URL) > max(user_service_calls)
-        # …and the row really is gone by the end.
+        # …and the row really is gone (it was dropped before the fan-out began).
         assert db_session.query(models.Character).filter(
             models.Character.id == CHARACTER_ID
         ).first() is None

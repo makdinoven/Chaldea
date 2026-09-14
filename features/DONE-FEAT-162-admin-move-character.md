@@ -781,6 +781,14 @@ local-dev practice, but it should not be mistaken for original state.
 [LOG] 2026-09-15 01:12 — Reviewer: браузерная проверка НЕ выполнена — расширение claude-in-chrome не подключено в этой сессии; в §5 приведён точный список из 8 пунктов для ручной проверки пользователем
 [LOG] 2026-09-15 01:15 — Reviewer: тестовые данные убраны — гейты, связи телепорта, пост, запись в журнале и две транзакции золота удалены, NPC 33/49 и персонаж 765 восстановлены полностью, временно переименованные таблицы вернуты на место
 [LOG] 2026-09-15 01:18 — Reviewer: проверка завершена, результат PASS — фичу можно выпускать
+
+[LOG] 2026-09-14 03:05 — Backend Dev: закрыт остаток аудита §3.4 — оставшиеся 8 роутов `/characters/internal/` (try-spawn, mob-pack, mob-reward-data, active-mob-status, npc-status, record-mob-kill, spawn-dungeon-mobs, deduct-gold) получили `Depends(verify_internal_token)`; под префиксом теперь защищены все 14 из 14
+[LOG] 2026-09-14 03:06 — Backend Dev: вызывающие обновлены — `locations-service/app/main.py` (try-spawn), `battle-service/app/main.py` x5 (новый хелпер `_internal_token_headers()`), `dungeon-service/app/http_clients.py` x2 (новый хелпер + `INTERNAL_SERVICE_TOKEN` в `config.py`)
+[LOG] 2026-09-14 03:07 — Backend Dev: снят блокер из ISSUES.md — у `dungeon-service` не было `INTERNAL_SERVICE_TOKEN`; добавлен в `docker-compose.yml` и в `docker-compose.prod.yml` (prod переопределяет весь блок `environment` этого сервиса, наследования не было); `docker compose config -q` зелёный на dev и dev+prod
+[LOG] 2026-09-14 03:08 — Backend Dev: матрица проверена вживую по каждому из 8 роутов — 401 без заголовка, 401 с неверным, 401 с пустым, 403 через api-gateway даже с верным токеном, 503 fail-closed на отдельном контейнере с пустым INTERNAL_SERVICE_TOKEN, 200/201 на легитимный внутренний вызов
+[LOG] 2026-09-14 03:09 — Backend Dev: вызывающие прогнаны на реальных сценариях — quick_move через gateway (try-spawn 200), вход в подземелье 1 и засада в коридоре (spawn-dungeon-mobs 201), `_distribute_pve_rewards` и `_get_pack_roster` против живого character-service, `_finalize_battle` на прогоне теста NPC-смерти; ни одного 401 от настоящих вызывающих
+[LOG] 2026-09-14 03:10 — Backend Dev: 24 теста в 5 файлах character-service падали (звали роуты без заголовка) — починены механически (пин `auth_http.INTERNAL_SERVICE_TOKEN` + `headers=`), ни одно утверждение не изменено; суммы: character-service 953 passed/1 skipped, battle-service 490/4, locations-service 1133, dungeon-service 123 — все равны базовым
+[LOG] 2026-09-14 03:11 — Backend Dev: ISSUES.md приведён в соответствие — таблица «остаются 8 незащищённых» заменена на запись о закрытии; отмечен оставшийся пробел: у spawn-dungeon-mobs и deduct-gold в character-service тестов нет вовсе (задача для QA); `dungeon-service` по-прежнему не описан в CLAUDE.md §1
 ```
 
 ---

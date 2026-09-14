@@ -41,7 +41,8 @@ def _create_characters_table(db):
         """CREATE TABLE battle_participants (
             id INTEGER PRIMARY KEY,
             battle_id INTEGER NOT NULL,
-            character_id INTEGER NOT NULL
+            character_id INTEGER NOT NULL,
+            dropped_out_at DATETIME
         )"""
     ))
     db.commit()

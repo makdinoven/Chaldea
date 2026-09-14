@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     PARTY_SERVICE_URL: str = os.getenv("PARTY_SERVICE_URL", "http://party-service:8014")
     LOCATIONS_SERVICE_URL: str = os.getenv("LOCATIONS_SERVICE_URL", "http://locations-service:8006")
 
+    # FEAT-162 §3.4: shared secret for service-to-service calls into other
+    # services' /internal/ routes. Read from env, never logged.
+    INTERNAL_SERVICE_TOKEN: str = os.getenv("INTERNAL_SERVICE_TOKEN", "")
+
     class Config:
         env_file = ".env"
 

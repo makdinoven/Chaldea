@@ -139,6 +139,9 @@ def _make_battle(
     battle.battle_type.value = battle_type
     battle.location_id = location_id
     battle.is_paused = is_paused
+    # FEAT-163: real column, must not be an auto-MagicMock
+    battle.pause_reason = None
+    battle.paused_by_admin = False
     battle.created_at = created_at or NOW
     return battle
 

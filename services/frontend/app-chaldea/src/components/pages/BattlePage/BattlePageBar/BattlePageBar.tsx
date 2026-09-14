@@ -529,6 +529,31 @@ const BattlePageBar = ({
       );
     }
 
+    // FEAT-163: the turn-timeout sweeper dropped this participant out of the
+    // battle. Without this branch the generic fallback below would print the
+    // raw event name next to the name.
+    if (event.event === "participant_timed_out") {
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.who)}
+          <span className="text-site-red">
+            не успел сделать ход и выбыл из боя.
+          </span>
+        </span>
+      );
+    }
+
+    // Emitted both by a killing blow and by the timeout drop above. Without a
+    // branch it fell through to the raw-event-name fallback.
+    if (event.event === "participant_defeated") {
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.who)}
+          <span className="text-site-red">повержен</span>
+        </span>
+      );
+    }
+
     if (event.event === "control_skip") {
       const label =
         event.control === "Poison"

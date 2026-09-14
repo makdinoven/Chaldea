@@ -362,6 +362,7 @@ services:
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
     depends_on:
       mysql:
         condition: service_healthy
@@ -483,6 +484,11 @@ services:
       SKILLS_SERVICE_URL: http://skills-service:8003
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       AUTOBATTLE_SERVICE_URL: http://autobattle-service:8011
+      TURN_TIMEOUT_HOURS: 24
+      BATTLE_STATE_TTL_HOURS: 48
+      BATTLE_TIMEOUT_SWEEPER_ENABLED: "1"
+      BATTLE_TIMEOUT_SWEEP_INTERVAL_SECONDS: 60
+      BATTLE_TIMEOUT_RECONCILE_EVERY: 60
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
     depends_on:
       mysql:
@@ -575,6 +581,7 @@ services:
       CHAR_ATTRS_SERVICE_URL: http://character-attributes-service:8002
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       USER_SERVICE_URL: http://user-service:8000
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
     depends_on:
       mysql:
         condition: service_healthy

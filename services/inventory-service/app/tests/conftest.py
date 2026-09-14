@@ -104,7 +104,8 @@ _CROSS_SERVICE_TABLE_DDL = [
     """CREATE TABLE battle_participants (
         id INTEGER PRIMARY KEY,
         battle_id INTEGER,
-        character_id INTEGER
+        character_id INTEGER,
+        dropped_out_at DATETIME
     )""",
 ]
 

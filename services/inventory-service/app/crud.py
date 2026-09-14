@@ -785,6 +785,7 @@ def is_character_in_battle(db: Session, character_id: int) -> bool:
             "SELECT 1 FROM battle_participants bp "
             "JOIN battles b ON bp.battle_id = b.id "
             "WHERE bp.character_id = :cid AND b.status IN ('pending', 'in_progress') "
+            "AND bp.dropped_out_at IS NULL "
             "LIMIT 1"
         ),
         {"cid": character_id}

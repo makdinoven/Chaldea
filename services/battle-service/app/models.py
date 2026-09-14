@@ -56,6 +56,15 @@ class Battle(Base):
     is_paused: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0"
     )
+    # FEAT-163: why the battle is paused, shown to players verbatim.
+    pause_reason: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    # FEAT-163: an admin freeze outranks the join-request pause and must not be
+    # lifted by resume_battle_if_ready.
+    paused_by_admin: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -87,6 +96,12 @@ class BattleParticipant(Base):
     )
     character_id: Mapped[int] = mapped_column(index=True)
     team: Mapped[int] = mapped_column(Integer, default=0)
+    # FEAT-163: set when the participant is dropped from the battle (turn
+    # timeout or admin force-finish). Releases the in-battle lock while a team
+    # battle keeps running without them.
+    dropped_out_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
 
     battle = relationship("Battle", back_populates="participants")
 

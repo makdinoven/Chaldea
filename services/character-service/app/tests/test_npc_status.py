@@ -27,6 +27,14 @@ from main import app, get_db
 import models
 import database
 
+import auth_http
+
+# FEAT-162 §3.4: these /characters/internal/ routes now require the
+# X-Internal-Token header. Pin the module constant so the suite does not depend
+# on INTERNAL_SERVICE_TOKEN being set in the environment.
+auth_http.INTERNAL_SERVICE_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -187,6 +195,7 @@ class TestInternalNpcStatus:
         resp = npc_client.put(
             f"/characters/internal/npc-status/{npc.id}",
             json={"status": "dead"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         body = resp.json()
@@ -199,6 +208,7 @@ class TestInternalNpcStatus:
         resp = npc_client.put(
             f"/characters/internal/npc-status/{npc.id}",
             json={"status": "alive"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         body = resp.json()
@@ -210,6 +220,7 @@ class TestInternalNpcStatus:
         resp = npc_client.put(
             "/characters/internal/npc-status/99999",
             json={"status": "dead"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 404
 
@@ -219,6 +230,7 @@ class TestInternalNpcStatus:
         resp = npc_client.put(
             f"/characters/internal/npc-status/{player.id}",
             json={"status": "dead"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 404
 
@@ -228,6 +240,7 @@ class TestInternalNpcStatus:
         resp = npc_client.put(
             f"/characters/internal/npc-status/{mob.id}",
             json={"status": "dead"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 404
 
@@ -237,6 +250,7 @@ class TestInternalNpcStatus:
         resp = npc_client.put(
             f"/characters/internal/npc-status/{npc.id}",
             json={"status": "invalid_value"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 422
 

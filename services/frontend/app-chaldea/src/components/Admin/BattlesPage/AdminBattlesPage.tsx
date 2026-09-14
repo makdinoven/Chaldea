@@ -8,7 +8,14 @@ import {
   approveJoinRequest,
   rejectJoinRequest,
 } from '../../../api/battles';
+import {
+  freezeBattle,
+  unfreezeBattle,
+} from '../../../api/battles';
 import type { AdminJoinRequestItem } from '../../../api/battles';
+import { useAppSelector } from '../../../redux/store';
+import { selectPermissions } from '../../../redux/slices/userSlice';
+import { hasPermission } from '../../../utils/permissions';
 import PvpRequestsPanel from './PvpRequestsPanel';
 import AdminPagination from '../AdminPagination/AdminPagination';
 import { formatServerDateTime } from '../../../utils/serverDate';
@@ -80,6 +87,11 @@ interface BattleStateResponse {
     status: string;
     battle_type: string;
     created_at: string;
+    /** FEAT-163: not yet returned by GET /battles/admin/{id}/state — see the
+     *  contract note in the feature file. Optional so the freeze control works
+     *  today and lights up automatically once the backend sends it. */
+    is_paused?: boolean;
+    pause_reason?: string | null;
   };
   snapshot: SnapshotParticipant[] | null;
   runtime: BattleRuntime | null;
@@ -208,12 +220,27 @@ const BattleDetailPanel = ({ battleId, onForceFinish }: BattleDetailPanelProps) 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [finishing, setFinishing] = useState(false);
 
+  // --- FEAT-163: admin freeze / unfreeze ---
+  const permissions = useAppSelector(selectPermissions);
+  const canManage = hasPermission(permissions, 'battles:manage');
+  // `null` = unknown: the admin state endpoint does not report `is_paused` yet,
+  // so until a freeze/unfreeze call answers we offer both actions rather than
+  // guessing. The backend refuses the wrong one with a clear Russian 400.
+  const [isPaused, setIsPaused] = useState<boolean | null>(null);
+  const [freezeFormOpen, setFreezeFormOpen] = useState(false);
+  const [freezeReason, setFreezeReason] = useState('');
+  const [freezing, setFreezing] = useState(false);
+  const [unfreezing, setUnfreezing] = useState(false);
+
   const fetchState = useCallback(async () => {
     try {
       const { data } = await axios.get<BattleStateResponse>(
         `${BASE_URL_BATTLES}/battles/admin/${battleId}/state`,
       );
       setState(data);
+      if (typeof data.battle.is_paused === 'boolean') {
+        setIsPaused(data.battle.is_paused);
+      }
       setError(null);
     } catch (err) {
       const e = err as { response?: { data?: { detail?: string } } };
@@ -241,6 +268,52 @@ const BattleDetailPanel = ({ battleId, onForceFinish }: BattleDetailPanelProps) 
       toast.error(e?.response?.data?.detail || 'Ошибка при завершении боя');
     } finally {
       setFinishing(false);
+    }
+  };
+
+  const handleFreeze = async () => {
+    setFreezing(true);
+    try {
+      const res = await freezeBattle(battleId, freezeReason);
+      setIsPaused(res.is_paused);
+      toast.success(
+        res.reason ? `${res.message}: ${res.reason}` : res.message,
+      );
+      setFreezeFormOpen(false);
+      setFreezeReason('');
+      fetchState();
+    } catch (err) {
+      const e = err as { response?: { data?: { detail?: unknown } } };
+      const detail = e?.response?.data?.detail;
+      toast.error(
+        typeof detail === 'string' ? detail : 'Не удалось заморозить бой',
+      );
+    } finally {
+      setFreezing(false);
+    }
+  };
+
+  const handleUnfreeze = async () => {
+    setUnfreezing(true);
+    try {
+      const res = await unfreezeBattle(battleId);
+      setIsPaused(res.is_paused);
+      // 200 + is_paused:true is information, not a failure: a join request is
+      // still pending, so the battle honestly stays paused.
+      if (res.is_paused) {
+        toast(res.message, { icon: 'ℹ️' });
+      } else {
+        toast.success(res.message);
+      }
+      fetchState();
+    } catch (err) {
+      const e = err as { response?: { data?: { detail?: unknown } } };
+      const detail = e?.response?.data?.detail;
+      toast.error(
+        typeof detail === 'string' ? detail : 'Не удалось разморозить бой',
+      );
+    } finally {
+      setUnfreezing(false);
     }
   };
 
@@ -347,6 +420,79 @@ const BattleDetailPanel = ({ battleId, onForceFinish }: BattleDetailPanelProps) 
                 <span className="text-white">
                   {Object.keys(runtime.active_effects).join(', ')}
                 </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* FEAT-163: admin freeze / unfreeze. Hidden entirely without
+            `battles:manage` — the same permission the endpoints require. */}
+        {canManage && (
+          <div className="mt-4 flex flex-col gap-3">
+            {isPaused !== null && (
+              <p className="text-white/50 text-xs">
+                {isPaused
+                  ? `Бой на паузе${state.battle.pause_reason ? `: ${state.battle.pause_reason}` : ''}`
+                  : 'Бой идёт'}
+              </p>
+            )}
+
+            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
+              {isPaused !== true && (
+                <button
+                  onClick={() => setFreezeFormOpen((v) => !v)}
+                  className="btn-line !w-full sm:!w-auto !px-4"
+                >
+                  {freezeFormOpen ? 'Отмена' : 'Заморозить бой'}
+                </button>
+              )}
+              {isPaused !== false && (
+                <button
+                  onClick={handleUnfreeze}
+                  disabled={unfreezing}
+                  className="btn-line !w-full sm:!w-auto !px-4 disabled:opacity-50"
+                >
+                  {unfreezing ? 'Разморозка...' : 'Разморозить бой'}
+                </button>
+              )}
+            </div>
+
+            {freezeFormOpen && (
+              <div className="gold-outline relative rounded-card p-4 flex flex-col gap-3">
+                <label
+                  htmlFor={`freeze-reason-${battleId}`}
+                  className="text-white/70 text-xs relative z-10"
+                >
+                  Причина заморозки — её увидят оба игрока. Желательно указать,
+                  иначе будет «Бой заморожен администратором».
+                </label>
+                <input
+                  id={`freeze-reason-${battleId}`}
+                  type="text"
+                  maxLength={255}
+                  value={freezeReason}
+                  onChange={(e) => setFreezeReason(e.target.value)}
+                  placeholder="Игрок в отъезде до понедельника, противник согласен"
+                  className="input-underline relative z-10 w-full text-sm"
+                />
+                <div className="flex flex-col sm:flex-row gap-2 relative z-10">
+                  <button
+                    onClick={handleFreeze}
+                    disabled={freezing}
+                    className="btn-blue !w-full sm:!w-auto !px-4 disabled:opacity-50"
+                  >
+                    {freezing ? 'Заморозка...' : 'Заморозить'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setFreezeFormOpen(false);
+                      setFreezeReason('');
+                    }}
+                    className="btn-line !w-full sm:!w-auto !px-4"
+                  >
+                    Отмена
+                  </button>
+                </div>
               </div>
             )}
           </div>

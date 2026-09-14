@@ -211,6 +211,11 @@ services:
       SKILLS_SERVICE_URL: http://skills-service:8003
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       AUTOBATTLE_SERVICE_URL: http://autobattle-service:8011
+      TURN_TIMEOUT_HOURS: 24
+      BATTLE_STATE_TTL_HOURS: 48
+      BATTLE_TIMEOUT_SWEEPER_ENABLED: "1"
+      BATTLE_TIMEOUT_SWEEP_INTERVAL_SECONDS: 60
+      BATTLE_TIMEOUT_RECONCILE_EVERY: 60
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
       # FEAT-125 cutover: enable on first deploy, then remove
@@ -245,6 +250,7 @@ services:
       CHAR_ATTRS_SERVICE_URL: http://character-attributes-service:8002
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       USER_SERVICE_URL: http://user-service:8000
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
 
   party-service:
     <<: *restart

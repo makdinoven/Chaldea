@@ -249,6 +249,22 @@ class AdminForceFinishResponse(BaseModel):
     message: str
 
 
+# --- Admin freeze / unfreeze schemas (FEAT-163) ---
+
+class AdminFreezeRequest(BaseModel):
+    # Typed by the admin and shown to the players verbatim; optional, an empty
+    # value falls back to the default reason in main.py.
+    reason: Optional[str] = Field(None, max_length=255)
+
+
+class AdminFreezeResponse(BaseModel):
+    ok: bool
+    battle_id: int
+    is_paused: bool
+    reason: Optional[str] = None
+    message: str
+
+
 # --- Location Battles schemas ---
 
 class LocationBattleParticipant(BaseModel):
@@ -278,6 +294,36 @@ class LocationBattlesResponse(BaseModel):
 class SpectateStateResponse(BaseModel):
     snapshot: Optional[list] = None
     runtime: Optional[dict] = None
+
+
+# --- Battle runtime participant (FEAT-163 T8) ---
+
+class BattleRuntimeParticipant(BaseModel):
+    """Shape of one entry in ``runtime.participants`` (see main._build_runtime).
+
+    The runtime payload itself is still returned as a plain ``dict`` by
+    ``GET /battles/{id}/state``, ``/state/internal`` and the WS ``battle_state``
+    message, so this model documents and validates the contract rather than
+    replacing it. ``dropped_out`` is the additive field from FEAT-163 §3.8: it
+    defaults to ``False``, so pre-deploy battles and the current frontend keep
+    working unchanged.
+    """
+    hp: float
+    mana: float = 0
+    energy: float = 0
+    stamina: float = 0
+    team: int
+    character_id: int
+    cooldowns: dict = {}
+    fast_slots: list = []
+    max_hp: float = 0
+    max_mana: float = 0
+    max_energy: float = 0
+    max_stamina: float = 0
+    dropped_out: bool = False
+
+    class Config:
+        orm_mode = True
 
 
 # --- Battle preview schemas (FEAT-151, profile Battles tab) ---

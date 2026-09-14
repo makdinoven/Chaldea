@@ -33,6 +33,14 @@ from auth_http import (
 )
 from fastapi.testclient import TestClient
 
+import auth_http
+
+# FEAT-162 §3.4: /characters/internal/evaluate-titles now requires the
+# X-Internal-Token header. Pin the module constant so the suite does not depend
+# on INTERNAL_SERVICE_TOKEN being set in the environment.
+auth_http.INTERNAL_SERVICE_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -826,6 +834,7 @@ class TestTitleNotification:
         resp = title_client.post(
             "/characters/internal/evaluate-titles",
             json={"character_id": char.id},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -844,6 +853,7 @@ class TestTitleNotification:
         resp = title_client.post(
             "/characters/internal/evaluate-titles",
             json={"character_id": char.id},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         assert len(resp.json()["newly_unlocked_titles"]) == 0

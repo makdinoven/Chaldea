@@ -260,6 +260,7 @@ def admin_grant_perk(
         httpx.post(
             f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
             json={"character_id": character_id},
+            headers=_internal_token_headers(),
             timeout=5.0,
         )
     except Exception as e:
@@ -1142,6 +1143,7 @@ def increment_cumulative_stats(
         resp = httpx.post(
             f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
             json={"character_id": payload.character_id},
+            headers=_internal_token_headers(),
             timeout=5.0,
         )
     except Exception as e:

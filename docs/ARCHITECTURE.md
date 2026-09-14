@@ -14,7 +14,7 @@ Chaldea - это браузерная RPG-игра с микросервисно
 | **Документная БД** | MongoDB 6.0 (логи боёв, снапшоты) |
 | **Кэш/Стейт** | Redis 7 (состояние боёв, Pub/Sub) |
 | **Очереди** | RabbitMQ (уведомления, Celery broker) |
-| **Фоновые задачи** | Celery (worker + beat) |
+| **Фоновые задачи** | Celery (worker + beat) + in-process asyncio-цикл свипера таймаутов в battle-service (FEAT-163) |
 | **API Gateway** | Nginx |
 | **Хранилище файлов** | S3-совместимое (s3.twcstorage.ru) |
 | **Оркестрация** | Docker Compose (single instance) |
@@ -82,9 +82,9 @@ Chaldea - это браузерная RPG-игра с микросервисно
 | character-attributes-service | `character_attributes` |
 | skills-service | `skills`, `skill_ranks`, `skill_rank_damages`, `skill_rank_effects`, `character_skills` |
 | inventory-service | `items`, `character_inventory`, `equipment_slots`, `gathering_skills`, `gathering_skill_ranks`, `character_gathering_skills` (FEAT-128) |
-| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154), `post_drafts` (FEAT-156), `post_gate_requests` (FEAT-159) |
+| locations-service | `Countries`, `Regions`, `Districts`, `Locations`, `LocationNeighbors`, `posts`, `gathering_nodes`, `gathering_sessions` (FEAT-128), `origin_countries` (FEAT-154), `post_drafts` (FEAT-156), `post_gate_requests` (FEAT-159), `post_versions` (FEAT-160) |
 | notification-service | `notifications` |
-| battle-service | `battles`, `battle_participants`, `battle_turns` |
+| battle-service | `battles` (+ `pause_reason`, `paused_by_admin`), `battle_participants` (+ `dropped_out_at` — читается ещё тремя сервисами как снятие блокировки боя), `battle_turns` |
 
 **MongoDB** (`mydatabase`):
 - `battle_logs` - логи ходов боёв
@@ -184,6 +184,7 @@ notification-service ──> user-service (список юзеров для ра
 - `user_registration` queue: user-service -> notification-service (welcome-уведомление)
 - `general_notifications` queue: notification-service -> notification-service consumer (рассылка)
 - Celery broker: battle-service -> celery-worker (сохранение логов в MongoDB)
+- Свипер таймаута хода (FEAT-163): фоновый asyncio-цикл **внутри** battle-service (`main.py:5379`), не Celery beat — у celery-worker нет реквизитов MySQL. За тик: разбор просроченных дедлайнов из Redis-ZSET `battle:deadlines`, keep-alive замороженных боёв, почасовая сверка с MySQL. Подробности — `docs/services/battle-service.md`.
 
 **Примечание:** RabbitMQ consumers в character-service, skills-service, inventory-service и character-attributes-service **закомментированы**. Изначально планировалась асинхронная коммуникация, но сервисы перешли на HTTP.
 
