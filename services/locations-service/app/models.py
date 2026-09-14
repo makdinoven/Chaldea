@@ -4,6 +4,7 @@ from sqlalchemy import (
     Column, Integer, String, ForeignKey, Text, Boolean, Enum, BigInteger, TIMESTAMP,
     func, Float, JSON, text, UniqueConstraint, Index
 )
+from sqlalchemy.dialects.mysql import MEDIUMTEXT, TINYINT
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -166,6 +167,13 @@ class Post(Base):
     # dungeon | npc_dialogue. Non-regular posts gate the matching action.
     post_type = Column(String(20), server_default='regular', nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    # FEAT-159: the «изменено» marker. NULL until the post is edited for the
+    # first time; the hour-long edit window is always measured from created_at,
+    # never from edited_at, so repeated edits cannot extend it.
+    edited_at = Column(TIMESTAMP, nullable=True, server_default=None)
+    # Who performed the last edit (the author, or an admin). Audit trail only —
+    # never sent to clients; get_post_details derives `edited_by_admin` from it.
+    edited_by_user_id = Column(Integer, nullable=True, server_default=None)
 
     __table_args__ = (
         Index('idx_posts_character_id', 'character_id'),
@@ -203,6 +211,53 @@ class PostLike(Base):
 
     __table_args__ = (
         UniqueConstraint('post_id', 'character_id', name='uq_post_character'),
+    )
+
+
+class PostVersion(Base):
+    """The text a post had BEFORE an edit (FEAT-160).
+
+    A row stores the content the edit *destroyed*, not the content it produced.
+    Storing the "after" text would lose the original at the very first edit —
+    and the original wording is exactly what gets quoted and then disputed. The
+    post's current text is never duplicated here; it is read live from
+    ``posts.content``.
+
+    Hence the deliberate off-by-one: ``edited_by_user_id`` and ``created_at``
+    describe the edit that **replaced** ``content``, not the one that wrote it.
+    ``crud.get_post_versions`` flips this once, server-side, into the shape an
+    admin thinks in.
+
+    Unlike ``post_gate_requests`` / ``post_deletion_requests`` / ``post_reports``
+    (``SET NULL``, migrations 037/039), ``post_id`` is NOT NULL and cascades: a
+    version is a copy of the post's content, not a staff decision about it. Once
+    the post is deleted — often deleted by moderation *for* that content — an
+    orphaned copy would defeat the deletion instead of documenting it.
+    """
+    __tablename__ = "post_versions"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    post_id = Column(
+        Integer,
+        ForeignKey("posts.id", ondelete="CASCADE", name="fk_post_versions_post_id"),
+        nullable=False,
+    )
+    # 1 = the oldest stored text. Assigned as MAX(version_no) + 1 under the
+    # SELECT ... FOR UPDATE in crud.edit_post; the unique key is the backstop.
+    version_no = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    # Who performed the edit that replaced `content` (author or admin).
+    edited_by_user_id = Column(Integer, nullable=False)
+    # MEANINGFUL ONLY ON version_no = 1. Set at write time to
+    # (posts.edited_at IS NULL): True when this row really holds the original,
+    # False when the post had already been edited before history existed and
+    # the true original is unrecoverable. Ignore it on every later row.
+    is_original = Column(Boolean, nullable=False, server_default=text("1"))
+    # When the edit that replaced `content` happened.
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('post_id', 'version_no', name='uq_post_versions_post_version'),
     )
 
 
@@ -259,7 +314,13 @@ class PostDeletionRequest(Base):
     __tablename__ = "post_deletion_requests"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
+    # post_id survives post deletion as NULL (migration 037, FEAT-158 bug 4):
+    # moderation decision history must outlive the post it is about.
+    post_id = Column(
+        Integer,
+        ForeignKey("posts.id", ondelete="SET NULL", name="fk_post_deletion_requests_post_id"),
+        nullable=True,
+    )
     user_id = Column(Integer, nullable=False)
     reason = Column(String(500), nullable=True)
     status = Column(String(20), default="pending", nullable=False)
@@ -272,7 +333,13 @@ class PostReport(Base):
     __tablename__ = "post_reports"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
+    # post_id survives post deletion as NULL (migration 037, FEAT-158 bug 4):
+    # moderation decision history must outlive the post it is about.
+    post_id = Column(
+        Integer,
+        ForeignKey("posts.id", ondelete="SET NULL", name="fk_post_reports_post_id"),
+        nullable=True,
+    )
     user_id = Column(Integer, nullable=False)
     reason = Column(String(500), nullable=True)
     status = Column(String(20), default="pending", nullable=False)
@@ -282,6 +349,51 @@ class PostReport(Base):
 
     __table_args__ = (
         UniqueConstraint('post_id', 'user_id', name='uq_post_report_user'),
+    )
+
+
+class PostGateRequest(Base):
+    """A moderation request to grant intent gates that were added to a post
+    *after* publication, during an edit (FEAT-159, Phase B).
+
+    A retro-added gate never fires on its own: the edit writes a row here and
+    nothing else. ``action_gates`` rows are created only when an admin approves
+    (see the review endpoint), so a rejected request leaves no rights behind.
+
+    Deliberately NOT folded into ``post_deletion_requests``: that table's
+    approve branch deletes the post, and a "grant rights" conditional has no
+    business living next to it (FEAT-159 section 3.7).
+    """
+    __tablename__ = "post_gate_requests"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    # post_id survives post deletion as NULL — the policy of migration 037:
+    # a moderation decision must outlive the post it is about.
+    post_id = Column(
+        Integer,
+        ForeignKey("posts.id", ondelete="SET NULL", name="fk_post_gate_requests_post_id"),
+        nullable=True,
+    )
+    character_id = Column(Integer, nullable=False)
+    location_id = Column(
+        BigInteger,
+        ForeignKey("Locations.id", ondelete="CASCADE", name="fk_post_gate_requests_location_id"),
+        nullable=False,
+    )
+    # The requester. Not derivable from character_id: an admin may file a
+    # request while editing somebody else's post.
+    user_id = Column(Integer, nullable=False)
+    # [{"action_type": "...", "targets": [...]}] — the gates to grant on approval.
+    gates = Column(JSON, nullable=False)
+    # pending | approved | rejected | expired
+    status = Column(String(20), server_default='pending', nullable=False)
+    reviewed_by_user_id = Column(Integer, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    reviewed_at = Column(TIMESTAMP, nullable=True, server_default=None)
+
+    __table_args__ = (
+        Index('idx_pgr_queue', 'status', 'created_at'),
+        Index('idx_pgr_post', 'post_id'),
     )
 
 
@@ -715,3 +827,59 @@ class OriginStartingPoint(Base):
         Index('ix_origin_starting_points_location', 'location_id'),
         {'mysql_engine': 'InnoDB'},
     )
+
+
+class PostDraft(Base):
+    """Черновик ролевого поста — пара «персонаж + локация» (FEAT-156).
+
+    ``content`` — ``MEDIUMTEXT``, а не ``TEXT``: ``TEXT`` вмещает 64 КБ, кириллица
+    в ``utf8mb4`` стоит 2 байта на символ, плюс разметка TipTap. Длинный пост
+    упёрся бы в потолок и молча обрезался — ровно тот баг, ради которого фича и
+    делается.
+
+    ``active`` — намеренно nullable-флаг, а не boolean. MySQL не умеет частично
+    уникальные индексы, но считает ``NULL`` различными внутри UNIQUE-ключа,
+    поэтому ``UNIQUE (character_id, location_id, active)`` даёт ровно один живой
+    черновик на пару «персонаж + локация» и при этом не ограничивает число
+    архивных строк. Это гарантия на уровне БД против гонки «две вкладки сразу».
+    Код пишет только ``1`` или ``NULL``, никогда ``0``.
+
+    FK только на ``Locations.id`` — внешних ключей в таблицы чужих сервисов в
+    этом сервисе нет; очистка по персонажу делается admin-эндпоинтом (см. 3.12).
+    """
+
+    __tablename__ = "post_drafts"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    location_id = Column(
+        BigInteger, ForeignKey("Locations.id", ondelete="CASCADE"), nullable=False
+    )
+    content = Column(MEDIUMTEXT, nullable=False)
+    # 1 = живой черновик локации; NULL = архивная строка (вытесненная или отправленная)
+    active = Column(TINYINT, nullable=True)
+    # NOT NULL => этот текст стал настоящим постом («дописанный» из брифа)
+    sent_at = Column(TIMESTAMP, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    # Проставляется явно в crud (datetime.now(timezone.utc)), без MySQL ON UPDATE —
+    # чтобы порядок вытеснения был детерминированным и тестируемым.
+    updated_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'character_id', 'location_id', 'active', name='uq_post_drafts_active'
+        ),
+        Index('idx_post_drafts_char_updated', 'character_id', 'updated_at'),
+        {'mysql_engine': 'InnoDB'},
+    )
+
+    # Производные флаги для Pydantic-схем (orm_mode читает их как обычные атрибуты).
+    @property
+    def is_sent(self) -> bool:
+        """Текст стал настоящим постом («дописанный» из брифа)."""
+        return self.sent_at is not None
+
+    @property
+    def is_active(self) -> bool:
+        """Это живой черновик своей локации, а не архивная строка."""
+        return self.active == 1

@@ -6,6 +6,8 @@ interface SpellCheckPanelProps {
   errors: SpellError[];
   loading: boolean;
   checked: boolean;
+  /** Russian message of the last failure. The panel must never go blank. */
+  error?: string | null;
   onApplySuggestion: (errorIndex: number, suggestion: string) => void;
   onDismissError: (errorIndex: number) => void;
 }
@@ -14,6 +16,7 @@ const SpellCheckPanel = ({
   errors,
   loading,
   checked,
+  error = null,
   onApplySuggestion,
   onDismissError,
 }: SpellCheckPanelProps) => {
@@ -46,28 +49,48 @@ const SpellCheckPanel = ({
     );
   }
 
-  if (!checked) return null;
+  // FEAT-157 (T3): a failed check used to render nothing at all. The message
+  // stays in the panel after the toast expires, so the player can still read it.
+  const errorBlock = error ? (
+    <motion.div
+      role="alert"
+      initial={{ opacity: 0, y: -5 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: 'easeOut' }}
+      className="mx-2 sm:mx-4 my-2 px-3 py-2 rounded border border-site-red/40
+                 bg-site-red/10 text-sm text-site-red break-words"
+    >
+      {error}
+    </motion.div>
+  ) : null;
+
+  if (!checked) return errorBlock;
 
   if (errors.length === 0) {
     return (
-      <motion.div
-        initial={{ opacity: 0, y: -5 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
-        className="py-2 px-4 text-sm text-stat-energy"
-      >
-        Ошибок не найдено
-      </motion.div>
+      <>
+        {errorBlock}
+        <motion.div
+          initial={{ opacity: 0, y: -5 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
+          className="py-2 px-4 text-sm text-stat-energy"
+        >
+          Ошибок не найдено
+        </motion.div>
+      </>
     );
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: -5 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2, ease: 'easeOut' }}
-      className="flex flex-col gap-1 py-2"
-    >
+    <>
+      {errorBlock}
+      <motion.div
+        initial={{ opacity: 0, y: -5 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2, ease: 'easeOut' }}
+        className="flex flex-col gap-1 py-2"
+      >
       <span className="px-4 text-xs text-white/50 mb-1">
         Найдено ошибок: {errors.length}
       </span>
@@ -171,8 +194,9 @@ const SpellCheckPanel = ({
             </div>
           );
         })}
-      </div>
-    </motion.div>
+        </div>
+      </motion.div>
+    </>
   );
 };
 

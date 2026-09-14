@@ -19,6 +19,7 @@ import { fetchBattleSpectateState } from "../../../api/battles";
 import { checkActiveSession } from "../../../api/dungeons";
 import useBattleWebSocket from "../../../hooks/useBattleWebSocket";
 import { evaluateControl, type EffectLike } from "./battleEffects";
+import { parseServerDate } from "../../../utils/serverDate";
 
 // --- Types ---
 
@@ -295,8 +296,20 @@ const BattlePage = () => {
       setOpponentData(enemySnaps.length ? build(enemySnaps[0]) : null);
 
       const now = Date.now();
-      const turnEnd = new Date(runtime.deadline_at).getTime();
-      const timeLeft = Math.max(0, turnEnd - now);
+      // FEAT-161: `deadline_at` reaches the client in two shapes — legacy
+      // offset-aware (`+03:00`) for battles whose Redis state predates the
+      // deadline normalisation, and naive UTC for everything written since.
+      // `parseServerDate` keeps an offset-carrying string as-is and reads a
+      // naive one as UTC, so both forms of the same instant yield the same
+      // remaining time as the server enforces, in any viewer timezone. A bare
+      // `new Date()` here read the naive form as local wall-clock, shifting the
+      // countdown by the viewer's UTC offset: east of UTC the timer ran short
+      // (at UTC+3 a one-hour turn showed as already expired), west of UTC it
+      // ran long (at UTC-4 it showed five hours).
+      const turnEnd = parseServerDate(runtime.deadline_at);
+      // No parsable deadline ⇒ nothing left to count down, rather than the NaN
+      // the old parse produced.
+      const timeLeft = turnEnd ? Math.max(0, turnEnd.getTime() - now) : 0;
       const currentActorSnapshot = snapshot.find(
         (p) => p.participant_id === runtime.current_actor,
       );
@@ -711,8 +724,15 @@ const BattlePage = () => {
         {/* Pause banner */}
         {isPaused && (
           <div className="relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center bg-site-bg border border-gold-dark/50">
+            {/* FEAT-163 T13: the reason is dynamic — an admin freeze types its
+                own text, a join-request pause sends its own string. Rendered as
+                plain text only; never dangerouslySetInnerHTML. */}
             <p className="text-gold text-sm sm:text-base font-medium">
-              Бой приостановлен — рассматриваются заявки на присоединение
+              Бой приостановлен
+            </p>
+            <p className="text-gold/80 text-xs sm:text-sm mt-1 break-words">
+              {runtimeData.paused_reason?.trim() ||
+                "Рассматриваются заявки на присоединение"}
             </p>
           </div>
         )}

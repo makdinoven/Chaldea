@@ -5,6 +5,22 @@
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm certbot \
 #     certonly --webroot -w /var/www/certbot -d fallofgods.top
 
+# ВРЕМЯ: все контейнеры работают в UTC. НЕ ЗАДАВАЙТЕ здесь переменную TZ —
+# ни в этом overlay, ни в базовом docker-compose.yml. Prod особенно уязвим:
+# игроки живут в UTC+3, и дописать сюда TZ=Europe/Moscow, «чтобы время на
+# сервере совпадало с реальным», выглядит разумной настройкой. Это тихо
+# сломает все даты в игре.
+#
+# Бэкенд отдаёт метки БЕЗ пояса ("2026-03-23T10:23:58"), клиент
+# (services/frontend/app-chaldea/src/utils/serverDate.ts) читает строку без
+# пояса как UTC. Задав TZ, вы заставите MySQL NOW() и Python datetime писать
+# местное время в те же колонки, а клиент всё равно прочитает его как UTC —
+# возраст постов, онлайн-статус, кулдауны, таймер хода и игровой календарь
+# сместятся на величину пояса. Ни исключения, ни записи в логах не будет.
+#
+# То же про ENV TZ в Dockerfile, /etc/localtime и default-time-zone в MySQL.
+# Подробности: docs/ARCHITECTURE.md, раздел "Time & Timezones".
+
 # Auto-restart policy: containers come back up after a host reboot
 # (e.g. VPS restarted by the provider). Merged into every prod service below.
 x-restart: &restart
@@ -125,6 +141,9 @@ services:
       LOCATIONS_SERVICE_URL: http://locations-service:8006
       # Лимит персонажей на аккаунт. 0 = без ограничений (значение по умолчанию).
       MAX_CHARACTERS_PER_USER: ${MAX_CHARACTERS_PER_USER:-0}
+      # FEAT-162: общий токен для internal service-to-service эндпоинтов
+      # (/characters/internal/...). Значение — только из окружения.
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
     depends_on:
       mysql:
         condition: service_healthy
@@ -192,6 +211,11 @@ services:
       SKILLS_SERVICE_URL: http://skills-service:8003
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       AUTOBATTLE_SERVICE_URL: http://autobattle-service:8011
+      TURN_TIMEOUT_HOURS: 24
+      BATTLE_STATE_TTL_HOURS: 48
+      BATTLE_TIMEOUT_SWEEPER_ENABLED: "1"
+      BATTLE_TIMEOUT_SWEEP_INTERVAL_SECONDS: 60
+      BATTLE_TIMEOUT_RECONCILE_EVERY: 60
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
       # FEAT-125 cutover: enable on first deploy, then remove
@@ -226,6 +250,7 @@ services:
       CHAR_ATTRS_SERVICE_URL: http://character-attributes-service:8002
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       USER_SERVICE_URL: http://user-service:8000
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
 
   party-service:
     <<: *restart

@@ -19,6 +19,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../redux/store';
+import { parseServerDate } from '../utils/serverDate';
 import {
   loadActiveGathering,
   selectActiveSession,
@@ -35,11 +36,14 @@ export interface GatheringLockState {
 const POLL_INTERVAL_MS = 10_000;
 const TICK_INTERVAL_MS = 1_000;
 
+// FEAT-161: `complete_at` arrives from the backend without a zone designator
+// (naive UTC). Parsing it with the browser's local frame made the countdown
+// wrong by the player's UTC offset, so the banner could hit 00:00 long before
+// the server finalises the session (or hang for hours after it did).
 const computeRemainingSeconds = (completeAt: string | null): number => {
-  if (!completeAt) return 0;
-  const completeMs = Date.parse(completeAt);
-  if (Number.isNaN(completeMs)) return 0;
-  return Math.max(0, Math.floor((completeMs - Date.now()) / 1000));
+  const completeDate = parseServerDate(completeAt);
+  if (!completeDate) return 0;
+  return Math.max(0, Math.floor((completeDate.getTime() - Date.now()) / 1000));
 };
 
 /**

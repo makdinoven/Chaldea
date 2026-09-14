@@ -1403,3 +1403,19 @@ class HomeLeaderboardsResponse(BaseModel):
     symbols_daily: List[LeaderboardEntry]  # characters written in the last 24h
     pvp: List[LeaderboardEntry]            # PvP wins (all-time)
     pve: List[LeaderboardEntry]            # PvE points = sum of defeated mob levels (all-time)
+
+
+# ── FEAT-162: перенос персонажа администратором ──
+class AdminMoveCharacterRequest(BaseModel):
+    new_location_id: int
+
+
+class AdminMoveCharacterResponse(BaseModel):
+    detail: str
+    character_id: int
+    moved: bool
+    from_location_id: Optional[int] = None
+    from_location_name: Optional[str] = None
+    to_location_id: int
+    to_location_name: Optional[str] = None
+    gathering_cancelled: bool = False

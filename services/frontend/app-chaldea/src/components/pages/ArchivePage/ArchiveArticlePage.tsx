@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import DOMPurify from 'dompurify';
 import { fetchArticleBySlug, type ArchiveArticle } from '../../../api/archive';
 import ArchiveLinkPreview from '../../CommonComponents/ArchiveLinkPreview/ArchiveLinkPreview';
+import { parseServerDate } from '../../../utils/serverDate';
 
 const titleFont = "'MedievalSharp', 'Georgia', serif";
 const bodyFont = "'Cormorant Garamond', 'Georgia', serif";
@@ -167,7 +168,9 @@ const ArchiveArticlePage = () => {
 
   const formatDate = (dateStr: string) => {
     try {
-      return new Date(dateStr).toLocaleDateString('ru-RU', {
+      const date = parseServerDate(dateStr);
+      if (!date) return dateStr;
+      return date.toLocaleDateString('ru-RU', {
         day: 'numeric',
         month: 'long',
         year: 'numeric',

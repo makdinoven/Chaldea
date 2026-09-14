@@ -13,6 +13,7 @@ import { useEffect } from "react";
 import toast from "react-hot-toast";
 import { motion } from "motion/react";
 import AdminPagination from "../AdminPagination/AdminPagination";
+import { formatServerDate } from "../../../utils/serverDate";
 
 type Tab = "articles" | "categories";
 
@@ -268,7 +269,7 @@ const ArticlesList = ({ onEdit, onCreate }: ArticlesListProps) => {
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-white/50 hidden lg:table-cell">
-                    {new Date(article.created_at).toLocaleDateString("ru-RU")}
+                    {formatServerDate(article.created_at, {})}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-col items-end gap-1.5">

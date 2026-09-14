@@ -1,9 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
-import DOMPurify from 'dompurify';
 import { Post, Player } from './types';
 import PlayerActionsMenu from './PlayerActionsMenu';
 import useNpcAttack from '../../../hooks/useNpcAttack';
 import ArchiveLinkPreview from '../../CommonComponents/ArchiveLinkPreview/ArchiveLinkPreview';
+import { formatRelativeTime, parseServerDate, serverDateMs } from '../../../utils/serverDate';
+import { sanitizePostHtml } from '../../../utils/sanitizePostHtml';
+import { useAppSelector } from '../../../redux/store';
+import { selectPermissions } from '../../../redux/slices/userSlice';
+import { hasPermission } from '../../../utils/permissions';
 
 interface PostCardProps {
   post: Post;
@@ -19,30 +23,57 @@ interface PostCardProps {
   onTagPlayer: (targetUserId: number) => void;
   onReport: (postId: number, reason: string) => void;
   onRequestDeletion: (postId: number, reason: string) => void;
+  /**
+   * FEAT-159: this post is the newest one in the location (index 0 of the
+   * `id DESC` feed). One of the two owner-path conditions for editing.
+   */
+  isLatestPostInLocation?: boolean;
+  /** Current user's role — only the literal `admin` may edit someone else's post. */
+  currentUserRole?: string | null;
+  /** Opens the edit modal. Absent -> the «Редактировать» entry is never shown. */
+  onEdit?: (post: Post) => void;
+  /**
+   * FEAT-160: opens the version-history modal. Absent -> the «История правок»
+   * entry is never shown.
+   */
+  onShowHistory?: (post: Post) => void;
 }
 
-const formatRelativeTime = (dateStr: string): string => {
-  try {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
 
-    if (diffMin < 1) return 'только что';
-    if (diffMin < 60) return `${diffMin} мин. назад`;
-    if (diffHours < 24) return `${diffHours} ч. назад`;
-    if (diffDays < 7) return `${diffDays} дн. назад`;
+/**
+ * FEAT-159: the edit window is one hour from PUBLICATION.
+ *
+ * `posts.created_at` is a naive MySQL `TIMESTAMP` written by the server's own
+ * `NOW()` and serialised without an offset, so it must be read as UTC — letting
+ * `new Date()` interpret it as *local* time would shift the window by the
+ * viewer's offset and hide the button from everyone east of UTC. FEAT-161 moved
+ * that reading into the shared `utils/serverDate` helper; the local copy is gone.
+ *
+ * This is only a convenience check: the server re-decides both limits at save
+ * time (section 3.4), and a stale client state degrades into a visible Russian
+ * error in the modal, never into a silent no-op.
+ */
+const EDIT_WINDOW_MS = 60 * 60 * 1000;
 
-    return date.toLocaleDateString('ru-RU', {
-      day: 'numeric',
-      month: 'short',
-      year: diffDays > 365 ? 'numeric' : undefined,
-    });
-  } catch {
-    return dateStr;
-  }
+const isWithinEditWindow = (createdAt: string): boolean => {
+  // `serverDateMs` yields 0 for an absent/unparseable value, i.e. "older than
+  // anything" — which closes the window, exactly as the previous NaN guard did.
+  const ts = serverDateMs(createdAt);
+  if (!ts) return false;
+  return Date.now() - ts < EDIT_WINDOW_MS;
+};
+
+/** Exact moment of the edit for the marker's `title`. */
+const formatExactTime = (dateStr: string): string => {
+  const date = parseServerDate(dateStr);
+  if (!date) return dateStr;
+  return date.toLocaleString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 };
 
 const getRarityColorClass = (rarity?: string | null): string => {
@@ -112,7 +143,12 @@ const PostCard = ({
   onTagPlayer,
   onReport,
   onRequestDeletion,
+  isLatestPostInLocation = false,
+  currentUserRole = null,
+  onEdit,
+  onShowHistory,
 }: PostCardProps) => {
+  const permissions = useAppSelector(selectPermissions);
   const isLiked = currentCharacterId !== null && post.liked_by.includes(currentCharacterId);
   const [animating, setAnimating] = useState(false);
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
@@ -126,6 +162,32 @@ const PostCard = ({
   const isAuthor = currentCharacterId !== null && post.character_id === currentCharacterId;
   // System / NPC-authored posts have no user account behind them.
   const isNpcPost = !post.user_id;
+
+  // FEAT-159: «Редактировать» is offered to the author while the post is the
+  // location's newest and still inside the hour, and to role `admin` always
+  // (moderators are NOT admins here — the server answers them 403).
+  const canEdit =
+    !!onEdit &&
+    (currentUserRole === 'admin' ||
+      (isAuthor && isLatestPostInLocation && isWithinEditWindow(post.created_at)));
+
+  /**
+   * FEAT-160: «История правок» is gated on the `posts:history` PERMISSION, never
+   * on `role === 'admin'`.
+   *
+   * That permission is deliberately granted to no role (user-service migration
+   * 0029): admins hold it implicitly through `get_effective_permissions`,
+   * moderators do not, and it can be handed to one named person through
+   * `user_permissions` **without a deploy**. A role check would quietly break
+   * that delegation — the entry would stay hidden for someone the server would
+   * happily answer 200. The server guards the endpoint with the same
+   * permission, so the two can never disagree.
+   *
+   * There is nothing to show for a post that was never edited, hence
+   * `post.edited_at`.
+   */
+  const canViewHistory =
+    !!onShowHistory && !!post.edited_at && hasPermission(permissions, 'posts:history');
 
   // Filter out the current user from players list (prevent self-tagging)
   const taggablePlayers = players.filter((p) => p.user_id !== currentUserId);
@@ -247,6 +309,16 @@ const PostCard = ({
             <span className="text-white/40 text-[11px] shrink-0">
               {formatRelativeTime(post.created_at)}
             </span>
+            {/* FEAT-159: an edit must be visible — a line may have been quoted
+                before it was changed. The exact moment lives in the tooltip. */}
+            {post.edited_at && (
+              <span
+                className="text-white/35 text-[11px] italic shrink-0"
+                title={`Отредактировано: ${formatExactTime(post.edited_at)}`}
+              >
+                · {post.edited_by_admin ? 'изменено администратором' : 'изменено'}
+              </span>
+            )}
           </div>
         </div>
 
@@ -301,6 +373,34 @@ const PostCard = ({
                       </svg>
                       Пожаловаться
                     </button>
+                    {canEdit && (
+                      <button
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onEdit?.(post);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-white/70 hover:bg-white/10 hover:text-white transition-colors text-left text-xs"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-site-blue/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                        Редактировать
+                      </button>
+                    )}
+                    {canViewHistory && (
+                      <button
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onShowHistory?.(post);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-white/70 hover:bg-white/10 hover:text-white transition-colors text-left text-xs"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-gold/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        История правок
+                      </button>
+                    )}
                     {isAuthor && (
                       <button
                         onClick={() => openModal('deletion')}
@@ -320,24 +420,32 @@ const PostCard = ({
         </div>
       </div>
 
-      {/* Content — RP body styling per mock: gold quotes, tinted emphasis */}
+      {/* Content — RP body styling per mock: gold quotes. Bold/italic carry no colour
+          of their own (FEAT-157): they inherit the post colour unless the author
+          coloured them, so a player-chosen colour is never overridden. */}
       <ArchiveLinkPreview>
         <div
           className="text-white/[0.88] text-sm sm:text-[14.5px] leading-relaxed whitespace-pre-wrap break-words prose-rules
             [&_blockquote]:border-l-2 [&_blockquote]:border-gold/50 [&_blockquote]:pl-3.5 [&_blockquote]:my-2 [&_blockquote]:italic [&_blockquote]:text-white/75
-            [&_em]:italic [&_em]:text-rarity-epic [&_b]:text-gold-light [&_strong]:text-gold-light"
+            [&_em]:italic"
           dangerouslySetInnerHTML={{
-            __html: DOMPurify.sanitize(post.content, {
-              ADD_ATTR: ['data-archive-slug'],
-            }),
+            // Player-written HTML. `sanitizePostHtml` is the project-wide post
+            // policy (allow-list of the editor's own tags/attributes/CSS
+            // properties) — never inline a DOMPurify config here instead.
+            __html: sanitizePostHtml(post.content),
           }}
         />
       </ArchiveLinkPreview>
 
-      {/* FEAT-145 item 7: intent-gate marks declared in this post */}
-      {post.gates && Object.keys(post.gates).length > 0 && (
+      {/* FEAT-145 item 7: intent-gate marks declared in this post.
+          FEAT-159 (T12): gates added during an edit sit in `pending_gates` until
+          a moderator rules on them. They are rendered in the same row but must
+          read as *not yet granted* — dashed outline, hourglass, «на
+          рассмотрении» — because they unlock nothing until approval. */}
+      {((post.gates && Object.keys(post.gates).length > 0) ||
+        (post.pending_gates && Object.keys(post.pending_gates).length > 0)) && (
         <div className="flex flex-wrap gap-1.5">
-          {Object.entries(post.gates).map(([at, count]) => {
+          {Object.entries(post.gates ?? {}).map(([at, count]) => {
             const m = GATE_BADGE_META[at] ?? { icon: '•', label: at, cls: 'border-gold/20 bg-gold/10 text-gold/90' };
             return (
               <span
@@ -346,6 +454,22 @@ const PostCard = ({
               >
                 {m.icon} {m.label}
                 {(count as number) > 1 ? ` ×${count}` : ''}
+              </span>
+            );
+          })}
+          {Object.entries(post.pending_gates ?? {}).map(([at, count]) => {
+            const m = GATE_BADGE_META[at] ?? { icon: '•', label: at, cls: '' };
+            return (
+              <span
+                key={`pending-${at}`}
+                title="Намерение добавлено при редактировании и ждёт решения администратора — действие пока недоступно"
+                className="flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-0.5 rounded-full
+                           border border-dashed border-gold/40 bg-gold/[0.06] text-gold/80 break-words"
+              >
+                <span aria-hidden="true">⏳</span>
+                {m.icon} {m.label}
+                {(count as number) > 1 ? ` ×${count}` : ''}
+                <span className="text-white/45">· на рассмотрении</span>
               </span>
             );
           })}
@@ -446,7 +570,11 @@ const PostCard = ({
           </div>
         )}
 
-        {/* Char length counter (mock: «N симв.») */}
+        {/* Char length counter — the number a player uses to judge whether the
+            post pays for its intent gates, so it MUST equal what the server
+            counts. `post.length` now IS that figure: the backend builds it with
+            `crud.strip_html_tags`, the same helper behind post XP and the gate
+            budgets, so the count lives in exactly one place. */}
         <span className="ml-auto text-white/30 text-[11px] shrink-0">
           {post.length} симв.
         </span>

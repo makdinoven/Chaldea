@@ -24,6 +24,7 @@ import FriendsSection from './FriendsSection';
 import CharactersSection from './CharactersSection';
 import ProfileSettingsModal, { buildColorEffectStyle, buildNicknameTextShadow } from './ProfileSettingsModal';
 import AvatarWithFrame from '../common/AvatarWithFrame';
+import { formatServerDate } from '../../utils/serverDate';
 
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
 
@@ -174,7 +175,7 @@ const UserProfilePage = () => {
   }
 
   const registeredDate = profile.registered_at
-    ? new Date(profile.registered_at).toLocaleDateString('ru-RU', {
+    ? formatServerDate(profile.registered_at, {
         day: 'numeric',
         month: 'long',
         year: 'numeric',

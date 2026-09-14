@@ -1521,3 +1521,78 @@ class TestSecurityInvariants:
         # Either 401 (rejected by OAuth2PasswordBearer) or 503 (auth-service
         # unreachable) — both prove the route is gated. Never 200.
         assert resp.status_code in (401, 403, 422, 503)
+
+
+# ===========================================================================
+# 11. FEAT-162 §3.8 — the optional `reason` on the internal cancel
+# ===========================================================================
+
+class TestCancelGatheringReason:
+    """The admin teleport cancels a gathering session for a reason that has
+    nothing to do with a battle, so the session row must not be closed as
+    `interrupted_by_battle`.
+
+    The risk this class guards is the *other* direction: battle-service is an
+    existing caller that sends no `reason` at all, and its behaviour had to
+    stay byte-for-byte identical. So the default is pinned first, and the new
+    branch second.
+    """
+
+    def test_default_reason_keeps_the_battle_status(self):
+        """Regression pin for the pre-FEAT-162 caller: `None` -> today's value."""
+        import crud as crud_module
+
+        assert crud_module._gathering_status_for_reason(None) == "interrupted_by_battle"
+
+    def test_explicit_battle_reason_matches_the_default(self):
+        import crud as crud_module
+
+        assert crud_module._gathering_status_for_reason("battle") == "interrupted_by_battle"
+
+    @pytest.mark.parametrize("reason", ["admin_teleport", "whatever", ""])
+    def test_any_other_reason_closes_the_session_as_cancelled(self, reason):
+        """The enum is deliberately NOT widened — an unknown reason falls back
+        to the closest existing value rather than writing an invalid status."""
+        import crud as crud_module
+
+        assert crud_module._gathering_status_for_reason(reason) == "cancelled"
+
+    @patch("crud.cancel_gathering_internal", new_callable=AsyncMock)
+    def test_omitted_reason_reaches_crud_as_none(self, mock_cancel, client):
+        """The battle-service call shape, unchanged: no `reason` key at all."""
+        import main as main_module
+
+        original = getattr(main_module, "INTERNAL_SERVICE_TOKEN", "")
+        main_module.INTERNAL_SERVICE_TOKEN = "secret-test-token"
+        mock_cancel.return_value = {"cancelled": False, "reason": "no_active_session"}
+        try:
+            resp = client.post(
+                "/locations/internal/cancel-gathering",
+                json={"character_id": 421},
+                headers={"X-Internal-Token": "secret-test-token"},
+            )
+            assert resp.status_code == 200, resp.text
+            assert mock_cancel.await_args.kwargs["reason"] is None
+        finally:
+            main_module.INTERNAL_SERVICE_TOKEN = original
+
+    @patch("crud.cancel_gathering_internal", new_callable=AsyncMock)
+    def test_admin_reason_is_threaded_through(self, mock_cancel, client):
+        import main as main_module
+
+        original = getattr(main_module, "INTERNAL_SERVICE_TOKEN", "")
+        main_module.INTERNAL_SERVICE_TOKEN = "secret-test-token"
+        mock_cancel.return_value = {
+            "cancelled": True, "session_id": 9, "stamina_refunded": 2,
+        }
+        try:
+            resp = client.post(
+                "/locations/internal/cancel-gathering",
+                json={"character_id": 421, "reason": "admin_teleport"},
+                headers={"X-Internal-Token": "secret-test-token"},
+            )
+            assert resp.status_code == 200, resp.text
+            assert mock_cancel.await_args.kwargs["reason"] == "admin_teleport"
+            assert resp.json()["cancelled"] is True
+        finally:
+            main_module.INTERNAL_SERVICE_TOKEN = original

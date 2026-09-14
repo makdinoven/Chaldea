@@ -19,6 +19,7 @@ import {
 } from '../../redux/slices/userProfileSlice';
 import { buildColorEffectStyle } from './ProfileSettingsModal';
 import WysiwygEditor from '../CommonComponents/WysiwygEditor/WysiwygEditor';
+import { formatServerDate } from '../../utils/serverDate';
 
 interface WallSectionProps {
   profileUserId: number;
@@ -80,7 +81,7 @@ const PostCard = ({
     }
   };
 
-  const date = new Date(post.created_at).toLocaleDateString('ru-RU', {
+  const date = formatServerDate(post.created_at, {
     day: 'numeric',
     month: 'long',
     year: 'numeric',

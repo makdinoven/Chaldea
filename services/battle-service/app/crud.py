@@ -87,6 +87,7 @@ async def get_active_battle_for_character(
             JOIN battle_participants bp ON b.id = bp.battle_id
             WHERE bp.character_id = :cid
               AND b.status IN ('pending', 'in_progress')
+              AND bp.dropped_out_at IS NULL
             LIMIT 1
         """),
         {"cid": character_id},

@@ -19,7 +19,13 @@ from producer import (
 )
 from typing import List, Dict, Optional
 from fastapi.middleware.cors import CORSMiddleware
-from auth_http import get_admin_user, get_current_user_via_http, require_permission, OAUTH2_SCHEME
+from auth_http import (
+    get_admin_user,
+    get_current_user_via_http,
+    require_permission,
+    verify_internal_token,
+    OAUTH2_SCHEME,
+)
 from sqlalchemy import text
 import logging
 
@@ -785,6 +791,165 @@ async def admin_update_character(
     return {"detail": "Character updated", "character_id": character.id}
 
 
+# ============================================================
+# FEAT-162 — перенос персонажа администратором
+# ============================================================
+# Порядок операций — это и есть суть фичи (§3.3): КАЖДАЯ очистка выполняется
+# ДО изменения состояния, а само изменение — одна локальная транзакция.
+#
+#   сбой отмены сбора      -> 502, не записано ничего
+#   сбой гашения намерений -> 502, персонаж НЕ перенесён
+#   сбой коммита           -> намерения погашены, персонаж НЕ перенесён
+#                             (эквивалент «вышел и вернулся»)
+#
+# Нет такого порядка, при котором персонаж окажется в новой локации, сохранив
+# живые намерения в старой.
+
+
+def _is_in_battle(db: Session, character_id: int) -> bool:
+    """Активный бой по общей БД (таблицы battle-service, только чтение)."""
+    row = db.execute(
+        text(
+            "SELECT 1 FROM battles b "
+            "JOIN battle_participants bp ON b.id = bp.battle_id "
+            "WHERE bp.character_id = :cid "
+            "AND b.status IN ('pending', 'in_progress') "
+            "AND bp.dropped_out_at IS NULL LIMIT 1"
+        ),
+        {"cid": character_id},
+    ).fetchone()
+    return row is not None
+
+
+def _is_in_dungeon_run(db: Session, character_id: int) -> bool:
+    """Незавершённый забег в подземелье (таблицы dungeon-service, только чтение)."""
+    row = db.execute(
+        text(
+            "SELECT 1 FROM dungeon_sessions ds "
+            "JOIN dungeon_session_members dsm ON ds.id = dsm.session_id "
+            "WHERE dsm.character_id = :cid "
+            "AND ds.status IN ('forming', 'active') LIMIT 1"
+        ),
+        {"cid": character_id},
+    ).fetchone()
+    return row is not None
+
+
+@router.post("/admin/{character_id}/move", response_model=schemas.AdminMoveCharacterResponse)
+async def admin_move_character(
+    character_id: int,
+    data: schemas.AdminMoveCharacterRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("characters:teleport")),
+):
+    """Перенести персонажа в произвольную локацию (только админ).
+
+    Игнорирует обычные правила перемещения (соседство локаций, выносливость,
+    кулдаун), но воспроизводит все побочные эффекты ухода из локации.
+
+    Разрешение `characters:teleport` намеренно не выдано ни одной роли:
+    админ получает его автоматически, модератор — нет (`characters:update`
+    для этого не годится, он есть и у модератора).
+    """
+    if data.new_location_id is None or data.new_location_id <= 0:
+        raise HTTPException(status_code=422, detail="Некорректный идентификатор локации")
+
+    # 1. Персонаж. Блокировка строки здесь НЕ берётся: дальше идут HTTP-вызовы,
+    #    и держать `FOR UPDATE` через сеть нельзя. Строка перечитывается под
+    #    блокировкой в `crud.apply_admin_move`, уже без внешних вызовов.
+    character = db.query(models.Character).filter(models.Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    from_location_id = character.current_location_id
+
+    # 2. Локация назначения должна существовать (заодно даёт имя для журнала).
+    to_location_name = crud._get_location_name(db, data.new_location_id)
+    if to_location_name is None:
+        raise HTTPException(status_code=404, detail="Локация назначения не найдена")
+
+    # 3. Та же локация — безусловный no-op ДО любых проверок и очисток:
+    #    ни записи в журнале, ни гашения намерений, ни сброса кулдауна.
+    if from_location_id is not None and int(from_location_id) == int(data.new_location_id):
+        return schemas.AdminMoveCharacterResponse(
+            detail="Персонаж уже находится в этой локации",
+            character_id=character_id,
+            moved=False,
+            from_location_id=from_location_id,
+            from_location_name=to_location_name,
+            to_location_id=data.new_location_id,
+            to_location_name=to_location_name,
+            gathering_cancelled=False,
+        )
+
+    from_location_name = crud._get_location_name(db, from_location_id)
+
+    # 4. Бой — отказ: выдёргивание из боя оставило бы бой неразрешимым.
+    if _is_in_battle(db, character_id):
+        raise HTTPException(status_code=409, detail="Персонаж находится в бою — перенос невозможен")
+
+    # 5. Подземелье — отказ: забег привязан к локации подземелья и несёт
+    #    состояние для остальных участников.
+    if _is_in_dungeon_run(db, character_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Персонаж находится в подземелье — перенос невозможен",
+        )
+
+    # 6. Сбор ресурсов отменяем (идемпотентно, с возвратом 50% выносливости).
+    try:
+        cancel_payload = await locations_client.cancel_gathering(
+            character_id, reason="admin_teleport",
+        )
+    except locations_client.LocationsServiceError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Не удалось подготовить перенос: {e}. Перенос отменён.",
+        )
+    gathering_cancelled = bool(cancel_payload.get("cancelled"))
+
+    # 7. Гашение намерений и заявок в покидаемой локации + роспуск группы.
+    #    Критический шаг: при сбое персонаж НЕ переносится.
+    try:
+        await locations_client.notify_character_left_location(character_id, from_location_id)
+    except locations_client.LocationsServiceError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Не удалось подготовить перенос: {e}. Перенос отменён.",
+        )
+
+    # 8. Одна локальная транзакция: локация + сброс кулдауна + запись в журнал.
+    try:
+        crud.apply_admin_move(
+            db,
+            character_id=character_id,
+            from_location_id=from_location_id,
+            from_location_name=from_location_name,
+            to_location_id=data.new_location_id,
+            to_location_name=to_location_name,
+            admin_user_id=current_user.id,
+            admin_username=current_user.username,
+            gathering_cancelled=gathering_cancelled,
+        )
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка при переносе персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+    return schemas.AdminMoveCharacterResponse(
+        detail="Персонаж перенесён",
+        character_id=character_id,
+        moved=True,
+        from_location_id=from_location_id,
+        from_location_name=from_location_name,
+        to_location_id=data.new_location_id,
+        to_location_name=to_location_name,
+        gathering_cancelled=gathering_cancelled,
+    )
+
+
 @router.post("/admin/{character_id}/unlink")
 async def admin_unlink_character(
     character_id: int,
@@ -857,11 +1022,17 @@ class InternalUnlinkRequest(schemas.BaseModel):
 async def internal_unlink_character(
     body: InternalUnlinkRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth) to unlink a character from its user.
-    Used by battle-service after a death duel to "kill" the loser's character.
-    Should be blocked by Nginx for external access.
+    Отвязка персонажа от аккаунта (internal, service-to-service).
+    Вызывается battle-service после смертельного дуэля, чтобы "убить"
+    персонажа проигравшего.
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт наружу как 403, и дополнительно требует заголовок X-Internal-Token.
+    Один только nginx не закрывает эндпоинт изнутри compose-сети, а один только
+    токен оставляет его публично роутируемым — поэтому нужны оба слоя.
     """
     character = db.query(models.Character).filter(
         models.Character.id == body.character_id
@@ -875,38 +1046,39 @@ async def internal_unlink_character(
 
     previous_user_id = character.user_id
 
-    # Clear user-character relation in shared DB directly (no auth needed)
+    # Три записи ниже идут в нашу же БД и в один коммит. Ошибку любой из них
+    # глотать нельзя: раньше `except Exception` + logger.warning прятали опечатку
+    # в имени колонки, и battle-service получал 200 при том, что не выполнилось
+    # ничего. Поэтому — единый try/except вокруг всей транзакции и 500 наружу.
     try:
+        # Clear user-character relation in shared DB directly (no auth needed)
+        # Таблица называется users_character (не user_characters) — см. models
+        # user-service и остальные запросы в этом файле.
         db.execute(
             text(
-                "DELETE FROM user_characters WHERE user_id = :uid AND character_id = :cid"
+                "DELETE FROM users_character WHERE user_id = :uid AND character_id = :cid"
             ),
             {"uid": previous_user_id, "cid": body.character_id},
         )
-    except Exception as e:
-        logger.warning(f"Failed to delete user_characters relation: {e}")
 
-    # Clear current_character_id in users table if it matches
-    try:
+        # Clear current_character in users table if it matches.
+        # Колонка называется current_character (не current_character_id).
         db.execute(
             text(
-                "UPDATE users SET current_character_id = NULL "
-                "WHERE id = :uid AND current_character_id = :cid"
+                "UPDATE users SET current_character = NULL "
+                "WHERE id = :uid AND current_character = :cid"
             ),
             {"uid": previous_user_id, "cid": body.character_id},
         )
-    except Exception as e:
-        logger.warning(f"Failed to clear current_character_id: {e}")
 
-    # Set user_id to None on the character
-    character.user_id = None
-    try:
+        # Set user_id to None on the character
+        character.user_id = None
         db.commit()
         db.refresh(character)
-    except SQLAlchemyError as e:
+    except Exception as e:
         db.rollback()
-        logger.error(f"Error unlinking character {body.character_id}: {e}")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        logger.error(f"Error unlinking character {body.character_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Не удалось отвязать персонажа")
 
     logger.info(
         f"Internal unlink: character {body.character_id} unlinked from user {previous_user_id}"
@@ -1089,10 +1261,15 @@ class InternalEvaluateTitlesRequest(schemas.BaseModel):
 async def internal_evaluate_titles(
     body: InternalEvaluateTitlesRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth). Evaluate and auto-grant titles for a character.
-    Called by character-attributes-service after cumulative stats increment.
+    Пересчёт и автовыдача титулов персонажу (internal, service-to-service).
+    Вызывается character-attributes-service после инкремента накопительных
+    характеристик и inventory-service после (сня)надевания предмета.
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт наружу как 403, и дополнительно требует заголовок X-Internal-Token.
     """
     try:
         newly_unlocked = crud.evaluate_titles(db, body.character_id)
@@ -1127,6 +1304,19 @@ async def delete_character(
 ):
     """
     Удаление персонажа по его ID с каскадной очисткой зависимых сервисов.
+
+    Порядок важен. Очистка в соседних сервисах идёт по HTTP и не может войти в
+    транзакцию нашей БД, поэтому полной атомарности здесь не существует.
+    Выбираем безопасный режим отказа: сначала удаляем строку персонажа, и
+    только после успешного коммита запускаем best-effort очистку. Если удаление
+    падает — данные персонажа целы, и админ видит ошибку. Обратный порядок
+    (как было раньше) при падении оставлял «выпотрошенного» персонажа: инвентарь,
+    навыки и атрибуты уже стёрты, а сам персонаж остался в списке.
+
+    Цена такого порядка — при падении очистки в соседях остаются осиротевшие
+    строки (инвентарь/навыки/атрибуты несуществующего персонажа). Это видно в
+    логах и чинится повторным вызовом соседних admin-эндпоинтов; игроку такой
+    мусор не показывается, в отличие от «выпотрошенного» персонажа.
     """
     character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if not character:
@@ -1134,6 +1324,25 @@ async def delete_character(
 
     headers = {"Authorization": f"Bearer {token}"}
     user_id = character.user_id
+
+    # 0. Delete the character row FIRST — see the docstring. Everything below is
+    #    best-effort cleanup that must not run unless the character is really gone.
+    try:
+        db.delete(character)
+        db.commit()
+    except Exception as e:
+        # Не только SQLAlchemyError: составной первичный ключ в character_titles
+        # раньше приводил к AssertionError, который уходил наружу пустым 500 без
+        # detail и без отката.
+        db.rollback()
+        logger.error(f"Error deleting character {character_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Не удалось удалить персонажа (ID {character_id}). "
+                "Данные персонажа не пострадали. Подробности — в логах character-service."
+            ),
+        )
 
     # 1. Delete all inventory (graceful)
     try:
@@ -1206,14 +1415,19 @@ async def delete_character(
         except Exception as e:
             logger.warning(f"Error clearing current_character for user {user_id}: {e}")
 
-    # 5. Delete the character row
+    # 4.5. Delete post drafts in locations-service (graceful)
     try:
-        db.delete(character)
-        db.commit()
-    except SQLAlchemyError as e:
-        db.rollback()
-        logger.error(f"Error deleting character {character_id}: {e}")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{settings.LOCATIONS_SERVICE_URL}/locations/admin/drafts/by_character/{character_id}",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Post drafts cleared for character {character_id}")
+            else:
+                logger.warning(f"Failed to clear post drafts for character {character_id}: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        logger.warning(f"Error clearing post drafts for character {character_id}: {e}")
 
     return {"message": f"Персонаж с ID {character_id} успешно удален."}
 
@@ -1610,10 +1824,20 @@ async def get_titles_for_character(character_id: int, db: Session = Depends(get_
         logger.error(f"Ошибка при получении титулов для персонажа {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при получении титулов для персонажа.")
 
-@router.put("/{character_id}/deduct_points")
-def deduct_points(character_id: int, data: dict, db: Session = Depends(get_db)):
+@router.put("/internal/{character_id}/deduct_points")
+def deduct_points(
+    character_id: int,
+    data: dict,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
     """
-    Списание stat_points у персонажа.
+    Списание stat_points у персонажа (internal, service-to-service).
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт наружу как 403, и дополнительно требует заголовок X-Internal-Token.
+    Раньше эндпоинт был публичным, и любой мог обнулить чужие очки характеристик.
+    Единственный вызывающий — character-attributes-service (upgrade_attributes).
     """
     points_to_deduct = data.get("points_to_deduct", 0)
     logger.info(f"Получен запрос на списание {points_to_deduct} stat_points для персонажа ID {character_id}")
@@ -1837,10 +2061,18 @@ def get_characters_by_location(location_id: int, db: Session = Depends(get_db)):
     return result
 
 
-@router.put("/{character_id}/update_location")
-def update_location(character_id: int, payload: dict, db: Session = Depends(get_db)):
+@router.put("/internal/{character_id}/update_location")
+def update_location(
+    character_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
     """
-    Обновляет текущую локацию персонажа.
+    Обновляет текущую локацию персонажа (internal, service-to-service).
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт наружу как 403, и дополнительно требует заголовок X-Internal-Token.
 
     Запрос:
       {
@@ -2879,10 +3111,14 @@ def admin_update_mob_spawns(
 def internal_try_spawn(
     data: schemas.TrySpawnRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth) — called by locations-service after post creation.
+    Internal endpoint — called by locations-service after post creation.
     Queries spawn rules for the given location, rolls chance, spawns mob if successful.
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт 403 снаружи, плюс обязательный заголовок X-Internal-Token.
     """
     try:
         result = crud.try_spawn_at_location(db, data.location_id)
@@ -3196,8 +3432,13 @@ def get_mob_packs_by_location(
 def internal_get_pack_roster(
     active_pack_id: int,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
-    """Internal (battle-service): living member character_ids of a spawned pack."""
+    """Internal (battle-service): living member character_ids of a spawned pack.
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт 403 снаружи, плюс обязательный заголовок X-Internal-Token.
+    """
     roster = crud.get_pack_roster(db, active_pack_id)
     if roster is None:
         raise HTTPException(status_code=404, detail="Активная стая не найдена")
@@ -3234,10 +3475,14 @@ def add_rewards(
 def get_mob_reward_data_endpoint(
     character_id: int,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth) — returns mob template reward data for a given mob character_id.
+    Internal endpoint — returns mob template reward data for a given mob character_id.
     Used by battle-service to determine PvE rewards.
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт 403 снаружи, плюс обязательный заголовок X-Internal-Token.
     """
     reward_data = crud.get_mob_reward_data(db, character_id)
     if reward_data is None:
@@ -3250,10 +3495,14 @@ def update_mob_status(
     character_id: int,
     data: schemas.UpdateActiveMobStatusRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth) — updates active mob status.
+    Internal endpoint — updates active mob status.
     Called by battle-service after PvE battle ends.
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт 403 снаружи, плюс обязательный заголовок X-Internal-Token.
     """
     result = crud.update_active_mob_status(db, character_id, data.status)
     if result is None:
@@ -3270,12 +3519,15 @@ def update_npc_status(
     character_id: int,
     data: schemas.UpdateNpcStatusRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth) — updates NPC status (alive/dead).
+    Internal endpoint — updates NPC status (alive/dead).
     Called by battle-service after a battle where an NPC is defeated.
     Only works for NPCs (is_npc=True, npc_role != 'mob').
-    Should be blocked by Nginx for external access.
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт 403 снаружи, плюс обязательный заголовок X-Internal-Token.
     """
     npc = db.query(models.Character).filter(
         models.Character.id == character_id,
@@ -3305,11 +3557,15 @@ def update_npc_status(
 def record_mob_kill_endpoint(
     req: schemas.RecordMobKillRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth) — records a mob kill for the bestiary.
+    Internal endpoint — records a mob kill for the bestiary.
     Called by battle-service after PvE battle ends.
     Idempotent — duplicate calls return already_recorded=true.
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт 403 снаружи, плюс обязательный заголовок X-Internal-Token.
     """
     result = crud.record_mob_kill(db, req.character_id, req.mob_character_id)
     if result is None:
@@ -3329,12 +3585,16 @@ def record_mob_kill_endpoint(
 def spawn_dungeon_mobs_endpoint(
     req: schemas.SpawnDungeonMobsRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth) — spawns ActiveMob entries from given mob templates.
+    Internal endpoint — spawns ActiveMob entries from given mob templates.
     Called by dungeon-service when party enters a battle/boss room or triggers corridor battle.
     Creates a Character (is_npc=True) + ActiveMob record for each template.
     Returns list of character_ids for the spawned mobs.
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт 403 снаружи, плюс обязательный заголовок X-Internal-Token.
     """
     character_ids = []
     for template_id in req.mob_template_ids:
@@ -3381,11 +3641,15 @@ def spawn_dungeon_mobs_endpoint(
 def deduct_gold_endpoint(
     req: schemas.DeductGoldRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth) — deducts gold from a character's currency_balance.
+    Internal endpoint — deducts gold from a character's currency_balance.
     Called by dungeon-service for merchant purchases, rest costs, revive costs.
     Returns 400 if insufficient gold.
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
+    отдаёт 403 снаружи, плюс обязательный заголовок X-Internal-Token.
     """
     character = db.query(models.Character).filter(
         models.Character.id == req.character_id
@@ -3445,15 +3709,22 @@ def get_bestiary_endpoint(
 # Character Logs (FEAT-095)
 # ============================================================
 
-@router.post("/{character_id}/logs", response_model=schemas.CharacterLogResponse, status_code=201)
+@router.post("/internal/{character_id}/logs", response_model=schemas.CharacterLogResponse, status_code=201)
 def create_character_log_endpoint(
     character_id: int,
     data: schemas.CreateCharacterLogRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth) — creates a log entry for the character.
-    Called by other services to record events (battles, rewards, travel, etc.).
+    Запись события в журнал персонажа (internal, service-to-service).
+
+    FEAT-162 §3.4: живёт под префиксом /characters/internal/ (nginx отдаёт 403
+    снаружи) и требует заголовок X-Internal-Token. Раньше эндпоинт был публичным,
+    и кто угодно мог подделать записи в журнале любого персонажа.
+    Вызывающие: character-attributes-service, locations-service.
+    GET /characters/{character_id}/logs остаётся публичным чтением — его читает
+    фронтенд (api/characterLogs.ts).
     """
     character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if not character:
@@ -3537,7 +3808,7 @@ def get_teleport_options(
     # Cooldown belongs to the player's active character (if any)
     cooldown = 0
     row = db.execute(
-        text("SELECT current_character_id FROM users WHERE id = :uid"),
+        text("SELECT current_character FROM users WHERE id = :uid"),  # столбец в users называется current_character
         {"uid": current_user.id},
     ).fetchone()
     if row and row[0]:
@@ -3632,13 +3903,19 @@ def admin_delete_teleport_link(
 # Travel Cooldown (internal, service-to-service)
 # ============================================================
 
-@router.post("/{character_id}/set_travel_cooldown")
+@router.post("/internal/{character_id}/set_travel_cooldown")
 def set_travel_cooldown(
     character_id: int,
     body: schemas.SetTravelCooldownRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
-    """Set or clear travel cooldown for a character (internal endpoint)."""
+    """Set or clear travel cooldown for a character (internal endpoint).
+
+    FEAT-162 §3.4: nginx блокирует /characters/internal/ снаружи (403), плюс
+    обязательный заголовок X-Internal-Token. Раньше эндпоинт был публичным,
+    и любой игрок мог обнулить себе кулдаун перемещения.
+    """
     character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if not character:
         raise HTTPException(status_code=404, detail="Персонаж не найден")

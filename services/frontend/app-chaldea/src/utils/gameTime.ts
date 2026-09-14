@@ -1,6 +1,8 @@
 // Game time calculation utility — pure functions, no side effects.
 // Algorithm must match backend (locations-service) implementation exactly.
 
+import { parseServerDate } from './serverDate';
+
 export interface GameTimeResult {
   year: number;
   segmentName: string;
@@ -69,10 +71,19 @@ export function computeGameTime(
   offsetDays: number,
   serverTime: string,
 ): GameTimeResult {
-  const epochMs = new Date(epoch).getTime();
-  const serverMs = new Date(serverTime).getTime();
+  // FEAT-161: `epoch` and `server_time` MUST be parsed through the same
+  // helper. The result is their *difference*, so as long as both are read in
+  // the same reference frame the in-game date is unchanged — which is why
+  // these two lines may only ever be edited together. Parsing one and not the
+  // other shifts the whole game calendar by the player's UTC offset.
+  const epochMs = parseServerDate(epoch)?.getTime() ?? NaN;
+  const serverMs = parseServerDate(serverTime)?.getTime() ?? NaN;
 
   let elapsed = Math.floor((serverMs - epochMs) / MS_PER_DAY) + offsetDays;
+
+  if (!Number.isFinite(elapsed)) {
+    elapsed = 0;
+  }
 
   if (elapsed < 0) {
     elapsed = 0;

@@ -79,8 +79,11 @@ const AdminPage = () => {
     }
   }, [dispatch, role, permissions]);
 
+  // Tile visibility must be an exact preview of route access (FEAT-158):
+  // ProtectedRoute is strict and has no admin bypass, so neither does this filter.
+  // Admins receive every registered permission automatically, so they still see every tile.
   const visibleSections = sections.filter((section) =>
-    role === 'admin' || hasModuleAccess(permissions, section.module)
+    hasModuleAccess(permissions, section.module)
   );
 
   return (

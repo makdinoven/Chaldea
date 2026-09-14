@@ -87,6 +87,8 @@ async def _try_spawn_mob(location_id: int, character_id: int):
             resp = await client.post(
                 f"{settings.CHARACTER_SERVICE_URL}/characters/internal/try-spawn",
                 json={"location_id": location_id, "character_id": character_id},
+                # FEAT-162 §3.4: /characters/internal/try-spawn требует X-Internal-Token.
+                headers=_internal_token_headers(),
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -133,6 +135,7 @@ async def check_not_in_battle(db: AsyncSession, character_id: int, message: str 
             "SELECT b.id FROM battles b "
             "JOIN battle_participants bp ON b.id = bp.battle_id "
             "WHERE bp.character_id = :cid AND b.status IN ('pending', 'in_progress') "
+            "AND bp.dropped_out_at IS NULL "
             "LIMIT 1"
         ),
         {"cid": character_id},
@@ -373,6 +376,146 @@ async def delete_district_route(
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+# --------------------------------------------------------------------
+# POST DRAFTS (FEAT-156) — D1..D6
+# --------------------------------------------------------------------
+# Объявлены ДО маршрутов вида `/{location_id}/...`: иначе FastAPI сопоставит
+# `/locations/drafts` с одностегментным параметром и черновики станут
+# недоступны. Порядок объявления здесь — часть контракта, не стиль.
+#
+# Авторизация везде одинаковая: токен (`get_current_user_via_http`) плюс
+# `verify_character_ownership`. Для маршрутов, адресованных строкой (D2, D6),
+# сначала читаем строку и проверяем владельца по `row.character_id` —
+# `character_id` из запроса на таких маршрутах не доверяем никогда.
+
+@router.get("/drafts", response_model=List[schemas.PostDraftListItem])
+async def list_post_drafts(
+    character_id: int = Query(..., description="Персонаж, чьи черновики читаем"),
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D1. История текстов персонажа: не более десяти строк, свежие сверху."""
+    await verify_character_ownership(session, character_id, current_user.id)
+    return await crud.list_drafts(session, character_id)
+
+
+@router.get("/drafts/{draft_id}", response_model=schemas.PostDraftRead)
+async def get_post_draft(
+    draft_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D2. Один черновик целиком, вместе с текстом."""
+    draft = await crud.get_draft_by_id(session, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Черновик не найден")
+    # Владелец проверяется по строке, а не по данным из запроса.
+    await verify_character_ownership(session, draft.character_id, current_user.id)
+    return draft
+
+
+@router.delete("/drafts/{draft_id}", status_code=204)
+async def delete_post_draft(
+    draft_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D6. Удалить черновик из истории. Идемпотентно: 204 и когда строки нет."""
+    draft = await crud.get_draft_by_id(session, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Черновик не найден")
+    await verify_character_ownership(session, draft.character_id, current_user.id)
+    await crud.delete_draft_by_id(session, draft_id)
+    return None
+
+
+@router.delete("/admin/drafts/by_character/{character_id}")
+async def admin_delete_drafts_by_character(
+    character_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user = Depends(require_permission("locations:delete")),
+):
+    """D7. Служебная очистка черновиков удаляемого персонажа.
+
+    Зовётся из character-service внутри `delete_character` — тем же
+    graceful-паттерном, что и очистка инвентаря, навыков и характеристик.
+    Владельца здесь проверить нельзя: строка персонажа уже уничтожается, и
+    `verify_character_ownership` отдала бы 404. Поэтому доступ по RBAC —
+    токен вызывающего пробрасывается character-service'ом, то есть чистить
+    черновики может тот, кому позволено удалить персонажа.
+
+    Удаляет только `post_drafts`. Посты персонажа остаются — они часть общего
+    отыгрыша локации (раздел 3.12 FEAT-156).
+
+    Идемпотентно: 200 и `count: 0`, когда чистить нечего.
+    """
+    count = await crud.delete_drafts_by_character(session, character_id)
+    return {"detail": "All post drafts deleted", "count": count}
+
+
+@router.get("/{location_id}/draft", response_model=Optional[schemas.PostDraftRead])
+async def get_location_draft(
+    location_id: int,
+    character_id: int = Query(..., description="Персонаж, чей черновик читаем"),
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D3. Живой черновик персонажа в локации либо `null`."""
+    await verify_character_ownership(session, character_id, current_user.id)
+    return await crud.get_active_draft(session, character_id, location_id)
+
+
+@router.put("/{location_id}/draft", response_model=Optional[schemas.PostDraftRead])
+async def save_location_draft(
+    location_id: int,
+    body: schemas.PostDraftSave,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D4. Автосохранение черновика. `null` в ответе — текст был пуст и живая
+    строка удалена (пустые черновики не храним)."""
+    await verify_character_ownership(session, body.character_id, current_user.id)
+    # Дубль проверки длины из `crud.upsert_draft` — сознательный: отсекаем
+    # гигантское тело до похода в БД. Сообщение строится из той же константы,
+    # чтобы две проверки не разъехались.
+    if len(body.content or "") > crud.MAX_DRAFT_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Черновик слишком длинный — максимум {crud.MAX_DRAFT_LENGTH} символов",
+        )
+    return await crud.upsert_draft(session, body.character_id, location_id, body.content)
+
+
+@router.delete("/{location_id}/draft", status_code=204)
+async def delete_location_draft(
+    location_id: int,
+    character_id: int = Query(..., description="Персонаж, чей черновик чистим"),
+    keep_in_history: bool = Query(
+        False,
+        description="Оставить текст в истории черновиков вместо удаления",
+    ),
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """D5. Освободить живой слот черновика локации.
+
+    По умолчанию — кнопка «Очистить черновик»: строка удаляется насовсем.
+
+    `keep_in_history=true` — кнопка «Отмена»: поле ввода очищается, но текст
+    остаётся в истории (`active = NULL`, `sent_at` по-прежнему `NULL`).
+    Живой слот в обоих случаях освобождается, поэтому следующий пост в этой
+    локации заводит новую строку, а не перетирает сохранённую.
+
+    Идемпотентно: 204 и когда чистить нечего.
+    """
+    await verify_character_ownership(session, character_id, current_user.id)
+    if keep_in_history:
+        await crud.archive_active_draft(session, character_id, location_id)
+    else:
+        await crud.delete_active_draft(session, character_id, location_id)
+    return None
+
+
 # --------------------------------------------------------------------
 # LOCATION
 # --------------------------------------------------------------------
@@ -631,19 +774,11 @@ async def update_location_neighbors(
 # --------------------------------------------------------------------
 def _validate_intent_post(char_count: int, gate_list: list) -> None:
     """FEAT-145 v2: every gate needs at least one target, and the post must be
-    long enough for the summed per-target cost (floored at the 300 minimum)."""
-    _labels = {
-        "combat": "нападения на мобов", "npc_dialogue": "диалога с НПС",
-        "gathering": "сбора", "dungeon": "входа в подземелье", "pvp": "PvP",
-    }
-    for g in gate_list:
-        if g["action_type"] not in crud.GATED_POST_TYPES:
-            raise HTTPException(status_code=400, detail="Неизвестный тип гейта")
-        if not g["targets"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Для {_labels.get(g['action_type'], g['action_type'])} выберите цель в посте",
-            )
+    long enough for the summed per-target cost (floored at the 300 minimum).
+
+    The shape half lives in ``crud.validate_gate_shape`` so the edit path
+    (FEAT-159) rejects a malformed gate with exactly the same wording."""
+    crud.validate_gate_shape(gate_list)
     required = crud.required_symbols_for_gates(gate_list)
     if char_count < required:
         raise HTTPException(
@@ -845,6 +980,75 @@ async def unlike_post(
     return {"status": "unliked", "post_id": post_id, "character_id": character_id}
 
 
+@router.put("/posts/{post_id}", response_model=schemas.PostEditResponse)
+async def edit_post_route(
+    post_id: int,
+    body: schemas.PostEditRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Edit the text of a post (FEAT-159, Phase A).
+
+    A non-admin author may edit their own post only while nobody has posted
+    after it in that location and only within an hour of PUBLICATION (never of
+    the last edit — otherwise the window renews itself forever). Role ``admin``
+    bypasses both limits unconditionally — on their own posts as well as on
+    other people's; **moderators do not** — this route deliberately does not use
+    ``get_admin_user``, which admits them, and checks
+    ``current_user.role == "admin"`` instead.
+
+    Both limits are re-decided server-side at save time inside one transaction
+    holding ``SELECT ... FOR UPDATE`` on the post row; the client-side check is
+    a convenience only. The residual race (another player's post committing in
+    the milliseconds around Save) is accepted and documented in
+    ``crud.edit_post`` — locking the whole location would serialise all posting
+    there to protect a check nothing else reads.
+
+    XP is **not** recomputed: it was awarded at publication, and recomputing it
+    would turn "keep appending text" into a farming route.
+
+    **Gates (Phase B).** ``body.gates`` are gates to ADD, and they do not fire:
+    the edit writes a ``post_gate_requests`` row and nothing else, so a gate the
+    player forgot at publication unlocks its mechanic only once an admin
+    approves the request. Gates the post already owns cannot be named, changed
+    or removed here. The symbol budget is recomputed over ALL of them at once —
+    existing ``action_gates`` rows of every status, the gates of any pending
+    request, and the newly requested ones — so a post cannot buy a second set of
+    gates with text it has already spent.
+    """
+    return await crud.edit_post(
+        session,
+        post_id=post_id,
+        content=body.content,
+        user_id=current_user.id,
+        is_admin=getattr(current_user, "role", None) == "admin",
+        gates=body.gates,
+    )
+
+
+@router.get("/posts/{post_id}/versions", response_model=schemas.PostVersionHistory)
+async def get_post_versions_route(
+    post_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("posts:history")),
+):
+    """Edit history of a post (FEAT-160) — who changed what, and when.
+
+    Guarded by the ``posts:history`` permission, deliberately granted to **no
+    role** (user-service migration 0029). Admins hold it implicitly through
+    ``get_effective_permissions``; moderators do **not**, so neither
+    ``get_admin_user`` (which admits them) nor the hard ``get_strict_admin_user``
+    gate is used here — the permission can be delegated to one named person via
+    ``user_permissions`` without a deploy.
+
+    Versions come back ascending, the post's current text last
+    (``is_current = true``). ``original_available = false`` means the post was
+    edited before this feature shipped: the earliest wording is gone and
+    version 1 carries ``created_at = null``.
+    """
+    return await crud.get_post_versions(session, post_id)
+
+
 @router.get("/admin/data", response_model=schemas.AdminPanelData)
 async def get_admin_panel_data_route(session: AsyncSession = Depends(get_db), current_user=Depends(require_permission("locations:read"))):
     """
@@ -1001,7 +1205,7 @@ async def move_and_post(
         profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/profile"
         profile_resp = await client.get(profile_url)
         if profile_resp.status_code != 200:
-            raise HTTPException(status_code=404, detail="Character profile not found")
+            raise HTTPException(status_code=404, detail="Профиль персонажа не найден")
         profile_data = profile_resp.json()
     current_location = profile_data.get("current_location_id")  # может быть NULL
 
@@ -1047,7 +1251,7 @@ async def move_and_post(
         if not neighbor:
             raise HTTPException(
                 status_code=400,
-                detail="Destination is not adjacent to current location"
+                detail="Целевая локация не является соседней"
             )
         movement_cost = neighbor.energy_cost
 
@@ -1056,11 +1260,11 @@ async def move_and_post(
         attr_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{movement.character_id}"
         attr_resp = await client.get(attr_url)
         if attr_resp.status_code != 200:
-            raise HTTPException(status_code=404, detail="Character attributes not found")
+            raise HTTPException(status_code=404, detail="Характеристики персонажа не найдены")
         attr_data = attr_resp.json()
         current_stamina = attr_data.get("current_stamina", 0)
         if current_stamina < movement_cost:
-            raise HTTPException(status_code=400, detail="Not enough stamina to move")
+            raise HTTPException(status_code=400, detail="Недостаточно выносливости для перехода")
 
     # 4. Validate minimum post length (strip HTML before counting)
     plain_text = crud.strip_html_tags(movement.content)
@@ -1089,6 +1293,17 @@ async def move_and_post(
     post_in = schemas.PostCreate(**payload)
     new_post = await crud.create_post(session, post_in)
 
+    # 5.1. Пост отправлен — живой черновик локации уходит в архив «дописанным»
+    # (FEAT-156). `create_post` уже закоммитил строку, поэтому бухгалтерия
+    # черновиков не имеет права уронить уже принятый базой пост: тот же
+    # защитный паттерн, что и у `create_action_gates` ниже.
+    try:
+        await crud.archive_draft_on_post(
+            session, movement.character_id, destination_location_id, movement.content,
+        )
+    except Exception as e:
+        logger.warning(f"archive_draft_on_post failed for post {new_post.id}: {e}")
+
     # Grant the action gates this intent post unlocks (FEAT-145).
     if mp_gates:
         try:
@@ -1100,18 +1315,24 @@ async def move_and_post(
             logger.warning(f"create_action_gates failed for post {new_post.id}: {e}")
 
     # 6. Обновляем текущую локацию персонажа через Character‑service
+    # FEAT-162 §3.4: internal-эндпоинт, требует X-Internal-Token.
     async with httpx.AsyncClient(timeout=5.0) as client:
-        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/update_location"
-        update_resp = await client.put(update_url, json={"new_location_id": destination_location_id})
+        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{movement.character_id}/update_location"
+        update_resp = await client.put(
+            update_url,
+            json={"new_location_id": destination_location_id},
+            headers=_internal_token_headers(),
+        )
         if update_resp.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to update character location")
+            raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
 
     # 6.5. Устанавливаем кулдаун перемещения (energy_cost минут)
     if movement_cost > 0:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
-                f"{settings.CHARACTER_SERVICE_URL}/characters/{movement.character_id}/set_travel_cooldown",
+                f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{movement.character_id}/set_travel_cooldown",
                 json={"minutes": movement_cost},
+                headers=_internal_token_headers(),
             )
 
     # 7. Списываем выносливость (вызываем эндпоинт consume_stamina в Attributes‑service)
@@ -1119,7 +1340,7 @@ async def move_and_post(
         consume_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{movement.character_id}/consume_stamina"
         consume_resp = await client.post(consume_url, json={"amount": movement_cost})
         if consume_resp.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to deduct stamina for movement")
+            raise HTTPException(status_code=500, detail="Не удалось списать выносливость за переход")
 
     # 7.5. Fire-and-forget: track location visit for battle pass
     if settings.BATTLEPASS_SERVICE_URL:
@@ -1190,6 +1411,13 @@ async def move_and_post(
             await crud.expire_action_gates(session, movement.character_id, int(current_location))
         except Exception as e:
             logger.warning(f"expire_action_gates failed for {movement.character_id}: {e}")
+        # ...and with them any gate request still awaiting moderation there
+        # (FEAT-159, section 3.8): leaving the location is what kills gates,
+        # so a pending request must not survive as a way to resurrect one.
+        try:
+            await crud.expire_gate_requests(session, movement.character_id, int(current_location))
+        except Exception as e:
+            logger.warning(f"expire_gate_requests failed for {movement.character_id}: {e}")
         # Count unique locations visited (by posts) and use set_max
         unique_count = await _count_unique_locations(session, movement.character_id)
         if unique_count > 0:
@@ -1336,9 +1564,14 @@ async def quick_move(
     new_post = await crud.create_post(session, post_in)
 
     # 6. Обновляем текущую локацию персонажа
+    # FEAT-162 §3.4: internal-эндпоинт, требует X-Internal-Token.
     async with httpx.AsyncClient(timeout=5.0) as client:
-        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/update_location"
-        update_resp = await client.put(update_url, json={"new_location_id": destination_location_id})
+        update_url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{body.character_id}/update_location"
+        update_resp = await client.put(
+            update_url,
+            json={"new_location_id": destination_location_id},
+            headers=_internal_token_headers(),
+        )
         if update_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Не удалось обновить локацию персонажа")
 
@@ -1357,8 +1590,9 @@ async def quick_move(
     if base_energy_cost > 0:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
-                f"{settings.CHARACTER_SERVICE_URL}/characters/{body.character_id}/set_travel_cooldown",
+                f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{body.character_id}/set_travel_cooldown",
                 json={"minutes": base_energy_cost},
+                headers=_internal_token_headers(),
             )
 
     # 7. Списываем удвоенную выносливость
@@ -1413,6 +1647,13 @@ async def quick_move(
             await crud.expire_action_gates(session, body.character_id, int(current_location))
         except Exception as e:
             logger.warning(f"expire_action_gates failed for {body.character_id}: {e}")
+        # ...and with them any gate request still awaiting moderation there
+        # (FEAT-159, section 3.8): leaving the location is what kills gates,
+        # so a pending request must not survive as a way to resurrect one.
+        try:
+            await crud.expire_gate_requests(session, body.character_id, int(current_location))
+        except Exception as e:
+            logger.warning(f"expire_gate_requests failed for {body.character_id}: {e}")
         unique_count = await _count_unique_locations(session, body.character_id)
         if unique_count > 0:
             move_set_max["locations_visited"] = unique_count
@@ -2000,7 +2241,7 @@ async def report_post(
 @router.get("/admin/moderation/deletion-requests", response_model=List[schemas.PostDeletionRequestRead])
 async def get_deletion_requests(
     session: AsyncSession = Depends(get_db),
-    current_user: UserRead = Depends(get_admin_user),
+    current_user: UserRead = Depends(require_permission("moderation:read")),
 ):
     """Список всех ожидающих запросов на удаление постов."""
     return await crud.get_pending_deletion_requests(session)
@@ -2009,7 +2250,7 @@ async def get_deletion_requests(
 @router.get("/admin/moderation/reports", response_model=List[schemas.PostReportRead])
 async def get_reports(
     session: AsyncSession = Depends(get_db),
-    current_user: UserRead = Depends(get_admin_user),
+    current_user: UserRead = Depends(require_permission("moderation:read")),
 ):
     """Список всех ожидающих жалоб на посты."""
     return await crud.get_pending_reports(session)
@@ -2020,7 +2261,7 @@ async def review_deletion_request(
     request_id: int,
     body: schemas.PostModerationReview,
     session: AsyncSession = Depends(get_db),
-    current_user: UserRead = Depends(get_admin_user),
+    current_user: UserRead = Depends(require_permission("moderation:review")),
 ):
     """Модератор рассматривает запрос на удаление поста (approve/reject)."""
     req = await crud.review_deletion_request(session, request_id, body.action, current_user.id)
@@ -2040,7 +2281,7 @@ async def review_report(
     report_id: int,
     body: schemas.PostModerationReview,
     session: AsyncSession = Depends(get_db),
-    current_user: UserRead = Depends(get_admin_user),
+    current_user: UserRead = Depends(require_permission("moderation:review")),
 ):
     """Модератор рассматривает жалобу на пост (resolve/dismiss)."""
     report = await crud.review_report(session, report_id, body.action, current_user.id)
@@ -2053,6 +2294,51 @@ async def review_report(
         "created_at": report.created_at,
         "reviewed_at": report.reviewed_at,
     }
+
+
+# --------------------------------------------------------------------
+# GATE REQUEST MODERATION — Admin endpoints (FEAT-159)
+# --------------------------------------------------------------------
+@router.get(
+    "/admin/moderation/gate-requests",
+    response_model=List[schemas.PostGateRequestRead],
+)
+async def get_gate_requests(
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("moderation:read")),
+):
+    """Список заявок на намерения, добавленные при редактировании поста.
+
+    Та же секция модерации и те же разрешения, что у запросов на удаление и
+    жалоб (FEAT-158) — новых разрешений не заводим. Каждая заявка приходит с
+    `targets_resolved`: имя и состояние каждой цели, чтобы админ мог оценить
+    намерение. Это подсказка, а не проверка (FEAT-159, раздел 3.9) — сбой
+    резолва не отклоняет заявку и не ломает список.
+    """
+    return await crud.get_pending_gate_requests(session)
+
+
+@router.put(
+    "/admin/moderation/gate-requests/{request_id}/review",
+    response_model=schemas.PostGateRequestRead,
+)
+async def review_gate_request(
+    request_id: int,
+    body: schemas.PostModerationReview,
+    session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(require_permission("moderation:review")),
+):
+    """Модератор рассматривает заявку на намерение (approve/reject).
+
+    При одобрении заявка перепроверяется заново, по порядку: она всё ещё
+    `pending` -> пост на месте -> персонаж всё ещё в локации -> общий бюджет
+    символов по всем гейтам поста снова сходится. Только после этого гейты
+    создаются. Отклонение не оставляет ничего — ни строк в `action_gates`, ни
+    частичных прав (правило FEAT-158).
+    """
+    return await crud.review_gate_request(
+        session, request_id, body.action, current_user.id
+    )
 
 
 # --------------------------------------------------------------------
@@ -3383,6 +3669,15 @@ async def action_gate_status(
 INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
 
 
+def _internal_token_headers() -> dict:
+    """Headers for outgoing internal service-to-service calls (FEAT-162 §3.4).
+
+    Reads the module-level constant so tests can override it the same way they
+    already do for `verify_internal_token`.
+    """
+    return {"X-Internal-Token": INTERNAL_SERVICE_TOKEN}
+
+
 def verify_internal_token(
     x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
 ) -> None:
@@ -3446,8 +3741,92 @@ async def cancel_gathering_internal_route(
     payload = await crud.cancel_gathering_internal(
         session,
         character_id=body.character_id,
+        reason=body.reason,
     )
     return schemas.CancelGatheringResponse(**payload)
+
+
+# --------------------------------------------------------------------
+# FEAT-162 task #4 — shared "a character left a location" cleanup
+# --------------------------------------------------------------------
+# Single code path for everything that must happen when a character stops
+# being in a location, wherever the move came from: the normal move, the
+# admin teleport (task 5) and the in-game Teleport Master (task 6).
+#
+# Ordering mirrors the normal move path: gates first (a DB failure there is
+# fatal — the caller aborts the move on a 500), then the party prune, which is
+# fire-and-forget there and therefore best-effort here.
+
+
+@router.post(
+    "/internal/character-left-location",
+    response_model=schemas.CharacterLeftLocationResponse,
+)
+async def character_left_location_route(
+    body: schemas.CharacterLeftLocationRequest,
+    session: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Погасить всё, что персонаж оставил за собой в покидаемой локации.
+
+    Порядок:
+      1. `expire_action_gates`  — открытые «намерения» в старой локации;
+      2. `expire_gate_requests` — заявки на намерения, ожидающие рассмотрения;
+      3. роспуск/выход из формирующейся группы в battle-service — best-effort.
+
+    Оба шага 1-2 пропускаются, если `from_location_id` не передан: гасить
+    нечего. Шаг 3 никогда не валит запрос — ровно как в обычном перемещении.
+
+    Идемпотентен: повторный вызов вернёт нули, ошибки не будет.
+    """
+    gates_expired = 0
+    gate_requests_expired = 0
+
+    if body.from_location_id is not None:
+        try:
+            gates_expired = await crud.expire_action_gates(
+                session, body.character_id, int(body.from_location_id),
+            )
+            gate_requests_expired = await crud.expire_gate_requests(
+                session, body.character_id, int(body.from_location_id),
+            )
+        except Exception as e:
+            logger.error(
+                "character-left-location cleanup failed for char %s at loc %s: %s",
+                body.character_id, body.from_location_id, e,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Не удалось погасить намерения персонажа в покидаемой локации",
+            )
+
+    # Best-effort: a pre-battle party is location-bound, so leaving the
+    # location leaves the party (the leader leaving disbands it). A failure
+    # here must never block a move that has already been decided.
+    party_pruned = False
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{settings.BATTLE_SERVICE_URL}/battles/internal/party/leave-on-move",
+                params={"character_id": body.character_id},
+            )
+        party_pruned = resp.status_code < 400
+        if not party_pruned:
+            logger.warning(
+                "party leave-on-move for char %s returned %s",
+                body.character_id, resp.status_code,
+            )
+    except Exception as e:
+        logger.warning(
+            "party leave-on-move failed for char %s: %s", body.character_id, e,
+        )
+
+    return schemas.CharacterLeftLocationResponse(
+        ok=True,
+        gates_expired=gates_expired,
+        gate_requests_expired=gate_requests_expired,
+        party_pruned=party_pruned,
+    )
 
 
 # --------------------------------------------------------------------

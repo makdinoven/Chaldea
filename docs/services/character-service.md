@@ -64,13 +64,14 @@ character-service/app/
 | GET | `/characters/{id}/race_info` | Раса, подраса, класс, уровень |
 | GET | `/characters/list` | Список всех персонажей |
 | DELETE | `/characters/{id}` | Удалить персонажа |
-| PUT | `/characters/{id}/deduct_points` | Списать stat points |
+| PUT | `/characters/internal/{id}/deduct_points` | Списать stat points (internal, `X-Internal-Token`) |
 
 ### Локации
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/characters/by_location?location_id=X` | Персонажи в локации |
-| PUT | `/characters/{id}/update_location` | Обновить текущую локацию |
+| PUT | `/characters/internal/{id}/update_location` | Обновить текущую локацию (internal, `X-Internal-Token`, nginx 403 снаружи) |
+| POST | `/characters/admin/{id}/move` | Перенос персонажа в произвольную локацию (админ, `characters:teleport`). Гасит намерения и заявки в покидаемой локации, отменяет сбор ресурсов, сбрасывает кулдаун перехода, пишет `admin_teleport` в `character_logs`. Отказ 409, если персонаж в бою или в подземелье; та же локация — no-op без записей |
 
 ### Титулы
 | Метод | Путь | Описание |
@@ -262,7 +263,7 @@ character-service/app/
 2. **Опыт не сохраняется** - `check_and_update_level()` уменьшает passive_experience локально, но не сохраняет в attributes-service
 3. **Неиспользуемый код** - `send_equipment_slots_request()` ссылается на несуществующий `EQUIPMENT_SERVICE_URL` (в `config.py` его нет; тест маскирует это, подставляя атрибут в `settings`)
 4. **`presets.py` — мёртвый код.** Реальный источник статов подрасы — колонка `subraces.stat_preset`
-5. **Аутентификация частичная.** Заявки, админские и модераторские эндпоинты защищены (`get_current_user_via_http`, `require_permission`), но `PUT /characters/{id}/deduct_points`, `PUT /characters/{id}/update_location` и `POST /characters/{id}/set_travel_cooldown` не имеют ни auth, ни проверки владения
+5. **Аутентификация частичная.** Заявки, админские и модераторские эндпоинты защищены (`get_current_user_via_http`, `require_permission`). Все публично маршрутизируемые незащищённые write-эндпоинты закрыты в FEAT-162: `update_location`, `set_travel_cooldown`, `deduct_points` и `POST .../logs` перенесены под `/characters/internal/` (nginx 403) + `verify_internal_token`. Остальные роуты `/characters/internal/*` и точечно заблокированный `POST /characters/{id}/add_rewards` держатся пока только на nginx — см. долг в `docs/ISSUES.md`
 6. **`character_requests.name` — `String(20)`, `characters.name` — `String(255)`.** Заявка на присвоение NPC с длинным именем не проходит round-trip
 7. **Одобрение неатомарно** - 13 шагов по пяти сервисам под одним коммитом; дублирующие публикации в RabbitMQ оставляют узкую гонку двойной выдачи
 

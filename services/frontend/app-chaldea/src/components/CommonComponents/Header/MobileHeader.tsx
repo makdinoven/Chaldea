@@ -29,6 +29,7 @@ import { CoinIcon } from './CharacterChip';
 import { navItems, NavLinkItem } from './navData';
 import { DropdownLink } from './types';
 import logo from '../../../assets/logo_fog.png';
+import { parseServerDate } from '../../../utils/serverDate';
 
 interface UnreadBadgeProps {
   count: number;
@@ -137,7 +138,9 @@ const MobileHeader = ({ userLinks }: MobileHeaderProps) => {
 
   const formatTime = (dateStr: string): string => {
     try {
-      return new Date(dateStr).toLocaleString('ru-RU', {
+      const date = parseServerDate(dateStr);
+      if (!date) return '';
+      return date.toLocaleString('ru-RU', {
         hour: '2-digit',
         minute: '2-digit',
         day: '2-digit',

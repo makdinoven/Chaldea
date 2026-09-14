@@ -40,6 +40,14 @@ for tbl in [
 from fastapi.testclient import TestClient
 from main import app, get_db
 
+import auth_http
+
+# FEAT-162 §3.4: these /characters/internal/ routes now require the
+# X-Internal-Token header. Pin the module constant so the suite does not depend
+# on INTERNAL_SERVICE_TOKEN being set in the environment.
+auth_http.INTERNAL_SERVICE_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -304,7 +312,7 @@ class TestMobRewardData:
         _create_mob_template(session, template_id=1, name="Волк", xp_reward=50, gold_reward=10)
         _create_active_mob(session, active_mob_id=1, mob_template_id=1, character_id=42)
 
-        response = client.get("/characters/internal/mob-reward-data/42")
+        response = client.get("/characters/internal/mob-reward-data/42", headers=INTERNAL_HEADERS)
 
         assert response.status_code == 200
         data = response.json()
@@ -326,7 +334,7 @@ class TestMobRewardData:
         _create_loot_entry(session, mob_template_id=1, item_id=20,
                            drop_chance=10.0, min_quantity=1, max_quantity=1)
 
-        response = client.get("/characters/internal/mob-reward-data/42")
+        response = client.get("/characters/internal/mob-reward-data/42", headers=INTERNAL_HEADERS)
 
         assert response.status_code == 200
         data = response.json()
@@ -347,7 +355,7 @@ class TestMobRewardData:
         client, session = client_with_db
         _create_character(session, character_id=1, name="Player", is_npc=False)
 
-        response = client.get("/characters/internal/mob-reward-data/1")
+        response = client.get("/characters/internal/mob-reward-data/1", headers=INTERNAL_HEADERS)
 
         assert response.status_code == 404
 
@@ -356,7 +364,7 @@ class TestMobRewardData:
         client, session = client_with_db
         _create_character(session, character_id=1, name="QuestNPC", is_npc=True, npc_role="questgiver")
 
-        response = client.get("/characters/internal/mob-reward-data/1")
+        response = client.get("/characters/internal/mob-reward-data/1", headers=INTERNAL_HEADERS)
 
         assert response.status_code == 404
 
@@ -364,7 +372,7 @@ class TestMobRewardData:
         """Returns 404 for character_id that does not exist."""
         client, session = client_with_db
 
-        response = client.get("/characters/internal/mob-reward-data/9999")
+        response = client.get("/characters/internal/mob-reward-data/9999", headers=INTERNAL_HEADERS)
 
         assert response.status_code == 404
 
@@ -373,6 +381,6 @@ class TestMobRewardData:
         client, session = client_with_db
         _create_character(session, character_id=42, name="OrphanMob", is_npc=True, npc_role="mob")
 
-        response = client.get("/characters/internal/mob-reward-data/42")
+        response = client.get("/characters/internal/mob-reward-data/42", headers=INTERNAL_HEADERS)
 
         assert response.status_code == 404

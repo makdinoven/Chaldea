@@ -145,3 +145,136 @@ async def get_default_starting_point_id() -> Optional[int]:
         return point_id
     logger.warning("Первая стартовая точка не содержит корректного id")
     return None
+
+
+# ============================================================
+# FEAT-162 — internal calls to locations-service
+# ============================================================
+# Unlike the probes above, these are *state-changing* internal calls guarded by
+# `X-Internal-Token` (see `auth_http.verify_internal_token` for the receiving
+# side of the same contract).
+#
+# Two flavours on purpose:
+#   * the async ones (`cancel_gathering` / `notify_character_left_location`)
+#     raise `LocationsServiceError` so the admin teleport can abort BEFORE it
+#     writes anything — the invariant of FEAT-162 §3.3;
+#   * the sync one (`notify_character_left_location_sync`) never raises, for
+#     `crud.execute_teleport` (§3.5).
+
+INTERNAL_TIMEOUT_SECONDS = 5.0
+
+
+class LocationsServiceError(Exception):
+    """locations-service could not perform a *mandatory* cleanup step."""
+
+
+def _internal_headers() -> dict:
+    # Imported lazily: auth_http reads the env var at import time and tests
+    # override the module attribute there.
+    import auth_http
+    return {"X-Internal-Token": auth_http.INTERNAL_SERVICE_TOKEN}
+
+
+async def cancel_gathering(character_id: int, reason: Optional[str] = None) -> dict:
+    """`POST /locations/internal/cancel-gathering` — idempotent.
+
+    :raises LocationsServiceError: transport failure or non-2xx answer.
+    """
+    url = f"{_base_url()}/locations/internal/cancel-gathering"
+    payload = {"character_id": character_id}
+    if reason is not None:
+        payload["reason"] = reason
+    try:
+        async with httpx.AsyncClient(timeout=INTERNAL_TIMEOUT_SECONDS) as client:
+            response = await client.post(url, json=payload, headers=_internal_headers())
+    except Exception as e:
+        logger.error(f"cancel-gathering недоступен для персонажа {character_id}: {e}")
+        raise LocationsServiceError("отмена сбора ресурсов") from e
+
+    if response.status_code >= 400:
+        logger.error(
+            f"cancel-gathering вернул {response.status_code} для персонажа {character_id}"
+        )
+        raise LocationsServiceError("отмена сбора ресурсов")
+    try:
+        return response.json() or {}
+    except Exception:  # pragma: no cover - defensive
+        return {}
+
+
+async def notify_character_left_location(
+    character_id: int, from_location_id: Optional[int]
+) -> dict:
+    """`POST /locations/internal/character-left-location` — idempotent.
+
+    Expires the character's open action gates and pending gate requests in the
+    location being left, then prunes a forming party (best-effort on the
+    locations-service side).
+
+    :raises LocationsServiceError: transport failure or non-2xx answer. The
+        caller MUST abort the move — a moved character still holding live gates
+        in the old location is exactly the bug this feature exists to prevent.
+    """
+    url = f"{_base_url()}/locations/internal/character-left-location"
+    payload = {"character_id": character_id, "from_location_id": from_location_id}
+    try:
+        async with httpx.AsyncClient(timeout=INTERNAL_TIMEOUT_SECONDS) as client:
+            response = await client.post(url, json=payload, headers=_internal_headers())
+    except Exception as e:
+        logger.error(f"character-left-location недоступен для персонажа {character_id}: {e}")
+        raise LocationsServiceError("гашение намерений в покидаемой локации") from e
+
+    if response.status_code >= 400:
+        logger.error(
+            f"character-left-location вернул {response.status_code} "
+            f"для персонажа {character_id}"
+        )
+        raise LocationsServiceError("гашение намерений в покидаемой локации")
+    try:
+        return response.json() or {}
+    except Exception:  # pragma: no cover - defensive
+        return {}
+
+
+def notify_character_left_location_sync(
+    character_id: int, from_location_id: Optional[int]
+) -> bool:
+    """Best-effort sync twin of :func:`notify_character_left_location`.
+
+    Used by `crud.execute_teleport`, which is sync, has already charged the
+    player gold and must not hold its `with_for_update` lock across an HTTP
+    call — so the cleanup runs AFTER the commit and can only log on failure.
+
+    Trade-off, recorded deliberately (FEAT-162 §3.5): this leaves a window of
+    milliseconds in which the character is already in the new location while
+    the gates in the old one are still live. That is strictly better than
+    today's behaviour, where those gates leak permanently. The admin teleport
+    (`POST /characters/admin/{id}/move`) does not take this trade-off: there
+    the cleanup is blocking and aborts the move on failure.
+
+    :return: True when the cleanup was acknowledged, False otherwise.
+    """
+    import requests
+
+    url = f"{_base_url()}/locations/internal/character-left-location"
+    try:
+        response = requests.post(
+            url,
+            json={"character_id": character_id, "from_location_id": from_location_id},
+            headers=_internal_headers(),
+            timeout=INTERNAL_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        logger.warning(
+            f"Не удалось погасить намерения персонажа {character_id} "
+            f"в локации {from_location_id} после телепорта: {e}"
+        )
+        return False
+
+    if response.status_code >= 400:
+        logger.warning(
+            f"Гашение намерений после телепорта персонажа {character_id} "
+            f"вернуло {response.status_code}"
+        )
+        return False
+    return True

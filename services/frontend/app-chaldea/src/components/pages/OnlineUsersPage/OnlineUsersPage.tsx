@@ -3,28 +3,11 @@ import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { fetchOnlineUsers } from '../../../api/usersApi';
 import type { UserPublicItem } from '../../../types/users';
+import { formatRelativeTime } from '../../../utils/serverDate';
 
 const DEFAULT_AVATAR = 'assets/avatars/avatar.png';
 const PAGE_SIZE = 50;
 
-const formatRelativeTime = (dateStr: string | null): string => {
-  if (!dateStr) return '';
-  const now = Date.now();
-  const then = new Date(dateStr).getTime();
-  const diffSec = Math.floor((now - then) / 1000);
-
-  if (diffSec < 60) return 'только что';
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) {
-    if (diffMin === 1) return '1 минуту назад';
-    if (diffMin >= 2 && diffMin <= 4) return `${diffMin} минуты назад`;
-    return `${diffMin} минут назад`;
-  }
-  const diffHours = Math.floor(diffMin / 60);
-  if (diffHours === 1) return '1 час назад';
-  if (diffHours >= 2 && diffHours <= 4) return `${diffHours} часа назад`;
-  return `${diffHours} часов назад`;
-};
 
 const OnlineUsersPage = () => {
   const [users, setUsers] = useState<UserPublicItem[]>([]);
@@ -116,7 +99,7 @@ const OnlineUsersPage = () => {
                   {user.username}
                 </Link>
                 <span className="ml-auto text-white/40 text-xs">
-                  {formatRelativeTime(user.last_active_at)}
+                  {formatRelativeTime(user.last_active_at, { style: 'long', fallback: 'none', invalid: '' })}
                 </span>
               </motion.div>
             ))}

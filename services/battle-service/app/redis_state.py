@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import redis.asyncio as redis
@@ -48,6 +48,59 @@ def state_key(battle_id: int) -> str:
 
 
 ZSET_DEADLINES: str = "battle:deadlines"      # один ZSET на все бои
+
+
+# ---------- дедлайны хода: единое представление времени --------------------
+# Дедлайны хранятся в НАИВНОМ UTC — так же, как и все остальные временные
+# значения в общей БД. Исторически (до FEAT-161) они строились как
+# ``datetime.now(timezone.utc).astimezone(МСК)`` и попадали в Redis, в API и в
+# колонку ``battles.deadline_at`` со смещением ``+03:00``. Состояния боёв живут
+# в Redis до ``STATE_TTL_HOURS``, поэтому бои, начатые до выката, ещё какое-то
+# время содержат старую форму строки. Любое сравнение обязано понимать обе.
+
+
+def utc_now() -> datetime:
+    """Текущий момент в наивном UTC (аналог ``datetime.utcnow()``, но явный)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def to_naive_utc(dt: datetime) -> datetime:
+    """Приводит datetime к наивному UTC. Наивное значение считается UTC."""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def parse_deadline(raw) -> Optional[datetime]:
+    """Разбирает ``state["deadline_at"]`` в наивный UTC.
+
+    Понимает обе формы:
+      • legacy со смещением — ``"2026-09-13T23:10:00+03:00"`` (приводится к UTC);
+      • новую наивную UTC   — ``"2026-09-13T20:10:00"`` (берётся как есть).
+    Никогда не бросает исключение: на ``None``/мусоре возвращает ``None``.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return to_naive_utc(raw)
+    text = str(raw).strip()
+    if not text:
+        return None
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return to_naive_utc(dt)
+
+
+def deadline_epoch(dt: datetime) -> float:
+    """Абсолютный unix-timestamp для score в ZSET. Наивное время = UTC."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
 
 
 # ---------- очередь ходов --------------------------------------------------
@@ -130,7 +183,7 @@ async def init_battle_state(
     # cформируем JSON-словарь состояния
     battle_state: Dict = {
         "turn_number": 0,
-        "deadline_at": deadline_at.isoformat(),
+        "deadline_at": to_naive_utc(deadline_at).isoformat(),
         "next_actor": first_actor_participant_id,
         "first_actor": first_actor_participant_id,  # ← кто начинает
         "turn_order": turn_order,
@@ -171,7 +224,7 @@ async def init_battle_state(
 
     # добавляем дедлайн первого хода в ZSET
     member = f"{battle_id}:{first_actor_participant_id}"
-    await redis_client.zadd(ZSET_DEADLINES, {member: deadline_at.timestamp()})
+    await redis_client.zadd(ZSET_DEADLINES, {member: deadline_epoch(deadline_at)})
 
     # уведомляем первого игрока / автобоя
     await redis_client.publish(

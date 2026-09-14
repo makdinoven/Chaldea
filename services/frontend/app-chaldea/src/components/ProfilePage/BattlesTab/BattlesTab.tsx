@@ -11,6 +11,7 @@ import FilterChips, { type FilterChipItem } from '../shared/FilterChips';
 import StatTile from '../shared/StatTile';
 import EmptyState from '../shared/EmptyState';
 import ActiveBattleCard from './ActiveBattleCard';
+import { EMPTY_DATE_PLACEHOLDER, parseServerDate } from '../../../utils/serverDate';
 
 /* ── Types ── */
 
@@ -100,7 +101,8 @@ const toParam = (filterKey: string): string =>
   filterKey === ALL_FILTER_KEY ? '' : filterKey;
 
 const formatDate = (dateStr: string): string => {
-  const date = new Date(dateStr);
+  const date = parseServerDate(dateStr);
+  if (!date) return EMPTY_DATE_PLACEHOLDER;
   const months = [
     'янв', 'фев', 'мар', 'апр', 'май', 'июн',
     'июл', 'авг', 'сен', 'окт', 'ноя', 'дек',

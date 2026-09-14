@@ -15,6 +15,9 @@ import type {
   AddCharacterSkillPayload,
   AdminCharacterSkillUpdatePayload,
   ItemData,
+  AdminMoveCharacterRequest,
+  AdminMoveCharacterResponse,
+  LocationOption,
 } from '../components/Admin/CharactersPage/types';
 
 // --- Character CRUD ---
@@ -67,6 +70,32 @@ export const deleteCharacter = async (
     `/characters/${characterId}`,
   );
   return data;
+};
+
+// --- Move (admin teleport) ---
+
+export const moveAdminCharacter = async (
+  characterId: number,
+  newLocationId: number,
+): Promise<AdminMoveCharacterResponse> => {
+  const payload: AdminMoveCharacterRequest = { new_location_id: newLocationId };
+  const { data } = await axios.post<AdminMoveCharacterResponse>(
+    `/characters/admin/${characterId}/move`,
+    payload,
+  );
+  return data;
+};
+
+/**
+ * Поиск локаций по названию или ID.
+ * Локаций больше двух тысяч, поэтому запрос всегда с непустым q.
+ */
+export const lookupLocations = async (q: string): Promise<LocationOption[]> => {
+  const { data } = await axios.get<LocationOption[]>(
+    '/locations/locations/lookup',
+    { params: { q } },
+  );
+  return Array.isArray(data) ? data : [];
 };
 
 // --- Attributes ---

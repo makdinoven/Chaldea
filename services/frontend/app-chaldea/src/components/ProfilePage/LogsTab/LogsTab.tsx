@@ -6,6 +6,7 @@ import {
   fetchCharacterLogs,
   CharacterLogEntry,
 } from '../../../api/characterLogs';
+import { formatRelativeTime } from '../../../utils/serverDate';
 
 /* ── Types ── */
 
@@ -59,44 +60,6 @@ const getEventColor = (eventType: string): string => {
   }
 };
 
-const formatRelativeTime = (dateStr: string): string => {
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSeconds = Math.floor(diffMs / 1000);
-  const diffMinutes = Math.floor(diffSeconds / 60);
-  const diffHours = Math.floor(diffMinutes / 60);
-  const diffDays = Math.floor(diffHours / 24);
-
-  if (diffSeconds < 60) return 'только что';
-  if (diffMinutes < 60) {
-    if (diffMinutes === 1) return '1 минуту назад';
-    if (diffMinutes < 5) return `${diffMinutes} минуты назад`;
-    return `${diffMinutes} минут назад`;
-  }
-  if (diffHours < 24) {
-    if (diffHours === 1) return '1 час назад';
-    if (diffHours < 5) return `${diffHours} часа назад`;
-    return `${diffHours} часов назад`;
-  }
-  if (diffDays === 1) return 'вчера';
-  if (diffDays < 7) {
-    if (diffDays < 5) return `${diffDays} дня назад`;
-    return `${diffDays} дней назад`;
-  }
-
-  const months = [
-    'янв', 'фев', 'мар', 'апр', 'май', 'июн',
-    'июл', 'авг', 'сен', 'окт', 'ноя', 'дек',
-  ];
-  const day = date.getDate();
-  const month = months[date.getMonth()];
-  const year = date.getFullYear();
-  const currentYear = now.getFullYear();
-
-  if (year === currentYear) return `${day} ${month}`;
-  return `${day} ${month} ${year}`;
-};
 
 /* ── Component ── */
 
@@ -235,7 +198,7 @@ const LogsTab = ({ characterId }: LogsTabProps) => {
                     {entry.description}
                   </p>
                   <p className="text-white/30 text-xs mt-1">
-                    {formatRelativeTime(entry.created_at)}
+                    {formatRelativeTime(entry.created_at, { style: 'long', yesterday: true })}
                   </p>
                 </div>
               </motion.div>

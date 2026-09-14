@@ -5,33 +5,12 @@ import {
   getLatestRoleplayPosts,
   type LatestRoleplayPost,
 } from '../../../api/api';
+import { formatRelativeTime } from '../../../utils/serverDate';
 
 /** How many recent posts to surface, and how often to silently refresh. */
 const POSTS_LIMIT = 6;
 const REFRESH_INTERVAL_MS = 30_000;
 
-const formatRelativeTime = (dateStr: string): string => {
-  try {
-    const date = new Date(dateStr);
-    const diffMs = Date.now() - date.getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMin < 1) return 'только что';
-    if (diffMin < 60) return `${diffMin} мин. назад`;
-    if (diffHours < 24) return `${diffHours} ч. назад`;
-    if (diffDays < 7) return `${diffDays} дн. назад`;
-
-    return date.toLocaleDateString('ru-RU', {
-      day: 'numeric',
-      month: 'short',
-      year: diffDays > 365 ? 'numeric' : undefined,
-    });
-  } catch {
-    return dateStr;
-  }
-};
 
 const getRarityColorClass = (rarity?: string | null): string => {
   switch (rarity) {

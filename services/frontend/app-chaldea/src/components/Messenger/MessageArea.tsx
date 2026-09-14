@@ -5,6 +5,7 @@ import { getPresence, searchMessages } from '../../api/messengerApi';
 import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
 import GroupParticipantsModal from './GroupParticipantsModal';
+import { parseServerDate } from '../../utils/serverDate';
 
 interface MessageAreaProps {
   conversation: ConversationListItem | null;
@@ -37,10 +38,24 @@ const NEAR_BOTTOM_THRESHOLD = 150;
 // Scroll position (px from top) that triggers loading older messages.
 const LOAD_MORE_THRESHOLD = 50;
 
+/**
+ * Grouping key for the «Сегодня»/«Вчера» separators. Deliberately built from
+ * the *local* calendar fields, so a message lands under the day the player saw
+ * it, not the day it was in UTC. FEAT-161: the instant itself must come from
+ * `parseServerDate`, or a naive server string near local midnight groups under
+ * the wrong day.
+ */
 const dayKey = (d: Date): string => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 
+/** Same key, straight from a server timestamp; `null` for an unusable value. */
+const serverDayKey = (dateStr: string): string | null => {
+  const d = parseServerDate(dateStr);
+  return d ? dayKey(d) : null;
+};
+
 const formatDateLabel = (dateStr: string): string => {
-  const d = new Date(dateStr);
+  const d = parseServerDate(dateStr);
+  if (!d) return '';
   const today = new Date();
   const yesterday = new Date();
   yesterday.setDate(today.getDate() - 1);
@@ -283,7 +298,7 @@ const MessageArea = ({
 
     let lastDay: string | null = null;
     displayMessages.forEach((msg, idx) => {
-      const msgDay = dayKey(new Date(msg.created_at));
+      const msgDay = serverDayKey(msg.created_at);
       if (msgDay !== lastDay) {
         items.push({ kind: 'date', key: `date-${msg.id}`, label: formatDateLabel(msg.created_at) });
         lastDay = msgDay;

@@ -3184,7 +3184,7 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
     Returns dict on success.
     """
     user_row = db.execute(
-        sa_text("SELECT current_character_id FROM users WHERE id = :uid"),
+        sa_text("SELECT current_character FROM users WHERE id = :uid"),  # столбец в users называется current_character
         {"uid": user_id},
     ).fetchone()
     if not user_row or user_row[0] is None:
@@ -3254,6 +3254,11 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
         metadata={"link_id": link.id, "from_npc_id": source.id, "to_npc_id": target.id},
     )
 
+    # FEAT-162 task #6: remember where the character is leaving FROM — the
+    # cleanup below must be told the *pre*-teleport location, and the field is
+    # about to be overwritten.
+    previous_location_id = character.current_location_id
+
     character.current_location_id = target.current_location_id
     character.last_teleport_at = datetime.utcnow()
     db.flush()
@@ -3262,6 +3267,23 @@ def execute_teleport(db: Session, user_id: int, source_npc_id: int, link_id: int
 
     db.commit()
     db.refresh(character)
+
+    # FEAT-162 task #6 — the shared "a character left a location" cleanup
+    # (expire action gates + gate requests + party prune). Before this, the
+    # Teleport Master left open gates behind permanently, so a teleported
+    # character could still be attacked in — and attack from — a location they
+    # had left.
+    #
+    # Deliberately best-effort and AFTER the commit, unlike the admin teleport
+    # which aborts on a cleanup failure (§3.5): this function is sync, held a
+    # `with_for_update` lock we must not carry across an HTTP call, and has
+    # already charged the player gold, so it cannot abort. The trade-off is a
+    # millisecond-wide window where the old gates are still live — replacing a
+    # permanent leak. The helper never raises.
+    if previous_location_id is not None and previous_location_id != character.current_location_id:
+        locations_client.notify_character_left_location_sync(
+            character.id, previous_location_id,
+        )
 
     return {
         "new_location_id": character.current_location_id,
@@ -3440,3 +3462,68 @@ def get_home_leaderboards(db: Session, limit: int = 3) -> dict:
         "pvp": _to_entries(pvp_rows),
         "pve": _to_entries(pve_rows),
     }
+
+
+# ============================================================
+# FEAT-162 — admin teleport: the single local transaction
+# ============================================================
+
+
+def apply_admin_move(
+    db: Session,
+    *,
+    character_id: int,
+    from_location_id,
+    from_location_name,
+    to_location_id: int,
+    to_location_name,
+    admin_user_id: int,
+    admin_username: str,
+    gathering_cancelled: bool = False,
+):
+    """Write the move itself — location, cooldown and audit row — in ONE commit.
+
+    Called only after every cleanup has already succeeded (FEAT-162 §3.3), so
+    a failure here leaves the character where they were, with their gates
+    already expired: the harmless "left and came back" state. The three writes
+    share a single transaction on purpose — a half-written move (moved but not
+    logged, or logged but not moved) would be worse than no move at all.
+
+    `create_character_log` is NOT reused here: it commits on its own, which
+    would split this into two transactions.
+    """
+    character = (
+        db.query(Character)
+        .filter(Character.id == character_id)
+        .with_for_update()
+        .first()
+    )
+    if not character:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    character.current_location_id = to_location_id
+    # Перенос не должен наказывать игрока невозможностью ходить дальше.
+    character.travel_cooldown_until = None
+
+    db.add(CharacterLog(
+        character_id=character_id,
+        event_type="admin_teleport",
+        description=(
+            f"Перенесён администратором: «{from_location_name or '—'}» "
+            f"→ «{to_location_name or '—'}»"
+        ),
+        metadata_={
+            "from_location_id": from_location_id,
+            "from_location_name": from_location_name,
+            "to_location_id": to_location_id,
+            "to_location_name": to_location_name,
+            "admin_user_id": admin_user_id,
+            "admin_username": admin_username,
+            "gathering_cancelled": gathering_cancelled,
+            "admin_action": True,
+        },
+    ))
+
+    db.commit()
+    db.refresh(character)
+    return character

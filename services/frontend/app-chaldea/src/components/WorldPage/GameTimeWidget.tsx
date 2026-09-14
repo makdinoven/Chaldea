@@ -17,6 +17,7 @@ import {
   SEGMENT_LABELS,
   GameTimeResult,
 } from '../../utils/gameTime';
+import { serverDateMs } from '../../utils/serverDate';
 
 const ICON_MAP: Record<string, typeof Sun> = {
   spring: Droplet,
@@ -47,15 +48,23 @@ const GameTimeWidget = () => {
   useEffect(() => {
     if (!epoch || !serverTime) return;
 
+    // FEAT-161: the tick and the first render must share one reference frame.
+    // Previously the first render used the raw `server_time` while every tick
+    // used `new Date().toISOString()` — the server's clock vs. the browser's —
+    // so the displayed in-game day could jump a minute after load. We now
+    // advance the *server* instant by the real time elapsed since we received
+    // it, which makes the tick at elapsed = 0 identical to the first render
+    // and immune to any client/server clock skew.
+    const serverBaseMs = serverDateMs(serverTime);
+    const receivedAtMs = Date.now();
+
     const compute = () => {
-      // On first render, use server_time. On subsequent ticks, estimate
-      // by adding elapsed real time since the server_time was received.
-      const now = new Date().toISOString();
-      setGameTime(computeGameTime(epoch, offsetDays, now));
+      const elapsedMs = Date.now() - receivedAtMs;
+      const reference = new Date(serverBaseMs + elapsedMs).toISOString();
+      setGameTime(computeGameTime(epoch, offsetDays, reference));
     };
 
-    // Initial computation using server time reference
-    setGameTime(computeGameTime(epoch, offsetDays, serverTime));
+    compute();
 
     const interval = setInterval(compute, REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);

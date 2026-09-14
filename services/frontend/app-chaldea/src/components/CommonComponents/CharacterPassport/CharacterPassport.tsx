@@ -6,6 +6,7 @@ import PassportKitBlock from './PassportKitBlock';
 import PassportSeal from './PassportSeal';
 import PassportStatBlock from './PassportStatBlock';
 import { PASSPORT_STAT_ORDER } from './types';
+import { parseServerDate } from '../../../utils/serverDate';
 import type {
   PassportAudience,
   PassportData,
@@ -85,8 +86,8 @@ const DASH = '—';
 
 const formatRegisteredAt = (iso: string | null | undefined): string => {
   if (!iso) return DASH;
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return DASH;
+  const date = parseServerDate(iso);
+  if (!date) return DASH;
   return date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 

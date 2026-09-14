@@ -30,6 +30,14 @@ import models
 import schemas
 import crud
 
+import auth_http
+
+# FEAT-162 §3.4: these /characters/internal/ routes now require the
+# X-Internal-Token header. Pin the module constant so the suite does not depend
+# on INTERNAL_SERVICE_TOKEN being set in the environment.
+auth_http.INTERNAL_SERVICE_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -303,6 +311,7 @@ class TestTrySpawnEndpoint:
         resp = client.post(
             "/characters/internal/try-spawn",
             json={"location_id": 10, "character_id": 1},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -321,6 +330,7 @@ class TestTrySpawnEndpoint:
         resp = client.post(
             "/characters/internal/try-spawn",
             json={"location_id": 10, "character_id": 1},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -343,6 +353,7 @@ class TestTrySpawnEndpoint:
         resp = client.post(
             "/characters/internal/try-spawn",
             json={"location_id": 10, "character_id": 1},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         assert resp.json()["spawned"] is False
@@ -360,6 +371,7 @@ class TestTrySpawnEndpoint:
         resp = client.post(
             "/characters/internal/try-spawn",
             json={"location_id": 10, "character_id": 1},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         assert resp.json()["spawned"] is False
@@ -369,6 +381,7 @@ class TestTrySpawnEndpoint:
         resp = client.post(
             "/characters/internal/try-spawn",
             json={"location_id": 999, "character_id": 1},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         assert resp.json()["spawned"] is False
@@ -390,6 +403,7 @@ class TestTrySpawnEndpoint:
         resp = client.post(
             "/characters/internal/try-spawn",
             json={"location_id": 10, "character_id": 1},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         assert resp.json()["spawned"] is True
@@ -596,6 +610,7 @@ class TestMobSpawningSecurity:
         resp = client.post(
             "/characters/internal/try-spawn",
             json={"location_id": 1, "character_id": 1},
+            headers=INTERNAL_HEADERS,
         )
         # Should handle gracefully (return 200 or 422, not 500)
         assert resp.status_code in (200, 422)

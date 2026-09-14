@@ -23,6 +23,15 @@ def _client(timeout: float = DEFAULT_TIMEOUT) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout)
 
 
+def _internal_token_headers() -> dict:
+    """Headers for outgoing internal service-to-service calls (FEAT-162 §3.4).
+
+    The character-service /characters/internal/ routes are guarded by
+    `verify_internal_token`; without this header they answer 401.
+    """
+    return {"X-Internal-Token": settings.INTERNAL_SERVICE_TOKEN}
+
+
 # =====================================================================
 # Character Service  (http://character-service:8005)
 # =====================================================================
@@ -109,7 +118,8 @@ async def spawn_dungeon_mobs(mob_template_ids: List[int], location_id: int) -> L
     Returns: list of character_ids for the spawned mobs.
 
     Note: this internal endpoint in character-service is created as part
-    of the dungeon system integration (Task #11).
+    of the dungeon system integration (Task #11). It is token-guarded
+    (FEAT-162 §3.4) — the X-Internal-Token header is mandatory.
     """
     url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/spawn-dungeon-mobs"
     payload = {
@@ -118,7 +128,7 @@ async def spawn_dungeon_mobs(mob_template_ids: List[int], location_id: int) -> L
     }
     try:
         async with _client() as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, json=payload, headers=_internal_token_headers())
             resp.raise_for_status()
             data = resp.json()
             return data.get("character_ids", [])
@@ -415,7 +425,7 @@ async def deduct_gold(character_id: int, amount: int) -> bool:
     payload = {"character_id": character_id, "amount": amount}
     try:
         async with _client() as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, json=payload, headers=_internal_token_headers())
             if resp.status_code == 400:
                 # Insufficient gold
                 return False

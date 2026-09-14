@@ -15,6 +15,12 @@ from rabbitmq_consumer import start_consumer
 from auth_http import get_admin_user, get_current_user_via_http, require_permission, UserRead
 from sqlalchemy import text
 
+
+def _internal_token_headers() -> dict:
+    """Headers for outgoing internal service-to-service calls (FEAT-162 §3.4)."""
+    return {"X-Internal-Token": settings.INTERNAL_SERVICE_TOKEN}
+
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -254,6 +260,7 @@ def admin_grant_perk(
         httpx.post(
             f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
             json={"character_id": character_id},
+            headers=_internal_token_headers(),
             timeout=5.0,
         )
     except Exception as e:
@@ -262,12 +269,13 @@ def admin_grant_perk(
     # Log perk grant to character logs (fire-and-forget)
     try:
         httpx.post(
-            f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/logs",
+            f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/logs",
             json={
                 "event_type": "perk_granted",
                 "description": f"Получен перк: {perk.name}",
                 "metadata": {"perk_id": perk_id, "perk_name": perk.name},
             },
+            headers=_internal_token_headers(),
             timeout=5.0,
         )
     except Exception as e:
@@ -377,9 +385,9 @@ async def upgrade_attributes(
     # Списываем stat_points
     try:
         async with httpx.AsyncClient() as client:
-            deduct_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/deduct_points"
+            deduct_url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/deduct_points"
             payload = {"points_to_deduct": total_needed}
-            resp = await client.put(deduct_url, json=payload)
+            resp = await client.put(deduct_url, json=payload, headers=_internal_token_headers())
             if resp.status_code != 200:
                 raise HTTPException(status_code=500, detail="Failed to deduct stat points")
             deduct_response = resp.json()
@@ -903,7 +911,7 @@ def admin_update_attributes(
     if logged_fields:
         try:
             httpx.post(
-                f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/logs",
+                f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/logs",
                 json={
                     "event_type": "admin_experience_change",
                     "description": f"Опыт изменён администратором: {', '.join(logged_fields)}",
@@ -913,6 +921,7 @@ def admin_update_attributes(
                         "admin_action": True,
                     },
                 },
+                headers=_internal_token_headers(),
                 timeout=5.0,
             )
         except Exception:
@@ -966,7 +975,7 @@ def admin_grant_active_xp(
     # Fire-and-forget лог в character-service
     try:
         httpx.post(
-            f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/logs",
+            f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/logs",
             json={
                 "event_type": "admin_experience_change",
                 "description": f"Админ изменил активный опыт на {data.delta:+d} (итог: {new_value})",
@@ -976,6 +985,7 @@ def admin_grant_active_xp(
                     "admin_action": True,
                 },
             },
+            headers=_internal_token_headers(),
             timeout=5.0,
         )
     except Exception:
@@ -1133,6 +1143,7 @@ def increment_cumulative_stats(
         resp = httpx.post(
             f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
             json={"character_id": payload.character_id},
+            headers=_internal_token_headers(),
             timeout=5.0,
         )
     except Exception as e:

@@ -31,6 +31,14 @@ import models
 import schemas
 import crud
 
+import auth_http
+
+# FEAT-162 §3.4: these /characters/internal/ routes now require the
+# X-Internal-Token header. Pin the module constant so the suite does not depend
+# on INTERNAL_SERVICE_TOKEN being set in the environment.
+auth_http.INTERNAL_SERVICE_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+
 
 _ADMIN_USER = UserRead(
     id=1, username="admin", role="admin",
@@ -232,7 +240,7 @@ class TestPackDisplayAndRoster:
         assert crud.get_mobs_at_location(db_session, 9) == []
 
     def test_roster_404(self, client, db_session):
-        assert client.get("/characters/internal/mob-pack/99999").status_code == 404
+        assert client.get("/characters/internal/mob-pack/99999", headers=INTERNAL_HEADERS).status_code == 404
 
     @patch("crud._sync_send_attributes_request", return_value={"id": 100})
     def test_by_location_endpoint(self, _m, client, db_session):

@@ -6,6 +6,14 @@
 
 ## DONE / Learning notes
 
+### ~~Уязвимость: посты игроков пропускали `<form>`, `<input>` и `<style>` — фишинг и подмена интерфейса~~ DONE (2026-09-14)
+**Сервис:** frontend
+**Файлы:** `services/frontend/app-chaldea/src/utils/sanitizePostHtml.ts` (новый), `.../components/pages/LocationPage/PostCard.tsx`, `.../components/AdminModerationPage/AdminModerationPage.tsx`
+**Описание:** Посты — это HTML, написанный игроками, и рендерятся через `dangerouslySetInnerHTML` после `DOMPurify.sanitize(html, { ADD_ATTR: ['data-archive-slug'] })`. Скрипты этот конфиг блокировал корректно, но **дефолты DOMPurify оставляют `<form>`, `<input>`, `<button>`, `<select>`, `<textarea>`, `<style>`**. То есть игрок мог положить в пост убедительную поддельную форму входа с `action` на свой сервер — её видели все, кто открывал локацию, — или `<style>`, чьи селекторы действуют на **всю страницу**, а не только на его пост (скрыть чужие посты, накрыть интерфейс). Конфиг к тому же был продублирован в двух файлах и неизбежно разошёлся бы.
+**Исправление:** Один общий помощник `utils/sanitizePostHtml.ts`, который вызывают обе точки рендера. Политика переведена с deny-list на **allow-list**: вывод редактора TipTap — известное конечное множество, поэтому перечислены все допустимые теги и атрибуты, остальное удаляется (fail-closed). Инлайновый `style` сохранён (цвет — легальная возможность, FEAT-157), но допускается только по списку CSS-свойств, каждое привязано к тегам, на которых редактор его выпускает, и к шаблону значения; `position`, `z-index`, `transform`, `background-image: url(...)`, `width: 100vw` и т.п. вырезаются. `class` ограничен списком `archive-link` / `editor-link` — иначе игрок мог применить реальные классы из собранного CSS (`modal-overlay`).
+**Проверено:** все 120 постов из БД и посты, полученные вживую из locations-service, после правки байт-в-байт совпадают со старым выводом; форма входа, `<style>`, оверлей, `url()`-маяк, `class="modal-overlay"`, `<script>`, `onerror`, `javascript:`, `<iframe>`, `id` — нейтрализованы. `npx tsc --noEmit` и `npm run build` зелёные.
+**Осталось (отдельной задачей):** `utils/postText.ts` санитизирует тот же контент своим конфигом (`USE_PROFILES: { html: true }`) перед извлечением обычного текста — его стоит перевести на общий помощник. `ArchivePage/ArchiveArticlePage.tsx` и `RulesPage/RuleOverlay.tsx` рендерят контент, написанный админами (другой уровень доверия), и общую политику постов им применять нельзя без отдельного решения. Внешние ссылки в постах остаются — санитайзер не отличит фишинговую ссылку от обычной, это зона модерации.
+
 ### Prod-инцидент: взаимные HTTP-вызовы вычерпали QueuePool у character-service DONE (2026-09-04)
 **Сервисы:** character-service, user-service, notification-service
 **Симптом:** Прод «жутко лагает», внизу постоянно висит «Переподключение к серверу». При этом сервер здоров: load average 0.29, диск 40%, все контейнеры Up.
@@ -44,6 +52,58 @@
 **Случай:** В FEAT-123 миграция character-service имела id `015_add_teleport_links_and_cooldown` (35 символов) → переименована в `015_teleport_cooldown` (21).
 **Правило:** Все новые revision id — ≤32 символов. Желательно ≤24, чтобы оставить запас. Формат: `NNN_short_slug`.
 
+### ~~Баг: Мастер Телепорта (FEAT-123) был полностью нерабочим — SELECT по несуществующей колонке~~ DONE (2026-09-14, FEAT-162 task #6)
+**Сервис:** character-service
+**Файлы:** `services/character-service/app/crud.py` (`execute_teleport`), `services/character-service/app/main.py` (`get_teleport_options`)
+**Описание:** Оба места читали активного персонажа запросом `SELECT current_character_id FROM users WHERE id = :uid`, тогда как колонка в таблице `users` называется `current_character` (имя `current_character_id` существует только в ответе `GET /users/me` user-service, где оно формируется на лету). Любой вызов `POST /characters/npcs/{id}/teleport` падал с 500: `(1054, "Unknown column 'current_character_id' in 'field list'")`. То есть вся фича «Мастер Телепорта» не работала с момента выпуска.
+**Обнаружено:** FEAT-162 task #6 — при живой проверке гашения намерений после телепорта (баг блокировал проверку, поэтому исправлен в рамках задачи).
+**Исправление:** имя колонки в обоих запросах приведено к фактическому (`current_character`), с поясняющим комментарием. Проверено вживую: телепорт 523 → 1173 вернул 200.
+**Правило на будущее:** имя поля в схеме ответа сервиса-владельца не обязано совпадать с именем колонки в общей БД; сырой SQL по чужой таблице сверять со `SHOW COLUMNS`, а не с API-схемой.
+
+### ~~Баг: персонаж с титулом не удалялся, а веерная очистка успевала его «выпотрошить»~~ DONE (2026-09-14)
+**Сервис:** character-service
+**Файлы:** `services/character-service/app/models.py` (`Character.titles`, `CharacterTitle.character_id`), `services/character-service/app/main.py` (`DELETE /characters/{character_id}`), миграция `022_character_titles_cascade`
+**Описание:** `character_titles.character_id` входит в составной первичный ключ таблицы, а связь
+`Character.titles` была объявлена без каскада. При `db.delete(character)` ORM пытался занулить
+дочерний FK — колонку первичного ключа — и падал на коммите с
+`AssertionError: Dependency rule on column 'characters.id' tried to blank-out primary key column
+'character_titles.character_id'`. Хендлер ловил только `SQLAlchemyError`, поэтому `AssertionError`
+уходил наружу **пустым 500 без `detail`** и без `db.rollback()`. На dev-БД так не удалялись 11
+персонажей; остальные удалялись нормально. `character_titles` была единственной внешней ссылкой на
+`characters` с правилом `NO ACTION` (у `teleport_links` обе — `CASCADE`).
+**Почему это было хуже отказа:** веерная очистка соседних сервисов (inventory, skills, attributes,
+user_characters, черновики постов) шла **до** удаления строки и успевала отработать. Неудачное
+удаление оставляло персонажа «выпотрошенным, но живым»: инвентарь, навыки, атрибуты и связь с
+пользователем стёрты, персонаж остался в публичном списке, а админу показано
+«Не удалось удалить персонажа».
+**Исправление:**
+1. `Character.titles` получил `cascade="all, delete-orphan"`; миграция `022_char_titles_cascade`
+   переводит FK `character_titles.character_id` на `ON DELETE CASCADE` (страховка для удалений
+   в обход ORM). ORM-каскад работает и без миграции — они независимы.
+2. Порядок в хендлере перевёрнут: сначала удаление строки + коммит, и только после успеха —
+   best-effort очистка соседей. Полной атомарности тут не существует (очистка идёт по HTTP и не
+   входит в транзакцию БД), поэтому выбран безопасный режим отказа.
+3. `except SQLAlchemyError` заменён на `except Exception` с `rollback()`, `exc_info=True` и русским
+   `detail` вместо пустого тела.
+**Остаточный риск (осознанный):** при падении очистки *после* успешного удаления в соседних сервисах
+остаются осиротевшие строки (инвентарь/навыки/атрибуты несуществующего персонажа). Игроку они не
+видны — все публичные выборки идут INNER JOIN по `characters`, — и чинятся повторным вызовом
+admin-эндпоинтов соседей. Это строго лучше «выпотрошенного» персонажа в списке ролей.
+**Проверено вживую (2026-09-14):** до правки `DELETE /characters/999806` → 500 с пустым телом,
+`AssertionError` в логах, у персонажа обнулились инвентарь/навыки/атрибуты/связь, сам он остался.
+После — `200 OK`, строки `characters`, `character_titles`, `character_inventory`, `character_skills`,
+`character_attributes`, `users_character` = 0; персонаж исчез из `/characters/list`,
+`/characters/by_location`, `/characters/{id}/public` (404), `/characters/{id}/short_info` (404),
+`/characters/{id}/full_profile` (404) и `/characters/home-leaderboards`. Принудительный сбой
+удаления (временный FK `ON DELETE RESTRICT`) дал 500 **с русским detail**, и всё содержимое
+персонажа осталось на месте — «выпотрошить» персонажа больше нельзя.
+**Тесты:** теста на удаление персонажа с титулом нет — это прямой аналог фикстуры, которая
+скрывала опечатку в колонке. QA: нужен тест `DELETE /characters/{id}` для персонажа с
+`character_titles` и тест на порядок (при сбое удаления очистка соседей не вызывается).
+**Правило на будущее:** связь на таблицу, где FK входит в первичный ключ, обязана иметь
+`cascade="all, delete-orphan"`; необратимую очистку нельзя запускать раньше операции, ради которой
+она делается.
+
 ---
 
 ## CRITICAL
@@ -63,12 +123,18 @@
 
 ## HIGH
 
-### Баг: state-мутирующие эндпоинты character-service без аутентификации и проверки владельца
-**Сервис:** character-service
-**Файлы:** `app/main.py:1266` (`PUT /characters/{id}/deduct_points`), `app/main.py:1493` (`PUT /characters/{id}/update_location`), `app/main.py:3204` (`POST /characters/{id}/set_travel_cooldown`)
-**Обнаружено:** FEAT-154 (Codebase Analyst, 2026-09-06)
-**Описание:** У трёх изменяющих состояние эндпоинтов нет ни `Depends` на аутентификацию, ни проверки принадлежности персонажа вызывающему. Любой может списать очки характеристик, выставить кулдаун перемещения или переместить **чужого** персонажа в произвольную локацию. Опасность `update_location` резко вырастет, когда локация начнёт что-то значить (FEAT-154 назначает стартовую локацию).
-**Исправление:** добавить `get_current_user_via_http` + проверку владельца, либо пометить как internal-only и закрыть на уровне Nginx.
+### Долг: `INTERNAL_SERVICE_TOKEN` имеет публично известный fallback `dev-internal-token-change-me`
+**Сервисы:** character-service, character-attributes-service, locations-service, battle-service, inventory-service, party-service (все, кому токен задан в compose)
+**Файлы:** `docker-compose.yml:135,311,338,396,427,486`, `docker-compose.prod.yml:127,146,215,276`
+**Обнаружено:** FEAT-162 (Reviewer, 2026-09-14). Долг **пред­существующий** — дефолт был прописан ещё до FEAT-162 для четырёх сервисов; фича лишь распространила ту же строку на ещё два и сделала её несущей.
+**Описание:** во всех compose-файлах токен объявлен как `${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}`. Если переменная не задана в prod `.env` на VPS, все сервисы поднимутся с дефолтом, прописанным прямо в публичном репозитории. После FEAT-162 на этом токене держится второй (и для шести эндпоинтов — фактически единственный прикладной) слой защиты internal-маршрутов: `verify_internal_token` сравнивает заголовок именно с ним. Тот же класс проблемы, что и запись 27 про `JWT_SECRET_KEY`.
+**Почему не CRITICAL:** первый слой (nginx `return 403` на всех `/internal/`-префиксах) остаётся, и порты сервисов в prod наружу не открыты — эксплуатация требует доступа внутрь compose-сети либо ошибки в ingress.
+**Возможное решение:** сгенерировать криптостойкое значение (`openssl rand -hex 32`), прописать `INTERNAL_SERVICE_TOKEN` в prod `.env`, добавить в `.env.example` маскированную заглушку и рассмотреть удаление fallback-значения из `docker-compose.prod.yml` (fail-closed: без токена сервис отдаёт 503 — механизм уже реализован).
+
+### ~~Баг: ZSET `battle:deadlines` никто не читает — таймаут хода не срабатывает сам по себе~~ DONE (FEAT-163)
+~~**Сервис:** battle-service~~
+~~**Обнаружено:** FEAT-161 (Reviewer, 2026-09-14). Предсуществующее, фичей не внесено.~~
+**Исправлено в FEAT-163:** у множества появился читатель — фоновый свипер в battle-service (`main.py:5379` `_deadline_sweeper_loop`, стартует из `@app.on_event("startup")` на `main.py:5400`). За тик он делает `ZRANGEBYSCORE battle:deadlines -inf <now> LIMIT 0 50` (`_sweep_due_deadlines`, `main.py:5225`) и засчитывает просрочившему выбывание, поддерживает TTL состояния замороженных боёв (`main.py:5285`) и раз в час сверяется с MySQL по брошенным боям (`main.py:5310`). Течь множества тоже закрыта: при передаче хода запись предыдущего актора теперь снимается (`main.py:2940`), а принудительное завершение боя с истекшим Redis-состоянием перечисляет участников из MySQL и чистит все записи (`_force_finish_battle`, `main.py:3965`). `TURN_TIMEOUT_HOURS` и `BATTLE_STATE_TTL_HOURS` вынесены в оба compose-файла. Подробности — `docs/services/battle-service.md`, раздел «FEAT-163».
 
 ### Баг: `settings.EQUIPMENT_SERVICE_URL` не существует, падение маскируется тестом
 **Сервис:** character-service
@@ -161,6 +227,99 @@
 ~~**Исправлено в FEAT-044:** `convert_to_webp` теперь определяет анимированные GIF (`image.format == 'GIF'` + `is_animated`) и сохраняет их как GIF с `save_all=True`, сохраняя все кадры и анимацию. Статические изображения по-прежнему конвертируются в WebP. S3 получает корректный `ContentType` (`image/gif` или `image/webp`).~~
 
 ## MEDIUM
+
+### Долг: админские эндпоинты боёв не отдают `is_paused` / `pause_reason`
+**Сервис:** battle-service (потребитель — фронтенд, `components/Admin/BattlesPage/AdminBattlesPage.tsx`)
+**Обнаружено:** FEAT-163 (Frontend Dev, задача #14, 2026-09-14). Сверено с живым `/openapi.json` — совпадает с кодом.
+**Описание:** `AdminBattleListItem` (`schemas.py:221`) и словарь `battle` в `GET /battles/admin/{id}/state` (`main.py:3904-3909`) не содержат ни `is_paused`, ни `pause_reason`, хотя колонки в таблице `battles` есть и `LocationBattleItem` своё `is_paused` отдаёт. Из-за этого админский контрол заморозки/разморозки (FEAT-163) не может показать текущее состояние боя до первого вызова freeze/unfreeze и вынужден показывать обе кнопки сразу, полагаясь на честный 400 «Бой не приостановлен» от бэкенда.
+**Возможное решение:** добавить `is_paused: bool` и `pause_reason: Optional[str]` в `AdminBattleListItem` и в `battle_dict` админского state-эндпоинта — аддитивно, обратная совместимость не ломается. Фронтенд уже типизировал оба поля как необязательные и подхватит их без правок.
+
+### Долг (Stage 2): бэкенд отдаёт все временные метки без часового пояса
+**Сервисы:** все 10 backend-сервисов
+**Обнаружено:** FEAT-161 (Architect, разделы 2.2/3.1; подтверждено Reviewer 2026-09-14). Сознательно вынесено за пределы FEAT-161.
+**Описание:** `created_at`/`updated_at` и прочие `DateTime`-колонки — наивный UTC (`server_default=func.now()` или `datetime.utcnow()`), `json_encoders` нет нигде, поэтому FastAPI/Pydantic v1 сериализует их без смещения: `"2026-03-23T10:23:58"` (проверено вживую на `GET /locations/game-time` и `GET /locations/posts/latest`). Клиент обязан угадывать, что это UTC. FEAT-161 закрыл симптом на фронтенде общим терпимым к смещению парсером `src/utils/serverDate.ts`, но корень остался: любой новый потребитель (мобильный клиент, внешняя интеграция, скрипт) получит ту же ловушку.
+**Почему это не одна правка:** (1) ~160 блоков `class Config:` в 10 сервисах, которым нужен общий базовый класс с `json_encoders`; (2) **22 места с ручным `.isoformat()` в обход Pydantic**, которые `json_encoders` не покроет вообще: `notification-service/app/messenger_routes.py:652,796`, `notification-service/app/messenger_ws_handler.py:221,325,327,342`, `inventory-service/app/crud.py:2089,2090,2448,2984`, `inventory-service/app/main.py:1120,1333,3437`, `character-service/app/main.py:424,1975,3674`, `battle-service/app/main.py:1665,2817,3795`, `battle-service/app/redis_state.py:133`, `dungeon-service/app/gameplay.py:3627`, `skills-service/app/crud.py:557`; (3) выкатывается не атомарно — во время раскатки часть эндпоинтов отдаёт смещение, часть нет, поэтому клиент обязан быть терпимым к смещению **до** правки бэкенда (это и сделала FEAT-161, так что Stage 1 — предпосылка для Stage 2, а не замена ему).
+**Побочные эффекты, которые надо учесть:** `skills-service/app/tests/test_character_skill_reset.py:128` вычитает наивное время из разобранного ответа — при появлении смещения упадёт с `TypeError`. `locations-service/app/main.py:1194,1457` уже терпимы к обеим формам, ломать межсервисные вызовы Stage 2 не должен.
+**Возможное решение:** общий Pydantic-базовый класс с `json_encoders={datetime: lambda v: v.replace(tzinfo=timezone.utc).isoformat()}` + отдельный проход по 22 ручным местам; выкатывать сервис за сервисом.
+
+### Долг: большинство внутренних эндпоинтов защищены только nginx, без `X-Internal-Token`
+**Сервисы:** все, у кого есть `/internal/`-маршруты
+**Обнаружено:** FEAT-162 (DevSecOps, аудит internal-префиксов 2026-09-14).
+**Описание:** после FEAT-162 все internal-префиксы закрыты в обоих nginx-конфигах (`return 403`), но второй слой — проверка `X-Internal-Token` через `Depends(verify_internal_token)` — стоял на момент обнаружения лишь на 6 эндпоинтах из ~33 (к 2026-09-14 — на 16: все 14 под `/characters/internal/` и 2 под `/locations/internal/`): `character-service` (`/characters/internal/{id}/update_location`, `/characters/internal/{id}/set_travel_cooldown`, `/characters/internal/{id}/deduct_points`, `POST /characters/internal/{id}/logs`) и `locations-service` (`/locations/internal/cancel-gathering`, `/locations/internal/character-left-location`). Остальные (`/attributes/internal/{id}/reconcile-perks`, `/locations/internal/gathering-status`, `/locations/internal/action-gate*`, `/locations/quests/internal/*`, `/users/internal/*`, `/inventory/internal/*`, `/battles/internal/*`, `/dungeons/internal/*`, `/party/internal/*`, `/battle-pass/internal/track-event`, `/autobattle/internal/register`) не проверяют ничего: любой контейнер в compose-сети (или скомпрометированный сервис) может их дёргать. Проверено вживую: до правки nginx `POST /attributes/internal/1/reconcile-perks` через gateway без каких-либо заголовков возвращал `200`.
+**Почему не критично:** снаружи всё закрыто gateway'ем (`403`), порты сервисов в prod наружу не открыты — эксплуатация требует доступа внутрь compose-сети.
+**Возможное решение:** добавить `Depends(verify_internal_token)` на оставшиеся internal-эндпоинты, вынеся хелпер в общий модуль; выкатывать сервис за сервисом, синхронно с `INTERNAL_SERVICE_TOKEN` у вызывающих.
+**Дополнено (Backend Dev, 2026-09-14, аудит `/characters/internal/`):** перечислены **все 14** роутов под этим префиксом. Было защищено 4, стало 6 — добавлен `Depends(verify_internal_token)` на `POST /characters/internal/unlink` (отвязывает любого персонажа от аккаунта по id — самый весомый из незакрытых) и на `POST /characters/internal/evaluate-titles`; вызывающие обновлены синхронно (`battle-service/app/main.py` — unlink; `character-attributes-service/app/main.py` x2 и `inventory-service/app/main.py` x2 — evaluate-titles). Заодно закрыт блокер: у `inventory-service` вообще не был проброшен `INTERNAL_SERVICE_TOKEN` в `docker-compose.yml` — добавлен (prod наследует `environment` из базового файла).
+
+**Дополнено (Backend Dev, 2026-09-14, закрытие остатка):** оставшиеся **8** роутов
+`/characters/internal/` («мобо-подземельный» кластер) закрыты — под префиксом теперь
+защищены **все 14 из 14**. Вызывающие обновлены синхронно, каждый проверен вживую:
+
+| Роут | Вызывающий (проверен) |
+|---|---|
+| `POST /internal/try-spawn` | `locations-service/app/main.py:88` (`_try_spawn_mob`) |
+| `GET /internal/mob-pack/{active_pack_id}` | `battle-service/app/main.py:961` (`_get_pack_roster`) |
+| `GET /internal/mob-reward-data/{character_id}` | `battle-service/app/main.py:270` (`_distribute_pve_rewards`) |
+| `PUT /internal/active-mob-status/{character_id}` | `battle-service/app/main.py:309` (то же) |
+| `PUT /internal/npc-status/{character_id}` | `battle-service/app/main.py:2015` (`_finalize_battle`) |
+| `POST /internal/record-mob-kill` | `battle-service/app/main.py:372` (`_distribute_pve_rewards`) |
+| `POST /internal/spawn-dungeon-mobs` | `dungeon-service/app/http_clients.py:131` |
+| `POST /internal/deduct-gold` | `dungeon-service/app/http_clients.py:428` |
+
+Заодно закрыт блокер: у `dungeon-service` не был проброшен `INTERNAL_SERVICE_TOKEN` —
+добавлен в `docker-compose.yml` **и** в `docker-compose.prod.yml` (prod переопределяет
+весь блок `environment` этого сервиса, поэтому наследования из базового файла не было).
+`battle-service` и `dungeon-service` получили хелпер `_internal_token_headers()` по образцу
+`character-attributes-service` / `inventory-service`.
+
+24 теста в 5 файлах `character-service` дёргали эти роуты без заголовка — исправлено
+механически (пин `auth_http.INTERNAL_SERVICE_TOKEN` + `headers=`), ни одно утверждение
+не изменено: `test_add_rewards.py`, `test_bestiary.py`, `test_mob_packs.py`,
+`test_mob_spawning.py`, `test_npc_status.py`.
+
+**Остаётся пробел в покрытии:** у `POST /internal/spawn-dungeon-mobs` и
+`POST /internal/deduct-gold` в `character-service` нет ни одного теста — ни до правки,
+ни после (задача для QA).
+
+**Сопутствующий пробел в тестах:** `battle-service/app/tests/test_pvp_death_duel.py::test_loser_character_unlinked` не вызывает `_finalize_battle`, а переписывает httpx-вызов у себя в теле — поэтому он **не поймал бы** отсутствие заголовка у настоящего вызывающего. Тест стоит переписать на реальный прогон функции (задача для QA).
+
+**Дополнено (FEAT-162, задача 14, 2026-09-14):** полный аудит всех 99 роутов `character-service/app/main.py` (см. §3.4) не нашёл больше ни одного *публично маршрутизируемого* незащищённого write-эндпоинта. Отдельно стоит `POST /characters/{character_id}/add_rewards` — он **не** под префиксом `/internal/`, его закрывает точечное правило nginx (`location ~ ^/characters/\d+/add_rewards$ { return 403; }` в обоих конфигах), но `verify_internal_token` на нём нет, то есть он держится ровно на одном слое и относится к этому же долгу.
+
+### ~~Баг: отвязка персонажа не очищает `users.current_character` — UPDATE по несуществующей колонке~~ DONE (2026-09-14)
+**Сервис:** character-service
+**Файл:** `services/character-service/app/main.py:1053-1062` (`POST /characters/internal/unlink`)
+**Описание:** после удаления связи в `user_characters` код выполняет
+`UPDATE users SET current_character_id = NULL WHERE id = :uid AND current_character_id = :cid`.
+Колонки `current_character_id` в таблице `users` **не существует** — реальное имя `current_character`
+(то же самое расхождение «имя поля в API user-service ≠ имя колонки в общей БД», из-за которого
+FEAT-123 Мастер Телепорта возвращал 500, см. запись в DONE выше). Запрос всегда падает с
+`(1054, "Unknown column 'current_character_id' in 'where clause'")`, но исключение проглочено
+`except Exception` c `logger.warning`, поэтому отвязка формально «успешна»: `characters.user_id`
+обнуляется, а `users.current_character` продолжает указывать на отвязанного персонажа.
+**Проверено вживую (2026-09-14):** тот же UPDATE, выполненный напрямую через движок character-service
+на dev-БД, падает с `Unknown column 'current_character_id' in 'where clause'`;
+`inspect(engine).get_columns('users')` подтверждает единственную колонку `current_character`.
+**Почему тесты это не поймали:** `tests/test_internal_unlink.py` не создаёт зеркальную таблицу `users`
+вовсе, так что в SQLite запрос падает ровно так же и точно так же проглатывается — тест зелёный
+при полностью неработающем шаге.
+**Обнаружено:** FEAT-162, задачи QA #9-#11 (при проверке, что фикстура `users` в `test_teleport.py`
+теперь отражает реальную схему).
+**Приоритет:** MEDIUM (тихая рассинхронизация данных, а не отказ).
+**Исправлено (Backend Dev, 2026-09-14):** в `POST /characters/internal/unlink` колонка приведена к
+фактическому имени `current_character` в обоих условиях UPDATE. Попутно найдена **вторая** опечатка
+в той же функции: `DELETE FROM user_characters` — такой таблицы нет, реальная называется
+`users_character`, и эта ошибка глоталась ровно так же (лог: `(1146, "Table
+'fogdatabase.user_characters' doesn't exist")`), то есть связь пользователь↔персонаж при смертельной
+дуэли не удалялась вовсе. Оба `except Exception` + `logger.warning` сняты: три записи (DELETE связи,
+UPDATE `users`, обнуление `characters.user_id`) объединены в одну транзакцию с единым
+`except Exception` → `rollback` + `HTTPException(500)`. Вызывающий (battle-service, `main.py:2603`)
+уже логирует `resp.status_code != 200` как ошибку, поэтому 500 не теряется.
+**Проверено вживую (2026-09-14):** до правки — `200 OK`, при этом `users_character` = 1 строка,
+`users.current_character` = 999807, в логах два проглоченных WARNING. После — `200 OK` и все три
+записи применились: `users_character` → 0, `users.current_character` → NULL, `characters.user_id` → NULL.
+**Фикстура:** `tests/test_internal_unlink.py` теперь создаёт зеркальные таблицы `users`
+(`id`, `current_character`) и `users_character` сырым DDL — без них сырой SQL в SQLite не выполнялся
+и тест оставался зелёным при неработающем шаге. **QA:** ассертов на содержимое этих таблиц пока нет —
+тест проверяет только `characters.user_id`; их стоит добавить.
 
 ### Баг: `POST /skills/assign_multiple` обрывает весь батч на первом ненайденном навыке
 **Сервис:** skills-service (потребитель — character-service)
@@ -258,7 +417,96 @@
 
 ---
 
+### Долг: `posts.content` — `TEXT` (64 КБ), длинный ролевой пост может молча обрезаться
+**Сервис:** locations-service
+**Файл:** `services/locations-service/app/models.py:165`
+**Обнаружено:** FEAT-156 (Architect, 2026-09-13). Предсуществующее, вне области фичи.
+**Описание:** Колонка объявлена как `Column(Text, ...)`, то есть потолок 64 **КБ**. Кириллица в `utf8mb4` стоит 2 байта на символ, а TipTap кладёт в то же поле HTML-разметку — длинный ролевой пост с форматированием реально способен подойти к границе. MySQL в нестрогом режиме обрежет текст **молча**, то есть игрок потеряет часть уже отправленного поста и не узнает об этом.
+**Почему не починено в FEAT-156:** новая таблица `post_drafts` сделана с `MEDIUMTEXT` именно из-за этого риска, но саму таблицу `posts` фича не трогала — это отдельная миграция с `ALTER TABLE` на живых данных.
+**Возможное решение:** миграция `posts.content` → `MEDIUMTEXT` плюс серверная проверка длины с русским 400, по образцу `MAX_DRAFT_LENGTH` в `locations-service/app/crud.py:34`.
+
+### Долг: `delete_character` не чистит `posts` / `post_likes` / `action_gates` — строки осиротевают
+**Сервис:** character-service (владельцы таблиц — locations-service)
+**Файлы:** `services/character-service/app/main.py:1121` (`delete_character`), `services/locations-service/app/models.py` (`Post`, `PostLike`, `ActionGate`)
+**Обнаружено:** FEAT-156 (Architect, 2026-09-13)
+**Описание:** Удаление персонажа — жёсткое (`db.delete(character)`), и перед ним идёт веерная graceful-очистка в inventory-, skills-, character-attributes- и user-service, а с FEAT-156 ещё и в locations-service (шаг 4.5, эндпоинт D7). Но D7 удаляет **только** `post_drafts`. Ни у одной таблицы locations-service нет внешнего ключа на `characters`, поэтому `posts`, `post_likes` и `action_gates` удалённого персонажа остаются в базе со ссылкой на несуществующий `character_id` — так происходит уже сейчас, до FEAT-156.
+**Почему не расширено в FEAT-156:** это продуктовое решение, а не технический недосмотр. Удаление `posts` вырвало бы куски из общего отыгрыша локации, который читают посты других игроков — необратимая правка чужого контента. Обоснование целиком: раздел 3.12 «Why drafts only» в `features/FEAT-156-rp-post-drafts.md`.
+**Требуется решение пользователя:** удалять посты удалённого персонажа, обезличивать их или оставлять как есть. До этого решения расширять D7 нельзя.
+
+### Долг: `move_and_post` коммитит пост до перемещения персонажа и списания стамины
+**Сервис:** locations-service
+**Файл:** `services/locations-service/app/main.py:1213` (`crud.create_post`) против `:1241` (500 «Не удалось обновить локацию персонажа») и `:1256` (500 «Не удалось списать выносливость за переход»)
+**Обнаружено:** FEAT-156 (QA, задача T4, 2026-09-13). Предсуществующее, фичей не внесено.
+**Описание:** `crud.create_post` (`app/crud.py:957`) делает `session.commit()` сразу. Обновление локации в character-service и списание стамины в character-attributes-service идут **после** и каждое имеет свою ветку `raise HTTPException(500)`. Если сработает любая из них, пост уже записан и виден в локации, а персонаж остался в старой локации с несписанной выносливостью — то есть отыгрыш и состояние мира разъехались. Откатить commit на этом месте нечем: соседние сервисы правятся по HTTP, общей транзакции нет.
+**Тот же порядок** повторяется в `quick_move` (`:1470` / `:1477`).
+**Почему заведено, а не починено:** это вопрос проектирования (сага/компенсация либо перенос вставки поста в самый конец), а не очевидный дефект, и он старше FEAT-156.
+**Возможное решение:** создавать пост последним шагом, либо добавить компенсацию — удалять только что созданный пост при провале шагов 6/7 и отдавать вменяемую русскую ошибку.
+
+### Долг: `strip_html_tags` вырезает теги без разделителя и не декодирует энтити — влияет на `char_count`, опыт и гейты
+**Сервис:** locations-service (+ зеркало на фронте)
+**Файлы:** `services/locations-service/app/crud.py:140-142` (`strip_html_tags`), `services/locations-service/app/tests/test_post_xp.py:35,38`, зеркало на фронте — `services/frontend/app-chaldea/src/components/pages/LocationPage/gateConstants.ts:90` (`stripHtmlTags`; во FEAT-159 переехало из `PostCreateForm.tsx`)
+**Обнаружено:** FEAT-157 (Architect, 2026-09-13). Осознанно вынесено из фичи.
+**Описание:** Теги удаляются без подстановки разделителя, поэтому `<p>Один</p><p>Два</p>` превращается в `"ОдинДва"` — два слова склеиваются на границе абзацев. HTML-энтити (`&nbsp;`, `&amp;`) не декодируются и считаются как литералы. Тест `test_post_xp.py:35,38` **закрепляет** неправильное поведение, ожидая `"line oneline two"`.
+**Почему не исправлено в FEAT-157:** функция считает `char_count` поста, а от него зависят опыт за пост и пороги гейтов. Любая правка меняет длину **всех** постов, то есть это **изменение баланса**, а не тихий багфикс — решение за пользователем. Фронтовый `stripHtmlTags` обязан байт-в-байт зеркалить бэкенд, иначе счётчик символов будет обещать гейт, который сервер откажется засчитать; поэтому во FEAT-157 он тоже оставлен как есть (для спеллчекера сделана отдельная корректная модель смещений).
+**Возможное решение:** вставлять `\n` на границах блочных тегов и декодировать энтити, одновременно правя `test_post_xp.py` и согласовав с пользователем пересчёт порогов опыта/гейтов.
+
+### ~~Бэкенд отдаёт `length` поста как длину сырого HTML, а не текста~~ DONE (исправлено в источнике)
+**Сервис:** locations-service (+ потребитель на фронте)
+**Файлы:** `services/locations-service/app/crud.py:1587`, `services/locations-service/app/crud.py:2324` — `"length": len(post.content)`; схемы `PostResponse.length` (`schemas.py:569`) и `PostEditResponse.length` (`schemas.py:371`)
+**Обнаружено:** 2026-09-14 (Frontend Dev, багрепорт «счётчик под постом считает разметку»).
+**Описание:** Поле `length` в ответе API считается как `len(post.content)`, то есть по сырому HTML вместе с тегами и инлайновыми стилями. Все остальные длины в сервисе (опыт за пост, порог гейтов, `char_count` черновиков и истории постов) считаются через `strip_html_tags`. На реальном посте id=133 расхождение — 5597 против 4248 символов (+32 %). Единственным потребителем поля был счётчик «N симв.» под опубликованным постом: игрок видел завышенное число, считал, что пост оплачивает гейт, а сервер отказывал.
+~~**Исправлено (Backend Dev, 2026-09-14):** оба места считают `"length": len(strip_html_tags(...))` — `crud.py:1587` (ответ редактирования) и `crud.py:2324` (лента `/client/details`). Баланс не затронут: поле нигде не участвует в проверках, единственный потребитель — счётчик «N симв.». Временный обход на фронте снят: `PostCard.tsx` снова показывает серверное `post.length`, клиентский `useMemo`/`stripHtmlTags` из него удалён, число считается ровно в одном месте. Замер на посте id=133: было `length=5597` при `strip_html_tags`=4248, стало 4248 = 4248. Тест `test_owner_edits_the_latest_post_inside_the_window` сверял `length` с `len(LONG_TEXT)` по сырой строке — переведён на `len(crud.strip_html_tags(LONG_TEXT))` (расхождение было в один концевой пробел, который снимает `.strip()`).~~
+**Важно:** сам `strip_html_tags` НЕ трогали — его дефекты (нет разделителя на границах блоков, не декодируются энтити) остаются открытым долгом выше и являются изменением баланса.
+
+### Долг: резолв имён в очереди модерации — N+1 запросов вместо батч-эндпоинта
+**Сервисы:** locations-service -> character-service, user-service
+**Файлы:** `services/locations-service/app/crud.py` — `_enrich_moderation_items()`, `_fetch_character_brief_map()`, `_fetch_username_map()`
+**Обнаружено:** FEAT-158 (Architect, раздел 3.3; подтверждено Reviewer 2026-09-13)
+**Описание:** Ни у character-service, ни у user-service нет батч-эндпоинта для получения имён по списку id, поэтому очереди модерации делают по одному HTTP-запросу на каждый **уникальный** id (`GET /characters/{id}/short_info`, `GET /users/{id}`). Сейчас это безопасно: обе очереди фильтруют `status='pending'`, вызовы дедуплицируются через `set()`, идут один раз за запрос уже после SQL, таймаут 5 c, а любой сбой даёт `null`, а не 500. Но на длинной очереди (или если такой резолв переиспользуют на более массовом экране) это линейный рост числа запросов.
+**Возможное решение:** завести батч-эндпоинты (`POST /characters/short_info/batch`, `POST /users/batch`) и перевести оба хелпера на один запрос.
+
+### Долг: `action_gates.created_at` никто не читает, а цели гейта не валидируются при создании поста
+**Сервис:** locations-service
+**Файлы:** `services/locations-service/app/models.py:196` (`ActionGate.created_at`), `services/locations-service/app/main.py:772-784` (`_validate_intent_post`), `services/locations-service/app/crud.py:1033` (`create_action_gates`), точки вызова — `main.py:848` (`POST /locations/posts/`) и `main.py:1284` (`move_and_post`)
+**Обнаружено:** FEAT-159 (Codebase Analyst + Architect, раздел 3.9, 2026-09-13). Предсуществующее, фичей не внесено и сознательно вынесено за её пределы.
+**Описание:** Две связанные асимметрии на пути **создания** гейта.
+1. Колонка `action_gates.created_at` заполняется, но **не читается ни одним запросом** во всём репозитории: ни `ORDER BY`, ни сравнения, ни выборки по ней нет (проверено grep'ом по `services/`). Гейты не резервируют цели, не блокируют других игроков и не разрешают ни одной гонки — два персонажа могут одновременно держать `combat`-гейт на одного моба.
+2. Цели гейта **никак не проверяются** при создании поста. `_validate_intent_post` смотрит только на то, что `action_type` входит в `GATED_POST_TYPES`, что у гейта есть хотя бы одна цель и что длина текста покрывает бюджет. Ничто не проверяет, что цель **существует**, что она **находится в этой локации**, что это моб, а не игрок (и наоборот), и что она **жива**. У `combat` и принудительного PvP есть отложенные проверки в battle-service, у `gathering` / `dungeon` / `npc_dialogue` — никаких.
+**Почему не исправлено в FEAT-159:** раздел 3.9 фичи разбирал родственный вопрос («запрещать ли цели, появившиеся в локации позже поста») и решил **не** вводить проверку по времени: для `pvp` и `npc_dialogue` она в принципе нереализуема — у персонажей и НПС нет истории прибытия в локацию, `characters.current_location_id` перезаписывается без отметки времени. Полупроверка, покрывающая только `combat`, хуже отсутствующей. Вместо этого выбран путь «обогащать, а не блокировать»; он **реализован** в Phase B фичи — `crud._resolve_gate_targets` (`services/locations-service/app/crud.py:3314`) показывает админу имя и состояние каждой цели заявки, но **только на пути модерации ретро-гейтов**. Путь создания поста (`POST /locations/posts/`, `move_and_post`) как не валидировал цели, так и не валидирует — асимметрия сохраняется и после FEAT-159. Валидация целей там — отдельная задача и затрагивает оба «горячих» эндпоинта постинга.
+**Статус после FEAT-159 (2026-09-13):** актуально. `action_gates.created_at` по-прежнему не читает ни один запрос (новый код Phase B выбирает из `action_gates` только `action_type` и `target_ref`).
+**Возможное решение:** либо удалить `created_at` как неиспользуемую (дёшево, но теряется аудит), либо начать её использовать осознанно; отдельно — ввести проверку существования и локации цели в `_validate_intent_post` с русскими 400, согласовав с тем, что цель может легально умереть/уйти между постом и действием.
+
+---
+
 ## LOW
+
+### Долг: при срабатывании `maxEditLength` jsdiff молотит ~30 секунд, блокируя вкладку, и только потом сдаётся
+**Сервис:** frontend (`services/frontend/app-chaldea/src/components/pages/LocationPage/PostVersionHistoryModal.tsx:55`, `:111-117`)
+**Обнаружено:** FEAT-160 (Frontend Dev — наблюдение; подтверждено Reviewer 2026-09-14 замером внутри контейнера `frontend`).
+**Описание:** `DIFF_MAX_EDIT_LENGTH = 20000` ограничивает **ответ**, а не **ожидание**. jsdiff O(ND) доходит до порога и только тогда возвращает `undefined`; поток при этом занят. Замер (node внутри контейнера, реальный модуль `diff@9` + `Intl.Segmenter('ru')`): 1500 слов / 14 748 символов — 415 мс; 6000 слов / 59 205 символов — 6,6 с; 12 000 слов / 118 570 символов — **30,1 с**, и только после этого `undefined`. Модалка обрабатывает `undefined` корректно (показывает обе версии целиком), но до этого вкладка не отвечает.
+**Почему сейчас не горит:** самый длинный пост в базе — 5 597 символов, у прода порядок тот же. Порог на реальных данных недостижим: пара постов максимальной длины считается за сотни миллисекунд. Риск латентный и зависит от того, вырастет ли допустимая длина поста (см. долг про `posts.content` TEXT).
+**Возможное решение:** вынести расчёт в Web Worker, либо ограничивать вход по длине текста *до* вызова `diffWords` (например, отказываться от пословного сравнения сразу при > 40 000 символов на сторону) вместо того, чтобы полагаться на `maxEditLength`. Сознательно не правилось в FEAT-160: архитектурное решение 3.2 фиксирует `maxEditLength`, а отход от него — отдельное решение.
+
+
+### Долг: таблица сервисов в CLAUDE.md п.1 устарела — три живых сервиса не перечислены
+**Сервис:** документация (`CLAUDE.md`, раздел 1, «Сервисы и порты»)
+**Обнаружено:** FEAT-161 (Architect, раздел 2.2, риск R6; подтверждено Reviewer 2026-09-14 по `docker ps`).
+**Описание:** В таблице перечислено 10 backend-сервисов, а в `docker ps` живут ещё три: `dungeon-service`, `battle-pass-service`, `party-service`. Все три имеют собственный код в `services/`, поднимаются обоими compose-файлами и содержат `datetime`-поля в схемах. Агент, который сверяется только с CLAUDE.md, их не увидит и пропустит при любой сквозной правке (ровно это чуть не случилось со списком сервисов в FEAT-161).
+**Возможное решение:** дописать три строки в таблицу раздела 1 (порт, путь, особенности) и заодно сверить граф межсервисных зависимостей в разделе 2.
+
+### Долг: CLAUDE.md п.10.7 устарел — locations-service проверяет JWT сам
+**Сервис:** документация (`CLAUDE.md`, раздел 10, пункт 7)
+**Обнаружено:** FEAT-156 (Architect, 2026-09-13; сначала как «риск» попало в раздел 2 фичи, затем проверено по коду и опровергнуто)
+**Описание:** П.10.7 утверждает: «Аутентификация — JWT реализована только в user-service и notification-service. Остальные сервисы не проверяют токены.» Для locations-service это неверно: `services/locations-service/app/auth_http.py:24` определяет `get_current_user_via_http`, которая валидирует Bearer-токен запросом к `user-service GET /users/me`. Зависимость стоит напрямую на **26** маршрутах `main.py` и ещё на **59** через `require_permission(...)` (`auth_http.py:73`), построенный поверх неё. Владелец персонажа сверяется отдельно — `verify_character_ownership` (`main.py:114`).
+**Почему это важно:** формулировка уже один раз увела проектирование в сторону — архитектор FEAT-156 начинал с допущения, что для черновиков нужен новый механизм авторизации. Копии `auth_http.py` лежат в 12 сервисах, так что утверждение, скорее всего, устарело шире, чем на один сервис.
+**Возможное решение:** перепроверить наличие и применение `auth_http.py` во всех сервисах и переписать п.10.7 по факту. Правка CLAUDE.md в FEAT-156 не делалась намеренно — файл вне области фичи. Фактическое состояние уже описано в `docs/services/locations-service.md` (раздел «Назначение»).
+
+### Долг: прод-база называется `fogdatabase`, а документация говорит `mydatabase`
+**Сервис:** документация (`CLAUDE.md` разделы 1 и 2, `docs/ARCHITECTURE.md`)
+**Обнаружено:** FEAT-156 (PM, проверка прода 2026-09-13)
+**Описание:** И CLAUDE.md, и `docs/ARCHITECTURE.md` называют единую MySQL-базу `mydatabase`. Это имя **локального dev-окружения**; на проде база называется `fogdatabase` — подтверждено прямым запросом к прод-БД при расследовании потерянного поста. Имя MongoDB-базы в `ARCHITECTURE.md` тоже указано как `mydatabase` и на проде не проверялось.
+**Чем мешает:** любая инструкция вида «зайди в `mydatabase` и посмотри» на проде не работает, а агент, который поверит документации, решит, что базы нет.
+**Возможное решение:** писать в документации оба имени с пометкой, какое из них dev, а какое prod, либо ссылаться на переменную окружения вместо литерала. Проверить заодно и имя базы MongoDB на проде.
 
 ### Долг: в миграциях индексы удаляются до таблицы — откат падает на MySQL
 **Сервис:** locations-service (и любой другой, где повторят приём)
@@ -415,6 +663,82 @@
 **Описание:** `crud.update_location` поднимает `HTTPException(404, "Location not found")`, но её же перехватывает собственный `except Exception` и переоборачивает в `HTTP 500 detail=str(e)`. То же самое повторяет `try/except` в обработчике. Клиент вместо «локация не найдена» получает 500. Дополнительно текст 404 на английском (нарушает правило русских сообщений).
 **Решение:** Пробрасывать `HTTPException` без перехвата (`except HTTPException: raise` перед общим `except`), перевести сообщение на русский.
 
+### Долг: применение исправления спеллчекера перемонтирует редактор — теряются курсор и история отмен
+**Сервис:** frontend
+**Файлы:** `services/frontend/app-chaldea/src/components/pages/LocationPage/PostCreateForm.tsx:140-148` (`replaceContent`, бамп `editorKey`), `:266-272` (`handleApplySuggestion`), `services/frontend/app-chaldea/src/components/CommonComponents/WysiwygEditor/WysiwygEditor.tsx:59-63`
+**Обнаружено:** FEAT-157 (Architect, 2026-09-13). Предсуществующее (появилось в FEAT-156), не входит ни в один из трёх симптомов фичи.
+**Описание:** Любая программная подмена контента (применение исправления правописания, вставка черновика) делается через смену `key` у `WysiwygEditor`. React размонтирует и монтирует редактор заново: позиция курсора теряется, история undo/redo обнуляется, поле проматывается наверх. При правке нескольких слов подряд это заметно.
+**Почему не исправлено в FEAT-157:** правильное решение — применять замену транзакцией ProseMirror, а для этого нужно отдать наружу экземпляр `Editor`, то есть менять публичный контракт общего `WysiwygEditor` (`{ content, onChange, enableArchiveLinks }`), которым пользуются несколько страниц. Это отдельный рефакторинг, а не багфикс.
+**Возможное решение:** расширить API `WysiwygEditor` императивным методом (`ref` + `replaceRange`/`setContent` через транзакцию), убрать `editorKey` и перевести на него же вставку черновика.
+
+### Баг: палитра `react-colorful` красит текст при простом перетаскивании, без подтверждения
+**Сервис:** frontend
+**Файл:** `services/frontend/app-chaldea/src/components/CommonComponents/WysiwygEditor/WysiwygEditor.tsx:376`
+**Обнаружено:** FEAT-157 (PM/Architect, 2026-09-13). Побочное наблюдение при разборе бага с цветом, отдельной жалобы от игроков не было.
+**Описание:** `react-colorful` шлёт `onChange` непрерывно во время перетаскивания, и обработчик сразу применяет цвет к выделению. Достаточно открыть палитру и дёрнуть мышью, чтобы текст оказался покрашен — в том числе в белый `rgb(255,255,255)`, так как текущий цвет читается как `editor.getAttributes("textStyle").color || "#ffffff"`. Игрок получает цвет, который «не выбирал», а на обычном тексте это ещё и лишний `<span>` в HTML поста.
+**Возможное решение:** применять цвет по `onMouseUp`/`onTouchEnd` (или по кнопке «Применить»), а во время перетаскивания показывать только превью; не подставлять `#ffffff` как «текущий цвет», если у выделения цвета нет.
+
+### Долг: смещения спеллчекера ломаются на суррогатных парах (эмодзи)
+**Сервис:** frontend
+**Файл:** `services/frontend/app-chaldea/src/api/spellcheck.ts` (`htmlToSpellText` / `replaceWordInHtml`)
+**Обнаружено:** FEAT-157 (Architect, 2026-09-13). Осознанно принятое ограничение, зафиксировано в разделе 3.3 фичи.
+**Описание:** Яндекс.Спеллер возвращает `pos`/`len` в кодовых единицах UTF-16, что совпадает с индексами JS-строк для всей кириллицы и латиницы. Текст с суррогатными парами (эмодзи, редкие символы вне BMP) может дать смещение, не совпадающее с индексом в нашей модели, и исправление применится не к тому фрагменту.
+**Почему не исправлено:** для ролевых постов случай редкий, а корректная обработка требует отдельной модели индексации по кодовым точкам во всём пути «HTML → текст → замена».
+**Возможное решение:** считать индексы по кодовым точкам и переводить их в UTF-16 при сопоставлении с ответом спеллера, либо отклонять применение исправления, если в диапазоне обнаружена суррогатная пара, и показывать русское сообщение.
+
+### Долг: права `gametime:read|update` заводятся миграцией locations-service, а не user-service
+**Сервисы:** locations-service (миграция), user-service (владелец RBAC)
+**Файл:** `services/locations-service/app/alembic/versions/004_game_time_config.py:45-66`
+**Обнаружено:** FEAT-158 (Architect, раздел 3.5; проверено Reviewer 2026-09-13)
+**Описание:** Это единственные права в системе, которые регистрируются вне user-service. Работает только потому, что база MySQL общая. Нарушает CLAUDE.md §10.13 («разрешения заводит владелец RBAC») и, что важнее, делает ненадёжной ровно ту проверку, которая поймала бы баг FEAT-158: «сгрепать `user-service/alembic` и получить полный список прав». Guard-тест `services/user-service/tests/test_moderation_permissions.py` вынужден сканировать оба дерева миграций.
+**Возможное решение:** перенести регистрацию `gametime:*` в миграцию user-service (идемпотентным SELECT-then-INSERT, чтобы не задеть существующие установки), из миграции 004 убрать.
+
+### Вопрос продукта: модератор не может открыть `/admin/game-time`
+**Сервис:** frontend + user-service (RBAC)
+**Файл:** `services/locations-service/app/alembic/versions/004_game_time_config.py:56-62`
+**Обнаружено:** FEAT-158 (Architect, раздел 3.5)
+**Описание:** Права `gametime:read|update` выдаются только роли `admin` (миграция джойнит `roles r WHERE r.name = 'admin'`). Плитка и маршрут согласованы между собой, поэтому визуального «битого» перехода нет — это не дефект, а не заданный продуктовый вопрос: должен ли модератор видеть игровой календарь.
+**Возможное решение:** если ответ «да» — двухстрочная миграция, выдающая оба права роли 3.
+
+### Долг: PUT-эндпоинты рассмотрения модерации объявляют полную read-схему, а отдают 7 полей
+**Сервис:** locations-service
+**Файлы:** `services/locations-service/app/main.py:2221-2238` (`PUT /admin/moderation/deletion-requests/{id}/review`), `services/locations-service/app/main.py:2241-2258` (`PUT /admin/moderation/reports/{id}/review`), `services/locations-service/app/main.py:2283-2303` + `crud.py:3620-3630` (`PUT /admin/moderation/gate-requests/{id}/review`, FEAT-159 — та же картина)
+**Обнаружено:** FEAT-158 (Reviewer, 2026-09-13)
+**Описание:** Оба хендлера объявлены с `response_model=PostDeletionRequestRead` / `PostReportRead`, но вручную собирают словарь из 7 ключей. Остальные шесть полей (`post_content`, `post_character_id`, `post_location_id`, `post_character_name`, `post_created_at`, `requester_username`) сериализуются как `null`. Живая проверка: `dismiss` жалобы на **живой** пост вернул `{"post_id":153, ..., "post_content":null}` — по правилу фронта `isPostMissing` (`post_id === null || post_content === null`) это читается как «пост удалён», что неправда. Сегодня безвредно: `AdminModerationPage.tsx` игнорирует тело PUT и перезапрашивает очередь. Но контракт в `/openapi.json` обещает то, чего эндпоинт не отдаёт, и любой следующий потребитель, доверившийся телу ответа, отрисует неверное состояние.
+**Дополнено FEAT-159 (2026-09-13):** третий эндпоинт рассмотрения — заявки на ретро-гейты — повторил тот же паттерн: `response_model=PostGateRequestRead`, а `crud.review_gate_request` возвращает 9 ключей из 18 (`post_content`, `post_character_name`, `post_location_name`, `post_edited_at`, `requester_username`, `targets_resolved` -> `null` / `{}`). Симптом тот же и так же безвреден сегодня: фронт игнорирует тело PUT и перезапрашивает очередь.
+**Возможное решение:** либо объявить отдельную узкую схему `PostModerationDecisionRead` (7 полей; для гейтов — плюс `gates`), либо заполнять тело теми же данными, что и очередь. Чинить стоит все три эндпоинта разом.
+
+### Долг: видимость плитки в админке проверяет модуль, а маршрут — конкретное право
+**Сервис:** frontend
+**Файлы:** `services/frontend/app-chaldea/src/components/Admin/AdminPage.tsx:82-84` (`hasModuleAccess`), `services/frontend/app-chaldea/src/components/CommonComponents/ProtectedRoute/ProtectedRoute.tsx:56-58` (`hasPermission`)
+**Обнаружено:** FEAT-158 (Reviewer, 2026-09-13)
+**Описание:** После FEAT-158 обход `role === 'admin'` убран, и обе проверки идут от прав — это закрыло исходный баг. Но остаётся разная гранулярность: плитка показывается при **любом** праве модуля (`module:*`), а маршрут требует конкретное (`moderation:read`, `items:read` и т. д.). Пользователь, которому выдали только `moderation:review` (или только `items:create`), увидит плитку и будет выброшен на `/home` — тот же симптом, что чинила FEAT-158. Сейчас не воспроизводится: ни одна роль не имеет `review` без `read`, а админ получает все права. Риск реализуется при точечной выдаче прав через `user_permissions`.
+**Возможное решение:** хранить в `sections[]` рядом с `module` то же самое право, что стоит в `requiredPermission` маршрута, и фильтровать плитки через `hasPermission`.
+
+### Долг: тест «админ получает все разрешения» не читает миграции и новое право не покрывает
+**Сервис:** user-service (тесты)
+**Файлы:** `services/user-service/tests/test_rbac_permissions.py` (класс `TestAdminAutoPermissions`)
+**Обнаружено:** FEAT-160 (QA, 2026-09-14)
+**Описание:** CLAUDE.md §10.13 утверждал, что этот тест «обновится автоматически при добавлении новых разрешений». Это неправда: класс работает на собственном синтетическом сиде из 8 разрешений с захардкоженными счётчиками (`len(perms) == 9`, `== 11`) и дерево Alembic-миграций не читает вообще. Новая строка в `permissions`, заведённая миграцией, в него не попадает — покрытие появляется только если разрешение засеяно явно отдельной секцией. На это утверждение уже опёрлись две фичи, заведшие по разрешению (`characters:teleport` — FEAT-162, `posts:history` — FEAT-160); у обеих покрытие есть, но потому что QA засеял их руками, а не потому что тест сам их подхватил. Формулировка в CLAUDE.md исправлена (FEAT-160, T10); сам тест не трогали.
+**Возможное решение:** отдельный guard-тест, который сканирует `user-service/alembic/versions/` (и, пока не закрыт долг про разрешения вне user-service, `locations-service/app/alembic/versions/`), собирает полный список `module:action` и проверяет, что `get_effective_permissions` для админа отдаёт их все. Тогда новое разрешение действительно покрывалось бы без ручного сида.
+
+
+### Долг: `BattleStatus.forfeit` — мёртвое значение перечисления
+**Сервис:** battle-service
+**Файлы:** `services/battle-service/app/models.py:17`, `services/battle-service/app/alembic/versions/001_initial_baseline.py:32`; читается на `services/battle-service/app/main.py:4072` и `:4391`
+**Обнаружено:** FEAT-163 (Backend Dev, задача #15, 2026-09-14)
+**Описание:** значение `forfeit` объявлено в ENUM `battles.status`, читается ровно в двух местах — и в обоих означает ровно то же, что `finished` («Бой уже завершён»). **Не присваивается нигде**: `crud.finish_battle` пишет только `finished`, и никакой другой путь тоже. Собственного поведения значение не несёт.
+**Почему FEAT-163 сознательно его не задействовала:** факт выбывания — **пер-участниковый**, а не пер-боевой. В командном бою бой не «сдан» вообще: уходит один участник, остальные доигрывают. Значение уровня боя — неверная гранулярность для основного случая. Кроме того, второй терминальный статус потребовал бы аудита всех мест, где `finished` считается *тем самым* терминальным значением (`_make_action_core`, фильтры админского списка, `battle_history`, выборка по локации, фронтенд). Факт выбывания вместо этого живёт в `battle_participants.dropped_out_at` и в Mongo-событии `participant_timed_out`.
+**Возможное решение:** отдельной уборкой убрать `forfeit` из перечисления и из двух проверок (миграция ENUM на `battles.status`), либо оставить как есть и задокументировать как защитное чтение. Сейчас безвредно — просто мёртвый код.
+
+### Ограничение: свипер таймаута не видит бой, потерявший запись в ZSET при живом ключе состояния
+**Сервис:** battle-service
+**Файлы:** `services/battle-service/app/main.py:5225` (`_sweep_due_deadlines`), `:5310` (`_reconcile_stale_battles`)
+**Обнаружено:** FEAT-163 (Backend Dev, автор свипера, 2026-09-14). **Это заявленное покрытие проектного решения, а не регрессия** — записано, чтобы его не «переоткрыли» как баг.
+**Описание:** свипер ключуется по `battle:deadlines`. Если запись боя из множества пропала, а ключ `battle:{id}:state` ещё жив (например, процесс упал между атомарным `ZREM`-захватом и повторным `ZADD`), проход по дедлайнам такой бой не увидит. Вторая линия — почасовая сверка с MySQL (`_reconcile_stale_battles`) — требует **отсутствия** ключа состояния, поэтому подхватит бой только после того, как ключ истечёт по `BATTLE_STATE_TTL_HOURS` (48 ч). То есть окно есть, но оно ограничено сверху и самолечится.
+**Почему так сделано:** второй guard (отсутствие ключа состояния) — именно то, что не даёт сверке уничтожить живой, но тихий бой. Ослабить его = получить ложные срабатывания на здоровых боях.
+**Возможное решение, если понадобится:** перевзводить запись в ZSET из ключа состояния — сверять `state["deadline_at"]` живых `in_progress` боёв с содержимым множества и восстанавливать недостающие записи. Отдельной задачей: это уже третий источник истины по дедлайну.
+
 ---
 
 ## GLOBAL TASKS (стратегические задачи)
@@ -530,7 +854,10 @@
 | Приоритет | Количество |
 |-----------|-----------|
 | CRITICAL | 1 |
-| HIGH | 4 |
-| MEDIUM | 4 |
-| LOW | 5 |
-| **Итого** | **14** |
+| HIGH | 9 |
+| MEDIUM | 21 |
+| LOW | 31 |
+| **Итого** | **62** |
+
+_Пересчитано 2026-09-14 (FEAT-163): таблица разошлась с содержимым файла — считаются только
+незакрытые записи (`###`-заголовки без зачёркивания) в секциях CRITICAL/HIGH/MEDIUM/LOW._

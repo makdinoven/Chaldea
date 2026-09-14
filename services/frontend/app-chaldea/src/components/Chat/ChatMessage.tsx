@@ -4,6 +4,7 @@ import type { ChatMessage as ChatMessageType } from '../../types/chat';
 import { hasPermission } from '../../utils/permissions';
 import AvatarWithFrame from '../common/AvatarWithFrame';
 import MessageBackground from '../common/MessageBackground';
+import { parseServerDate } from '../../utils/serverDate';
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -15,7 +16,8 @@ interface ChatMessageProps {
 
 const formatTime = (dateStr: string): string => {
   try {
-    const date = new Date(dateStr);
+    const date = parseServerDate(dateStr);
+    if (!date) return '';
     const hours = date.getHours().toString().padStart(2, '0');
     const minutes = date.getMinutes().toString().padStart(2, '0');
     return `${hours}:${minutes}`;

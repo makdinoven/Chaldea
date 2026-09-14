@@ -15,6 +15,7 @@ import type {
 } from '../../../api/rbacAdmin';
 import PermissionGrid from './PermissionGrid';
 import AdminPagination from '../AdminPagination/AdminPagination';
+import { formatServerDate } from '../../../utils/serverDate';
 
 const PAGE_SIZE = 20;
 
@@ -165,17 +166,14 @@ const UsersTab = () => {
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '—';
-    const d = new Date(dateStr);
-    return d.toLocaleDateString('ru-RU', {
+  const formatDate = (dateStr: string | null) =>
+    formatServerDate(dateStr, {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
     });
-  };
 
   return (
     <div className="space-y-4">

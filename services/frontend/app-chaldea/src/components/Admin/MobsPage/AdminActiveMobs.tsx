@@ -20,6 +20,7 @@ import {
 } from '../../../redux/slices/mobsSlice';
 import AdminPagination from '../AdminPagination/AdminPagination';
 import type { MobTemplateListItem } from '../../../api/mobs';
+import { formatServerDateTime } from '../../../utils/serverDate';
 
 interface LocationOption {
   id: number;
@@ -133,13 +134,8 @@ const AdminActiveMobs = () => {
 
   const totalPages = Math.ceil(total / pageSize);
 
-  const formatDate = (dateStr: string) => {
-    try {
-      return new Date(dateStr).toLocaleString('ru-RU');
-    } catch {
-      return dateStr;
-    }
-  };
+  const formatDate = (dateStr: string | null | undefined) =>
+    formatServerDateTime(dateStr, {});
 
   return (
     <div className="w-full max-w-container mx-auto flex flex-col gap-6">

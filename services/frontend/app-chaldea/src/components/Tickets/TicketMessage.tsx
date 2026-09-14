@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import type { TicketMessageItem } from '../../types/ticket';
+import { parseServerDate } from '../../utils/serverDate';
 
 interface TicketMessageProps {
   message: TicketMessageItem;
@@ -8,7 +9,8 @@ interface TicketMessageProps {
 
 const formatTime = (dateStr: string): string => {
   try {
-    const date = new Date(dateStr);
+    const date = parseServerDate(dateStr);
+    if (!date) return '';
     const day = date.getDate().toString().padStart(2, '0');
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const hours = date.getHours().toString().padStart(2, '0');

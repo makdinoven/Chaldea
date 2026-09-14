@@ -14,6 +14,7 @@ import {
 import type { TicketStatus, TicketCategory, CreateTicketPayload } from '../../types/ticket';
 import CreateTicketModal from './CreateTicketModal';
 import toast from 'react-hot-toast';
+import { parseServerDate } from '../../utils/serverDate';
 
 const STATUS_LABELS: Record<TicketStatus, string> = {
   open: 'Открыт',
@@ -39,7 +40,8 @@ const CATEGORY_LABELS: Record<TicketCategory, string> = {
 
 const formatDate = (dateStr: string): string => {
   try {
-    const date = new Date(dateStr);
+    const date = parseServerDate(dateStr);
+    if (!date) return '';
     const day = date.getDate().toString().padStart(2, '0');
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const year = date.getFullYear();

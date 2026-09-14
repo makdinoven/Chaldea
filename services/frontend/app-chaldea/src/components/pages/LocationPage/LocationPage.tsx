@@ -7,12 +7,16 @@ import { useBodyBackground } from '../../../hooks/useBodyBackground';
 import { useAppSelector, useAppDispatch } from '../../../redux/store';
 import { setCharacterLocation, getMe } from '../../../redux/slices/userSlice';
 import { isStaff } from '../../../utils/permissions';
-import { LocationData } from './types';
+import { parseServerDate } from '../../../utils/serverDate';
+import { LocationData, Post } from './types';
+import type { PostGate } from './gateConstants';
 import LocationHeader from './LocationHeader';
 import LocationTopBar from './LocationTopBar';
 import PlayersSection from './PlayersSection';
 import PostCard from './PostCard';
 import PostCreateForm from './PostCreateForm';
+import PostEditModal from './PostEditModal';
+import PostVersionHistoryModal from './PostVersionHistoryModal';
 import NeighborsSection from './NeighborsSection';
 import LootSection from './LootSection';
 import PendingInvitationsPanel from './PendingInvitationsPanel';
@@ -40,6 +44,17 @@ const LocationPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [quickMoving, setQuickMoving] = useState(false);
   const [showPostForm, setShowPostForm] = useState(false);
+  // FEAT-159: the post currently open in the edit modal (null = closed).
+  // Held here, not inside PostCard, so the modal is a single instance that
+  // survives feed re-renders.
+  const [editingPost, setEditingPost] = useState<Post | null>(null);
+  /**
+   * FEAT-160: the post whose edit history is open (null = closed). Held here
+   * for the same reason as `editingPost` — a feed refresh must not unmount the
+   * modal while an admin is reading a diff. Only the id is needed; the modal
+   * fetches its own data.
+   */
+  const [historyPostId, setHistoryPostId] = useState<number | null>(null);
 
   const character = useAppSelector((state) => state.user.character);
   const userId = useAppSelector((state) => state.user.id);
@@ -60,9 +75,14 @@ const LocationPage = () => {
 
   // Sync from server value (getMe response)
   useEffect(() => {
-    const cooldownUntil = character?.travel_cooldown_until;
+    // FEAT-161: `travel_cooldown_until` is serialised without a zone. The
+    // server enforces it as UTC (locations-service/app/main.py:1194 —
+    // `fromisoformat` + `tzinfo is None -> utc`, compared with
+    // `datetime.now(timezone.utc)`), so the client must read it the same way;
+    // otherwise the timer disagrees with the 400 the server returns.
+    const cooldownUntil = parseServerDate(character?.travel_cooldown_until);
     if (!cooldownUntil) return;
-    const diff = new Date(cooldownUntil).getTime() - Date.now();
+    const diff = cooldownUntil.getTime() - Date.now();
     const remaining = Math.max(0, Math.ceil(diff / 1000));
     if (remaining > 0) {
       setCooldownRemaining(remaining);
@@ -326,6 +346,7 @@ const LocationPage = () => {
     []
   );
 
+
   // --- Post submit ---
 
   // Mobs on this location — offered as targets for a combat post (FEAT-145).
@@ -374,6 +395,65 @@ const LocationPage = () => {
     refetchGates();
   }, [refetchGates]);
 
+  // --- Post edit (FEAT-159) ---
+
+  /**
+   * `PUT /locations/posts/{id}`.
+   *
+   * Rejects with an `Error` carrying a ready-to-show Russian message so
+   * `PostEditModal` can render it inline **without closing or clearing the
+   * editor**. The server's own `detail` is preferred verbatim — it names the
+   * rule that was broken (not last / past the hour / not the owner / gone),
+   * which a generic client message could not.
+   */
+  const handleEditPost = useCallback(
+    async (postId: number, content: string, gates: PostGate[] = []) => {
+      try {
+        const { data } = await axios.put(`${BASE_URL}/locations/posts/${postId}`, {
+          content,
+          gates,
+        });
+        // FEAT-159 Phase B: a retro-added gate does NOT fire. The server answers
+        // with the id of the moderation request it filed, and the player is told
+        // plainly that the mechanic stays locked until an admin approves it —
+        // a generic «Пост изменён» would read as "the intent now works".
+        if (data?.gate_request_id) {
+          toast.success(
+            'Пост изменён. Заявка на новое намерение отправлена администратору — ' +
+              'действие станет доступно только после одобрения.',
+            { duration: 7000 },
+          );
+        } else {
+          toast.success('Пост изменён');
+        }
+        await fetchLocationData();
+        // A gate may have been requested; the location's gate status is what
+        // unlocks the action buttons, and it must not go stale after an edit.
+        refetchGates();
+      } catch (err) {
+        let message = 'Не удалось сохранить изменения. Текст остался в редакторе.';
+        if (axios.isAxiosError(err)) {
+          const detail = err.response?.data?.detail;
+          if (typeof detail === 'string' && detail.trim()) {
+            message = detail;
+          } else if (Array.isArray(detail) && detail.length > 0) {
+            // FastAPI validation shape — never expected here, but never swallowed.
+            message = 'Сервер отклонил текст поста. Проверьте содержимое и попробуйте ещё раз.';
+          } else if (!err.response) {
+            message = 'Нет связи с сервером — изменения не сохранены. Текст остался в редакторе.';
+          } else if (err.response.status === 429) {
+            // Nginx rate limit (T6) answers with its own body, not a JSON detail.
+            message = 'Слишком много правок подряд. Подождите немного и попробуйте снова — текст остался в редакторе.';
+          } else {
+            message = `Не удалось сохранить изменения (ошибка ${err.response.status}). Текст остался в редакторе.`;
+          }
+        }
+        throw new Error(message);
+      }
+    },
+    [fetchLocationData, refetchGates]
+  );
+
   // Gate targets available on this location for the post editor (FEAT-145 v2).
   const dungeonsAtLocation = useAppSelector(selectDungeonsAtLocation);
   const gateOptions = useMemo(
@@ -413,6 +493,8 @@ const LocationPage = () => {
             ? err.response.data.detail
             : 'Не удалось отправить пост';
         toast.error(message);
+        // Rethrow so PostCreateForm can tell failure from success and keep the text.
+        throw err;
       }
     },
     [locationId, character?.id, character?.current_location?.id, location, dispatch, fetchLocationData]
@@ -437,6 +519,8 @@ const LocationPage = () => {
             ? err.response.data.detail
             : 'Не удалось отправить пост от НПС';
         toast.error(message);
+        // Rethrow so PostCreateForm can tell failure from success and keep the text.
+        throw err;
       }
     },
     [locationId, fetchLocationData]
@@ -842,6 +926,10 @@ const LocationPage = () => {
                   onTagPlayer={handleTagPlayer}
                   onReport={handleReport}
                   onRequestDeletion={handleRequestDeletion}
+                  isLatestPostInLocation={post.post_id === location.posts[0]?.post_id}
+                  currentUserRole={userRole}
+                  onEdit={setEditingPost}
+                  onShowHistory={(p) => setHistoryPostId(p.post_id)}
                 />
               ))}
             </div>
@@ -861,6 +949,32 @@ const LocationPage = () => {
           </div>
         )}
       </div>
+
+      {/* FEAT-159: post editor. Rendered at page level so a feed re-render
+          cannot unmount it mid-edit; it closes only on «Отмена» or a 200. */}
+      {editingPost && (
+        <PostEditModal
+          post={editingPost}
+          gateOptions={gateOptions}
+          /* The server demands the post's character still stand in the post's
+             location before it accepts a gate request (403). Only the author
+             can satisfy that, so an admin editing someone else's post is not
+             offered the picker. */
+          canAddGates={isCharacterHere && editingPost.character_id === (character?.id ?? -1)}
+          onSave={handleEditPost}
+          onClose={() => setEditingPost(null)}
+        />
+      )}
+
+      {/* FEAT-160: post edit history. The kebab entry that opens it is gated on
+          the `posts:history` permission (PostCard), and the endpoint behind it
+          is guarded by the same permission server-side. */}
+      {historyPostId !== null && (
+        <PostVersionHistoryModal
+          postId={historyPostId}
+          onClose={() => setHistoryPostId(null)}
+        />
+      )}
     </div>
   );
 };

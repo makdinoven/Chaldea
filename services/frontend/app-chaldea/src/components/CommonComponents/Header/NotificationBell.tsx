@@ -12,6 +12,7 @@ import {
 } from '../../../redux/slices/notificationSlice';
 import { getIncomingInvites, respondInvite, IncomingInvite } from '../../../api/squads';
 import toast from 'react-hot-toast';
+import { parseServerDate } from '../../../utils/serverDate';
 
 const NotificationBell = () => {
   const dispatch = useAppDispatch();
@@ -93,7 +94,8 @@ const NotificationBell = () => {
 
   const formatTime = (dateStr: string): string => {
     try {
-      const date = new Date(dateStr);
+      const date = parseServerDate(dateStr);
+      if (!date) return '';
       return date.toLocaleString('ru-RU', {
         hour: '2-digit',
         minute: '2-digit',

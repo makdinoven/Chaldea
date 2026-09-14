@@ -4,7 +4,7 @@ from os import supports_fd
 from typing import List, Dict
 
 import asyncio
-from fastapi import FastAPI, Depends, HTTPException, APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, APIRouter, Query, WebSocket, WebSocketDisconnect, Body
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text, select
@@ -21,6 +21,7 @@ from schemas import (
     BattleHistoryItem, BattleStats, BattleHistoryResponse,
     AdminBattleParticipant, AdminBattleListItem, AdminBattleListResponse,
     AdminBattleStateResponse, AdminForceFinishResponse,
+    AdminFreezeRequest, AdminFreezeResponse,
     LocationBattleParticipant, LocationBattleItem, LocationBattlesResponse,
     SpectateStateResponse, BattlePreviewOut,
     JoinRequestCreate, JoinRequestResponse, JoinRequestListItem, JoinRequestListResponse,
@@ -34,7 +35,7 @@ from rabbitmq_publisher import publish_notification
 from auth_http import get_current_user_via_http, UserRead, require_permission, authenticate_websocket
 import ws_manager
 from mongo_client import get_mongo_db
-from database import get_db
+from database import get_db, AsyncSessionLocal
 from battle_engine import decrement_cooldowns, set_cooldown
 from inventory_client import get_fast_slots, consume_item, get_equipment_durability, update_durability
 from character_client import get_character_profile
@@ -43,7 +44,8 @@ from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, b
     first_cycle_limit_skills
 from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, fetch_weapons, compute_damage_with_rolls, roll_chance, roll_dodge
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
-    get_cached_snapshot, KEY_BATTLE_TURNS, state_key, compute_initiative
+    get_cached_snapshot, KEY_BATTLE_TURNS, state_key, compute_initiative, \
+    utc_now, parse_deadline, deadline_epoch, STATE_TTL_HOURS
 from config import settings
 from mongo_helpers import save_snapshot, load_snapshot
 from tasks import save_log
@@ -52,11 +54,25 @@ import httpx
 import logging
 import os
 import random
+import uuid
 logging.basicConfig(
     level=logging.DEBUG,               # DEBUG, чтобы видеть максимум
     format="%(levelname)s | %(name)s | %(asctime)s | %(message)s",
 )
 logger = logging.getLogger("battle-service")
+
+
+def _internal_token_headers() -> dict:
+    """Headers for outgoing calls into another service's /internal/ routes
+    (FEAT-162 §3.4).
+
+    Read from env at call time (not import time), matching the inline
+    `os.environ.get("INTERNAL_SERVICE_TOKEN", ...)` this module already used
+    for /characters/internal/unlink.
+    """
+    return {"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")}
+
+
 app = FastAPI(title="Battle Service")
 
 cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
@@ -251,7 +267,8 @@ async def _distribute_pve_rewards(
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     resp = await client.get(
-                        f"{char_service}/characters/internal/mob-reward-data/{char_id}"
+                        f"{char_service}/characters/internal/mob-reward-data/{char_id}",
+                        headers=_internal_token_headers(),
                     )
                     if resp.status_code == 200:
                         defeated_mob_char_ids.append((char_id, resp.json()))
@@ -291,6 +308,7 @@ async def _distribute_pve_rewards(
                 await client.put(
                     f"{char_service}/characters/internal/active-mob-status/{mob_char_id}",
                     json={"status": "dead"},
+                    headers=_internal_token_headers(),
                 )
         except httpx.RequestError as e:
             logger.error(f"Ошибка при обновлении статуса моба char_id={mob_char_id}: {e}")
@@ -353,6 +371,7 @@ async def _distribute_pve_rewards(
                     await client.post(
                         f"{char_service}/characters/internal/record-mob-kill",
                         json={"character_id": winner_id, "mob_character_id": mob_char_id},
+                        headers=_internal_token_headers(),
                     )
             except httpx.RequestError as e:
                 logger.error(f"Ошибка записи kill для бестиария char={winner_id}, mob={mob_char_id}: {e}")
@@ -611,10 +630,7 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id):
     )
 
     first_actor_pid = participant_objs[0].id
-    moscow_tz = timezone(timedelta(hours=3))
-    deadline = datetime.now(timezone.utc).astimezone(moscow_tz) + timedelta(
-        hours=settings.TURN_TIMEOUT_HOURS
-    )
+    deadline = utc_now() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
 
     participants_info = []
     for p in participant_objs:
@@ -942,7 +958,8 @@ async def _get_pack_roster(active_pack_id: int) -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(
-                f"{settings.CHARACTER_SERVICE_URL}/characters/internal/mob-pack/{active_pack_id}"
+                f"{settings.CHARACTER_SERVICE_URL}/characters/internal/mob-pack/{active_pack_id}",
+                headers=_internal_token_headers(),
             )
             if resp.status_code == 200:
                 return resp.json()
@@ -1284,6 +1301,8 @@ async def get_state_internal(battle_id: int):
                 "max_mana": state["participants"][pid].get("max_mana", 0),
                 "max_energy": state["participants"][pid].get("max_energy", 0),
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
+                # FEAT-163 3.8: additive, defaults to False for pre-deploy states.
+                "dropped_out": bool(state["participants"][pid].get("dropped_out", False)),
             }
             for pid in state["participants"]
         },
@@ -1348,7 +1367,12 @@ async def get_state(
     # Load battle record for pause status
     battle_record = await get_battle(db, battle_id)
     is_paused = battle_record.is_paused if battle_record else False
-    paused_reason = "Рассматривается заявка на присоединение" if is_paused else None
+    # FEAT-163: reason comes from battles.pause_reason (already loaded, no extra
+    # query); the fallback covers rows paused before the column existed.
+    paused_reason = (
+        (battle_record.pause_reason if battle_record else None)
+        or JOIN_REQUEST_PAUSE_REASON
+    ) if is_paused else None
 
     runtime = {
                "turn_number": state["turn_number"],
@@ -1370,6 +1394,10 @@ async def get_state(
                             "fast_slots": state["participants"][pid].get("fast_slots", []),
                             "team": state["participants"][pid]["team"],
                             "character_id": state["participants"][pid]["character_id"],
+                            # FEAT-163 3.8: additive, defaults to False.
+                            "dropped_out": bool(
+                                state["participants"][pid].get("dropped_out", False)
+                            ),
                         }
                             for pid in state["participants"]
                     },
@@ -1433,7 +1461,10 @@ async def spectate_battle(
 
     # 5. Build runtime with pause info
     is_paused = battle_record.is_paused
-    paused_reason = "Рассматривается заявка на присоединение" if is_paused else None
+    # FEAT-163: dynamic reason, see get_state_internal above.
+    paused_reason = (
+        battle_record.pause_reason or JOIN_REQUEST_PAUSE_REASON
+    ) if is_paused else None
 
     runtime = {
         "turn_number": state["turn_number"],
@@ -1459,6 +1490,8 @@ async def spectate_battle(
                 "max_mana": state["participants"][pid].get("max_mana", 0),
                 "max_energy": state["participants"][pid].get("max_energy", 0),
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
+                # FEAT-163 3.8: additive, defaults to False for pre-deploy states.
+                "dropped_out": bool(state["participants"][pid].get("dropped_out", False)),
             }
             for pid in state["participants"]
         },
@@ -1589,25 +1622,51 @@ async def get_battle_preview(
 # ---------------------------------------------------------------------------
 # Pause / Resume helpers (used by join-request and admin approve/reject)
 # ---------------------------------------------------------------------------
-async def pause_battle(db: AsyncSession, battle_id: int) -> None:
+# FEAT-163: the pause reason used to be hardcoded at every render site. It is now
+# stored in battles.pause_reason (MySQL is the source of truth, because an admin
+# freeze is expected to outlive the 48h Redis state TTL) and mirrored into the
+# Redis state next to the existing "paused" flag.
+JOIN_REQUEST_PAUSE_REASON = "Рассматривается заявка на присоединение"
+ADMIN_FREEZE_DEFAULT_REASON = "Бой заморожен администратором"
+PAUSE_REASON_MAX_LENGTH = 255
+
+
+async def pause_battle(
+    db: AsyncSession,
+    battle_id: int,
+    reason: str = JOIN_REQUEST_PAUSE_REASON,
+    by_admin: bool = False,
+) -> None:
     """
-    Pause a battle: set is_paused in MySQL, update Redis state
-    (paused flag + remaining_deadline_seconds), remove deadline from ZSET.
+    Pause a battle: set is_paused / pause_reason / paused_by_admin in MySQL,
+    update Redis state (paused flag + pause_reason + remaining_deadline_seconds),
+    remove deadline from ZSET.
     """
     # 1. MySQL: set is_paused = True
     await db.execute(
-        text("UPDATE battles SET is_paused = 1 WHERE id = :bid"),
-        {"bid": battle_id},
+        text(
+            "UPDATE battles SET is_paused = 1, pause_reason = :reason,"
+            " paused_by_admin = :by_admin WHERE id = :bid"
+        ),
+        {"bid": battle_id, "reason": reason, "by_admin": 1 if by_admin else 0},
     )
     await db.commit()
 
     # 2. Redis state: set paused, store remaining deadline seconds
     state = await load_state(battle_id)
     if state:
-        now = datetime.utcnow()
-        deadline_at = datetime.fromisoformat(state["deadline_at"])
-        remaining = max(0, (deadline_at - now).total_seconds())
+        now = utc_now()
+        # Состояние боя могло быть создано до FEAT-161 и нести смещение +03:00 —
+        # parse_deadline приводит обе формы к наивному UTC.
+        if state.get("paused") and state.get("remaining_deadline_seconds") is not None:
+            # Already paused (e.g. an admin freeze upgrading a join-request pause):
+            # deadline_at is stale, so keep the remainder captured the first time.
+            remaining = state["remaining_deadline_seconds"]
+        else:
+            deadline_at = parse_deadline(state.get("deadline_at"))
+            remaining = max(0, (deadline_at - now).total_seconds()) if deadline_at else 0
         state["paused"] = True
+        state["pause_reason"] = reason
         state["remaining_deadline_seconds"] = remaining
         await save_state(battle_id, state)
 
@@ -1621,19 +1680,36 @@ async def pause_battle(db: AsyncSession, battle_id: int) -> None:
         rds_pub = await get_redis_client()
         await rds_pub.publish(
             f"battle:{battle_id}:state_update",
-            json.dumps({"type": "battle_paused", "data": {"is_paused": True, "reason": "Рассматривается заявка на присоединение"}}),
+            json.dumps({"type": "battle_paused", "data": {"is_paused": True, "reason": reason}}),
         )
     except Exception as e:
         logger.error(f"WS publish (battle_paused) failed for battle {battle_id}: {e}")
 
-    logger.info(f"Battle {battle_id} paused")
+    logger.info(f"Battle {battle_id} paused (by_admin={by_admin}): {reason}")
 
 
 async def resume_battle_if_ready(db: AsyncSession, battle_id: int) -> bool:
     """
     Check if there are remaining pending join requests.
     If none, resume the battle. Returns True if resumed.
+
+    FEAT-163: an admin freeze outranks the join-request pause. While
+    battles.paused_by_admin is set this function bails out, so approving or
+    rejecting a join request can no longer silently cancel a freeze. Admin
+    unfreeze clears the flag first and then calls this very function.
     """
+    # FEAT-163: admin freeze wins — do not resume until it is lifted.
+    admin_freeze = await db.execute(
+        text("SELECT paused_by_admin FROM battles WHERE id = :bid"),
+        {"bid": battle_id},
+    )
+    admin_freeze_row = admin_freeze.fetchone()
+    if admin_freeze_row and admin_freeze_row[0]:
+        logger.info(
+            f"Battle {battle_id} stays paused: frozen by admin"
+        )
+        return False
+
     # Check for remaining pending requests
     result = await db.execute(
         text("""
@@ -1648,7 +1724,10 @@ async def resume_battle_if_ready(db: AsyncSession, battle_id: int) -> bool:
 
     # Resume: MySQL
     await db.execute(
-        text("UPDATE battles SET is_paused = 0 WHERE id = :bid"),
+        text(
+            "UPDATE battles SET is_paused = 0, pause_reason = NULL,"
+            " paused_by_admin = 0 WHERE id = :bid"
+        ),
         {"bid": battle_id},
     )
     await db.commit()
@@ -1657,10 +1736,11 @@ async def resume_battle_if_ready(db: AsyncSession, battle_id: int) -> bool:
     state = await load_state(battle_id)
     if state:
         remaining_secs = state.get("remaining_deadline_seconds", 60)
-        now = datetime.utcnow()
+        now = utc_now()
         new_deadline = now + timedelta(seconds=remaining_secs)
 
         state["paused"] = False
+        state["pause_reason"] = None
         state["remaining_deadline_seconds"] = None
         state["deadline_at"] = new_deadline.isoformat()
         await save_state(battle_id, state)
@@ -1669,7 +1749,7 @@ async def resume_battle_if_ready(db: AsyncSession, battle_id: int) -> bool:
         rds = await get_redis_client()
         next_actor = state["next_actor"]
         member = f"{battle_id}:{next_actor}"
-        await rds.zadd(ZSET_DEADLINES, {member: new_deadline.timestamp()})
+        await rds.zadd(ZSET_DEADLINES, {member: deadline_epoch(new_deadline)})
 
     # Notify all participants: "Бой продолжается!"
     participants_result = await db.execute(
@@ -1719,6 +1799,339 @@ async def _auto_reject_pending_join_requests(db: AsyncSession, battle_id: int) -
     await db.commit()
 
 
+async def _finalize_battle(
+    db_session: AsyncSession,
+    battle_id: int,
+    battle_state: Dict,
+    winner_team: int | None,
+    turn_events: List[Dict],
+    turn_number: int,
+    by_timeout: bool = False,
+) -> BattleRewards | None:
+    """End a battle and run every post-battle consequence (FEAT-163 T6).
+
+    Extracted verbatim from `_make_action_core` so the turn-timeout sweeper can
+    reach the *same* ending a killing blow reaches, instead of growing a parallel
+    one. Everything happens in the original order: MySQL status, join-request
+    auto-reject, resource sync, durability sync, final Redis save + 300 s expire,
+    deadline ZSET cleanup, the `battle_finished` event, PvP consequences, PvE
+    rewards, NPC death, battle history, cumulative stats, `save_log` and the two
+    WS publishes.
+
+    `turn_events` is mutated in place (the `battle_finished` event is appended to
+    it), matching what the inlined block did.
+
+    `by_timeout` marks a finish reached through the turn-timeout dropout rather
+    than a killing blow. It deliberately changes nothing today — a timeout is a
+    loss like any other (Architecture Decision 3.11) — and exists only so the
+    distinction is cheap to act on later.
+
+    Returns the PvE rewards payload, or None when there are none.
+    """
+    # Update battle status in MySQL
+    await finish_battle(db_session, battle_id)
+
+    # Auto-reject all pending join requests
+    await _auto_reject_pending_join_requests(db_session, battle_id)
+
+    # Sync final resources (HP, mana, energy, stamina) back to character_attributes DB
+    for pid_str, pdata in battle_state["participants"].items():
+        char_id = pdata["character_id"]
+        try:
+            await db_session.execute(
+                text("""
+                    UPDATE character_attributes
+                    SET current_health = :hp,
+                        current_mana = :mana,
+                        current_energy = :energy,
+                        current_stamina = :stamina
+                    WHERE character_id = :cid
+                """),
+                {
+                    "hp": max(0, int(pdata["hp"])),
+                    "mana": max(0, int(pdata["mana"])),
+                    "energy": max(0, int(pdata["energy"])),
+                    "stamina": max(0, int(pdata["stamina"])),
+                    "cid": char_id,
+                },
+            )
+            await db_session.commit()
+            logger.info(f"Ресурсы персонажа {char_id} синхронизированы после боя")
+        except Exception as e:
+            logger.error(f"Не удалось синхронизировать ресурсы персонажа {char_id}: {e}")
+
+    # Sync equipment durability back to inventory-service (best-effort)
+    for pid_str, pdata in battle_state["participants"].items():
+        equip_dur = pdata.get("equipment_durability", {})
+        entries = []
+        for slot_type, slot_data in equip_dur.items():
+            if slot_data and slot_data.get("max_durability", 0) > 0:
+                entries.append({
+                    "slot_type": slot_type,
+                    "new_durability": slot_data["current_durability"],
+                })
+        if entries:
+            try:
+                await update_durability(pdata["character_id"], entries)
+                logger.info(f"Прочность экипировки персонажа {pdata['character_id']} синхронизирована после боя")
+            except Exception as e:
+                logger.error(f"Failed to sync durability for character {pdata['character_id']}: {e}")
+
+    # Update Redis state one last time with final HP values
+    battle_state["turn_number"] = turn_number
+    await save_state(battle_id, battle_state)
+
+    # Expire Redis state (keep for 5 minutes for final reads, then auto-delete)
+    redis = await get_redis_client()
+    await redis.expire(state_key(battle_id), 300)
+
+    # Clean up deadline entries
+    for pid_str in battle_state["participants"]:
+        await redis.zrem(ZSET_DEADLINES, f"{battle_id}:{pid_str}")
+
+    turn_events.append({
+        "event": "battle_finished",
+        "winner_team": winner_team,
+    })
+
+    # PvP post-battle consequences: training duel → set loser HP to 1
+    if winner_team is not None:
+        try:
+            bt_result = await db_session.execute(
+                text("SELECT battle_type FROM battles WHERE id = :bid"),
+                {"bid": battle_id},
+            )
+            bt_row = bt_result.fetchone()
+            if bt_row and bt_row[0] == "pvp_training":
+                for pid_str, pdata in battle_state["participants"].items():
+                    if pdata["hp"] <= 0 and pdata["team"] != winner_team:
+                        await db_session.execute(
+                            text("UPDATE character_attributes SET current_health = 1 WHERE character_id = :cid"),
+                            {"cid": pdata["character_id"]},
+                        )
+                        await db_session.commit()
+                        logger.info(
+                            f"PvP training: HP персонажа {pdata['character_id']} установлен в 1"
+                        )
+            elif bt_row and bt_row[0] == "pvp_death":
+                for pid_str, pdata in battle_state["participants"].items():
+                    if pdata["hp"] <= 0 and pdata["team"] != winner_team:
+                        loser_char_id = pdata["character_id"]
+                        # Fetch loser's user_id BEFORE unlink (it will be set to NULL)
+                        loser_user_id = None
+                        try:
+                            loser_user_result = await db_session.execute(
+                                text("SELECT user_id FROM characters WHERE id = :cid"),
+                                {"cid": loser_char_id},
+                            )
+                            loser_user_row = loser_user_result.fetchone()
+                            if loser_user_row:
+                                loser_user_id = loser_user_row[0]
+                        except Exception as lookup_err:
+                            logger.error(
+                                f"PvP death: ошибка поиска user_id для персонажа "
+                                f"{loser_char_id}: {lookup_err}"
+                            )
+                        # Unlink loser's character via character-service internal endpoint
+                        try:
+                            async with httpx.AsyncClient(timeout=10.0) as client:
+                                resp = await client.post(
+                                    f"{settings.CHARACTER_SERVICE_URL}/characters/internal/unlink",
+                                    json={"character_id": loser_char_id},
+                                    # FEAT-162 §3.4: /characters/internal/unlink
+                                    # требует X-Internal-Token.
+                                    headers={
+                                        "X-Internal-Token": os.environ.get(
+                                            "INTERNAL_SERVICE_TOKEN", ""
+                                        )
+                                    },
+                                )
+                                if resp.status_code == 200:
+                                    logger.info(
+                                        f"PvP death: персонаж {loser_char_id} отвязан от пользователя"
+                                    )
+                                else:
+                                    logger.error(
+                                        f"PvP death: ошибка отвязки персонажа {loser_char_id}: "
+                                        f"{resp.status_code} - {resp.text}"
+                                    )
+                        except httpx.RequestError as exc:
+                            logger.error(
+                                f"PvP death: не удалось связаться с character-service для отвязки "
+                                f"персонажа {loser_char_id}: {exc}"
+                            )
+                        # Send notification to loser about character loss
+                        if loser_user_id:
+                            try:
+                                await publish_notification(
+                                    target_user_id=loser_user_id,
+                                    message="Ваш персонаж погиб в смертельном бою! Персонаж отвязан от аккаунта.",
+                                    ws_type="pvp_death_character_lost",
+                                    ws_data={"character_id": loser_char_id},
+                                )
+                            except Exception as notify_err:
+                                logger.error(
+                                    f"PvP death: ошибка отправки уведомления для персонажа "
+                                    f"{loser_char_id}: {notify_err}"
+                                )
+                        else:
+                            logger.warning(
+                                f"PvP death: не удалось отправить уведомление — "
+                                f"user_id не найден для персонажа {loser_char_id}"
+                            )
+        except Exception as e:
+            logger.error(f"Ошибка при обработке последствий PvP-боя: {e}")
+
+    # PvE rewards: check if defeated participant is a mob
+    battle_rewards = None
+    if winner_team is not None:
+        battle_rewards = await _distribute_pve_rewards(
+            battle_state, winner_team, turn_events
+        )
+
+    # Store rewards in Redis state so frontend can read them via polling
+    if battle_rewards:
+        battle_state["rewards"] = battle_rewards.dict()
+        await save_state(battle_id, battle_state)
+
+    # NPC death: mark defeated NPCs (not mobs) as dead
+    if winner_team is not None:
+        for pid_str, pdata in battle_state["participants"].items():
+            if pdata["hp"] <= 0 and pdata["team"] != winner_team:
+                defeated_char_id = pdata["character_id"]
+                try:
+                    npc_check = await db_session.execute(
+                        text(
+                            "SELECT is_npc, npc_role FROM characters "
+                            "WHERE id = :cid AND is_npc = 1 AND (npc_role IS NULL OR npc_role != 'mob')"
+                        ),
+                        {"cid": defeated_char_id},
+                    )
+                    npc_row = npc_check.fetchone()
+                    if npc_row:
+                        try:
+                            async with httpx.AsyncClient(timeout=10.0) as client:
+                                resp = await client.put(
+                                    f"{settings.CHARACTER_SERVICE_URL}/characters/internal/npc-status/{defeated_char_id}",
+                                    json={"status": "dead"},
+                                    headers=_internal_token_headers(),
+                                )
+                                if resp.status_code == 200:
+                                    logger.info(
+                                        f"NPC death: NPC {defeated_char_id} помечен как dead"
+                                    )
+                                else:
+                                    logger.error(
+                                        f"NPC death: ошибка обновления статуса NPC {defeated_char_id}: "
+                                        f"{resp.status_code} - {resp.text}"
+                                    )
+                        except httpx.RequestError as exc:
+                            logger.error(
+                                f"NPC death: не удалось связаться с character-service "
+                                f"для NPC {defeated_char_id}: {exc}"
+                            )
+                except Exception as e:
+                    logger.error(f"NPC death: ошибка проверки NPC {defeated_char_id}: {e}")
+
+    # Save battle history to MySQL
+    try:
+        # Query battle_type from DB
+        bh_bt_result = await db_session.execute(
+            text("SELECT battle_type FROM battles WHERE id = :bid"),
+            {"bid": battle_id},
+        )
+        bh_bt_row = bh_bt_result.fetchone()
+        bh_battle_type = bh_bt_row[0] if bh_bt_row else "pve"
+
+        # Get character names from snapshot (MongoDB/Redis) — avoids charset issues with raw SQL
+        names_map = {}
+        try:
+            rds = await get_redis_client()
+            snapshot = await get_cached_snapshot(rds, battle_id)
+            if snapshot is None:
+                snap_doc = await load_snapshot(battle_id)
+                if snap_doc:
+                    snapshot = snap_doc.get("participants", [])
+            if snapshot:
+                for p in snapshot:
+                    names_map[p["character_id"]] = p.get("name", f"Персонаж #{p['character_id']}")
+        except Exception as snap_err:
+            logger.warning(f"[HISTORY] Failed to load snapshot for names: {snap_err}")
+
+        logger.info(f"[HISTORY] names_map from snapshot: {names_map}")
+
+        for pid_str, pdata in battle_state["participants"].items():
+            char_id = pdata["character_id"]
+            char_name = names_map.get(char_id, f"Персонаж #{char_id}")
+            is_winner = (winner_team is not None
+                         and pdata["team"] == winner_team
+                         and pdata["hp"] > 0)
+            result_val = BattleResult.victory if is_winner else BattleResult.defeat
+
+            # Collect opponent info
+            opp_names = []
+            opp_ids = []
+            for other_pid, other_pdata in battle_state["participants"].items():
+                if other_pid != pid_str:
+                    other_id = other_pdata["character_id"]
+                    opp_names.append(names_map.get(other_id, f"Персонаж #{other_id}"))
+                    opp_ids.append(other_id)
+
+            history_entry = BattleHistory(
+                battle_id=battle_id,
+                character_id=char_id,
+                character_name=char_name,
+                opponent_names=opp_names,
+                opponent_character_ids=opp_ids,
+                battle_type=bh_battle_type,
+                result=result_val,
+                finished_at=datetime.utcnow(),
+            )
+            db_session.add(history_entry)
+
+        await db_session.commit()
+        logger.info(f"Battle history saved for battle {battle_id}")
+    except Exception as e:
+        logger.error(f"Failed to save battle history for battle {battle_id}: {e}")
+
+    # --- Cumulative stats tracking (FEAT-078) ---
+    await _track_cumulative_stats(
+        battle_state=battle_state,
+        winner_team=winner_team,
+        battle_type=bh_battle_type,
+        turn_number=turn_number,
+        db_session=db_session,
+    )
+
+    # Save log via Celery
+    save_log.delay(battle_id, turn_number, turn_events)
+
+    # Publish battle_state + battle_finished to WS via Redis Pub/Sub (FEAT-074)
+    try:
+        rds_ws = await get_redis_client()
+        snapshot_ws = await get_cached_snapshot(rds_ws, battle_id)
+        if snapshot_ws is None:
+            snap_doc_ws = await load_snapshot(battle_id)
+            if snap_doc_ws:
+                snapshot_ws = snap_doc_ws["participants"]
+        runtime_ws = _build_runtime(battle_state)
+        # Send final state
+        await rds_ws.publish(
+            f"battle:{battle_id}:state_update",
+            json.dumps({"type": "battle_state", "data": {"snapshot": snapshot_ws, "runtime": runtime_ws}}),
+        )
+        # Send battle_finished event
+        rewards_data = battle_rewards.dict() if battle_rewards else None
+        await rds_ws.publish(
+            f"battle:{battle_id}:state_update",
+            json.dumps({"type": "battle_finished", "data": {"winner_team": winner_team, "rewards": rewards_data}}),
+        )
+    except Exception as e:
+        logger.error(f"WS publish (battle_finished) failed for battle {battle_id}: {e}")
+
+    return battle_rewards
+
+
 async def _make_action_core(
     battle_id: int,
     request: ActionRequest,
@@ -1744,7 +2157,9 @@ async def _make_action_core(
     # 1.1. Check if battle is paused (join request being reviewed)
     # ------------------------------------------------------------------------------
     if battle_state.get("paused"):
-        raise HTTPException(400, "Бой приостановлен — рассматриваются заявки на присоединение")
+        # FEAT-163: tell the player why — a frozen battle is not a join request.
+        pause_detail = battle_state.get("pause_reason") or "рассматриваются заявки на присоединение"
+        raise HTTPException(400, f"Бой приостановлен — {pause_detail}")
 
     # ------------------------------------------------------------------------------
     # 1.5. Ownership check (skipped for internal/autobattle calls)
@@ -2477,8 +2892,7 @@ async def _make_action_core(
     # 10. Записываем ход в БД
     # ------------------------------------------------------------------------------
     new_turn_number = battle_state["turn_number"] + 1
-    moscow_tz = timezone(timedelta(hours=3))
-    started_at = datetime.now(timezone.utc).astimezone(moscow_tz)
+    started_at = utc_now()
     new_deadline = started_at + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
     await write_turn(
         db_session,
@@ -2493,298 +2907,14 @@ async def _make_action_core(
     # 10.5. Если бой завершён — обновляем MySQL и Redis, возвращаем результат
     # ------------------------------------------------------------------------------
     if battle_finished:
-        # Update battle status in MySQL
-        await finish_battle(db_session, battle_id)
-
-        # Auto-reject all pending join requests
-        await _auto_reject_pending_join_requests(db_session, battle_id)
-
-        # Sync final resources (HP, mana, energy, stamina) back to character_attributes DB
-        for pid_str, pdata in battle_state["participants"].items():
-            char_id = pdata["character_id"]
-            try:
-                await db_session.execute(
-                    text("""
-                        UPDATE character_attributes
-                        SET current_health = :hp,
-                            current_mana = :mana,
-                            current_energy = :energy,
-                            current_stamina = :stamina
-                        WHERE character_id = :cid
-                    """),
-                    {
-                        "hp": max(0, int(pdata["hp"])),
-                        "mana": max(0, int(pdata["mana"])),
-                        "energy": max(0, int(pdata["energy"])),
-                        "stamina": max(0, int(pdata["stamina"])),
-                        "cid": char_id,
-                    },
-                )
-                await db_session.commit()
-                logger.info(f"Ресурсы персонажа {char_id} синхронизированы после боя")
-            except Exception as e:
-                logger.error(f"Не удалось синхронизировать ресурсы персонажа {char_id}: {e}")
-
-        # Sync equipment durability back to inventory-service (best-effort)
-        for pid_str, pdata in battle_state["participants"].items():
-            equip_dur = pdata.get("equipment_durability", {})
-            entries = []
-            for slot_type, slot_data in equip_dur.items():
-                if slot_data and slot_data.get("max_durability", 0) > 0:
-                    entries.append({
-                        "slot_type": slot_type,
-                        "new_durability": slot_data["current_durability"],
-                    })
-            if entries:
-                try:
-                    await update_durability(pdata["character_id"], entries)
-                    logger.info(f"Прочность экипировки персонажа {pdata['character_id']} синхронизирована после боя")
-                except Exception as e:
-                    logger.error(f"Failed to sync durability for character {pdata['character_id']}: {e}")
-
-        # Update Redis state one last time with final HP values
-        battle_state["turn_number"] = new_turn_number
-        await save_state(battle_id, battle_state)
-
-        # Expire Redis state (keep for 5 minutes for final reads, then auto-delete)
-        redis = await get_redis_client()
-        await redis.expire(state_key(battle_id), 300)
-
-        # Clean up deadline entries
-        for pid_str in battle_state["participants"]:
-            await redis.zrem(ZSET_DEADLINES, f"{battle_id}:{pid_str}")
-
-        turn_events.append({
-            "event": "battle_finished",
-            "winner_team": winner_team,
-        })
-
-        # PvP post-battle consequences: training duel → set loser HP to 1
-        if winner_team is not None:
-            try:
-                bt_result = await db_session.execute(
-                    text("SELECT battle_type FROM battles WHERE id = :bid"),
-                    {"bid": battle_id},
-                )
-                bt_row = bt_result.fetchone()
-                if bt_row and bt_row[0] == "pvp_training":
-                    for pid_str, pdata in battle_state["participants"].items():
-                        if pdata["hp"] <= 0 and pdata["team"] != winner_team:
-                            await db_session.execute(
-                                text("UPDATE character_attributes SET current_health = 1 WHERE character_id = :cid"),
-                                {"cid": pdata["character_id"]},
-                            )
-                            await db_session.commit()
-                            logger.info(
-                                f"PvP training: HP персонажа {pdata['character_id']} установлен в 1"
-                            )
-                elif bt_row and bt_row[0] == "pvp_death":
-                    for pid_str, pdata in battle_state["participants"].items():
-                        if pdata["hp"] <= 0 and pdata["team"] != winner_team:
-                            loser_char_id = pdata["character_id"]
-                            # Fetch loser's user_id BEFORE unlink (it will be set to NULL)
-                            loser_user_id = None
-                            try:
-                                loser_user_result = await db_session.execute(
-                                    text("SELECT user_id FROM characters WHERE id = :cid"),
-                                    {"cid": loser_char_id},
-                                )
-                                loser_user_row = loser_user_result.fetchone()
-                                if loser_user_row:
-                                    loser_user_id = loser_user_row[0]
-                            except Exception as lookup_err:
-                                logger.error(
-                                    f"PvP death: ошибка поиска user_id для персонажа "
-                                    f"{loser_char_id}: {lookup_err}"
-                                )
-                            # Unlink loser's character via character-service internal endpoint
-                            try:
-                                async with httpx.AsyncClient(timeout=10.0) as client:
-                                    resp = await client.post(
-                                        f"{settings.CHARACTER_SERVICE_URL}/characters/internal/unlink",
-                                        json={"character_id": loser_char_id},
-                                    )
-                                    if resp.status_code == 200:
-                                        logger.info(
-                                            f"PvP death: персонаж {loser_char_id} отвязан от пользователя"
-                                        )
-                                    else:
-                                        logger.error(
-                                            f"PvP death: ошибка отвязки персонажа {loser_char_id}: "
-                                            f"{resp.status_code} - {resp.text}"
-                                        )
-                            except httpx.RequestError as exc:
-                                logger.error(
-                                    f"PvP death: не удалось связаться с character-service для отвязки "
-                                    f"персонажа {loser_char_id}: {exc}"
-                                )
-                            # Send notification to loser about character loss
-                            if loser_user_id:
-                                try:
-                                    await publish_notification(
-                                        target_user_id=loser_user_id,
-                                        message="Ваш персонаж погиб в смертельном бою! Персонаж отвязан от аккаунта.",
-                                        ws_type="pvp_death_character_lost",
-                                        ws_data={"character_id": loser_char_id},
-                                    )
-                                except Exception as notify_err:
-                                    logger.error(
-                                        f"PvP death: ошибка отправки уведомления для персонажа "
-                                        f"{loser_char_id}: {notify_err}"
-                                    )
-                            else:
-                                logger.warning(
-                                    f"PvP death: не удалось отправить уведомление — "
-                                    f"user_id не найден для персонажа {loser_char_id}"
-                                )
-            except Exception as e:
-                logger.error(f"Ошибка при обработке последствий PvP-боя: {e}")
-
-        # PvE rewards: check if defeated participant is a mob
-        battle_rewards = None
-        if winner_team is not None:
-            battle_rewards = await _distribute_pve_rewards(
-                battle_state, winner_team, turn_events
-            )
-
-        # Store rewards in Redis state so frontend can read them via polling
-        if battle_rewards:
-            battle_state["rewards"] = battle_rewards.dict()
-            await save_state(battle_id, battle_state)
-
-        # NPC death: mark defeated NPCs (not mobs) as dead
-        if winner_team is not None:
-            for pid_str, pdata in battle_state["participants"].items():
-                if pdata["hp"] <= 0 and pdata["team"] != winner_team:
-                    defeated_char_id = pdata["character_id"]
-                    try:
-                        npc_check = await db_session.execute(
-                            text(
-                                "SELECT is_npc, npc_role FROM characters "
-                                "WHERE id = :cid AND is_npc = 1 AND (npc_role IS NULL OR npc_role != 'mob')"
-                            ),
-                            {"cid": defeated_char_id},
-                        )
-                        npc_row = npc_check.fetchone()
-                        if npc_row:
-                            try:
-                                async with httpx.AsyncClient(timeout=10.0) as client:
-                                    resp = await client.put(
-                                        f"{settings.CHARACTER_SERVICE_URL}/characters/internal/npc-status/{defeated_char_id}",
-                                        json={"status": "dead"},
-                                    )
-                                    if resp.status_code == 200:
-                                        logger.info(
-                                            f"NPC death: NPC {defeated_char_id} помечен как dead"
-                                        )
-                                    else:
-                                        logger.error(
-                                            f"NPC death: ошибка обновления статуса NPC {defeated_char_id}: "
-                                            f"{resp.status_code} - {resp.text}"
-                                        )
-                            except httpx.RequestError as exc:
-                                logger.error(
-                                    f"NPC death: не удалось связаться с character-service "
-                                    f"для NPC {defeated_char_id}: {exc}"
-                                )
-                    except Exception as e:
-                        logger.error(f"NPC death: ошибка проверки NPC {defeated_char_id}: {e}")
-
-        # Save battle history to MySQL
-        try:
-            # Query battle_type from DB
-            bh_bt_result = await db_session.execute(
-                text("SELECT battle_type FROM battles WHERE id = :bid"),
-                {"bid": battle_id},
-            )
-            bh_bt_row = bh_bt_result.fetchone()
-            bh_battle_type = bh_bt_row[0] if bh_bt_row else "pve"
-
-            # Get character names from snapshot (MongoDB/Redis) — avoids charset issues with raw SQL
-            names_map = {}
-            try:
-                rds = await get_redis_client()
-                snapshot = await get_cached_snapshot(rds, battle_id)
-                if snapshot is None:
-                    snap_doc = await load_snapshot(battle_id)
-                    if snap_doc:
-                        snapshot = snap_doc.get("participants", [])
-                if snapshot:
-                    for p in snapshot:
-                        names_map[p["character_id"]] = p.get("name", f"Персонаж #{p['character_id']}")
-            except Exception as snap_err:
-                logger.warning(f"[HISTORY] Failed to load snapshot for names: {snap_err}")
-
-            logger.info(f"[HISTORY] names_map from snapshot: {names_map}")
-
-            for pid_str, pdata in battle_state["participants"].items():
-                char_id = pdata["character_id"]
-                char_name = names_map.get(char_id, f"Персонаж #{char_id}")
-                is_winner = (winner_team is not None
-                             and pdata["team"] == winner_team
-                             and pdata["hp"] > 0)
-                result_val = BattleResult.victory if is_winner else BattleResult.defeat
-
-                # Collect opponent info
-                opp_names = []
-                opp_ids = []
-                for other_pid, other_pdata in battle_state["participants"].items():
-                    if other_pid != pid_str:
-                        other_id = other_pdata["character_id"]
-                        opp_names.append(names_map.get(other_id, f"Персонаж #{other_id}"))
-                        opp_ids.append(other_id)
-
-                history_entry = BattleHistory(
-                    battle_id=battle_id,
-                    character_id=char_id,
-                    character_name=char_name,
-                    opponent_names=opp_names,
-                    opponent_character_ids=opp_ids,
-                    battle_type=bh_battle_type,
-                    result=result_val,
-                    finished_at=datetime.utcnow(),
-                )
-                db_session.add(history_entry)
-
-            await db_session.commit()
-            logger.info(f"Battle history saved for battle {battle_id}")
-        except Exception as e:
-            logger.error(f"Failed to save battle history for battle {battle_id}: {e}")
-
-        # --- Cumulative stats tracking (FEAT-078) ---
-        await _track_cumulative_stats(
+        battle_rewards = await _finalize_battle(
+            db_session=db_session,
+            battle_id=battle_id,
             battle_state=battle_state,
             winner_team=winner_team,
-            battle_type=bh_battle_type,
+            turn_events=turn_events,
             turn_number=new_turn_number,
-            db_session=db_session,
         )
-
-        # Save log via Celery
-        save_log.delay(battle_id, new_turn_number, turn_events)
-
-        # Publish battle_state + battle_finished to WS via Redis Pub/Sub (FEAT-074)
-        try:
-            rds_ws = await get_redis_client()
-            snapshot_ws = await get_cached_snapshot(rds_ws, battle_id)
-            if snapshot_ws is None:
-                snap_doc_ws = await load_snapshot(battle_id)
-                if snap_doc_ws:
-                    snapshot_ws = snap_doc_ws["participants"]
-            runtime_ws = _build_runtime(battle_state)
-            # Send final state
-            await rds_ws.publish(
-                f"battle:{battle_id}:state_update",
-                json.dumps({"type": "battle_state", "data": {"snapshot": snapshot_ws, "runtime": runtime_ws}}),
-            )
-            # Send battle_finished event
-            rewards_data = battle_rewards.dict() if battle_rewards else None
-            await rds_ws.publish(
-                f"battle:{battle_id}:state_update",
-                json.dumps({"type": "battle_finished", "data": {"winner_team": winner_team, "rewards": rewards_data}}),
-            )
-        except Exception as e:
-            logger.error(f"WS publish (battle_finished) failed for battle {battle_id}: {e}")
 
         return ActionResponse(
             ok=True,
@@ -2823,9 +2953,12 @@ async def _make_action_core(
     await redis.zadd(KEY_BATTLE_TURNS.format(id=battle_id),
                      {str(new_turn_number): 1})
 
+    # ZSET hygiene (FEAT-163): drop the previous actor's deadline member before
+    # arming the next one, otherwise battle:deadlines grows without bound.
+    await redis.zrem(ZSET_DEADLINES, f"{battle_id}:{request.participant_id}")
     await redis.zadd(
         ZSET_DEADLINES,
-        {f"{battle_id}:{next_actor_participant_id}": new_deadline.timestamp()},
+        {f"{battle_id}:{next_actor_participant_id}": deadline_epoch(new_deadline)},
     )
     await redis.publish(
         f"battle:{battle_id}:your_turn", str(next_actor_participant_id)
@@ -3225,8 +3358,7 @@ async def respond_to_pvp_invitation(
     # Initialize Redis state (same pattern as create_battle_endpoint)
     from datetime import timedelta
     first_actor_pid = participant_objs[0].id
-    moscow_tz = timezone(timedelta(hours=3))
-    deadline = datetime.now(timezone.utc).astimezone(moscow_tz) + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
+    deadline = utc_now() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
 
     participants_info = []
     for p in participant_objs:
@@ -3523,8 +3655,7 @@ async def pvp_attack(
     # Initialize Redis state (same pattern as create_battle_endpoint)
     from datetime import timedelta
     first_actor_pid = participant_objs[0].id
-    moscow_tz = timezone(timedelta(hours=3))
-    deadline = datetime.now(timezone.utc).astimezone(moscow_tz) + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
+    deadline = utc_now() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
 
     participants_info = []
     for p in participant_objs:
@@ -3849,25 +3980,24 @@ async def admin_get_battle_state(
     )
 
 
-@router.post("/admin/{battle_id}/force-finish", response_model=AdminForceFinishResponse)
-async def admin_force_finish_battle(
+async def _force_finish_battle(
+    db: AsyncSession,
     battle_id: int,
-    db: AsyncSession = Depends(get_db),
-    _admin: UserRead = Depends(require_permission("battles:manage")),
-):
-    """Force-finish a battle: no winner, no rewards, no PvP consequences."""
+    state: Dict | None,
+    reason: str | None = None,
+) -> None:
+    """Force-finish a battle: no winner, no rewards, no PvP consequences.
 
-    # 1. Validate battle exists and is active
-    battle = await get_battle(db, battle_id)
-    if not battle:
-        raise HTTPException(status_code=404, detail="Бой не найден")
+    Extracted from `admin_force_finish_battle` (FEAT-163 T6) so the turn-timeout
+    sweeper can abandon-finish a battle whose Redis state has expired through the
+    same path the admin button takes. The caller validates the battle and loads
+    `state`; `state=None` means the Redis state is gone, in which case the final
+    resource sync is impossible (there are no resources left to read) and the
+    deadline ZSET members are enumerated from MySQL instead.
 
-    battle_status = battle.status.value if hasattr(battle.status, "value") else str(battle.status)
-    if battle_status in ("finished", "forfeit"):
-        raise HTTPException(status_code=400, detail="Бой уже завершён")
-
-    # 2. Load Redis state (may be None if expired)
-    state = await load_state(battle_id)
+    `reason` is recorded in the service log only; nothing player-facing is emitted
+    here yet.
+    """
 
     # 3. Sync final resources back to character_attributes (if Redis state exists)
     if state:
@@ -3906,10 +4036,25 @@ async def admin_force_finish_battle(
     redis_client = await get_redis_client()
     await redis_client.delete(state_key(battle_id))
 
-    # Clean up deadline ZSET entries
+    # Clean up deadline ZSET entries. When the Redis state has expired the
+    # participant ids are still recoverable from MySQL — without this the
+    # members leak forever, because nothing else ever enumerates them
+    # (FEAT-163 T6).
     if state:
-        for pid_str in state["participants"]:
-            await redis_client.zrem(ZSET_DEADLINES, f"{battle_id}:{pid_str}")
+        participant_ids = [int(pid_str) for pid_str in state["participants"]]
+    else:
+        rows = (await db.execute(
+            text("SELECT id FROM battle_participants WHERE battle_id = :bid"),
+            {"bid": battle_id},
+        )).fetchall()
+        participant_ids = [row[0] for row in rows]
+        logger.info(
+            "Force-finish: Redis state for battle %s is gone; %d participant(s) "
+            "enumerated from MySQL for deadline cleanup",
+            battle_id, len(participant_ids),
+        )
+    for pid in participant_ids:
+        await redis_client.zrem(ZSET_DEADLINES, f"{battle_id}:{pid}")
 
     # Clean up snapshot and turns keys
     await redis_client.delete(f"battle:{battle_id}:snapshot")
@@ -3925,12 +4070,169 @@ async def admin_force_finish_battle(
     # will get 404 on next state fetch and stop acting for this battle.
     # No explicit deregistration needed.
 
+    logger.info("Battle %s force-finished (reason=%s)", battle_id, reason)
+
+
+@router.post("/admin/{battle_id}/force-finish", response_model=AdminForceFinishResponse)
+async def admin_force_finish_battle(
+    battle_id: int,
+    db: AsyncSession = Depends(get_db),
+    _admin: UserRead = Depends(require_permission("battles:manage")),
+):
+    """Force-finish a battle: no winner, no rewards, no PvP consequences."""
+
+    # 1. Validate battle exists and is active
+    battle = await get_battle(db, battle_id)
+    if not battle:
+        raise HTTPException(status_code=404, detail="Бой не найден")
+
+    battle_status = battle.status.value if hasattr(battle.status, "value") else str(battle.status)
+    if battle_status in ("finished", "forfeit"):
+        raise HTTPException(status_code=400, detail="Бой уже завершён")
+
+    # 2. Load Redis state (may be None if expired)
+    state = await load_state(battle_id)
+
+    await _force_finish_battle(db, battle_id, state, reason="Принудительно завершён администратором")
+
     logger.info(f"Battle {battle_id} force-finished by admin {_admin.username}")
 
     return AdminForceFinishResponse(
         ok=True,
         battle_id=battle_id,
         message="Бой принудительно завершён",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin freeze / unfreeze (FEAT-163, 3.12-3.13, 3.15)
+# ---------------------------------------------------------------------------
+def _validate_pause_reason(raw: str | None) -> str:
+    """Strip, reject control characters, fall back to the default reason."""
+    reason = (raw or "").strip()
+    if not reason:
+        return ADMIN_FREEZE_DEFAULT_REASON
+    if any(ch < " " or ch == "" for ch in reason):
+        raise HTTPException(
+            status_code=400,
+            detail="Причина содержит недопустимые символы",
+        )
+    if len(reason) > PAUSE_REASON_MAX_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Причина не должна быть длиннее {PAUSE_REASON_MAX_LENGTH} символов",
+        )
+    return reason
+
+
+async def _notify_participants(db: AsyncSession, battle_id: int, message: str, ws_type: str) -> None:
+    """Notify every non-NPC participant of a battle (non-fatal)."""
+    try:
+        rows = await db.execute(
+            text("""
+                SELECT DISTINCT c.user_id
+                FROM battle_participants bp
+                JOIN characters c ON bp.character_id = c.id
+                WHERE bp.battle_id = :bid AND c.is_npc = 0
+            """),
+            {"bid": battle_id},
+        )
+        for row in rows.fetchall():
+            try:
+                await publish_notification(
+                    target_user_id=row[0],
+                    message=message,
+                    ws_type=ws_type,
+                    ws_data={"battle_id": battle_id},
+                )
+            except Exception as e:
+                logger.error(f"Ошибка уведомления участника боя {battle_id}: {e}")
+    except Exception as e:
+        logger.error(f"Не удалось перечислить участников боя {battle_id}: {e}")
+
+
+@router.post("/admin/{battle_id}/freeze", response_model=AdminFreezeResponse)
+async def admin_freeze_battle(
+    battle_id: int,
+    req: AdminFreezeRequest = Body(default=AdminFreezeRequest()),
+    db: AsyncSession = Depends(get_db),
+    _admin: UserRead = Depends(require_permission("battles:manage")),
+):
+    """Freeze a battle indefinitely with an admin-typed reason."""
+    battle = await get_battle(db, battle_id)
+    if not battle:
+        raise HTTPException(status_code=404, detail="Бой не найден")
+
+    battle_status = battle.status.value if hasattr(battle.status, "value") else str(battle.status)
+    if battle_status not in ("pending", "in_progress"):
+        raise HTTPException(status_code=400, detail="Бой уже завершён")
+
+    reason = _validate_pause_reason(req.reason if req else None)
+
+    # Reuses the existing pause machinery: MySQL flags, Redis state mirror,
+    # ZSET cleanup (the turn timer stops) and the battle_paused WS broadcast.
+    await pause_battle(db, battle_id, reason=reason, by_admin=True)
+
+    await _notify_participants(db, battle_id, reason, "battle_frozen")
+
+    logger.info(f"Battle {battle_id} frozen by admin {_admin.username}: {reason}")
+
+    return AdminFreezeResponse(
+        ok=True,
+        battle_id=battle_id,
+        is_paused=True,
+        reason=reason,
+        message="Бой заморожен",
+    )
+
+
+@router.post("/admin/{battle_id}/unfreeze", response_model=AdminFreezeResponse)
+async def admin_unfreeze_battle(
+    battle_id: int,
+    db: AsyncSession = Depends(get_db),
+    _admin: UserRead = Depends(require_permission("battles:manage")),
+):
+    """Lift an admin freeze, reusing resume_battle_if_ready (no parallel path)."""
+    battle = await get_battle(db, battle_id)
+    if not battle:
+        raise HTTPException(status_code=404, detail="Бой не найден")
+
+    if not battle.is_paused:
+        raise HTTPException(status_code=400, detail="Бой не приостановлен")
+
+    # Clear the admin flag first, then let the existing resume path decide.
+    await db.execute(
+        text("UPDATE battles SET paused_by_admin = 0 WHERE id = :bid"),
+        {"bid": battle_id},
+    )
+    await db.commit()
+
+    resumed = await resume_battle_if_ready(db, battle_id)
+
+    if not resumed:
+        # A join request is still pending: the battle correctly stays paused and
+        # downgrades to the join-request reason. Say so instead of no-opping.
+        await pause_battle(db, battle_id, reason=JOIN_REQUEST_PAUSE_REASON, by_admin=False)
+        logger.info(
+            f"Battle {battle_id} unfrozen by admin {_admin.username}, "
+            f"but stays paused: join request pending"
+        )
+        return AdminFreezeResponse(
+            ok=True,
+            battle_id=battle_id,
+            is_paused=True,
+            reason=JOIN_REQUEST_PAUSE_REASON,
+            message="Бой остаётся на паузе: рассматривается заявка на присоединение",
+        )
+
+    logger.info(f"Battle {battle_id} unfrozen by admin {_admin.username}")
+
+    return AdminFreezeResponse(
+        ok=True,
+        battle_id=battle_id,
+        is_paused=False,
+        reason=None,
+        message="Бой разморожен",
     )
 
 
@@ -4598,12 +4900,17 @@ def _build_runtime(state: dict) -> dict:
                 "max_mana": state["participants"][pid].get("max_mana", 0),
                 "max_energy": state["participants"][pid].get("max_energy", 0),
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
+                # FEAT-163 3.8: additive, defaults to False for pre-deploy states.
+                "dropped_out": bool(state["participants"][pid].get("dropped_out", False)),
             }
             for pid in state["participants"]
         },
         "active_effects": state["active_effects"],
         "is_paused": state.get("paused", False),
-        "paused_reason": "Рассматривается заявка на присоединение" if state.get("paused") else None,
+        # FEAT-163: mirrored into the Redis state by pause_battle().
+        "paused_reason": (
+            state.get("pause_reason") or JOIN_REQUEST_PAUSE_REASON
+        ) if state.get("paused") else None,
         "rewards": state.get("rewards"),
     }
 
@@ -4650,6 +4957,475 @@ async def startup_ws_subscriber():
     """Start the Redis Pub/Sub subscriber as a background task."""
     asyncio.create_task(_redis_state_update_subscriber())
     logger.info("WS state_update subscriber task created")
+
+
+# ===========================================================================
+# Turn-timeout sweeper (FEAT-163 T8)
+# ===========================================================================
+# The deadline the engine writes on every turn advance had no reader at all:
+# a player who walked away left the battle `in_progress` forever, which locks
+# BOTH participants out of movement, RP posts, twelve inventory operations and
+# any new battle. This loop is that missing reader.
+#
+# Rule: whoever misses their turn DROPS OUT. The dropout is expressed as a
+# *defeat* (hp = 0 / defeated / dropped_out) and then handed to the engine's
+# own post-turn resolution, so both business rules fall out with no
+# special-casing - a 1v1 leaves one team alive and `_finalize_battle` runs the
+# ordinary ending, a team battle leaves several teams alive and the turn simply
+# advances past the dropout. There is deliberately no parallel ending here.
+
+# Advisory, cluster-wide: only stops two replicas doing redundant reads.
+# Correctness never rests on it - `container_name:` pins battle-service to one
+# container today, and the atomic ZREM claim below is a guarantee on its own.
+SWEEPER_LEASE_KEY = "battle:deadline_sweeper:lock"
+# Per-tick batch cap: bounds Redis/MySQL load even against a large backlog.
+SWEEPER_BATCH_LIMIT = 50
+# Per-battle mutex TTL (seconds) - layer 2 of the idempotency design.
+TIMEOUT_LOCK_TTL_SECONDS = 60
+# Identifies this process so it can re-acquire (refresh) its own lease.
+_SWEEPER_INSTANCE_ID = uuid.uuid4().hex
+
+TIMEOUT_DROPOUT_MESSAGE = "Вы не сделали ход за отведённое время и выбыли из боя."
+TIMEOUT_ABANDON_REASON = "Бой завершён: истёк срок ожидания хода."
+
+
+def _parse_deadline_member(member: str) -> tuple[int, int] | None:
+    """Parse a `battle:deadlines` member `"{battle_id}:{participant_id}"`.
+
+    Defensive: a corrupted member must never be able to kill the loop, so
+    anything unparsable returns None and the caller drops it.
+    """
+    try:
+        battle_part, pid_part = str(member).rsplit(":", 1)
+        return int(battle_part), int(pid_part)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _battle_timeout_lock_key(battle_id: int) -> str:
+    return f"battle:{battle_id}:timeout:lock"
+
+
+async def _notify_timeout_dropout(
+    db: AsyncSession, battle_id: int, dropped_character_id: int
+) -> None:
+    """Tell the dropout and everyone else in the battle what happened (3.9).
+
+    NPCs are excluded the same way the existing participant notification
+    queries do it. Never fatal: a notification failure must not undo a
+    completed drop.
+    """
+    try:
+        name = await _get_character_name(db, dropped_character_id)
+        rows = await db.execute(
+            text("""
+                SELECT c.id, c.user_id
+                FROM battle_participants bp
+                JOIN characters c ON bp.character_id = c.id
+                WHERE bp.battle_id = :bid AND c.is_npc = 0 AND c.user_id IS NOT NULL
+            """),
+            {"bid": battle_id},
+        )
+        for char_id, user_id in rows.fetchall():
+            if char_id == dropped_character_id:
+                message, ws_type = TIMEOUT_DROPOUT_MESSAGE, "battle_timeout_dropout"
+            else:
+                message = f"{name} не успел сделать ход и выбыл из боя."
+                ws_type = "battle_participant_dropped"
+            try:
+                await publish_notification(
+                    target_user_id=user_id,
+                    message=message,
+                    ws_type=ws_type,
+                    ws_data={"battle_id": battle_id, "character_id": dropped_character_id},
+                )
+            except Exception as exc:
+                logger.error("Timeout notify failed for battle %s: %s", battle_id, exc)
+    except Exception as exc:
+        logger.error("Timeout notify enumeration failed for battle %s: %s", battle_id, exc)
+
+
+async def _abandon_finish_battle(
+    db: AsyncSession, battle_id: int, reason: str = TIMEOUT_ABANDON_REASON
+) -> None:
+    """End a battle whose Redis state is gone (3.6).
+
+    There is no honest way to award a victory after the engine state (HP,
+    teams, effects, turn order) has expired, and nothing left to continue, so
+    the whole battle is abandon-finished through the existing admin
+    force-finish machinery: status `finished`, no winner, no rewards, no PvP
+    consequences, every ZSET member removed (participants enumerated from
+    MySQL, not Redis), everyone unlocked and notified.
+    """
+    await db.execute(
+        text("""
+            UPDATE battle_participants
+               SET dropped_out_at = UTC_TIMESTAMP()
+             WHERE battle_id = :bid AND dropped_out_at IS NULL
+        """),
+        {"bid": battle_id},
+    )
+    await db.commit()
+    await _force_finish_battle(db, battle_id, None, reason=reason)
+    await _notify_participants(db, battle_id, reason, "battle_force_finished")
+    logger.warning("Sweeper: battle %s abandon-finished (%s)", battle_id, reason)
+
+
+async def handle_expired_turn(
+    db: AsyncSession, battle_id: int, participant_id: int
+) -> str:
+    """Drop a participant who missed their turn, then run the ordinary ending.
+
+    Returns a short outcome string (for logs and tests). Every early return is
+    a no-op beyond the ZSET member the caller already removed.
+
+    This is idempotency layer 3: the preconditions are re-read from the
+    authoritative state *inside* the handler, so a second pass - or a pass
+    racing a legitimate move - changes nothing, even if layers 1 and 2 were
+    both bypassed.
+    """
+    battle = await get_battle(db, battle_id)
+    if battle is None:
+        return "no_battle"
+
+    status = battle.status.value if hasattr(battle.status, "value") else str(battle.status)
+    if status != "in_progress":
+        # Stale member of an already-finished battle: cleaned up, nothing else.
+        return "not_in_progress"
+
+    state = await load_state(battle_id)
+    if state is None:
+        # 3.6(a): the member carries both ids, so *who* is recoverable - but the
+        # engine state is not. Abandon-finish the battle.
+        await _abandon_finish_battle(db, battle_id)
+        return "abandoned"
+
+    if state.get("paused") or battle.is_paused:
+        # A freeze owns the ZSET (pause_battle ZREMs every member). Never
+        # interfere with a frozen battle.
+        return "paused"
+
+    participants = state.get("participants", {})
+    pdata = participants.get(str(participant_id))
+    if pdata is None:
+        return "unknown_participant"
+
+    try:
+        next_actor = int(state.get("next_actor"))
+    except (TypeError, ValueError):
+        next_actor = None
+    if next_actor != participant_id:
+        # The player already moved; this member was stale.
+        return "not_current_actor"
+
+    deadline = parse_deadline(state.get("deadline_at"))
+    if deadline is None or deadline > utc_now():
+        # The authoritative state disagrees with the ZSET score - trust the
+        # state. This is exactly what a re-armed deadline produces.
+        return "deadline_not_passed"
+
+    if pdata.get("dropped_out") or pdata["hp"] <= 0:
+        return "already_out"
+
+    # --- the drop itself ----------------------------------------------------
+    pdata["dropped_out"] = True
+    pdata["hp"] = 0
+    pdata["defeated"] = True
+
+    result = await db.execute(
+        text("""
+            UPDATE battle_participants
+               SET dropped_out_at = UTC_TIMESTAMP()
+             WHERE battle_id = :bid AND id = :pid AND dropped_out_at IS NULL
+        """),
+        {"bid": battle_id, "pid": participant_id},
+    )
+    await db.commit()
+    if result.rowcount == 0:
+        # MySQL already had them dropped while the Redis state did not. Not a
+        # double drop (the resolution below is what unlocks everyone), but worth
+        # knowing about.
+        logger.warning(
+            "Sweeper: participant %s of battle %s was already stamped dropped_out_at",
+            participant_id, battle_id,
+        )
+
+    character_id = pdata["character_id"]
+    turn_events: List[Dict] = [
+        {"event": "participant_timed_out", "who": participant_id, "character_id": character_id},
+        {"event": "participant_defeated", "who": participant_id, "hp": 0},
+    ]
+    new_turn_number = int(state.get("turn_number", 0)) + 1
+
+    # Identical to the post-turn check in `_make_action_core`: a team survives
+    # while ANY member has hp > 0.
+    teams_alive = {
+        p.get("team") for p in participants.values() if p["hp"] > 0
+    }
+
+    if len(teams_alive) <= 1:
+        winner_team = next(iter(teams_alive)) if teams_alive else None
+        # The SAME ending a killing blow takes - rewards, history, resource and
+        # durability sync, cumulative stats, Mongo log, WS, ZSET cleanup and
+        # status `finished` (which releases the lock for everyone).
+        await _finalize_battle(
+            db_session=db,
+            battle_id=battle_id,
+            battle_state=state,
+            winner_team=winner_team,
+            turn_events=turn_events,
+            turn_number=new_turn_number,
+            by_timeout=True,
+        )
+        await _notify_timeout_dropout(db, battle_id, character_id)
+        logger.info(
+            "Sweeper: battle %s finished by timeout of participant %s (winner_team=%s)",
+            battle_id, participant_id, winner_team,
+        )
+        return "battle_finished"
+
+    # --- the battle continues without the dropout ---------------------------
+    # Advance along the fixed turn_order, skipping the dead - identical to the
+    # advancement in `_make_action_core`. At least one participant is alive here
+    # (otherwise teams_alive would be empty and we would have finished above).
+    turn_order: List[int] = [int(pid) for pid in state["turn_order"]]
+    current_index = turn_order.index(participant_id) if participant_id in turn_order else 0
+    next_actor_participant_id = participant_id
+    total = len(turn_order)
+    for step in range(1, total + 1):
+        cand = turn_order[(current_index + step) % total]
+        if participants[str(cand)]["hp"] > 0:
+            next_actor_participant_id = cand
+            break
+
+    new_deadline = utc_now() + timedelta(hours=settings.TURN_TIMEOUT_HOURS)
+    state["turn_number"] = new_turn_number
+    state["next_actor"] = next_actor_participant_id
+    state["deadline_at"] = new_deadline.isoformat()
+    await save_state(battle_id, state)
+
+    rds = await get_redis_client()
+    await rds.zadd(
+        ZSET_DEADLINES,
+        {f"{battle_id}:{next_actor_participant_id}": deadline_epoch(new_deadline)},
+    )
+    await rds.publish(f"battle:{battle_id}:your_turn", str(next_actor_participant_id))
+
+    try:
+        snapshot_ws = await get_cached_snapshot(rds, battle_id)
+        if snapshot_ws is None:
+            snap_doc_ws = await load_snapshot(battle_id)
+            if snap_doc_ws:
+                snapshot_ws = snap_doc_ws["participants"]
+        await rds.publish(
+            f"battle:{battle_id}:state_update",
+            json.dumps({
+                "type": "battle_state",
+                "data": {"snapshot": snapshot_ws, "runtime": _build_runtime(state)},
+            }),
+        )
+    except Exception as exc:
+        logger.error("WS publish (timeout dropout) failed for battle %s: %s", battle_id, exc)
+
+    try:
+        save_log.delay(battle_id, new_turn_number, turn_events)
+    except Exception as exc:
+        logger.error("save_log failed for timeout dropout in battle %s: %s", battle_id, exc)
+
+    await _notify_timeout_dropout(db, battle_id, character_id)
+    logger.info(
+        "Sweeper: participant %s dropped out of battle %s; next actor %s",
+        participant_id, battle_id, next_actor_participant_id,
+    )
+    return "participant_dropped"
+
+
+async def _sweep_due_deadlines(db: AsyncSession, rds) -> int:
+    """Claim and handle every deadline that is already in the past."""
+    now_epoch = deadline_epoch(utc_now())
+    due = await rds.zrangebyscore(
+        ZSET_DEADLINES, "-inf", now_epoch,
+        start=0, num=SWEEPER_BATCH_LIMIT, withscores=True,
+    )
+    handled = 0
+    for member, score in due:
+        parsed = _parse_deadline_member(member)
+        if parsed is None:
+            await rds.zrem(ZSET_DEADLINES, member)
+            logger.warning("Sweeper: dropped malformed deadline member %r", member)
+            continue
+        battle_id, participant_id = parsed
+
+        # Idempotency layer 1 - the atomic claim. ZREM reports how many members
+        # it actually removed, so of any number of concurrent passes over this
+        # member exactly one gets 1. This alone prevents a double drop.
+        if await rds.zrem(ZSET_DEADLINES, member) != 1:
+            continue
+
+        # Idempotency layer 2 - per-battle mutex. Serialises the handler against
+        # another pass touching the same battle. Narrowing, not a guarantee (the
+        # player-action path does not take it), which is why layer 3 exists.
+        lock_key = _battle_timeout_lock_key(battle_id)
+        token = uuid.uuid4().hex
+        if not await rds.set(lock_key, token, nx=True, ex=TIMEOUT_LOCK_TTL_SECONDS):
+            logger.info(
+                "Sweeper: battle %s already being handled, skipping member %s",
+                battle_id, member,
+            )
+            continue
+
+        try:
+            outcome = await handle_expired_turn(db, battle_id, participant_id)
+            handled += 1
+            logger.debug("Sweeper: member %s -> %s", member, outcome)
+        except Exception as exc:
+            # Put the member back with its original score so a later tick
+            # retries; layer 3 makes the retry safe even if the handler had
+            # already dropped the participant.
+            logger.error("Sweeper: handling %s failed: %s", member, exc, exc_info=True)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            try:
+                await rds.zadd(ZSET_DEADLINES, {member: score})
+            except Exception:
+                pass
+        finally:
+            try:
+                if await rds.get(lock_key) == token:
+                    await rds.delete(lock_key)
+            except Exception:
+                pass
+    return handled
+
+
+async def _keep_alive_frozen_battles(db: AsyncSession, rds) -> int:
+    """Keep a frozen battle's Redis state alive for as long as the freeze lasts.
+
+    `battle:{id}:state` expires after BATTLE_STATE_TTL_HOURS, but a freeze is
+    meant to last days. If the key expires mid-freeze, `resume_battle_if_ready`
+    guards its whole restore block with `if state:` - so unfreeze would clear
+    `is_paused`, arm no deadline, add no ZSET member and still report success,
+    leaving a battle that is unplayable AND invisible to the sweeper. One small
+    indexed query plus N EXPIREs per tick keeps the freeze working.
+    """
+    rows = (await db.execute(
+        text("SELECT id FROM battles WHERE status = 'in_progress' AND is_paused = 1")
+    )).fetchall()
+    refreshed = 0
+    for (battle_id,) in rows:
+        try:
+            if await rds.expire(state_key(battle_id), STATE_TTL_HOURS * 3600):
+                refreshed += 1
+        except Exception as exc:
+            logger.error("Sweeper: keep-alive failed for battle %s: %s", battle_id, exc)
+    if refreshed:
+        logger.debug("Sweeper: refreshed state TTL for %d frozen battle(s)", refreshed)
+    return refreshed
+
+
+async def _reconcile_stale_battles(db: AsyncSession, rds) -> int:
+    """Low-frequency MySQL pass for battles with NO ZSET member at all (3.6b).
+
+    A ZSET-keyed sweeper is structurally blind to a battle that was never
+    re-armed - which is the state the battles already wedged in production are
+    in. Two independent guards keep a healthy battle safe: age AND a missing
+    Redis state key (a live battle rewrites that key on every turn).
+
+    `AND is_paused = 0` is load-bearing, not cosmetic: a pause writes raw SQL,
+    so it does NOT bump `updated_at` (no ORM onupdate, no MySQL
+    ON UPDATE CURRENT_TIMESTAMP), and after the state TTL a week-old freeze
+    matches every other condition here. Without this clause the pass meant to
+    rescue orphans would destroy legitimately frozen battles.
+    """
+    rows = (await db.execute(
+        text("""
+            SELECT id FROM battles
+             WHERE status = 'in_progress'
+               AND is_paused = 0
+               AND updated_at < UTC_TIMESTAMP() - INTERVAL :ttl HOUR
+        """),
+        {"ttl": STATE_TTL_HOURS},
+    )).fetchall()
+    recovered = 0
+    for (battle_id,) in rows:
+        try:
+            if await rds.exists(state_key(battle_id)):
+                continue  # still alive, just quiet
+            await _abandon_finish_battle(db, battle_id)
+            recovered += 1
+        except Exception as exc:
+            logger.error("Sweeper: reconciliation of battle %s failed: %s", battle_id, exc)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+    if recovered:
+        logger.warning("Sweeper: reconciliation recovered %d wedged battle(s)", recovered)
+    return recovered
+
+
+async def _acquire_sweeper_lease(rds, ttl: int) -> bool:
+    """Advisory cluster-wide lease. Re-acquires our own lease on later ticks."""
+    if await rds.set(SWEEPER_LEASE_KEY, _SWEEPER_INSTANCE_ID, nx=True, ex=ttl):
+        return True
+    holder = await rds.get(SWEEPER_LEASE_KEY)
+    if holder == _SWEEPER_INSTANCE_ID:
+        await rds.expire(SWEEPER_LEASE_KEY, ttl)
+        return True
+    return False
+
+
+async def _deadline_sweeper_tick(tick: int) -> Dict[str, int]:
+    """One pass: deadlines, frozen keep-alive, and (rarely) reconciliation."""
+    rds = await get_redis_client()
+    interval = max(1, settings.BATTLE_TIMEOUT_SWEEP_INTERVAL_SECONDS)
+    if not await _acquire_sweeper_lease(rds, interval * 2):
+        return {"skipped": 1}
+
+    stats: Dict[str, int] = {}
+    async with AsyncSessionLocal() as db:
+        stats["deadlines"] = await _sweep_due_deadlines(db, rds)
+        stats["frozen_refreshed"] = await _keep_alive_frozen_battles(db, rds)
+        reconcile_every = max(1, settings.BATTLE_TIMEOUT_RECONCILE_EVERY)
+        if tick % reconcile_every == 0:
+            stats["reconciled"] = await _reconcile_stale_battles(db, rds)
+    return stats
+
+
+async def _deadline_sweeper_loop() -> None:
+    """Never-die loop: a sweeper that dies silently reproduces the bug it fixes."""
+    interval = max(1, settings.BATTLE_TIMEOUT_SWEEP_INTERVAL_SECONDS)
+    logger.info(
+        "Turn-timeout sweeper started (interval=%ss, reconcile every %s ticks, "
+        "timeout=%sh, state TTL=%sh)",
+        interval, settings.BATTLE_TIMEOUT_RECONCILE_EVERY,
+        settings.TURN_TIMEOUT_HOURS, STATE_TTL_HOURS,
+    )
+    tick = 0
+    while True:
+        try:
+            await _deadline_sweeper_tick(tick)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Turn-timeout sweeper tick failed: %s", exc, exc_info=True)
+        tick += 1
+        await asyncio.sleep(interval)
+
+
+@app.on_event("startup")
+async def startup_deadline_sweeper() -> None:
+    """Start the turn-timeout sweeper, unless the kill switch is off."""
+    if not settings.BATTLE_TIMEOUT_SWEEPER_ENABLED:
+        logger.warning(
+            "Turn-timeout sweeper disabled (BATTLE_TIMEOUT_SWEEPER_ENABLED=0)"
+        )
+        return
+    asyncio.create_task(_deadline_sweeper_loop())
+    logger.info("Turn-timeout sweeper task created")
+
 
 
 @app.on_event("startup")

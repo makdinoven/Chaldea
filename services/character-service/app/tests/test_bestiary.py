@@ -16,6 +16,14 @@ import database
 import crud
 from main import app, get_db
 
+import auth_http
+
+# FEAT-162 §3.4: these /characters/internal/ routes now require the
+# X-Internal-Token header. Pin the module constant so the suite does not depend
+# on INTERNAL_SERVICE_TOKEN being set in the environment.
+auth_http.INTERNAL_SERVICE_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -363,6 +371,7 @@ class TestRecordMobKillEndpoint:
         resp = bestiary_client.post(
             "/characters/internal/record-mob-kill",
             json={"character_id": 10, "mob_character_id": 700},
+            headers=INTERNAL_HEADERS,
         )
 
         assert resp.status_code == 200
@@ -375,6 +384,7 @@ class TestRecordMobKillEndpoint:
         resp = bestiary_client.post(
             "/characters/internal/record-mob-kill",
             json={"character_id": 10, "mob_character_id": 99999},
+            headers=INTERNAL_HEADERS,
         )
 
         assert resp.status_code == 404
@@ -392,6 +402,7 @@ class TestRecordMobKillEndpoint:
         resp1 = bestiary_client.post(
             "/characters/internal/record-mob-kill",
             json={"character_id": 20, "mob_character_id": 800},
+            headers=INTERNAL_HEADERS,
         )
         assert resp1.status_code == 200
         assert resp1.json()["already_recorded"] is False
@@ -400,6 +411,7 @@ class TestRecordMobKillEndpoint:
         resp2 = bestiary_client.post(
             "/characters/internal/record-mob-kill",
             json={"character_id": 20, "mob_character_id": 800},
+            headers=INTERNAL_HEADERS,
         )
         assert resp2.status_code == 200
         assert resp2.json()["already_recorded"] is True
@@ -409,6 +421,7 @@ class TestRecordMobKillEndpoint:
         resp = bestiary_client.post(
             "/characters/internal/record-mob-kill",
             json={"character_id": 10},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 422
 

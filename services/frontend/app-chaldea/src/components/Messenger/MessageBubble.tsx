@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import type { PrivateMessage } from '../../types/messenger';
 import AvatarWithFrame from '../common/AvatarWithFrame';
+import { parseServerDate } from '../../utils/serverDate';
 
 interface MessageBubbleProps {
   message: PrivateMessage;
@@ -28,7 +29,8 @@ const renderContent = (text: string) =>
 
 const formatTime = (dateStr: string): string => {
   try {
-    const date = new Date(dateStr);
+    const date = parseServerDate(dateStr);
+    if (!date) return '';
     const hours = date.getHours().toString().padStart(2, '0');
     const minutes = date.getMinutes().toString().padStart(2, '0');
     return `${hours}:${minutes}`;

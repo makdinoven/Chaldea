@@ -296,8 +296,14 @@ class TestUpdateUsername:
 
 class TestGetUserCharacters:
 
+    # `_fetch_character_post_stats` must be mocked too: unmocked it makes a real
+    # HTTP call to locations-service, so the assertion below depends on whatever
+    # posts happen to exist in the developer's database (it read 3 where 0 was
+    # expected). In CI the service is absent, the call fails and the count falls
+    # back to 0 — which is why this only ever failed locally.
+    @patch("main._fetch_character_post_stats", new_callable=AsyncMock, return_value={})
     @patch("main._fetch_character_short", new_callable=AsyncMock)
-    def test_get_user_characters_success(self, mock_fetch, client, db_session):
+    def test_get_user_characters_success(self, mock_fetch, mock_post_stats, client, db_session):
         """Mock character-service response and verify character list."""
         user = _make_user(db_session)
 

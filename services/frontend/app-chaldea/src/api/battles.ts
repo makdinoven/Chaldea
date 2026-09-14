@@ -273,3 +273,47 @@ export const rejectPvpRequest = async (requestId: number): Promise<{ detail: str
   const { data } = await axios.post(`/battles/admin/pvp-requests/${requestId}/reject`);
   return data;
 };
+
+// --- Admin freeze / unfreeze (FEAT-163) ---
+
+/** Response of both POST /battles/admin/{id}/freeze and .../unfreeze. */
+export interface AdminFreezeResponse {
+  ok: boolean;
+  battle_id: number;
+  /** Authoritative state after the call — unfreeze can honestly report `true`
+   *  when a join request is still pending and the battle stays paused. */
+  is_paused: boolean;
+  reason: string | null;
+  message: string;
+}
+
+/**
+ * Freeze a battle indefinitely. `reason` is optional: the backend strips it,
+ * caps it at 255 chars and falls back to «Бой заморожен администратором».
+ * Requires the `battles:manage` permission.
+ */
+export const freezeBattle = async (
+  battleId: number,
+  reason?: string,
+): Promise<AdminFreezeResponse> => {
+  const trimmed = reason?.trim();
+  const { data } = await axios.post<AdminFreezeResponse>(
+    `/battles/admin/${battleId}/freeze`,
+    { reason: trimmed ? trimmed : null },
+  );
+  return data;
+};
+
+/**
+ * Lift an admin freeze. Restores the *remaining* turn time, not a fresh 24 h.
+ * A 200 with `is_paused: true` is not an error — it means a join request is
+ * still pending and the battle stays paused; show `message` as information.
+ */
+export const unfreezeBattle = async (
+  battleId: number,
+): Promise<AdminFreezeResponse> => {
+  const { data } = await axios.post<AdminFreezeResponse>(
+    `/battles/admin/${battleId}/unfreeze`,
+  );
+  return data;
+};

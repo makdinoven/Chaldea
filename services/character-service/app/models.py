@@ -78,7 +78,15 @@ class Character(Base):
     # NULL = персонаж создан до фичи, паспорт реконструирует пресет подрасы.
     starting_attributes = Column(JSON, nullable=True)
 
-    titles = relationship("CharacterTitle", back_populates="character")
+    # character_titles.character_id входит в составной первичный ключ, поэтому
+    # ORM по умолчанию пытается занулить его при удалении персонажа и падает с
+    # AssertionError. delete-orphan заставляет ORM удалять строки связи явно,
+    # а ON DELETE CASCADE на FK страхует удаления в обход ORM (raw SQL).
+    titles = relationship(
+        "CharacterTitle",
+        back_populates="character",
+        cascade="all, delete-orphan",
+    )
     current_title = relationship("Title")
 
 
@@ -145,7 +153,7 @@ class Title(Base):
 class CharacterTitle(Base):
     __tablename__ = "character_titles"
 
-    character_id = Column(Integer, ForeignKey("characters.id"), primary_key=True)
+    character_id = Column(Integer, ForeignKey("characters.id", ondelete="CASCADE"), primary_key=True)
     title_id = Column(Integer, ForeignKey("titles.id_title"), primary_key=True)
     is_custom = Column(Boolean, nullable=False, default=False, server_default='0')
 
