@@ -2647,6 +2647,8 @@ async def update_clickable_zone(session: AsyncSession, zone_id: int, data: Click
     update_data = data.dict(exclude_unset=True)
     if "zone_data" in update_data and update_data["zone_data"] is not None:
         update_data["zone_data"] = [point.dict() for point in data.zone_data]
+        # The exact outline was cut from the old shape; photo-service recomputes it
+        db_zone.precise_path = None
 
     for field, value in update_data.items():
         setattr(db_zone, field, value)
@@ -2674,6 +2676,84 @@ async def get_clickable_zones_by_parent(session: AsyncSession, parent_type: str,
         )
     )
     return result.scalars().all()
+
+
+# -------------------------------
+#   RECOMMENDED LEVEL RANGES (map cards)
+# -------------------------------
+
+LEVEL_TARGET_TYPES = ("area", "country", "region")
+# Level 1 is the default for locations nobody has set a level for: it means "not set"
+UNSET_RECOMMENDED_LEVEL = 1
+
+
+async def auto_level_ranges(
+    session: AsyncSession, target_type: str, target_ids: List[int],
+) -> Dict[int, Tuple[Optional[int], Optional[int]]]:
+    """min/max recommended_level of all locations inside each target.
+
+    A location belongs to a region directly (region_id) or through its district.
+    Locations at UNSET_RECOMMENDED_LEVEL are ignored.
+    """
+    if not target_ids or target_type not in LEVEL_TARGET_TYPES:
+        return {}
+    Location, District, Region, Country = models.Location, models.District, models.Region, models.Country
+    region_of_location = sa_func.coalesce(Location.region_id, District.region_id)
+
+    query = select().select_from(Location).outerjoin(District, Location.district_id == District.id)
+    if target_type == "region":
+        key = region_of_location
+    else:
+        query = query.join(Region, Region.id == region_of_location)
+        if target_type == "country":
+            key = Region.country_id
+        else:
+            query = query.join(Country, Country.id == Region.country_id)
+            key = Country.area_id
+
+    query = (
+        query.add_columns(key, sa_func.min(Location.recommended_level), sa_func.max(Location.recommended_level))
+        .where(key.in_(target_ids), Location.recommended_level > UNSET_RECOMMENDED_LEVEL)
+        .group_by(key)
+    )
+    rows = (await session.execute(query)).all()
+    return {row[0]: (row[1], row[2]) for row in rows}
+
+
+async def manual_level_ranges(
+    session: AsyncSession, target_type: str, target_ids: List[int],
+) -> Dict[int, Tuple[Optional[int], Optional[int]]]:
+    model = {"country": models.Country, "region": models.Region}.get(target_type)
+    if model is None or not target_ids:
+        return {}
+    rows = (await session.execute(
+        select(model.id, model.recommended_level_min, model.recommended_level_max).where(model.id.in_(target_ids))
+    )).all()
+    return {row[0]: (row[1], row[2]) for row in rows}
+
+
+async def level_ranges_for_targets(session: AsyncSession, targets) -> Dict[Tuple[str, int], Optional[dict]]:
+    """Effective range per (target_type, target_id): a manual bound wins over the computed one."""
+    by_type: Dict[str, List[int]] = {}
+    for target_type, target_id in targets:
+        by_type.setdefault(target_type, []).append(target_id)
+
+    result: Dict[Tuple[str, int], Optional[dict]] = {}
+    for target_type, ids in by_type.items():
+        ids = sorted(set(ids))
+        auto = await auto_level_ranges(session, target_type, ids)
+        manual = await manual_level_ranges(session, target_type, ids)
+        for target_id in ids:
+            auto_min, auto_max = auto.get(target_id, (None, None))
+            manual_min, manual_max = manual.get(target_id, (None, None))
+            low = manual_min if manual_min is not None else auto_min
+            high = manual_max if manual_max is not None else auto_max
+            result[(target_type, target_id)] = None if low is None and high is None else {
+                "min": low,
+                "max": high,
+                "is_manual": manual_min is not None or manual_max is not None,
+            }
+    return result
 
 
 # -------------------------------

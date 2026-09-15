@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from models import (
     User, Character, Area, Country, Region, District,
     Location, Skill, SkillRank, Item, GameRule, Race, Subrace,
-    MobTemplate, Recipe, Conversation, ConversationParticipant,
+    MobTemplate, Recipe, Conversation, ConversationParticipant, ClickableZone,
 )
 
 
@@ -44,6 +44,28 @@ def update_area_map_image(db: Session, area_id: int, map_url: str):
 
 
 # 1) Обновляем map_image_url в таблице Countries
+MAP_OUTLINE_PARENTS = {"area": Area, "country": Country}
+
+
+def get_map_parent(db: Session, parent_type: str, parent_id: int):
+    """Area or Country row owning a map with clickable zones, or None."""
+    model = MAP_OUTLINE_PARENTS.get(parent_type)
+    return db.query(model).filter(model.id == parent_id).first() if model else None
+
+
+def get_clickable_zone(db: Session, zone_id: int):
+    return db.query(ClickableZone).filter(ClickableZone.id == zone_id).first()
+
+
+def get_clickable_zones(db: Session, parent_type: str, parent_id: int):
+    return (
+        db.query(ClickableZone)
+        .filter(ClickableZone.parent_type == parent_type, ClickableZone.parent_id == parent_id)
+        .order_by(ClickableZone.id)
+        .all()
+    )
+
+
 def update_country_map_image(db: Session, country_id: int, map_url: str):
     country = db.query(Country).filter(Country.id == country_id).first()
     if country:

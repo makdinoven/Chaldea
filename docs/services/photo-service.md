@@ -30,6 +30,9 @@ photo-service/
 | POST | `/photo/character_avatar_preview` | Превью аватара персонажа |
 | POST | `/photo/user_avatar_preview` | Превью аватара пользователя |
 | POST | `/photo/change_country_map` | Карта страны |
+| GET | `/photo/map_outlines/settings/{area\|country}/{id}` | Сохранённые образцы воды и чувствительность карты (`locations:update`) |
+| POST | `/photo/map_outlines/preview` | Превью маски суши по образцам воды (`map_outlines.py`, numpy + OpenCV) |
+| POST | `/photo/map_outlines/apply` | Сохранить настройки и пересчитать `ClickableZones.precise_path` всех зон карты: грубый многоугольник ∩ суша → SVG-путь с островами. После загрузки новой карты области/страны пересчёт идёт сам по сохранённым настройкам (при сбое в ответе `outlines_warning`) |
 | POST | `/photo/change_region_map` | Карта региона |
 | POST | `/photo/change_region_image` | Изображение региона |
 | POST | `/photo/change_district_image` | Изображение района |

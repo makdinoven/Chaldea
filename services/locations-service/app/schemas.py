@@ -1,3 +1,4 @@
+import json
 from pydantic import BaseModel, Field, validator
 from typing import Optional, List, Literal, Dict, Any
 from datetime import datetime
@@ -19,7 +20,33 @@ class CountryCreate(CountryBase):
     x: Optional[float] = None
     y: Optional[float] = None
 
-class CountryUpdate(BaseModel):
+# Level 1 means "not set" (see crud.UNSET_RECOMMENDED_LEVEL), so a manual bound starts at 2
+LEVEL_BOUND_MIN = 2
+LEVEL_BOUND_MAX = 999
+
+
+class RecommendedLevelOverride(BaseModel):
+    """Manual recommended level range; a None bound is computed from the locations inside."""
+    recommended_level_min: Optional[int] = None
+    recommended_level_max: Optional[int] = None
+
+    @validator("recommended_level_min", "recommended_level_max")
+    def _bound_in_range(cls, v):
+        if v is not None and not LEVEL_BOUND_MIN <= v <= LEVEL_BOUND_MAX:
+            raise ValueError(
+                f"Рекомендуемый уровень — от {LEVEL_BOUND_MIN} до {LEVEL_BOUND_MAX} (пусто — автоматически)"
+            )
+        return v
+
+    @validator("recommended_level_max")
+    def _min_not_above_max(cls, v, values):
+        low = values.get("recommended_level_min")
+        if v is not None and low is not None and low > v:
+            raise ValueError("Минимальный рекомендуемый уровень не может быть больше максимального")
+        return v
+
+
+class CountryUpdate(RecommendedLevelOverride):
     name: Optional[str] = None
     description: Optional[str] = None
     leader_id: Optional[int] = None
@@ -41,6 +68,8 @@ class CountryRead(BaseModel):
     x: Optional[float] = None
     y: Optional[float] = None
     is_hidden: bool = False
+    recommended_level_min: Optional[int] = None
+    recommended_level_max: Optional[int] = None
 
     @validator('is_hidden', pre=True, always=True)
     def _default_is_hidden(cls, v):
@@ -216,7 +245,7 @@ class RegionCreate(BaseModel):
     map_image_url: Optional[str] = None
     image_url: Optional[str] = None
 
-class RegionUpdate(BaseModel):
+class RegionUpdate(RecommendedLevelOverride):
     name: Optional[str] = None
     description: Optional[str] = None
     country_id: Optional[int] = None
@@ -238,6 +267,8 @@ class RegionUpdateResponse(BaseModel):
     leader_id: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
+    recommended_level_min: Optional[int] = None
+    recommended_level_max: Optional[int] = None
 
     class Config:
         orm_mode = True
@@ -492,6 +523,19 @@ class ClickableZoneUpdate(BaseModel):
     label: Optional[str] = None
     stroke_color: Optional[str] = None
 
+class TargetLevel(BaseModel):
+    min: Optional[int] = None
+    max: Optional[int] = None
+    is_manual: bool = False
+
+
+class RecommendedLevelInfo(BaseModel):
+    auto_min: Optional[int] = None
+    auto_max: Optional[int] = None
+    manual_min: Optional[int] = None
+    manual_max: Optional[int] = None
+
+
 class ClickableZoneRead(BaseModel):
     id: int
     parent_type: str
@@ -501,6 +545,15 @@ class ClickableZoneRead(BaseModel):
     zone_data: list
     label: Optional[str] = None
     stroke_color: Optional[str] = None
+    precise_path: Optional[str] = None
+    land_settings: Optional[dict] = None
+    # Recommended level range of the target, attached by the zones route
+    target_level: Optional[TargetLevel] = None
+
+    @validator("land_settings", pre=True)
+    def _parse_land_settings(cls, v):
+        # Stored as JSON text by photo-service
+        return json.loads(v) if isinstance(v, str) else v
 
     class Config:
         orm_mode = True

@@ -26,6 +26,13 @@ def _mock_response(status_code: int, json_data: dict = None):
     return resp
 
 
+@pytest.fixture(autouse=True)
+def _no_level_lookup():
+    """The zones route also looks up target level ranges; the DB here is a mock."""
+    with patch("crud.level_ranges_for_targets", new_callable=AsyncMock, return_value={}):
+        yield
+
+
 ADMIN_HEADERS = {"Authorization": "Bearer admin-token"}
 
 ADMIN_USER_RESPONSE = {
@@ -52,6 +59,8 @@ def _make_zone(zone_id=1, parent_type="area", parent_id=1,
     zone.zone_data = zone_data or [{"x": 0.1, "y": 0.2}, {"x": 0.3, "y": 0.4}]
     zone.label = label
     zone.stroke_color = stroke_color
+    zone.precise_path = None
+    zone.land_settings = None
     return zone
 
 

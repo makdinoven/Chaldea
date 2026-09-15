@@ -4,7 +4,11 @@ import time
 import traceback
 from uuid import uuid4
 
-from typing import Optional
+import json
+import logging
+from typing import List, Literal, Optional
+
+from pydantic import BaseModel, confloat, conint, conlist
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends
 from sqlalchemy.orm import Session
@@ -23,7 +27,9 @@ from crud import (
     get_district_map_icon_url, get_location_map_icon_url,
     update_conversation_avatar, get_conversation_avatar,
     is_conversation_participant, get_conversation_type, get_conversation_created_by,
+    get_map_parent, get_clickable_zones, get_clickable_zone,
 )
+import map_outlines
 from utils import (
     convert_to_webp, generate_unique_filename, upload_file_to_s3, delete_s3_file, validate_image_mime,
     normalize_orientation, crop_image, download_s3_file,
@@ -176,6 +182,187 @@ async def change_mob_avatar(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+logger = logging.getLogger("photo-service")
+
+
+# ---------------------------------------------------------------------------
+# Precise coastline outlines for clickable map zones (areas and countries)
+# ---------------------------------------------------------------------------
+
+class MapPoint(BaseModel):
+    x: confloat(ge=0, le=100)
+    y: confloat(ge=0, le=100)
+
+
+class MapOutlineRequest(BaseModel):
+    parent_type: Literal["area", "country"]
+    parent_id: conint(ge=1)
+    samples: conlist(MapPoint, min_items=1, max_items=8)
+    tolerance: confloat(ge=1, le=60) = 18
+    # Set = work on this one zone and store the settings on it instead of the map
+    zone_id: Optional[conint(ge=1)] = None
+
+
+def _load_map_image(parent):
+    if not parent.map_image_url:
+        raise HTTPException(status_code=404, detail="У карты нет изображения")
+    return map_outlines.decode_image(download_s3_file(parent.map_image_url))
+
+
+def _zone_points(zone):
+    return [(p["x"], p["y"]) for p in (zone.zone_data or [])]
+
+
+def _settings_land(img, settings: dict, cache: dict):
+    """Land mask for a settings dict, computed once per distinct settings."""
+    key = json.dumps(settings, sort_keys=True)
+    if key not in cache:
+        samples = [(p["x"], p["y"]) for p in settings["samples"]]
+        cache[key] = map_outlines.land_mask(img, samples, settings["tolerance"])
+    return cache[key]
+
+
+def _get_zone_of_map(db: Session, zone_id: int, parent_type: str, parent_id: int):
+    zone = get_clickable_zone(db, zone_id)
+    if zone is None or zone.parent_type != parent_type or zone.parent_id != parent_id:
+        raise HTTPException(status_code=404, detail="Зона не найдена на этой карте")
+    return zone
+
+
+def _recompute_zone_outlines(db: Session, parent, parent_type: str, parent_id: int, zones=None):
+    """Recompute precise_path of zones (all of the map by default). A zone uses its own
+    land_settings when it has them, otherwise the map's; with neither it is left alone.
+    Returns (updated count, ids of zones where no land was found)."""
+    map_settings = json.loads(parent.map_land_settings) if parent.map_land_settings else None
+    zones = get_clickable_zones(db, parent_type, parent_id) if zones is None else zones
+    if not any(z.land_settings for z in zones) and map_settings is None:
+        return 0, []
+
+    img = _load_map_image(parent)
+    cache: dict = {}
+    updated, empty = 0, []
+    for zone in zones:
+        settings = json.loads(zone.land_settings) if zone.land_settings else map_settings
+        if settings is None:
+            continue
+        zone.precise_path = map_outlines.zone_path(_settings_land(img, settings, cache), _zone_points(zone))
+        if zone.precise_path:
+            updated += 1
+        else:
+            empty.append(zone.id)
+    return updated, empty
+
+
+def _refresh_outlines_after_map_upload(db: Session, parent_type: str, parent_id: int) -> Optional[str]:
+    """A new map image makes old outlines wrong: recompute with the saved settings.
+    Returns a warning for the response if that failed (the upload itself succeeded)."""
+    parent = get_map_parent(db, parent_type, parent_id)
+    if parent is None:
+        return None
+    try:
+        _recompute_zone_outlines(db, parent, parent_type, parent_id)
+        db.commit()
+        return None
+    except Exception as e:
+        db.rollback()
+        logger.error("Outline recompute failed for %s %s: %s", parent_type, parent_id, e)
+        return "Карта загружена, но контуры по берегу пересчитать не удалось — примените их заново в редакторе зон"
+
+
+@app.get("/photo/map_outlines/settings/{parent_type}/{parent_id}")
+def get_map_outline_settings(
+    parent_type: Literal["area", "country"],
+    parent_id: int,
+    current_user=Depends(require_permission("locations:update")),
+    db: Session = Depends(get_db),
+):
+    parent = get_map_parent(db, parent_type, parent_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Карта не найдена")
+    return json.loads(parent.map_land_settings) if parent.map_land_settings else None
+
+
+@app.post("/photo/map_outlines/preview")
+def preview_map_outlines(
+    body: MapOutlineRequest,
+    current_user=Depends(require_permission("locations:update")),
+    db: Session = Depends(get_db),
+):
+    """Show which pixels count as land for the given water samples (inside one zone if zone_id is set)."""
+    parent = get_map_parent(db, body.parent_type, body.parent_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Карта не найдена")
+    zone = _get_zone_of_map(db, body.zone_id, body.parent_type, body.parent_id) if body.zone_id else None
+    try:
+        img = _load_map_image(parent)
+        land = map_outlines.land_mask(img, [(p.x, p.y) for p in body.samples], body.tolerance)
+        if zone is not None:
+            land = map_outlines.restrict_to_zone(land, _zone_points(zone))
+        mask_png, land_ratio = map_outlines.preview_png(land)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    height, width = land.shape[:2]
+    return {"mask_png": mask_png, "width": width, "height": height, "land_ratio": round(land_ratio, 4)}
+
+
+@app.post("/photo/map_outlines/apply")
+def apply_map_outlines(
+    body: MapOutlineRequest,
+    current_user=Depends(require_permission("locations:update")),
+    db: Session = Depends(get_db),
+):
+    """Save land settings and recompute exact outlines: for the whole map, or for one zone
+    (then the settings become that zone's own)."""
+    parent = get_map_parent(db, body.parent_type, body.parent_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Карта не найдена")
+    settings = json.dumps({"samples": [p.dict() for p in body.samples], "tolerance": body.tolerance})
+    try:
+        if body.zone_id:
+            zone = _get_zone_of_map(db, body.zone_id, body.parent_type, body.parent_id)
+            zone.land_settings = settings
+            updated, empty = _recompute_zone_outlines(db, parent, body.parent_type, body.parent_id, zones=[zone])
+        else:
+            parent.map_land_settings = settings
+            updated, empty = _recompute_zone_outlines(db, parent, body.parent_type, body.parent_id)
+    except HTTPException:
+        db.rollback()
+        raise
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    db.commit()
+    return {"zones_updated": updated, "zones_empty": empty}
+
+
+@app.delete("/photo/map_outlines/zone/{zone_id}/settings")
+def reset_zone_outline_settings(
+    zone_id: int,
+    current_user=Depends(require_permission("locations:update")),
+    db: Session = Depends(get_db),
+):
+    """Drop a zone's own land settings; it goes back to the map's (recomputed if the map has any)."""
+    zone = get_clickable_zone(db, zone_id)
+    if zone is None:
+        raise HTTPException(status_code=404, detail="Зона не найдена")
+    parent = get_map_parent(db, zone.parent_type, zone.parent_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Карта не найдена")
+    zone.land_settings = None
+    try:
+        _recompute_zone_outlines(db, parent, zone.parent_type, zone.parent_id, zones=[zone])
+    except HTTPException:
+        db.rollback()
+        raise
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    db.commit()
+    return {"precise_path": zone.precise_path}
+
+
 @app.post("/photo/change_area_map")
 async def change_area_map_photo(area_id: int = Form(...), file: UploadFile = File(...), current_user = Depends(require_permission("photos:upload")), db: Session = Depends(get_db)):
     """
@@ -193,10 +380,14 @@ async def change_area_map_photo(area_id: int = Form(...), file: UploadFile = Fil
         # Обновляем поле map_image_url в таблице Areas
         update_area_map_image(db, area_id, map_url)
 
-        return {
+        response = {
             "message": "Карта области успешно загружена",
             "map_image_url": map_url
         }
+        outlines_warning = _refresh_outlines_after_map_upload(db, "area", area_id)
+        if outlines_warning:
+            response["outlines_warning"] = outlines_warning
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -218,10 +409,14 @@ async def change_country_map_photo(country_id: int = Form(...), file: UploadFile
         # Обновляем поле map_image_url в таблице Countries
         update_country_map_image(db, country_id, map_url)
 
-        return {
+        response = {
             "message": "Карта страны успешно загружена",
             "map_image_url": map_url
         }
+        outlines_warning = _refresh_outlines_after_map_upload(db, "country", country_id)
+        if outlines_warning:
+            response["outlines_warning"] = outlines_warning
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

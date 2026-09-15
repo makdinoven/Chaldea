@@ -18,6 +18,8 @@ class Area(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=False)
     map_image_url = Column(String(255), nullable=True)
+    # JSON {"samples": [{x, y}], "tolerance": n}: how photo-service tells land from water
+    map_land_settings = Column(Text, nullable=True)
     sort_order = Column(Integer, nullable=False, default=0)
 
     countries = relationship("Country", back_populates="area")
@@ -32,10 +34,15 @@ class Country(Base):
     leader_id = Column(BigInteger, nullable=True)
     map_image_url = Column(String(255), nullable=True)
     emblem_url = Column(String(255), nullable=True)
+    # JSON {"samples": [{x, y}], "tolerance": n}: how photo-service tells land from water
+    map_land_settings = Column(Text, nullable=True)
     area_id = Column(BigInteger, ForeignKey('Areas.id', ondelete="SET NULL"), nullable=True)
     x = Column(Float, nullable=True)
     y = Column(Float, nullable=True)
     is_hidden = Column(Boolean, nullable=False, default=False, server_default='0')
+    # Manual override of the recommended level range; NULL bound = computed from locations
+    recommended_level_min = Column(Integer, nullable=True)
+    recommended_level_max = Column(Integer, nullable=True)
 
     area = relationship("Area", back_populates="countries")
     regions = relationship("Region", back_populates="country")
@@ -52,6 +59,9 @@ class Region(Base):
     image_url = Column(String(255), nullable=True)
     entrance_location_id = Column(BigInteger, ForeignKey('Locations.id', ondelete="SET NULL"))
     leader_id = Column(BigInteger, nullable=True)
+    # Manual override of the recommended level range; NULL bound = computed from locations
+    recommended_level_min = Column(Integer, nullable=True)
+    recommended_level_max = Column(Integer, nullable=True)
 
     x = Column(Float, nullable=True)
     y = Column(Float, nullable=True)
@@ -272,6 +282,12 @@ class ClickableZone(Base):
     zone_data = Column(JSON, nullable=False)
     label = Column(String(255), nullable=True)
     stroke_color = Column(String(20), nullable=True)
+    # Exact coastline of the zone (SVG path in the same 0..100 space as zone_data),
+    # computed by photo-service from the map image. NULL = draw the rough polygon.
+    precise_path = Column(Text().with_variant(MEDIUMTEXT(), "mysql"), nullable=True)
+    # JSON {"samples": [{x, y}], "tolerance": n}: this zone's own water samples,
+    # overriding the map-level map_land_settings. NULL = use the map's.
+    land_settings = Column(Text, nullable=True)
 
 
 class GameRule(Base):

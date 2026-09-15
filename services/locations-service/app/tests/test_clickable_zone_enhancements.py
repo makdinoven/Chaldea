@@ -29,6 +29,13 @@ def _mock_response(status_code: int, json_data: dict = None):
     return resp
 
 
+@pytest.fixture(autouse=True)
+def _no_level_lookup():
+    """The zones route also looks up target level ranges; the DB here is a mock."""
+    with patch("crud.level_ranges_for_targets", new_callable=AsyncMock, return_value={}):
+        yield
+
+
 ADMIN_HEADERS = {"Authorization": "Bearer admin-token"}
 
 ADMIN_USER_RESPONSE = {
@@ -54,6 +61,8 @@ def _make_zone(zone_id=1, parent_type="area", parent_id=1,
     zone.zone_data = zone_data or [{"x": 0.1, "y": 0.2}, {"x": 0.3, "y": 0.4}]
     zone.label = label
     zone.stroke_color = stroke_color
+    zone.precise_path = None
+    zone.land_settings = None
     return zone
 
 
@@ -366,3 +375,63 @@ class TestCountryEmblemUrl:
         assert "emblem_url" in data[0]
         assert data[0]["emblem_url"] == "https://s3.example.com/emblems/fire.webp"
         assert data[1]["emblem_url"] is None
+
+
+# ===========================================================================
+# Precise coastline outline (computed by photo-service)
+# ===========================================================================
+
+class TestClickableZonePrecisePath:
+
+    @patch("crud.get_clickable_zones_by_parent", new_callable=AsyncMock)
+    def test_get_zones_returns_precise_path(self, mock_crud, client):
+        with_outline = _make_zone(zone_id=1)
+        with_outline.precise_path = "M10 10 L20 10 L20 20 Z M30 30 L35 30 L35 35 Z"
+        without = _make_zone(zone_id=2)
+        without.precise_path = None
+        mock_crud.return_value = [with_outline, without]
+
+        with_outline.land_settings = '{"samples": [{"x": 5, "y": 6}], "tolerance": 22}'
+
+        data = client.get("/locations/clickable-zones/area/1").json()
+        assert data[0]["precise_path"].startswith("M10 10")
+        assert data[1]["precise_path"] is None
+        # Stored as JSON text by photo-service, served as an object
+        assert data[0]["land_settings"] == {"samples": [{"x": 5, "y": 6}], "tolerance": 22}
+        assert data[1]["land_settings"] is None
+
+    @pytest.mark.asyncio
+    async def test_reshaping_a_zone_drops_its_outline(self):
+        import crud
+        from schemas import ClickableZoneUpdate
+
+        zone = MagicMock()
+        zone.precise_path = "M1 1 L2 2 L3 1 Z"
+        session = MagicMock()
+        result = MagicMock()
+        result.scalars.return_value.first.return_value = zone
+        session.execute = AsyncMock(return_value=result)
+        session.commit = AsyncMock()
+        session.refresh = AsyncMock()
+
+        await crud.update_clickable_zone(
+            session, 1, ClickableZoneUpdate(zone_data=[{"x": 1, "y": 1}, {"x": 5, "y": 1}, {"x": 5, "y": 5}]),
+        )
+        assert zone.precise_path is None
+
+    @pytest.mark.asyncio
+    async def test_relabeling_keeps_the_outline(self):
+        import crud
+        from schemas import ClickableZoneUpdate
+
+        zone = MagicMock()
+        zone.precise_path = "M1 1 L2 2 L3 1 Z"
+        session = MagicMock()
+        result = MagicMock()
+        result.scalars.return_value.first.return_value = zone
+        session.execute = AsyncMock(return_value=result)
+        session.commit = AsyncMock()
+        session.refresh = AsyncMock()
+
+        await crud.update_clickable_zone(session, 1, ClickableZoneUpdate(label="Новое имя"))
+        assert zone.precise_path == "M1 1 L2 2 L3 1 Z"

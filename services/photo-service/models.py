@@ -6,7 +6,7 @@ reads or writes. The tables are OWNED by other services — photo-service
 never creates or drops them.
 """
 
-from sqlalchemy import Column, Integer, String, Text
+from sqlalchemy import Column, Integer, JSON, String, Text
 from database import Base
 
 
@@ -31,6 +31,7 @@ class Area(Base):
 
     id = Column(Integer, primary_key=True)
     map_image_url = Column(Text, nullable=True)
+    map_land_settings = Column(Text, nullable=True)
 
 
 class Country(Base):
@@ -39,6 +40,7 @@ class Country(Base):
     id = Column(Integer, primary_key=True)
     map_image_url = Column(Text, nullable=True)
     emblem_url = Column(Text, nullable=True)
+    map_land_settings = Column(Text, nullable=True)
 
 
 class Region(Base):
@@ -121,6 +123,17 @@ class Recipe(Base):
 
     id = Column(Integer, primary_key=True)
     icon = Column(String(255), nullable=True)
+
+
+class ClickableZone(Base):
+    __tablename__ = "ClickableZones"
+
+    id = Column(Integer, primary_key=True)
+    parent_type = Column(String(20), nullable=False)
+    parent_id = Column(Integer, nullable=False)
+    zone_data = Column(JSON, nullable=False)
+    precise_path = Column(Text, nullable=True)
+    land_settings = Column(Text, nullable=True)
 
 
 class Conversation(Base):

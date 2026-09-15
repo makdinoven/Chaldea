@@ -1772,7 +1772,30 @@ async def get_clickable_zones_route(
     """Returns all clickable zones for a given parent (area or country)."""
     if parent_type not in ("area", "country"):
         raise HTTPException(status_code=400, detail="parent_type must be 'area' or 'country'")
-    return await crud.get_clickable_zones_by_parent(session, parent_type, parent_id)
+    zones = await crud.get_clickable_zones_by_parent(session, parent_type, parent_id)
+    levels = await crud.level_ranges_for_targets(session, {(z.target_type, z.target_id) for z in zones})
+    for zone in zones:
+        # Not a column: read by ClickableZoneRead for the map card
+        zone.target_level = levels.get((zone.target_type, zone.target_id))
+    return zones
+
+
+@router.get("/recommended-level/{target_type}/{target_id}", response_model=schemas.RecommendedLevelInfo)
+async def get_recommended_level_route(
+    target_type: str,
+    target_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Computed and manual recommended level range of a country or region (admin forms)."""
+    model = {"country": models.Country, "region": models.Region}.get(target_type)
+    if model is None:
+        raise HTTPException(status_code=400, detail="target_type должен быть 'country' или 'region'")
+    manual = await crud.manual_level_ranges(session, target_type, [target_id])
+    if target_id not in manual:
+        raise HTTPException(status_code=404, detail="Не найдено")
+    auto_min, auto_max = (await crud.auto_level_ranges(session, target_type, [target_id])).get(target_id, (None, None))
+    manual_min, manual_max = manual[target_id]
+    return {"auto_min": auto_min, "auto_max": auto_max, "manual_min": manual_min, "manual_max": manual_max}
 
 
 @router.post("/clickable-zones/create", response_model=schemas.ClickableZoneRead)

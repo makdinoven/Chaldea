@@ -479,3 +479,17 @@ Country -> Region -> District -> Location
 5. **CORS allow-all** в production
 6. **`posts.content` — `TEXT`** (`app/models.py:165`), то есть 64 КБ. Кириллица в `utf8mb4` стоит 2 байта на символ плюс разметка TipTap — длинный ролевой пост может молча обрезаться. `post_drafts.content` сделан `MEDIUMTEXT` именно поэтому, `posts` оставлен как был (FEAT-156, вне области)
 7. **`move_and_post` коммитит пост до обновления локации и списания стамины** (`app/main.py:1213` против `:1241` и `:1256`) — при 500 на любом из этих шагов пост остаётся, а переход не состоялся. Предсуществующее, тот же порядок в `quick_move` (`:1470` / `:1477`)
+
+## Точные контуры кликабельных зон (041)
+
+- `ClickableZones.precise_path` (MEDIUMTEXT) — SVG-путь в том же пространстве 0..100, что `zone_data`: суша внутри грубого многоугольника, по под-пути на остров. Считает и пишет photo-service (`/photo/map_outlines/*`), locations-service только отдаёт его в `GET /locations/clickable-zones/...`. NULL — фронт рисует грубый многоугольник.
+- `Areas.map_land_settings`, `Countries.map_land_settings` — JSON `{samples: [{x, y}], tolerance}`: образцы «не суши», выбранные админом пипеткой; нужны для пересчёта при замене картинки карты.
+- Изменение `zone_data` через `PUT .../update` сбрасывает `precise_path` (контур был вырезан из старой формы).
+
+## Рекомендуемый уровень стран и регионов (042)
+
+- Карточка на карте мира/страны показывает диапазон уровня цели зоны. `GET /locations/clickable-zones/...` отдаёт у каждой зоны `target_level: {min, max, is_manual}` или `null`.
+- Автоматически: min..max `recommended_level` всех локаций внутри (локация относится к региону напрямую через `region_id` или через район). Для области — по всем странам в ней (`crud.auto_level_ranges`).
+- `Countries/Regions.recommended_level_min/_max` — ручное переопределение, каждая граница отдельно (NULL = автоматически). Меняется через обычные PUT страны/региона, проверка `min <= max` в схеме.
+- `GET /locations/recommended-level/{country|region}/{id}` → `{auto_min, auto_max, manual_min, manual_max}` для формы в админке.
+
