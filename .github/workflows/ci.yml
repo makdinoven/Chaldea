@@ -91,6 +91,12 @@ jobs:
     name: Deploy to Production
     runs-on: ubuntu-latest
     needs: test
+    env:
+      TARGET: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
+      RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      # Short sessions with keepalives: the deploy itself runs detached on the
+      # server (docker/deploy-prod.sh), SSH is only used to start and poll it
+      SSH_OPTS: -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -i key
 
     steps:
       - name: Setup SSH key
@@ -98,17 +104,37 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY_BASE64 }}" | base64 -d > key
           chmod 600 key
 
-      - name: Deploy via SSH
+      - name: Start deploy on the server
         run: |
-          ssh -o StrictHostKeyChecking=no -i key \
-          ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+          # The script is taken from the pushed commit, not from the server's
+          # checkout, so changes to the deploy itself apply on the same push
+          ssh $SSH_OPTS "$TARGET" "RUN_ID=$RUN_ID bash -s" << 'EOF'
             set -e
             cd ~/rpgroll
             git fetch origin main
-            git reset --hard origin/main
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml down
-            docker builder prune -af
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml build --no-cache
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-            docker image prune -f
+            mkdir -p ~/deploy
+            git show origin/main:docker/deploy-prod.sh > ~/deploy/deploy-prod.sh
+            nohup bash ~/deploy/deploy-prod.sh "$RUN_ID" > ~/deploy/"$RUN_ID".log 2>&1 < /dev/null &
+            echo "deploy $RUN_ID started"
           EOF
+
+      - name: Wait for deploy to finish
+        timeout-minutes: 60
+        run: |
+          POLL_SECONDS=30
+          while true; do
+            sleep $POLL_SECONDS
+            # A dropped or refused connection is not a failed deploy: keep polling
+            if ! STATE=$(ssh $SSH_OPTS "$TARGET" \
+                "cat ~/deploy/$RUN_ID.exit 2>/dev/null || echo running; grep '^===' ~/deploy/$RUN_ID.log | tail -n 1"); then
+              echo "server did not answer, retrying"
+              continue
+            fi
+            echo "$STATE" | tail -n 1
+            CODE=$(echo "$STATE" | head -n 1)
+            if [ "$CODE" != "running" ]; then
+              ssh $SSH_OPTS "$TARGET" "tail -n 60 ~/deploy/$RUN_ID.log" || true
+              echo "deploy finished with exit code $CODE"
+              exit "$CODE"
+            fi
+          done
