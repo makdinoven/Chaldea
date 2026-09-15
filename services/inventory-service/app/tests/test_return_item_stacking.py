@@ -138,7 +138,7 @@ def test_return_nonstackable_item_creates_new_slot(db_session):
     """A non-stackable item (max_stack_size=1) should always create a new
     inventory slot, even if other slots for the same item exist."""
     item = _create_item(
-        db_session, name="Unique Sword", item_type="main_weapon", max_stack_size=1
+        db_session, name="Unique Sword", item_type="weapon", max_stack_size=1
     )
 
     # Pre-existing slot with quantity=1

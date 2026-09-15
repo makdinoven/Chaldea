@@ -30,7 +30,7 @@ def _auth_ok():
 def _seed_item(db_session, full_image=FULL):
     item = models.Items(
         id=1, name="Меч", image=ICON, full_image=full_image,
-        item_type="main_weapon", item_rarity="common", item_level=1,
+        item_type="weapon", item_rarity="common", item_level=1,
         max_stack_size=1, is_unique=False,
     )
     db_session.add(item)
@@ -84,3 +84,24 @@ class TestAuctionFullImage:
 
         assert data["item"]["image"] == ICON
         assert data["item"]["full_image"] == FULL
+
+    def test_listing_item_carries_weapon_kind(self, db_session):
+        import crud
+
+        item = _seed_item(db_session)
+        item.weapon_subclass = "sword"
+        db_session.commit()
+        now = datetime.utcnow()
+        listing = models.AuctionListing(
+            seller_character_id=1, item_id=1, quantity=1,
+            start_price=10, buyout_price=None, current_bid=0,
+            status="active", created_at=now, expires_at=now + timedelta(hours=1),
+        )
+        db_session.add(listing)
+        db_session.commit()
+
+        with patch("crud.get_character_name", return_value="Alice"):
+            data = crud._build_listing_response(db_session, listing)
+
+        assert data["item"]["weapon_subclass"] == "sword"
+        assert data["item"]["armor_subclass"] is None

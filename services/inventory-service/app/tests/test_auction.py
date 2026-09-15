@@ -137,7 +137,7 @@ def auction_env(db_session):
     _insert_character(db_session, 2, user_id=2, name="Bob", location=1, gold=3000)
     _insert_npc_auctioneer(db_session, 100, location=1)
 
-    _create_item(db_session, 201, "Iron Sword", max_stack=1, item_type="main_weapon")
+    _create_item(db_session, 201, "Iron Sword", max_stack=1, item_type="weapon")
     _create_item(db_session, 202, "Herb", max_stack=99, item_type="resource")
 
     inv1 = _add_inventory(db_session, 1, 201, 1)
@@ -358,7 +358,7 @@ def test_create_listing_in_battle_blocked(mock_notify, auction_env):
 def test_create_listing_enhancement_data_snapshot(mock_notify, auction_env):
     """Enhancement data is preserved in the listing via storage."""
     db = auction_env["db"]
-    _create_item(db, 500, "Magic Sword", max_stack=1, item_type="main_weapon")
+    _create_item(db, 500, "Magic Sword", max_stack=1, item_type="weapon")
     enh_data = json.dumps({
         "enhancement_points_spent": 5,
         "enhancement_bonuses": {"strength_modifier": 3},

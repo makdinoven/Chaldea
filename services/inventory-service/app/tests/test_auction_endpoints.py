@@ -143,9 +143,9 @@ def auction_client(client, db_session):
     _insert_character(db_session, 2, user_id=2, name="Bob", location=1, gold=3000)
     _insert_npc_auctioneer(db_session, 100, location=1)
 
-    _create_item(db_session, 201, "Iron Sword", max_stack=1, item_type="main_weapon", rarity="common")
+    _create_item(db_session, 201, "Iron Sword", max_stack=1, item_type="weapon", rarity="common")
     _create_item(db_session, 202, "Herb", max_stack=99, item_type="resource", rarity="common")
-    _create_item(db_session, 203, "Magic Staff", max_stack=1, item_type="main_weapon", rarity="epic")
+    _create_item(db_session, 203, "Magic Staff", max_stack=1, item_type="weapon", rarity="epic")
 
     inv1 = _add_inventory(db_session, 1, 201, 1)
     inv2 = _add_inventory(db_session, 1, 202, 50)
@@ -252,11 +252,11 @@ def test_browse_listings_filter_item_type(auction_client):
     db.commit()
 
     c = auction_client["client"]
-    resp = c.get("/inventory/auction/listings?item_type=main_weapon")
+    resp = c.get("/inventory/auction/listings?item_type=weapon")
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 1
-    assert data["listings"][0]["item"]["item_type"] == "main_weapon"
+    assert data["listings"][0]["item"]["item_type"] == "weapon"
 
 
 def test_browse_listings_filter_rarity(auction_client):

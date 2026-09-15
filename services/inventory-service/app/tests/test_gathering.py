@@ -370,7 +370,7 @@ class TestToolItemValidation:
         body = {
             "name": "Странный меч",
             "item_level": 1,
-            "item_type": "main_weapon",
+            "item_type": "weapon",
             "item_rarity": "common",
             "max_stack_size": 1,
             "is_unique": False,
@@ -431,7 +431,7 @@ class TestListToolsEndpoint:
         """item_type=gathering_tool returns only tools with all fields."""
         pickaxe = _seed_tool_item(db_session, item_id=100, tool_category="pickaxe", name="Кирка")
         sickle = _seed_tool_item(db_session, item_id=101, tool_category="sickle", name="Серп")
-        sword = _seed_resource_item(db_session, item_id=102, name="Меч", item_type="main_weapon")
+        sword = _seed_resource_item(db_session, item_id=102, name="Меч", item_type="weapon")
         _add_inventory_row(db_session, 1, 100, quantity=1, current_durability=45)
         _add_inventory_row(db_session, 1, 101, quantity=1, current_durability=30)
         _add_inventory_row(db_session, 1, 102, quantity=1)

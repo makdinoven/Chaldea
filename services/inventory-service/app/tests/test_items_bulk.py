@@ -23,7 +23,7 @@ def _seed_items(db_session):
     db_session.add_all([
         models.Items(
             id=1, name="Ржавый меч", description="Видал лучшие дни.",
-            image="https://s3/rusty.webp", item_type="main_weapon",
+            image="https://s3/rusty.webp", item_type="weapon",
             item_rarity="common", item_level=1,
         ),
         models.Items(
@@ -67,7 +67,7 @@ class TestItemsBulkHappyPath:
         }
         assert row["image_url"] == "https://s3/rusty.webp"
         assert row["rarity"] == "common"
-        assert row["type"] == "main_weapon"
+        assert row["type"] == "weapon"
 
     def test_nullable_fields_come_back_as_null(self, client, db_session):
         _seed_items(db_session)

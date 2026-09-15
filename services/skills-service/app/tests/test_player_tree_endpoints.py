@@ -940,3 +940,53 @@ class TestGetSubclassTrees:
         assert resp.status_code == 200
         data = resp.json()
         assert data == []
+
+
+# ===========================================================================
+# Equipment revalidation after a subclass change (class/subclass equipment rules)
+# ===========================================================================
+
+class TestEquipmentRevalidationTrigger:
+
+    async def _choose(self, client, ids, node_key):
+        return await client.post(
+            f"/skills/class_trees/{ids['tree_id']}/choose_node",
+            json={"character_id": ids["character_id"], "node_id": ids[node_key]},
+        )
+
+    @pytest.mark.asyncio
+    @patch.object(main_module, "revalidate_character_equipment", new_callable=AsyncMock)
+    @patch.object(main_module, "get_character_info", new_callable=AsyncMock)
+    async def test_choosing_subclass_revalidates(self, mock_char_info, mock_revalidate, player_client, seeded_tree):
+        mock_char_info.return_value = _mock_character_info(class_id=1, level=30)
+        ids = seeded_tree
+        for key in ("root_id", "child_a_id", "grandchild_id"):
+            assert (await self._choose(player_client, ids, key)).status_code == 200
+        mock_revalidate.assert_not_called()
+
+        resp = await self._choose(player_client, ids, "subclass_id")
+        assert resp.status_code == 200
+        mock_revalidate.assert_awaited_once_with(ids["character_id"])
+
+    @pytest.mark.asyncio
+    @patch.object(main_module, "revalidate_character_equipment", new_callable=AsyncMock)
+    async def test_admin_full_reset_revalidates(self, mock_revalidate, admin_client, db_session, seeded_tree):
+        ids = seeded_tree
+        db_session.add(models.CharacterTreeProgress(
+            character_id=ids["character_id"], tree_id=ids["tree_id"], node_id=ids["root_id"],
+        ))
+        await db_session.commit()
+
+        resp = await admin_client.post(
+            "/skills/admin/class_trees/reset_full", json={"character_id": ids["character_id"]},
+        )
+        assert resp.status_code == 200, resp.text
+        mock_revalidate.assert_awaited_once_with(ids["character_id"])
+
+    @pytest.mark.asyncio
+    async def test_inventory_failure_does_not_raise(self):
+        failing = AsyncMock(side_effect=httpx.ConnectError("down"))
+        with patch.object(httpx.AsyncClient, "post", failing):
+            await main_module.revalidate_character_equipment(100)
+        failing.assert_awaited_once()
+        assert "/inventory/internal/characters/100/revalidate-equipment" in failing.call_args[0][0]

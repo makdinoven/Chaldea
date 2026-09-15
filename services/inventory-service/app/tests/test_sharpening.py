@@ -147,7 +147,7 @@ def sharpen_env(client, db_session):
 
     # Weapon item (sharpenable) with some base stats
     weapon = _create_item(
-        db_session, 10, "Железный меч", "main_weapon", max_stack=1,
+        db_session, 10, "Железный меч", "weapon", max_stack=1,
         strength_modifier=5, damage_modifier=20,
     )
 
@@ -639,7 +639,7 @@ class TestSharpenInfoEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["item_name"] == "Железный меч"
-        assert data["item_type"] == "main_weapon"
+        assert data["item_type"] == "weapon"
         assert data["points_spent"] == 0
         assert data["points_remaining"] == 15
         assert len(data["stats"]) == len(crud.ALL_SHARPENABLE_FIELDS)
@@ -774,7 +774,7 @@ class TestBuildModifiersDictWithEnhancement:
         _create_characters_table(db_session)
 
         item = _create_item(
-            db_session, 50, "Тестовый меч", "main_weapon", max_stack=1,
+            db_session, 50, "Тестовый меч", "weapon", max_stack=1,
             strength_modifier=10, damage_modifier=20, res_fire_modifier=0.5,
         )
         db_session.commit()
@@ -801,7 +801,7 @@ class TestBuildModifiersDictWithEnhancement:
         _create_characters_table(db_session)
 
         item = _create_item(
-            db_session, 51, "Тестовый щит", "shield", max_stack=1,
+            db_session, 51, "Тестовый щит", "weapon", max_stack=1,
             endurance_modifier=5,
         )
         db_session.commit()

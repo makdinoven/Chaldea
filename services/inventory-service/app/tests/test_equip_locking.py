@@ -211,7 +211,7 @@ def test_equip_item_insufficient_inventory(authed_client, db_session):
         id=2,
         name="Ghost Sword",
         item_level=1,
-        item_type="main_weapon",
+        item_type="weapon",
         item_rarity="common",
         max_stack_size=1,
         is_unique=False,

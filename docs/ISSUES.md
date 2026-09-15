@@ -123,6 +123,13 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 ## HIGH
 
+### Баг: `damage_modifier` оружия засчитывается в урон дважды
+**Сервисы:** inventory-service, battle-service
+**Файлы:** `services/inventory-service/app/crud.py:533` (`build_modifiers_dict`), `services/battle-service/app/battle_engine.py:155-157`
+**Обнаружено:** 2026-09-15, при разборе полей предметов для реорганизации админки
+**Описание:** при надевании оружия `build_modifiers_dict` кладёт его `damage_modifier` в атрибут `damage` персонажа. В бою `battle_engine` строит базовый урон как `base_stat + attacker_attr["damage"] + weapon["damage_modifier"]` — то есть тот же модификатор оружия прибавляется второй раз. Оружие с «Урон +10» даёт +20. Касается только оружия: у брони и украшений `damage_modifier` идёт лишь через атрибут.
+**Возможное решение:** решение за балансом — убрать `weapon_mod` из формулы в `battle_engine` (оружие действует через атрибут, как остальная экипировка) либо не складывать `damage_modifier` оружия в атрибут. Вынесено в отдельную задачу по просьбе пользователя; перед правкой сверить с автобоем и тестами battle-service.
+
 ### Долг: `INTERNAL_SERVICE_TOKEN` имеет публично известный fallback `dev-internal-token-change-me`
 **Сервисы:** character-service, character-attributes-service, locations-service, battle-service, inventory-service, party-service (все, кому токен задан в compose)
 **Файлы:** `docker-compose.yml:135,311,338,396,427,486`, `docker-compose.prod.yml:127,146,215,276`

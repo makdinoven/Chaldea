@@ -155,7 +155,7 @@ def craft_env(client, db_session):
     _create_rank(db_session, profession_id=prof.id, rank_number=2, name="Подмастерье")
 
     # Result item
-    result_item = _create_item(db_session, 50, "Железный меч", "main_weapon", max_stack=1)
+    result_item = _create_item(db_session, 50, "Железный меч", "weapon", max_stack=1)
 
     # Material items
     ore = _create_item(db_session, 100, "Железная руда", "resource")
@@ -247,7 +247,7 @@ class TestListRecipes:
         c = craft_env["client"]
 
         # Create a blueprint recipe
-        result_item2 = _create_item(db, 51, "Стальной меч", "main_weapon", max_stack=1)
+        result_item2 = _create_item(db, 51, "Стальной меч", "weapon", max_stack=1)
         bp_recipe = _create_recipe(db, name="Ковка стального меча",
                                    profession_id=1, result_item_id=result_item2.id,
                                    is_blueprint_recipe=True)
@@ -323,7 +323,7 @@ class TestCraftWithBlueprint:
         c = craft_env["client"]
 
         # Create blueprint recipe and items
-        result_item2 = _create_item(db, 52, "Стальной щит", "shield", max_stack=1)
+        result_item2 = _create_item(db, 52, "Стальной щит", "weapon", max_stack=1)
         bp_recipe = _create_recipe(db, name="Ковка стального щита",
                                    profession_id=1, result_item_id=result_item2.id,
                                    is_blueprint_recipe=True, required_rank=1)
@@ -390,7 +390,7 @@ class TestCraftInsufficientRank:
         c = craft_env["client"]
 
         # Create a recipe requiring rank 2
-        result_item2 = _create_item(db, 54, "Стальной меч+", "main_weapon")
+        result_item2 = _create_item(db, 54, "Стальной меч+", "weapon")
         recipe2 = _create_recipe(db, name="Улучшенная ковка",
                                  profession_id=1, result_item_id=result_item2.id,
                                  required_rank=2)
@@ -448,7 +448,7 @@ class TestCraftUnknownRecipe:
         db = craft_env["db"]
         c = craft_env["client"]
 
-        result_item2 = _create_item(db, 55, "Секретный клинок", "main_weapon")
+        result_item2 = _create_item(db, 55, "Секретный клинок", "weapon")
         secret_recipe = _create_recipe(db, name="Секретная ковка",
                                        profession_id=1, result_item_id=result_item2.id)
         # NOT learning the recipe
@@ -471,7 +471,7 @@ class TestLearnRecipe:
         db = craft_env["db"]
         c = craft_env["client"]
 
-        result_item2 = _create_item(db, 56, "Бронзовый клинок", "main_weapon")
+        result_item2 = _create_item(db, 56, "Бронзовый клинок", "weapon")
         new_recipe = _create_recipe(db, name="Бронзовая ковка",
                                     profession_id=1, result_item_id=result_item2.id)
         db.commit()
@@ -509,7 +509,7 @@ class TestLearnRecipe:
         db = craft_env["db"]
         c = craft_env["client"]
 
-        result_item2 = _create_item(db, 58, "Мастерский клинок", "main_weapon")
+        result_item2 = _create_item(db, 58, "Мастерский клинок", "weapon")
         rank2_recipe = _create_recipe(db, name="Мастерская ковка",
                                       profession_id=1, result_item_id=result_item2.id,
                                       required_rank=2)
@@ -551,7 +551,7 @@ class TestAdminRecipes:
         c = admin_recipe_env["client"]
 
         prof = _create_profession(db)
-        result_item = _create_item(db, 50, "Железный меч", "main_weapon")
+        result_item = _create_item(db, 50, "Железный меч", "weapon")
         mat1 = _create_item(db, 100, "Железная руда", "resource")
         mat2 = _create_item(db, 101, "Уголь", "resource")
         db.commit()
@@ -646,7 +646,7 @@ class TestAdminRecipes:
 
         prof1 = _create_profession(db, 1, "Кузнец", "blacksmith")
         prof2 = _create_profession(db, 2, "Алхимик", "alchemist")
-        item1 = _create_item(db, 50, "Sword", "main_weapon")
+        item1 = _create_item(db, 50, "Sword", "weapon")
         item2 = _create_item(db, 51, "Potion", "consumable")
         _create_recipe(db, name="Sword Recipe", profession_id=prof1.id, result_item_id=item1.id)
         _create_recipe(db, name="Potion Recipe", profession_id=prof2.id, result_item_id=item2.id)

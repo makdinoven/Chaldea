@@ -197,7 +197,7 @@ class TestAdminNpcEquip:
 
     def test_invalid_slot_type_nonexistent(self, admin_client, db_session):
         """A completely invalid slot_type should return 400."""
-        item = _create_item(db_session, name="Sword", item_type="main_weapon")
+        item = _create_item(db_session, name="Sword", item_type="weapon")
 
         with patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock):
             response = admin_client.post(
@@ -213,7 +213,7 @@ class TestAdminNpcEquip:
         weapon = _create_item(
             db_session,
             name="Big Sword",
-            item_type="main_weapon",
+            item_type="weapon",
         )
 
         with patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock):

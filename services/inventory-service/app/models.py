@@ -14,8 +14,8 @@ class Items(Base):
     full_image = Column(String(255), nullable=True)
     item_level = Column(Integer, nullable=False,default=0)
     item_type = Column(Enum(
-        'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet', 'main_weapon',
-        'consumable','additional_weapons', 'resource', 'scroll', 'misc', 'shield',
+        'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet', 'weapon',
+        'consumable', 'resource', 'scroll', 'misc',
         'blueprint', 'recipe', 'gem', 'rune', 'gathering_tool'
     ), nullable=False)
     blueprint_recipe_id = Column(Integer, ForeignKey('recipes.id', ondelete='SET NULL'), nullable=True)
@@ -62,17 +62,26 @@ class Items(Base):
 
     weapon_subclass = Column(
         Enum(
-            # Варианты для воинов:
-            'one_handed_weapon', 'two_handed_weapon', 'maces', 'axes', 'battle_axes', 'hammers', 'polearms', 'scythes',
-            # Варианты для плутов:
-            'daggers', 'twin_daggers', 'short_swords', 'rapiers', 'spears', 'bows', 'firearms', 'knuckledusters',
-            # Варианты для магов:
-            'one_handed_staffs', 'two_handed_staffs', 'grimoires', 'catalysts', 'spheres', 'wands', 'amulets',
-            'magic_weapon',
+            # Одноручное
+            'sword', 'hatchet', 'mace', 'sabre', 'dagger', 'espada', 'tanto', 'war_pick',
+            # Полуторное
+            'bastard_sword', 'axe', 'katana', 'broadsword', 'rapier', 'war_hammer',
+            # Двуручное
+            'zweihander', 'maul', 'battle_axe', 'scythe', 'nodachi',
+            # Древковое
+            'halberd', 'glaive', 'pike', 'spear', 'naginata',
+            # Стрелковое
+            'bow', 'pistol', 'musket',
+            # Щиты
+            'buckler', 'targe', 'tower_shield',
+            # Другое
+            'lute', 'knuckledusters',
+            # Магическое
+            'staff', 'grimoire', 'amulet', 'rod', 'magic_weapon', 'catalyst', 'wand',
             name="weapon_subclass_enum"
         ),
         nullable=True,
-        comment="Подкласс оружия, в зависимости от типа персонажа (воины, плуты, маги)"
+        comment="Вид оружия; категория (одноручное, полуторное, ...) выводится из вида"
     )
 
     primary_damage_type = Column(
@@ -151,6 +160,21 @@ class CharacterInventory(Base):
     current_durability = Column(Integer, nullable=True)  # NULL = full, 0 = broken
 
     item = relationship("Items", back_populates="inventories")
+
+
+class EquipmentRule(Base):
+    """What a class (subclass_key NULL) or subclass may wear. See equipment_rules.py."""
+    __tablename__ = "equipment_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # "class:<id>" for the class row, the subclass key otherwise — one row per scope
+    scope_key = Column(String(60), nullable=False, unique=True)
+    class_id = Column(Integer, nullable=False, index=True)
+    subclass_key = Column(String(50), nullable=True)
+    armor_classes = Column(Text, nullable=False, default="[]")  # JSON list of armor classes
+    main_hand = Column(Text, nullable=False, default="[]")  # JSON list of "category:x" / "kind:y"
+    off_hand = Column(Text, nullable=False, default="[]")
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 # Таблица слотов экипировки

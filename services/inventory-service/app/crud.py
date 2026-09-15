@@ -43,7 +43,7 @@ MAX_ENHANCEMENT_POINTS = 15
 MAX_STAT_SHARPEN = 5
 WHETSTONE_CHANCE = {1: 0.25, 2: 0.50, 3: 0.75}
 
-SHARPENABLE_TYPES = {'head', 'body', 'cloak', 'belt', 'main_weapon', 'additional_weapons', 'shield'}
+SHARPENABLE_TYPES = {'head', 'body', 'cloak', 'belt', 'weapon'}
 
 # ---------------------------------------------------------------------------
 # Gem socket constants
@@ -56,7 +56,7 @@ SHARPENABLE_TYPES = {'head', 'body', 'cloak', 'belt', 'main_weapon', 'additional
 DURABILITY_SLOT_TYPES = {'head', 'body', 'cloak', 'main_weapon', 'additional_weapons'}
 
 JEWELRY_TYPES = {'ring', 'necklace', 'bracelet'}
-ARMOR_WEAPON_TYPES = {'head', 'body', 'cloak', 'belt', 'main_weapon', 'additional_weapons', 'shield'}
+ARMOR_WEAPON_TYPES = {'head', 'body', 'cloak', 'belt', 'weapon'}
 SOCKETABLE_TYPES = JEWELRY_TYPES | ARMOR_WEAPON_TYPES
 GEM_PRESERVATION_CHANCES = {1: 10, 2: 40, 3: 70}  # % chance gem/rune survives extraction, by profession rank
 GEM_XP_REWARD = 10
@@ -404,9 +404,9 @@ def is_item_compatible_with_slot(item_type: str, slot_type: str) -> bool:
         'ring': ['ring'],
         'necklace': ['necklace'],
         'bracelet': ['bracelet'],
-        'main_weapon': ['main_weapon'],
-        # Shields equip into the off-hand slot (shield SLOT removed, item TYPE stays)
-        'additional_weapons': ['additional_weapons', 'shield'],
+        # Weapons fit either hand; class rules decide which hands are allowed
+        'main_weapon': ['weapon'],
+        'additional_weapons': ['weapon'],
         'fast_slot_1': ['consumable'],
         'fast_slot_2': ['consumable'],
         'fast_slot_3': ['consumable'],
@@ -418,9 +418,12 @@ def find_equipment_slot_for_item(db: Session, character_id: int, item_obj: model
     fixed = {
         'head': 'head', 'body': 'body', 'cloak': 'cloak', 'belt': 'belt',
         'ring': 'ring', 'necklace': 'necklace', 'bracelet': 'bracelet',
-        'main_weapon': 'main_weapon', 'additional_weapons': 'additional_weapons',
-        'shield': 'additional_weapons',
     }
+    if item_obj.item_type == 'weapon':
+        # Hand choice needs the character's rules; see main._pick_weapon_slot
+        return db.query(models.EquipmentSlot).filter_by(
+            character_id=character_id, slot_type='main_weapon'
+        ).with_for_update().first()
     if item_obj.item_type in fixed:
         return db.query(models.EquipmentSlot).filter_by(
             character_id=character_id,
@@ -2073,6 +2076,8 @@ def _build_listing_response(db: Session, listing: models.AuctionListing) -> dict
             "item_type": item_obj.item_type,
             "item_rarity": item_obj.item_rarity,
             "item_level": item_obj.item_level,
+            "weapon_subclass": item_obj.weapon_subclass,
+            "armor_subclass": item_obj.armor_subclass,
         }
 
     return {
@@ -2966,6 +2971,8 @@ def get_auction_storage(
                     "item_type": item_obj.item_type,
                     "item_rarity": item_obj.item_rarity,
                     "item_level": item_obj.item_level,
+                    "weapon_subclass": item_obj.weapon_subclass,
+                    "armor_subclass": item_obj.armor_subclass,
                 }
 
         enhancement_data = None

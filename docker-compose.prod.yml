@@ -125,6 +125,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
+      INVENTORY_SERVICE_URL: http://inventory-service:8004
 
   inventory-service:
     <<: *restart

@@ -302,7 +302,7 @@ class TestInsertGemWrongItemType:
         c = gem_env["client"]
         gem_inv = gem_env["gem_inv"]
 
-        sword = _create_item(db, 50, "Меч", "main_weapon", max_stack=1, socket_count=2)
+        sword = _create_item(db, 50, "Меч", "weapon", max_stack=1, socket_count=2)
         sword_inv = _add_inventory(db, 1, sword.id, 1)
         db.commit()
 
@@ -819,7 +819,7 @@ class TestSmeltNonJewelry:
         db = gem_env["db"]
         c = gem_env["client"]
 
-        sword = _create_item(db, 60, "Большой меч", "main_weapon", max_stack=1)
+        sword = _create_item(db, 60, "Большой меч", "weapon", max_stack=1)
         sword_inv = _add_inventory(db, 1, sword.id, 1)
         db.commit()
 

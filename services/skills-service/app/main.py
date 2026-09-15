@@ -1,4 +1,5 @@
 import os
+import logging
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -22,6 +23,9 @@ from auth_http import get_admin_user, get_current_user_via_http, require_permiss
 # Пример, если нужно
 CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8005/characters")
 ATTRIBUTES_SERVICE_URL = os.getenv("ATTRIBUTES_SERVICE_URL", "http://character-attributes-service:8002/attributes")
+INVENTORY_SERVICE_URL = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8004")
+
+logger = logging.getLogger("skills-service")
 
 app = FastAPI(title="Async Skill Service")
 
@@ -705,6 +709,22 @@ async def deduct_active_experience(character_id: int, amount: int) -> int:
         return resp.json().get("active_experience", 0)
 
 
+async def revalidate_character_equipment(character_id: int) -> None:
+    """Ask inventory-service to take off items the character's (new) subclass may not wear.
+
+    Non-fatal for the caller: the subclass change is already committed. A failure is
+    logged; the rules are enforced again on the next equip anyway.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{INVENTORY_SERVICE_URL}/inventory/internal/characters/{character_id}/revalidate-equipment"
+            )
+            resp.raise_for_status()
+    except httpx.HTTPError as e:
+        logger.error("Equipment revalidation failed for character %s: %s", character_id, e)
+
+
 async def get_character_info(character_id: int) -> dict:
     """Get character class/level via character-service."""
     async with httpx.AsyncClient() as client:
@@ -878,6 +898,10 @@ async def choose_node(
 
     # 7. Insert progress
     await crud.add_character_tree_progress(db, character_id, tree_id, node_id)
+
+    # Picking a subclass switches the character to that subclass's equipment rules
+    if node.node_type == "subclass_choice":
+        await revalidate_character_equipment(character_id)
     return {"detail": "Узел выбран", "node_id": node_id}
 
 
@@ -1052,6 +1076,9 @@ async def admin_reset_tree_full(
         total_nodes += len(progress_rows)
 
     await db.commit()
+
+    # Without a subclass the class-level equipment rules apply again
+    await revalidate_character_equipment(character_id)
     return {
         "detail": "Весь прогресс сброшен (включая подкласс)",
         "nodes_reset": total_nodes,

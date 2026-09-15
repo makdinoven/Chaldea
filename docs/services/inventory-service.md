@@ -69,11 +69,13 @@ inventory-service/app/
 ### items (каталог)
 - Базовые: id, name (unique), image, item_level, description, price, max_stack_size, is_unique
 - **image / full_image** (миграция 018): `full_image` — исходная картинка, `image` — квадратная иконка, вырезанная из неё photo-service. Оба поля пишет только photo-service; `full_image` отдаётся в `GET /items/{id}` и в аукционных ответах, через `PUT /items/{id}` не меняется. У старых предметов `full_image` = NULL — окна описания показывают `image`
-- **item_type** enum: head, body, cloak, belt, ring, necklace, bracelet, main_weapon, consumable, additional_weapons, resource, scroll, misc, shield, blueprint, recipe, gem, rune, **gathering_tool** (FEAT-128)
+- **item_type** enum: head, body, cloak, belt, ring, necklace, bracelet, main_weapon, consumable, additional_weapons, resource, scroll, misc, blueprint, recipe, gem, rune, **gathering_tool** (FEAT-128). Тип `shield` удалён миграцией 019: щит — обычное оружие вида buckler/targe/tower_shield
 - **Поля для gathering_tool** (FEAT-128, NULL для других типов): `tool_category` enum(pickaxe/sickle/axe), `gather_double_chance_bonus` FLOAT, `gather_speed_bonus_pct` FLOAT, `gather_stamina_bonus_pct` FLOAT (все в диапазоне 0..50)
 - **item_rarity** enum: common, rare, epic, legendary, mythical, divine, demonic
-- **armor_subclass**: cloth, light_armor, medium_armor, heavy_armor
-- **weapon_subclass**: 25 типов (one_handed_weapon, two_handed_weapon, daggers, bows, staffs, grimoires...)
+- **armor_subclass**: cloth, light_armor, medium_armor, heavy_armor — только для head/body (валидация в `ItemCreate`)
+- **weapon_subclass** (вид оружия, миграция 019): 38 видов, каждый входит ровно в одну категорию — одноручное, полуторное, двуручное, древковое, стрелковое, щиты, другое, магическое. Категория не хранится, а берётся из `WEAPON_KIND_CATEGORY` (`schemas.py`, зеркало во фронте `constants/items.ts`). Только для main_weapon/additional_weapons. Под класс брони и вид/категорию оружия планируются ограничения экипировки по классу персонажа
+- **res_\*/vul_\*/crit** — Float в БД и в схемах (раньше схема обрезала дробные до int)
+- **blueprint_recipe_id** — принимается в `ItemCreate` только для чертежа, эндпоинт проверяет существование рецепта (400)
 - **primary_damage_type**: physical, catting, crushing, piercing, magic, fire, ice, watering, electricity, wind, sainting, damning
 - **Модификаторы статов** (30+ полей): strength/agility/intelligence/endurance/health/energy/mana/stamina/charisma/luck/damage/dodge_modifier
 - **Модификаторы сопротивлений** (13 полей): res_physical_modifier, res_fire_modifier, ...
@@ -105,6 +107,19 @@ inventory-service/app/
 4. Применить модификаторы -> HTTP POST к attributes-service `/apply_modifiers`
 5. Пересчитать быстрые слоты (fast_slot_bonus от экипировки)
 6. Rollback при любой ошибке
+
+## Ограничения экипировки по классу и подклассу
+
+Код: `app/equipment_rules.py`, таблица `equipment_rules` (миграция 020).
+
+- **Тип `weapon`** (миграция 019) заменил `main_weapon`/`additional_weapons` как **тип предмета**; слоты `main_weapon`/`additional_weapons` не изменились. В какую руку идёт оружие, решают правила.
+- **Области правил:** строка класса (`scope_key = "class:<id>"`) действует, пока подкласс не выбран; строка подкласса (`scope_key = <subclass_key>`) — после выбора, строка класса тогда игнорируется. Нет строки = без ограничений.
+- **Подкласс персонажа** читается из общей БД: `character_tree_progress` + `tree_nodes` (`node_type='subclass_choice'`), класс — `characters.id_class`. NPC и мобы (`is_npc`) не ограничиваются.
+- **Содержимое строки:** `armor_classes` (для head/body), `main_hand` / `off_hand` — токены `category:<категория>` или `kind:<вид>`. Предметы без вида/класса брони не ограничиваются.
+- **Двуручность:** виды категорий `two_handed` и `polearm` берутся только в основную руку, при надевании снимают предмет из доп. руки, пока надеты — доп. рука заблокирована. В `off_hand` такие токены запрещены (400).
+- **Надевание:** `POST /inventory/{id}/equip` принимает `slot_type` (только для оружия); без него сервер выбирает свободную разрешённую руку.
+- **Автоснятие** (`_revalidate_equipment`, пропускается во время боя) запускается: после сохранения правил (все игроки класса, фоном), после правки предмета с изменением типа/вида/класса брони (носящие его, фоном), из skills-service после выбора подкласса и после полного админского сброса дерева (`POST /inventory/internal/characters/{id}/revalidate-equipment`).
+- **Эндпоинты:** `GET/PUT/DELETE /inventory/admin/equipment-rules` (`items:read` / `items:update`), `GET /inventory/{id}/equipment-rules` — что может носить персонаж (для подсветки в инвентаре).
 
 ## Быстрые слоты
 

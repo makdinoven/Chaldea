@@ -206,7 +206,7 @@ class TestChooseProfession:
 
         prof = _create_profession(db)
         _create_rank(db, profession_id=prof.id, rank_number=1, name="Ученик")
-        result_item = _create_item(db, 50, "Железный меч", "main_weapon")
+        result_item = _create_item(db, 50, "Железный меч", "weapon")
         recipe = _create_recipe(db, name="Ковка меча", profession_id=prof.id,
                                 result_item_id=result_item.id, auto_learn_rank=1)
         db.commit()
@@ -361,7 +361,7 @@ class TestChangeProfession:
 
         prof1 = _create_profession(db, 1, "Кузнец", "blacksmith", 1)
         _create_rank(db, profession_id=prof1.id, rank_number=1, name="Ученик")
-        result_item = _create_item(db, 50, "Железный меч", "main_weapon")
+        result_item = _create_item(db, 50, "Железный меч", "weapon")
         _create_recipe(db, name="Ковка меча", profession_id=prof1.id,
                        result_item_id=result_item.id, auto_learn_rank=1)
 

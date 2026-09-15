@@ -19,7 +19,7 @@ def _create_item(db_session, **overrides):
     defaults = dict(
         name="Test Sword",
         item_level=1,
-        item_type="main_weapon",
+        item_type="weapon",
         item_rarity="common",
         max_stack_size=1,
         is_unique=False,

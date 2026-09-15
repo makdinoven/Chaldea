@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 import math
 import threading
@@ -6,11 +7,12 @@ import random
 from datetime import datetime
 import httpx
 from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, APIRouter, Query
+from fastapi import FastAPI, Depends, HTTPException, APIRouter, Query, BackgroundTasks, Response
 from sqlalchemy.orm import Session
 import models
 import schemas
 import crud
+import equipment_rules
 from database import SessionLocal, engine
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings
@@ -152,11 +154,19 @@ def list_items(
     )
     return items
 
+def _ensure_blueprint_recipe_exists(db: Session, item_in: schemas.ItemCreate):
+    if item_in.blueprint_recipe_id is None:
+        return
+    if not db.query(models.Recipe.id).filter(models.Recipe.id == item_in.blueprint_recipe_id).first():
+        raise HTTPException(status_code=400, detail="Рецепт для чертежа не найден")
+
+
 @router.post("/items", response_model=schemas.Item, status_code=201)
 def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(require_permission("items:create"))):
     """Создаёт новый предмет."""
     if db.query(models.Items).filter(models.Items.name == item_in.name).first():
         raise HTTPException(status_code=400, detail="Предмет с таким названием уже существует")
+    _ensure_blueprint_recipe_exists(db, item_in)
     db_item = models.Items(**item_in.dict(exclude_unset=True))
     db.add(db_item)
     db.commit()
@@ -238,7 +248,7 @@ def get_item(item_id: int, db: Session = Depends(get_db)):
     return db_item
 
 @router.put("/items/{item_id}", response_model=schemas.Item)
-def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends(get_db), current_user = Depends(require_permission("items:update"))):
+def update_item(item_id: int, item_in: schemas.ItemCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user = Depends(require_permission("items:update"))):
     """Обновляет все переданные поля предмета."""
     db_item = db.query(models.Items).get(item_id)
     if not db_item:
@@ -246,10 +256,20 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, db: Session = Depends
     if item_in.name and item_in.name != db_item.name:
         if db.query(models.Items).filter(models.Items.name == item_in.name).first():
             raise HTTPException(status_code=400, detail="Предмет с таким названием уже существует")
+    _ensure_blueprint_recipe_exists(db, item_in)
+    wearability_before = (db_item.item_type, db_item.weapon_subclass, db_item.armor_subclass)
     for field, value in item_in.dict(exclude_unset=True).items():
         setattr(db_item, field, value)
     db.commit()
     db.refresh(db_item)
+
+    if (db_item.item_type, db_item.weapon_subclass, db_item.armor_subclass) != wearability_before:
+        wearer_ids = [
+            row[0] for row in db.query(models.EquipmentSlot.character_id)
+            .filter(models.EquipmentSlot.item_id == db_item.id).distinct().all()
+        ]
+        if wearer_ids:
+            background_tasks.add_task(_revalidate_characters, wearer_ids)
     return db_item
 
 
@@ -394,6 +414,242 @@ def remove_item_from_inventory(character_id: int, item_id: int, quantity: int = 
     return updated_items
 
 
+# ---------------------------------------------------------------------------
+# Class / subclass equipment rules
+# ---------------------------------------------------------------------------
+
+def _scope_word(rules: "equipment_rules.EffectiveRules") -> str:
+    return "подкласс" if rules.subclass_key else "класс"
+
+
+async def _move_slot_item_to_inventory(db: Session, character_id: int, slot: models.EquipmentSlot):
+    """Take the item off a slot into the bag, keeping its enhancements, and remove
+    its modifiers. No commit — the caller owns the transaction."""
+    old_item = db.query(models.Items).filter(models.Items.id == slot.item_id).first()
+    if old_item:
+        enh_bonuses = crud.get_enhancement_bonuses(slot)
+        enh_points = slot.enhancement_points_spent
+        socketed_gems = crud.get_socketed_gems(slot)
+        current_durability = slot.current_durability
+
+        crud.return_item_to_inventory(db, character_id, old_item)
+        db.flush()
+        if enh_points > 0 or socketed_gems or current_durability is not None:
+            new_inv_row = db.query(models.CharacterInventory).filter(
+                models.CharacterInventory.character_id == character_id,
+                models.CharacterInventory.item_id == old_item.id,
+            ).order_by(models.CharacterInventory.id.desc()).first()
+            if new_inv_row:
+                new_inv_row.enhancement_points_spent = enh_points
+                crud.set_enhancement_bonuses(new_inv_row, enh_bonuses)
+                crud.set_socketed_gems(new_inv_row, socketed_gems)
+                new_inv_row.current_durability = current_durability
+                db.flush()
+
+        gem_items = crud.load_gem_items(db, socketed_gems) if socketed_gems else []
+        minus_mods = crud.build_modifiers_dict(
+            old_item, negative=True, enhancement_bonuses=enh_bonuses, gem_items=gem_items,
+            current_durability=current_durability, max_durability=old_item.max_durability,
+        )
+        if minus_mods:
+            await apply_modifiers_in_attributes_service(character_id, minus_mods)
+
+    slot.item_id = None
+    slot.enhancement_points_spent = 0
+    slot.enhancement_bonuses = None
+    slot.socketed_gems = None
+    slot.current_durability = None
+    db.add(slot)
+    db.flush()
+
+
+def _pick_weapon_slot(
+    db: Session,
+    character_id: int,
+    item: models.Items,
+    rules: "equipment_rules.EffectiveRules",
+    requested: Optional[str],
+) -> models.EquipmentSlot:
+    """Choose the hand for a weapon, enforcing class rules and the two-handed lock."""
+    MAIN, OFF = equipment_rules.MAIN_HAND, equipment_rules.OFF_HAND
+    hands = equipment_rules.allowed_hands(rules, item)
+
+    if requested == OFF and equipment_rules.is_two_handed(item):
+        raise HTTPException(status_code=400, detail="Двуручное оружие берётся только в основную руку")
+    if requested and requested not in hands:
+        hand = "основной" if requested == MAIN else "доп."
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ваш {_scope_word(rules)} не может держать это оружие в {hand} руке",
+        )
+    if not hands:
+        raise HTTPException(status_code=400, detail=f"Ваш {_scope_word(rules)} не может носить этот вид оружия")
+
+    slots = {
+        s.slot_type: s
+        for s in db.query(models.EquipmentSlot).filter(
+            models.EquipmentSlot.character_id == character_id,
+            models.EquipmentSlot.slot_type.in_([MAIN, OFF]),
+        ).with_for_update().all()
+    }
+    main_slot = slots.get(MAIN)
+    main_item = (
+        db.query(models.Items).filter(models.Items.id == main_slot.item_id).first()
+        if main_slot and main_slot.item_id else None
+    )
+    # Equipping a two-handed weapon frees the off-hand itself, so only other weapons see the lock
+    off_locked = (
+        main_item is not None
+        and equipment_rules.is_two_handed(main_item)
+        and not equipment_rules.is_two_handed(item)
+    )
+
+    if requested:
+        candidates = [requested]
+    else:
+        usable = [h for h in hands if slots.get(h) is not None and not (h == OFF and off_locked)]
+        free = [h for h in usable if not slots[h].item_id]
+        candidates = free or usable or hands
+
+    choice = candidates[0]
+    if choice == OFF and off_locked:
+        raise HTTPException(status_code=400, detail="Доп. рука занята двуручным оружием")
+    slot = slots.get(choice)
+    if slot is None:
+        raise HTTPException(status_code=404, detail="Нет подходящего слота для этого предмета")
+    return slot
+
+
+async def _revalidate_equipment(db: Session, character_id: int) -> List[str]:
+    """Take off everything the character may no longer wear. Returns freed slot types."""
+    if crud.is_character_in_battle(db, character_id):
+        # Changing gear mid-battle would desync the battle snapshot; the next
+        # trigger (rules edit, subclass change) catches it after the battle.
+        logger.info("Equipment revalidation skipped for character %s: in battle", character_id)
+        return []
+
+    rules = equipment_rules.rules_for_character(db, character_id)
+    forbidden = equipment_rules.forbidden_equipped_slots(db, character_id, rules)
+    if not forbidden:
+        db.rollback()  # release the row locks taken while checking
+        return []
+
+    removed: List[str] = []
+    try:
+        for slot, _reason in forbidden:
+            await _move_slot_item_to_inventory(db, character_id, slot)
+            removed.append(slot.slot_type)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    crud.recalc_fast_slots(db, character_id)
+    _reconcile_perks(character_id)
+    logger.info("Unequipped forbidden items for character %s: %s", character_id, removed)
+    return removed
+
+
+async def _revalidate_characters(character_ids: List[int]):
+    """Background revalidation with its own session (the request session is closed)."""
+    db = SessionLocal()
+    try:
+        for character_id in character_ids:
+            try:
+                await _revalidate_equipment(db, character_id)
+            except Exception as e:
+                # One character failing must not stop the rest; it is logged, not swallowed silently
+                logger.error("Equipment revalidation failed for character %s: %s", character_id, e)
+    finally:
+        db.close()
+
+
+def _player_ids_of_class(db: Session, class_id: int) -> List[int]:
+    rows = db.execute(
+        text("SELECT id FROM characters WHERE id_class = :cid AND is_npc = 0"),
+        {"cid": class_id},
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+@router.get("/admin/equipment-rules", response_model=List[schemas.EquipmentRuleOut])
+def list_equipment_rules(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("items:read")),
+):
+    rules = db.query(models.EquipmentRule).order_by(models.EquipmentRule.class_id, models.EquipmentRule.id).all()
+    return [equipment_rules.rule_to_dict(r) for r in rules]
+
+
+@router.put("/admin/equipment-rules", response_model=schemas.EquipmentRuleOut)
+def save_equipment_rule(
+    body: schemas.EquipmentRuleIn,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("items:update")),
+):
+    """Create or replace the rule for a class (subclass_key null) or a subclass.
+    Characters of that class then lose items they may no longer wear."""
+    if not db.execute(text("SELECT 1 FROM classes WHERE id_class = :cid"), {"cid": body.class_id}).fetchone():
+        raise HTTPException(status_code=400, detail="Класс не найден")
+    try:
+        main_hand = equipment_rules.validate_hand_tokens(body.main_hand, off_hand=False)
+        off_hand = equipment_rules.validate_hand_tokens(body.off_hand, off_hand=True)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    key = equipment_rules.scope_key(body.class_id, body.subclass_key)
+    rule = db.query(models.EquipmentRule).filter(models.EquipmentRule.scope_key == key).first()
+    if rule is None:
+        rule = models.EquipmentRule(scope_key=key, class_id=body.class_id, subclass_key=body.subclass_key)
+        db.add(rule)
+    rule.armor_classes = json.dumps(sorted({a.value for a in body.armor_classes}))
+    rule.main_hand = json.dumps(main_hand)
+    rule.off_hand = json.dumps(off_hand)
+    rule.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(rule)
+
+    background_tasks.add_task(_revalidate_characters, _player_ids_of_class(db, body.class_id))
+    return equipment_rules.rule_to_dict(rule)
+
+
+@router.delete("/admin/equipment-rules", status_code=204)
+def delete_equipment_rule(
+    class_id: int = Query(...),
+    subclass_key: Optional[str] = Query(None, regex=r"^[a-z][a-z_]{1,49}$"),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("items:update")),
+):
+    """Remove restrictions for a scope (everything becomes allowed)."""
+    key = equipment_rules.scope_key(class_id, subclass_key)
+    rule = db.query(models.EquipmentRule).filter(models.EquipmentRule.scope_key == key).first()
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Правило не найдено")
+    db.delete(rule)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.get("/{character_id}/equipment-rules", response_model=schemas.CharacterEquipmentRules)
+def get_character_equipment_rules(character_id: int, db: Session = Depends(get_db)):
+    """What this character may wear, for greying out items in the inventory."""
+    return equipment_rules.rules_for_character(db, character_id).to_response()
+
+
+@router.post(
+    "/internal/characters/{character_id}/revalidate-equipment",
+    response_model=schemas.RevalidateEquipmentResponse,
+)
+async def revalidate_equipment_internal(character_id: int, db: Session = Depends(get_db)):
+    """Called by skills-service when a subclass is chosen or reset."""
+    try:
+        removed = await _revalidate_equipment(db, character_id)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Ошибка обращения к сервису атрибутов: {e}")
+    return {"character_id": character_id, "removed_slots": removed}
+
+
 @router.get("/{character_id}/equipment", response_model=List[schemas.EquipmentSlot])
 def get_equipment_slots(character_id: int, db: Session = Depends(get_db)):
     return crud.get_equipment_slots(db, character_id)
@@ -503,11 +759,31 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
             db.rollback()
             raise HTTPException(status_code=400, detail="Предмет не опознан")
 
+        # 2.6) Правила класса/подкласса
+        rules = equipment_rules.rules_for_character(db, character_id)
+        if not equipment_rules.armor_allowed(rules, db_item):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ваш {_scope_word(rules)} не может носить броню этого класса",
+            )
+
         # 3) Ищем слот
-        slot = crud.find_equipment_slot_for_item(db, character_id, db_item)
+        if db_item.item_type == "weapon":
+            slot = _pick_weapon_slot(db, character_id, db_item, rules, req.slot_type)
+        else:
+            slot = crud.find_equipment_slot_for_item(db, character_id, db_item)
         if not slot:
             db.rollback()
             raise HTTPException(status_code=404, detail="Нет подходящего слота для этого предмета")
+
+        # Двуручное оружие занимает обе руки: доп. рука освобождается
+        if slot.slot_type == equipment_rules.MAIN_HAND and equipment_rules.is_two_handed(db_item):
+            off_slot = db.query(models.EquipmentSlot).filter(
+                models.EquipmentSlot.character_id == character_id,
+                models.EquipmentSlot.slot_type == equipment_rules.OFF_HAND,
+            ).with_for_update().first()
+            if off_slot and off_slot.item_id:
+                await _move_slot_item_to_inventory(db, character_id, off_slot)
 
         # Если слот уже занят => снимаем старый предмет
         if slot.item_id:

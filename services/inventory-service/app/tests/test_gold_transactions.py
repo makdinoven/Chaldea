@@ -357,7 +357,7 @@ class TestAuctionGoldTransactions:
         _insert_character(db, 2, user_id=2, name="Bidder1", location=1, gold=3000)
         _insert_character(db, 3, user_id=3, name="Bidder2", location=1, gold=4000)
         _insert_npc_auctioneer(db, 100, location=1)
-        _create_item(db, 201, "Sword", max_stack=1, item_type="main_weapon")
+        _create_item(db, 201, "Sword", max_stack=1, item_type="weapon")
         db.commit()
 
     def test_bid_creates_auction_buy_transaction(self, gold_env):

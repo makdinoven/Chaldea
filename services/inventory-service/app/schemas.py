@@ -1,4 +1,4 @@
-from pydantic import BaseModel, root_validator, validator
+from pydantic import BaseModel, root_validator, validator, constr
 from typing import List, Optional, Any
 from enum import Enum
 from datetime import datetime
@@ -14,19 +14,85 @@ class ItemType(str, Enum):
     belt = "belt"
     ring = "ring"
     necklace = "necklace"
-    main_weapon = "main_weapon"
-    additional_weapons = "additional_weapons"
+    weapon = "weapon"
     consumable = "consumable"
     resource = "resource"
     scroll = "scroll"
     misc = "misc"
     bracelet = "bracelet"
-    shield = "shield"
     blueprint = "blueprint"
     recipe = "recipe"
     gem = "gem"
     rune = "rune"
     gathering_tool = "gathering_tool"
+
+
+# Armor class only means something for these slots (cloak/belt have none)
+ARMOR_SUBCLASS_TYPES = ("head", "body")
+WEAPON_SUBCLASS_TYPES = ("weapon",)
+
+
+class ArmorSubclass(str, Enum):
+    cloth = "cloth"
+    light_armor = "light_armor"
+    medium_armor = "medium_armor"
+    heavy_armor = "heavy_armor"
+
+
+class WeaponSubclass(str, Enum):
+    """Weapon kind. Each kind belongs to one category; see WEAPON_KIND_CATEGORY."""
+    sword = "sword"
+    hatchet = "hatchet"
+    mace = "mace"
+    sabre = "sabre"
+    dagger = "dagger"
+    espada = "espada"
+    tanto = "tanto"
+    war_pick = "war_pick"
+    bastard_sword = "bastard_sword"
+    axe = "axe"
+    katana = "katana"
+    broadsword = "broadsword"
+    rapier = "rapier"
+    war_hammer = "war_hammer"
+    zweihander = "zweihander"
+    maul = "maul"
+    battle_axe = "battle_axe"
+    scythe = "scythe"
+    nodachi = "nodachi"
+    halberd = "halberd"
+    glaive = "glaive"
+    pike = "pike"
+    spear = "spear"
+    naginata = "naginata"
+    bow = "bow"
+    pistol = "pistol"
+    musket = "musket"
+    buckler = "buckler"
+    targe = "targe"
+    tower_shield = "tower_shield"
+    lute = "lute"
+    knuckledusters = "knuckledusters"
+    staff = "staff"
+    grimoire = "grimoire"
+    amulet = "amulet"
+    rod = "rod"
+    magic_weapon = "magic_weapon"
+    catalyst = "catalyst"
+    wand = "wand"
+
+
+# Category of each weapon kind (for class equipment restrictions)
+WEAPON_KIND_CATEGORY = {
+    "sword": "one_handed", "hatchet": "one_handed", "mace": "one_handed", "sabre": "one_handed", "dagger": "one_handed", "espada": "one_handed", "tanto": "one_handed", "war_pick": "one_handed",
+    "bastard_sword": "one_and_half", "axe": "one_and_half", "katana": "one_and_half", "broadsword": "one_and_half", "rapier": "one_and_half", "war_hammer": "one_and_half",
+    "zweihander": "two_handed", "maul": "two_handed", "battle_axe": "two_handed", "scythe": "two_handed", "nodachi": "two_handed",
+    "halberd": "polearm", "glaive": "polearm", "pike": "polearm", "spear": "polearm", "naginata": "polearm",
+    "bow": "ranged", "pistol": "ranged", "musket": "ranged",
+    "buckler": "shield", "targe": "shield", "tower_shield": "shield",
+    "lute": "other", "knuckledusters": "other",
+    "staff": "magic", "grimoire": "magic", "amulet": "magic", "rod": "magic", "magic_weapon": "magic", "catalyst": "magic", "wand": "magic",
+}
 
 
 class ToolCategory(str, Enum):
@@ -128,8 +194,8 @@ class ItemBase(BaseModel):
     repair_power: Optional[int] = None
 
     primary_damage_type: Optional[str] = None
-    armor_subclass: Optional[str] = None
-    weapon_subclass: Optional[str] = None
+    armor_subclass: Optional[ArmorSubclass] = None
+    weapon_subclass: Optional[WeaponSubclass] = None
 
     # Gathering tool fields (only meaningful when item_type='gathering_tool')
     tool_category: Optional[ToolCategory] = None
@@ -151,39 +217,39 @@ class ItemBase(BaseModel):
     luck_modifier: Optional[int] = None
     damage_modifier: Optional[int] = None
     dodge_modifier: Optional[int] = None
-    res_effects_modifier: Optional[int] = None
-    res_physical_modifier: Optional[int] = None
-    res_catting_modifier: Optional[int] = None
-    res_crushing_modifier: Optional[int] = None
-    res_piercing_modifier: Optional[int] = None
-    res_magic_modifier: Optional[int] = None
-    res_fire_modifier: Optional[int] = None
-    res_ice_modifier: Optional[int] = None
-    res_watering_modifier: Optional[int] = None
-    res_electricity_modifier: Optional[int] = None
-    res_wind_modifier: Optional[int] = None
-    res_sainting_modifier: Optional[int] = None
-    res_damning_modifier: Optional[int] = None
-    critical_hit_chance_modifier: Optional[int] = None
-    critical_damage_modifier: Optional[int] = None
+    res_effects_modifier: Optional[float] = None
+    res_physical_modifier: Optional[float] = None
+    res_catting_modifier: Optional[float] = None
+    res_crushing_modifier: Optional[float] = None
+    res_piercing_modifier: Optional[float] = None
+    res_magic_modifier: Optional[float] = None
+    res_fire_modifier: Optional[float] = None
+    res_ice_modifier: Optional[float] = None
+    res_watering_modifier: Optional[float] = None
+    res_electricity_modifier: Optional[float] = None
+    res_wind_modifier: Optional[float] = None
+    res_sainting_modifier: Optional[float] = None
+    res_damning_modifier: Optional[float] = None
+    critical_hit_chance_modifier: Optional[float] = None
+    critical_damage_modifier: Optional[float] = None
     health_recovery: Optional[int] = None
     energy_recovery: Optional[int] = None
     mana_recovery: Optional[int] = None
     stamina_recovery: Optional[int] = None
 
-    vul_effects_modifier: Optional[int] = None
-    vul_physical_modifier: Optional[int] = None
-    vul_catting_modifier: Optional[int] = None
-    vul_crushing_modifier: Optional[int] = None
-    vul_piercing_modifier: Optional[int] = None
-    vul_magic_modifier: Optional[int] = None
-    vul_fire_modifier: Optional[int] = None
-    vul_ice_modifier: Optional[int] = None
-    vul_watering_modifier: Optional[int] = None
-    vul_electricity_modifier: Optional[int] = None
-    vul_sainting_modifier: Optional[int] = None
-    vul_wind_modifier: Optional[int] = None
-    vul_damning_modifier: Optional[int] = None
+    vul_effects_modifier: Optional[float] = None
+    vul_physical_modifier: Optional[float] = None
+    vul_catting_modifier: Optional[float] = None
+    vul_crushing_modifier: Optional[float] = None
+    vul_piercing_modifier: Optional[float] = None
+    vul_magic_modifier: Optional[float] = None
+    vul_fire_modifier: Optional[float] = None
+    vul_ice_modifier: Optional[float] = None
+    vul_watering_modifier: Optional[float] = None
+    vul_electricity_modifier: Optional[float] = None
+    vul_sainting_modifier: Optional[float] = None
+    vul_wind_modifier: Optional[float] = None
+    vul_damning_modifier: Optional[float] = None
 
 
 class ItemCreate(ItemBase):
@@ -191,6 +257,21 @@ class ItemCreate(ItemBase):
     Схема для создания/обновления предмета.
     Включает валидацию специфичных для gathering_tool полей.
     """
+    # Blueprint -> the recipe it lets you craft once. Existence is checked in the endpoint.
+    blueprint_recipe_id: Optional[int] = None
+
+    @root_validator
+    def _validate_type_bound_fields(cls, values):
+        item_type = values.get("item_type")
+        item_type = item_type.value if isinstance(item_type, Enum) else item_type
+
+        if values.get("armor_subclass") is not None and item_type not in ARMOR_SUBCLASS_TYPES:
+            raise ValueError("Класс брони можно указать только для головы и тела")
+        if values.get("weapon_subclass") is not None and item_type not in WEAPON_SUBCLASS_TYPES:
+            raise ValueError("Подкласс оружия можно указать только для оружия")
+        if values.get("blueprint_recipe_id") is not None and item_type not in ("blueprint", "recipe"):
+            raise ValueError("Рецепт можно привязать только к чертежу")
+        return values
 
     @root_validator
     def _validate_gathering_tool_fields(cls, values):
@@ -306,40 +387,40 @@ class ItemResponse(BaseModel):
     luck_modifier: Optional[int] = None
     damage_modifier: Optional[int] = None
     dodge_modifier: Optional[int] = None
-    res_effects_modifier: Optional[int] = None
-    res_physical_modifier: Optional[int] = None
-    res_catting_modifier: Optional[int] = None
-    res_crushing_modifier: Optional[int] = None
-    res_piercing_modifier: Optional[int] = None
-    res_magic_modifier: Optional[int] = None
-    res_fire_modifier: Optional[int] = None
-    res_ice_modifier: Optional[int] = None
-    res_watering_modifier: Optional[int] = None
-    res_electricity_modifier: Optional[int] = None
-    res_wind_modifier: Optional[int] = None
-    res_sainting_modifier: Optional[int] = None
-    res_damning_modifier: Optional[int] = None
-    critical_hit_chance_modifier: Optional[int] = None
-    critical_damage_modifier: Optional[int] = None
+    res_effects_modifier: Optional[float] = None
+    res_physical_modifier: Optional[float] = None
+    res_catting_modifier: Optional[float] = None
+    res_crushing_modifier: Optional[float] = None
+    res_piercing_modifier: Optional[float] = None
+    res_magic_modifier: Optional[float] = None
+    res_fire_modifier: Optional[float] = None
+    res_ice_modifier: Optional[float] = None
+    res_watering_modifier: Optional[float] = None
+    res_electricity_modifier: Optional[float] = None
+    res_wind_modifier: Optional[float] = None
+    res_sainting_modifier: Optional[float] = None
+    res_damning_modifier: Optional[float] = None
+    critical_hit_chance_modifier: Optional[float] = None
+    critical_damage_modifier: Optional[float] = None
 
     health_recovery: Optional[int] = None
     energy_recovery: Optional[int] = None
     mana_recovery: Optional[int] = None
     stamina_recovery: Optional[int] = None
 
-    vul_effects_modifier: Optional[int] = None
-    vul_physical_modifier: Optional[int] = None
-    vul_catting_modifier: Optional[int] = None
-    vul_crushing_modifier: Optional[int] = None
-    vul_piercing_modifier: Optional[int] = None
-    vul_magic_modifier: Optional[int] = None
-    vul_fire_modifier: Optional[int] = None
-    vul_ice_modifier: Optional[int] = None
-    vul_watering_modifier: Optional[int] = None
-    vul_electricity_modifier: Optional[int] = None
-    vul_sainting_modifier: Optional[int] = None
-    vul_wind_modifier: Optional[int] = None
-    vul_damning_modifier: Optional[int] = None
+    vul_effects_modifier: Optional[float] = None
+    vul_physical_modifier: Optional[float] = None
+    vul_catting_modifier: Optional[float] = None
+    vul_crushing_modifier: Optional[float] = None
+    vul_piercing_modifier: Optional[float] = None
+    vul_magic_modifier: Optional[float] = None
+    vul_fire_modifier: Optional[float] = None
+    vul_ice_modifier: Optional[float] = None
+    vul_watering_modifier: Optional[float] = None
+    vul_electricity_modifier: Optional[float] = None
+    vul_sainting_modifier: Optional[float] = None
+    vul_wind_modifier: Optional[float] = None
+    vul_damning_modifier: Optional[float] = None
 
 class InventoryResponse(BaseModel):
     """
@@ -435,6 +516,52 @@ class EquipItemRequest(BaseModel):
     """
     item_id: int
     inventory_item_id: Optional[int] = None
+    # Weapons only: which hand. Omitted = the server picks an allowed hand.
+    slot_type: Optional[str] = None
+
+    @validator("slot_type")
+    def _hand_slot_only(cls, v):
+        if v is not None and v not in ("main_weapon", "additional_weapons"):
+            raise ValueError("Рука может быть только main_weapon или additional_weapons")
+        return v
+
+
+# -----------------------------------------------------------------------------
+# Class / subclass equipment rules
+# -----------------------------------------------------------------------------
+
+class EquipmentRuleIn(BaseModel):
+    class_id: int
+    subclass_key: Optional[constr(regex=r"^[a-z][a-z_]{1,49}$")] = None
+    armor_classes: List[ArmorSubclass] = []
+    main_hand: List[str] = []
+    off_hand: List[str] = []
+
+
+class EquipmentRuleOut(BaseModel):
+    scope_key: str
+    class_id: int
+    subclass_key: Optional[str] = None
+    armor_classes: List[str]
+    main_hand: List[str]
+    off_hand: List[str]
+    updated_at: Optional[datetime] = None
+
+
+class CharacterEquipmentRules(BaseModel):
+    """None in a list = no restriction for that part."""
+    restricted: bool
+    class_id: Optional[int] = None
+    subclass_key: Optional[str] = None
+    armor_classes: Optional[List[str]] = None
+    main_hand_kinds: Optional[List[str]] = None
+    off_hand_kinds: Optional[List[str]] = None
+    two_handed_kinds: List[str]
+
+
+class RevalidateEquipmentResponse(BaseModel):
+    character_id: int
+    removed_slots: List[str]
 
 
 # -----------------------------------------------------------------------------
@@ -1155,6 +1282,8 @@ class AuctionItemInfo(BaseModel):
     item_type: str
     item_rarity: str
     item_level: int
+    weapon_subclass: Optional[str] = None
+    armor_subclass: Optional[str] = None
 
     class Config:
         orm_mode = True

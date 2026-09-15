@@ -174,7 +174,7 @@ def xp_env(client, db_session):
                  required_experience=2000)
 
     # Result item
-    _create_item(db_session, 50, "Железный меч", "main_weapon", max_stack=99)
+    _create_item(db_session, 50, "Железный меч", "weapon", max_stack=99)
 
     # Material items
     ore = _create_item(db_session, 100, "Железная руда", "resource")
@@ -250,7 +250,7 @@ class TestCraftXpByRarity:
 
         # Create recipe with specific rarity (no xp_reward override)
         result_item = _create_item(db, 200 + hash(rarity) % 1000, f"Item_{rarity}",
-                                   "main_weapon", max_stack=99)
+                                   "weapon", max_stack=99)
         recipe = _create_recipe(db, name=f"Recipe_{rarity}", profession_id=1,
                                 result_item_id=result_item.id, rarity=rarity)
         _add_ingredient(db, recipe.id, xp_env["ore"].id, 1)
@@ -273,7 +273,7 @@ class TestCraftXpOverride:
         db = xp_env["db"]
         c = xp_env["client"]
 
-        result_item = _create_item(db, 300, "Особый клинок", "main_weapon", max_stack=99)
+        result_item = _create_item(db, 300, "Особый клинок", "weapon", max_stack=99)
         recipe = _create_recipe(db, name="Рецепт с XP override", profession_id=1,
                                 result_item_id=result_item.id, rarity="common",
                                 xp_reward=77)
@@ -292,7 +292,7 @@ class TestCraftXpOverride:
         db = xp_env["db"]
         c = xp_env["client"]
 
-        result_item = _create_item(db, 301, "Бесплатный клинок", "main_weapon", max_stack=99)
+        result_item = _create_item(db, 301, "Бесплатный клинок", "weapon", max_stack=99)
         recipe = _create_recipe(db, name="Рецепт 0 XP", profession_id=1,
                                 result_item_id=result_item.id, rarity="legendary",
                                 xp_reward=0)
@@ -397,7 +397,7 @@ class TestMultiRankJump:
         c = xp_env["client"]
 
         # Create high-XP recipe (divine = 500 XP)
-        result_item = _create_item(db, 400, "Божественный клинок", "main_weapon", max_stack=99)
+        result_item = _create_item(db, 400, "Божественный клинок", "weapon", max_stack=99)
         recipe = _create_recipe(db, name="Божественная ковка", profession_id=1,
                                 result_item_id=result_item.id, rarity="common",
                                 xp_reward=2500)
@@ -436,7 +436,7 @@ class TestAutoLearnOnRankUp:
         c = xp_env["client"]
 
         # Create a recipe that auto-learns at rank 2
-        result_item2 = _create_item(db, 401, "Стальной клинок", "main_weapon", max_stack=99)
+        result_item2 = _create_item(db, 401, "Стальной клинок", "weapon", max_stack=99)
         auto_recipe = _create_recipe(db, name="Стальная ковка", profession_id=1,
                                      result_item_id=result_item2.id, rarity="rare",
                                      auto_learn_rank=2)
@@ -472,17 +472,17 @@ class TestAutoLearnOnRankUp:
         c = xp_env["client"]
 
         # Auto-learn recipe at rank 2
-        result_item2 = _create_item(db, 402, "R2 item", "main_weapon", max_stack=99)
+        result_item2 = _create_item(db, 402, "R2 item", "weapon", max_stack=99)
         r2_recipe = _create_recipe(db, name="Auto R2", profession_id=1,
                                    result_item_id=result_item2.id, auto_learn_rank=2)
 
         # Auto-learn recipe at rank 3
-        result_item3 = _create_item(db, 403, "R3 item", "main_weapon", max_stack=99)
+        result_item3 = _create_item(db, 403, "R3 item", "weapon", max_stack=99)
         r3_recipe = _create_recipe(db, name="Auto R3", profession_id=1,
                                    result_item_id=result_item3.id, auto_learn_rank=3)
 
         # Big XP craft to jump from rank 1 to rank 3
-        result_big = _create_item(db, 404, "Mega item", "main_weapon", max_stack=99)
+        result_big = _create_item(db, 404, "Mega item", "weapon", max_stack=99)
         big_recipe = _create_recipe(db, name="Mega craft", profession_id=1,
                                     result_item_id=result_big.id, xp_reward=3000)
         _add_ingredient(db, big_recipe.id, xp_env["ore"].id, 1)
@@ -591,7 +591,7 @@ class TestAdminRecipeXpReward:
 
         prof = _create_profession(db)
         _create_rank(db, profession_id=prof.id, rank_number=1, name="Ученик")
-        result_item = _create_item(db, 50, "Железный меч", "main_weapon")
+        result_item = _create_item(db, 50, "Железный меч", "weapon")
         mat = _create_item(db, 100, "Руда", "resource")
         db.commit()
 
@@ -613,7 +613,7 @@ class TestAdminRecipeXpReward:
 
         prof = _create_profession(db)
         _create_rank(db, profession_id=prof.id, rank_number=1, name="Ученик")
-        result_item = _create_item(db, 50, "Простой предмет", "main_weapon")
+        result_item = _create_item(db, 50, "Простой предмет", "weapon")
         mat = _create_item(db, 100, "Руда", "resource")
         db.commit()
 

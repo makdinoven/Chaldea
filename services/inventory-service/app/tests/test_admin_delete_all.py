@@ -12,7 +12,7 @@ import models
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _create_item(db, item_id=1, name="Sword", item_type="main_weapon", item_rarity="common"):
+def _create_item(db, item_id=1, name="Sword", item_type="weapon", item_rarity="common"):
     """Create an item in the test DB."""
     item = models.Items(
         id=item_id,
