@@ -4,6 +4,8 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import type { RootState } from '../../../../redux/store';
 import type { Area } from '../../../../redux/actions/adminLocationsActions';
+import RecommendedLevelFields from '../RecommendedLevelFields';
+import { parseLevelRange } from '../../../../api/recommendedLevel';
 
 interface CountryFormData {
   name: string;
@@ -47,6 +49,8 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
     is_hidden: initialData?.is_hidden ?? false,
   });
 
+  const [levelMin, setLevelMin] = useState('');
+  const [levelMax, setLevelMax] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [emblemFile, setEmblemFile] = useState<File | null>(null);
   const [emblemPreview, setEmblemPreview] = useState<string | null>(null);
@@ -135,8 +139,18 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
     if (isUploading) return;
 
     if (initialData?.id) {
+      const levels = parseLevelRange(levelMin, levelMax);
+      if (levels.error) {
+        toast.error(levels.error);
+        return;
+      }
       // Edit existing country
-      const resultData: Record<string, unknown> = { ...formData, id: initialData.id };
+      const resultData: Record<string, unknown> = {
+        ...formData,
+        id: initialData.id,
+        recommended_level_min: levels.min,
+        recommended_level_max: levels.max,
+      };
 
       if (selectedFile) {
         const imageUrl = await uploadImage(initialData.id);
@@ -295,6 +309,19 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
             </p>
           )}
         </div>
+
+        {initialData?.id && (
+          <RecommendedLevelFields
+            targetType="country"
+            targetId={initialData.id}
+            min={levelMin}
+            max={levelMax}
+            onChange={(min, max) => {
+              setLevelMin(min);
+              setLevelMax(max);
+            }}
+          />
+        )}
 
         <div className="mb-6">
           <label className="block mb-2 text-[#8ab3d5] font-medium">ПРАВИТЕЛЬ:</label>

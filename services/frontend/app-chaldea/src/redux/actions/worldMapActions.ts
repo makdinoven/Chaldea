@@ -27,6 +27,14 @@ export interface ZonePoint {
   y: number;
 }
 
+/** Recommended level range of a map zone's target; a bound is null when unknown */
+export interface TargetLevel {
+  min: number | null;
+  max: number | null;
+  /** At least one bound was set by an admin instead of computed from locations */
+  is_manual: boolean;
+}
+
 export interface ClickableZone {
   id: number;
   parent_type: 'area' | 'country';
@@ -36,6 +44,11 @@ export interface ClickableZone {
   zone_data: ZonePoint[];
   label: string | null;
   stroke_color: string | null;
+  /** Precise coastline outline (SVG path in the same 0..100 space as zone_data); null = not computed */
+  precise_path?: string | null;
+  /** The zone's own coastline settings; null = uses the map-level settings */
+  land_settings?: { samples: ZonePoint[]; tolerance: number } | null;
+  target_level?: TargetLevel | null;
 }
 
 export interface Area {

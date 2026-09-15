@@ -8,6 +8,18 @@ import {
   deleteClickableZone,
 } from '../../../redux/actions/adminLocationsActions';
 import type { ClickableZone, ZonePoint } from '../../../redux/actions/adminLocationsActions';
+import {
+  applyMapOutlines,
+  DEFAULT_TOLERANCE,
+  fetchMapOutlineSettings,
+  mapOutlineErrorMessage,
+  MAX_WATER_SAMPLES,
+  previewMapOutlines,
+  resetZoneOutlineSettings,
+  type MapOutlineSettings,
+  type MapSamplePoint,
+} from '../../../api/mapOutlines';
+import CoastlineOutlinePanel from './CoastlineOutlinePanel';
 
 // --- Types ---
 
@@ -85,10 +97,61 @@ const AdminClickableZoneEditor = ({
   // Edit zone form
   const [editingZone, setEditingZone] = useState<EditingZone | null>(null);
 
+  // Coastline outlines
+  const [coastPanelOpen, setCoastPanelOpen] = useState(false);
+  const [savedOutlineSettings, setSavedOutlineSettings] = useState<MapOutlineSettings | null>(null);
+  const [outlineSettingsLoading, setOutlineSettingsLoading] = useState(false);
+  const [pipetteMode, setPipetteMode] = useState(false);
+  const [waterSamples, setWaterSamples] = useState<MapSamplePoint[]>([]);
+  const [tolerance, setTolerance] = useState(DEFAULT_TOLERANCE);
+  const [maskPng, setMaskPng] = useState<string | null>(null);
+  const [showMask, setShowMask] = useState(true);
+  const [landRatio, setLandRatio] = useState<number | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+
   // Load zones on mount
   useEffect(() => {
     dispatch(fetchClickableZones({ parentType, parentId }));
   }, [dispatch, parentType, parentId]);
+
+  // Panel scope: the selected zone (its own settings, else the map's) or the whole map.
+  // Keyed on the selection only, so refetching zones does not wipe samples being edited.
+  const zonesRef = useRef(clickableZones);
+  zonesRef.current = clickableZones;
+  useEffect(() => {
+    const zone = selectedZoneId ? zonesRef.current.find((z) => z.id === selectedZoneId) : undefined;
+    const settings = zone?.land_settings ?? savedOutlineSettings;
+    setWaterSamples(settings?.samples ?? []);
+    setTolerance(settings?.tolerance ?? DEFAULT_TOLERANCE);
+    setMaskPng(null);
+    setLandRatio(null);
+  }, [selectedZoneId, savedOutlineSettings]);
+
+  // Saved coastline settings: prefill the panel and allow auto-apply after drawing a zone
+  useEffect(() => {
+    let cancelled = false;
+    setOutlineSettingsLoading(true);
+    fetchMapOutlineSettings(parentType, parentId)
+      .then((settings) => {
+        if (cancelled) return;
+        setSavedOutlineSettings(settings);
+        if (settings) {
+          setWaterSamples(settings.samples);
+          setTolerance(settings.tolerance);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) toast.error(mapOutlineErrorMessage(error, 'Не удалось загрузить настройки контуров'));
+      })
+      .finally(() => {
+        if (!cancelled) setOutlineSettingsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [parentType, parentId]);
 
   // --- Coordinate conversion ---
 
@@ -140,6 +203,7 @@ const AdminClickableZoneEditor = ({
   // --- Drawing handlers ---
 
   const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (pipetteMode) return; // pipette uses click
     if (drawingMode === 'polygon') return; // polygon uses click, not drag
 
     if (selectedZoneId) {
@@ -191,6 +255,15 @@ const AdminClickableZoneEditor = ({
   };
 
   const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (pipetteMode) {
+      if (waterSamples.length >= MAX_WATER_SAMPLES) {
+        toast.error(`Не больше ${MAX_WATER_SAMPLES} образцов`);
+        return;
+      }
+      const coords = getPercentCoords(e.clientX, e.clientY);
+      setWaterSamples((prev) => [...prev, coords]);
+      return;
+    }
     if (drawingMode !== 'polygon') return;
     if (polygonFinalized) return;
 
@@ -279,9 +352,98 @@ const AdminClickableZoneEditor = ({
       setNewZoneColor(savedColor);
 
       dispatch(fetchClickableZones({ parentType, parentId }));
+
+      // Cut the new zone along the coastline with the saved settings
+      if (savedOutlineSettings && savedOutlineSettings.samples.length > 0) {
+        try {
+          await applyMapOutlines({ parent_type: parentType, parent_id: parentId, ...savedOutlineSettings });
+          dispatch(fetchClickableZones({ parentType, parentId }));
+        } catch (error: unknown) {
+          toast.error(mapOutlineErrorMessage(error, 'Зона создана, но контур по берегу не пересчитан'));
+        }
+      }
     } catch {
       toast.error('Ошибка создания зоны');
     }
+  };
+
+  // --- Coastline outlines ---
+
+  const selectedZone = selectedZoneId ? clickableZones.find((z) => z.id === selectedZoneId) : undefined;
+
+  const outlineRequest = () => ({
+    parent_type: parentType,
+    parent_id: parentId,
+    samples: waterSamples,
+    tolerance,
+    ...(selectedZone ? { zone_id: selectedZone.id } : {}),
+  });
+
+  const handlePreviewMask = async () => {
+    setPreviewLoading(true);
+    try {
+      const preview = await previewMapOutlines(outlineRequest());
+      setMaskPng(preview.mask_png);
+      setLandRatio(preview.land_ratio);
+      setShowMask(true);
+    } catch (error: unknown) {
+      toast.error(mapOutlineErrorMessage(error, 'Не удалось построить маску суши'));
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleApplyOutlines = async () => {
+    setApplyLoading(true);
+    try {
+      const request = outlineRequest();
+      const result = await applyMapOutlines(request);
+      if (request.zone_id === undefined) {
+        setSavedOutlineSettings({ samples: request.samples, tolerance: request.tolerance });
+      }
+      toast.success(`Контуры обновлены: ${result.zones_updated}`);
+      if (result.zones_empty.length > 0) {
+        toast(`Без суши (оставлена грубая обводка): ${result.zones_empty.length} — ID ${result.zones_empty.join(', ')}`, {
+          icon: '⚠️',
+        });
+      }
+      setPipetteMode(false);
+      dispatch(fetchClickableZones({ parentType, parentId }));
+    } catch (error: unknown) {
+      toast.error(mapOutlineErrorMessage(error, 'Не удалось применить контуры'));
+    } finally {
+      setApplyLoading(false);
+    }
+  };
+
+  const handleResetZoneSettings = async () => {
+    if (!selectedZone) return;
+    setResetLoading(true);
+    try {
+      await resetZoneOutlineSettings(selectedZone.id);
+      toast.success('Для зоны возвращены общие настройки карты');
+      setWaterSamples(savedOutlineSettings?.samples ?? []);
+      setTolerance(savedOutlineSettings?.tolerance ?? DEFAULT_TOLERANCE);
+      setMaskPng(null);
+      setLandRatio(null);
+      dispatch(fetchClickableZones({ parentType, parentId }));
+    } catch (error: unknown) {
+      toast.error(mapOutlineErrorMessage(error, 'Не удалось вернуть общие настройки'));
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const handleTogglePipette = () => {
+    setPipetteMode((on) => {
+      if (!on) {
+        // Pipette clicks must not add polygon points or start rectangles
+        setDragState(null);
+        setIsDragging(false);
+        setCursorPos(null);
+      }
+      return !on;
+    });
   };
 
   const handleCancelNewZone = () => {
@@ -446,7 +608,9 @@ const AdminClickableZoneEditor = ({
 
         <div
           ref={containerRef}
-          className="relative border border-white/20 rounded-lg overflow-hidden cursor-crosshair"
+          className={`relative border rounded-lg overflow-hidden cursor-crosshair ${
+            pipetteMode ? 'border-site-blue/70' : 'border-white/20'
+          }`}
         >
           <img
             src={mapImageUrl}
@@ -454,6 +618,15 @@ const AdminClickableZoneEditor = ({
             className="w-full h-auto block select-none pointer-events-none"
             draggable={false}
           />
+
+          {maskPng && showMask && (
+            <img
+              src={maskPng}
+              alt=""
+              className="absolute inset-0 w-full h-full select-none pointer-events-none"
+              draggable={false}
+            />
+          )}
 
           <svg
             ref={svgRef}
@@ -475,15 +648,32 @@ const AdminClickableZoneEditor = ({
               <g key={zone.id}>
                 <path
                   d={getZoneSvgPath(zone.zone_data)}
-                  fill={selectedZoneId === zone.id ? 'rgba(118,166,189,0.4)' : 'rgba(240,217,92,0.2)'}
+                  fill={
+                    selectedZoneId === zone.id
+                      ? 'rgba(118,166,189,0.4)'
+                      : zone.precise_path ? 'rgba(240,217,92,0.05)' : 'rgba(240,217,92,0.2)'
+                  }
                   stroke={selectedZoneId === zone.id ? '#76a6bd' : (zone.stroke_color || '#f0d95c')}
                   strokeWidth="0.3"
-                  className="cursor-pointer transition-colors"
+                  strokeDasharray={zone.precise_path ? '1 0.8' : undefined}
+                  opacity={zone.precise_path && selectedZoneId !== zone.id ? 0.55 : 1}
+                  className={`${pipetteMode ? 'pointer-events-none' : 'cursor-pointer'} transition-colors`}
                   onClick={(e) => {
                     e.stopPropagation();
                     setSelectedZoneId(zone.id === selectedZoneId ? null : zone.id);
                   }}
                 />
+                {zone.precise_path && (
+                  <path
+                    d={zone.precise_path}
+                    fill="none"
+                    stroke={zone.stroke_color || '#f0d95c'}
+                    strokeWidth={1.5}
+                    strokeLinejoin="round"
+                    vectorEffect="non-scaling-stroke"
+                    className="pointer-events-none"
+                  />
+                )}
                 {/* Zone label */}
                 {zone.label && zone.zone_data.length >= 2 && (
                   <text
@@ -571,6 +761,27 @@ const AdminClickableZoneEditor = ({
                 ))}
               </g>
             )}
+
+            {/* Water samples (pipette) */}
+            {waterSamples.map((sample, index) => (
+              <circle
+                key={`sample-${index}`}
+                cx={sample.x}
+                cy={sample.y}
+                r={0.9}
+                fill="rgba(80, 180, 255, 0.85)"
+                stroke="white"
+                strokeWidth={1.5}
+                vectorEffect="non-scaling-stroke"
+                className="cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setWaterSamples((prev) => prev.filter((_, i) => i !== index));
+                }}
+              >
+                <title>Образец #{index + 1} — клик, чтобы удалить</title>
+              </circle>
+            ))}
           </svg>
         </div>
 
@@ -686,6 +897,33 @@ const AdminClickableZoneEditor = ({
             </div>
           </div>
         )}
+
+        <CoastlineOutlinePanel
+          open={coastPanelOpen}
+          onToggleOpen={() => setCoastPanelOpen((v) => !v)}
+          settingsLoading={outlineSettingsLoading}
+          pipetteMode={pipetteMode}
+          onTogglePipette={handleTogglePipette}
+          samples={waterSamples}
+          onRemoveSample={(index) => setWaterSamples((prev) => prev.filter((_, i) => i !== index))}
+          onClearSamples={() => setWaterSamples([])}
+          tolerance={tolerance}
+          onToleranceChange={setTolerance}
+          hasMask={Boolean(maskPng)}
+          showMask={showMask}
+          onToggleShowMask={() => setShowMask((v) => !v)}
+          landRatio={landRatio}
+          previewLoading={previewLoading}
+          applyLoading={applyLoading}
+          onPreview={handlePreviewMask}
+          onApply={handleApplyOutlines}
+          preciseCount={clickableZones.filter((z) => Boolean(z.precise_path)).length}
+          zoneCount={clickableZones.length}
+          zoneLabel={selectedZone ? selectedZone.label || getTargetName(selectedZone.target_id) : null}
+          zoneHasOwnSettings={Boolean(selectedZone?.land_settings)}
+          resetLoading={resetLoading}
+          onResetZoneSettings={handleResetZoneSettings}
+        />
       </div>
 
       {/* Zone list panel */}
@@ -723,8 +961,16 @@ const AdminClickableZoneEditor = ({
               onClick={() => setSelectedZoneId(zone.id === selectedZoneId ? null : zone.id)}
             >
               <div className="flex justify-between items-start mb-1">
-                <span className="text-white text-sm font-medium">
-                  {zone.label || `Зона #${zone.id}`}
+                <span className="text-white text-sm font-medium flex items-center gap-1.5 min-w-0">
+                  <span className="truncate">{zone.label || `Зона #${zone.id}`}</span>
+                  {zone.land_settings && (
+                    <span
+                      className="shrink-0 rounded-full border border-gold/40 bg-gold/10 px-1.5 py-px text-[10px] text-gold"
+                      title="Свои настройки контура"
+                    >
+                      свой контур
+                    </span>
+                  )}
                 </span>
                 <span className="text-[#8ab3d5] text-xs">ID: {zone.id}</span>
               </div>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { GraphLocation } from '../../api/worldGraph';
+import { hasRecommendedLevel } from '../../utils/recommendedLevel';
 
 interface LocationPickerProps {
   locations: GraphLocation[];
@@ -138,7 +139,8 @@ const LocationPicker = ({
               >
                 <span className="w-full truncate text-[13px] text-white/90">{location.name}</span>
                 <span className="w-full truncate text-[10px] text-white/40">
-                  {regionNames.get(location.region_id) ?? '—'} · ур. {location.recommended_level}
+                  {regionNames.get(location.region_id) ?? '—'}
+                  {hasRecommendedLevel(location.recommended_level) && ` · ур. ${location.recommended_level}`}
                 </span>
               </button>
             </li>

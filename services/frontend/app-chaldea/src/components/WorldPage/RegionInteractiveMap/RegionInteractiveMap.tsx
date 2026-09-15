@@ -1,5 +1,6 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
+import { hasRecommendedLevel } from '../../../utils/recommendedLevel';
 
 export interface MapItem {
   id: number;
@@ -84,7 +85,7 @@ const MARKER_BADGE_COLORS: Record<string, string> = {
 const renderMapBadge = (markerType?: string | null, recommendedLevel?: number | null) => {
   const icon = MARKER_ICONS[markerType ?? ''] ?? '';
   const color = MARKER_BADGE_COLORS[markerType ?? ''] ?? 'text-white/50';
-  const showLevel = (markerType === 'dangerous' || markerType === 'farm') && recommendedLevel;
+  const showLevel = (markerType === 'dangerous' || markerType === 'farm') && hasRecommendedLevel(recommendedLevel);
   const levelStr = showLevel ? `\u{00B7} \u0423\u0440.${recommendedLevel}` : '';
   const parts = [icon, levelStr].filter(Boolean).join(' ');
   if (!parts) return null;

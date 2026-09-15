@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { NeighborLocation } from './types';
+import { hasRecommendedLevel } from '../../../utils/recommendedLevel';
 
 interface NeighborsSectionProps {
   neighbors: NeighborLocation[];
@@ -70,7 +71,7 @@ const NeighborsSection = ({ neighbors }: NeighborsSectionProps) => {
                   {neighbor.name}
                 </span>
                 <span className="flex items-center gap-3">
-                  {neighbor.recommended_level > 0 && (
+                  {hasRecommendedLevel(neighbor.recommended_level) && (
                     <span className="text-gold text-[11px] font-medium shrink-0">
                       {neighbor.recommended_level}+ LVL
                     </span>

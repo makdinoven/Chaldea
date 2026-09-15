@@ -33,6 +33,7 @@ import HierarchyTree from './HierarchyTree/HierarchyTree';
 import InteractiveMap from './InteractiveMap/InteractiveMap';
 import RegionInteractiveMap from './RegionInteractiveMap/RegionInteractiveMap';
 import type { MapItem } from './RegionInteractiveMap/RegionInteractiveMap';
+import { hasRecommendedLevel } from '../../utils/recommendedLevel';
 
 type ViewLevel = 'world' | 'area' | 'country' | 'region';
 
@@ -786,7 +787,7 @@ const WorldPage = () => {
               <h2 className="gold-text text-2xl font-medium uppercase mb-2 text-center">
                 {regionDetails.name}
               </h2>
-              {regionDetails.recommended_level && (
+              {hasRecommendedLevel(regionDetails.recommended_level) && (
                 <p className="text-white/60 text-sm text-center mb-4">
                   Рекомендуемый уровень: {regionDetails.recommended_level}
                 </p>

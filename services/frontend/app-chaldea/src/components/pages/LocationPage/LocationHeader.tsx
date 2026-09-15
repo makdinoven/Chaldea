@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { LocationData, MarkerType } from './types';
+import { hasRecommendedLevel } from '../../../utils/recommendedLevel';
 
 interface LocationHeaderProps {
   location: LocationData;
@@ -108,7 +109,7 @@ const LocationHeader = ({ location, aside }: LocationHeaderProps) => {
           </svg>
           {markerLabel}
         </span>
-        {location.recommended_level > 0 && (
+        {hasRecommendedLevel(location.recommended_level) && (
           <span className="px-3 py-1.5 rounded-full bg-site-bg border border-gold-dark/60 text-gold text-[11px] font-medium tracking-[0.06em]">
             {location.recommended_level}+ LVL
           </span>

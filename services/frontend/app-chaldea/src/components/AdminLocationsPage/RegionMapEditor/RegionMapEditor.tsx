@@ -4,6 +4,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useAppDispatch } from '../../../redux/store';
 import { updateLocationPosition, updateDistrictPosition } from '../../../redux/actions/worldMapActions';
+import { hasRecommendedLevel } from '../../../utils/recommendedLevel';
 
 // --- Types ---
 
@@ -64,10 +65,10 @@ const MARKER_BADGES: Record<string, { icon: string; label: string; color: string
 
 const renderMarkerBadge = (markerType?: string | null, recommendedLevel?: number | null, size: 'map' | 'list' = 'list') => {
   const badge = MARKER_BADGES[markerType ?? ''];
-  if (!badge && !recommendedLevel) return null;
+  if (!badge && !hasRecommendedLevel(recommendedLevel)) return null;
   const icon = badge?.icon ?? '';
   const color = badge?.color ?? 'text-white/50';
-  const showLevel = (markerType === 'dangerous' || markerType === 'farm') && recommendedLevel;
+  const showLevel = (markerType === 'dangerous' || markerType === 'farm') && hasRecommendedLevel(recommendedLevel);
   const levelStr = showLevel ? `Ур.${recommendedLevel}` : '';
   const parts = [icon, levelStr].filter(Boolean).join(' ');
   if (!parts) return null;

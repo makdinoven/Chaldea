@@ -13,6 +13,8 @@ import { resetRegionEditState } from '../../../../redux/slices/regionEditSlice';
 import { selectRegionEdit, selectAdminLocations } from '../../../../redux/selectors/locationSelectors';
 import LocationSearch from '../../../CommonComponents/LocationSearch/LocationSearch';
 import type { AppDispatch } from '../../../../redux/store';
+import RecommendedLevelFields from '../RecommendedLevelFields';
+import { parseLevelRange } from '../../../../api/recommendedLevel';
 
 interface RegionFormData {
   name: string;
@@ -77,6 +79,8 @@ const EditRegionForm = ({
     status: 'active',
   });
 
+  const [levelMin, setLevelMin] = useState('');
+  const [levelMax, setLevelMax] = useState('');
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [selectedMap, setSelectedMap] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -151,7 +155,13 @@ const EditRegionForm = ({
       return;
     }
 
-    const regionData = {
+    const levels = parseLevelRange(levelMin, levelMax);
+    if (regionId !== 'new' && levels.error) {
+      toast.error(levels.error);
+      return;
+    }
+
+    const regionData: Record<string, unknown> = {
       name: formData.name,
       description: formData.description,
       country_id: Number(formData.country_id),
@@ -162,6 +172,10 @@ const EditRegionForm = ({
       map_image_url: formData.map_image_url || null,
       image_url: formData.image_url || null,
     };
+    if (regionId !== 'new') {
+      regionData.recommended_level_min = levels.min;
+      regionData.recommended_level_max = levels.max;
+    }
 
     setIsUploading(true);
     try {
@@ -338,6 +352,19 @@ const EditRegionForm = ({
             )}
           </div>
         </div>
+
+        {regionId !== 'new' && (
+          <RecommendedLevelFields
+            targetType="region"
+            targetId={Number(regionId)}
+            min={levelMin}
+            max={levelMax}
+            onChange={(min, max) => {
+              setLevelMin(min);
+              setLevelMax(max);
+            }}
+          />
+        )}
 
         {error && <div className="text-site-red mb-4">{error}</div>}
 
