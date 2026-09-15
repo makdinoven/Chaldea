@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import ItemList from "./ItemList";
 import ItemForm from "./ItemForm";
 import IssueItemModal from "./IssueItemModal";
+import { ITEM_CATEGORIES, type ItemCategoryKey } from "../../constants/items";
 
 /* ── Types ── */
 
@@ -27,28 +29,30 @@ export interface ItemData {
   [key: string]: unknown;
 }
 
-/* ── Craft / Regular type constants ── */
+const DEFAULT_CATEGORY: ItemCategoryKey = "equipment";
 
-export const CRAFT_ITEM_TYPES = ["blueprint", "recipe", "gem", "rune", "resource"] as const;
+const isCategoryKey = (value: string | null): value is ItemCategoryKey =>
+  ITEM_CATEGORIES.some((c) => c.key === value);
 
-export const REGULAR_ITEM_TYPES = [
-  "head", "body", "cloak", "belt", "ring", "necklace", "bracelet",
-  "main_weapon", "additional_weapons", "shield", "consumable", "scroll", "misc",
-] as const;
+/* ── Component ── */
 
-/* ── Props ── */
+const ItemsAdminPage = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawCategory = searchParams.get("category");
+  const category: ItemCategoryKey = isCategoryKey(rawCategory) ? rawCategory : DEFAULT_CATEGORY;
 
-interface ItemsAdminPageProps {
-  title?: string;
-  itemTypes?: string[];
-  excludeTypes?: string[];
-}
-
-const ItemsAdminPage = ({ title, itemTypes, excludeTypes }: ItemsAdminPageProps) => {
   const [editingId, setEditingId] = useState<number | undefined>();
   const [creating, setCreating] = useState(false);
   const [issueItem, setIssueItem] = useState<ItemData | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
+
+  const setCategory = (key: ItemCategoryKey) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("category", key);
+      return next;
+    }, { replace: true });
+  };
 
   const closeForm = () => {
     setEditingId(undefined);
@@ -56,31 +60,31 @@ const ItemsAdminPage = ({ title, itemTypes, excludeTypes }: ItemsAdminPageProps)
     setRefreshKey((k) => k + 1);
   };
 
+  const defaultType = ITEM_CATEGORIES.find((c) => c.key === category)?.types[0];
+
   return (
-    <div className="w-full max-w-container mx-auto" key={refreshKey}>
+    <div className="w-full max-w-container mx-auto">
       {!editingId && !creating && (
         <ItemList
+          key={refreshKey}
+          category={category}
+          onCategoryChange={setCategory}
           onSelect={(id: number) => setEditingId(id)}
           onCreate={() => setCreating(true)}
           onIssue={(item: ItemData) => setIssueItem(item)}
-          title={title}
-          itemTypes={itemTypes}
-          excludeTypes={excludeTypes}
         />
       )}
       {(editingId || creating) && (
         <ItemForm
           selected={editingId}
+          defaultType={defaultType}
           onSuccess={closeForm}
           onCancel={closeForm}
         />
       )}
       <IssueItemModal
         open={Boolean(issueItem)}
-        onClose={() => {
-          setIssueItem(undefined);
-          setRefreshKey((k) => k + 1);
-        }}
+        onClose={() => setIssueItem(undefined)}
         initialItem={issueItem}
       />
     </div>

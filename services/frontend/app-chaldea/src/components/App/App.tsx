@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
+import { BrowserRouter as Router, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { useAppDispatch } from "../../redux/store";
 import { getMe, setAuthInitialized } from "../../redux/slices/userSlice";
@@ -19,6 +19,7 @@ import LocationPage from "../pages/LocationPage/LocationPage";
 import ItemsAdminPage from "../ItemsAdminPage/ItemsAdminPage";
 import AdminPage from "../Admin/AdminPage";
 import StarterKitsPage from "../Admin/StarterKitsPage/StarterKitsPage";
+import EquipmentRulesAdminPage from "../Admin/EquipmentRulesAdminPage/EquipmentRulesAdminPage";
 import BattlePage from "../pages/BattlePage/BattlePage";
 import ProfilePage from "../ProfilePage/ProfilePage";
 import AdminCharactersPage from "../Admin/CharactersPage/AdminCharactersPage";
@@ -56,7 +57,6 @@ import AdminPerksPage from "../Admin/PerksPage/AdminPerksPage";
 import AdminTitlesPage from "../Admin/TitlesPage/AdminTitlesPage";
 import ProfessionsAdminPage from "../Admin/ProfessionsAdminPage/ProfessionsAdminPage";
 import RecipesAdminPage from "../Admin/RecipesAdminPage/RecipesAdminPage";
-import CraftItemsAdminPage from "../Admin/CraftItemsAdminPage/CraftItemsAdminPage";
 import AdminPathEditorPage from "../AdminPathEditor/AdminPathEditorPage";
 import MessengerPage from "../Messenger/MessengerPage";
 import PostHistoryPage from "../pages/PostHistoryPage/PostHistoryPage";
@@ -65,7 +65,6 @@ import TicketListPage from "../Tickets/TicketListPage";
 import TicketDetailPage from "../Tickets/TicketDetailPage";
 import AdminTicketsPage from "../Tickets/AdminTicketsPage";
 import AdminTicketDetailPage from "../Tickets/AdminTicketDetailPage";
-import { CRAFT_ITEM_TYPES } from "../ItemsAdminPage/ItemsAdminPage";
 import EventsPage from "../Events/EventsPage";
 import BattlePassPage from "../Events/BattlePass/BattlePassPage";
 import AdminDungeonList from "../Admin/DungeonsPage/AdminDungeonList";
@@ -169,14 +168,16 @@ const App = () => {
             } />
             <Route path="admin/items" element={
               <ProtectedRoute requiredPermission="items:read">
-                <ItemsAdminPage excludeTypes={[...CRAFT_ITEM_TYPES]} />
+                <ItemsAdminPage />
               </ProtectedRoute>
             } />
-            <Route path="admin/craft-items" element={
+            <Route path="admin/equipment-rules" element={
               <ProtectedRoute requiredPermission="items:read">
-                <CraftItemsAdminPage />
+                <EquipmentRulesAdminPage />
               </ProtectedRoute>
             } />
+            {/* Old bookmark: craft items are now a category of the items page */}
+            <Route path="admin/craft-items" element={<Navigate to="/admin/items?category=craft" replace />} />
             <Route path="admin/starter-kits" element={
               <ProtectedRoute requiredPermission="characters:update">
                 <StarterKitsPage />

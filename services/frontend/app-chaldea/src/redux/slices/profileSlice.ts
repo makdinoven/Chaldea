@@ -2,6 +2,7 @@ import { createSlice, createAsyncThunk, createSelector, PayloadAction } from '@r
 import axios from 'axios';
 import type { RootState, AppDispatch } from '../store';
 import { getMe } from './userSlice';
+import type { EquipmentRules } from '../../utils/equipmentRules';
 
 // --- Types ---
 
@@ -270,6 +271,10 @@ export interface ProfileState {
   error: string | null;
   avatarUploading: boolean;
   raceNamesMap: RaceNamesMap;
+  /** What the character's class/subclass may wear; null until loaded */
+  equipmentRules: EquipmentRules | null;
+  equipmentRulesLoading: boolean;
+  equipmentRulesError: string | null;
 }
 
 // --- Initial State ---
@@ -302,6 +307,9 @@ const initialState: ProfileState = {
   error: null,
   avatarUploading: false,
   raceNamesMap: {},
+  equipmentRules: null,
+  equipmentRulesLoading: false,
+  equipmentRulesError: null,
 };
 
 // --- Async Thunks ---
@@ -427,16 +435,39 @@ export const fetchFastSlots = createAsyncThunk<
   },
 );
 
+export const fetchEquipmentRules = createAsyncThunk<
+  EquipmentRules,
+  number,
+  { rejectValue: string }
+>(
+  'profile/fetchEquipmentRules',
+  async (characterId, thunkAPI) => {
+    try {
+      const response = await axios.get(`/inventory/${characterId}/equipment-rules`);
+      return response.data;
+    } catch {
+      return thunkAPI.rejectWithValue('Не удалось загрузить ограничения экипировки');
+    }
+  },
+);
+
 export const equipItem = createAsyncThunk<
   void,
-  { characterId: number; itemId: number; inventoryItemId?: number },
+  {
+    characterId: number;
+    itemId: number;
+    inventoryItemId?: number;
+    /** Target hand for weapons: 'main_weapon' | 'additional_weapons'; server picks when omitted */
+    slotType?: string;
+  },
   { rejectValue: string; dispatch: AppDispatch }
 >(
   'profile/equipItem',
-  async ({ characterId, itemId, inventoryItemId }, thunkAPI) => {
+  async ({ characterId, itemId, inventoryItemId, slotType }, thunkAPI) => {
     try {
-      const payload: { item_id: number; inventory_item_id?: number } = { item_id: itemId };
+      const payload: { item_id: number; inventory_item_id?: number; slot_type?: string } = { item_id: itemId };
       if (inventoryItemId) payload.inventory_item_id = inventoryItemId;
+      if (slotType) payload.slot_type = slotType;
       await axios.post(`/inventory/${characterId}/equip`, payload);
       // Re-fetch inventory, equipment, and attributes after successful equip
       await Promise.all([
@@ -694,6 +725,7 @@ export const loadProfileData = createAsyncThunk<
         thunkAPI.dispatch(fetchFastSlots(characterId)),
         thunkAPI.dispatch(fetchRaceNames()),
         thunkAPI.dispatch(fetchActiveBuffs(characterId)),
+        thunkAPI.dispatch(fetchEquipmentRules(characterId)),
       ]);
     } catch {
       return thunkAPI.rejectWithValue('Не удалось загрузить данные профиля');
@@ -882,6 +914,21 @@ const profileSlice = createSlice({
       .addCase(identifyItem.rejected, (state, action) => {
         state.error = action.payload ?? 'Не удалось опознать предмет';
       })
+      // fetchEquipmentRules
+      .addCase(fetchEquipmentRules.pending, (state) => {
+        state.equipmentRulesLoading = true;
+        state.equipmentRulesError = null;
+      })
+      .addCase(fetchEquipmentRules.fulfilled, (state, action) => {
+        state.equipmentRulesLoading = false;
+        state.equipmentRules = action.payload;
+      })
+      .addCase(fetchEquipmentRules.rejected, (state, action) => {
+        state.equipmentRulesLoading = false;
+        state.equipmentRules = null;
+        state.equipmentRulesError = action.payload ?? 'Не удалось загрузить ограничения экипировки';
+        state.error = state.equipmentRulesError;
+      })
       // fetchActiveBuffs
       .addCase(fetchActiveBuffs.fulfilled, (state, action) => {
         state.activeBuffs = action.payload;
@@ -965,6 +1012,7 @@ export const selectItemDetailModal = (state: RootState) => state.profile.itemDet
 export const selectItemDetail = (state: RootState) => state.profile.itemDetail;
 export const selectItemDetailLoading = (state: RootState) => state.profile.itemDetailLoading;
 export const selectRepairLoading = (state: RootState) => state.profile.repairLoading;
+export const selectEquipmentRules = (state: RootState) => state.profile.equipmentRules;
 
 export const selectFilteredInventory = createSelector(
   [selectInventory, selectSelectedCategory],

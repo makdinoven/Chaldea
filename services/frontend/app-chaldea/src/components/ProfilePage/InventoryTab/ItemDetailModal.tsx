@@ -13,46 +13,7 @@ import {
 import { STAT_LABELS, PERCENTAGE_STATS } from '../constants';
 import toast from 'react-hot-toast';
 import ItemArtwork from '../../CommonComponents/ItemArtwork';
-
-/** Russian labels for item types */
-const ITEM_TYPE_LABELS: Record<string, string> = {
-  head: 'Шлем',
-  body: 'Броня',
-  cloak: 'Плащ',
-  belt: 'Пояс',
-  shield: 'Щит',
-  ring: 'Кольцо',
-  necklace: 'Ожерелье',
-  bracelet: 'Браслет',
-  main_weapon: 'Оружие',
-  additional_weapons: 'Дополнительное оружие',
-  consumable: 'Зелье',
-  scroll: 'Свиток',
-  resource: 'Ресурс',
-  misc: 'Разное',
-  blueprint: 'Чертёж',
-  recipe: 'Рецепт',
-  gem: 'Камень',
-  rune: 'Руна',
-};
-
-/** Russian labels for item rarities */
-const RARITY_LABELS: Record<string, string> = {
-  common: 'Обычный',
-  rare: 'Редкий',
-  epic: 'Эпический',
-  mythical: 'Мифический',
-  legendary: 'Легендарный',
-};
-
-/** Rarity text color classes */
-const RARITY_COLORS: Record<string, string> = {
-  common: 'text-rarity-common',
-  rare: 'text-rarity-rare',
-  epic: 'text-rarity-epic',
-  mythical: 'text-rarity-mythical',
-  legendary: 'text-rarity-legendary',
-};
+import ItemTypeLine from '../../CommonComponents/ItemTypeLine';
 
 /** Modifier field keys that are numeric on ItemData */
 const MODIFIER_FIELDS = [
@@ -279,9 +240,6 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
   const hasDurability = maxDurability > 0;
   const needsRepair = hasDurability && effectiveDurability < maxDurability;
 
-  const rarityColor = RARITY_COLORS[item.item_rarity] ?? 'text-white';
-  const rarityLabel = RARITY_LABELS[item.item_rarity] ?? item.item_rarity;
-  const typeLabel = ITEM_TYPE_LABELS[item.item_type] ?? item.item_type;
 
   // Collect base modifiers
   const baseModMap: Record<string, number> = {};
@@ -388,14 +346,8 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center justify-center gap-2 mt-1 flex-wrap">
-                      <span className={`text-sm font-medium ${rarityColor}`}>
-                        {rarityLabel}
-                      </span>
-                      <span className="text-white/40 text-xs">|</span>
-                      <span className="text-white/70 text-sm">{typeLabel}</span>
-                      <span className="text-white/40 text-xs">|</span>
-                      <span className="text-white/70 text-sm">Ур. {item.item_level}</span>
+                    <div className="mt-2">
+                      <ItemTypeLine item={item} />
                     </div>
                   </div>
                 </div>

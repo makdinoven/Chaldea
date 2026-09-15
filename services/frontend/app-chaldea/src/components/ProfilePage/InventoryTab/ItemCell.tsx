@@ -2,8 +2,9 @@ import React, { useCallback } from 'react';
 import { motion } from 'motion/react';
 import { useDraggable } from '@dnd-kit/core';
 import toast from 'react-hot-toast';
-import { useAppDispatch } from '../../../redux/store';
-import { openContextMenu, equipItem, InventoryItem } from '../../../redux/slices/profileSlice';
+import { useAppDispatch, useAppSelector } from '../../../redux/store';
+import { openContextMenu, equipItem, InventoryItem, selectEquipmentRules } from '../../../redux/slices/profileSlice';
+import { isForbiddenForCharacter } from '../../../utils/equipmentRules';
 import { ITEM_TYPE_ICONS } from '../constants';
 import { EQUIPMENT_ITEM_TYPES, FAST_SLOT_ITEM_TYPES } from './dnd/constants';
 import { useInventoryCharacterId } from './dnd/InventoryDndContext';
@@ -18,6 +19,7 @@ interface ItemCellProps {
 const ItemCell = ({ inventoryItem, placeholderType }: ItemCellProps) => {
   const dispatch = useAppDispatch();
   const characterId = useInventoryCharacterId();
+  const equipmentRules = useAppSelector(selectEquipmentRules);
 
   if (!inventoryItem) {
     // Empty cell
@@ -50,6 +52,7 @@ const ItemCell = ({ inventoryItem, placeholderType }: ItemCellProps) => {
 
   const isEquippable =
     item.item_type in EQUIPMENT_ITEM_TYPES || FAST_SLOT_ITEM_TYPES.has(item.item_type);
+  const isForbidden = isForbiddenForCharacter(item, equipmentRules);
 
   // --- Draggable setup ---
   const dragData: DragItemData = {
@@ -114,7 +117,8 @@ const ItemCell = ({ inventoryItem, placeholderType }: ItemCellProps) => {
     <div className="relative">
       <motion.div
         ref={setNodeRef}
-        className={`item-cell w-full h-auto aspect-square ${rarityClass} cursor-pointer hover:scale-105 ${isDragging ? 'opacity-50' : ''} ${isUnidentified ? 'opacity-60' : ''}`}
+        className={`item-cell w-full h-auto aspect-square ${rarityClass} cursor-pointer hover:scale-105 ${isDragging ? 'opacity-50' : ''} ${isUnidentified ? 'opacity-60' : ''} ${isForbidden ? 'opacity-40 grayscale' : ''}`}
+        title={isForbidden ? `${item.name} — недоступно для вашего класса/подкласса` : item.name}
         {...attributes}
         {...listeners}
         {...clickHandlers}
@@ -146,6 +150,19 @@ const ItemCell = ({ inventoryItem, placeholderType }: ItemCellProps) => {
           </span>
         )}
       </motion.div>
+
+      {/* Class/subclass cannot wear it */}
+      {isForbidden && (
+        <span
+          className="absolute -bottom-1 -left-1 z-10 w-[20px] h-[20px] flex items-center justify-center bg-site-bg rounded-full border border-white/30 pointer-events-none"
+          aria-label="Недоступно для вашего класса/подкласса"
+        >
+          <svg className="w-3 h-3 text-white/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="5" y="11" width="14" height="10" rx="2" />
+            <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+          </svg>
+        </span>
+      )}
 
       {/* Low durability warning pulse (<25%) */}
       {hasDurability && !isBroken && durabilityPct < 25 && (

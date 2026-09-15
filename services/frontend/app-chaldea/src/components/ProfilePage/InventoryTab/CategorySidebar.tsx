@@ -6,7 +6,6 @@ import { CATEGORY_LIST } from '../constants';
  * FEAT-149: category filter as a horizontally scrollable row of icon-only
  * round chips (no text labels next to icons — user decision). The Russian
  * label survives as a `title` tooltip / aria-label for accessibility.
- * Category keys/icons are unchanged (shield stays a distinct item category).
  */
 const CategorySidebar = () => {
   const dispatch = useAppDispatch();

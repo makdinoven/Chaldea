@@ -16,6 +16,7 @@ import {
 import { formatTimeRemaining, RARITY_COLOR_MAP } from './AuctionListingCard';
 import { STAT_LABELS } from '../ProfilePage/constants';
 import ItemArtwork from '../CommonComponents/ItemArtwork';
+import ItemTypeLine from '../CommonComponents/ItemTypeLine';
 
 interface AuctionListingDetailProps {
   listingId: number;
@@ -136,8 +137,11 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
                   <p className="text-white/50 text-sm mt-1">
                     Продавец: <span className="text-white">{listing.seller_name}</span>
                   </p>
-                  <p className="text-white/40 text-xs mt-1">
-                    Ур. {listing.item.item_level} &middot; Осталось: {formatTimeRemaining(listing.time_remaining_seconds)}
+                  <div className="mt-2">
+                    <ItemTypeLine item={listing.item} />
+                  </div>
+                  <p className="text-white/40 text-xs mt-2">
+                    Осталось: {formatTimeRemaining(listing.time_remaining_seconds)}
                   </p>
                 </div>
               </div>

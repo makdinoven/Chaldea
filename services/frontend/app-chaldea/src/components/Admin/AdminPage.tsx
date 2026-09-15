@@ -17,8 +17,8 @@ interface AdminSection {
 const sections: AdminSection[] = [
   { label: 'Тикеты', path: '/admin/tickets', description: 'Управление тикетами поддержки', module: 'tickets' },
   { label: 'Заявки', path: '/requestsPage', description: 'Модерация заявок на создание персонажей', module: 'characters' },
-  { label: 'Айтемы', path: '/admin/items', description: 'Управление предметами и экипировкой', module: 'items' },
-  { label: 'Крафтовые предметы', path: '/admin/craft-items', description: 'Чертежи, рецепты, камни, руны, ресурсы', module: 'items' },
+  { label: 'Предметы', path: '/admin/items', description: 'Экипировка, украшения, расходуемое, крафт и инструменты', module: 'items' },
+  { label: 'Экипировка классов', path: '/admin/equipment-rules', description: 'Что может носить каждый класс и подкласс: броня, основная и доп. рука', module: 'items' },
   { label: 'Локации', path: '/admin/locations', description: 'Редактирование мира, регионов и локаций', module: 'locations' },
   { label: 'Плавающие структуры', path: '/admin/floating-structures', description: 'Управление плавающими структурами и телепортами', module: 'locations' },
   { label: 'Навыки', path: '/home/admin/skills', description: 'Редактирование деревьев навыков', module: 'skills' },

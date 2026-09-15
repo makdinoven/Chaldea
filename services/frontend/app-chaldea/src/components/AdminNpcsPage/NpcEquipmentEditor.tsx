@@ -41,12 +41,13 @@ interface EquipmentSlotData {
 
 /* ── Constants ── */
 
-// NOTE (FEAT-149): the 'shield' equipment SLOT was removed — shield ITEMS
-// remain a valid item type and equip into the 'additional_weapons' slot.
+// Shields are ordinary weapons of a shield kind (buckler/targe/tower_shield), no own slot.
 const NPC_SLOT_TYPES = [
   'head', 'body', 'cloak', 'belt', 'ring',
   'necklace', 'bracelet', 'main_weapon', 'additional_weapons',
 ] as const;
+
+const WEAPON_SLOTS = new Set(['main_weapon', 'additional_weapons']);
 
 const SLOT_LABELS: Record<string, string> = {
   head: 'Голова',
@@ -118,10 +119,8 @@ const NpcEquipmentEditor = ({ npcId, npcName, onClose }: NpcEquipmentEditorProps
   const fetchPickerItems = useCallback(async (slotType: string) => {
     setPickerLoading(true);
     try {
-      // Mirrors backend slot compatibility (FEAT-149): the off-hand slot
-      // accepts both additional weapons and shields.
-      const itemTypes =
-        slotType === 'additional_weapons' ? 'additional_weapons,shield' : slotType;
+      // Both hand slots take items of the single 'weapon' type
+      const itemTypes = WEAPON_SLOTS.has(slotType) ? 'weapon' : slotType;
       const res = await axios.get(`${BASE_URL}/inventory/items`, {
         params: { item_types: itemTypes, page: 1, page_size: 100 },
       });

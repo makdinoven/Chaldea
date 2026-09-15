@@ -25,6 +25,8 @@ export interface AuctionItemInfo {
   item_type: string;
   item_rarity: string;
   item_level: number;
+  weapon_subclass?: string | null;
+  armor_subclass?: string | null;
 }
 
 // --- Enhancement data snapshot ---

@@ -1,5 +1,4 @@
 import swordIcon from '../../assets/icons/equipment/sword.svg';
-import shieldIcon from '../../assets/icons/equipment/shield.svg';
 import necklaceIcon from '../../assets/icons/equipment/necklace.svg';
 import ringIcon from '../../assets/icons/equipment/ring.svg';
 import helmetIcon from '../../assets/icons/equipment/helmet.svg';
@@ -14,9 +13,7 @@ import bagIcon from '../../assets/icons/equipment/bag.svg';
 
 // Maps item_type to placeholder SVG icon path
 export const ITEM_TYPE_ICONS: Record<string, string> = {
-  main_weapon: swordIcon,
-  additional_weapons: swordIcon,
-  shield: shieldIcon,
+  weapon: swordIcon,
   bracelet: braceletIcon,
   necklace: necklaceIcon,
   ring: ringIcon,
@@ -36,14 +33,13 @@ export const ITEM_TYPE_ICONS: Record<string, string> = {
 
 export const CATEGORY_LIST = [
   { key: 'all', label: 'Все', icon: bagIcon },
-  { key: 'main_weapon', label: 'Оружие', icon: swordIcon },
+  { key: 'weapon', label: 'Оружие', icon: swordIcon },
   { key: 'body', label: 'Броня', icon: armorIcon },
   { key: 'head', label: 'Шлем', icon: helmetIcon },
   { key: 'cloak', label: 'Плащ', icon: cloakIcon },
   { key: 'belt', label: 'Пояс', icon: beltIcon },
   { key: 'ring', label: 'Кольцо', icon: ringIcon },
   { key: 'necklace', label: 'Ожерелье', icon: necklaceIcon },
-  { key: 'shield', label: 'Щит', icon: shieldIcon },
   { key: 'bracelet', label: 'Браслет', icon: braceletIcon },
   { key: 'consumable', label: 'Зелья', icon: potionIcon },
   { key: 'scroll', label: 'Свитки', icon: scrollIcon },
@@ -54,8 +50,7 @@ export const CATEGORY_LIST = [
   { key: 'rune', label: 'Руны', icon: resourceIcon },
 ] as const;
 
-// NOTE (FEAT-149): the 'shield' EQUIPMENT SLOT was removed — shield ITEMS
-// remain a distinct item type/category and equip into 'additional_weapons'.
+// Shields are ordinary weapons of a shield kind (buckler/targe/tower_shield), no own slot.
 export const EQUIPMENT_SLOT_ORDER = [
   'head',
   'body',
@@ -86,12 +81,10 @@ export const EQUIPMENT_TYPES = new Set([
   'body',
   'cloak',
   'belt',
-  'shield',
   'ring',
   'necklace',
   'bracelet',
-  'main_weapon',
-  'additional_weapons',
+  'weapon',
 ]);
 
 // Minimum cells to display in the item grid

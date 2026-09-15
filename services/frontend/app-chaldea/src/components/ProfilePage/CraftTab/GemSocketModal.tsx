@@ -42,9 +42,7 @@ const ITEM_TYPE_LABELS: Record<string, string> = {
   body: 'Броня',
   cloak: 'Плащ',
   belt: 'Пояс',
-  main_weapon: 'Основное оружие',
-  additional_weapons: 'Дополнительное оружие',
-  shield: 'Щит',
+  weapon: 'Оружие',
 };
 
 const MODIFIER_LABELS: Record<string, string> = {

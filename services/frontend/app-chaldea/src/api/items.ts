@@ -47,6 +47,19 @@ export const fetchItems = async (
   return Array.isArray(data) ? data : data.items ?? [];
 };
 
+/** Largest page the items endpoint serves (inventory-service: le=500) */
+const ITEMS_MAX_PAGE_SIZE = 500;
+
+/** Every matching item, walking pages so a long catalogue is never cut off. */
+export const fetchAllItems = async (opts: Omit<FetchItemsOptions, "page" | "pageSize"> = {}) => {
+  const all = [];
+  for (let page = 1; ; page += 1) {
+    const chunk = await fetchItems({ ...opts, page, pageSize: ITEMS_MAX_PAGE_SIZE });
+    all.push(...chunk);
+    if (chunk.length < ITEMS_MAX_PAGE_SIZE) return all;
+  }
+};
+
 export const fetchItem = async (id: number) => {
   const { data } = await client.get(`/items/${id}`);
   return data;

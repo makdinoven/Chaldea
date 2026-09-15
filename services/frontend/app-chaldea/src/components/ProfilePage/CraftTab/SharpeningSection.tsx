@@ -7,8 +7,7 @@ import SectionHeader from '../shared/SectionHeader';
 import SharpeningModal from './SharpeningModal';
 
 const SHARPENABLE_TYPES = new Set([
-  'head', 'body', 'cloak', 'belt',
-  'main_weapon', 'additional_weapons', 'shield',
+  'head', 'body', 'cloak', 'belt', 'weapon',
 ]);
 
 const MAX_POINTS = 15;

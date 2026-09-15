@@ -21,10 +21,15 @@ attachAuthInterceptors(client);
 // ── Response interceptor: normalize errors to readable messages ──
 client.interceptors.response.use(
   (r) => r,
-  (e: AxiosError<{ detail?: string }>) => {
+  (e: AxiosError<{ detail?: string | { msg?: string }[] }>) => {
     if (e.response) {
       // возврат читаемого текста ошибки
-      throw new Error(e.response.data?.detail || e.response.statusText);
+      const detail = e.response.data?.detail;
+      // FastAPI validation errors (422) come as a list of {loc, msg}
+      const text = Array.isArray(detail)
+        ? detail.map((d) => d?.msg).filter(Boolean).join('; ')
+        : detail;
+      throw new Error(text || e.response.statusText);
     }
     throw e;
   },

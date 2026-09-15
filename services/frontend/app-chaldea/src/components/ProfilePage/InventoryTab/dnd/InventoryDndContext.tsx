@@ -10,11 +10,25 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core';
 import toast from 'react-hot-toast';
-import { useAppDispatch } from '../../../../redux/store';
-import { equipItem, unequipItem } from '../../../../redux/slices/profileSlice';
+import { useAppDispatch, useAppSelector } from '../../../../redux/store';
+import {
+  equipItem,
+  unequipItem,
+  selectEquipment,
+  selectEquipmentRules,
+} from '../../../../redux/slices/profileSlice';
 import type { InventoryItem, EquipmentSlotData } from '../../../../redux/slices/profileSlice';
 import { EQUIPMENT_ITEM_TYPES, FAST_SLOT_ITEM_TYPES } from './constants';
 import { ITEM_TYPE_ICONS } from '../../constants';
+import {
+  HAND_SLOTS,
+  MAIN_HAND_SLOT,
+  OFF_HAND_SLOT,
+  allowedHandSlots,
+  armorAllowed,
+  isTwoHandedKind,
+  type EquipmentRules,
+} from '../../../../utils/equipmentRules';
 
 // --- Drag data types ---
 
@@ -45,11 +59,26 @@ const ActiveDragContext = createContext<DragItemData | null>(null);
 
 export const useActiveDrag = () => useContext(ActiveDragContext);
 
-// --- Helper: compute compatible slots for a given item_type ---
+// --- Helper: compute compatible slots for a dragged item ---
 
-function getCompatibleSlots(itemType: string): string[] {
-  // Equipment items map 1:1 to their slot
+function getCompatibleSlots(
+  data: DragItemData,
+  rules: EquipmentRules | null,
+  equipment: EquipmentSlotData[],
+): string[] {
+  const { itemType } = data;
+  const item = data.inventoryItem?.item ?? data.slot?.item;
+
+  // Weapons may go into either hand, as far as the class/subclass rules allow;
+  // a two-handed weapon in the main hand locks the off-hand.
+  if (itemType === 'weapon' && item) {
+    const mainItem = equipment.find((s) => s.slot_type === MAIN_HAND_SLOT)?.item;
+    const offHandLocked = isTwoHandedKind(mainItem?.weapon_subclass, rules);
+    return allowedHandSlots(item, rules).filter((slot) => !(slot === OFF_HAND_SLOT && offHandLocked));
+  }
+  // Other equipment maps 1:1 to its slot
   if (itemType in EQUIPMENT_ITEM_TYPES) {
+    if (item && !armorAllowed(item, rules)) return [];
     return [EQUIPMENT_ITEM_TYPES[itemType]];
   }
   // Fast-slot items are compatible with all fast slots
@@ -100,6 +129,8 @@ interface InventoryDndProviderProps {
 
 const InventoryDndProvider = ({ characterId, children }: InventoryDndProviderProps) => {
   const dispatch = useAppDispatch();
+  const rules = useAppSelector(selectEquipmentRules);
+  const equipment = useAppSelector(selectEquipment);
   const [compatibleSlots, setCompatibleSlots] = useState<string[]>([]);
   const [activeDragData, setActiveDragData] = useState<DragItemData | null>(null);
 
@@ -116,8 +147,8 @@ const InventoryDndProvider = ({ characterId, children }: InventoryDndProviderPro
     if (!data) return;
 
     setActiveDragData(data);
-    setCompatibleSlots(getCompatibleSlots(data.itemType));
-  }, []);
+    setCompatibleSlots(getCompatibleSlots(data, rules, equipment));
+  }, [rules, equipment]);
 
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
@@ -138,8 +169,17 @@ const InventoryDndProvider = ({ characterId, children }: InventoryDndProviderPro
         // Case: inventory/equipment/fast_slot -> equipment slot
         if (overId.startsWith('drop-equipment-')) {
           if (dragData.source === 'inventory' && dragData.inventoryItem) {
+            // A weapon dropped on a hand goes into exactly that hand
+            const targetSlot = overId.slice('drop-equipment-'.length);
+            const slotType =
+              dragData.itemType === 'weapon' && HAND_SLOTS.includes(targetSlot) ? targetSlot : undefined;
             const result = await dispatch(
-              equipItem({ characterId, itemId: dragData.inventoryItem.item.id, inventoryItemId: dragData.inventoryItem.id }),
+              equipItem({
+                characterId,
+                itemId: dragData.inventoryItem.item.id,
+                inventoryItemId: dragData.inventoryItem.id,
+                slotType,
+              }),
             );
             if (result.meta.requestStatus === 'fulfilled') {
               toast.success('Предмет экипирован');

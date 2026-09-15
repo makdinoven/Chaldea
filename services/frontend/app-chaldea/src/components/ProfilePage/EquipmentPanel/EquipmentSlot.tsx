@@ -1,6 +1,7 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
-import { useAppDispatch } from '../../../redux/store';
-import { openContextMenu } from '../../../redux/slices/profileSlice';
+import { useAppDispatch, useAppSelector } from '../../../redux/store';
+import { openContextMenu, selectEquipment, selectEquipmentRules } from '../../../redux/slices/profileSlice';
+import { MAIN_HAND_SLOT, OFF_HAND_SLOT, isTwoHandedKind } from '../../../utils/equipmentRules';
 import type { EquipmentSlotData, InventoryItem } from '../../../redux/slices/profileSlice';
 import { ITEM_TYPE_ICONS, EQUIPMENT_SLOT_LABELS } from '../constants';
 import { useCompatibleSlots, useActiveDrag } from '../InventoryTab/dnd/InventoryDndContext';
@@ -16,8 +17,16 @@ export default function EquipmentSlot({ slot, size = 'normal' }: EquipmentSlotPr
   const dispatch = useAppDispatch();
   const compatibleSlots = useCompatibleSlots();
   const activeDrag = useActiveDrag();
+  const equipment = useAppSelector(selectEquipment);
+  const rules = useAppSelector(selectEquipmentRules);
 
   const isEmpty = !slot.item;
+
+  // A two-handed weapon in the main hand occupies the off-hand as well
+  const mainHandItem =
+    slot.slot_type === OFF_HAND_SLOT ? equipment.find((s) => s.slot_type === MAIN_HAND_SLOT)?.item : undefined;
+  const lockedByTwoHanded =
+    isEmpty && Boolean(mainHandItem) && isTwoHandedKind(mainHandItem?.weapon_subclass, rules);
   const placeholderIcon = ITEM_TYPE_ICONS[slot.slot_type] ?? ITEM_TYPE_ICONS['misc'];
   const label = EQUIPMENT_SLOT_LABELS[slot.slot_type] ?? slot.slot_type;
   const rarityClass = slot.item ? `rarity-${slot.item.item_rarity}` : '';
@@ -39,6 +48,7 @@ export default function EquipmentSlot({ slot, size = 'normal' }: EquipmentSlotPr
   const { setNodeRef: setDropRef, isOver } = useDroppable({
     id: `drop-equipment-${slot.slot_type}`,
     data: { slotType: slot.slot_type },
+    disabled: lockedByTwoHanded,
   });
 
   // --- Draggable: only when slot has an item ---
@@ -90,6 +100,35 @@ export default function EquipmentSlot({ slot, size = 'normal' }: EquipmentSlotPr
       slotType: slot.slot_type,
     }));
   };
+
+  if (lockedByTwoHanded && mainHandItem) {
+    const ghostSrc = mainHandItem.image || ITEM_TYPE_ICONS[mainHandItem.item_type] || placeholderIcon;
+    return (
+      <div className="relative flex flex-col items-center gap-1" ref={setDropRef}>
+        <div
+          className={`item-cell relative ${sizeClasses} cursor-not-allowed ${isDragActive ? 'opacity-30' : ''}`}
+          title="Занято двуручным оружием"
+          aria-label="Доп. рука занята двуручным оружием"
+        >
+          <img
+            src={ghostSrc}
+            alt=""
+            className={`${mainHandItem.image ? 'w-full h-full object-cover rounded-full' : placeholderSizeClasses} grayscale brightness-[0.35]`}
+            draggable={false}
+          />
+          <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <svg className="w-5 h-5 text-white/60" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="5" y="11" width="14" height="10" rx="2" />
+              <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+            </svg>
+          </span>
+        </div>
+        {size === 'normal' && (
+          <span className="text-xs text-white/60 text-center max-w-[90px] leading-tight">{label}</span>
+        )}
+      </div>
+    );
+  }
 
   // --- Merge refs: the outer div is droppable, the button inside is draggable ---
   return (
