@@ -1,5 +1,7 @@
+from datetime import datetime
 from sqlalchemy.orm import Session
 import models, schemas
+import regen
 import traceback
 from sqlalchemy import text as sa_text
 from constants import (
@@ -102,6 +104,9 @@ def create_character_attributes(db: Session, attributes: schemas.CharacterAttrib
     # Compute all derived stats (resources, combat, resistances, damage)
     compute_derived_stats(db_attributes, class_id=class_id)
 
+    # FEAT-164: start the passive-regen clock at creation.
+    db_attributes.regen_anchor_at = datetime.utcnow()
+
     db.add(db_attributes)
     db.commit()
     db.refresh(db_attributes)
@@ -163,6 +168,9 @@ def refund_stamina(db: Session, character_id: int, amount: int):
     if not attr:
         return None, 0
 
+    # FEAT-164: credit passive regen before changing the value.
+    stats_changed = regen.settle_regen(db, attr)
+
     before = int(attr.current_stamina or 0)
     max_st = int(attr.max_stamina or 0)
     new_value = before + int(amount)
@@ -171,6 +179,8 @@ def refund_stamina(db: Session, character_id: int, amount: int):
     refunded = new_value - before
     attr.current_stamina = new_value
     db.commit()
+    if stats_changed:
+        regen.reconcile_perks_after_expiry(db, character_id)
     db.refresh(attr)
     return attr, refunded
 

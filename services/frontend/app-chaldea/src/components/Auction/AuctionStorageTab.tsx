@@ -15,6 +15,7 @@ import {
 } from '../../redux/slices/auctionSlice';
 import { RARITY_COLOR_MAP } from './AuctionListingCard';
 import type { AuctionStorageItemResponse } from '../../types/auction';
+import { shownRarity } from '../../constants/items';
 
 interface AuctionStorageTabProps {
   characterId: number;
@@ -158,7 +159,7 @@ const StorageRow = ({
   onListingSuccess: () => void;
 }) => {
   const rarityColor = item.item
-    ? (RARITY_COLOR_MAP[item.item.item_rarity] ?? 'text-white')
+    ? (RARITY_COLOR_MAP[shownRarity(item.item.item_type, item.item.item_rarity) ?? ''] ?? 'text-white')
     : 'text-gold';
 
   const isGold = item.gold_amount > 0 && !item.item;

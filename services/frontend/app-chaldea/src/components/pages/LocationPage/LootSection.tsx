@@ -1,5 +1,6 @@
 import { LocationLootItem } from './types';
 import { ITEM_TYPE_ICONS } from '../../ProfilePage/constants';
+import { shownRarity } from '../../../constants/items';
 
 interface LootSectionProps {
   loot: LocationLootItem[];
@@ -48,9 +49,10 @@ const LootSection = ({ loot, currentCharacterId, onPickup }: LootSectionProps) =
       {/* Loot rows */}
       <div className="flex flex-col gap-2 p-3.5 sm:p-4">
         {loot.map((lootItem) => {
+          const visibleRarity = shownRarity(lootItem.item_type, lootItem.item_rarity);
           const rarityClass =
-            lootItem.item_rarity && lootItem.item_rarity !== 'common'
-              ? `rarity-${lootItem.item_rarity}`
+            visibleRarity && visibleRarity !== 'common'
+              ? `rarity-${visibleRarity}`
               : '';
           const placeholderIcon =
             lootItem.item_type ? ITEM_TYPE_ICONS[lootItem.item_type] : undefined;
@@ -113,7 +115,7 @@ const LootSection = ({ loot, currentCharacterId, onPickup }: LootSectionProps) =
 
               {/* Name + quantity */}
               <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                <span className={`text-[13px] font-medium truncate ${getRarityTextClass(lootItem.item_rarity)}`}>
+                <span className={`text-[13px] font-medium truncate ${getRarityTextClass(visibleRarity)}`}>
                   {lootItem.item_name ?? 'Неизвестный предмет'}
                 </span>
                 {lootItem.quantity > 1 && (

@@ -316,3 +316,63 @@ class CumulativeStatsIncrement(BaseModel):
     increments: Dict[str, int] = Field(default_factory=dict)
     set_max: Optional[Dict[str, int]] = Field(default_factory=dict)
     resets: Optional[Dict[str, int]] = Field(default_factory=dict)
+
+# ---------------------------------------------------------------------------
+# FEAT-164: passive regen in rest + satiety
+# ---------------------------------------------------------------------------
+from pydantic import validator, conlist  # noqa: E402
+
+
+class SatietyInfo(BaseModel):
+    item_id: Optional[int] = None
+    source_item_name: Optional[str] = None
+    rarity: str
+    regen_bonus_percent: int
+    modifiers: Dict[str, float] = {}
+    started_at: datetime
+    expires_at: datetime
+    remaining_seconds: int
+
+
+class RestStatusResponse(BaseModel):
+    character_id: int
+    is_resting: bool
+    busy_reason: Optional[str] = None
+    base_regen_percent_per_hour: float
+    regen_percent_per_hour: float
+    satiety: Optional[SatietyInfo] = None
+
+
+class SatietyRecovery(BaseModel):
+    health_recovery: int = 0
+    mana_recovery: int = 0
+    energy_recovery: int = 0
+    stamina_recovery: int = 0
+
+
+class SatietyApplyRequest(BaseModel):
+    item_id: Optional[int] = None
+    source_item_name: Optional[str] = Field(None, max_length=200)
+    rarity: str
+    modifiers: Dict[str, float] = {}
+    recovery: SatietyRecovery = SatietyRecovery()
+
+
+class SatietyApplyResponse(BaseModel):
+    satiety: SatietyInfo
+    stats_changed: bool
+
+
+class SettleRegenRequest(BaseModel):
+    character_ids: conlist(int, min_items=1, max_items=50)
+
+    @validator("character_ids")
+    def _unique_ids(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError("character_ids должны быть уникальными")
+        return value
+
+
+class SettleRegenResponse(BaseModel):
+    settled: List[int]
+    missing: List[int]

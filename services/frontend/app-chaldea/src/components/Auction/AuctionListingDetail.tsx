@@ -17,6 +17,7 @@ import { formatTimeRemaining, RARITY_COLOR_MAP } from './AuctionListingCard';
 import { STAT_LABELS } from '../ProfilePage/constants';
 import ItemArtwork from '../CommonComponents/ItemArtwork';
 import ItemTypeLine from '../CommonComponents/ItemTypeLine';
+import { shownRarity } from '../../constants/items';
 
 interface AuctionListingDetailProps {
   listingId: number;
@@ -81,7 +82,8 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
   };
 
   const isSeller = listing?.seller_character_id === characterId;
-  const rarityColor = RARITY_COLOR_MAP[listing?.item.item_rarity ?? ''] ?? 'text-white';
+  const rarityColor =
+    RARITY_COLOR_MAP[shownRarity(listing?.item.item_type, listing?.item.item_rarity) ?? ''] ?? 'text-white';
 
   return (
     <AnimatePresence>

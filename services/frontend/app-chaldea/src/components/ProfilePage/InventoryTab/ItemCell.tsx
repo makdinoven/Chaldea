@@ -1,4 +1,5 @@
 import React, { useCallback } from 'react';
+import { shownRarity } from '../../../constants/items';
 import { motion } from 'motion/react';
 import { useDraggable } from '@dnd-kit/core';
 import toast from 'react-hot-toast';
@@ -40,8 +41,9 @@ const ItemCell = ({ inventoryItem, placeholderType }: ItemCellProps) => {
 
   /* eslint-disable react-hooks/rules-of-hooks -- early return above is for empty cells only */
   const { item, quantity, is_identified, current_durability } = inventoryItem;
-  const rarityClass = item.item_rarity && item.item_rarity !== 'common'
-    ? `rarity-${item.item_rarity}`
+  const visibleRarity = shownRarity(item.item_type, item.item_rarity);
+  const rarityClass = visibleRarity && visibleRarity !== 'common'
+    ? `rarity-${visibleRarity}`
     : '';
   const isUnidentified = is_identified === false;
   const maxDurability = item.max_durability ?? 0;

@@ -1799,6 +1799,72 @@ async def _auto_reject_pending_join_requests(db: AsyncSession, battle_id: int) -
     await db.commit()
 
 
+# FEAT-164: the end-of-battle resource sync also resets the passive-regen anchor
+# (character_attributes.regen_anchor_at) so battle time is never credited as rest.
+_RESOURCE_SYNC_SQL = text("""
+    UPDATE character_attributes
+    SET current_health = :hp,
+        current_mana = :mana,
+        current_energy = :energy,
+        current_stamina = :stamina,
+        regen_anchor_at = UTC_TIMESTAMP()
+    WHERE character_id = :cid
+""")
+_RESOURCE_SYNC_SQL_LEGACY = text("""
+    UPDATE character_attributes
+    SET current_health = :hp,
+        current_mana = :mana,
+        current_energy = :energy,
+        current_stamina = :stamina
+    WHERE character_id = :cid
+""")
+_TRAINING_LOSER_SQL = text(
+    "UPDATE character_attributes SET current_health = 1, regen_anchor_at = UTC_TIMESTAMP() "
+    "WHERE character_id = :cid"
+)
+_TRAINING_LOSER_SQL_LEGACY = text(
+    "UPDATE character_attributes SET current_health = 1 WHERE character_id = :cid"
+)
+
+
+def _is_missing_anchor_column(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "regen_anchor_at" in msg and ("unknown column" in msg or "no such column" in msg)
+
+
+async def _execute_with_anchor_fallback(db: AsyncSession, anchored, legacy, params: dict) -> None:
+    """Run the anchored UPDATE; if character-attributes-service has not migrated
+    yet (unknown column), retry the old statement without the anchor. Commits."""
+    try:
+        await db.execute(anchored, params)
+        await db.commit()
+    except Exception as e:
+        if not _is_missing_anchor_column(e):
+            raise
+        await db.rollback()
+        logger.warning(
+            f"regen_anchor_at ещё не существует (миграция атрибутов не применена), "
+            f"синхронизация без сброса якоря для персонажа {params.get('cid')}"
+        )
+        await db.execute(legacy, params)
+        await db.commit()
+
+
+async def _sync_final_resources(db: AsyncSession, char_id: int, pdata: dict) -> None:
+    await _execute_with_anchor_fallback(
+        db,
+        _RESOURCE_SYNC_SQL,
+        _RESOURCE_SYNC_SQL_LEGACY,
+        {
+            "hp": max(0, int(pdata["hp"])),
+            "mana": max(0, int(pdata["mana"])),
+            "energy": max(0, int(pdata["energy"])),
+            "stamina": max(0, int(pdata["stamina"])),
+            "cid": char_id,
+        },
+    )
+
+
 async def _finalize_battle(
     db_session: AsyncSession,
     battle_id: int,
@@ -1838,24 +1904,7 @@ async def _finalize_battle(
     for pid_str, pdata in battle_state["participants"].items():
         char_id = pdata["character_id"]
         try:
-            await db_session.execute(
-                text("""
-                    UPDATE character_attributes
-                    SET current_health = :hp,
-                        current_mana = :mana,
-                        current_energy = :energy,
-                        current_stamina = :stamina
-                    WHERE character_id = :cid
-                """),
-                {
-                    "hp": max(0, int(pdata["hp"])),
-                    "mana": max(0, int(pdata["mana"])),
-                    "energy": max(0, int(pdata["energy"])),
-                    "stamina": max(0, int(pdata["stamina"])),
-                    "cid": char_id,
-                },
-            )
-            await db_session.commit()
+            await _sync_final_resources(db_session, char_id, pdata)
             logger.info(f"Ресурсы персонажа {char_id} синхронизированы после боя")
         except Exception as e:
             logger.error(f"Не удалось синхронизировать ресурсы персонажа {char_id}: {e}")
@@ -1905,11 +1954,12 @@ async def _finalize_battle(
             if bt_row and bt_row[0] == "pvp_training":
                 for pid_str, pdata in battle_state["participants"].items():
                     if pdata["hp"] <= 0 and pdata["team"] != winner_team:
-                        await db_session.execute(
-                            text("UPDATE character_attributes SET current_health = 1 WHERE character_id = :cid"),
+                        await _execute_with_anchor_fallback(
+                            db_session,
+                            _TRAINING_LOSER_SQL,
+                            _TRAINING_LOSER_SQL_LEGACY,
                             {"cid": pdata["character_id"]},
                         )
-                        await db_session.commit()
                         logger.info(
                             f"PvP training: HP персонажа {pdata['character_id']} установлен в 1"
                         )
@@ -4004,24 +4054,7 @@ async def _force_finish_battle(
         for pid_str, pdata in state["participants"].items():
             char_id = pdata["character_id"]
             try:
-                await db.execute(
-                    text("""
-                        UPDATE character_attributes
-                        SET current_health = :hp,
-                            current_mana = :mana,
-                            current_energy = :energy,
-                            current_stamina = :stamina
-                        WHERE character_id = :cid
-                    """),
-                    {
-                        "hp": max(0, int(pdata["hp"])),
-                        "mana": max(0, int(pdata["mana"])),
-                        "energy": max(0, int(pdata["energy"])),
-                        "stamina": max(0, int(pdata["stamina"])),
-                        "cid": char_id,
-                    },
-                )
-                await db.commit()
+                await _sync_final_resources(db, char_id, pdata)
                 logger.info(f"Force-finish: ресурсы персонажа {char_id} синхронизированы")
             except Exception as e:
                 logger.error(f"Force-finish: не удалось синхронизировать ресурсы персонажа {char_id}: {e}")
@@ -4426,6 +4459,7 @@ async def admin_approve_join_request(
         battle_id=battle_id,
         character_id=character_id,
         team=team,
+        joined_at=datetime.utcnow(),  # FEAT-164: late joiner's own busy start
     )
     db.add(new_participant)
     await db.commit()

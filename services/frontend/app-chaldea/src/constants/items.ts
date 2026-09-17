@@ -69,6 +69,35 @@ export const RARITY_LABELS: Record<string, string> = {
   demonic: 'Демонический',
 };
 
+/** Wearable equipment types (backend EQUIPMENT_ITEM_TYPES) */
+export const WEARABLE_ITEM_TYPES: readonly string[] = [
+  'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet', 'weapon',
+];
+
+/**
+ * Rarities that exist only on wearable equipment and never come from crafting
+ * (backend EQUIPMENT_ONLY_RARITIES). A set, not an ordering.
+ */
+export const EQUIPMENT_ONLY_RARITIES: readonly string[] = ['mythical', 'divine', 'demonic'];
+
+export const isWearableType = (itemType: string | null | undefined): boolean =>
+  Boolean(itemType) && WEARABLE_ITEM_TYPES.includes(itemType as string);
+
+export const isEquipmentOnlyRarity = (rarity: string | null | undefined): boolean =>
+  Boolean(rarity) && EQUIPMENT_ONLY_RARITIES.includes(rarity as string);
+
+/** Types that have no quality of their own: rarity is never shown for them (FEAT-164) */
+export const RARITYLESS_ITEM_TYPES: readonly string[] = ['recipe', 'blueprint'];
+
+export const itemHasRarity = (itemType: string | null | undefined): boolean =>
+  !itemType || !RARITYLESS_ITEM_TYPES.includes(itemType);
+
+/** The rarity to display for an item, or null when its type has no quality */
+export const shownRarity = (
+  itemType: string | null | undefined,
+  rarity: string | null | undefined,
+): string | null => (rarity && itemHasRarity(itemType) ? rarity : null);
+
 export const RARITY_ORDER: Record<string, number> = Object.fromEntries(
   ITEM_RARITIES.map((r, i) => [r, i]),
 );

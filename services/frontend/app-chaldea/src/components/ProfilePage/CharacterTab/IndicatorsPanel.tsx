@@ -8,6 +8,7 @@ import {
 } from '../../../redux/slices/profileSlice';
 import PanelShell, { PANEL_DESKTOP_HEIGHT_CLASS } from '../PanelShell';
 import StatsPanel from '../CharacterInfoPanel/StatsPanel';
+import RestStatusPanel from '../CharacterInfoPanel/RestStatusPanel';
 import PrimaryStatsSection from '../StatsTab/PrimaryStatsSection';
 import StatDistributionPanel from '../StatsTab/StatDistributionPanel';
 import DerivedStatsSection from '../StatsTab/DerivedStatsSection';
@@ -41,7 +42,11 @@ const IndicatorsPanel = ({ characterId }: IndicatorsPanelProps) => {
     >
       <div className="flex flex-col gap-6">
         {/* Vitals — icon-only labels, values right-aligned */}
-        <StatsPanel />
+        <div className="flex flex-col gap-3">
+          <StatsPanel />
+          {/* Rest regeneration rate + active satiety (FEAT-164) */}
+          <RestStatusPanel />
+        </div>
 
         {/* «Характеристики» — tiered bars */}
         {attributes && <PrimaryStatsSection attributes={attributes} />}

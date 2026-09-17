@@ -102,6 +102,12 @@ class BattleParticipant(Base):
     dropped_out_at: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True
     )
+    # FEAT-164: when this participant entered the battle (naive UTC). Start of
+    # the "busy" interval for passive regen; NULL for historical rows
+    # (character-attributes-service falls back to battles.created_at).
+    joined_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, default=datetime.utcnow
+    )
 
     battle = relationship("Battle", back_populates="participants")
 

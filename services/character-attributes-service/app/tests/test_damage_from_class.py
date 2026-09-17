@@ -16,7 +16,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from sqlalchemy import create_engine, event, Column, Integer, String
+from sqlalchemy import create_engine, event, Boolean, Column, Integer, String
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -59,6 +59,8 @@ class _Character(database.Base):
     user_id = Column(Integer, nullable=True)
     name = Column(String(100), nullable=True)
     id_class = Column(Integer, nullable=True)
+    # FEAT-164: settle_regen reads characters.is_npc (real column, character-service).
+    is_npc = Column(Boolean, nullable=False, default=False, server_default="0")
     # Minimal columns needed by queries across test files (id_class for
     # damage-from-class tests, user_id + name for ownership checks in auth tests).
 

@@ -215,6 +215,11 @@ class FakeDB:
         self.history: List[Any] = []
         self.resource_syncs: List[Dict[str, Any]] = []
         self.pvp_training_heals: List[int] = []
+        # FEAT-164: character ids whose regen_anchor_at was reset by a sync,
+        # and a switch simulating character-attributes-service before
+        # migration 008 (the column does not exist yet).
+        self.anchor_resets: List[int] = []
+        self.missing_anchor_column = False
         self.join_requests_rejected: List[int] = []
         self.character_locations: Dict[int, Optional[int]] = {}
         self.sql_log: List[str] = []
@@ -335,6 +340,15 @@ class FakeDB:
             return FakeResult(rowcount=1)
 
         # resource / pvp-training sync
+        if q.startswith("update character_attributes") and "regen_anchor_at" in q:
+            if self.missing_anchor_column:
+                raise RuntimeError(
+                    "(pymysql.err.OperationalError) (1054, \"Unknown column "
+                    "'regen_anchor_at' in 'field list'\")"
+                )
+            if "regen_anchor_at = utc_timestamp()" in q:
+                self.anchor_resets.append(p.get("cid"))
+
         if q.startswith("update character_attributes set current_health = 1"):
             self.pvp_training_heals.append(p.get("cid"))
             return FakeResult(rowcount=1)

@@ -15,6 +15,7 @@ import {
 } from '../../../redux/slices/auctionSlice';
 import { RARITY_COLOR_MAP } from '../../Auction/AuctionListingCard';
 import type { AuctionStorageItemResponse } from '../../../types/auction';
+import { shownRarity } from '../../../constants/items';
 
 /* -- Types -- */
 
@@ -70,7 +71,7 @@ const StorageRow = ({
   onToggle: (id: number) => void;
 }) => {
   const rarityColor = item.item
-    ? (RARITY_COLOR_MAP[item.item.item_rarity] ?? 'text-white')
+    ? (RARITY_COLOR_MAP[shownRarity(item.item.item_type, item.item.item_rarity) ?? ''] ?? 'text-white')
     : 'text-gold';
   const isGold = item.gold_amount > 0 && !item.item;
 
@@ -344,7 +345,8 @@ const NpcAuctionModal = ({ npcId, npcName, npcAvatar, onClose }: NpcAuctionModal
                   ) : (
                     <div className="max-h-[250px] overflow-y-auto gold-scrollbar space-y-1">
                       {inventoryItems.map((inv) => {
-                        const rarityColor = RARITY_COLOR_MAP[inv.item.item_rarity] ?? 'text-white';
+                        const rarityColor =
+                          RARITY_COLOR_MAP[shownRarity(inv.item.item_type, inv.item.item_rarity) ?? ''] ?? 'text-white';
                         const isSelected = inv.id === selectedItemId;
                         return (
                           <div

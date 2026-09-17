@@ -33,7 +33,40 @@ character-attributes-service/app/
 | POST | `/attributes/{character_id}/apply_modifiers` | Применить модификаторы (экипировка/баффы) |
 | POST | `/attributes/{character_id}/recover` | Восстановить ресурсы (health/mana/energy/stamina) |
 | PUT | `/attributes/{character_id}/active_experience` | Изменить активный опыт |
-| POST | `/attributes/{character_id}/consume_stamina` | Потратить стамину |
+| POST | `/attributes/{character_id}/consume_stamina` | Потратить стамину (с блокировкой строки) |
+| GET | `/attributes/{character_id}/rest-status` | FEAT-164: состояние восстановления в покое и активная сытость |
+| POST | `/attributes/internal/{character_id}/satiety` | FEAT-164, internal: применить сытость (вызывает inventory-service `/eat-food`) |
+| POST | `/attributes/internal/settle-regen` | FEAT-164, internal: досчитать восстановление для списка персонажей (до 50 id) |
+
+## Восстановление в покое и сытость (FEAT-164)
+
+Логика — `app/regen.py`, константы — `app/constants.py` (`REGEN_PERCENT_PER_HOUR`, `SATIETY_DURATION_HOURS`, `SATIETY_REGEN_BONUS_BY_RARITY`).
+
+- **Скорость:** 5% от максимума в час реального времени для здоровья, маны, энергии и выносливости; не выше максимума.
+- **Лениво, без фоновых задач:** `settle_regen(db, attr)` вызывается под блокировкой строки (`with_for_update`) во всех путях чтения/записи: `GET /{id}`, `GET /{id}/rest-status`, `recover`, `apply_modifiers`, `consume_stamina`, `refund_stamina`, `upgrade`, `PUT /admin/{id}`, `internal/{id}/reconcile-perks`, `internal/{id}/satiety`, `internal/settle-regen`. Ответ `GET /{id}` не изменился (новые колонки не отдаются).
+- **Учёт времени:** `character_attributes.regen_anchor_at` — момент последнего пересчёта (NULL = часы ещё не запущены; первый пересчёт запускает их без ретро-лечения). `regen_carry_*` — дробный остаток на ресурс, поэтому частые чтения не «съедают» восстановление.
+- **Занятость (восстановление не идёт):** из общей БД берутся интервалы — бой (`battle_participants.joined_at`/`battles.created_at` … `dropped_out_at` или «сейчас» для активного боя), подземелье (только `dungeon_sessions.status='active'`, `started_at` … `finished_at`; лобби `forming` = покой), сбор (`gathering_sessions.started_at` … `finished_at`/`complete_at`). Время покоя = окно минус объединение интервалов. `now`/начало окна передаются bind-параметрами. Ошибка чтения интервалов логируется (ERROR), восстановление не начисляется, якорь не сдвигается.
+- **Конец боя:** battle-service при синхронизации ресурсов ставит `regen_anchor_at = UTC_TIMESTAMP()`.
+- **Мобы/NPC** (`characters.is_npc = 1`) и персонажи без строки в `characters` пропускаются.
+- **Сытость** — таблица `character_satiety` (одна строка на персонажа, `UNIQUE(character_id)`): `item_id`, `source_item_name`, `rarity`, `regen_bonus`, `modifiers` (JSON), `started_at`, `expires_at` (24 ч, naive UTC). Бонус к восстановлению по редкости: обычная +50%, редкая +100%, эпическая +150%, легендарная +200%. Пока сытость активна, новая еда → 409 «Вы уже наелись». Модификаторы еды добавляются в базовые колонки как у экипировки (без производных бонусов) и вычитаются при первом пересчёте после `expires_at` (строка удаляется в той же транзакции), затем выполняется reconcile перков. Если сытость закончилась посреди окна, до `expires_at` считается с бонусом, после — без.
+
+### `GET /attributes/{id}/rest-status`
+```json
+{"character_id": 12, "is_resting": true, "busy_reason": null,
+ "base_regen_percent_per_hour": 5.0, "regen_percent_per_hour": 10.0,
+ "satiety": {"item_id": 345, "source_item_name": "Жаркое из кабана", "rarity": "rare",
+             "regen_bonus_percent": 100, "modifiers": {"strength": 2},
+             "started_at": "...", "expires_at": "...", "remaining_seconds": 72000}}
+```
+`busy_reason`: `null | battle | dungeon | gathering`. NPC → `is_resting=false`, `satiety=null`. 404 «Атрибуты персонажа не найдены».
+
+### `POST /attributes/internal/{id}/satiety`
+Тело: `{item_id, source_item_name, rarity, modifiers: {...}, recovery: {health_recovery, mana_recovery, energy_recovery, stamina_recovery}}`. Ответ 201 `{satiety, stats_changed}`. Ошибки: 400 «Недопустимая редкость еды» / недопустимые модификаторы / отрицательное восстановление; 404; 409 «Вы уже наелись». Одна транзакция: блокировка → пересчёт → проверка → модификаторы → мгновенное восстановление → запись сытости.
+
+### `POST /attributes/internal/settle-regen`
+Тело `{"character_ids": [1, 2]}` (1..50 уникальных) → `{"settled": [...], "missing": [...]}`; каждый id в своей короткой транзакции. Вызывается party-service перед чтением ресурсов участников.
+
+**Откат миграции 008:** перед `downgrade` снять активные бонусы: `UPDATE character_satiety SET expires_at = UTC_TIMESTAMP();`, затем `POST /attributes/internal/settle-regen` для всех `character_id` из таблицы.
 
 ## Модель CharacterAttributes
 

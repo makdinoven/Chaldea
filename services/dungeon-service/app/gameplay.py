@@ -1564,6 +1564,9 @@ async def process_battle_completion(
         if all_dead:
             results["wiped"] = True
             session_obj.status = "wiped"
+            # FEAT-164: the dungeon's busy interval (passive regen) ends here.
+            if session_obj.finished_at is None:
+                session_obj.finished_at = datetime.utcnow()
             await session_state.update_session_state(
                 session_id, phase="wiped", status="wiped",
                 active_battle_id=None, pending_target_room_id=None,

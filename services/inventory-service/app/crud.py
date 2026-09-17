@@ -1467,6 +1467,21 @@ def get_recipes_admin(
     return items, total
 
 
+# FEAT-164: recipes have no quality of their own. recipes.rarity is derived
+# from the result item (kept so RARITY_XP_MAP / filters keep working), and the
+# auto-created recipe item (item_type='recipe') is rarity-neutral: stored as
+# 'common' because items.item_rarity is NOT NULL; the UI hides its rarity.
+RECIPE_ITEM_RARITY = "common"
+
+
+def _result_item_rarity(db: Session, result_item_id: int) -> str:
+    item = db.query(models.Items).filter(models.Items.id == result_item_id).first()
+    if item is None:
+        raise ValueError(f"Result item {result_item_id} not found")
+    rarity = item.item_rarity
+    return rarity.value if hasattr(rarity, "value") else rarity
+
+
 def create_recipe(db: Session, data: schemas.RecipeCreate) -> models.Recipe:
     recipe = models.Recipe(
         name=data.name,
@@ -1475,7 +1490,7 @@ def create_recipe(db: Session, data: schemas.RecipeCreate) -> models.Recipe:
         required_rank=data.required_rank,
         result_item_id=data.result_item_id,
         result_quantity=data.result_quantity,
-        rarity=data.rarity,
+        rarity=_result_item_rarity(db, data.result_item_id),  # payload rarity ignored
         icon=data.icon,
         auto_learn_rank=data.auto_learn_rank,
         is_blueprint_recipe=data.is_blueprint_recipe,
@@ -1497,7 +1512,7 @@ def create_recipe(db: Session, data: schemas.RecipeCreate) -> models.Recipe:
         recipe_item = models.Items(
             name=f"Рецепт: {data.name}",
             item_type="recipe",
-            item_rarity=data.rarity or "common",
+            item_rarity=RECIPE_ITEM_RARITY,
             item_level=0,
             max_stack_size=99,
             is_unique=False,
@@ -1515,10 +1530,12 @@ def create_recipe(db: Session, data: schemas.RecipeCreate) -> models.Recipe:
 def update_recipe(db: Session, recipe: models.Recipe, data: schemas.RecipeUpdate) -> models.Recipe:
     update_data = data.dict(exclude_unset=True)
     ingredients_data = update_data.pop("ingredients", None)
+    update_data.pop("rarity", None)  # FEAT-164: derived from the result item, payload ignored
 
     for field, value in update_data.items():
         if value is not None:
             setattr(recipe, field, value)
+    recipe.rarity = _result_item_rarity(db, recipe.result_item_id)
     recipe.updated_at = datetime.utcnow()
 
     if ingredients_data is not None:
@@ -1550,7 +1567,7 @@ def update_recipe(db: Session, recipe: models.Recipe, data: schemas.RecipeUpdate
         recipe_item = models.Items(
             name=f"Рецепт: {recipe.name}",
             item_type="recipe",
-            item_rarity=recipe.rarity or "common",
+            item_rarity=RECIPE_ITEM_RARITY,
             item_level=0,
             max_stack_size=99,
             is_unique=False,
@@ -1562,7 +1579,7 @@ def update_recipe(db: Session, recipe: models.Recipe, data: schemas.RecipeUpdate
     # If recipe item exists and recipe is still non-auto-learn, update it
     elif recipe_item and not recipe.auto_learn_rank:
         recipe_item.name = f"Рецепт: {recipe.name}"
-        recipe_item.item_rarity = recipe.rarity or "common"
+        recipe_item.item_rarity = RECIPE_ITEM_RARITY
         recipe_item.description = recipe.description or f"Рецепт для изучения: {recipe.name}"
         recipe_item.image = recipe.icon
 

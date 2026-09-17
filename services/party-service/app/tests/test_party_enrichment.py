@@ -43,6 +43,15 @@ _SHARED_DROP = [
 
 
 @pytest.fixture(autouse=True)
+def _settle_calls(monkeypatch):
+    """FEAT-164: get_attributes_map asks character-attributes-service to settle
+    regen first (HTTP). Never hit the network here; record the calls instead."""
+    calls = []
+    monkeypatch.setattr(crud, "settle_regen", lambda ids: calls.append(list(ids)))
+    return calls
+
+
+@pytest.fixture(autouse=True)
 def _setup():
     models.Base.metadata.create_all(bind=_engine)
     with _engine.begin() as conn:
@@ -160,12 +169,13 @@ def test_get_character_info_unknown_class_is_null():
     db.close()
 
 
-def test_get_attributes_map_batched_and_missing_rows():
+def test_get_attributes_map_batched_and_missing_rows(_settle_calls):
     _add_attrs(1, ch=260, mh=300, cm=40, mm=90)
     # char 2 has NO attributes row
     db = _TestSession()
     m = crud.get_attributes_map(db, [1, 2])
     db.close()
+    assert _settle_calls == [[1, 2]]  # FEAT-164: settled before the raw read
     assert m[1] == {
         "current_health": 260, "max_health": 300,
         "current_mana": 40, "max_mana": 90,
@@ -173,10 +183,11 @@ def test_get_attributes_map_batched_and_missing_rows():
     assert 2 not in m
 
 
-def test_get_attributes_map_empty_ids():
+def test_get_attributes_map_empty_ids(_settle_calls):
     db = _TestSession()
     assert crud.get_attributes_map(db, []) == {}
     db.close()
+    assert _settle_calls == []
 
 
 # ---------------------------------------------------------------------------

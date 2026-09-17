@@ -26,11 +26,13 @@ async def create_battle(
     await db.flush()
 
     participants = []
+    joined_at = datetime.utcnow()
     for idx, cid in enumerate(player_ids):
         p = models.BattleParticipant(
             battle_id=battle.id,
             character_id=cid,
             team=teams[idx],
+            joined_at=joined_at,  # FEAT-164: start of the busy interval
         )
         participants.append(p)
     db.add_all(participants)

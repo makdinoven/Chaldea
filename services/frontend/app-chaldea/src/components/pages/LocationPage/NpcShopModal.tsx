@@ -8,6 +8,7 @@ import type { InventoryItem } from '../../../redux/slices/profileSlice';
 import type { AppDispatch, RootState } from '../../../redux/store';
 import { ITEM_TYPE_ICONS } from '../../ProfilePage/constants';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
+import { shownRarity } from '../../../constants/items';
 
 /* ── Types ── */
 
@@ -309,7 +310,7 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                       className="flex gap-3 bg-white/[0.03] rounded-card p-3 border border-white/5 hover:border-white/10 transition-colors"
                     >
                       {/* Item icon */}
-                      <div className={`item-cell !w-14 !h-14 sm:!w-16 sm:!h-16 shrink-0 ${getRarityClass(si.item_rarity)}`}>
+                      <div className={`item-cell !w-14 !h-14 sm:!w-16 sm:!h-16 shrink-0 ${getRarityClass(shownRarity(si.item_type, si.item_rarity))}`}>
                         {icon ? (
                           <img src={icon} alt={si.item_name ?? ''} className="w-8 h-8 sm:w-10 sm:h-10 object-contain" />
                         ) : (
@@ -409,7 +410,7 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                       className="flex gap-3 bg-white/[0.03] rounded-card p-3 border border-white/5 hover:border-white/10 transition-colors"
                     >
                       {/* Item icon */}
-                      <div className={`item-cell !w-14 !h-14 sm:!w-16 sm:!h-16 shrink-0 ${getRarityClass(inv.item.item_rarity)}`}>
+                      <div className={`item-cell !w-14 !h-14 sm:!w-16 sm:!h-16 shrink-0 ${getRarityClass(shownRarity(inv.item.item_type, inv.item.item_rarity))}`}>
                         {icon ? (
                           <img src={icon} alt={inv.item.name} className="w-8 h-8 sm:w-10 sm:h-10 object-contain" />
                         ) : (

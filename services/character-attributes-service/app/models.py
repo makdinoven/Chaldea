@@ -75,6 +75,40 @@ class CharacterAttributes(Base):
     vul_wind = Column(Float, default=0.0)
     vul_damning = Column(Float, default=0.0)
 
+    # FEAT-164: passive regen bookkeeping. NULL anchor = clock not started yet
+    # (first settle starts it — no retroactive heal). Carries hold the
+    # fractional remainder of regen per resource.
+    regen_anchor_at = Column(DateTime, nullable=True)
+    regen_carry_health = Column(Float, nullable=False, default=0.0, server_default="0")
+    regen_carry_mana = Column(Float, nullable=False, default=0.0, server_default="0")
+    regen_carry_energy = Column(Float, nullable=False, default=0.0, server_default="0")
+    regen_carry_stamina = Column(Float, nullable=False, default=0.0, server_default="0")
+
+
+class CharacterSatiety(Base):
+    """FEAT-164: the single active "Сытость" (food effect) of a character.
+
+    ``modifiers`` were added to the base stat columns when the food was eaten
+    and are subtracted (and the row deleted) by settle_regen once expired.
+    All timestamps are naive UTC.
+    """
+    __tablename__ = "character_satiety"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    character_id = Column(Integer, nullable=False)
+    item_id = Column(Integer, nullable=True)
+    source_item_name = Column(String(200), nullable=True)
+    rarity = Column(String(20), nullable=False)
+    regen_bonus = Column(Float, nullable=False)
+    modifiers = Column(JSON, nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("character_id", name="uq_character_satiety_character"),
+        Index("ix_character_satiety_expires_at", "expires_at"),
+    )
+
 
 class Perk(Base):
     __tablename__ = "perks"

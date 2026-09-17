@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import { shownRarity } from '../../../../constants/items';
 import {
   DndContext,
   DragOverlay,
@@ -99,8 +100,9 @@ const DragOverlayContent = ({ data }: DragOverlayContentProps) => {
   if (!item) return null;
 
   const iconSrc = item.image || ITEM_TYPE_ICONS[item.item_type];
-  const rarityClass = item.item_rarity && item.item_rarity !== 'common'
-    ? `rarity-${item.item_rarity}`
+  const visibleRarity = shownRarity(item.item_type, item.item_rarity);
+  const rarityClass = visibleRarity && visibleRarity !== 'common'
+    ? `rarity-${visibleRarity}`
     : '';
 
   return (

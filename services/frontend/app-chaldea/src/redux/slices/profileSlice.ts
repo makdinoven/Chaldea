@@ -51,6 +51,8 @@ export interface ItemData {
   // Durability
   max_durability: number;
   repair_power: number | null;
+  /** Food gives satiety when eaten (FEAT-164); older payloads may omit it */
+  is_food?: boolean;
 }
 
 export interface InventoryItem {
@@ -198,6 +200,36 @@ export interface UseBuffItemResult {
   message: string;
 }
 
+/* Mirrors character-attributes-service SatietyInfo (FEAT-164) */
+export interface SatietyInfo {
+  item_id: number | null;
+  source_item_name: string | null;
+  rarity: string;
+  regen_bonus_percent: number;
+  modifiers: Record<string, number>;
+  started_at: string;
+  expires_at: string;
+  remaining_seconds: number;
+}
+
+export type RestBusyReason = 'battle' | 'dungeon' | 'gathering';
+
+/* Mirrors character-attributes-service RestStatusResponse (FEAT-164) */
+export interface RestStatus {
+  character_id: number;
+  is_resting: boolean;
+  busy_reason: RestBusyReason | null;
+  base_regen_percent_per_hour: number;
+  regen_percent_per_hour: number;
+  satiety: SatietyInfo | null;
+}
+
+export interface EatFoodResult {
+  success: boolean;
+  message: string;
+  satiety: SatietyInfo;
+}
+
 export interface RepairItemRequest {
   item_row_id: number;
   repair_kit_item_id: number;
@@ -275,6 +307,9 @@ export interface ProfileState {
   equipmentRules: EquipmentRules | null;
   equipmentRulesLoading: boolean;
   equipmentRulesError: string | null;
+  /** Rest regen + satiety; null until loaded */
+  restStatus: RestStatus | null;
+  restStatusError: string | null;
 }
 
 // --- Initial State ---
@@ -310,6 +345,8 @@ const initialState: ProfileState = {
   equipmentRules: null,
   equipmentRulesLoading: false,
   equipmentRulesError: null,
+  restStatus: null,
+  restStatusError: null,
 };
 
 // --- Async Thunks ---
@@ -652,6 +689,52 @@ export const useBuffItem = createAsyncThunk<
   },
 );
 
+export const fetchRestStatus = createAsyncThunk<
+  RestStatus,
+  number,
+  { rejectValue: string }
+>(
+  'profile/fetchRestStatus',
+  async (characterId, thunkAPI) => {
+    try {
+      const response = await axios.get(`/attributes/${characterId}/rest-status`);
+      return response.data;
+    } catch {
+      return thunkAPI.rejectWithValue('Не удалось загрузить состояние восстановления');
+    }
+  },
+);
+
+export const eatFood = createAsyncThunk<
+  EatFoodResult,
+  { characterId: number; inventoryItemId: number },
+  { rejectValue: string; dispatch: AppDispatch }
+>(
+  'profile/eatFood',
+  async ({ characterId, inventoryItemId }, thunkAPI) => {
+    let result: EatFoodResult;
+    try {
+      const response = await axios.post(`/inventory/${characterId}/eat-food`, {
+        inventory_item_id: inventoryItemId,
+      });
+      result = response.data;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && typeof error.response?.data?.detail === 'string') {
+        return thunkAPI.rejectWithValue(error.response.data.detail);
+      }
+      return thunkAPI.rejectWithValue('Не удалось съесть предмет');
+    }
+    // Refresh everything eating can change; each thunk reports its own errors
+    await Promise.all([
+      thunkAPI.dispatch(fetchInventory(characterId)),
+      thunkAPI.dispatch(fetchFastSlots(characterId)),
+      thunkAPI.dispatch(fetchAttributes(characterId)),
+      thunkAPI.dispatch(fetchRestStatus(characterId)),
+    ]);
+    return result;
+  },
+);
+
 export const fetchItemDetail = createAsyncThunk<
   ItemDetailResponse,
   { characterId: number; inventoryItemId: number; source: string },
@@ -726,6 +809,7 @@ export const loadProfileData = createAsyncThunk<
         thunkAPI.dispatch(fetchRaceNames()),
         thunkAPI.dispatch(fetchActiveBuffs(characterId)),
         thunkAPI.dispatch(fetchEquipmentRules(characterId)),
+        thunkAPI.dispatch(fetchRestStatus(characterId)),
       ]);
     } catch {
       return thunkAPI.rejectWithValue('Не удалось загрузить данные профиля');
@@ -940,6 +1024,20 @@ const profileSlice = createSlice({
       .addCase(useBuffItem.rejected, (state, action) => {
         state.error = action.payload ?? 'Не удалось использовать предмет';
       })
+      // fetchRestStatus
+      .addCase(fetchRestStatus.fulfilled, (state, action) => {
+        state.restStatus = action.payload;
+        state.restStatusError = null;
+      })
+      .addCase(fetchRestStatus.rejected, (state, action) => {
+        state.restStatusError = action.payload ?? 'Не удалось загрузить состояние восстановления';
+      })
+      // eatFood
+      .addCase(eatFood.fulfilled, (state, action) => {
+        if (state.restStatus && action.payload.satiety) {
+          state.restStatus.satiety = action.payload.satiety;
+        }
+      })
       // fetchItemDetail
       .addCase(fetchItemDetail.pending, (state) => {
         state.itemDetailModal.loading = true;
@@ -1013,6 +1111,8 @@ export const selectItemDetail = (state: RootState) => state.profile.itemDetail;
 export const selectItemDetailLoading = (state: RootState) => state.profile.itemDetailLoading;
 export const selectRepairLoading = (state: RootState) => state.profile.repairLoading;
 export const selectEquipmentRules = (state: RootState) => state.profile.equipmentRules;
+export const selectRestStatus = (state: RootState) => state.profile.restStatus;
+export const selectRestStatusError = (state: RootState) => state.profile.restStatusError;
 
 export const selectFilteredInventory = createSelector(
   [selectInventory, selectSelectedCategory],

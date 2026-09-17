@@ -54,6 +54,9 @@ class Items(Base):
     buff_value = Column(Float, nullable=True)
     buff_duration_minutes = Column(Integer, nullable=True)
 
+    # FEAT-164: food — eaten via /eat-food, gives "Сытость" for 24h
+    is_food = Column(Boolean, nullable=False, default=False, server_default="0")
+
     armor_subclass = Column(
         Enum('cloth', 'light_armor', 'medium_armor', 'heavy_armor', name="armor_subclass_enum"),
         nullable=True,

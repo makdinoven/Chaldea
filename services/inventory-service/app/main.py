@@ -734,6 +734,10 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
         if not db_item:
             db.rollback()
             raise HTTPException(status_code=404, detail="Предмет не найден")
+        if db_item.is_food:
+            # FEAT-164: food cannot be eaten in battle, so no fast slot for it
+            db.rollback()
+            raise HTTPException(status_code=400, detail="Еду нельзя положить в быстрый слот")
 
         # 2) Проверяем наличие в инвентаре
         if req.inventory_item_id:
@@ -1016,6 +1020,9 @@ async def use_item(character_id: int, req: schemas.InventoryItem, db: Session = 
 
     if db_item.item_type not in ("consumable", "scroll", "misc", "resource"):
         raise HTTPException(status_code=400, detail="Нельзя использовать этот предмет")
+    if db_item.is_food:
+        # FEAT-164: food must go through /eat-food (satiety rules)
+        raise HTTPException(status_code=400, detail=FOOD_REJECT_MESSAGE)
 
     inv_slot = db.query(models.CharacterInventory).filter(
         models.CharacterInventory.character_id == character_id,
@@ -1454,6 +1461,11 @@ def consume_item_internal(
     Используется battle-service при применении расходника в бою.
     Без авторизации — только для межсервисных вызовов.
     """
+    # FEAT-164: food is never usable in battle (defence in depth)
+    food_item = db.query(models.Items.is_food).filter(models.Items.id == req.item_id).first()
+    if food_item is not None and food_item[0]:
+        raise HTTPException(status_code=400, detail="Еду нельзя использовать в бою")
+
     # Atomic decrement: only succeeds if quantity > 0
     result = db.execute(
         text(
@@ -2147,6 +2159,24 @@ def admin_list_recipes(
     return {"items": items, "total": total, "page": page, "per_page": per_page}
 
 
+RECIPE_RARITY_CAP_ERROR = (
+    "Крафт не может создавать предметы мифической, божественной или демонической редкости"
+)
+
+
+def _ensure_recipe_rarity_allowed(result_item) -> None:
+    """FEAT-164 rarity cap for crafting.
+
+    Recipes have no quality of their own — only the result item does (the
+    recipe's stored rarity is derived from it). Equipment-only rarities
+    (mythical/divine/demonic) are fine for equipment results; a non-equipment
+    result above legendary (legacy rows only — the item validator forbids it)
+    cannot be crafted.
+    """
+    if not schemas.is_rarity_allowed_for_type(result_item.item_type, result_item.item_rarity):
+        raise HTTPException(status_code=400, detail=RECIPE_RARITY_CAP_ERROR)
+
+
 @router.post("/admin/recipes", status_code=201)
 def admin_create_recipe(
     data: schemas.RecipeCreate,
@@ -2163,6 +2193,8 @@ def admin_create_recipe(
     result_item = db.query(models.Items).filter(models.Items.id == data.result_item_id).first()
     if not result_item:
         raise HTTPException(status_code=400, detail="Результирующий предмет не найден")
+
+    _ensure_recipe_rarity_allowed(result_item)
 
     # Verify unique name
     existing = db.query(models.Recipe).filter(models.Recipe.name == data.name).first()
@@ -2239,6 +2271,13 @@ def admin_update_recipe(
         result_item = db.query(models.Items).filter(models.Items.id == data.result_item_id).first()
         if not result_item:
             raise HTTPException(status_code=400, detail="Результирующий предмет не найден")
+    else:
+        result_item = db.query(models.Items).filter(models.Items.id == recipe.result_item_id).first()
+
+    if result_item is None:
+        raise HTTPException(status_code=400, detail="Результирующий предмет не найден")
+    # FEAT-164: cap checked on the (new or stored) result item
+    _ensure_recipe_rarity_allowed(result_item)
 
     # Validate ingredients if provided
     if data.ingredients is not None:
@@ -2764,18 +2803,18 @@ def extract_essence(
 # Transmutation endpoints — PUBLIC
 # ---------------------------------------------------------------------------
 
+# FEAT-164: the chain ends at legendary — mythical/divine/demonic are
+# equipment-only and never produced by crafting/transmutation.
 RARITY_CHAIN = {
     'common': 'rare',
     'rare': 'epic',
     'epic': 'legendary',
-    'legendary': 'mythical',
 }
 
 TRANSMUTE_RESULT_NAMES = {
     'rare': 'Трансмутированный ресурс (редкий)',
     'epic': 'Трансмутированный ресурс (эпический)',
     'legendary': 'Трансмутированный ресурс (легендарный)',
-    'mythical': 'Трансмутированный ресурс (мифический)',
 }
 
 TRANSMUTE_COST = 5
@@ -3659,6 +3698,9 @@ def use_buff_item(
         if not item_obj:
             raise HTTPException(status_code=404, detail="Предмет не найден")
 
+        if item_obj.is_food:
+            raise HTTPException(status_code=400, detail=FOOD_REJECT_MESSAGE)
+
         # 3. Validate it's a buff item
         if not item_obj.buff_type or item_obj.buff_value is None or item_obj.buff_duration_minutes is None:
             raise HTTPException(status_code=400, detail="Этот предмет не является баффовым")
@@ -3698,6 +3740,113 @@ def use_buff_item(
         db.rollback()
         logger.error(f"Use buff item error for character {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при использовании баффового предмета")
+
+
+# ---------------------------------------------------------------------------
+# FEAT-164: eating food → "Сытость"
+# ---------------------------------------------------------------------------
+FOOD_REJECT_MESSAGE = "Еду нужно съесть"
+SATIETY_HTTP_TIMEOUT = 5.0
+SATIETY_UNAVAILABLE_MESSAGE = "Не удалось применить сытость, попробуйте позже"
+SATIETY_DURATION_LABEL = "24 ч"
+
+
+def _extract_detail(resp: httpx.Response, fallback: str) -> str:
+    try:
+        detail = resp.json().get("detail")
+    except Exception:
+        return fallback
+    return detail if isinstance(detail, str) and detail else fallback
+
+
+@router.post("/{character_id}/eat-food", response_model=schemas.EatFoodResponse)
+def eat_food(
+    character_id: int,
+    req: schemas.EatFoodRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Съесть еду: сытость на 24 ч (+ мгновенное восстановление, если есть).
+
+    Предмет списывается только после того, как сервис атрибутов применил
+    сытость (201). Во время боя есть нельзя; в подземелье и на сборе — можно.
+    """
+    verify_character_ownership(db, character_id, current_user.id)
+    check_not_in_battle(db, character_id, "Нельзя есть во время боя")
+
+    try:
+        inv_row = db.query(models.CharacterInventory).filter(
+            models.CharacterInventory.id == req.inventory_item_id,
+            models.CharacterInventory.character_id == character_id,
+        ).with_for_update().first()
+        if not inv_row or inv_row.quantity < 1:
+            raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
+
+        item_obj = db.query(models.Items).filter(models.Items.id == inv_row.item_id).first()
+        if not item_obj:
+            raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
+        if not item_obj.is_food:
+            raise HTTPException(status_code=400, detail="Этот предмет нельзя съесть")
+
+        payload = {
+            "item_id": item_obj.id,
+            "source_item_name": item_obj.name,
+            "rarity": schemas._enum_value(item_obj.item_rarity),
+            "modifiers": crud.build_modifiers_dict(item_obj),
+            "recovery": {
+                "health_recovery": max(0, item_obj.health_recovery or 0),
+                "mana_recovery": max(0, item_obj.mana_recovery or 0),
+                "energy_recovery": max(0, item_obj.energy_recovery or 0),
+                "stamina_recovery": max(0, item_obj.stamina_recovery or 0),
+            },
+        }
+
+        url = f"{settings.ATTRIBUTES_SERVICE_URL}internal/{character_id}/satiety"
+        try:
+            resp = httpx.post(url, json=payload, timeout=SATIETY_HTTP_TIMEOUT)
+        except httpx.HTTPError as e:
+            logger.error(f"eat-food: сервис атрибутов недоступен (персонаж {character_id}): {e}")
+            raise HTTPException(status_code=502, detail=SATIETY_UNAVAILABLE_MESSAGE)
+
+        if resp.status_code == 409:
+            raise HTTPException(status_code=409, detail=_extract_detail(resp, "Вы уже наелись"))
+        if resp.status_code == 400:
+            raise HTTPException(status_code=400, detail=_extract_detail(resp, "Этот предмет нельзя съесть"))
+        if resp.status_code != 201:
+            logger.error(
+                f"eat-food: сервис атрибутов вернул {resp.status_code} для персонажа {character_id}: {resp.text[:300]}"
+            )
+            raise HTTPException(status_code=502, detail=SATIETY_UNAVAILABLE_MESSAGE)
+
+        satiety = resp.json().get("satiety")
+
+        # Satiety applied — now consume exactly one item.
+        inv_row.quantity -= 1
+        if inv_row.quantity <= 0:
+            db.delete(inv_row)
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(
+                f"eat-food: сытость выдана, но предмет не списан (персонаж {character_id}, "
+                f"inventory_item_id={req.inventory_item_id}): {e}"
+            )
+            raise HTTPException(status_code=500, detail="Ошибка при списании предмета")
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"eat-food error for character {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при употреблении еды")
+
+    return {
+        "success": True,
+        "message": f"Вы поели: {payload['source_item_name']}. Сытость на {SATIETY_DURATION_LABEL}",
+        "satiety": satiety,
+    }
 
 
 @router.get("/{character_id}/active-buffs", response_model=schemas.ActiveBuffsResponse)

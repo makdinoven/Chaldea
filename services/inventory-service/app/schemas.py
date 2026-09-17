@@ -1,5 +1,5 @@
 from pydantic import BaseModel, root_validator, validator, constr
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 from enum import Enum
 from datetime import datetime
 
@@ -30,6 +30,28 @@ class ItemType(str, Enum):
 # Armor class only means something for these slots (cloak/belt have none)
 ARMOR_SUBCLASS_TYPES = ("head", "body")
 WEAPON_SUBCLASS_TYPES = ("weapon",)
+
+# FEAT-164: rarity cap. Mythical/divine/demonic exist ONLY on equipment; every
+# other item type (incl. any future non-equipment type) is capped at legendary.
+# These are sets — no ordering between rarities is implied.
+EQUIPMENT_ITEM_TYPES = frozenset({"head", "body", "cloak", "belt", "ring", "necklace", "bracelet", "weapon"})
+EQUIPMENT_ONLY_RARITIES = frozenset({"mythical", "divine", "demonic"})
+EQUIPMENT_ONLY_RARITY_ERROR = (
+    "Мифическая, божественная и демоническая редкость доступны только для снаряжения"
+)
+FOOD_ITEM_TYPE = "consumable"
+
+
+def _enum_value(value):
+    return value.value if isinstance(value, Enum) else value
+
+
+def is_rarity_allowed_for_type(item_type, item_rarity) -> bool:
+    """False when an equipment-only rarity is used on a non-equipment type."""
+    return not (
+        _enum_value(item_rarity) in EQUIPMENT_ONLY_RARITIES
+        and _enum_value(item_type) not in EQUIPMENT_ITEM_TYPES
+    )
 
 
 class ArmorSubclass(str, Enum):
@@ -190,6 +212,9 @@ class ItemBase(BaseModel):
     buff_value: Optional[float] = None
     buff_duration_minutes: Optional[int] = None
 
+    # FEAT-164: food gives "Сытость" (24h) when eaten via /eat-food
+    is_food: bool = False
+
     max_durability: int = 0
     repair_power: Optional[int] = None
 
@@ -271,6 +296,23 @@ class ItemCreate(ItemBase):
             raise ValueError("Подкласс оружия можно указать только для оружия")
         if values.get("blueprint_recipe_id") is not None and item_type not in ("blueprint", "recipe"):
             raise ValueError("Рецепт можно привязать только к чертежу")
+        return values
+
+    @root_validator
+    def _validate_food_and_rarity(cls, values):
+        item_type = _enum_value(values.get("item_type"))
+        item_rarity = _enum_value(values.get("item_rarity"))
+        if item_type is None or item_rarity is None:
+            return values  # field-level validation already failed
+
+        if values.get("is_food"):
+            if item_type != FOOD_ITEM_TYPE:
+                raise ValueError("Едой может быть только расходуемый предмет")
+            if values.get("buff_type"):
+                raise ValueError("Еда не может быть баффовым предметом")
+
+        if not is_rarity_allowed_for_type(item_type, item_rarity):
+            raise ValueError(EQUIPMENT_ONLY_RARITY_ERROR)
         return values
 
     @root_validator
@@ -818,7 +860,8 @@ class RecipeCreate(BaseModel):
     required_rank: int = 1
     result_item_id: int
     result_quantity: int = 1
-    rarity: str = "common"
+    # FEAT-164: deprecated and ignored — recipe rarity is derived from the result item
+    rarity: Optional[str] = None
     icon: Optional[str] = None
     auto_learn_rank: Optional[int] = None
     is_blueprint_recipe: bool = False
@@ -833,7 +876,7 @@ class RecipeUpdate(BaseModel):
     required_rank: Optional[int] = None
     result_item_id: Optional[int] = None
     result_quantity: Optional[int] = None
-    rarity: Optional[str] = None
+    rarity: Optional[str] = None  # FEAT-164: deprecated and ignored (derived from the result item)
     icon: Optional[str] = None
     auto_learn_rank: Optional[int] = None
     is_active: Optional[bool] = None
@@ -1158,6 +1201,29 @@ class ActiveBuffsResponse(BaseModel):
 
 class UseBuffItemRequest(BaseModel):
     inventory_item_id: int
+
+
+class EatFoodRequest(BaseModel):
+    """FEAT-164: eat one food item from the inventory."""
+    inventory_item_id: int
+
+
+class SatietyInfo(BaseModel):
+    """Mirror of character-attributes-service SatietyInfo (FEAT-164)."""
+    item_id: Optional[int] = None
+    source_item_name: Optional[str] = None
+    rarity: str
+    regen_bonus_percent: int
+    modifiers: Dict[str, float] = {}
+    started_at: datetime
+    expires_at: datetime
+    remaining_seconds: int
+
+
+class EatFoodResponse(BaseModel):
+    success: bool
+    message: str
+    satiety: SatietyInfo
 
 
 class UseBuffItemResult(BaseModel):

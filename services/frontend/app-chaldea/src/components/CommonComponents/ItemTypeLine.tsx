@@ -8,6 +8,7 @@ import {
   WEAPON_KIND_CATEGORY,
   WEAPON_SUBCLASS_GROUPS,
   WEAPON_SUBCLASS_LABELS,
+  itemHasRarity,
 } from '../../constants/items';
 
 interface ItemTypeLineProps {
@@ -17,6 +18,7 @@ interface ItemTypeLineProps {
     item_level: number;
     weapon_subclass?: string | null;
     armor_subclass?: string | null;
+    is_food?: boolean;
   };
 }
 
@@ -35,16 +37,22 @@ const ItemTypeLine = ({ item }: ItemTypeLineProps) => {
     if (category) segments.push({ text: category.label, className: 'text-white/55' });
     segments.push({ text: WEAPON_SUBCLASS_LABELS[kind], className: 'text-white' });
   } else {
-    segments.push({ text: ITEM_TYPE_LABELS[item.item_type] ?? item.item_type, className: 'text-white/80' });
+    const typeLabel =
+      item.item_type === 'consumable' && item.is_food
+        ? 'Еда'
+        : ITEM_TYPE_LABELS[item.item_type] ?? item.item_type;
+    segments.push({ text: typeLabel, className: 'text-white/80' });
     if (ARMOR_SUBCLASS_TYPES.includes(item.item_type) && item.armor_subclass) {
       segments.push({ text: ARMOR_SUBCLASS_LABELS[item.armor_subclass] ?? item.armor_subclass, className: 'text-white' });
     }
   }
 
-  segments.push({
-    text: RARITY_LABELS[item.item_rarity] ?? item.item_rarity,
-    className: `font-medium ${RARITY_TEXT_COLORS[item.item_rarity] ?? 'text-white'}`,
-  });
+  if (itemHasRarity(item.item_type)) {
+    segments.push({
+      text: RARITY_LABELS[item.item_rarity] ?? item.item_rarity,
+      className: `font-medium ${RARITY_TEXT_COLORS[item.item_rarity] ?? 'text-white'}`,
+    });
+  }
   segments.push({ text: `Ур. ${item.item_level}`, className: 'text-gold' });
 
   return (

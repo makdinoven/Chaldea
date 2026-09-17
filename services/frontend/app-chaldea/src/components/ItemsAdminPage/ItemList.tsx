@@ -9,6 +9,7 @@ import {
   RARITY_LABELS,
   RARITY_ORDER,
   RARITY_TEXT_COLORS,
+  itemHasRarity,
   WEAPON_SUBCLASS_LABELS,
   type ItemCategoryKey,
 } from "../../constants/items";
@@ -257,7 +258,7 @@ const ItemList = ({ category, onCategoryChange, onSelect, onCreate, onIssue }: I
                   {subclassLabel(i) && <span className="block text-xs text-white/40">{subclassLabel(i)}</span>}
                 </td>
                 <td className={`px-3 py-2 text-sm font-medium ${RARITY_TEXT_COLORS[i.item_rarity] ?? "text-white/70"}`}>
-                  {RARITY_LABELS[i.item_rarity] ?? i.item_rarity}
+                  {itemHasRarity(i.item_type) ? RARITY_LABELS[i.item_rarity] ?? i.item_rarity : "—"}
                 </td>
                 <td className="px-3 py-2">{actions(i)}</td>
               </motion.tr>
@@ -278,9 +279,11 @@ const ItemList = ({ category, onCategoryChange, onSelect, onCreate, onIssue }: I
                   #{i.id} · {ITEM_TYPE_LABELS[i.item_type] ?? i.item_type}
                   {subclassLabel(i) ? ` · ${subclassLabel(i)}` : ""}
                 </p>
-                <p className={`text-xs font-medium ${RARITY_TEXT_COLORS[i.item_rarity] ?? "text-white/70"}`}>
-                  {RARITY_LABELS[i.item_rarity] ?? i.item_rarity}
-                </p>
+                {itemHasRarity(i.item_type) && (
+                  <p className={`text-xs font-medium ${RARITY_TEXT_COLORS[i.item_rarity] ?? "text-white/70"}`}>
+                    {RARITY_LABELS[i.item_rarity] ?? i.item_rarity}
+                  </p>
+                )}
               </div>
             </div>
             {actions(i)}

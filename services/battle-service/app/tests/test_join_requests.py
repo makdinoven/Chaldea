@@ -897,6 +897,12 @@ class TestAdminJoinRequests:
         assert data["request_id"] == 1
         assert "одобрена" in data["message"]
 
+        # FEAT-164: the late joiner gets its own busy-interval start
+        new_parts = [o for o in added_objects if type(o).__name__ == "BattleParticipant"]
+        assert len(new_parts) == 1
+        assert new_parts[0].joined_at is not None
+        assert abs((datetime.utcnow() - new_parts[0].joined_at).total_seconds()) < 60
+
         # Verify build_participant_info was called
         mock_build_info.assert_called_once_with(100, 500)
 

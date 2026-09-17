@@ -16,6 +16,7 @@ import {
 import { formatTimeRemaining, RARITY_COLOR_MAP } from './AuctionListingCard';
 import AuctionListingDetail from './AuctionListingDetail';
 import type { AuctionListingResponse } from '../../types/auction';
+import { shownRarity } from '../../constants/items';
 
 interface AuctionMyListingsTabProps {
   characterId: number;
@@ -48,7 +49,8 @@ const ListingRow = ({
   canCancel: boolean;
   actionLoading: boolean;
 }) => {
-  const rarityColor = RARITY_COLOR_MAP[listing.item.item_rarity] ?? 'text-white';
+  const rarityColor =
+    RARITY_COLOR_MAP[shownRarity(listing.item.item_type, listing.item.item_rarity) ?? ''] ?? 'text-white';
   const statusColor = STATUS_COLORS[listing.status] ?? 'text-white/50';
 
   return (

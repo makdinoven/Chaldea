@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { motion } from 'motion/react';
 import { ITEM_TYPE_ICONS } from '../../ProfilePage/constants';
 import type { InventoryItem } from '../../../redux/slices/profileSlice';
+import { shownRarity } from '../../../constants/items';
 
 interface SelectedItem {
   item_id: number;
@@ -139,7 +140,7 @@ const TradeItemSelector = ({
                 onClick={() => toggleItem(invItem)}
                 className={`
                   item-cell cursor-pointer transition-all duration-200 hover:scale-105
-                  ${getRarityClass(invItem.item.item_rarity)}
+                  ${getRarityClass(shownRarity(invItem.item.item_type, invItem.item.item_rarity))}
                   ${selected ? 'ring-2 ring-site-blue ring-offset-1 ring-offset-transparent shadow-[0_0_8px_rgba(118,166,189,0.4)]' : ''}
                 `}
                 title={invItem.item.name}

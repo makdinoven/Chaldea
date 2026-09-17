@@ -15,12 +15,12 @@ import {
   ARMOR_SUBCLASS_LABELS,
   DAMAGE_TYPE_LABELS,
   ITEM_CATEGORIES,
-  ITEM_RARITIES,
   ITEM_TYPE_LABELS,
   RARITY_LABELS,
   TOOL_CATEGORIES,
   TOOL_CATEGORY_LABELS,
   WEAPON_SUBCLASS_GROUPS,
+  itemHasRarity,
 } from "../../constants/items";
 import {
   ATTR_MODS,
@@ -28,13 +28,16 @@ import {
   DEFAULT_DURABILITY,
   DEFAULT_DURABILITY_TYPES,
   DEFAULT_TOOL_DURABILITY,
+  FOOD_HINT,
   IDENTIFY_LEVEL_OPTIONS,
+  RARITY_CAP_MESSAGE,
   RECOVERY_FIELDS,
   REPAIR_POWER_OPTIONS,
   RES_MODS,
   RESOURCE_KIND_LABELS,
   VUL_MODS,
   WHETSTONE_OPTIONS,
+  allowedRaritiesFor,
   buildItemPayload,
   detectResourceKind,
   rulesFor,
@@ -52,6 +55,7 @@ interface ItemFormState {
   price: number | string;
   max_stack_size: number | string;
   is_unique: boolean;
+  is_food?: boolean;
   description: string;
   image?: string | null;
   full_image?: string | null;
@@ -72,6 +76,7 @@ const initialState = (itemType: string): ItemFormState => {
     price: 0,
     max_stack_size: 1,
     is_unique: false,
+    is_food: false,
     description: "",
     fast_slot_bonus: 0,
     socket_count: 0,
@@ -120,6 +125,30 @@ const Section = ({ title, hint, children }: { title: string; hint?: string; chil
 
 const optionClass = "bg-site-dark text-white";
 
+/**
+ * Readable Russian text for a failed save. FastAPI sends `detail` as a string
+ * (400) or as a list of {msg} (422); the inventory client already folds both
+ * into Error.message, raw axios errors (image upload) still carry `detail`.
+ */
+const saveErrorMessage = (err: unknown): string => {
+  const fallback = "Ошибка при сохранении";
+  const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) {
+    const text = detail
+      .map((d) => (d && typeof d === "object" ? (d as { msg?: unknown }).msg : null))
+      .filter((m): m is string => typeof m === "string" && m.length > 0)
+      // Pydantic v1 prefixes custom validator messages; show only the message itself
+      .map((m) => m.replace(/^Value error, /, ""))
+      .join("; ");
+    if (text) return text;
+  }
+  // Non-HTTP failures (network, timeout) come with English axios text
+  if ((err as { isAxiosError?: boolean })?.isAxiosError) return `${fallback}: сервер недоступен`;
+  if (err instanceof Error && err.message) return err.message.replace(/^Value error, /, "");
+  return fallback;
+};
+
 /* ── Props ── */
 
 interface ItemFormProps {
@@ -146,8 +175,15 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
   const [essenceOptions, setEssenceOptions] = useState<Option[] | null>(null);
   const [recipeOptions, setRecipeOptions] = useState<Option[] | null>(null);
 
+  /** Shown when a type switch reset a rarity the new type cannot have */
+  const [rarityNote, setRarityNote] = useState<string | null>(null);
+
   const editMode = Boolean(selected);
-  const rules = rulesFor(item.item_type);
+  const rules = rulesFor(item.item_type, Boolean(item.is_food));
+  const allowedRarities = allowedRaritiesFor(item.item_type);
+  /** Recipes and blueprints have no quality: no rarity field for them */
+  const showRarity = itemHasRarity(item.item_type);
+  const rarityAllowed = !showRarity || allowedRarities.includes(item.item_rarity);
 
   useEffect(() => {
     if (!selected) return;
@@ -212,8 +248,17 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
 
   const handleTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const nextType = e.target.value;
+    const resetRarity =
+      itemHasRarity(nextType) && !allowedRaritiesFor(nextType).includes(item.item_rarity);
+    setRarityNote(
+      resetRarity
+        ? `Редкость «${RARITY_LABELS[item.item_rarity] ?? item.item_rarity}» сброшена на «${RARITY_LABELS.common}»: ${RARITY_CAP_MESSAGE.toLowerCase()}.`
+        : null,
+    );
     setItem((st) => {
       const next: ItemFormState = { ...st, item_type: nextType };
+      if (resetRarity) next.item_rarity = "common";
+      if (nextType !== "consumable") next.is_food = false;
       if (DEFAULT_DURABILITY_TYPES.includes(nextType) && Number(st.max_durability) === 0) {
         next.max_durability = DEFAULT_DURABILITY;
       }
@@ -235,6 +280,10 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!rarityAllowed) {
+      toast.error(RARITY_CAP_MESSAGE);
+      return;
+    }
     setSaving(true);
     try {
       const payload = buildItemPayload(item, resourceKind);
@@ -247,9 +296,7 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
       toast.success(editMode ? "Предмет сохранён" : "Предмет создан");
       onSuccess();
     } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
-      const msg = typeof detail === "string" ? detail : err instanceof Error ? err.message : "Ошибка при сохранении";
-      toast.error(msg || "Ошибка при сохранении");
+      toast.error(saveErrorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -332,15 +379,35 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
           </select>
         </Field>
 
+        {showRarity && (
         <Field label="Редкость">
-          <select name="item_rarity" value={item.item_rarity} onChange={handleChange} className="input-underline">
-            {ITEM_RARITIES.map((r) => (
+          <select
+            name="item_rarity"
+            value={item.item_rarity}
+            onChange={(e) => {
+              setRarityNote(null);
+              handleChange(e);
+            }}
+            className="input-underline"
+          >
+            {/* A stored rarity this type may no longer have stays visible until changed */}
+            {!rarityAllowed && (
+              <option value={item.item_rarity} disabled className={optionClass}>
+                {RARITY_LABELS[item.item_rarity] ?? item.item_rarity} (недоступна)
+              </option>
+            )}
+            {allowedRarities.map((r) => (
               <option key={r} value={r} className={optionClass}>
                 {RARITY_LABELS[r]}
               </option>
             ))}
           </select>
+          {!rarityAllowed && (
+            <span className="text-site-red text-xs">{RARITY_CAP_MESSAGE}. Выберите другую редкость.</span>
+          )}
+          {rarityAllowed && rarityNote && <span className="text-gold text-xs">{rarityNote}</span>}
         </Field>
+        )}
 
         <Field label="Уровень предмета">{numberInput("item_level", { min: 0 })}</Field>
         <Field label="Цена">{numberInput("price", { min: 0 })}</Field>
@@ -372,7 +439,7 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
       {rules.recipeAuto && (
         <p className="text-white/60 text-sm border border-white/10 rounded-card p-4 bg-white/[0.03]">
           Предмет-рецепт создаётся и удаляется автоматически вместе с рецептом в разделе профессий.
-          Здесь можно поменять только название, описание, редкость и картинку.
+          Здесь можно поменять только название, описание и картинку.
         </p>
       )}
 
@@ -442,6 +509,24 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
             {rules.fastSlotBonus && <Field label="Бонус быстрых слотов">{numberInput("fast_slot_bonus", { min: 0 })}</Field>}
           </Section>
         )}
+
+      {/* ── Food (satiety) ── */}
+      {rules.food && (
+        <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] min-w-0">
+          <legend className={`${labelText} px-2`}>Еда</legend>
+          <label className="flex items-center gap-3 mt-2">
+            <input
+              type="checkbox"
+              name="is_food"
+              checked={Boolean(item.is_food)}
+              onChange={handleChange}
+              className="w-5 h-5 accent-site-blue shrink-0"
+            />
+            <span className="text-sm text-white">Еда (даёт сытость)</span>
+          </label>
+          {Boolean(item.is_food) && <p className="text-white/40 text-xs mt-3">{FOOD_HINT}</p>}
+        </fieldset>
+      )}
 
       {/* ── Consumables & scrolls ── */}
       {rules.recovery && (
@@ -623,6 +708,9 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
             <p className="text-white/40 text-xs -mb-3">
               {item.item_type === "gem" ? "Камень" : "Руна"} добавляет эти значения предмету, в который вставлен.
             </p>
+          )}
+          {item.item_type === "consumable" && (
+            <p className="text-white/40 text-xs -mb-3">Бонусы сытости: действуют 24 ч после еды.</p>
           )}
           {renderModGroup("Характеристики", ATTR_MODS)}
           {renderModGroup("Сопротивления", RES_MODS)}

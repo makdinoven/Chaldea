@@ -3,12 +3,34 @@
  * The admin form shows only these, and the payload resets the rest so a type
  * switch never leaves stale values behind (e.g. armor class on a ring).
  */
-import { ARMOR_SUBCLASS_TYPES, WEAPON_SUBCLASS_TYPES } from "../../constants/items";
+import {
+  ARMOR_SUBCLASS_TYPES,
+  ITEM_RARITIES,
+  WEAPON_SUBCLASS_TYPES,
+  isEquipmentOnlyRarity,
+  isWearableType,
+} from "../../constants/items";
 
 export const EQUIPMENT_TYPES: readonly string[] = [
   "head", "body", "cloak", "belt", "weapon",
 ];
 export const JEWELRY_TYPES: readonly string[] = ["ring", "necklace", "bracelet"];
+
+/**
+ * Rarities the admin may pick for a type: mythical/divine/demonic exist only
+ * on wearable equipment (FEAT-164). A set check, not a ranking.
+ */
+export const allowedRaritiesFor = (itemType: string): readonly string[] =>
+  isWearableType(itemType)
+    ? ITEM_RARITIES
+    : ITEM_RARITIES.filter((r) => !isEquipmentOnlyRarity(r));
+
+export const RARITY_CAP_MESSAGE =
+  "Мифическая, божественная и демоническая редкость доступны только для снаряжения";
+
+export const FOOD_HINT =
+  "Сытость на 24 ч. Бонус к восстановлению по редкости: обычная +50%, редкая +100%, эпическая +150%, легендарная +200%. " +
+  "Характеристики ниже действуют, пока активна сытость; восстановление срабатывает сразу при еде.";
 
 /** Types that start with durability 100 when picked in the form */
 export const DEFAULT_DURABILITY_TYPES: readonly string[] = [
@@ -128,25 +150,32 @@ export interface FieldRules {
   blueprintRecipe: boolean;
   recipeAuto: boolean;
   gatheringTool: boolean;
+  /** "Еда" checkbox (consumables only) */
+  food: boolean;
 }
 
-export const rulesFor = (itemType: string): FieldRules => {
+export const rulesFor = (itemType: string, isFood = false): FieldRules => {
   const equipment = EQUIPMENT_TYPES.includes(itemType);
   const jewelry = JEWELRY_TYPES.includes(itemType);
+  const food = itemType === "consumable";
+  const eatable = food && isFood;
   return {
-    modifiers: equipment || jewelry || itemType === "gem" || itemType === "rune",
+    // Food bonuses use the same modifier columns as equipment
+    modifiers: equipment || jewelry || itemType === "gem" || itemType === "rune" || eatable,
     durability: equipment || itemType === "gathering_tool",
     sockets: equipment ? "runes" : jewelry ? "gems" : null,
     fastSlotBonus: equipment || jewelry,
     armorSubclass: ARMOR_SUBCLASS_TYPES.includes(itemType),
     weaponFields: WEAPON_SUBCLASS_TYPES.includes(itemType),
     recovery: itemType === "consumable" || itemType === "scroll",
-    buff: itemType === "consumable",
+    // Food cannot be a buff item
+    buff: itemType === "consumable" && !eatable,
     identify: itemType === "scroll",
     resourceKind: itemType === "resource",
     blueprintRecipe: itemType === "blueprint",
     recipeAuto: itemType === "recipe",
     gatheringTool: itemType === "gathering_tool",
+    food,
   };
 };
 
@@ -169,7 +198,7 @@ export const buildItemPayload = (
   resourceKind: ResourceKind,
 ): Record<string, unknown> => {
   const type = String(item.item_type);
-  const rules = rulesFor(type);
+  const rules = rulesFor(type, Boolean(item.is_food));
   const payload: Record<string, unknown> = { ...item };
 
   // Response-only fields the API does not accept
@@ -200,6 +229,8 @@ export const buildItemPayload = (
   payload.buff_type = hasBuff ? item.buff_type : null;
   payload.buff_value = hasBuff ? num(item.buff_value) : null;
   payload.buff_duration_minutes = hasBuff ? num(item.buff_duration_minutes) : null;
+
+  payload.is_food = rules.food && Boolean(item.is_food);
 
   payload.identify_level = rules.identify ? numOrNull(item.identify_level) : null;
 

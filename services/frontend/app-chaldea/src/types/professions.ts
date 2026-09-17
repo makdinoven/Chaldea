@@ -221,7 +221,6 @@ export interface RecipeCreateRequest {
   required_rank?: number;
   result_item_id: number;
   result_quantity?: number;
-  rarity?: string;
   icon?: string | null;
   auto_learn_rank?: number | null;
   xp_reward?: number | null;
@@ -235,7 +234,6 @@ export interface RecipeUpdateRequest {
   required_rank?: number;
   result_item_id?: number;
   result_quantity?: number;
-  rarity?: string;
   icon?: string | null;
   auto_learn_rank?: number | null;
   xp_reward?: number | null;

@@ -1,5 +1,6 @@
 import { motion } from 'motion/react';
 import type { AuctionListingResponse } from '../../types/auction';
+import { shownRarity } from '../../constants/items';
 
 const RARITY_COLOR_MAP: Record<string, string> = {
   common: 'text-rarity-common',
@@ -40,8 +41,9 @@ interface AuctionListingCardProps {
 }
 
 const AuctionListingCard = ({ listing, onClick }: AuctionListingCardProps) => {
-  const rarityColor = RARITY_COLOR_MAP[listing.item.item_rarity] ?? 'text-white';
-  const rarityBorder = RARITY_BORDER_MAP[listing.item.item_rarity] ?? 'border-white/10';
+  const visibleRarity = shownRarity(listing.item.item_type, listing.item.item_rarity) ?? '';
+  const rarityColor = RARITY_COLOR_MAP[visibleRarity] ?? 'text-white';
+  const rarityBorder = RARITY_BORDER_MAP[visibleRarity] ?? 'border-white/10';
 
   const displayPrice = listing.current_bid > 0 ? listing.current_bid : listing.start_price;
 

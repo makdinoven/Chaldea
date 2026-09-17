@@ -47,7 +47,7 @@ battle-service/app/
 
 ### MySQL (постоянное)
 - **battles** - id, status (pending/in_progress/finished/forfeit), is_paused, `pause_reason`, `paused_by_admin`, timestamps
-- **battle_participants** - battle_id, character_id, team, `dropped_out_at`
+- **battle_participants** - battle_id, character_id, team, `dropped_out_at`, `joined_at` (FEAT-164, миграция `007_participant_joined_at`; ставится при создании боя и при одобрении заявки на вступление, NULL у старых строк)
 - **battle_turns** - battle_id, actor_id, turn_number, attack/defense/support_rank_id, item_id, deadline
 
 ### MongoDB (логи)
@@ -372,6 +372,12 @@ NPC исключаются (`c.is_npc = 0`) во всех запросах ув�
 Прописаны в `docker-compose.yml:487-491` и `docker-compose.prod.yml:214-218`. Новых Python-пакетов
 фича не добавляет. Новых RBAC-разрешений тоже: оба админских эндпоинта используют существующее
 `battles:manage`.
+
+## FEAT-164: восстановление в покое
+
+- Все три синхронизации ресурсов в `character_attributes` (обычное завершение боя, HP=1 проигравшему в `pvp_training`, force-finish/таймаут) дополнительно ставят `regen_anchor_at = UTC_TIMESTAMP()` — время боя не засчитывается как покой. Если колонки ещё нет (миграция character-attributes-service не применена), выполняется старый UPDATE без якоря с WARNING в логе (`_execute_with_anchor_fallback`).
+- `battle_participants.joined_at` — начало «занятого» интервала участника для character-attributes-service (для поздно вступивших — свой момент входа).
+- Старт боя не менялся: `build_participant_info` → `GET /attributes/{id}` досчитывает восстановление до `joined_at`.
 
 ## Известные проблемы
 

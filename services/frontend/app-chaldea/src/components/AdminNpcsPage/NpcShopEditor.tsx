@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
 import useDebounce from '../../hooks/useDebounce';
+import { shownRarity } from '../../constants/items';
 
 /* ── Types ── */
 
@@ -243,7 +244,7 @@ const NpcShopEditor = ({ npcId, npcName, onClose }: NpcShopEditorProps) => {
                       <img src={item.image} alt="" className="w-6 h-6 rounded object-contain" />
                     )}
                     <span className="truncate">{item.name}</span>
-                    <span className="text-white/40 text-xs ml-auto shrink-0">{item.item_rarity}</span>
+                    <span className="text-white/40 text-xs ml-auto shrink-0">{shownRarity(item.item_type, item.item_rarity)}</span>
                   </button>
                 ))}
               </div>
@@ -263,7 +264,7 @@ const NpcShopEditor = ({ npcId, npcName, onClose }: NpcShopEditorProps) => {
               )}
               <div className="flex flex-col min-w-0">
                 <span className="text-white text-sm font-medium truncate">{selectedItem.name}</span>
-                <span className="text-white/40 text-xs">ID: {selectedItem.id} | {selectedItem.item_rarity} | {selectedItem.item_type}</span>
+                <span className="text-white/40 text-xs">ID: {selectedItem.id}{shownRarity(selectedItem.item_type, selectedItem.item_rarity) ? ` | ${selectedItem.item_rarity}` : ""} | {selectedItem.item_type}</span>
               </div>
             </div>
           )}
@@ -354,7 +355,7 @@ const NpcShopEditor = ({ npcId, npcName, onClose }: NpcShopEditorProps) => {
                           )}
                           <div className="flex flex-col min-w-0">
                             <span className="text-white text-sm truncate">{si.item_name ?? `#${si.item_id}`}</span>
-                            {si.item_rarity && (
+                            {shownRarity(si.item_type, si.item_rarity) && (
                               <span className="text-white/40 text-[10px]">{si.item_rarity}</span>
                             )}
                           </div>
@@ -459,7 +460,7 @@ const NpcShopEditor = ({ npcId, npcName, onClose }: NpcShopEditorProps) => {
                       <span className="text-white text-sm font-medium truncate">
                         {si.item_name ?? `#${si.item_id}`}
                       </span>
-                      {si.item_rarity && (
+                      {shownRarity(si.item_type, si.item_rarity) && (
                         <span className="text-white/40 text-[10px]">{si.item_rarity}</span>
                       )}
                     </div>

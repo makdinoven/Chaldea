@@ -1,9 +1,37 @@
+import logging
 from typing import Optional
 
+import httpx
 from sqlalchemy import text, bindparam
 from sqlalchemy.orm import Session
 
 import models
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+# FEAT-164: character-attributes-service settles passive regen lazily; ask it to
+# persist up-to-date values before the raw SELECT below.
+SETTLE_REGEN_TIMEOUT_SECONDS = 2.0
+SETTLE_REGEN_MAX_IDS = 50
+
+
+def settle_regen(character_ids: list) -> None:
+    """Best effort: failures are logged (WARNING) and the read continues."""
+    ids = list(dict.fromkeys(int(c) for c in character_ids))
+    url = f"{settings.ATTRIBUTES_SERVICE_URL}internal/settle-regen"
+    for start in range(0, len(ids), SETTLE_REGEN_MAX_IDS):
+        chunk = ids[start:start + SETTLE_REGEN_MAX_IDS]
+        try:
+            resp = httpx.post(
+                url, json={"character_ids": chunk}, timeout=SETTLE_REGEN_TIMEOUT_SECONDS,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    f"settle-regen вернул {resp.status_code} для персонажей {chunk}: {resp.text[:200]}"
+                )
+        except Exception as e:
+            logger.warning(f"settle-regen недоступен для персонажей {chunk}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +97,7 @@ def get_attributes_map(db: Session, character_ids: list) -> dict:
     """
     if not character_ids:
         return {}
+    settle_regen(character_ids)
     rows = db.execute(
         text(
             "SELECT character_id, current_health, max_health, "

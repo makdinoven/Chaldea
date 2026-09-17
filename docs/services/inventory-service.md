@@ -38,7 +38,8 @@ inventory-service/app/
 | GET | `/inventory/{id}/equipment` | Слоты экипировки |
 | POST | `/inventory/{id}/equip` | Экипировать предмет (транзакция с модификаторами) |
 | POST | `/inventory/{id}/unequip` | Снять предмет (обратные модификаторы) |
-| POST | `/inventory/{id}/use_item` | Использовать расходник |
+| POST | `/inventory/{id}/use_item` | Использовать расходник (еду — нельзя, 400 «Еду нужно съесть») |
+| POST | `/inventory/{id}/eat-food` | FEAT-164: съесть еду `{inventory_item_id}` → сытость на 24 ч (JWT + владелец) |
 | GET | `/inventory/{id}/fast_slots` | Быстрые слоты |
 
 ### Каталог предметов
@@ -121,6 +122,20 @@ inventory-service/app/
 - **Автоснятие** (`_revalidate_equipment`, пропускается во время боя) запускается: после сохранения правил (все игроки класса, фоном), после правки предмета с изменением типа/вида/класса брони (носящие его, фоном), из skills-service после выбора подкласса и после полного админского сброса дерева (`POST /inventory/internal/characters/{id}/revalidate-equipment`).
 - **Эндпоинты:** `GET/PUT/DELETE /inventory/admin/equipment-rules` (`items:read` / `items:update`), `GET /inventory/{id}/equipment-rules` — что может носить персонаж (для подсветки в инвентаре).
 
+## Еда и сытость (FEAT-164)
+
+- `items.is_food` (BOOLEAN, default 0, миграция `021_add_item_is_food`). Едой может быть только `consumable` без `buff_type` (валидатор `ItemCreate`). Еда использует обычные поля `*_modifier` (бонусы на время сытости) и `*_recovery` (мгновенное восстановление при поедании).
+- `POST /inventory/{id}/eat-food`: владелец → не в бою (400 «Нельзя есть во время боя»; в подземелье и на сборе можно) → блокировка строки инвентаря → `is_food` (иначе 400 «Этот предмет нельзя съесть») → `POST character-attributes-service /attributes/internal/{id}/satiety` (модификаторы `build_modifiers_dict`, восстановление ×1, редкость предмета). Предмет списывается **только после 201**. 409 «Вы уже наелись» и 400 пробрасываются; недоступность/5xx сервиса атрибутов → 502 «Не удалось применить сытость, попробуйте позже», предмет остаётся. Ответ: `{success, message, satiety}`.
+- Еда отклоняется в `use_item`, `use-buff-item` (400 «Еду нужно съесть»), при экипировке в быстрый слот (400 «Еду нельзя положить в быстрый слот») и во внутреннем `consume_item` (400 «Еду нельзя использовать в бою»).
+
+## Ограничение редкости (FEAT-164)
+
+- Мифическая, божественная и демоническая редкость — только у снаряжения (`head, body, cloak, belt, ring, necklace, bracelet, weapon`; `schemas.EQUIPMENT_ITEM_TYPES` / `EQUIPMENT_ONLY_RARITIES`, это множества, без порядка редкостей). Любой другой тип — максимум легендарная (400/422 «Мифическая, божественная и демоническая редкость доступны только для снаряжения»).
+- **У рецептов нет своего качества** — оно есть только у результата. `POST/PUT /inventory/admin/recipes`: поле `rarity` в запросе устарело и игнорируется; `recipes.rarity` всегда записывается из редкости результирующего предмета (при создании и при каждом обновлении — нужен для `RARITY_XP_MAP` и фильтра `?rarity=`). Ответы по-прежнему содержат `rarity` (= редкость результата).
+- Лимит проверяется по результату: не-снаряжение с мифической/божественной/демонической редкостью (только старые строки) → 400 «Крафт не может создавать предметы мифической, божественной или демонической редкости». Для снаряжения в результате эти редкости разрешены.
+- Автосоздаваемый предмет-рецепт (`item_type='recipe'`) не имеет качества: хранится как `common` (колонка NOT NULL). Фронтенд скрывает редкость для `item_type` `recipe` (и `blueprint` — чертежи тоже не имеют качества по смыслу, хотя их редкость задаёт админ и бэкенд её не трогает).
+- Трансмутация: цепочка `common → rare → epic → legendary`, дальше не идёт; легендарные ресурсы не показываются в списке и не трансмутируются. Существующий на проде «Трансмутированный ресурс (мифический)» не тронут (миграция 021 только логирует такие предметы/рецепты).
+
 ## Быстрые слоты
 
 - Базово 4 слота + бонусы от экипировки
@@ -133,6 +148,7 @@ inventory-service/app/
 ### HTTP (исходящие)
 - `character-attributes-service:8002` -> POST `/attributes/{id}/apply_modifiers` (при equip/unequip)
 - `character-attributes-service:8002` -> POST `/attributes/{id}/recover` (при use_item)
+- `character-attributes-service:8002` -> POST `/attributes/internal/{id}/satiety` (при eat-food, sync httpx, timeout 5 с)
 
 ### check_not_gathering integration (FEAT-128)
 Защитная проверка `is_character_gathering` (raw SQL `SELECT 1 FROM gathering_sessions WHERE character_id=:cid AND status='active' AND complete_at > NOW()`) добавлена в 11 action-эндпоинтов: `equip`, `unequip`, `craft`, `sharpen`, `extract-essence`, `transmute`, `insert-gem`, `extract-gem`, `smelt`, `identify`, `use-buff-item`, `use_item`. Возвращает 400 «Действие заблокировано во время добычи» если у персонажа активная сессия. Зеркальный паттерн `is_character_in_battle`.

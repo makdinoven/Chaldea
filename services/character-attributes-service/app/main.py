@@ -14,6 +14,11 @@ import logging
 from rabbitmq_consumer import start_consumer
 from auth_http import get_admin_user, get_current_user_via_http, require_permission, UserRead
 from sqlalchemy import text
+from datetime import datetime
+import regen
+from constants import (
+    REGEN_PERCENT_PER_HOUR, SATIETY_DURATION_HOURS, SATIETY_REGEN_BONUS_BY_RARITY,
+)
 
 
 def _internal_token_headers() -> dict:
@@ -335,10 +340,182 @@ def get_character_perks(character_id: int, db: Session = Depends(get_db)):
 # -----------------------------
 @router.get("/{character_id}", response_model=schemas.CharacterAttributesResponse)
 def get_full_attributes(character_id: int, db: Session = Depends(get_db)):
-    attr = db.query(models.CharacterAttributes).filter(models.CharacterAttributes.character_id == character_id).first()
+    # FEAT-164: lock → settle passive regen / satiety expiry → commit → return.
+    try:
+        attr = regen.settle_character(db, character_id)
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка пересчёта восстановления персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось получить атрибуты персонажа")
     if not attr:
         raise HTTPException(status_code=404, detail="Attributes not found")
     return attr
+
+
+# -----------------------------
+# FEAT-164: восстановление в покое и сытость
+# -----------------------------
+def _build_satiety_info(satiety, now: datetime) -> schemas.SatietyInfo:
+    expires_at = regen.to_datetime(satiety.expires_at)
+    remaining = int((expires_at - now).total_seconds())
+    return schemas.SatietyInfo(
+        item_id=satiety.item_id,
+        source_item_name=satiety.source_item_name,
+        rarity=satiety.rarity,
+        regen_bonus_percent=int(round(float(satiety.regen_bonus or 0.0) * 100)),
+        modifiers=satiety.modifiers or {},
+        started_at=regen.to_datetime(satiety.started_at),
+        expires_at=expires_at,
+        remaining_seconds=max(0, remaining),
+    )
+
+
+@router.get("/{character_id}/rest-status", response_model=schemas.RestStatusResponse)
+def get_rest_status(character_id: int, db: Session = Depends(get_db)):
+    now = datetime.utcnow()
+    try:
+        attr = regen.settle_character(db, character_id, now)
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка пересчёта восстановления персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось получить состояние восстановления")
+    if not attr:
+        raise HTTPException(status_code=404, detail="Атрибуты персонажа не найдены")
+
+    try:
+        eligible = regen.is_regen_eligible(db, character_id)
+    except SQLAlchemyError as e:
+        logger.error(f"rest-status: не удалось проверить is_npc персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось получить состояние восстановления")
+
+    if not eligible:
+        return schemas.RestStatusResponse(
+            character_id=character_id,
+            is_resting=False,
+            busy_reason=None,
+            base_regen_percent_per_hour=REGEN_PERCENT_PER_HOUR,
+            regen_percent_per_hour=REGEN_PERCENT_PER_HOUR,
+            satiety=None,
+        )
+
+    try:
+        busy_reason = regen.get_busy_reason(db, character_id, now)
+    except SQLAlchemyError as e:
+        logger.error(f"rest-status: ошибка чтения занятости персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось получить состояние восстановления")
+
+    satiety = regen.get_satiety(db, character_id)
+    regen_rate = REGEN_PERCENT_PER_HOUR
+    satiety_info = None
+    if satiety is not None:
+        regen_rate = REGEN_PERCENT_PER_HOUR * (1.0 + float(satiety.regen_bonus or 0.0))
+        satiety_info = _build_satiety_info(satiety, now)
+
+    return schemas.RestStatusResponse(
+        character_id=character_id,
+        is_resting=busy_reason is None,
+        busy_reason=busy_reason,
+        base_regen_percent_per_hour=REGEN_PERCENT_PER_HOUR,
+        regen_percent_per_hour=regen_rate,
+        satiety=satiety_info,
+    )
+
+
+@router.post("/internal/settle-regen", response_model=schemas.SettleRegenResponse)
+def settle_regen_bulk(payload: schemas.SettleRegenRequest, db: Session = Depends(get_db)):
+    """Internal: settle regen for several characters, one short transaction each."""
+    settled, missing = [], []
+    for character_id in payload.character_ids:
+        try:
+            attr = regen.settle_character(db, character_id)
+        except SQLAlchemyError as e:
+            logger.error(f"settle-regen: ошибка для персонажа {character_id}: {e}")
+            raise HTTPException(status_code=500, detail="Ошибка пересчёта восстановления")
+        if attr is None:
+            missing.append(character_id)
+        else:
+            settled.append(character_id)
+    return schemas.SettleRegenResponse(settled=settled, missing=missing)
+
+
+@router.post(
+    "/internal/{character_id}/satiety",
+    response_model=schemas.SatietyApplyResponse,
+    status_code=201,
+)
+def apply_satiety(
+    character_id: int,
+    payload: schemas.SatietyApplyRequest,
+    db: Session = Depends(get_db),
+):
+    """Internal: eat food — settle, reject if satiated, apply modifiers and
+    instant recovery, create the satiety row. One transaction."""
+    if payload.rarity not in SATIETY_REGEN_BONUS_BY_RARITY:
+        raise HTTPException(status_code=400, detail="Недопустимая редкость еды")
+    unknown = [k for k in payload.modifiers if k not in crud.VALID_FLAT_BONUS_KEYS]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недопустимые модификаторы еды: {', '.join(sorted(unknown))}",
+        )
+    recovery = payload.recovery.dict()
+    if any(v < 0 for v in recovery.values()):
+        raise HTTPException(status_code=400, detail="Восстановление не может быть отрицательным")
+
+    modifiers = {k: v for k, v in payload.modifiers.items() if v}
+    now = datetime.utcnow()
+    try:
+        attr = regen.lock_attributes(db, character_id)
+        if attr is None:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Атрибуты персонажа не найдены")
+
+        expired = regen.settle_regen(db, attr, now)
+        if regen.get_satiety(db, character_id) is not None:
+            # Keep the settle result, then reject.
+            db.commit()
+            if expired:
+                regen.reconcile_perks_after_expiry(db, character_id)
+            raise HTTPException(status_code=409, detail="Вы уже наелись")
+
+        if modifiers:
+            # Equipment-style: raw values only, no derived propagation — the
+            # exact negation is applied on expiry.
+            crud._apply_modifiers_internal(db, character_id, modifiers, propagate_derived=False)
+
+        for resource in ("health", "mana", "energy", "stamina"):
+            amount = int(recovery.get(f"{resource}_recovery", 0) or 0)
+            if amount:
+                current = int(getattr(attr, f"current_{resource}") or 0)
+                maximum = int(getattr(attr, f"max_{resource}") or 0)
+                setattr(attr, f"current_{resource}", max(0, min(current + amount, maximum)))
+
+        satiety = models.CharacterSatiety(
+            character_id=character_id,
+            item_id=payload.item_id,
+            source_item_name=payload.source_item_name,
+            rarity=payload.rarity,
+            regen_bonus=SATIETY_REGEN_BONUS_BY_RARITY[payload.rarity],
+            modifiers=modifiers,
+            started_at=now,
+            expires_at=regen.satiety_expires_at(now, SATIETY_DURATION_HOURS),
+        )
+        db.add(satiety)
+        db.commit()
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка применения сытости персонажу {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось применить сытость")
+
+    stats_changed = bool(modifiers) or expired
+    info = _build_satiety_info(satiety, now)
+    if stats_changed:
+        regen.reconcile_perks_after_expiry(db, character_id)
+
+    logger.info(
+        f"Персонаж {character_id} поел (item_id={payload.item_id}), сытость до {info.expires_at}"
+    )
+    return schemas.SatietyApplyResponse(satiety=info, stats_changed=stats_changed)
 
 # -----------------------------
 # 4. Прокачка (upgrade)
@@ -403,6 +580,10 @@ async def upgrade_attributes(
         ).with_for_update().first()
         if not attr:
             raise HTTPException(status_code=404, detail="Attributes not found")
+
+        # FEAT-164: credit passive regen / satiety expiry before the upgrade.
+        # (Perk reconcile below runs anyway.)
+        regen.settle_regen(db, attr)
 
         b = 0.1  # bonus per stat point
 
@@ -554,6 +735,9 @@ def apply_modifiers(character_id: int, modifiers: dict, db: Session = Depends(ge
         if not attr:
             raise HTTPException(status_code=404, detail="Character attributes not found")
 
+        # FEAT-164: credit passive regen / satiety expiry first.
+        satiety_expired = regen.settle_regen(db, attr)
+
         # ------- health -------
         delta_health = modifiers.get("health", 0)
         if delta_health != 0:
@@ -691,6 +875,8 @@ def apply_modifiers(character_id: int, modifiers: dict, db: Session = Depends(ge
 
         db.flush()
 
+    if satiety_expired:
+        regen.reconcile_perks_after_expiry(db, character_id)
     db.refresh(attr)
     return {"detail": "Modifiers applied successfully"}
 
@@ -708,6 +894,9 @@ def recover_resources(character_id: int, recovery: dict, db: Session = Depends(g
         ).with_for_update().first()
         if not attr:
             raise HTTPException(status_code=404, detail="Character attributes not found")
+
+        # FEAT-164: credit passive regen / satiety expiry first.
+        satiety_expired = regen.settle_regen(db, attr)
 
         health_rec = recovery.get("health_recovery", 0)
         mana_rec = recovery.get("mana_recovery", 0)
@@ -728,6 +917,8 @@ def recover_resources(character_id: int, recovery: dict, db: Session = Depends(g
 
         db.flush()
 
+    if satiety_expired:
+        regen.reconcile_perks_after_expiry(db, character_id)
     db.refresh(attr)
     return {"detail": "Resources recovered successfully"}
 
@@ -815,20 +1006,33 @@ def consume_stamina(character_id: int, payload: dict, db: Session = Depends(get_
     if amount is None or not isinstance(amount, int):
         raise HTTPException(status_code=400, detail="Поле 'amount' обязательно и должно быть целым числом")
 
-    attr = db.query(models.CharacterAttributes).filter(models.CharacterAttributes.character_id == character_id).first()
+    # FEAT-164: row lock (was missing) + passive regen settle before the check.
+    attr = regen.lock_attributes(db, character_id)
     if not attr:
+        db.rollback()
         raise HTTPException(status_code=404, detail="Атрибуты персонажа не найдены")
 
-    if attr.current_stamina < amount:
-        raise HTTPException(status_code=400, detail="Недостаточно выносливости для списания")
-
-    attr.current_stamina -= amount
     try:
+        satiety_expired = regen.settle_regen(db, attr)
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Ошибка пересчёта восстановления персонажа {character_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при обновлении выносливости")
+
+    insufficient = attr.current_stamina < amount
+    if not insufficient:
+        attr.current_stamina -= amount
+    try:
+        # Commits the spend, or only the settle result when stamina is short.
         db.commit()
     except Exception as e:
         db.rollback()
         logger.error(f"Ошибка при списании выносливости: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при обновлении выносливости")
+    if satiety_expired:
+        regen.reconcile_perks_after_expiry(db, character_id)
+    if insufficient:
+        raise HTTPException(status_code=400, detail="Недостаточно выносливости для списания")
     db.refresh(attr)
 
     return {
@@ -883,11 +1087,13 @@ def admin_update_attributes(
     db: Session = Depends(get_db),
     admin: UserRead = Depends(require_permission("characters:update")),
 ):
-    attr = db.query(models.CharacterAttributes).filter(
-        models.CharacterAttributes.character_id == character_id
-    ).first()
+    attr = regen.lock_attributes(db, character_id)
     if not attr:
+        db.rollback()
         raise HTTPException(status_code=404, detail="Attributes not found")
+
+    # FEAT-164: settle first; admin values then overwrite, anchor stays "now".
+    satiety_expired = regen.settle_regen(db, attr)
 
     update_data = data.dict(exclude_unset=True)
     for field, value in update_data.items():
@@ -900,6 +1106,10 @@ def admin_update_attributes(
         db.rollback()
         logger.error(f"Ошибка при админском обновлении атрибутов: {e}")
         raise HTTPException(status_code=500, detail="Failed to update attributes")
+
+    if satiety_expired:
+        regen.reconcile_perks_after_expiry(db, character_id)
+        db.refresh(attr)
 
     # Log experience changes to character-service (fire-and-forget)
     logged_fields = []
@@ -1158,6 +1368,8 @@ def reconcile_perks_endpoint(character_id: int, db: Session = Depends(get_db)):
     activate those whose conditions now hold, deactivate those that no longer
     do (FEAT-143 dynamic perks). Called on gear change, level-up, etc."""
     try:
+        # FEAT-164: settle passive regen / satiety expiry first.
+        regen.settle_character(db, character_id)
         from perk_evaluator import reconcile_perks
         result = reconcile_perks(db, character_id)
         return {"detail": "Perks reconciled", **result}

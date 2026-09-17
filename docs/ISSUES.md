@@ -123,6 +123,13 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 ## HIGH
 
+### Уязвимость: изменяющие эндпоинты character-attributes-service открыты через gateway без авторизации
+**Сервис:** character-attributes-service (+ nginx)
+**Файлы:** `services/character-attributes-service/app/main.py` (`POST /{id}/apply_modifiers` ~542, `POST /{id}/recover` ~700, `PUT /{id}/active_experience` ~734, `PUT /{id}/passive_experience` ~768, `POST /{id}/consume_stamina` ~801, `POST /{id}/refund_stamina` ~840), `docker/api-gateway/nginx.conf` (`location /attributes/`), `nginx.prod.conf`
+**Обнаружено:** FEAT-164 (Codebase Analyst, 2026-09-17), по коду; вживую не проверялось.
+**Описание:** у этих эндпоинтов нет ни JWT, ни `X-Internal-Token`, а nginx закрывает только `/attributes/internal/`. Любой клиент может снаружи вылечить любого персонажа (`/recover`), выдать ему произвольные статы (`/apply_modifiers`), начислить опыт (`/passive_experience`, `/active_experience`) или обнулить выносливость. Вызываются только другими сервисами (inventory, dungeon, locations, character-service).
+**Возможное решение:** перенести под `/attributes/internal/` (или добавить `Depends(verify_internal_token)`) и синхронно обновить вызывающих; отдельной задачей.
+
 ### Баг: `damage_modifier` оружия засчитывается в урон дважды
 **Сервисы:** inventory-service, battle-service
 **Файлы:** `services/inventory-service/app/crud.py:533` (`build_modifiers_dict`), `services/battle-service/app/battle_engine.py:155-157`
@@ -486,6 +493,24 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 ---
 
 ## LOW
+
+### Баг: удаление предмета, который лежит у кого-то в инвентаре, падает с 500
+**Сервис:** inventory-service (`services/inventory-service/app/main.py`, `DELETE /inventory/items/{item_id}`, `delete_item`)
+**Обнаружено:** FEAT-164 (Reviewer, 2026-09-17), вживую на dev-стеке.
+**Описание:** эндпоинт делает `db.delete(item)` + `commit()` без проверок и без обработки ошибок. Если на предмет ссылается `character_inventory` (FK `character_inventory_ibfk_1`, без `ON DELETE`), MySQL отклоняет удаление, и админ получает 500 вместо понятного сообщения. Докстринг сам упоминает, что проверки «можно добавить».
+**Что сделать:** перед удалением проверять ссылки (инвентари, слоты, рецепты, лавки, аукцион) и возвращать 409 с русским текстом («Предмет используется: …»), либо ловить `IntegrityError` → 409.
+
+### Долг: два теста конкурентности `refund_stamina` не запускаются нигде
+**Сервис:** character-attributes-service (`services/character-attributes-service/app/tests/test_refund_stamina.py:207`, `:265`, класс `TestRefundStaminaConcurrency`)
+**Обнаружено:** FEAT-164 (QA, 2026-09-17).
+**Описание:** оба теста помечены `skipif(dialect == 'sqlite')` с пояснением «the test runs in CI» / «Verified on MySQL CI». Но движок в файле жёстко задан как SQLite, а в CI (`.github/workflows/ci.yml`) MySQL нет — условие пропуска истинно всегда, и тесты не выполняются ни локально, ни в CI. Гарантию сериализации `with_for_update()` в `refund_stamina` на деле ничего не проверяет, а текст причины вводит в заблуждение.
+**Что сделать:** либо поднять MySQL-сервис в CI и гонять эти тесты на нём, либо переписать причину пропуска честно (и/или проверять наличие `FOR UPDATE` в сгенерированном SQL).
+
+### Хрупкость теста: `test_approve_join_request` в battle-service падает, если перед ним выполнен `test_finalize_extraction.py`
+**Сервис:** battle-service (`services/battle-service/app/tests/test_join_requests.py::TestAdminJoinRequests::test_approve_join_request`, `tests/_feat163_harness.py::patch_main`)
+**Обнаружено:** FEAT-164 (QA, 2026-09-17). Воспроизводится и на чистом `HEAD`: `pytest tests/test_finalize_extraction.py tests/test_join_requests.py` → `TypeError: object MagicMock can't be used in 'await' expression`.
+**Описание:** модули тестов подменяют `sys.modules` (`redis_state`, `battle_engine` и т.д.) MagicMock-ами, а харнесс FEAT-163 перепривязывает атрибуты `main`; при таком порядке файлов что-то из этого остаётся синхронным MagicMock там, где `admin_approve_join_request` делает `await`. В полном прогоне (алфавитный порядок) тест зелёный, поэтому CI не страдает — но случайный порядок (`pytest-randomly`, `-k`, выборочный запуск) даст ложное падение.
+**Что сделать:** изолировать подмены модулей (фикстура с `monkeypatch.setitem(sys.modules, ...)` + восстановление) вместо глобальных `sys.modules[...] = MagicMock()` при импорте.
 
 ### Долг: при срабатывании `maxEditLength` jsdiff молотит ~30 секунд, блокируя вкладку, и только потом сдаётся
 **Сервис:** frontend (`services/frontend/app-chaldea/src/components/pages/LocationPage/PostVersionHistoryModal.tsx:55`, `:111-117`)

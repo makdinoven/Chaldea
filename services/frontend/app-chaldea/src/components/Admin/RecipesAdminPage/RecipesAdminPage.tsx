@@ -7,7 +7,15 @@ import {
   deleteRecipe,
   uploadRecipeImage,
 } from "../../../api/professions";
-import { fetchItems } from "../../../api/items";
+import { fetchItem, fetchItems } from "../../../api/items";
+import {
+  ITEM_RARITIES,
+  ITEM_TYPE_LABELS,
+  RARITY_TEXT_COLORS,
+  RARITY_LABELS as ITEM_RARITY_LABELS,
+  isEquipmentOnlyRarity,
+  isWearableType,
+} from "../../../constants/items";
 import toast from "react-hot-toast";
 import { motion } from "motion/react";
 import useDebounce from "../../../hooks/useDebounce";
@@ -22,19 +30,14 @@ import type {
 
 /* ── Dictionaries ── */
 
-const RARITY_OPTIONS = [
-  { value: "common", label: "Обычный" },
-  { value: "uncommon", label: "Необычный" },
-  { value: "rare", label: "Редкий" },
-  { value: "epic", label: "Эпический" },
-  { value: "legendary", label: "Легендарный" },
-] as const;
+/** Recipe rarity is always the result item's rarity (read-only, FEAT-164) */
+const RARITY_FILTER_OPTIONS = [
+  { value: "", label: "Все редкости" },
+  ...ITEM_RARITIES.map((value) => ({ value, label: ITEM_RARITY_LABELS[value] ?? value })),
+];
 
-const RARITY_LABELS: Record<string, string> = Object.fromEntries(
-  RARITY_OPTIONS.map((r) => [r.value, r.label]),
-);
-
-const RARITY_FILTER_OPTIONS = [{ value: "", label: "Все редкости" }, ...RARITY_OPTIONS];
+const UNCRAFTABLE_RESULT_MESSAGE =
+  "Этот предмет нельзя создавать крафтом: его редкость доступна только для снаряжения";
 
 /* ── Types ── */
 
@@ -50,7 +53,6 @@ interface RecipeFormState {
   required_rank: number;
   result_item_id: number | "";
   result_quantity: number;
-  rarity: string;
   icon: string;
   auto_learn_rank: number | "";
   xp_reward: number | "";
@@ -65,7 +67,6 @@ const INITIAL_FORM: RecipeFormState = {
   required_rank: 1,
   result_item_id: "",
   result_quantity: 1,
-  rarity: "common",
   icon: "",
   auto_learn_rank: "",
   xp_reward: "",
@@ -76,7 +77,13 @@ const INITIAL_FORM: RecipeFormState = {
 interface ItemOption {
   id: number;
   name: string;
+  item_type?: string;
+  item_rarity?: string;
 }
+
+/** Legacy non-equipment items with an equipment-only rarity cannot be crafted */
+const isUncraftableResult = (item: ItemOption): boolean =>
+  isEquipmentOnlyRarity(item.item_rarity) && !isWearableType(item.item_type);
 
 /* ── Component ── */
 
@@ -107,7 +114,8 @@ const RecipesAdminPage = () => {
   const [itemSearch, setItemSearch] = useState("");
   const debouncedItemSearch = useDebounce(itemSearch);
   const [itemOptions, setItemOptions] = useState<ItemOption[]>([]);
-
+  /** Full data of the chosen result item (its type decides allowed rarities) */
+  const [resultItem, setResultItem] = useState<ItemOption | null>(null);
   /* ── Load data ── */
 
   const loadRecipes = useCallback(() => {
@@ -144,10 +152,35 @@ const RecipesAdminPage = () => {
     if (!showForm) return;
     fetchItems(debouncedItemSearch || "", 1, 50)
       .then((data: ItemOption[]) => setItemOptions(data))
-      .catch(() => {
-        /* silently ignore — items list is optional helper */
-      });
+      .catch((e: Error) => toast.error(e.message || "Не удалось загрузить список предметов"));
   }, [debouncedItemSearch, showForm]);
+
+  /* Result item details: needed to know whether equipment-only rarities apply */
+  useEffect(() => {
+    if (!showForm || form.result_item_id === "") {
+      setResultItem(null);
+      return undefined;
+    }
+    const id = Number(form.result_item_id);
+    const known = itemOptions.find((o) => o.id === id);
+    if (known?.item_type) {
+      setResultItem(known);
+      return undefined;
+    }
+    let cancelled = false;
+    fetchItem(id)
+      .then((data: ItemOption) => {
+        if (!cancelled) setResultItem(data);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) toast.error(e.message || "Не удалось загрузить результирующий предмет");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // itemOptions is only a lookup cache; re-running on every search would refetch needlessly
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.result_item_id, showForm]);
 
   /* ── Form handlers ── */
 
@@ -168,7 +201,6 @@ const RecipesAdminPage = () => {
       required_rank: r.required_rank,
       result_item_id: r.result_item_id,
       result_quantity: r.result_quantity,
-      rarity: r.rarity,
       icon: r.icon ?? "",
       auto_learn_rank: r.auto_learn_rank ?? "",
       xp_reward: r.xp_reward ?? "",
@@ -181,6 +213,11 @@ const RecipesAdminPage = () => {
       is_active: r.is_active,
     });
     setShowForm(true);
+  };
+
+  const handleResultChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value;
+    setForm((st) => ({ ...st, result_item_id: value === "" ? "" : Number(value) }));
   };
 
   const closeForm = () => {
@@ -243,6 +280,10 @@ const RecipesAdminPage = () => {
       toast.error("Выберите результирующий предмет");
       return;
     }
+    if (resultItem && isUncraftableResult(resultItem)) {
+      toast.error(UNCRAFTABLE_RESULT_MESSAGE);
+      return;
+    }
 
     const validIngredients: RecipeIngredientInput[] = form.ingredients
       .filter((ing) => ing.item_id !== "")
@@ -268,7 +309,6 @@ const RecipesAdminPage = () => {
           required_rank: Number(form.required_rank) || 1,
           result_item_id: Number(form.result_item_id),
           result_quantity: Number(form.result_quantity) || 1,
-          rarity: form.rarity,
           icon: form.icon.trim() || null,
           auto_learn_rank: form.auto_learn_rank !== "" ? Number(form.auto_learn_rank) : null,
           xp_reward: form.xp_reward !== "" ? Number(form.xp_reward) : null,
@@ -286,7 +326,6 @@ const RecipesAdminPage = () => {
           required_rank: Number(form.required_rank) || 1,
           result_item_id: Number(form.result_item_id),
           result_quantity: Number(form.result_quantity) || 1,
-          rarity: form.rarity,
           icon: form.icon.trim() || null,
           auto_learn_rank: form.auto_learn_rank !== "" ? Number(form.auto_learn_rank) : null,
           xp_reward: form.xp_reward !== "" ? Number(form.xp_reward) : null,
@@ -415,19 +454,49 @@ const RecipesAdminPage = () => {
               <select
                 name="result_item_id"
                 value={form.result_item_id}
-                onChange={handleChange}
+                onChange={handleResultChange}
                 required
                 className="input-underline"
               >
                 <option value="" disabled className="bg-site-dark text-white">
                   — Выберите предмет —
                 </option>
-                {itemOptions.map((item) => (
-                  <option key={item.id} value={item.id} className="bg-site-dark text-white">
-                    {item.name} (id: {item.id})
+                {/* Keep the stored result visible even if the search no longer lists it */}
+                {resultItem && !itemOptions.some((o) => o.id === resultItem.id) && (
+                  <option value={resultItem.id} className="bg-site-dark text-white">
+                    {resultItem.name} (id: {resultItem.id})
                   </option>
-                ))}
+                )}
+                {itemOptions.map((item) => {
+                  const blocked = isUncraftableResult(item);
+                  return (
+                    <option
+                      key={item.id}
+                      value={item.id}
+                      disabled={blocked}
+                      className="bg-site-dark text-white"
+                    >
+                      {item.name} (id: {item.id}){blocked ? " — недоступно для крафта" : ""}
+                    </option>
+                  );
+                })}
               </select>
+              {resultItem?.item_type && (
+                <span className="text-white/40 text-xs">
+                  {ITEM_TYPE_LABELS[resultItem.item_type] ?? resultItem.item_type}
+                  {resultItem.item_rarity && (
+                    <>
+                      {" · качество: "}
+                      <span className={RARITY_TEXT_COLORS[resultItem.item_rarity] ?? "text-white"}>
+                        {ITEM_RARITY_LABELS[resultItem.item_rarity] ?? resultItem.item_rarity}
+                      </span>
+                    </>
+                  )}
+                </span>
+              )}
+              {resultItem && isUncraftableResult(resultItem) && (
+                <span className="text-site-red text-xs">{UNCRAFTABLE_RESULT_MESSAGE}.</span>
+              )}
             </label>
 
             {/* Result quantity */}
@@ -443,25 +512,6 @@ const RecipesAdminPage = () => {
                 min={1}
                 className="input-underline"
               />
-            </label>
-
-            {/* Rarity */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
-                Редкость
-              </span>
-              <select
-                name="rarity"
-                value={form.rarity}
-                onChange={handleChange}
-                className="input-underline"
-              >
-                {RARITY_OPTIONS.map((r) => (
-                  <option key={r.value} value={r.value} className="bg-site-dark text-white">
-                    {r.label}
-                  </option>
-                ))}
-              </select>
             </label>
 
             {/* Auto-learn rank */}
@@ -606,10 +656,10 @@ const RecipesAdminPage = () => {
           </fieldset>
 
           {/* Buttons */}
-          <div className="flex gap-4 pt-2">
+          <div className="flex flex-wrap gap-4 pt-2">
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || Boolean(resultItem && isUncraftableResult(resultItem))}
               className="btn-blue !text-base !px-8 !py-2"
             >
               {submitting
@@ -730,7 +780,7 @@ const RecipesAdminPage = () => {
                   {r.result_quantity > 1 && ` x${r.result_quantity}`}
                 </td>
                 <td className="px-4 py-3 text-sm text-white/70">
-                  {RARITY_LABELS[r.rarity] ?? r.rarity}
+                  {ITEM_RARITY_LABELS[r.rarity] ?? r.rarity}
                 </td>
                 <td className="px-4 py-3 text-sm text-white/70">
                   {r.recipe_item_id ? (

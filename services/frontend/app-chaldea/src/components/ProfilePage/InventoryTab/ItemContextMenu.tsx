@@ -10,6 +10,7 @@ import {
   unequipItem,
   useItem,
   useBuffItem,
+  eatFood,
   dropItem,
   learnRecipeFromItem,
   identifyItem,
@@ -176,8 +177,30 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
       });
     }
 
-    // Использовать — for buff items (books etc.) or regular consumables
-    if (itemType === 'consumable') {
+    // Съесть — food gives satiety (FEAT-164); replaces «Использовать»
+    if (itemType === 'consumable' && item.is_food) {
+      actions.push({
+        label: 'Съесть',
+        handler: () => {
+          dispatch(closeContextMenu());
+          (async () => {
+            try {
+              const result = await dispatch(
+                eatFood({ characterId, inventoryItemId: inventoryItem.id }),
+              );
+              if (eatFood.rejected.match(result)) {
+                toast.error(result.payload ?? 'Не удалось съесть предмет');
+              } else if (eatFood.fulfilled.match(result)) {
+                toast.success(result.payload.message || 'Вы поели');
+              }
+            } catch {
+              toast.error('Не удалось съесть предмет');
+            }
+          })();
+        },
+      });
+    } else if (itemType === 'consumable') {
+      // Использовать — for buff items (books etc.) or regular consumables
       if (item.buff_type && item.buff_value != null && item.buff_duration_minutes != null) {
         // Buff item — use dedicated buff endpoint
         actions.push({
