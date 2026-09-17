@@ -439,7 +439,7 @@ Country -> Region -> District -> Location
   - `updated_at` проставляется явно в `crud` (`datetime.now(timezone.utc)`), без MySQL `ON UPDATE` — чтобы порядок вытеснения был детерминированным и тестируемым.
   - **Вытеснение:** после каждой вставки `evict_drafts` оставляет персонажу 10 самых свежих строк по `updated_at`, остальные удаляет. Вытеснить может и живой черновик другой локации — это корректно: он по определению самый давно не трогавшийся из десяти.
   - Удаление локации уносит её черновики каскадом; удаление персонажа — через D7 (FK на `characters` в этом сервисе нет ни у одной таблицы).
-- **gathering_nodes** (FEAT-128) - id, location_id (FK Locations CASCADE), node_name, category enum(ore/herb/wood), result_item_id (cross-service, no FK), result_quantity_per_gather, stamina_per_gather, daily_bank_max, current_bank, allow_concurrent_gather, depleted_at, restore_at (= depleted_at+24h), is_enabled, created_at, updated_at
+- **gathering_nodes** (FEAT-128) - id, location_id (FK Locations CASCADE), node_name, category enum(ore/herb/wood/ingredient; ingredient — FEAT-165, миграция 043), result_item_id (cross-service, no FK), result_quantity_per_gather, stamina_per_gather, daily_bank_max, current_bank, allow_concurrent_gather, depleted_at, restore_at (= depleted_at+24h), is_enabled, created_at, updated_at
 - **gathering_sessions** (FEAT-128) - id, node_id (FK gathering_nodes CASCADE), character_id, tool_inventory_item_id (nullable, no FK), tool_item_id, tool_durability_at_start, started_at, complete_at, effective_speed/double/stamina_bonus_pct (snapshot), stamina_paid, base_quantity, skill_slug, status enum(active/completed/cancelled/interrupted_by_battle/inventory_full), finished_at, result_quantity, xp_awarded, rank_up_to
 
 ## Перемещение (move_and_post)
@@ -493,3 +493,10 @@ Country -> Region -> District -> Location
 - `Countries/Regions.recommended_level_min/_max` — ручное переопределение, каждая граница отдельно (NULL = автоматически). Меняется через обычные PUT страны/региона, проверка `min <= max` в схеме.
 - `GET /locations/recommended-level/{country|region}/{id}` → `{auto_min, auto_max, manual_min, manual_max}` для формы в админке.
 
+## Сбор ингредиентов (FEAT-165, 043)
+
+- Четвёртая категория узлов `gathering_nodes.category = 'ingredient'` (ENUM расширен миграцией `043_gathering_ingredient_category`, revision id `043_gathering_ingredient`). Откат отказывается работать, пока есть узлы `ingredient` (их нужно удалить или сменить категорию).
+- Навык в inventory-service — `foraging` («Собирательство»): маппинги `_CATEGORY_TO_SKILL_SLUG` и `_GATHER_NODE_CATEGORY_TO_SKILL_SLUG` (`crud.py`) содержат `ingredient → foraging`; finalize шлёт этот slug в `/gathering/award`, ранговые бонусы берутся из того же навыка.
+- Без инструмента: `crud.TOOLLESS_GATHER_CATEGORIES = {'ingredient'}`, `is_tool_required_for_category()`. В `start_gathering` непустой `tool_inventory_item_id` для такого узла → 422 «Для сбора этого ресурса инструмент не нужен». Прочность не расходуется (инструмента нет).
+- `_compute_effective_gather_params(..., tool_required)`: штраф ×2 ко времени и обнуление шанса удвоения действуют только при `tool_required and not has_tool`. Для ингредиентов — ранговые бонусы скорости/стамины/удвоения с теми же капами, бонусы инструмента = 0. Руда/травы/древесина — без изменений.
+- `client/details` → каждый узел отдаёт `tool_required: bool` (аддитивно), фронт по нему решает, показывать ли выбор инструмента.

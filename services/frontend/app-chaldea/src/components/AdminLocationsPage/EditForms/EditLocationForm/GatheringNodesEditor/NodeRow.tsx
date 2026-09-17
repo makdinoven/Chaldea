@@ -47,12 +47,14 @@ const CATEGORY_LABEL: Record<GatheringCategory, string> = {
   ore: 'Руда',
   herb: 'Травы',
   wood: 'Дерево',
+  ingredient: 'Ингредиенты',
 };
 
 const CATEGORY_OPTIONS: { value: GatheringCategory; label: string }[] = [
   { value: 'ore', label: 'Руда' },
   { value: 'herb', label: 'Травы' },
   { value: 'wood', label: 'Дерево' },
+  { value: 'ingredient', label: 'Ингредиенты' },
 ];
 
 const formatDate = (iso: string | null): string => formatServerDateTime(iso, {});

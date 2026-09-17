@@ -8,14 +8,11 @@ import type {
   CraftResult,
   ChooseProfessionResponse,
   ChangeProfessionResponse,
-  LearnRecipeResponse,
-  ExtractInfoResponse,
-  ExtractEssenceResult,
-  TransmuteInfoResponse,
-  TransmuteResult,
   SharpenInfoResponse,
   SharpenRequest,
   SharpenResult,
+  RefineInfo,
+  RefineResult,
 } from "../../types/professions";
 import type {
   SocketInfoResponse,
@@ -23,9 +20,6 @@ import type {
   InsertGemResult,
   ExtractGemRequest,
   ExtractGemResult,
-  SmeltInfoResponse,
-  SmeltRequest,
-  SmeltResult,
 } from "../../types/gems";
 
 // --- State ---
@@ -47,16 +41,6 @@ interface CraftingState {
   craftError: string | null;
   lastCraftResult: CraftResult | null;
 
-  extractInfo: ExtractInfoResponse | null;
-  extractInfoLoading: boolean;
-  extractLoading: boolean;
-  extractError: string | null;
-
-  transmuteInfo: TransmuteInfoResponse | null;
-  transmuteInfoLoading: boolean;
-  transmuteLoading: boolean;
-  transmuteError: string | null;
-
   sharpenInfo: SharpenInfoResponse | null;
   sharpenInfoLoading: boolean;
   sharpenLoading: boolean;
@@ -67,10 +51,11 @@ interface CraftingState {
   socketLoading: boolean;
   socketError: string | null;
 
-  smeltInfo: SmeltInfoResponse | null;
-  smeltInfoLoading: boolean;
-  smeltLoading: boolean;
-  smeltError: string | null;
+  refineInfo: RefineInfo | null;
+  refineInfoLoading: boolean;
+  refineInfoError: string | null;
+  refineLoading: boolean;
+  refineError: string | null;
 }
 
 const initialState: CraftingState = {
@@ -90,16 +75,6 @@ const initialState: CraftingState = {
   craftError: null,
   lastCraftResult: null,
 
-  extractInfo: null,
-  extractInfoLoading: false,
-  extractLoading: false,
-  extractError: null,
-
-  transmuteInfo: null,
-  transmuteInfoLoading: false,
-  transmuteLoading: false,
-  transmuteError: null,
-
   sharpenInfo: null,
   sharpenInfoLoading: false,
   sharpenLoading: false,
@@ -110,10 +85,11 @@ const initialState: CraftingState = {
   socketLoading: false,
   socketError: null,
 
-  smeltInfo: null,
-  smeltInfoLoading: false,
-  smeltLoading: false,
-  smeltError: null,
+  refineInfo: null,
+  refineInfoLoading: false,
+  refineInfoError: null,
+  refineLoading: false,
+  refineError: null,
 };
 
 // --- Async Thunks ---
@@ -189,83 +165,15 @@ export const fetchRecipes = createAsyncThunk<
 
 export const craftItem = createAsyncThunk<
   CraftResult,
-  { characterId: number; recipeId: number; blueprintItemId?: number | null },
+  { characterId: number; recipeId: number },
   { rejectValue: string }
->("crafting/craftItem", async ({ characterId, recipeId, blueprintItemId }, thunkAPI) => {
+>("crafting/craftItem", async ({ characterId, recipeId }, thunkAPI) => {
   try {
     return await professionsApi.craftItem(characterId, {
       recipe_id: recipeId,
-      blueprint_item_id: blueprintItemId ?? null,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Не удалось создать предмет";
-    return thunkAPI.rejectWithValue(msg);
-  }
-});
-
-export const learnRecipe = createAsyncThunk<
-  LearnRecipeResponse,
-  { characterId: number; recipeId: number },
-  { rejectValue: string }
->("crafting/learnRecipe", async ({ characterId, recipeId }, thunkAPI) => {
-  try {
-    return await professionsApi.learnRecipe(characterId, {
-      recipe_id: recipeId,
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Не удалось выучить рецепт";
-    return thunkAPI.rejectWithValue(msg);
-  }
-});
-
-export const fetchExtractInfo = createAsyncThunk<
-  ExtractInfoResponse,
-  number,
-  { rejectValue: string }
->("crafting/fetchExtractInfo", async (characterId, thunkAPI) => {
-  try {
-    return await professionsApi.fetchExtractInfo(characterId);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Не удалось загрузить информацию об экстракции";
-    return thunkAPI.rejectWithValue(msg);
-  }
-});
-
-export const extractEssence = createAsyncThunk<
-  ExtractEssenceResult,
-  { characterId: number; crystalItemId: number },
-  { rejectValue: string }
->("crafting/extractEssence", async ({ characterId, crystalItemId }, thunkAPI) => {
-  try {
-    return await professionsApi.extractEssence(characterId, crystalItemId);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Не удалось извлечь эссенцию";
-    return thunkAPI.rejectWithValue(msg);
-  }
-});
-
-export const fetchTransmuteInfo = createAsyncThunk<
-  TransmuteInfoResponse,
-  number,
-  { rejectValue: string }
->("crafting/fetchTransmuteInfo", async (characterId, thunkAPI) => {
-  try {
-    return await professionsApi.fetchTransmuteInfo(characterId);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Не удалось загрузить информацию о трансмутации";
-    return thunkAPI.rejectWithValue(msg);
-  }
-});
-
-export const transmuteItem = createAsyncThunk<
-  TransmuteResult,
-  { characterId: number; inventoryItemId: number },
-  { rejectValue: string }
->("crafting/transmuteItem", async ({ characterId, inventoryItemId }, thunkAPI) => {
-  try {
-    return await professionsApi.transmuteItem(characterId, inventoryItemId);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Не удалось трансмутировать ресурс";
     return thunkAPI.rejectWithValue(msg);
   }
 });
@@ -335,28 +243,31 @@ export const extractGem = createAsyncThunk<
   }
 });
 
-export const fetchSmeltInfo = createAsyncThunk<
-  SmeltInfoResponse,
-  { characterId: number; itemRowId: number },
+export const fetchRefineInfo = createAsyncThunk<
+  RefineInfo,
+  number,
   { rejectValue: string }
->("crafting/fetchSmeltInfo", async ({ characterId, itemRowId }, thunkAPI) => {
+>("crafting/fetchRefineInfo", async (characterId, thunkAPI) => {
   try {
-    return await professionsApi.fetchSmeltInfo(characterId, itemRowId);
+    return await professionsApi.fetchRefineInfo(characterId);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Не удалось загрузить информацию о переплавке";
+    const msg = e instanceof Error ? e.message : "Не удалось загрузить данные переработки";
     return thunkAPI.rejectWithValue(msg);
   }
 });
 
-export const smeltItem = createAsyncThunk<
-  SmeltResult,
-  { characterId: number; payload: SmeltRequest },
+export const refineItem = createAsyncThunk<
+  RefineResult,
+  { characterId: number; sourceItemId: number; quantity: number },
   { rejectValue: string }
->("crafting/smeltItem", async ({ characterId, payload }, thunkAPI) => {
+>("crafting/refineItem", async ({ characterId, sourceItemId, quantity }, thunkAPI) => {
   try {
-    return await professionsApi.smeltItem(characterId, payload);
+    return await professionsApi.refineItem(characterId, {
+      source_item_id: sourceItemId,
+      quantity,
+    });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Не удалось переплавить предмет";
+    const msg = e instanceof Error ? e.message : "Не удалось переработать";
     return thunkAPI.rejectWithValue(msg);
   }
 });
@@ -379,14 +290,6 @@ const craftingSlice = createSlice({
       state.recipes = [];
       state.recipesError = null;
     },
-    clearExtractInfo(state) {
-      state.extractInfo = null;
-      state.extractError = null;
-    },
-    clearTransmuteInfo(state) {
-      state.transmuteInfo = null;
-      state.transmuteError = null;
-    },
     clearSharpenInfo(state) {
       state.sharpenInfo = null;
       state.sharpenError = null;
@@ -395,9 +298,10 @@ const craftingSlice = createSlice({
       state.socketInfo = null;
       state.socketError = null;
     },
-    clearSmeltInfo(state) {
-      state.smeltInfo = null;
-      state.smeltError = null;
+    clearRefineInfo(state) {
+      state.refineInfo = null;
+      state.refineInfoError = null;
+      state.refineError = null;
     },
   },
   extraReducers: (builder) => {
@@ -497,79 +401,6 @@ const craftingSlice = createSlice({
         state.craftError = action.payload ?? "Произошла ошибка";
       });
 
-    // learnRecipe
-    builder
-      .addCase(learnRecipe.pending, (state) => {
-        state.recipesLoading = true;
-        state.recipesError = null;
-      })
-      .addCase(learnRecipe.fulfilled, (state) => {
-        state.recipesLoading = false;
-        // Recipes list should be refetched after learning
-      })
-      .addCase(learnRecipe.rejected, (state, action) => {
-        state.recipesLoading = false;
-        state.recipesError = action.payload ?? "Произошла ошибка";
-      });
-
-    // fetchExtractInfo
-    builder
-      .addCase(fetchExtractInfo.pending, (state) => {
-        state.extractInfoLoading = true;
-        state.extractError = null;
-      })
-      .addCase(fetchExtractInfo.fulfilled, (state, action: PayloadAction<ExtractInfoResponse>) => {
-        state.extractInfoLoading = false;
-        state.extractInfo = action.payload;
-      })
-      .addCase(fetchExtractInfo.rejected, (state, action) => {
-        state.extractInfoLoading = false;
-        state.extractError = action.payload ?? "Произошла ошибка";
-      });
-
-    // extractEssence
-    builder
-      .addCase(extractEssence.pending, (state) => {
-        state.extractLoading = true;
-        state.extractError = null;
-      })
-      .addCase(extractEssence.fulfilled, (state) => {
-        state.extractLoading = false;
-      })
-      .addCase(extractEssence.rejected, (state, action) => {
-        state.extractLoading = false;
-        state.extractError = action.payload ?? "Произошла ошибка";
-      });
-
-    // fetchTransmuteInfo
-    builder
-      .addCase(fetchTransmuteInfo.pending, (state) => {
-        state.transmuteInfoLoading = true;
-        state.transmuteError = null;
-      })
-      .addCase(fetchTransmuteInfo.fulfilled, (state, action: PayloadAction<TransmuteInfoResponse>) => {
-        state.transmuteInfoLoading = false;
-        state.transmuteInfo = action.payload;
-      })
-      .addCase(fetchTransmuteInfo.rejected, (state, action) => {
-        state.transmuteInfoLoading = false;
-        state.transmuteError = action.payload ?? "Произошла ошибка";
-      });
-
-    // transmuteItem
-    builder
-      .addCase(transmuteItem.pending, (state) => {
-        state.transmuteLoading = true;
-        state.transmuteError = null;
-      })
-      .addCase(transmuteItem.fulfilled, (state) => {
-        state.transmuteLoading = false;
-      })
-      .addCase(transmuteItem.rejected, (state, action) => {
-        state.transmuteLoading = false;
-        state.transmuteError = action.payload ?? "Произошла ошибка";
-      });
-
     // fetchSharpenInfo
     builder
       .addCase(fetchSharpenInfo.pending, (state) => {
@@ -642,33 +473,33 @@ const craftingSlice = createSlice({
         state.socketError = action.payload ?? "Произошла ошибка";
       });
 
-    // fetchSmeltInfo
+    // fetchRefineInfo
     builder
-      .addCase(fetchSmeltInfo.pending, (state) => {
-        state.smeltInfoLoading = true;
-        state.smeltError = null;
+      .addCase(fetchRefineInfo.pending, (state) => {
+        state.refineInfoLoading = true;
+        state.refineInfoError = null;
       })
-      .addCase(fetchSmeltInfo.fulfilled, (state, action: PayloadAction<SmeltInfoResponse>) => {
-        state.smeltInfoLoading = false;
-        state.smeltInfo = action.payload;
+      .addCase(fetchRefineInfo.fulfilled, (state, action: PayloadAction<RefineInfo>) => {
+        state.refineInfoLoading = false;
+        state.refineInfo = action.payload;
       })
-      .addCase(fetchSmeltInfo.rejected, (state, action) => {
-        state.smeltInfoLoading = false;
-        state.smeltError = action.payload ?? "Произошла ошибка";
+      .addCase(fetchRefineInfo.rejected, (state, action) => {
+        state.refineInfoLoading = false;
+        state.refineInfoError = action.payload ?? "Произошла ошибка";
       });
 
-    // smeltItem
+    // refineItem
     builder
-      .addCase(smeltItem.pending, (state) => {
-        state.smeltLoading = true;
-        state.smeltError = null;
+      .addCase(refineItem.pending, (state) => {
+        state.refineLoading = true;
+        state.refineError = null;
       })
-      .addCase(smeltItem.fulfilled, (state) => {
-        state.smeltLoading = false;
+      .addCase(refineItem.fulfilled, (state) => {
+        state.refineLoading = false;
       })
-      .addCase(smeltItem.rejected, (state, action) => {
-        state.smeltLoading = false;
-        state.smeltError = action.payload ?? "Произошла ошибка";
+      .addCase(refineItem.rejected, (state, action) => {
+        state.refineLoading = false;
+        state.refineError = action.payload ?? "Произошла ошибка";
       });
   },
 });
@@ -677,11 +508,9 @@ export const {
   clearCraftResult,
   clearCharacterProfession,
   clearRecipes,
-  clearExtractInfo,
-  clearTransmuteInfo,
   clearSharpenInfo,
   clearSocketInfo,
-  clearSmeltInfo,
+  clearRefineInfo,
 } = craftingSlice.actions;
 
 // --- Selectors ---
@@ -705,16 +534,6 @@ export const selectCraftLoading = (state: RootState) => state.crafting.craftLoad
 export const selectCraftError = (state: RootState) => state.crafting.craftError;
 export const selectLastCraftResult = (state: RootState) => state.crafting.lastCraftResult;
 
-export const selectExtractInfo = (state: RootState) => state.crafting.extractInfo;
-export const selectExtractInfoLoading = (state: RootState) => state.crafting.extractInfoLoading;
-export const selectExtractLoading = (state: RootState) => state.crafting.extractLoading;
-export const selectExtractError = (state: RootState) => state.crafting.extractError;
-
-export const selectTransmuteInfo = (state: RootState) => state.crafting.transmuteInfo;
-export const selectTransmuteInfoLoading = (state: RootState) => state.crafting.transmuteInfoLoading;
-export const selectTransmuteLoading = (state: RootState) => state.crafting.transmuteLoading;
-export const selectTransmuteError = (state: RootState) => state.crafting.transmuteError;
-
 export const selectSharpenInfo = (state: RootState) => state.crafting.sharpenInfo;
 export const selectSharpenInfoLoading = (state: RootState) => state.crafting.sharpenInfoLoading;
 export const selectSharpenLoading = (state: RootState) => state.crafting.sharpenLoading;
@@ -725,9 +544,10 @@ export const selectSocketInfoLoading = (state: RootState) => state.crafting.sock
 export const selectSocketLoading = (state: RootState) => state.crafting.socketLoading;
 export const selectSocketError = (state: RootState) => state.crafting.socketError;
 
-export const selectSmeltInfo = (state: RootState) => state.crafting.smeltInfo;
-export const selectSmeltInfoLoading = (state: RootState) => state.crafting.smeltInfoLoading;
-export const selectSmeltLoading = (state: RootState) => state.crafting.smeltLoading;
-export const selectSmeltError = (state: RootState) => state.crafting.smeltError;
+export const selectRefineInfo = (state: RootState) => state.crafting.refineInfo;
+export const selectRefineInfoLoading = (state: RootState) => state.crafting.refineInfoLoading;
+export const selectRefineInfoError = (state: RootState) => state.crafting.refineInfoError;
+export const selectRefineLoading = (state: RootState) => state.crafting.refineLoading;
+export const selectRefineError = (state: RootState) => state.crafting.refineError;
 
 export default craftingSlice.reducer;

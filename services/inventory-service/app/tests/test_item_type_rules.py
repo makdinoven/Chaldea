@@ -6,7 +6,8 @@ Item create/update rules tied to the item type (admin item form reorganisation).
 - armor_subclass only on head/body, weapon_subclass only on weapons
 - 'shield' is no longer an item type; shields are weapon kinds (buckler/targe/tower_shield)
 - every weapon kind maps to exactly one category
-- blueprint_recipe_id is accepted for blueprints and must point at a real recipe
+- blueprint_recipe_id is accepted for recipe items only and must point at a real recipe
+  (single-use blueprints were removed in FEAT-165)
 """
 
 from unittest.mock import patch, MagicMock
@@ -128,7 +129,7 @@ class TestSubclassRules:
 
 
 # ===========================================================================
-# 3. Blueprint -> recipe link
+# 3. Recipe item -> recipe link
 # ===========================================================================
 
 def _seed_recipe(db_session):
@@ -143,46 +144,50 @@ def _seed_recipe(db_session):
     db_session.flush()
     recipe = models.Recipe(
         name="Ковка меча", profession_id=1, required_rank=1, result_item_id=500,
-        result_quantity=1, rarity="common", is_active=True, is_blueprint_recipe=True,
+        result_quantity=1, rarity="common", is_active=True,
     )
     db_session.add(recipe)
     db_session.commit()
     return recipe
 
 
-class TestBlueprintRecipeLink:
+class TestRecipeItemLink:
 
-    def test_blueprint_links_to_existing_recipe(self, client, db_session):
+    def test_recipe_item_links_to_existing_recipe(self, client, db_session):
         recipe = _seed_recipe(db_session)
         resp = _post(client, _body(
-            name="Чертёж меча", item_type="blueprint", blueprint_recipe_id=recipe.id,
+            name="Рецепт: меч", item_type="recipe", blueprint_recipe_id=recipe.id,
         ))
         assert resp.status_code == 201, resp.text
         assert resp.json()["blueprint_recipe_id"] == recipe.id
 
     def test_missing_recipe_returns_400(self, client, db_session):
         resp = _post(client, _body(
-            name="Чертёж пустоты", item_type="blueprint", blueprint_recipe_id=9999,
+            name="Рецепт пустоты", item_type="recipe", blueprint_recipe_id=9999,
         ))
         assert resp.status_code == 400
         assert "Рецепт" in resp.json()["detail"]
 
-    def test_recipe_link_on_non_blueprint_rejected(self, client, db_session):
+    def test_recipe_link_on_non_recipe_item_rejected(self, client, db_session):
         recipe = _seed_recipe(db_session)
         resp = _post(client, _body(item_type="misc", blueprint_recipe_id=recipe.id))
         assert resp.status_code == 422
 
-    def test_update_can_link_blueprint(self, client, db_session):
+    def test_update_can_link_recipe_item(self, client, db_session):
         recipe = _seed_recipe(db_session)
-        item_id = _post(client, _body(name="Чертёж", item_type="blueprint")).json()["id"]
+        item_id = _post(client, _body(name="Рецепт", item_type="recipe")).json()["id"]
         resp = _put(client, item_id, _body(
-            name="Чертёж", item_type="blueprint", blueprint_recipe_id=recipe.id,
+            name="Рецепт", item_type="recipe", blueprint_recipe_id=recipe.id,
         ))
         assert resp.status_code == 200, resp.text
         assert resp.json()["blueprint_recipe_id"] == recipe.id
 
     def test_sql_injection_in_recipe_id_rejected(self, client, db_session):
         resp = _post(client, _body(
-            item_type="blueprint", blueprint_recipe_id="1 OR 1=1",
+            item_type="recipe", blueprint_recipe_id="1 OR 1=1",
         ))
+        assert resp.status_code == 422
+
+    def test_blueprint_item_type_rejected(self, client, db_session):
+        resp = _post(client, _body(name="Чертёж", item_type="blueprint"))
         assert resp.status_code == 422

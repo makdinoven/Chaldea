@@ -6,7 +6,7 @@
 export const ITEM_TYPES = [
   'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet',
   'weapon', 'consumable', 'resource',
-  'scroll', 'misc', 'blueprint', 'recipe', 'gem', 'rune', 'gathering_tool',
+  'scroll', 'misc', 'recipe', 'gem', 'rune', 'gathering_tool',
 ] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];
@@ -24,7 +24,6 @@ export const ITEM_TYPE_LABELS: Record<string, string> = {
   resource: 'Ресурс',
   scroll: 'Свиток',
   misc: 'Разное',
-  blueprint: 'Чертёж',
   recipe: 'Рецепт',
   gem: 'Камень',
   rune: 'Руна',
@@ -45,7 +44,7 @@ export const ITEM_CATEGORIES: readonly ItemCategory[] = [
   { key: 'equipment', label: 'Экипировка', types: ['head', 'body', 'cloak', 'belt', 'weapon'] },
   { key: 'jewelry', label: 'Украшения', types: ['ring', 'necklace', 'bracelet'] },
   { key: 'consumables', label: 'Расходуемое', types: ['consumable', 'scroll'] },
-  { key: 'craft', label: 'Крафт', types: ['resource', 'blueprint', 'recipe', 'gem', 'rune'] },
+  { key: 'craft', label: 'Крафт', types: ['resource', 'recipe', 'gem', 'rune'] },
   { key: 'tools', label: 'Инструменты сбора', types: ['gathering_tool'] },
   { key: 'misc', label: 'Разное', types: ['misc'] },
 ];
@@ -87,7 +86,7 @@ export const isEquipmentOnlyRarity = (rarity: string | null | undefined): boolea
   Boolean(rarity) && EQUIPMENT_ONLY_RARITIES.includes(rarity as string);
 
 /** Types that have no quality of their own: rarity is never shown for them (FEAT-164) */
-export const RARITYLESS_ITEM_TYPES: readonly string[] = ['recipe', 'blueprint'];
+export const RARITYLESS_ITEM_TYPES: readonly string[] = ['recipe'];
 
 export const itemHasRarity = (itemType: string | null | undefined): boolean =>
   !itemType || !RARITYLESS_ITEM_TYPES.includes(itemType);

@@ -1221,3 +1221,124 @@ class TestGatheringSecurity:
         _seed_gathering_skills(db_session)
         resp = unauthed_client.get("/inventory/characters/1/gathering-skills")
         assert resp.status_code == 401
+
+
+# ===========================================================================
+# 8. FEAT-165 — 4th skill «Собирательство» (foraging, category ingredient)
+# ===========================================================================
+
+FORAGING_SKILL_ID = 4
+
+# Exactly the body locations-service `_award_via_inventory` builds for a
+# toolless (ingredient) node: tool id None, durability 0, xp == quantity.
+# Contract test — keep in sync with
+# services/locations-service/app/tests/test_gathering_ingredient.py
+LOCATIONS_FORAGING_PAYLOAD = {
+    "skill_slug": "foraging",
+    "result_item_id": 4712,
+    "result_quantity": 3,
+    "xp_to_add": 3,
+    "tool_inventory_item_id": None,
+    "tool_durability_to_consume": 0,
+}
+
+
+def _seed_foraging_skill(db):
+    """The 4th skill as migration 022 seeds it (same ranks as the other three)."""
+    db.add(models.GatheringSkill(
+        id=FORAGING_SKILL_ID, slug="foraging", name="Собирательство",
+        category="ingredient", description="Навык сбора ингредиентов", max_rank=5,
+    ))
+    db.flush()
+    for rn, req, bonus in [(1, 0, 0.0), (2, 10, 4.0), (3, 25, 8.0), (4, 50, 12.0), (5, 100, 20.0)]:
+        db.add(models.GatheringSkillRank(
+            skill_id=FORAGING_SKILL_ID, rank_number=rn, required_experience=req,
+            double_chance_bonus=bonus, speed_bonus_pct=bonus, stamina_bonus_pct=bonus,
+        ))
+    db.commit()
+
+
+def _progress(db, skill_id, character_id=1):
+    db.expire_all()
+    return db.query(models.CharacterGatheringSkill).filter(
+        models.CharacterGatheringSkill.character_id == character_id,
+        models.CharacterGatheringSkill.skill_id == skill_id,
+    ).first()
+
+
+class TestForagingSkill:
+
+    def _setup(self, db):
+        _ensure_characters_table(db)
+        _seed_gathering_skills(db)
+        _seed_foraging_skill(db)
+        item = models.Items(
+            id=4712, name="Пшеница", item_level=1, item_type="resource",
+            item_rarity="common", max_stack_size=99, is_unique=False,
+            resource_subcategory="ingredient",
+        )
+        db.add(item)
+        db.commit()
+
+    def test_locations_payload_is_accepted(self, client, db_session):
+        self._setup(db_session)
+
+        resp = client.post(
+            "/inventory/internal/characters/1/gathering/award",
+            json=LOCATIONS_FORAGING_PAYLOAD,
+        )
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["actual_quantity_added"] == 3
+        assert data["xp_awarded"] == 3
+        assert data["tool_durability_remaining"] is None
+        # DB: the XP went to foraging, not to another skill
+        assert _progress(db_session, FORAGING_SKILL_ID).experience == 3
+        for other_skill_id in (1, 2, 3):
+            progress = _progress(db_session, other_skill_id)
+            assert progress is None or progress.experience == 0
+        db_session.expire_all()
+        rows = db_session.query(models.CharacterInventory).filter(
+            models.CharacterInventory.character_id == 1,
+            models.CharacterInventory.item_id == 4712,
+        ).all()
+        assert sum(r.quantity for r in rows) == 3
+
+    def test_foraging_rank_up(self, client, db_session):
+        self._setup(db_session)
+        body = dict(LOCATIONS_FORAGING_PAYLOAD, result_quantity=10, xp_to_add=10)
+
+        resp = client.post("/inventory/internal/characters/1/gathering/award", json=body)
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["rank_up"] is True
+        assert resp.json()["new_rank_bonuses"]["double_chance_bonus"] == 4.0
+        assert _progress(db_session, FORAGING_SKILL_ID).current_rank == 2
+
+    def test_skill_slug_validator_accepts_foraging(self):
+        from schemas import GatheringAwardRequest, GATHERING_SKILL_SLUGS
+        assert GATHERING_SKILL_SLUGS == {"mining", "herbalism", "woodcutting", "foraging"}
+        assert GatheringAwardRequest(**LOCATIONS_FORAGING_PAYLOAD).skill_slug == "foraging"
+
+    @pytest.mark.parametrize("slug", ["Foraging", "forage", "ingredient", "foraging ", ""])
+    def test_near_miss_slugs_rejected(self, client, db_session, slug):
+        self._setup(db_session)
+        body = dict(LOCATIONS_FORAGING_PAYLOAD, skill_slug=slug)
+        resp = client.post("/inventory/internal/characters/1/gathering/award", json=body)
+        assert resp.status_code == 422
+        assert _progress(db_session, FORAGING_SKILL_ID) is None
+
+    def test_skills_read_lists_four_skills(self, authed_user_client, db_session):
+        self._setup(db_session)
+
+        resp = authed_user_client.get("/inventory/characters/1/gathering-skills")
+
+        assert resp.status_code == 200, resp.text
+        skills = {s["slug"]: s for s in resp.json()["skills"]}
+        assert set(skills) == {"mining", "herbalism", "woodcutting", "foraging"}
+        assert skills["foraging"]["category"] == "ingredient"
+        assert skills["foraging"]["name"] == "Собирательство"
+        assert skills["foraging"]["current_rank"] == 1
+        assert skills["foraging"]["next_rank"]["required_experience"] == 10
+        assert _progress(db_session, FORAGING_SKILL_ID) is not None

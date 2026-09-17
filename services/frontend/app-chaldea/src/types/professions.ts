@@ -1,5 +1,7 @@
 /* ── Profession & Crafting types ── */
 
+import type { ResourceSubcategory, WhetstoneGroup } from "../constants/professions";
+
 // --- Profession ---
 
 export interface ProfessionRank {
@@ -91,15 +93,14 @@ export interface Recipe {
   xp_reward: number | null;
   ingredients: RecipeIngredient[];
   can_craft: boolean;
-  source: "learned" | "blueprint";
-  blueprint_item_id: number | null;
+  /** Always "learned" since FEAT-165 (kept for compatibility). */
+  source: "learned";
 }
 
 // --- Crafting ---
 
 export interface CraftRequest {
   recipe_id: number;
-  blueprint_item_id: number | null;
 }
 
 export interface CraftedItem {
@@ -119,7 +120,6 @@ export interface CraftResult {
   success: boolean;
   crafted_item: CraftedItem;
   consumed_materials: ConsumedMaterial[];
-  blueprint_consumed: boolean;
   xp_earned: number;
   new_total_xp: number;
   rank_up: boolean;
@@ -161,7 +161,6 @@ export interface AdminRecipe {
   result_quantity: number;
   rarity: string;
   icon: string | null;
-  is_blueprint_recipe: boolean;
   is_active: boolean;
   auto_learn_rank: number | null;
   xp_reward: number | null;
@@ -248,72 +247,6 @@ export interface RecipesPaginatedResponse {
   per_page: number;
 }
 
-// --- Essence Extraction ---
-
-export interface CrystalInfo {
-  inventory_item_id: number;
-  item_id: number;
-  name: string;
-  image: string | null;
-  quantity: number;
-  essence_name: string;
-  essence_image: string | null;
-  success_chance: number;
-}
-
-export interface ExtractInfoResponse {
-  crystals: CrystalInfo[];
-}
-
-export interface ExtractEssenceRequest {
-  crystal_item_id: number;
-}
-
-export interface ExtractEssenceResult {
-  success: boolean;
-  crystal_name: string;
-  essence_name: string | null;
-  crystal_consumed: boolean;
-  xp_earned: number;
-  new_total_xp: number;
-  rank_up: boolean;
-  new_rank_name: string | null;
-}
-
-// --- Transmutation ---
-
-export interface TransmuteItemInfo {
-  inventory_item_id: number;
-  item_id: number;
-  name: string;
-  image: string | null;
-  quantity: number;
-  item_rarity: string;
-  next_rarity: string;
-  can_transmute: boolean;
-  required_quantity: number;
-}
-
-export interface TransmuteInfoResponse {
-  items: TransmuteItemInfo[];
-}
-
-export interface TransmuteRequest {
-  inventory_item_id: number;
-}
-
-export interface TransmuteResult {
-  success: boolean;
-  consumed_item_name: string;
-  consumed_quantity: number;
-  result_item_name: string;
-  result_item_rarity: string;
-  xp_earned: number;
-  new_total_xp: number;
-  rank_up: boolean;
-  new_rank_name: string | null;
-}
-
 // --- Repair ---
 
 export interface RepairItemRequest {
@@ -380,11 +313,13 @@ export interface SharpenWhetstoneInfo {
   name: string;
   quantity: number;
   success_chance: number;
+  whetstone_group: WhetstoneGroup;
 }
 
 export interface SharpenInfoResponse {
   item_name: string;
   item_type: string;
+  sharpen_group: WhetstoneGroup;
   points_spent: number;
   points_remaining: number;
   stats: SharpenStatInfo[];
@@ -409,8 +344,98 @@ export interface SharpenResult {
   points_remaining: number;
   point_cost: number;
   whetstone_consumed: boolean;
+}
+
+// --- Refining (FEAT-165) ---
+
+export interface RefineResultItem {
+  id: number;
+  name: string;
+  image: string | null;
+  item_rarity: string;
+}
+
+export interface AutoLearnedRecipe {
+  id: number;
+  name: string;
+}
+
+/** GET /inventory/crafting/refining-rules */
+export interface RefiningRule {
+  profession_id: number;
+  profession_slug: string;
+  profession_name: string;
+  source_subcategory: ResourceSubcategory;
+  result_subcategory: ResourceSubcategory;
+}
+
+export interface RefineSource {
+  source_item_id: number;
+  name: string;
+  image: string | null;
+  item_rarity: string;
+  owned_quantity: number;
+  source_quantity: number;
+  max_batches: number;
+  result_item: RefineResultItem;
+  result_quantity: number;
+  xp_per_batch: number;
+}
+
+/** GET /inventory/crafting/{cid}/refine-info */
+export interface RefineInfo {
+  can_refine: boolean;
+  profession_slug: string | null;
+  source_subcategory: ResourceSubcategory | null;
+  result_subcategory: ResourceSubcategory | null;
+  double_chance_pct: number | null;
+  sources: RefineSource[];
+}
+
+export interface RefineRequest {
+  source_item_id: number;
+  quantity: number;
+}
+
+export interface RefineResult {
+  success: boolean;
+  source_item_id: number;
+  consumed_quantity: number;
+  leftover_quantity: number;
+  batches: number;
+  doubled_batches: number;
+  result_item: RefineResultItem;
+  result_quantity: number;
   xp_earned: number;
   new_total_xp: number;
   rank_up: boolean;
   new_rank_name: string | null;
+  auto_learned_recipes: AutoLearnedRecipe[];
+}
+
+// --- Admin: item conversions (FEAT-165) ---
+
+export interface ItemConversionInput {
+  profession_id: number;
+  source_quantity: number;
+  result_item_id: number;
+  result_quantity: number;
+}
+
+export interface ItemConversionsPayload {
+  conversions: ItemConversionInput[];
+}
+
+export interface ItemConversion {
+  id: number;
+  profession_id: number;
+  profession_name: string;
+  source_quantity: number;
+  result_item: RefineResultItem;
+  result_quantity: number;
+}
+
+export interface ItemConversionsResponse {
+  source_item_id: number;
+  conversions: ItemConversion[];
 }

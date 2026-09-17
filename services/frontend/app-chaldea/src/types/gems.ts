@@ -1,4 +1,4 @@
-/* ── Gem Socket & Smelting types ── */
+/* ── Gem Socket types ── */
 
 // --- Socket system ---
 
@@ -23,6 +23,14 @@ export interface SocketInfoResponse {
   item_name: string;
   item_type: string;
   socket_count: number;
+  /** What goes into the sockets: gems (jewelry) or runes (weapon/armor/helmet/cloak) */
+  insertable_type: 'gem' | 'rune';
+  /** Anyone may insert (FEAT-165); false for legacy belts that still hold runes */
+  can_insert: boolean;
+  /** Only the matching profession extracts: jeweler → gems, enchanter → runes */
+  can_extract: boolean;
+  /** Chance (%) to keep the extracted gem/rune; null when extraction is not allowed */
+  extract_preservation_chance: number | null;
   slots: SocketGemInfo[];
   available_gems: AvailableGem[];
 }
@@ -39,10 +47,6 @@ export interface InsertGemResult {
   item_name: string;
   gem_name: string;
   slot_index: number;
-  xp_earned: number;
-  new_total_xp: number;
-  rank_up: boolean;
-  new_rank_name: string | null;
 }
 
 export interface ExtractGemRequest {
@@ -58,41 +62,4 @@ export interface ExtractGemResult {
   gem_preserved: boolean;
   preservation_chance: number;
   slot_index: number;
-  xp_earned: number;
-  new_total_xp: number;
-  rank_up: boolean;
-  new_rank_name: string | null;
-}
-
-// --- Smelting ---
-
-export interface SmeltIngredientInfo {
-  item_id: number;
-  name: string;
-  image: string | null;
-  quantity: number;
-}
-
-export interface SmeltInfoResponse {
-  item_name: string;
-  item_type: string;
-  has_gems: boolean;
-  gem_count: number;
-  has_recipe: boolean;
-  ingredients: SmeltIngredientInfo[];
-}
-
-export interface SmeltRequest {
-  inventory_item_id: number;
-}
-
-export interface SmeltResult {
-  success: boolean;
-  item_name: string;
-  gems_destroyed: number;
-  materials_returned: SmeltIngredientInfo[];
-  xp_earned: number;
-  new_total_xp: number;
-  rank_up: boolean;
-  new_rank_name: string | null;
 }

@@ -84,7 +84,7 @@ jobs:
         run: pip install -r ${{ matrix.requirements }}
 
       - name: Run tests
-        timeout-minutes: 3
+        timeout-minutes: 6
         run: cd ${{ matrix.working-dir }} && python -m pytest tests/ ${{ matrix.pytest-args }} -v
 
   deploy:

@@ -123,6 +123,12 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 ## HIGH
 
+### Уязвимость: `POST /inventory/{character_id}/items` выдаёт любой предмет любому персонажу без авторизации
+**Сервис:** inventory-service (`services/inventory-service/app/main.py`, `add_item_to_inventory`)
+**Обнаружено:** FEAT-165 (Reviewer, 2026-09-18), вживую через gateway: запрос без токена доходит до обработчика (404 «Предмет не найден» на несуществующий id, а не 401). Предсуществующее, фичей не внесено.
+**Описание:** у эндпоинта нет ни `get_current_user_via_http`, ни `X-Internal-Token`, а nginx не закрывает путь. Любой клиент может положить в инвентарь любого персонажа любой предмет в любом количестве (камни заточки, руны, сырьё для переработки и т.д.).
+**Возможное решение:** выяснить потребителей (соседние сервисы, админская «Выдать»), для межсервисных вызовов — отдельный internal-маршрут с `verify_internal_token`, для админки — `require_permission("items:update")`; публичный вариант закрыть.
+
 ### Уязвимость: изменяющие эндпоинты character-attributes-service открыты через gateway без авторизации
 **Сервис:** character-attributes-service (+ nginx)
 **Файлы:** `services/character-attributes-service/app/main.py` (`POST /{id}/apply_modifiers` ~542, `POST /{id}/recover` ~700, `PUT /{id}/active_experience` ~734, `PUT /{id}/passive_experience` ~768, `POST /{id}/consume_stamina` ~801, `POST /{id}/refund_stamina` ~840), `docker/api-gateway/nginx.conf` (`location /attributes/`), `nginx.prod.conf`
@@ -241,6 +247,12 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 ~~**Исправлено в FEAT-044:** `convert_to_webp` теперь определяет анимированные GIF (`image.format == 'GIF'` + `is_animated`) и сохраняет их как GIF с `save_all=True`, сохраняя все кадры и анимацию. Статические изображения по-прежнему конвертируются в WebP. S3 получает корректный `ContentType` (`image/gif` или `image/webp`).~~
 
 ## MEDIUM
+
+### Баг: админ не может вернуть рецепт из «базовых» в «изучаемые по предмету»
+**Сервис:** inventory-service (`app/crud.py`, `update_recipe`)
+**Обнаружено:** FEAT-165 (Backend Dev, 2026-09-18), проверено по коду.
+**Описание:** `update_recipe` применяет поля через `if value is not None: setattr(...)`, поэтому явный `"auto_learn_rank": null` в `PUT /inventory/admin/recipes/{id}` молча игнорируется. Рецепт, однажды ставший базовым (выдаётся по рангу), нельзя снова сделать изучаемым из предмета-рецепта: поле не сбрасывается, предмет-рецепт не создаётся, а ответ 200 выглядит как успех. Та же ловушка у остальных nullable-полей рецепта (`description`, `icon`, `xp_reward`).
+**Возможное решение:** для nullable-полей применять значение, если ключ есть в `exclude_unset`-словаре (включая `None`), и в ветке синхронизации предмета-рецепта проверять `"auto_learn_rank" in update_data`, а не истинность значения. Добавить тест «auto_learn_rank → null создаёт предмет-рецепт».
 
 ### Долг: админские эндпоинты боёв не отдают `is_paused` / `pause_reason`
 **Сервис:** battle-service (потребитель — фронтенд, `components/Admin/BattlesPage/AdminBattlesPage.tsx`)
@@ -493,6 +505,12 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 ---
 
 ## LOW
+
+### Долг: мёртвая константа `DURABILITY_SLOT_TYPES`
+**Сервис:** inventory-service (`app/crud.py`, константа `DURABILITY_SLOT_TYPES`)
+**Обнаружено:** FEAT-165 (Backend Dev, 2026-09-18).
+**Описание:** константа `{'head', 'body', 'cloak', 'main_weapon', 'additional_weapons'}` нигде не используется (прочность решается по `items.max_durability > 0`). Имена `main_weapon`/`additional_weapons` — это типы слотов экипировки (они существуют), но не типы предметов (после миграции 019 оружие — `weapon`), поэтому любой, кто начнёт сверять с ней `item_type`, получит тихо неверный результат.
+**Возможное решение:** удалить константу или переименовать и перевести на типы предметов (`weapon`), если она понадобится.
 
 ### Баг: удаление предмета, который лежит у кого-то в инвентаре, падает с 500
 **Сервис:** inventory-service (`services/inventory-service/app/main.py`, `DELETE /inventory/items/{item_id}`, `delete_item`)
@@ -886,10 +904,10 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 | Приоритет | Количество |
 |-----------|-----------|
 | CRITICAL | 1 |
-| HIGH | 9 |
-| MEDIUM | 21 |
-| LOW | 31 |
-| **Итого** | **62** |
+| HIGH | 10 |
+| MEDIUM | 22 |
+| LOW | 32 |
+| **Итого** | **65** |
 
 _Пересчитано 2026-09-14 (FEAT-163): таблица разошлась с содержимым файла — считаются только
 незакрытые записи (`###`-заголовки без зачёркивания) в секциях CRITICAL/HIGH/MEDIUM/LOW._

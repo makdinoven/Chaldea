@@ -665,7 +665,7 @@ class GatheringNode(Base):
     )
     node_name = Column(String(120), nullable=False)
     category = Column(
-        Enum('ore', 'herb', 'wood', name='gathering_node_category'),
+        Enum('ore', 'herb', 'wood', 'ingredient', name='gathering_node_category'),
         nullable=False,
     )
     # Cross-service: inventory-service owns the items table — no FK.

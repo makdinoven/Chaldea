@@ -1,8 +1,8 @@
 """
 Task 8 — QA tests for FEAT-081: Crafting system endpoints.
 
-Tests covering recipe listing, crafting (learned + blueprint), error cases,
-learn-recipe, and admin CRUD for recipes.
+Tests covering recipe listing, crafting (learned recipes only since FEAT-165), error cases,
+the closed learn-recipe endpoint, and admin CRUD for recipes.
 """
 
 import pytest
@@ -93,12 +93,11 @@ def _add_inventory(db, char_id, item_id, quantity):
 
 
 def _create_recipe(db, name="Железный меч", profession_id=1, required_rank=1,
-                   result_item_id=50, auto_learn_rank=None, is_blueprint_recipe=False):
+                   result_item_id=50, auto_learn_rank=None):
     recipe = models.Recipe(
         name=name, profession_id=profession_id, required_rank=required_rank,
         result_item_id=result_item_id, result_quantity=1, rarity="common",
         auto_learn_rank=auto_learn_rank, is_active=True,
-        is_blueprint_recipe=is_blueprint_recipe,
     )
     db.add(recipe)
     db.flush()
@@ -241,29 +240,25 @@ class TestListRecipes:
         assert len(learned_recipes) >= 1
         assert learned_recipes[0]["can_craft"] is True
 
-    def test_list_recipes_includes_blueprint_recipes(self, craft_env):
-        """Blueprint items in inventory should appear as blueprint-sourced recipes."""
+    def test_list_recipes_only_learned(self, craft_env):
+        """An unlearned recipe is not listed, even if its recipe item is in the inventory."""
         db = craft_env["db"]
         c = craft_env["client"]
 
-        # Create a blueprint recipe
         result_item2 = _create_item(db, 51, "Стальной меч", "weapon", max_stack=1)
-        bp_recipe = _create_recipe(db, name="Ковка стального меча",
-                                   profession_id=1, result_item_id=result_item2.id,
-                                   is_blueprint_recipe=True)
-
-        # Create blueprint item pointing to the recipe
-        bp_item = _create_item(db, 200, "Чертёж стального меча", "blueprint", max_stack=1)
-        bp_item.blueprint_recipe_id = bp_recipe.id
-
-        # Add blueprint to inventory
-        _add_inventory(db, 1, bp_item.id, 1)
+        other_recipe = _create_recipe(db, name="Ковка стального меча",
+                                      profession_id=1, result_item_id=result_item2.id)
+        recipe_item = _create_item(db, 200, "Рецепт: стальной меч", "recipe", max_stack=1)
+        recipe_item.blueprint_recipe_id = other_recipe.id
+        _add_inventory(db, 1, recipe_item.id, 1)
         db.commit()
 
         resp = c.get("/inventory/crafting/1/recipes")
+        assert resp.status_code == 200
         data = resp.json()
-        bp_sources = [r for r in data if r["source"] == "blueprint"]
-        assert len(bp_sources) >= 1
+        assert other_recipe.id not in [r["id"] for r in data]
+        assert all(r["source"] == "learned" for r in data)
+        assert all("blueprint_item_id" not in r for r in data)
 
 
 # ===========================================================================
@@ -286,7 +281,7 @@ class TestCraftSuccess:
         assert data["crafted_item"]["item_id"] == 50
         assert data["crafted_item"]["name"] == "Железный меч"
         assert data["crafted_item"]["quantity"] == 1
-        assert data["blueprint_consumed"] is False
+        assert "blueprint_consumed" not in data
         assert len(data["consumed_materials"]) == 2
 
         # Verify materials were consumed
@@ -313,44 +308,34 @@ class TestCraftSuccess:
 
 
 # ===========================================================================
-# 3. Craft with blueprint — consumes blueprint on use
+# 3. Legacy blueprint_item_id — ignored, the recipe must be learned
 # ===========================================================================
 
-class TestCraftWithBlueprint:
+class TestCraftLegacyBlueprintField:
 
-    def test_blueprint_consumed_on_craft(self, craft_env):
+    def test_blueprint_item_id_does_not_bypass_learning(self, craft_env):
         db = craft_env["db"]
         c = craft_env["client"]
 
-        # Create blueprint recipe and items
         result_item2 = _create_item(db, 52, "Стальной щит", "weapon", max_stack=1)
-        bp_recipe = _create_recipe(db, name="Ковка стального щита",
-                                   profession_id=1, result_item_id=result_item2.id,
-                                   is_blueprint_recipe=True, required_rank=1)
-        _add_ingredient(db, bp_recipe.id, 100, 2)  # 2 ore
-
-        bp_item = _create_item(db, 201, "Чертёж щита", "blueprint", max_stack=1)
-        bp_item.blueprint_recipe_id = bp_recipe.id
-        _add_inventory(db, 1, bp_item.id, 1)
+        unlearned = _create_recipe(db, name="Ковка стального щита",
+                                   profession_id=1, result_item_id=result_item2.id)
+        _add_ingredient(db, unlearned.id, 100, 2)
         db.commit()
 
         resp = c.post("/inventory/crafting/1/craft", json={
-            "recipe_id": bp_recipe.id,
-            "blueprint_item_id": bp_item.id,
+            "recipe_id": unlearned.id,
+            "blueprint_item_id": 201,
         })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["success"] is True
-        assert data["blueprint_consumed"] is True
+        assert resp.status_code == 400
+        assert "не изучен" in resp.json()["detail"]
 
-        # Verify blueprint was consumed
         db.expire_all()
-        bp_inv = db.query(models.CharacterInventory).filter(
+        ore = db.query(models.CharacterInventory).filter(
             models.CharacterInventory.character_id == 1,
-            models.CharacterInventory.item_id == bp_item.id,
+            models.CharacterInventory.item_id == 100,
         ).first()
-        # Blueprint should be consumed (deleted since quantity was 1)
-        assert bp_inv is None
+        assert ore.quantity == 10  # nothing consumed
 
 
 # ===========================================================================
@@ -462,12 +447,12 @@ class TestCraftUnknownRecipe:
 
 
 # ===========================================================================
-# 8. Learn recipe — POST /inventory/crafting/{char_id}/learn-recipe
+# 8. Free learn-recipe endpoint is closed (FEAT-165)
 # ===========================================================================
 
-class TestLearnRecipe:
+class TestLearnRecipeEndpointRemoved:
 
-    def test_learn_recipe_happy(self, craft_env):
+    def test_learn_recipe_route_is_gone(self, craft_env):
         db = craft_env["db"]
         c = craft_env["client"]
 
@@ -479,65 +464,14 @@ class TestLearnRecipe:
         resp = c.post("/inventory/crafting/1/learn-recipe", json={
             "recipe_id": new_recipe.id,
         })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["message"] == "Рецепт выучен"
-        assert data["recipe_name"] == "Бронзовая ковка"
+        assert resp.status_code in (404, 405)
 
-    def test_learn_recipe_not_found(self, craft_env):
-        c = craft_env["client"]
-        resp = c.post("/inventory/crafting/1/learn-recipe", json={"recipe_id": 99999})
-        assert resp.status_code == 404
-
-    def test_learn_recipe_wrong_profession(self, craft_env):
-        db = craft_env["db"]
-        c = craft_env["client"]
-
-        prof2 = _create_profession(db, 2, "Алхимик", "alchemist")
-        result_item2 = _create_item(db, 57, "Зелье маны", "consumable")
-        alchemy_recipe = _create_recipe(db, name="Зелье маны",
-                                        profession_id=prof2.id, result_item_id=result_item2.id)
-        db.commit()
-
-        resp = c.post("/inventory/crafting/1/learn-recipe", json={
-            "recipe_id": alchemy_recipe.id,
-        })
-        assert resp.status_code == 400
-        assert "профессия" in resp.json()["detail"].lower() or "Требуется" in resp.json()["detail"]
-
-    def test_learn_recipe_insufficient_rank(self, craft_env):
-        db = craft_env["db"]
-        c = craft_env["client"]
-
-        result_item2 = _create_item(db, 58, "Мастерский клинок", "weapon")
-        rank2_recipe = _create_recipe(db, name="Мастерская ковка",
-                                      profession_id=1, result_item_id=result_item2.id,
-                                      required_rank=2)
-        db.commit()
-
-        resp = c.post("/inventory/crafting/1/learn-recipe", json={
-            "recipe_id": rank2_recipe.id,
-        })
-        assert resp.status_code == 400
-        assert "ранг" in resp.json()["detail"].lower()
-
-
-# ===========================================================================
-# 9. Learn recipe duplicate — returns 400
-# ===========================================================================
-
-class TestLearnRecipeDuplicate:
-
-    def test_duplicate_learn_returns_400(self, craft_env):
-        c = craft_env["client"]
-        recipe = craft_env["recipe"]
-
-        # Recipe is already learned via craft_env fixture
-        resp = c.post("/inventory/crafting/1/learn-recipe", json={
-            "recipe_id": recipe.id,
-        })
-        assert resp.status_code == 400
-        assert "уже выучен" in resp.json()["detail"]
+        db.expire_all()
+        learned = db.query(models.CharacterRecipe).filter(
+            models.CharacterRecipe.character_id == 1,
+            models.CharacterRecipe.recipe_id == new_recipe.id,
+        ).first()
+        assert learned is None
 
 
 # ===========================================================================

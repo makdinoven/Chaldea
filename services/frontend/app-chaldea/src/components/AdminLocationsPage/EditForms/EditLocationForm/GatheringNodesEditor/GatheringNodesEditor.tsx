@@ -62,6 +62,7 @@ const CATEGORY_OPTIONS: { value: GatheringCategory; label: string }[] = [
   { value: 'ore', label: 'Руда' },
   { value: 'herb', label: 'Травы' },
   { value: 'wood', label: 'Дерево' },
+  { value: 'ingredient', label: 'Ингредиенты' },
 ];
 
 const INITIAL_FORM: CreateFormState = {

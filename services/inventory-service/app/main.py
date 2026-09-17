@@ -129,6 +129,7 @@ def list_items(
     q: Optional[str] = Query(None, description="Поиск по названию"),
     item_types: Optional[str] = Query(None, description="Фильтр по типам (через запятую)"),
     exclude_types: Optional[str] = Query(None, description="Исключить типы (через запятую)"),
+    resource_subcategory: Optional[schemas.ResourceSubcategory] = Query(None, description="Подкатегория ресурса"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -145,6 +146,8 @@ def list_items(
         exc_list = [t.strip() for t in exclude_types.split(",") if t.strip()]
         if exc_list:
             query = query.filter(models.Items.item_type.notin_(exc_list))
+    if resource_subcategory is not None:
+        query = query.filter(models.Items.resource_subcategory == resource_subcategory.value)
     items = (
         query
         .order_by(models.Items.id.asc())
@@ -154,11 +157,11 @@ def list_items(
     )
     return items
 
-def _ensure_blueprint_recipe_exists(db: Session, item_in: schemas.ItemCreate):
+def _ensure_linked_recipe_exists(db: Session, item_in: schemas.ItemCreate):
     if item_in.blueprint_recipe_id is None:
         return
     if not db.query(models.Recipe.id).filter(models.Recipe.id == item_in.blueprint_recipe_id).first():
-        raise HTTPException(status_code=400, detail="Рецепт для чертежа не найден")
+        raise HTTPException(status_code=400, detail="Рецепт для предмета-рецепта не найден")
 
 
 @router.post("/items", response_model=schemas.Item, status_code=201)
@@ -166,7 +169,7 @@ def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db), curr
     """Создаёт новый предмет."""
     if db.query(models.Items).filter(models.Items.name == item_in.name).first():
         raise HTTPException(status_code=400, detail="Предмет с таким названием уже существует")
-    _ensure_blueprint_recipe_exists(db, item_in)
+    _ensure_linked_recipe_exists(db, item_in)
     db_item = models.Items(**item_in.dict(exclude_unset=True))
     db.add(db_item)
     db.commit()
@@ -256,10 +259,13 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, background_tasks: Bac
     if item_in.name and item_in.name != db_item.name:
         if db.query(models.Items).filter(models.Items.name == item_in.name).first():
             raise HTTPException(status_code=400, detail="Предмет с таким названием уже существует")
-    _ensure_blueprint_recipe_exists(db, item_in)
+    _ensure_linked_recipe_exists(db, item_in)
     wearability_before = (db_item.item_type, db_item.weapon_subclass, db_item.armor_subclass)
     for field, value in item_in.dict(exclude_unset=True).items():
         setattr(db_item, field, value)
+    db.flush()
+    # FEAT-165: refining config must keep matching the item's subcategory
+    crud.delete_stale_conversions(db, db_item)
     db.commit()
     db.refresh(db_item)
 
@@ -271,6 +277,46 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, background_tasks: Bac
         if wearer_ids:
             background_tasks.add_task(_revalidate_characters, wearer_ids)
     return db_item
+
+
+# --- Refining config (FEAT-165) ---
+
+@router.get("/admin/items/{item_id}/conversions", response_model=schemas.ItemConversionsResponse)
+def admin_get_item_conversions(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("items:read")),
+):
+    """Настройки переработки сырья — админ."""
+    if not db.query(models.Items.id).filter(models.Items.id == item_id).first():
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+    return crud.build_item_conversions_response(db, item_id)
+
+
+@router.put("/admin/items/{item_id}/conversions", response_model=schemas.ItemConversionsResponse)
+def admin_put_item_conversions(
+    item_id: int,
+    payload: schemas.ItemConversionsPayload,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("items:update")),
+):
+    """Заменить все настройки переработки сырья (пустой список — удалить) — админ."""
+    source_item = db.query(models.Items).filter(models.Items.id == item_id).first()
+    if not source_item:
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+    try:
+        crud.replace_item_conversions(db, source_item, payload.conversions)
+    except crud.RefineNotFoundError as e:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        db.rollback()
+        logger.exception("Saving refining config for item %s failed", item_id)
+        raise HTTPException(status_code=500, detail="Не удалось сохранить настройки переработки")
+    return crud.build_item_conversions_response(db, item_id)
 
 
 # --- Character inventory ---
@@ -1595,6 +1641,10 @@ def get_my_profession(
     if not cp:
         raise HTTPException(status_code=404, detail="У персонажа нет профессии")
 
+    # FEAT-165: base recipes created after the character reached the rank
+    crud.sync_auto_learned_recipes_and_commit(db, cp)
+    cp = crud.get_character_profession(db, character_id)
+
     # Find rank name
     rank_name = ""
     if cp.profession and cp.profession.ranks:
@@ -1661,9 +1711,7 @@ def choose_profession(
         "profession_id": cp.profession_id,
         "current_rank": cp.current_rank,
         "experience": cp.experience,
-        "auto_learned_recipes": [
-            {"id": r.id, "name": r.name} for r in auto_recipes
-        ],
+        "auto_learned_recipes": auto_recipes,
     }
 
 
@@ -1701,9 +1749,7 @@ def change_profession(
         "current_rank": cp.current_rank,
         "experience": cp.experience,
         "message": "Профессия изменена. Прогресс сброшен, выученные рецепты сохранены.",
-        "auto_learned_recipes": [
-            {"id": r.id, "name": r.name} for r in auto_recipes
-        ],
+        "auto_learned_recipes": auto_recipes,
     }
 
 
@@ -1912,9 +1958,21 @@ def get_character_recipes(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_via_http),
 ):
-    """Список доступных рецептов персонажа (выученные + из чертежей)."""
+    """Список изученных рецептов персонажа (базовые рецепты по рангу досинхронизируются)."""
     verify_character_ownership(db, character_id, current_user.id)
+    cp = crud.get_character_profession(db, character_id)
+    if cp is not None:
+        crud.sync_auto_learned_recipes_and_commit(db, cp)
     return crud.get_available_recipes_for_character(db, character_id, profession_id)
+
+
+@router.get("/crafting/refining-rules", response_model=List[schemas.RefiningRuleOut])
+def get_refining_rules(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Какая профессия какое сырьё во что перерабатывает (FEAT-165)."""
+    return crud.get_refining_rules(db)
 
 
 @router.post("/crafting/{character_id}/craft")
@@ -1950,32 +2008,17 @@ def craft_item(
     if cp.current_rank < recipe.required_rank:
         raise HTTPException(status_code=400, detail=f"Недостаточный ранг. Требуется ранг {recipe.required_rank}, текущий: {cp.current_rank}")
 
-    # 5. Verify recipe access (learned or blueprint)
-    if req.blueprint_item_id is not None:
-        # Blueprint-sourced: verify blueprint exists in inventory
-        bp_inv = db.query(models.CharacterInventory).filter(
-            models.CharacterInventory.character_id == character_id,
-            models.CharacterInventory.item_id == req.blueprint_item_id,
-            models.CharacterInventory.quantity > 0,
-        ).first()
-        if not bp_inv:
-            raise HTTPException(status_code=400, detail="Чертёж не найден в инвентаре")
-
-        bp_item = db.query(models.Items).filter(models.Items.id == req.blueprint_item_id).first()
-        if not bp_item or bp_item.item_type != 'blueprint' or bp_item.blueprint_recipe_id != req.recipe_id:
-            raise HTTPException(status_code=400, detail="Этот предмет не является чертежом для данного рецепта")
-    else:
-        # Learned recipe: verify in character_recipes
-        learned = db.query(models.CharacterRecipe).filter(
-            models.CharacterRecipe.character_id == character_id,
-            models.CharacterRecipe.recipe_id == req.recipe_id,
-        ).first()
-        if not learned:
-            raise HTTPException(status_code=400, detail="Рецепт не изучен")
+    # 5. Verify the recipe is learned
+    learned = db.query(models.CharacterRecipe).filter(
+        models.CharacterRecipe.character_id == character_id,
+        models.CharacterRecipe.recipe_id == req.recipe_id,
+    ).first()
+    if not learned:
+        raise HTTPException(status_code=400, detail="Рецепт не изучен")
 
     # 6. Execute craft in transaction
     try:
-        result = crud.execute_craft(db, character_id, recipe, req.blueprint_item_id, cp=cp)
+        result = crud.execute_craft(db, character_id, recipe, cp=cp)
         db.commit()
         return result
     except ValueError as e:
@@ -1985,45 +2028,6 @@ def craft_item(
         db.rollback()
         logger.error(f"Crafting error for character {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при создании предмета")
-
-
-@router.post("/crafting/{character_id}/learn-recipe")
-def learn_recipe(
-    character_id: int,
-    req: schemas.LearnRecipeRequest,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user_via_http),
-):
-    """Выучить рецепт навсегда."""
-    verify_character_ownership(db, character_id, current_user.id)
-
-    # Get recipe
-    recipe = crud.get_recipe_by_id(db, req.recipe_id)
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Рецепт не найден")
-
-    # Check profession
-    cp = crud.get_character_profession(db, character_id)
-    if not cp:
-        raise HTTPException(status_code=400, detail="У персонажа нет профессии")
-    if cp.profession_id != recipe.profession_id:
-        prof_name = recipe.profession.name if recipe.profession else "другая"
-        raise HTTPException(status_code=400, detail=f"Требуется профессия: {prof_name}")
-
-    # Check rank
-    if cp.current_rank < recipe.required_rank:
-        raise HTTPException(status_code=400, detail=f"Недостаточный ранг. Требуется ранг {recipe.required_rank}")
-
-    # Check not already learned
-    existing = db.query(models.CharacterRecipe).filter(
-        models.CharacterRecipe.character_id == character_id,
-        models.CharacterRecipe.recipe_id == req.recipe_id,
-    ).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Рецепт уже выучен")
-
-    crud.learn_recipe_for_character(db, character_id, req.recipe_id)
-    return {"message": "Рецепт выучен", "recipe_id": recipe.id, "recipe_name": recipe.name}
 
 
 @router.post("/crafting/{character_id}/learn-from-item")
@@ -2148,7 +2152,6 @@ def admin_list_recipes(
             "rarity": recipe.rarity,
             "icon": recipe.icon,
             "xp_reward": recipe.xp_reward,
-            "is_blueprint_recipe": recipe.is_blueprint_recipe,
             "is_active": recipe.is_active,
             "auto_learn_rank": recipe.auto_learn_rank,
             "ingredients": ingredients,
@@ -2224,7 +2227,6 @@ def admin_create_recipe(
         "rarity": recipe.rarity,
         "icon": recipe.icon,
         "xp_reward": recipe.xp_reward,
-        "is_blueprint_recipe": recipe.is_blueprint_recipe,
         "is_active": recipe.is_active,
         "auto_learn_rank": recipe.auto_learn_rank,
         "ingredients": [
@@ -2303,7 +2305,6 @@ def admin_update_recipe(
         "rarity": recipe.rarity,
         "icon": recipe.icon,
         "xp_reward": recipe.xp_reward,
-        "is_blueprint_recipe": recipe.is_blueprint_recipe,
         "is_active": recipe.is_active,
         "auto_learn_rank": recipe.auto_learn_rank,
         "ingredients": [
@@ -2347,8 +2348,9 @@ def get_sharpen_info(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_via_http),
 ):
-    """Получить информацию о заточке предмета: текущие бонусы, доступные статы, точильные камни.
-    source=inventory для предмета в инвентаре, source=equipment для экипированного."""
+    """Получить информацию о заточке предмета: текущие бонусы, доступные статы, подходящие камни.
+    source=inventory для предмета в инвентаре, source=equipment для экипированного.
+    Профессия не нужна (FEAT-165)."""
     verify_character_ownership(db, character_id, current_user.id)
 
     # Get the row depending on source
@@ -2374,7 +2376,8 @@ def get_sharpen_info(
     if not item_obj:
         raise HTTPException(status_code=404, detail="Предмет не найден")
 
-    if item_obj.item_type not in crud.SHARPENABLE_TYPES:
+    sharpen_group = crud.sharpen_group_for_type(item_obj.item_type)
+    if sharpen_group is None:
         raise HTTPException(status_code=400, detail="Этот тип предмета нельзя затачивать")
 
     bonuses = crud.get_enhancement_bonuses(row)
@@ -2413,7 +2416,7 @@ def get_sharpen_info(
             "increment": increment,
         })
 
-    # Get whetstones from inventory
+    # Only stones of the matching group
     whetstones = []
     whetstone_inv_rows = (
         db.query(models.CharacterInventory)
@@ -2421,6 +2424,7 @@ def get_sharpen_info(
         .filter(
             models.CharacterInventory.character_id == character_id,
             models.Items.whetstone_level.isnot(None),
+            models.Items.whetstone_group == sharpen_group,
         )
         .all()
     )
@@ -2432,6 +2436,7 @@ def get_sharpen_info(
             "name": ws_item.name,
             "quantity": ws_row.quantity,
             "success_chance": chance_pct,
+            "whetstone_group": sharpen_group,
         })
 
     return {
@@ -2439,6 +2444,7 @@ def get_sharpen_info(
         "item_type": item_obj.item_type,
         "points_spent": points_spent,
         "points_remaining": points_remaining,
+        "sharpen_group": sharpen_group,
         "stats": stats,
         "whetstones": whetstones,
     }
@@ -2451,19 +2457,13 @@ async def sharpen_item(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_via_http),
 ):
-    """Заточить конкретный стат предмета с помощью точильного камня."""
+    """Заточить конкретный стат предмета подходящим камнем заточки.
+    Точить может любой персонаж; опыт профессии за заточку не начисляется (FEAT-165)."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя затачивать предметы во время боя")
     check_not_gathering(db, character_id, "Нельзя затачивать предметы во время добычи")
 
-    # 1. Check profession
-    cp = crud.get_character_profession(db, character_id)
-    if not cp:
-        raise HTTPException(status_code=400, detail="У персонажа нет профессии")
-    if cp.profession.slug != "blacksmith":
-        raise HTTPException(status_code=400, detail="Только кузнец может затачивать предметы")
-
-    # 2. Get item row (inventory or equipment)
+    # 1. Get item row (inventory or equipment)
     is_equipped = req.source == "equipment"
     eq_slot = None
 
@@ -2491,13 +2491,14 @@ async def sharpen_item(
     if not item_obj:
         raise HTTPException(status_code=404, detail="Предмет не найден")
 
-    # 2.5. Check identification (only for inventory items — equipped items are always identified)
+    # 2. Check identification (only for inventory items — equipped items are always identified)
     if not is_equipped:
         if not inv_row.is_identified:
             raise HTTPException(status_code=400, detail="Предмет не опознан")
 
     # 3. Validate item type
-    if item_obj.item_type not in crud.SHARPENABLE_TYPES:
+    sharpen_group = crud.sharpen_group_for_type(item_obj.item_type)
+    if sharpen_group is None:
         raise HTTPException(status_code=400, detail="Этот тип предмета нельзя затачивать")
 
     # 4. Validate stat_field
@@ -2512,16 +2513,14 @@ async def sharpen_item(
     if current_count >= crud.MAX_STAT_SHARPEN:
         raise HTTPException(status_code=400, detail="Этот стат уже заточен до максимума (+5)")
 
-    # 7. Calculate point cost
-    base_val = getattr(item_obj, req.stat_field, 0) or 0
-    is_existing = base_val != 0
+    # 7. Point cost
     point_cost = 1
 
     # 8. Check points budget
     if item_row.enhancement_points_spent + point_cost > crud.MAX_ENHANCEMENT_POINTS:
         raise HTTPException(status_code=400, detail="Недостаточно поинтов заточки")
 
-    # 9. Find and validate whetstone
+    # 9. Find and validate the stone (nothing is consumed before these checks pass)
     whetstone_inv = db.query(models.CharacterInventory).filter(
         models.CharacterInventory.id == req.whetstone_item_id,
         models.CharacterInventory.character_id == character_id,
@@ -2532,6 +2531,8 @@ async def sharpen_item(
     whetstone_item = db.query(models.Items).filter(models.Items.id == whetstone_inv.item_id).first()
     if not whetstone_item or whetstone_item.whetstone_level is None:
         raise HTTPException(status_code=400, detail="Этот предмет не является точильным камнем")
+    if getattr(whetstone_item.whetstone_group, "value", whetstone_item.whetstone_group) != sharpen_group:
+        raise HTTPException(status_code=400, detail="Этот камень не подходит для этого предмета")
 
     success_chance = crud.WHETSTONE_CHANCE.get(whetstone_item.whetstone_level, 0)
 
@@ -2577,31 +2578,6 @@ async def sharpen_item(
         else:
             new_value = old_value
 
-        # 13. Award XP (regardless of success/failure)
-        base_xp = 10
-        multiplier = crud.get_xp_multiplier(db, character_id)
-        xp_earned = int(base_xp * multiplier)
-        rank_up = False
-        new_rank_name = None
-
-        cp.experience += xp_earned
-        new_total_xp = cp.experience
-
-        # Check rank-up
-        all_ranks = sorted(cp.profession.ranks, key=lambda r: r.rank_number)
-        while True:
-            next_ranks = [r for r in all_ranks if r.rank_number == cp.current_rank + 1]
-            if not next_ranks:
-                break
-            next_rank = next_ranks[0]
-            if cp.experience >= next_rank.required_experience:
-                cp.current_rank = next_rank.rank_number
-                rank_up = True
-                new_rank_name = next_rank.name
-                crud.auto_learn_recipes_for_rank(db, cp.character_id, cp.profession_id, next_rank.rank_number)
-            else:
-                break
-
         db.commit()
 
         return {
@@ -2615,10 +2591,6 @@ async def sharpen_item(
             "points_remaining": crud.MAX_ENHANCEMENT_POINTS - item_row.enhancement_points_spent,
             "point_cost": point_cost,
             "whetstone_consumed": True,
-            "xp_earned": xp_earned,
-            "new_total_xp": new_total_xp,
-            "rank_up": rank_up,
-            "new_rank_name": new_rank_name,
         }
 
     except HTTPException:
@@ -2634,365 +2606,102 @@ async def sharpen_item(
 
 
 # ---------------------------------------------------------------------------
-# Essence extraction endpoints — PUBLIC
+# Refining endpoints — PUBLIC (FEAT-165)
 # ---------------------------------------------------------------------------
 
-@router.get("/crafting/{character_id}/extract-info")
-def get_extract_info(
+@router.get("/crafting/{character_id}/refine-info", response_model=schemas.RefineInfoResponse)
+def get_refine_info(
     character_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_via_http),
 ):
-    """Get list of crystals in character's inventory available for essence extraction."""
+    """Что персонаж может переработать своей профессией (сырьё из инвентаря с настроенным результатом)."""
     verify_character_ownership(db, character_id, current_user.id)
-
-    # Find all inventory items that have essence_result_item_id set (crystals)
-    crystal_rows = (
-        db.query(models.CharacterInventory)
-        .join(models.Items, models.CharacterInventory.item_id == models.Items.id)
-        .filter(
-            models.CharacterInventory.character_id == character_id,
-            models.Items.essence_result_item_id.isnot(None),
-        )
-        .all()
-    )
-
-    crystals = []
-    for inv_row in crystal_rows:
-        crystal_item = inv_row.item
-        # Load the essence item
-        essence_item = db.query(models.Items).filter(
-            models.Items.id == crystal_item.essence_result_item_id
-        ).first()
-        if not essence_item:
-            continue
-
-        crystals.append({
-            "inventory_item_id": inv_row.id,
-            "item_id": crystal_item.id,
-            "name": crystal_item.name,
-            "image": crystal_item.image,
-            "quantity": inv_row.quantity,
-            "essence_name": essence_item.name,
-            "essence_image": essence_item.image,
-            "success_chance": 75,
-        })
-
-    return {"crystals": crystals}
+    return crud.get_refine_info(db, character_id)
 
 
-@router.post("/crafting/{character_id}/extract-essence")
-def extract_essence(
+@router.post("/crafting/{character_id}/refine", response_model=schemas.RefineResult)
+def refine_item(
     character_id: int,
-    req: schemas.ExtractEssenceRequest,
+    req: schemas.RefineRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_via_http),
 ):
-    """Extract an essence from a crystal. Alchemist only. 75% success chance."""
+    """Переработать сырьё одного вида. Всегда успешно; остаток, не кратный пропорции, не тратится."""
     verify_character_ownership(db, character_id, current_user.id)
-    check_not_in_battle(db, character_id, "Нельзя извлекать эссенции во время боя")
-    check_not_gathering(db, character_id, "Нельзя извлекать эссенции во время добычи")
-
-    # 1. Check profession
-    cp = crud.get_character_profession(db, character_id)
-    if not cp:
-        raise HTTPException(status_code=400, detail="У персонажа нет профессии")
-    if cp.profession.slug != "alchemist":
-        raise HTTPException(status_code=400, detail="Только алхимик может извлекать эссенции")
-
-    # 2. Find crystal in inventory
-    crystal_inv = db.query(models.CharacterInventory).filter(
-        models.CharacterInventory.id == req.crystal_item_id,
-        models.CharacterInventory.character_id == character_id,
-    ).with_for_update().first()
-    if not crystal_inv or crystal_inv.quantity < 1:
-        raise HTTPException(status_code=404, detail="Кристалл не найден в инвентаре")
-
-    # 3. Validate it's a crystal (has essence_result_item_id)
-    crystal_item = db.query(models.Items).filter(
-        models.Items.id == crystal_inv.item_id
-    ).first()
-    if not crystal_item or crystal_item.essence_result_item_id is None:
-        raise HTTPException(status_code=400, detail="Этот предмет не является кристаллом для извлечения")
-
-    # 4. Load essence item info
-    essence_item = db.query(models.Items).filter(
-        models.Items.id == crystal_item.essence_result_item_id
-    ).first()
-    if not essence_item:
-        raise HTTPException(status_code=500, detail="Эссенция не найдена в базе данных")
+    check_not_in_battle(db, character_id, "Нельзя перерабатывать во время боя")
+    check_not_gathering(db, character_id, "Нельзя перерабатывать во время добычи")
 
     try:
-        # 5. Consume 1 crystal
-        crystal_inv.quantity -= 1
-        if crystal_inv.quantity <= 0:
-            db.delete(crystal_inv)
-        db.flush()
-
-        # 6. Roll 75% chance
-        success = random.random() < 0.75
-
-        essence_name = None
-        if success:
-            # Add 1 essence to inventory
-            existing_essence = db.query(models.CharacterInventory).filter(
-                models.CharacterInventory.character_id == character_id,
-                models.CharacterInventory.item_id == essence_item.id,
-            ).with_for_update().first()
-
-            if existing_essence:
-                existing_essence.quantity += 1
-            else:
-                new_inv = models.CharacterInventory(
-                    character_id=character_id,
-                    item_id=essence_item.id,
-                    quantity=1,
-                )
-                db.add(new_inv)
-            db.flush()
-            essence_name = essence_item.name
-
-        # 7. Award XP (always, regardless of success)
-        base_xp = 10
-        multiplier = crud.get_xp_multiplier(db, character_id)
-        xp_earned = int(base_xp * multiplier)
-        rank_up = False
-        new_rank_name = None
-
-        cp.experience += xp_earned
-        new_total_xp = cp.experience
-
-        # Check rank-up
-        all_ranks = sorted(cp.profession.ranks, key=lambda r: r.rank_number)
-        while True:
-            next_ranks = [r for r in all_ranks if r.rank_number == cp.current_rank + 1]
-            if not next_ranks:
-                break
-            next_rank = next_ranks[0]
-            if cp.experience >= next_rank.required_experience:
-                cp.current_rank = next_rank.rank_number
-                rank_up = True
-                new_rank_name = next_rank.name
-                crud.auto_learn_recipes_for_rank(db, cp.character_id, cp.profession_id, next_rank.rank_number)
-            else:
-                break
-
+        result = crud.refine_items(db, character_id, req.source_item_id, req.quantity)
         db.commit()
-
-        return {
-            "success": success,
-            "crystal_name": crystal_item.name,
-            "essence_name": essence_name,
-            "crystal_consumed": True,
-            "xp_earned": xp_earned,
-            "new_total_xp": new_total_xp,
-            "rank_up": rank_up,
-            "new_rank_name": new_rank_name,
-        }
-
-    except HTTPException:
+        return result
+    except crud.RefineNotFoundError as e:
         db.rollback()
-        raise
-    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
         db.rollback()
-        logger.error(f"Essence extraction error for character {character_id}: {e}")
-        raise HTTPException(status_code=500, detail="Ошибка при извлечении эссенции")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        db.rollback()
+        logger.exception("Refining error for character %s", character_id)
+        raise HTTPException(status_code=500, detail="Ошибка при переработке")
 
 
 # ---------------------------------------------------------------------------
-# Transmutation endpoints — PUBLIC
+# Gem / rune socket endpoints — PUBLIC
+# FEAT-165: anyone may INSERT a gem (jewelry) or a rune (weapon/body/head/cloak);
+# only a jeweler extracts gems and only an enchanter extracts runes (incl. legacy belt runes).
 # ---------------------------------------------------------------------------
 
-# FEAT-164: the chain ends at legendary — mythical/divine/demonic are
-# equipment-only and never produced by crafting/transmutation.
-RARITY_CHAIN = {
-    'common': 'rare',
-    'rare': 'epic',
-    'epic': 'legendary',
+INSERT_WRONG_KIND_ERRORS = {
+    'gem': "В украшение можно вставить только огранку",
+    'rune': "В этот предмет можно вставить только руну",
 }
 
-TRANSMUTE_RESULT_NAMES = {
-    'rare': 'Трансмутированный ресурс (редкий)',
-    'epic': 'Трансмутированный ресурс (эпический)',
-    'legendary': 'Трансмутированный ресурс (легендарный)',
-}
 
-TRANSMUTE_COST = 5
-TRANSMUTE_XP = 15
-
-
-@router.get("/crafting/{character_id}/transmute-info")
-def get_transmute_info(
-    character_id: int,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user_via_http),
-):
-    """Get list of resource items available for transmutation."""
-    verify_character_ownership(db, character_id, current_user.id)
-
-    # Find all resource items with transmutable rarity
-    resource_rows = (
-        db.query(models.CharacterInventory)
-        .join(models.Items, models.CharacterInventory.item_id == models.Items.id)
-        .filter(
-            models.CharacterInventory.character_id == character_id,
-            models.Items.item_type == 'resource',
-            models.Items.item_rarity.in_(list(RARITY_CHAIN.keys())),
+def _load_socket_row(db: Session, character_id: int, row_id: int, source: str, lock: bool):
+    """Inventory or equipment row of the character + its item, or 404."""
+    if source == "equipment":
+        query = db.query(models.EquipmentSlot).filter(
+            models.EquipmentSlot.id == row_id,
+            models.EquipmentSlot.character_id == character_id,
+            models.EquipmentSlot.item_id.isnot(None),
         )
-        .all()
-    )
-
-    items = []
-    for inv_row in resource_rows:
-        item = inv_row.item
-        next_rarity = RARITY_CHAIN.get(item.item_rarity)
-        if not next_rarity:
-            continue
-
-        items.append({
-            "inventory_item_id": inv_row.id,
-            "item_id": item.id,
-            "name": item.name,
-            "image": item.image,
-            "quantity": inv_row.quantity,
-            "item_rarity": item.item_rarity,
-            "next_rarity": next_rarity,
-            "can_transmute": inv_row.quantity >= TRANSMUTE_COST,
-            "required_quantity": TRANSMUTE_COST,
-        })
-
-    return {"items": items}
-
-
-@router.post("/crafting/{character_id}/transmute")
-def transmute_item(
-    character_id: int,
-    req: schemas.TransmuteRequest,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user_via_http),
-):
-    """Transmute 5 resource items into 1 of the next rarity. Alchemist only."""
-    verify_character_ownership(db, character_id, current_user.id)
-    check_not_in_battle(db, character_id, "Нельзя трансмутировать предметы во время боя")
-    check_not_gathering(db, character_id, "Нельзя трансмутировать предметы во время добычи")
-
-    # 1. Check profession
-    cp = crud.get_character_profession(db, character_id)
-    if not cp:
-        raise HTTPException(status_code=400, detail="У персонажа нет профессии")
-    if cp.profession.slug != "alchemist":
-        raise HTTPException(status_code=400, detail="Только алхимик может трансмутировать ресурсы")
-
-    # 2. Find resource in inventory
-    inv_row = db.query(models.CharacterInventory).filter(
-        models.CharacterInventory.id == req.inventory_item_id,
-        models.CharacterInventory.character_id == character_id,
-    ).with_for_update().first()
-    if not inv_row:
-        raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
-
-    # 3. Validate it's a resource with transmutable rarity
-    item = db.query(models.Items).filter(models.Items.id == inv_row.item_id).first()
-    if not item:
+        not_found = "Экипированный предмет не найден"
+    else:
+        query = db.query(models.CharacterInventory).filter(
+            models.CharacterInventory.id == row_id,
+            models.CharacterInventory.character_id == character_id,
+        )
+        not_found = "Предмет не найден в инвентаре"
+    if lock:
+        query = query.with_for_update()
+    row = query.first()
+    if not row:
+        raise HTTPException(status_code=404, detail=not_found)
+    item_obj = db.query(models.Items).filter(models.Items.id == row.item_id).first()
+    if not item_obj:
         raise HTTPException(status_code=404, detail="Предмет не найден")
-    if item.item_type != 'resource':
-        raise HTTPException(status_code=400, detail="Трансмутировать можно только ресурсы")
-
-    next_rarity = RARITY_CHAIN.get(item.item_rarity)
-    if not next_rarity:
-        raise HTTPException(status_code=400, detail="Этот ресурс уже максимальной редкости для трансмутации")
-
-    if inv_row.quantity < TRANSMUTE_COST:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Недостаточно ресурсов. Нужно минимум {TRANSMUTE_COST}, у вас {inv_row.quantity}"
-        )
-
-    # 4. Find result item
-    result_name = TRANSMUTE_RESULT_NAMES.get(next_rarity)
-    if not result_name:
-        raise HTTPException(status_code=500, detail="Ошибка: результат трансмутации не найден")
-
-    result_item = db.query(models.Items).filter(
-        models.Items.name == result_name
-    ).first()
-    if not result_item:
-        raise HTTPException(status_code=500, detail="Ошибка: предмет результата трансмутации не найден в базе")
-
-    try:
-        # 5. Consume resources
-        inv_row.quantity -= TRANSMUTE_COST
-        if inv_row.quantity <= 0:
-            db.delete(inv_row)
-        db.flush()
-
-        # 6. Add result item to inventory
-        existing_result = db.query(models.CharacterInventory).filter(
-            models.CharacterInventory.character_id == character_id,
-            models.CharacterInventory.item_id == result_item.id,
-        ).with_for_update().first()
-
-        if existing_result:
-            existing_result.quantity += 1
-        else:
-            new_inv = models.CharacterInventory(
-                character_id=character_id,
-                item_id=result_item.id,
-                quantity=1,
-            )
-            db.add(new_inv)
-        db.flush()
-
-        # 7. Award XP
-        multiplier = crud.get_xp_multiplier(db, character_id)
-        xp_earned = int(TRANSMUTE_XP * multiplier)
-        rank_up = False
-        new_rank_name = None
-
-        cp.experience += xp_earned
-        new_total_xp = cp.experience
-
-        # Check rank-up
-        all_ranks = sorted(cp.profession.ranks, key=lambda r: r.rank_number)
-        while True:
-            next_ranks = [r for r in all_ranks if r.rank_number == cp.current_rank + 1]
-            if not next_ranks:
-                break
-            next_rank = next_ranks[0]
-            if cp.experience >= next_rank.required_experience:
-                cp.current_rank = next_rank.rank_number
-                rank_up = True
-                new_rank_name = next_rank.name
-                crud.auto_learn_recipes_for_rank(db, cp.character_id, cp.profession_id, next_rank.rank_number)
-            else:
-                break
-
-        db.commit()
-
-        return {
-            "success": True,
-            "consumed_item_name": item.name,
-            "consumed_quantity": TRANSMUTE_COST,
-            "result_item_name": result_item.name,
-            "result_item_rarity": result_item.item_rarity,
-            "xp_earned": xp_earned,
-            "new_total_xp": new_total_xp,
-            "rank_up": rank_up,
-            "new_rank_name": new_rank_name,
-        }
-
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Transmutation error for character {character_id}: {e}")
-        raise HTTPException(status_code=500, detail="Ошибка при трансмутации")
+    return row, item_obj
 
 
-# ---------------------------------------------------------------------------
-# Gem socket endpoints — PUBLIC (jeweler only)
-# ---------------------------------------------------------------------------
+def _socket_slots(row, item_obj) -> list:
+    """socketed_gems padded to the item's socket count (legacy rows may hold more)."""
+    socketed = crud.get_socketed_gems(row)
+    socket_count = item_obj.socket_count or 0
+    while len(socketed) < socket_count:
+        socketed.append(None)
+    return socketed
+
+
+def _can_extract(cp, insertable_type: str) -> bool:
+    return (
+        cp is not None
+        and cp.profession is not None
+        and cp.profession.slug == crud.SOCKET_EXTRACTOR_BY_INSERTABLE[insertable_type]
+    )
+
 
 @router.get("/crafting/{character_id}/socket-info/{item_row_id}")
 def get_socket_info(
@@ -3002,65 +2711,38 @@ def get_socket_info(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_via_http),
 ):
-    """Получить информацию о слотах камней/рун предмета."""
+    """Получить информацию о слотах камней/рун предмета. Профессия не нужна;
+    can_extract показывает, может ли персонаж извлекать из этого предмета."""
     verify_character_ownership(db, character_id, current_user.id)
 
-    # 1. Check profession
+    row, item_obj = _load_socket_row(db, character_id, item_row_id, source, lock=False)
+
+    insertable_type = crud.insertable_type_for_item(item_obj.item_type)
+    if insertable_type is None:
+        raise HTTPException(status_code=400, detail="Этот тип предмета не поддерживает камни и руны")
+
+    socketed = _socket_slots(row, item_obj)
+    can_insert = item_obj.item_type in crud.SOCKETABLE_TYPES
+    if not can_insert and not any(g is not None for g in socketed):
+        # Legacy belts are shown only while they still hold runes
+        raise HTTPException(status_code=400, detail="Этот тип предмета не поддерживает руны")
+
     cp = crud.get_character_profession(db, character_id)
-    if not cp:
-        raise HTTPException(status_code=400, detail="У персонажа нет профессии")
-    if cp.profession.slug not in ("jeweler", "enchanter"):
-        raise HTTPException(status_code=400, detail="Только ювелир или зачарователь могут работать со слотами")
-
-    # 2. Load item row
-    if source == "equipment":
-        row = db.query(models.EquipmentSlot).filter(
-            models.EquipmentSlot.id == item_row_id,
-            models.EquipmentSlot.character_id == character_id,
-            models.EquipmentSlot.item_id.isnot(None),
-        ).first()
-        if not row:
-            raise HTTPException(status_code=404, detail="Экипированный предмет не найден")
-        item_id = row.item_id
-    else:
-        row = db.query(models.CharacterInventory).filter(
-            models.CharacterInventory.id == item_row_id,
-            models.CharacterInventory.character_id == character_id,
-        ).first()
-        if not row:
-            raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
-        item_id = row.item_id
-
-    item_obj = db.query(models.Items).filter(models.Items.id == item_id).first()
-    if not item_obj:
-        raise HTTPException(status_code=404, detail="Предмет не найден")
-
-    # Validate item type matches profession
-    if cp.profession.slug == "jeweler":
-        if item_obj.item_type not in crud.JEWELRY_TYPES:
-            raise HTTPException(status_code=400, detail="Ювелир может работать только с украшениями")
-    elif cp.profession.slug == "enchanter":
-        if item_obj.item_type not in crud.ARMOR_WEAPON_TYPES:
-            raise HTTPException(status_code=400, detail="Зачарователь может работать только с оружием и бронёй")
-
-    # 3. Parse socketed_gems
-    socketed = crud.get_socketed_gems(row)
-    socket_count = item_obj.socket_count or 0
-
-    # Ensure socketed array matches socket_count
-    while len(socketed) < socket_count:
-        socketed.append(None)
+    can_extract = _can_extract(cp, insertable_type)
+    preservation_pct = (
+        crud.GEM_PRESERVATION_CHANCES.get(cp.current_rank, 10) if can_extract else None
+    )
 
     # Load gem items for filled slots
-    gem_items_map = {}
     gem_ids = [gid for gid in socketed if gid is not None]
+    gem_items_map = {}
     if gem_ids:
-        gem_items_list = db.query(models.Items).filter(models.Items.id.in_(gem_ids)).all()
-        gem_items_map = {g.id: g for g in gem_items_list}
+        gem_items_map = {
+            g.id: g for g in db.query(models.Items).filter(models.Items.id.in_(gem_ids)).all()
+        }
 
     slots = []
-    for i in range(socket_count):
-        gem_id = socketed[i] if i < len(socketed) else None
+    for i, gem_id in enumerate(socketed):
         gem_item = gem_items_map.get(gem_id) if gem_id else None
         slots.append({
             "slot_index": i,
@@ -3070,38 +2752,36 @@ def get_socket_info(
             "gem_modifiers": crud.get_gem_modifiers_dict(gem_item) if gem_item else {},
         })
 
-    # 4. Find available gems/runes in inventory based on target item type
-    if item_obj.item_type in crud.JEWELRY_TYPES:
-        insertable_type = 'gem'
-    else:
-        insertable_type = 'rune'
-
-    gem_inv_rows = (
-        db.query(models.CharacterInventory)
-        .join(models.Items, models.CharacterInventory.item_id == models.Items.id)
-        .filter(
-            models.CharacterInventory.character_id == character_id,
-            models.Items.item_type == insertable_type,
-        )
-        .all()
-    )
-
     available_gems = []
-    for inv_row in gem_inv_rows:
-        gem = inv_row.item
-        available_gems.append({
-            "inventory_item_id": inv_row.id,
-            "item_id": gem.id,
-            "name": gem.name,
-            "image": gem.image,
-            "quantity": inv_row.quantity,
-            "modifiers": crud.get_gem_modifiers_dict(gem),
-        })
+    if can_insert:
+        gem_inv_rows = (
+            db.query(models.CharacterInventory)
+            .join(models.Items, models.CharacterInventory.item_id == models.Items.id)
+            .filter(
+                models.CharacterInventory.character_id == character_id,
+                models.Items.item_type == insertable_type,
+            )
+            .all()
+        )
+        for inv_row in gem_inv_rows:
+            gem = inv_row.item
+            available_gems.append({
+                "inventory_item_id": inv_row.id,
+                "item_id": gem.id,
+                "name": gem.name,
+                "image": gem.image,
+                "quantity": inv_row.quantity,
+                "modifiers": crud.get_gem_modifiers_dict(gem),
+            })
 
     return {
         "item_name": item_obj.name,
         "item_type": item_obj.item_type,
-        "socket_count": socket_count,
+        "socket_count": len(socketed),
+        "insertable_type": insertable_type,
+        "can_insert": can_insert,
+        "can_extract": can_extract,
+        "extract_preservation_chance": preservation_pct,
         "slots": slots,
         "available_gems": available_gems,
     }
@@ -3114,68 +2794,37 @@ async def insert_gem(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_via_http),
 ):
-    """Вставить камень/руну в слот предмета."""
+    """Вставить огранку (в украшение) или руну (в оружие, броню, шлем, плащ). Доступно любому персонажу."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя вставлять камни/руны во время боя")
     check_not_gathering(db, character_id, "Нельзя вставлять камни/руны во время добычи")
 
-    # 1. Check profession
-    cp = crud.get_character_profession(db, character_id)
-    if not cp:
-        raise HTTPException(status_code=400, detail="У персонажа нет профессии")
-
-    # 2. Load item row
     is_equipped = req.source == "equipment"
-    if is_equipped:
-        row = db.query(models.EquipmentSlot).filter(
-            models.EquipmentSlot.id == req.item_row_id,
-            models.EquipmentSlot.character_id == character_id,
-            models.EquipmentSlot.item_id.isnot(None),
-        ).with_for_update().first()
-        if not row:
-            raise HTTPException(status_code=404, detail="Экипированный предмет не найден")
-        item_id = row.item_id
+    row, item_obj = _load_socket_row(
+        db, character_id, req.item_row_id, "equipment" if is_equipped else "inventory", lock=True
+    )
+
+    # Equipped items are always identified
+    if not is_equipped and not row.is_identified:
+        raise HTTPException(status_code=400, detail="Предмет не опознан")
+
+    if item_obj.item_type in crud.JEWELRY_TYPES:
+        insertable_type = 'gem'
+    elif item_obj.item_type in crud.RUNE_INSERT_TYPES:
+        insertable_type = 'rune'
+    elif item_obj.item_type in crud.RUNE_EXTRACT_TYPES:
+        raise HTTPException(status_code=400, detail="Этот тип предмета не поддерживает руны")
     else:
-        row = db.query(models.CharacterInventory).filter(
-            models.CharacterInventory.id == req.item_row_id,
-            models.CharacterInventory.character_id == character_id,
-        ).with_for_update().first()
-        if not row:
-            raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
-        item_id = row.item_id
+        raise HTTPException(status_code=400, detail="Этот тип предмета не поддерживает камни и руны")
 
-    item_obj = db.query(models.Items).filter(models.Items.id == item_id).first()
-    if not item_obj:
-        raise HTTPException(status_code=404, detail="Предмет не найден")
-
-    # 2.5. Check identification (only for inventory items — equipped items are always identified)
-    if not is_equipped:
-        if not row.is_identified:
-            raise HTTPException(status_code=400, detail="Предмет не опознан")
-
-    # Profession-specific validation
-    if cp.profession.slug == "jeweler":
-        if item_obj.item_type not in crud.JEWELRY_TYPES:
-            raise HTTPException(status_code=400, detail="Ювелир может работать только с украшениями")
-    elif cp.profession.slug == "enchanter":
-        if item_obj.item_type not in crud.ARMOR_WEAPON_TYPES:
-            raise HTTPException(status_code=400, detail="Зачарователь может работать только с оружием и бронёй")
-    else:
-        raise HTTPException(status_code=400, detail="Только ювелир или зачарователь могут вставлять предметы в слоты")
-
-    # 3. Validate slot_index
     socket_count = item_obj.socket_count or 0
     if req.slot_index < 0 or req.slot_index >= socket_count:
         raise HTTPException(status_code=400, detail="Недопустимый индекс слота")
 
-    socketed = crud.get_socketed_gems(row)
-    while len(socketed) < socket_count:
-        socketed.append(None)
-
+    socketed = _socket_slots(row, item_obj)
     if socketed[req.slot_index] is not None:
         raise HTTPException(status_code=400, detail="Этот слот уже занят")
 
-    # 4. Load gem/rune from inventory
     gem_inv = db.query(models.CharacterInventory).filter(
         models.CharacterInventory.id == req.gem_inventory_id,
         models.CharacterInventory.character_id == character_id,
@@ -3184,62 +2833,29 @@ async def insert_gem(
         raise HTTPException(status_code=404, detail="Предмет для вставки не найден в инвентаре")
 
     gem_item = db.query(models.Items).filter(models.Items.id == gem_inv.item_id).first()
-
-    # Validate insertable item type matches profession
-    if cp.profession.slug == "jeweler":
-        if not gem_item or gem_item.item_type != 'gem':
-            raise HTTPException(status_code=400, detail="Ювелир может вставлять только камни")
-    elif cp.profession.slug == "enchanter":
-        if not gem_item or gem_item.item_type != 'rune':
-            raise HTTPException(status_code=400, detail="Зачарователь может вставлять только руны")
+    if not gem_item or gem_item.item_type != insertable_type:
+        raise HTTPException(status_code=400, detail=INSERT_WRONG_KIND_ERRORS[insertable_type])
 
     try:
-        # 5. Consume gem
+        # Consume gem
         gem_inv.quantity -= 1
         if gem_inv.quantity <= 0:
             db.delete(gem_inv)
         db.flush()
 
-        # 6. Update socketed_gems
         socketed[req.slot_index] = gem_item.id
         crud.set_socketed_gems(row, socketed)
         db.flush()
 
-        # 7. If equipped, apply gem modifiers
+        # If equipped, apply the gem's own modifiers
         if is_equipped:
-            gem_mods = crud.build_modifiers_dict(gem_item, negative=False)
-            # Only include the gem's own modifiers (not base item)
             gem_only_mods = {}
             for field in crud.ALL_MODIFIER_FIELDS:
                 val = getattr(gem_item, field, 0) or 0
                 if val:
-                    key = field.replace('_modifier', '')
-                    gem_only_mods[key] = val
+                    gem_only_mods[field.replace('_modifier', '')] = val
             if gem_only_mods:
                 await apply_modifiers_in_attributes_service(character_id, gem_only_mods)
-
-        # 8. Award XP
-        multiplier = crud.get_xp_multiplier(db, character_id)
-        xp_earned = int(crud.GEM_XP_REWARD * multiplier)
-        rank_up = False
-        new_rank_name = None
-
-        cp.experience += xp_earned
-        new_total_xp = cp.experience
-
-        all_ranks = sorted(cp.profession.ranks, key=lambda r: r.rank_number)
-        while True:
-            next_ranks = [r for r in all_ranks if r.rank_number == cp.current_rank + 1]
-            if not next_ranks:
-                break
-            next_rank = next_ranks[0]
-            if cp.experience >= next_rank.required_experience:
-                cp.current_rank = next_rank.rank_number
-                rank_up = True
-                new_rank_name = next_rank.name
-                crud.auto_learn_recipes_for_rank(db, cp.character_id, cp.profession_id, next_rank.rank_number)
-            else:
-                break
 
         db.commit()
 
@@ -3248,10 +2864,6 @@ async def insert_gem(
             "item_name": item_obj.name,
             "gem_name": gem_item.name,
             "slot_index": req.slot_index,
-            "xp_earned": xp_earned,
-            "new_total_xp": new_total_xp,
-            "rank_up": rank_up,
-            "new_rank_name": new_rank_name,
         }
 
     except HTTPException:
@@ -3273,61 +2885,37 @@ async def extract_gem(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_via_http),
 ):
-    """Извлечь камень/руну из слота предмета."""
+    """Извлечь огранку (ювелир) или руну (зачарователь) из слота предмета."""
     verify_character_ownership(db, character_id, current_user.id)
     check_not_in_battle(db, character_id, "Нельзя извлекать камни/руны во время боя")
     check_not_gathering(db, character_id, "Нельзя извлекать камни/руны во время добычи")
 
-    # 1. Check profession + get rank
+    # 1. Profession + rank
     cp = crud.get_character_profession(db, character_id)
     if not cp:
         raise HTTPException(status_code=400, detail="У персонажа нет профессии")
 
-    # Profession-specific validation
     if cp.profession.slug == "jeweler":
         allowed_types = crud.JEWELRY_TYPES
     elif cp.profession.slug == "enchanter":
-        allowed_types = crud.ARMOR_WEAPON_TYPES
+        allowed_types = crud.RUNE_EXTRACT_TYPES
     else:
         raise HTTPException(status_code=400, detail="Только ювелир или зачарователь могут извлекать предметы из слотов")
 
     # 2. Load item row
     is_equipped = req.source == "equipment"
-    if is_equipped:
-        row = db.query(models.EquipmentSlot).filter(
-            models.EquipmentSlot.id == req.item_row_id,
-            models.EquipmentSlot.character_id == character_id,
-            models.EquipmentSlot.item_id.isnot(None),
-        ).with_for_update().first()
-        if not row:
-            raise HTTPException(status_code=404, detail="Экипированный предмет не найден")
-        item_id = row.item_id
-    else:
-        row = db.query(models.CharacterInventory).filter(
-            models.CharacterInventory.id == req.item_row_id,
-            models.CharacterInventory.character_id == character_id,
-        ).with_for_update().first()
-        if not row:
-            raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
-        item_id = row.item_id
-
-    item_obj = db.query(models.Items).filter(models.Items.id == item_id).first()
-    if not item_obj:
-        raise HTTPException(status_code=404, detail="Предмет не найден")
+    row, item_obj = _load_socket_row(
+        db, character_id, req.item_row_id, "equipment" if is_equipped else "inventory", lock=True
+    )
 
     if item_obj.item_type not in allowed_types:
         if cp.profession.slug == "jeweler":
             raise HTTPException(status_code=400, detail="Ювелир может извлекать только из украшений")
-        else:
-            raise HTTPException(status_code=400, detail="Зачарователь может извлекать только из оружия и брони")
+        raise HTTPException(status_code=400, detail="Зачарователь может извлекать только из оружия и брони")
 
     # 3. Validate slot_index has a gem
-    socket_count = item_obj.socket_count or 0
-    socketed = crud.get_socketed_gems(row)
-    while len(socketed) < socket_count:
-        socketed.append(None)
-
-    if req.slot_index < 0 or req.slot_index >= socket_count:
+    socketed = _socket_slots(row, item_obj)
+    if req.slot_index < 0 or req.slot_index >= len(socketed):
         raise HTTPException(status_code=400, detail="Недопустимый индекс слота")
 
     gem_item_id = socketed[req.slot_index]
@@ -3338,56 +2926,29 @@ async def extract_gem(
     if not gem_item:
         raise HTTPException(status_code=400, detail="Камень не найден в базе данных")
 
-    # 4. Determine preservation chance
+    # 4. Preservation chance by rank
     preservation_pct = crud.GEM_PRESERVATION_CHANCES.get(cp.current_rank, 10)
 
     try:
-        # 5. Roll for preservation
         gem_preserved = random.random() < (preservation_pct / 100.0)
 
         if gem_preserved:
-            # Return gem to inventory
             crud.return_item_to_inventory(db, character_id, gem_item)
             db.flush()
 
-        # 6. Clear slot
         socketed[req.slot_index] = None
         crud.set_socketed_gems(row, socketed)
         db.flush()
 
-        # 7. If equipped, remove gem modifiers
+        # If equipped, remove gem modifiers
         if is_equipped:
             gem_neg_mods = {}
             for field in crud.ALL_MODIFIER_FIELDS:
                 val = getattr(gem_item, field, 0) or 0
                 if val:
-                    key = field.replace('_modifier', '')
-                    gem_neg_mods[key] = -val
+                    gem_neg_mods[field.replace('_modifier', '')] = -val
             if gem_neg_mods:
                 await apply_modifiers_in_attributes_service(character_id, gem_neg_mods)
-
-        # 8. Award XP
-        multiplier = crud.get_xp_multiplier(db, character_id)
-        xp_earned = int(crud.GEM_XP_REWARD * multiplier)
-        rank_up = False
-        new_rank_name = None
-
-        cp.experience += xp_earned
-        new_total_xp = cp.experience
-
-        all_ranks = sorted(cp.profession.ranks, key=lambda r: r.rank_number)
-        while True:
-            next_ranks = [r for r in all_ranks if r.rank_number == cp.current_rank + 1]
-            if not next_ranks:
-                break
-            next_rank = next_ranks[0]
-            if cp.experience >= next_rank.required_experience:
-                cp.current_rank = next_rank.rank_number
-                rank_up = True
-                new_rank_name = next_rank.name
-                crud.auto_learn_recipes_for_rank(db, cp.character_id, cp.profession_id, next_rank.rank_number)
-            else:
-                break
 
         db.commit()
 
@@ -3398,10 +2959,6 @@ async def extract_gem(
             "gem_preserved": gem_preserved,
             "preservation_chance": preservation_pct,
             "slot_index": req.slot_index,
-            "xp_earned": xp_earned,
-            "new_total_xp": new_total_xp,
-            "rank_up": rank_up,
-            "new_rank_name": new_rank_name,
         }
 
     except HTTPException:
@@ -3414,183 +2971,6 @@ async def extract_gem(
         db.rollback()
         logger.error(f"Extract gem error for character {character_id}: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при извлечении камня")
-
-
-# ---------------------------------------------------------------------------
-# Smelting endpoints — PUBLIC (jeweler only)
-# ---------------------------------------------------------------------------
-
-@router.get("/crafting/{character_id}/smelt-info/{item_row_id}")
-def get_smelt_info(
-    character_id: int,
-    item_row_id: int,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user_via_http),
-):
-    """Получить информацию о переплавке украшения."""
-    verify_character_ownership(db, character_id, current_user.id)
-
-    # 1. Check profession
-    cp = crud.get_character_profession(db, character_id)
-    if not cp:
-        raise HTTPException(status_code=400, detail="У персонажа нет профессии")
-    if cp.profession.slug != "jeweler":
-        raise HTTPException(status_code=400, detail="Только ювелир может переплавлять украшения")
-
-    # 2. Load item from inventory (NOT equipment)
-    inv_row = db.query(models.CharacterInventory).filter(
-        models.CharacterInventory.id == item_row_id,
-        models.CharacterInventory.character_id == character_id,
-    ).first()
-    if not inv_row:
-        raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
-
-    item_obj = db.query(models.Items).filter(models.Items.id == inv_row.item_id).first()
-    if not item_obj:
-        raise HTTPException(status_code=404, detail="Предмет не найден")
-
-    if item_obj.item_type not in crud.JEWELRY_TYPES:
-        raise HTTPException(status_code=400, detail="Переплавлять можно только украшения (кольца, ожерелья, браслеты)")
-
-    # 3. Check socketed gems
-    socketed = crud.get_socketed_gems(inv_row)
-    gem_count = sum(1 for g in socketed if g is not None)
-    has_gems = gem_count > 0
-
-    # 4. Find recipe
-    recipe = crud.find_recipe_for_item(db, item_obj.id)
-    has_recipe = recipe is not None
-
-    if has_recipe:
-        ingredients = crud.calculate_smelt_returns(recipe)
-    else:
-        junk_item = crud.get_junk_item(db)
-        if junk_item:
-            ingredients = [{
-                "item_id": junk_item.id,
-                "name": junk_item.name,
-                "image": junk_item.image,
-                "quantity": 1,
-            }]
-        else:
-            ingredients = [{"item_id": 0, "name": "Ювелирный лом", "image": None, "quantity": 1}]
-
-    return {
-        "item_name": item_obj.name,
-        "item_type": item_obj.item_type,
-        "has_gems": has_gems,
-        "gem_count": gem_count,
-        "has_recipe": has_recipe,
-        "ingredients": ingredients,
-    }
-
-
-@router.post("/crafting/{character_id}/smelt")
-def smelt_item(
-    character_id: int,
-    req: schemas.SmeltRequest,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user_via_http),
-):
-    """Переплавить украшение в материалы."""
-    verify_character_ownership(db, character_id, current_user.id)
-    check_not_in_battle(db, character_id, "Нельзя переплавлять предметы во время боя")
-    check_not_gathering(db, character_id, "Нельзя переплавлять предметы во время добычи")
-
-    # 1. Check profession
-    cp = crud.get_character_profession(db, character_id)
-    if not cp:
-        raise HTTPException(status_code=400, detail="У персонажа нет профессии")
-    if cp.profession.slug != "jeweler":
-        raise HTTPException(status_code=400, detail="Только ювелир может переплавлять украшения")
-
-    # 2. Load item from inventory (NOT equipment)
-    inv_row = db.query(models.CharacterInventory).filter(
-        models.CharacterInventory.id == req.inventory_item_id,
-        models.CharacterInventory.character_id == character_id,
-    ).with_for_update().first()
-    if not inv_row:
-        raise HTTPException(status_code=404, detail="Предмет не найден в инвентаре")
-
-    item_obj = db.query(models.Items).filter(models.Items.id == inv_row.item_id).first()
-    if not item_obj:
-        raise HTTPException(status_code=404, detail="Предмет не найден")
-
-    if item_obj.item_type not in crud.JEWELRY_TYPES:
-        raise HTTPException(status_code=400, detail="Переплавлять можно только украшения")
-
-    try:
-        # 3. Count socketed gems (will be destroyed)
-        socketed = crud.get_socketed_gems(inv_row)
-        gems_destroyed = sum(1 for g in socketed if g is not None)
-
-        # 4. Find recipe and calculate returns
-        recipe = crud.find_recipe_for_item(db, item_obj.id)
-        materials_returned = []
-
-        if recipe:
-            returns = crud.calculate_smelt_returns(recipe)
-            for ret in returns:
-                # Add materials to inventory
-                crud._add_items_to_inventory(db, character_id, ret["item_id"], ret["quantity"])
-                materials_returned.append({"name": ret["name"], "quantity": ret["quantity"]})
-        else:
-            # Return junk item
-            junk_item = crud.get_junk_item(db)
-            if not junk_item:
-                raise HTTPException(status_code=500, detail="Ювелирный лом не найден в базе данных")
-            crud._add_items_to_inventory(db, character_id, junk_item.id, 1)
-            materials_returned.append({"name": junk_item.name, "quantity": 1})
-
-        # 5. Delete the jewelry item from inventory
-        inv_row.quantity -= 1
-        if inv_row.quantity <= 0:
-            db.delete(inv_row)
-        db.flush()
-
-        # 6. Award XP
-        multiplier = crud.get_xp_multiplier(db, character_id)
-        xp_earned = int(crud.GEM_XP_REWARD * multiplier)
-        rank_up = False
-        new_rank_name = None
-
-        cp.experience += xp_earned
-        new_total_xp = cp.experience
-
-        all_ranks = sorted(cp.profession.ranks, key=lambda r: r.rank_number)
-        while True:
-            next_ranks = [r for r in all_ranks if r.rank_number == cp.current_rank + 1]
-            if not next_ranks:
-                break
-            next_rank = next_ranks[0]
-            if cp.experience >= next_rank.required_experience:
-                cp.current_rank = next_rank.rank_number
-                rank_up = True
-                new_rank_name = next_rank.name
-                crud.auto_learn_recipes_for_rank(db, cp.character_id, cp.profession_id, next_rank.rank_number)
-            else:
-                break
-
-        db.commit()
-
-        return {
-            "success": True,
-            "item_name": item_obj.name,
-            "gems_destroyed": gems_destroyed,
-            "materials_returned": materials_returned,
-            "xp_earned": xp_earned,
-            "new_total_xp": new_total_xp,
-            "rank_up": rank_up,
-            "new_rank_name": new_rank_name,
-        }
-
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Smelting error for character {character_id}: {e}")
-        raise HTTPException(status_code=500, detail="Ошибка при переплавке украшения")
 
 
 # ---------------------------------------------------------------------------

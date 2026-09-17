@@ -8,9 +8,9 @@
 
 // ── Shared enums ───────────────────────────────────────────────────────────
 
-export type GatheringCategory = 'ore' | 'herb' | 'wood';
+export type GatheringCategory = 'ore' | 'herb' | 'wood' | 'ingredient';
 export type ToolCategory = 'pickaxe' | 'sickle' | 'axe';
-export type GatheringSkillSlug = 'mining' | 'herbalism' | 'woodcutting';
+export type GatheringSkillSlug = 'mining' | 'herbalism' | 'woodcutting' | 'foraging';
 
 export type GatheringSessionStatus =
   | 'active'
@@ -36,6 +36,8 @@ export interface GatheringNode {
   id: number;
   node_name: string;
   category: GatheringCategory;
+  /** False for toolless categories (ingredients): start without a tool (FEAT-165) */
+  tool_required: boolean;
   result_item_id: number;
   result_item_name: string;
   result_item_image: string | null;

@@ -21,7 +21,6 @@ const ITEM_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: 'resource', label: 'Ресурс' },
   { value: 'scroll', label: 'Свиток' },
   { value: 'misc', label: 'Разное' },
-  { value: 'blueprint', label: 'Чертёж' },
   { value: 'recipe', label: 'Рецепт' },
   { value: 'gem', label: 'Камень' },
   { value: 'rune', label: 'Руна' },

@@ -1,6 +1,6 @@
 /**
- * "Сбор" profile tab — shows the character's three gathering skills
- * (mining / herbalism / woodcutting) with rank, XP progress, and bonuses.
+ * "Сбор" profile tab — shows the character's gathering skills
+ * (mining / herbalism / woodcutting / foraging) with rank, XP progress, and bonuses.
  * Restyled per Claude Design mock (FEAT-151); data/redux flow unchanged.
  *
  * Visible read-only on other players' profiles per FEAT-128 §2.7 #4.
@@ -124,7 +124,7 @@ const GatheringTab = ({ characterId, isOwnProfile = true }: GatheringTabProps) =
           hidden: {},
           visible: { transition: { staggerChildren: 0.05 } },
         }}
-        className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"
+        className="grid grid-cols-1 md:grid-cols-2 gap-4"
       >
         {skills.map((skill) => (
           <motion.div

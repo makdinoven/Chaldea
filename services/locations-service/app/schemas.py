@@ -1533,7 +1533,8 @@ class FloatingStructurePublicRead(BaseModel):
 # -------------------------------
 #   GATHERING NODE — ADMIN SCHEMAS (FEAT-128)
 # -------------------------------
-GatheringCategory = Literal["ore", "herb", "wood"]
+# FEAT-165: "ingredient" is gathered without a tool (see crud.TOOLLESS_GATHER_CATEGORIES).
+GatheringCategory = Literal["ore", "herb", "wood", "ingredient"]
 
 
 class GatheringNodeAdminCreate(BaseModel):
@@ -1708,6 +1709,9 @@ class GatheringNodeClient(BaseModel):
     current_bank: int
     daily_bank_max: int
     allow_concurrent_gather: bool
+    # FEAT-165: False for toolless categories (ingredient) — the UI starts
+    # gathering directly without the tool picker.
+    tool_required: bool = True
     depleted_at: Optional[datetime] = None
     restore_at: Optional[datetime] = None
     is_enabled: bool

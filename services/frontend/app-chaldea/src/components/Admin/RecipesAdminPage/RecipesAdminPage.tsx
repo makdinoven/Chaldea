@@ -528,6 +528,9 @@ const RecipesAdminPage = () => {
                 placeholder="Не задано"
                 className="input-underline"
               />
+              <span className="text-white/40 text-xs">
+                Базовый рецепт: выдаётся автоматически всем с этим рангом (и уже имеющим его)
+              </span>
             </label>
 
             {/* XP reward override */}

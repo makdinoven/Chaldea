@@ -5,6 +5,7 @@ interface ItemParams {
   q?: string;
   item_types?: string;
   exclude_types?: string;
+  resource_subcategory?: string;
   page?: number;
   page_size?: number;
 }
@@ -20,6 +21,8 @@ interface FetchItemsOptions {
   pageSize?: number;
   itemTypes?: string[];
   excludeTypes?: string[];
+  /** Server-side filter by items.resource_subcategory (FEAT-165) */
+  resourceSubcategory?: string;
 }
 
 export const fetchItems = async (
@@ -40,6 +43,7 @@ export const fetchItems = async (
     };
     if (opts.itemTypes?.length) params.item_types = opts.itemTypes.join(",");
     if (opts.excludeTypes?.length) params.exclude_types = opts.excludeTypes.join(",");
+    if (opts.resourceSubcategory) params.resource_subcategory = opts.resourceSubcategory;
   }
 
   const { data } = await client.get("/items", { params });

@@ -103,12 +103,11 @@ def _add_inventory(db, char_id, item_id, quantity):
 
 def _create_recipe(db, name="Железный меч", profession_id=1, required_rank=1,
                    result_item_id=50, rarity="common", xp_reward=None,
-                   auto_learn_rank=None, is_blueprint_recipe=False):
+                   auto_learn_rank=None):
     recipe = models.Recipe(
         name=name, profession_id=profession_id, required_rank=required_rank,
         result_item_id=result_item_id, result_quantity=1, rarity=rarity,
         xp_reward=xp_reward, auto_learn_rank=auto_learn_rank, is_active=True,
-        is_blueprint_recipe=is_blueprint_recipe,
     )
     db.add(recipe)
     db.flush()
@@ -552,7 +551,7 @@ class TestCraftResultFields:
         assert "success" in data
         assert "crafted_item" in data
         assert "consumed_materials" in data
-        assert "blueprint_consumed" in data
+        assert "blueprint_consumed" not in data  # blueprints removed in FEAT-165
 
         # New XP fields
         assert "xp_earned" in data

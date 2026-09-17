@@ -1,8 +1,9 @@
 """
-Task 7 — QA tests for FEAT-086: Jeweler gems, sockets, smelting.
+Task 7 — QA tests for FEAT-086: Jeweler gems and sockets.
 
-Covers: insert-gem, extract-gem, socket-info, smelt-info, smelt endpoints,
-equip/unequip with gems, build_modifiers_dict with gems, security, XP.
+Covers: insert-gem, extract-gem, socket-info endpoints,
+equip/unequip with gems, build_modifiers_dict with gems, security.
+FEAT-165: smelting removed; anyone may insert; no profession XP for sockets.
 """
 
 import json
@@ -125,24 +126,6 @@ def _create_equipment_slot(db, char_id, slot_type, item_id=None,
     return slot
 
 
-def _create_recipe(db, recipe_id, profession_id, result_item_id, ingredients):
-    """Create recipe with ingredients. ingredients = [(item_id, quantity), ...]"""
-    recipe = models.Recipe(
-        id=recipe_id, name=f"Recipe-{recipe_id}", profession_id=profession_id,
-        required_rank=1, result_item_id=result_item_id, result_quantity=1,
-        rarity="common", is_active=True,
-    )
-    db.add(recipe)
-    db.flush()
-    for item_id, qty in ingredients:
-        ing = models.RecipeIngredient(
-            recipe_id=recipe.id, item_id=item_id, quantity=qty,
-        )
-        db.add(ing)
-    db.flush()
-    return recipe
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -174,15 +157,6 @@ def gem_env(client, db_session):
         strength_modifier=3, res_fire_modifier=0.5,
     )
 
-    # Junk item for smelting
-    junk = _create_item(
-        db_session, 30, "Ювелирный лом", "resource", max_stack=99,
-    )
-
-    # Ingredient resource for recipe smelting
-    mat1 = _create_item(db_session, 40, "Золотой слиток", "resource", max_stack=99)
-    mat2 = _create_item(db_session, 41, "Серебряный слиток", "resource", max_stack=99)
-
     # Add ring and gems to inventory
     ring_inv = _add_inventory(db_session, 1, ring.id, 1)
     gem_inv = _add_inventory(db_session, 1, gem.id, 5)
@@ -200,9 +174,6 @@ def gem_env(client, db_session):
         "profession": prof,
         "ring": ring,
         "gem": gem,
-        "junk": junk,
-        "mat1": mat1,
-        "mat2": mat2,
         "ring_inv": ring_inv,
         "gem_inv": gem_inv,
     }
@@ -237,7 +208,7 @@ class TestInsertGemHappyPath:
         assert data["item_name"] == "Золотое кольцо"
         assert data["gem_name"] == "Рубин"
         assert data["slot_index"] == 0
-        assert data["xp_earned"] == 10
+        assert "xp_earned" not in data
 
         # Verify DB: gem consumed
         db.expire_all()
@@ -256,18 +227,17 @@ class TestInsertGemHappyPath:
 
 
 # ===========================================================================
-# 2. Non-jeweler tries to insert — expect 400
+# 2. Non-jeweler inserts — allowed since FEAT-165
 # ===========================================================================
 
 class TestInsertGemNotJeweler:
 
-    def test_non_jeweler_cannot_insert(self, gem_env):
+    def test_non_jeweler_can_insert(self, gem_env):
         db = gem_env["db"]
         c = gem_env["client"]
         ring_inv = gem_env["ring_inv"]
         gem_inv = gem_env["gem_inv"]
 
-        # Change profession to blacksmith
         cp = db.query(models.CharacterProfession).filter(
             models.CharacterProfession.character_id == 1
         ).first()
@@ -287,8 +257,12 @@ class TestInsertGemNotJeweler:
                 "gem_inventory_id": gem_inv.id,
             })
 
-        assert resp.status_code == 400
-        assert "ювелир" in resp.json()["detail"].lower()
+        assert resp.status_code == 200, resp.text
+        db.expire_all()
+        inv = db.query(models.CharacterInventory).filter(
+            models.CharacterInventory.id == ring_inv.id
+        ).first()
+        assert json.loads(inv.socketed_gems)[0] == gem_env["gem"].id
 
 
 # ===========================================================================
@@ -315,7 +289,7 @@ class TestInsertGemWrongItemType:
             })
 
         assert resp.status_code == 400
-        assert "украшен" in resp.json()["detail"].lower()
+        assert "руну" in resp.json()["detail"].lower()
 
 
 # ===========================================================================
@@ -694,144 +668,6 @@ class TestExtractGemEquipped:
 
 
 # ===========================================================================
-# 14. Smelt jewelry with recipe — returns ~50% ingredients
-# ===========================================================================
-
-class TestSmeltWithRecipe:
-
-    def test_smelt_with_recipe_returns_50_percent(self, gem_env):
-        db = gem_env["db"]
-        c = gem_env["client"]
-        ring = gem_env["ring"]
-        ring_inv = gem_env["ring_inv"]
-        mat1 = gem_env["mat1"]
-        mat2 = gem_env["mat2"]
-
-        # Create recipe for ring: 4 gold + 2 silver
-        _create_recipe(db, 1, gem_env["profession"].id, ring.id,
-                       [(mat1.id, 4), (mat2.id, 2)])
-        db.commit()
-
-        resp = c.post("/inventory/crafting/1/smelt", json={
-            "inventory_item_id": ring_inv.id,
-        })
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["success"] is True
-        assert data["item_name"] == "Золотое кольцо"
-
-        # Check materials returned: 4 // 2 = 2, 2 // 2 = 1
-        mat_dict = {m["name"]: m["quantity"] for m in data["materials_returned"]}
-        assert mat_dict["Золотой слиток"] == 2  # max(1, 4//2) = 2
-        assert mat_dict["Серебряный слиток"] == 1  # max(1, 2//2) = 1
-
-        # Ring should be deleted from inventory
-        db.expire_all()
-        inv = db.query(models.CharacterInventory).filter(
-            models.CharacterInventory.id == ring_inv.id
-        ).first()
-        assert inv is None
-
-
-# ===========================================================================
-# 15. Smelt jewelry without recipe — returns "Ювелирный лом"
-# ===========================================================================
-
-class TestSmeltWithoutRecipe:
-
-    def test_smelt_no_recipe_returns_junk(self, gem_env):
-        db = gem_env["db"]
-        c = gem_env["client"]
-        ring_inv = gem_env["ring_inv"]
-
-        resp = c.post("/inventory/crafting/1/smelt", json={
-            "inventory_item_id": ring_inv.id,
-        })
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["success"] is True
-
-        mat_names = [m["name"] for m in data["materials_returned"]]
-        assert "Ювелирный лом" in mat_names
-
-
-# ===========================================================================
-# 16. Smelt item with socketed gems — gems destroyed
-# ===========================================================================
-
-class TestSmeltWithGems:
-
-    def test_smelt_with_gems_destroys_gems(self, gem_env):
-        db = gem_env["db"]
-        c = gem_env["client"]
-        ring_inv = gem_env["ring_inv"]
-        gem = gem_env["gem"]
-
-        # Pre-insert gem
-        ring_inv.socketed_gems = json.dumps([gem.id, None])
-        db.commit()
-
-        resp = c.post("/inventory/crafting/1/smelt", json={
-            "inventory_item_id": ring_inv.id,
-        })
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["gems_destroyed"] == 1
-
-
-# ===========================================================================
-# 17. Smelt equipped item — expect error (must be in inventory)
-# ===========================================================================
-
-class TestSmeltEquippedItem:
-
-    def test_smelt_equipped_item_returns_error(self, gem_env):
-        """Equipped items cannot be smelted — only inventory items allowed."""
-        db = gem_env["db"]
-        c = gem_env["client"]
-        ring = gem_env["ring"]
-        ring_inv = gem_env["ring_inv"]
-
-        # Remove ring from inventory so only the equipment slot has it
-        db.delete(ring_inv)
-        db.flush()
-        eq_slot = _create_equipment_slot(db, 1, "ring", item_id=ring.id)
-        db.commit()
-
-        # Smelt endpoint queries character_inventory — equipment slot id won't match
-        resp = c.post("/inventory/crafting/1/smelt", json={
-            "inventory_item_id": eq_slot.id,
-        })
-
-        assert resp.status_code in (400, 404)
-
-
-# ===========================================================================
-# 18. Smelt non-jewelry — expect 400
-# ===========================================================================
-
-class TestSmeltNonJewelry:
-
-    def test_smelt_non_jewelry_returns_400(self, gem_env):
-        db = gem_env["db"]
-        c = gem_env["client"]
-
-        sword = _create_item(db, 60, "Большой меч", "weapon", max_stack=1)
-        sword_inv = _add_inventory(db, 1, sword.id, 1)
-        db.commit()
-
-        resp = c.post("/inventory/crafting/1/smelt", json={
-            "inventory_item_id": sword_inv.id,
-        })
-
-        assert resp.status_code == 400
-        assert "украшен" in resp.json()["detail"].lower()
-
-
-# ===========================================================================
 # 19. Socket-info returns correct data
 # ===========================================================================
 
@@ -862,65 +698,10 @@ class TestSocketInfo:
         assert len(data["available_gems"]) >= 1
         gem_names = [g["name"] for g in data["available_gems"]]
         assert "Рубин" in gem_names
-
-
-# ===========================================================================
-# 20. Smelt-info returns correct materials preview
-# ===========================================================================
-
-class TestSmeltInfo:
-
-    def test_smelt_info_with_recipe(self, gem_env):
-        db = gem_env["db"]
-        c = gem_env["client"]
-        ring = gem_env["ring"]
-        ring_inv = gem_env["ring_inv"]
-        mat1 = gem_env["mat1"]
-        mat2 = gem_env["mat2"]
-
-        _create_recipe(db, 2, gem_env["profession"].id, ring.id,
-                       [(mat1.id, 6), (mat2.id, 3)])
-        db.commit()
-
-        resp = c.get(f"/inventory/crafting/1/smelt-info/{ring_inv.id}")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["item_name"] == "Золотое кольцо"
-        assert data["has_recipe"] is True
-        assert len(data["ingredients"]) == 2
-
-        ing_dict = {i["name"]: i["quantity"] for i in data["ingredients"]}
-        assert ing_dict["Золотой слиток"] == 3  # max(1, 6//2)
-        assert ing_dict["Серебряный слиток"] == 1  # max(1, 3//2)
-
-    def test_smelt_info_no_recipe(self, gem_env):
-        c = gem_env["client"]
-        ring_inv = gem_env["ring_inv"]
-
-        resp = c.get(f"/inventory/crafting/1/smelt-info/{ring_inv.id}")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["has_recipe"] is False
-        ing_names = [i["name"] for i in data["ingredients"]]
-        assert "Ювелирный лом" in ing_names
-
-    def test_smelt_info_shows_gems_warning(self, gem_env):
-        db = gem_env["db"]
-        c = gem_env["client"]
-        ring_inv = gem_env["ring_inv"]
-        gem = gem_env["gem"]
-
-        ring_inv.socketed_gems = json.dumps([gem.id, None])
-        db.commit()
-
-        resp = c.get(f"/inventory/crafting/1/smelt-info/{ring_inv.id}")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["has_gems"] is True
-        assert data["gem_count"] == 1
+        assert data["insertable_type"] == "gem"
+        assert data["can_insert"] is True
+        assert data["can_extract"] is True  # jeweler
+        assert data["extract_preservation_chance"] == 10
 
 
 # ===========================================================================
@@ -1090,16 +871,6 @@ class TestGemSecurity:
         resp = client.get("/inventory/crafting/1/socket-info/1?source=inventory")
         assert resp.status_code == 401
 
-    def test_smelt_no_auth_401(self, client):
-        resp = client.post("/inventory/crafting/1/smelt", json={
-            "inventory_item_id": 1,
-        })
-        assert resp.status_code == 401
-
-    def test_smelt_info_no_auth_401(self, client):
-        resp = client.get("/inventory/crafting/1/smelt-info/1")
-        assert resp.status_code == 401
-
     def test_insert_gem_wrong_character_403(self, gem_env):
         db = gem_env["db"]
         c = gem_env["client"]
@@ -1125,26 +896,19 @@ class TestGemSecurity:
         })
         assert resp.status_code == 403
 
-    def test_smelt_wrong_character_403(self, gem_env):
-        db = gem_env["db"]
-        c = gem_env["client"]
-
-        _insert_character(db, 2, user_id=999, name="OtherPlayer")
-        db.commit()
-
-        resp = c.post("/inventory/crafting/2/smelt", json={
-            "inventory_item_id": 1,
-        })
-        assert resp.status_code == 403
-
-
 # ===========================================================================
-# 25. XP awarded for insert/extract/smelt
+# 25. No profession XP for insert/extract (FEAT-165)
 # ===========================================================================
 
 class TestGemXPAwarded:
 
-    def test_xp_awarded_on_insert(self, gem_env):
+    def _xp(self, db):
+        db.expire_all()
+        return db.query(models.CharacterProfession).filter(
+            models.CharacterProfession.character_id == 1
+        ).first().experience
+
+    def test_no_xp_on_insert(self, gem_env):
         c = gem_env["client"]
         ring_inv = gem_env["ring_inv"]
         gem_inv = gem_env["gem_inv"]
@@ -1158,11 +922,10 @@ class TestGemXPAwarded:
             })
 
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["xp_earned"] == 10
-        assert data["new_total_xp"] == 10
+        assert "xp_earned" not in resp.json()
+        assert self._xp(gem_env["db"]) == 0
 
-    def test_xp_awarded_on_extract(self, gem_env):
+    def test_no_xp_on_extract(self, gem_env):
         db = gem_env["db"]
         c = gem_env["client"]
         ring_inv = gem_env["ring_inv"]
@@ -1180,17 +943,280 @@ class TestGemXPAwarded:
             })
 
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["xp_earned"] == 10
+        assert "xp_earned" not in resp.json()
+        assert self._xp(db) == 0
 
-    def test_xp_awarded_on_smelt(self, gem_env):
-        c = gem_env["client"]
-        ring_inv = gem_env["ring_inv"]
 
-        resp = c.post("/inventory/crafting/1/smelt", json={
-            "inventory_item_id": ring_inv.id,
-        })
+# ===========================================================================
+# 26. Runes and belts (FEAT-165): belts take no runes, legacy belt runes can
+#     still be extracted by an enchanter; anyone may insert, nobody gets XP
+# ===========================================================================
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["xp_earned"] == 10
+def _row_gems(db, model, row_id):
+    db.expire_all()
+    row = db.query(model).filter(model.id == row_id).first()
+    return json.loads(row.socketed_gems) if row.socketed_gems else []
+
+
+def _qty(db, row_id):
+    db.expire_all()
+    row = db.query(models.CharacterInventory).filter(models.CharacterInventory.id == row_id).first()
+    return row.quantity if row else 0
+
+
+@pytest.fixture()
+def rune_env(gem_env):
+    db = gem_env["db"]
+    rune = _create_item(db, 50, "Руна огня", "rune", max_stack=99, strength_modifier=2)
+    belt = _create_item(db, 51, "Кожаный пояс", "belt", max_stack=1, socket_count=1)
+    cloak = _create_item(db, 52, "Плащ странника", "cloak", max_stack=1, socket_count=1)
+    enchanter = _create_profession(db, 2, "Зачарователь", "enchanter")
+    _create_rank(db, profession_id=enchanter.id, rank_number=1, name="Ученик")
+    rune_inv = _add_inventory(db, 1, rune.id, 3)
+    db.commit()
+    gem_env.update({"rune": rune, "belt": belt, "cloak": cloak,
+                    "enchanter": enchanter, "rune_inv": rune_inv})
+    return gem_env
+
+
+def _set_profession(env, profession_id):
+    db = env["db"]
+    cp = db.query(models.CharacterProfession).filter(
+        models.CharacterProfession.character_id == 1).first()
+    cp.profession_id = profession_id
+    db.commit()
+
+
+def _insert(env, row_id, gem_row_id, source="inventory"):
+    return env["client"].post("/inventory/crafting/1/insert-gem", json={
+        "item_row_id": row_id, "source": source,
+        "slot_index": 0, "gem_inventory_id": gem_row_id,
+    })
+
+
+def _extract(env, row_id, slot_index=0):
+    return env["client"].post("/inventory/crafting/1/extract-gem", json={
+        "item_row_id": row_id, "source": "inventory", "slot_index": slot_index,
+    })
+
+
+class TestRunesAndBelts:
+
+    def test_belt_insert_rejected_and_rune_kept(self, rune_env):
+        db = rune_env["db"]
+        belt_inv = _add_inventory(db, 1, rune_env["belt"].id, 1)
+        db.commit()
+
+        resp = _insert(rune_env, belt_inv.id, rune_env["rune_inv"].id)
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Этот тип предмета не поддерживает руны"
+        assert _qty(db, rune_env["rune_inv"].id) == 3
+        assert _row_gems(db, models.CharacterInventory, belt_inv.id) == []
+
+    def test_equipped_belt_insert_rejected(self, rune_env):
+        db = rune_env["db"]
+        slot = _create_equipment_slot(db, 1, "belt", item_id=rune_env["belt"].id)
+        db.commit()
+
+        with patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock) as mock_apply:
+            resp = _insert(rune_env, slot.id, rune_env["rune_inv"].id, source="equipment")
+
+        assert resp.status_code == 400
+        mock_apply.assert_not_awaited()
+        assert _qty(db, rune_env["rune_inv"].id) == 3
+
+    def test_socket_count_on_belt_rejected_by_item_validator(self):
+        from schemas import ItemCreate
+        with pytest.raises(ValueError):
+            ItemCreate(name="Пояс", item_level=1, item_type="belt", item_rarity="common",
+                       max_stack_size=1, is_unique=False, socket_count=1)
+
+    def test_non_enchanter_inserts_rune_into_cloak(self, rune_env):
+        """The jeweler (not an enchanter) inserts a rune — insertion is open to anyone."""
+        db = rune_env["db"]
+        cloak_inv = _add_inventory(db, 1, rune_env["cloak"].id, 1)
+        db.commit()
+
+        resp = _insert(rune_env, cloak_inv.id, rune_env["rune_inv"].id)
+
+        assert resp.status_code == 200, resp.text
+        assert "xp_earned" not in resp.json()
+        assert _row_gems(db, models.CharacterInventory, cloak_inv.id) == [rune_env["rune"].id]
+        assert _qty(db, rune_env["rune_inv"].id) == 2
+
+    def test_character_without_profession_inserts(self, rune_env):
+        db = rune_env["db"]
+        db.query(models.CharacterProfession).delete()
+        cloak_inv = _add_inventory(db, 1, rune_env["cloak"].id, 1)
+        db.commit()
+
+        resp = _insert(rune_env, cloak_inv.id, rune_env["rune_inv"].id)
+
+        assert resp.status_code == 200, resp.text
+        assert _row_gems(db, models.CharacterInventory, cloak_inv.id) == [rune_env["rune"].id]
+
+    def test_gem_into_cloak_rejected(self, rune_env):
+        db = rune_env["db"]
+        cloak_inv = _add_inventory(db, 1, rune_env["cloak"].id, 1)
+        db.commit()
+
+        resp = _insert(rune_env, cloak_inv.id, rune_env["gem_inv"].id)
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "В этот предмет можно вставить только руну"
+        assert _qty(db, rune_env["gem_inv"].id) == 5
+
+    def test_rune_into_ring_rejected(self, rune_env):
+        resp = _insert(rune_env, rune_env["ring_inv"].id, rune_env["rune_inv"].id)
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "В украшение можно вставить только огранку"
+        assert _qty(rune_env["db"], rune_env["rune_inv"].id) == 3
+
+    def test_enchanter_extracts_legacy_belt_rune(self, rune_env):
+        db = rune_env["db"]
+        _set_profession(rune_env, rune_env["enchanter"].id)
+        belt_inv = _add_inventory(db, 1, rune_env["belt"].id, 1,
+                                  socketed_gems=[rune_env["rune"].id])
+        db.commit()
+
+        with patch("main.random.random", return_value=0.01):
+            resp = _extract(rune_env, belt_inv.id)
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["gem_preserved"] is True
+        assert "xp_earned" not in resp.json()
+        assert _row_gems(db, models.CharacterInventory, belt_inv.id) == [None]
+        # the preserved rune went back to the inventory (3 + 1)
+        db.expire_all()
+        total = sum(r.quantity for r in db.query(models.CharacterInventory).filter(
+            models.CharacterInventory.character_id == 1,
+            models.CharacterInventory.item_id == rune_env["rune"].id).all())
+        assert total == 4
+        cp = db.query(models.CharacterProfession).filter(
+            models.CharacterProfession.character_id == 1).first()
+        assert cp.experience == 0
+
+    def test_legacy_belt_extract_from_slot_beyond_socket_count(self, rune_env):
+        """Legacy rows may hold more runes than the item's current socket_count."""
+        db = rune_env["db"]
+        _set_profession(rune_env, rune_env["enchanter"].id)
+        belt = rune_env["belt"]
+        belt.socket_count = 0
+        belt_inv = _add_inventory(db, 1, belt.id, 1,
+                                  socketed_gems=[None, rune_env["rune"].id])
+        db.commit()
+
+        with patch("main.random.random", return_value=0.99):
+            resp = _extract(rune_env, belt_inv.id, slot_index=1)
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["gem_preserved"] is False
+        assert _row_gems(db, models.CharacterInventory, belt_inv.id) == [None, None]
+
+    def test_jeweler_cannot_extract_rune(self, rune_env):
+        db = rune_env["db"]
+        cloak_inv = _add_inventory(db, 1, rune_env["cloak"].id, 1,
+                                   socketed_gems=[rune_env["rune"].id])
+        db.commit()
+
+        resp = _extract(rune_env, cloak_inv.id)
+
+        assert resp.status_code == 400
+        assert _row_gems(db, models.CharacterInventory, cloak_inv.id) == [rune_env["rune"].id]
+
+    def test_enchanter_cannot_extract_gem(self, rune_env):
+        db = rune_env["db"]
+        _set_profession(rune_env, rune_env["enchanter"].id)
+        ring_inv = rune_env["ring_inv"]
+        ring_inv.socketed_gems = json.dumps([rune_env["gem"].id, None])
+        db.commit()
+
+        resp = _extract(rune_env, ring_inv.id)
+
+        assert resp.status_code == 400
+        assert _row_gems(db, models.CharacterInventory, ring_inv.id) == [rune_env["gem"].id, None]
+
+    @pytest.mark.parametrize("slug", ["blacksmith", "alchemist", "cook", "scholar"])
+    def test_other_professions_cannot_extract(self, rune_env, slug):
+        db = rune_env["db"]
+        other = _create_profession(db, 9, f"Проф {slug}", slug)
+        _set_profession(rune_env, other.id)
+        ring_inv = rune_env["ring_inv"]
+        ring_inv.socketed_gems = json.dumps([rune_env["gem"].id, None])
+        db.commit()
+
+        resp = _extract(rune_env, ring_inv.id)
+
+        assert resp.status_code == 400
+        assert _row_gems(db, models.CharacterInventory, ring_inv.id) == [rune_env["gem"].id, None]
+
+    def test_extract_without_profession(self, rune_env):
+        db = rune_env["db"]
+        db.query(models.CharacterProfession).delete()
+        ring_inv = rune_env["ring_inv"]
+        ring_inv.socketed_gems = json.dumps([rune_env["gem"].id, None])
+        db.commit()
+
+        resp = _extract(rune_env, ring_inv.id)
+
+        assert resp.status_code == 400
+        assert _row_gems(db, models.CharacterInventory, ring_inv.id) == [rune_env["gem"].id, None]
+
+
+class TestSocketInfoFlags:
+
+    def _info(self, env, row_id, source="inventory"):
+        return env["client"].get(f"/inventory/crafting/1/socket-info/{row_id}?source={source}")
+
+    def test_ring_for_jeweler(self, rune_env):
+        data = self._info(rune_env, rune_env["ring_inv"].id).json()
+        assert data["insertable_type"] == "gem"
+        assert data["can_insert"] is True
+        assert data["can_extract"] is True
+        assert data["extract_preservation_chance"] == 10
+        assert [g["item_id"] for g in data["available_gems"]] == [rune_env["gem"].id]
+
+    def test_cloak_for_jeweler(self, rune_env):
+        db = rune_env["db"]
+        cloak_inv = _add_inventory(db, 1, rune_env["cloak"].id, 1)
+        db.commit()
+        data = self._info(rune_env, cloak_inv.id).json()
+        assert data["insertable_type"] == "rune"
+        assert data["can_insert"] is True
+        assert data["can_extract"] is False
+        assert data["extract_preservation_chance"] is None
+        assert [g["item_id"] for g in data["available_gems"]] == [rune_env["rune"].id]
+
+    def test_empty_belt_is_400(self, rune_env):
+        db = rune_env["db"]
+        belt_inv = _add_inventory(db, 1, rune_env["belt"].id, 1)
+        db.commit()
+        resp = self._info(rune_env, belt_inv.id)
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Этот тип предмета не поддерживает руны"
+
+    def test_legacy_belt_with_rune_for_enchanter(self, rune_env):
+        db = rune_env["db"]
+        _set_profession(rune_env, rune_env["enchanter"].id)
+        belt_inv = _add_inventory(db, 1, rune_env["belt"].id, 1,
+                                  socketed_gems=[rune_env["rune"].id])
+        db.commit()
+        data = self._info(rune_env, belt_inv.id).json()
+        assert data["insertable_type"] == "rune"
+        assert data["can_insert"] is False
+        assert data["can_extract"] is True
+        assert data["available_gems"] == []
+        assert data["slots"][0]["gem_item_id"] == rune_env["rune"].id
+
+    def test_non_socketable_item_400(self, rune_env):
+        db = rune_env["db"]
+        _create_item(db, 60, "Хлеб", "consumable")
+        row = _add_inventory(db, 1, 60, 1)
+        db.commit()
+        assert self._info(rune_env, row.id).status_code == 400
+
+    def test_socket_info_foreign_character_403(self, rune_env):
+        _insert_character(rune_env["db"], 2, user_id=999, name="OtherPlayer")
+        resp = rune_env["client"].get("/inventory/crafting/2/socket-info/1?source=inventory")
+        assert resp.status_code == 403

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import {
   createItem,
@@ -6,11 +6,12 @@ import {
   uploadItemImage,
   recropItemImage,
   fetchItem,
-  fetchAllItems,
   type ItemImageCrop,
 } from "../../api/items";
-import { fetchAdminRecipes } from "../../api/professions";
+import { fetchRefiningRules, putItemConversions } from "../../api/professions";
+import type { RefiningRule } from "../../types/professions";
 import ItemImageCropper from "./ItemImageCropper";
+import ItemConversionsEditor, { type ConversionsDraft } from "./ItemConversionsEditor";
 import {
   ARMOR_SUBCLASS_LABELS,
   DAMAGE_TYPE_LABELS,
@@ -23,6 +24,11 @@ import {
   itemHasRarity,
 } from "../../constants/items";
 import {
+  RESOURCE_SUBCATEGORY_GROUPS,
+  RESOURCE_SUBCATEGORY_LABELS,
+  RESOURCE_SUBCATEGORY_NONE_LABEL,
+} from "../../constants/professions";
+import {
   ATTR_MODS,
   BUFF_TYPE_OPTIONS,
   DEFAULT_DURABILITY,
@@ -34,15 +40,15 @@ import {
   RECOVERY_FIELDS,
   REPAIR_POWER_OPTIONS,
   RES_MODS,
-  RESOURCE_KIND_LABELS,
   VUL_MODS,
+  WHETSTONE_GROUP_OPTIONS,
   WHETSTONE_OPTIONS,
   allowedRaritiesFor,
   buildItemPayload,
-  detectResourceKind,
+  isRawSubcategory,
+  isResourceSubcategory,
   rulesFor,
   type ModDef,
-  type ResourceKind,
 } from "./itemFormRules";
 
 /* ── State ── */
@@ -90,7 +96,8 @@ const initialState = (itemType: string): ItemFormState => {
     identify_level: null,
     repair_power: null,
     whetstone_level: null,
-    essence_result_item_id: null,
+    whetstone_group: null,
+    resource_subcategory: null,
     blueprint_recipe_id: null,
     tool_category: itemType === "gathering_tool" ? "pickaxe" : null,
     gather_double_chance_bonus: 0,
@@ -98,11 +105,6 @@ const initialState = (itemType: string): ItemFormState => {
     gather_stamina_bonus_pct: 0,
   };
 };
-
-interface Option {
-  id: number;
-  name: string;
-}
 
 /* ── Small presentational helpers ── */
 
@@ -163,8 +165,13 @@ interface ItemFormProps {
 
 const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemFormProps) => {
   const [item, setItem] = useState<ItemFormState>(() => initialState(defaultType));
-  const [resourceKind, setResourceKind] = useState<ResourceKind>("plain");
   const [saving, setSaving] = useState(false);
+  /** Id of an item created in this form whose refining config failed to save */
+  const [createdId, setCreatedId] = useState<number | null>(null);
+  const [conversionsDraft, setConversionsDraft] = useState<ConversionsDraft | null>(null);
+  const [conversionsError, setConversionsError] = useState<string | null>(null);
+  const [refiningRules, setRefiningRules] = useState<RefiningRule[] | null>(null);
+  const [refiningRulesError, setRefiningRulesError] = useState<string | null>(null);
 
   const [imgFile, setImgFile] = useState<File | undefined>();
   const [imgFileUrl, setImgFileUrl] = useState<string | null>(null);
@@ -172,26 +179,21 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
   /** Re-framing the icon of an already stored original */
   const [recropping, setRecropping] = useState(false);
 
-  const [essenceOptions, setEssenceOptions] = useState<Option[] | null>(null);
-  const [recipeOptions, setRecipeOptions] = useState<Option[] | null>(null);
-
   /** Shown when a type switch reset a rarity the new type cannot have */
   const [rarityNote, setRarityNote] = useState<string | null>(null);
 
-  const editMode = Boolean(selected);
+  const targetId = selected ?? createdId ?? undefined;
+  const editMode = Boolean(targetId);
   const rules = rulesFor(item.item_type, Boolean(item.is_food));
   const allowedRarities = allowedRaritiesFor(item.item_type);
-  /** Recipes and blueprints have no quality: no rarity field for them */
+  /** Recipes have no quality: no rarity field for them */
   const showRarity = itemHasRarity(item.item_type);
   const rarityAllowed = !showRarity || allowedRarities.includes(item.item_rarity);
 
   useEffect(() => {
     if (!selected) return;
     fetchItem(selected)
-      .then((loaded: ItemFormState) => {
-        setItem(loaded);
-        setResourceKind(detectResourceKind(loaded));
-      })
+      .then((loaded: ItemFormState) => setItem(loaded))
       .catch((e: Error) => toast.error(e.message || "Не удалось загрузить предмет"));
   }, [selected]);
 
@@ -205,30 +207,6 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
     setImgFileUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [imgFile]);
-
-  // Lazy lookups for the pickers, loaded once when first needed
-  const needsEssences = rules.resourceKind && resourceKind === "crystal";
-  useEffect(() => {
-    if (!needsEssences || essenceOptions) return;
-    fetchAllItems({ itemTypes: ["resource"] })
-      .then((list: Option[]) =>
-        setEssenceOptions(list.map(({ id, name }) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "ru"))),
-      )
-      .catch((e: Error) => toast.error(e.message || "Не удалось загрузить список эссенций"));
-  }, [needsEssences, essenceOptions]);
-
-  useEffect(() => {
-    if (!rules.blueprintRecipe || recipeOptions) return;
-    (async () => {
-      const all: Option[] = [];
-      for (let page = 1; ; page += 1) {
-        const res = await fetchAdminRecipes({ page, per_page: 100 });
-        all.push(...res.items.map(({ id, name }) => ({ id, name })));
-        if (all.length >= res.total || res.items.length === 0) break;
-      }
-      setRecipeOptions(all.sort((a, b) => a.name.localeCompare(b.name, "ru")));
-    })().catch((e: Error) => toast.error(e.message || "Не удалось загрузить список рецептов"));
-  }, [rules.blueprintRecipe, recipeOptions]);
 
   /* ── Handlers ── */
 
@@ -278,28 +256,84 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
 
   const cropperSrc = imgFileUrl ?? (recropping ? item.full_image ?? null : null);
 
+  const handleConversionsChange = useCallback((draft: ConversionsDraft) => setConversionsDraft(draft), []);
+
+  const subcategory = rules.resource ? ((item.resource_subcategory as string | null) ?? null) : null;
+  // Refining rules decide which subcategories can be refined (loaded once for resources)
+  const needsRefiningRules = rules.resource;
+  useEffect(() => {
+    if (!needsRefiningRules || refiningRules || refiningRulesError) return;
+    fetchRefiningRules()
+      .then((list) => setRefiningRules(Array.isArray(list) ? list : []))
+      .catch((e: unknown) =>
+        setRefiningRulesError(
+          e instanceof Error && e.message ? e.message : "Не удалось загрузить правила переработки",
+        ),
+      );
+  }, [needsRefiningRules, refiningRules, refiningRulesError]);
+
+  const refinableSubcategories = useMemo(
+    () => new Set((refiningRules ?? []).map((r) => r.source_subcategory as string)),
+    [refiningRules],
+  );
+  // Editor for any rule's source subcategory; raw ones without a rule get the
+  // "not refined yet" note from the editor
+  const conversionsSubcategory =
+    isResourceSubcategory(subcategory) &&
+    (refinableSubcategories.has(subcategory) || isRawSubcategory(subcategory))
+      ? subcategory
+      : null;
+  const showConversions = conversionsSubcategory !== null;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!rarityAllowed) {
       toast.error(RARITY_CAP_MESSAGE);
       return;
     }
+    const draft = showConversions ? conversionsDraft : null;
+    if (draft?.invalid) {
+      toast.error(draft.invalid);
+      return;
+    }
     setSaving(true);
+    setConversionsError(null);
+    let saved: { id: number };
     try {
-      const payload = buildItemPayload(item, resourceKind);
-      const saved = editMode ? await updateItem(selected!, payload) : await createItem(payload);
+      const payload = buildItemPayload(item);
+      saved = editMode ? await updateItem(targetId!, payload) : await createItem(payload);
       if (imgFile) {
         await uploadItemImage(saved.id, imgFile, crop);
       } else if (recropping && crop) {
         await recropItemImage(saved.id, crop);
       }
-      toast.success(editMode ? "Предмет сохранён" : "Предмет создан");
-      onSuccess();
     } catch (err: unknown) {
       toast.error(saveErrorMessage(err));
-    } finally {
       setSaving(false);
+      return;
     }
+
+    // Refining config is saved after the item (a new item needs its id first).
+    // A retry after a failed save of a just-created item always sends the set.
+    const mustSaveConversions = Boolean(
+      draft && draft.ready && (draft.dirty || createdId !== null) && (Boolean(selected) || draft.conversions.length > 0),
+    );
+    if (draft && mustSaveConversions) {
+      try {
+        await putItemConversions(saved.id, { conversions: draft.conversions });
+      } catch (err: unknown) {
+        const msg = `Предмет сохранён, но настройки переработки — нет: ${saveErrorMessage(err)}`;
+        setConversionsError(msg);
+        toast.error(msg);
+        if (!editMode) setCreatedId(saved.id);
+        setSaving(false);
+        return;
+      }
+    }
+
+    toast.success(editMode ? "Предмет сохранён" : "Предмет создан");
+    setSaving(false);
+    onSuccess();
   };
 
   /* ── Type select: grouped by category; recipe items come from the recipe editor ── */
@@ -592,21 +626,29 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
       )}
 
       {/* ── Resources ── */}
-      {rules.resourceKind && (
-        <Section title="Вид ресурса">
-          <Field label="Вид">
+      {rules.resource && (
+        <Section title="Ресурс">
+          <Field label="Подкатегория">
             <select
-              value={resourceKind}
-              onChange={(e) => setResourceKind(e.target.value as ResourceKind)}
+              name="resource_subcategory"
+              value={subcategory ?? ""}
+              onChange={handleNullableSelect}
               className="input-underline"
             >
-              {(Object.keys(RESOURCE_KIND_LABELS) as ResourceKind[]).map((kind) => (
-                <option key={kind} value={kind} className={optionClass}>{RESOURCE_KIND_LABELS[kind]}</option>
+              <option value="" className={optionClass}>{RESOURCE_SUBCATEGORY_NONE_LABEL}</option>
+              {RESOURCE_SUBCATEGORY_GROUPS.map((group) => (
+                <optgroup key={group.label} label={group.label} className={optionClass}>
+                  {group.items.map((value) => (
+                    <option key={value} value={value} className={optionClass}>
+                      {RESOURCE_SUBCATEGORY_LABELS[value]}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </Field>
 
-          {resourceKind === "repair_kit" && (
+          {subcategory === "repair_kit" && (
             <Field label="Сила ремонта">
               <select
                 name="repair_power"
@@ -623,62 +665,50 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
             </Field>
           )}
 
-          {resourceKind === "whetstone" && (
-            <Field label="Уровень точильного камня">
-              <select
-                name="whetstone_level"
-                value={(item.whetstone_level as number | null) ?? ""}
-                onChange={handleNullableSelect}
-                required
-                className="input-underline"
-              >
-                <option value="" className={optionClass}>—</option>
-                {WHETSTONE_OPTIONS.map(({ value, label }) => (
-                  <option key={value} value={value} className={optionClass}>{label}</option>
-                ))}
-              </select>
-            </Field>
-          )}
-
-          {resourceKind === "crystal" && (
-            <Field label="Эссенция из кристалла">
-              <select
-                name="essence_result_item_id"
-                value={(item.essence_result_item_id as number | null) ?? ""}
-                onChange={handleNullableSelect}
-                required
-                disabled={!essenceOptions}
-                className="input-underline"
-              >
-                <option value="" className={optionClass}>{essenceOptions ? "—" : "Загрузка…"}</option>
-                {essenceOptions
-                  ?.filter((o) => o.id !== selected)
-                  .map((o) => (
-                    <option key={o.id} value={o.id} className={optionClass}>{o.name}</option>
+          {subcategory === "whetstone" && (
+            <>
+              <Field label="Уровень камня заточки">
+                <select
+                  name="whetstone_level"
+                  value={(item.whetstone_level as number | null) ?? ""}
+                  onChange={handleNullableSelect}
+                  required
+                  className="input-underline"
+                >
+                  <option value="" className={optionClass}>—</option>
+                  {WHETSTONE_OPTIONS.map(({ value, label }) => (
+                    <option key={value} value={value} className={optionClass}>{label}</option>
                   ))}
-              </select>
-            </Field>
+                </select>
+              </Field>
+              <Field label="Группа камня">
+                <select
+                  name="whetstone_group"
+                  value={(item.whetstone_group as string | null) ?? ""}
+                  onChange={handleNullableSelect}
+                  required
+                  className="input-underline"
+                >
+                  <option value="" className={optionClass}>—</option>
+                  {WHETSTONE_GROUP_OPTIONS.map(({ value, label }) => (
+                    <option key={value} value={value} className={optionClass}>{label}</option>
+                  ))}
+                </select>
+              </Field>
+            </>
           )}
         </Section>
       )}
 
-      {rules.blueprintRecipe && (
-        <Section title="Чертёж" hint="С чертежом рецепт можно сделать один раз без изучения; чертёж при этом тратится.">
-          <Field label="Рецепт">
-            <select
-              name="blueprint_recipe_id"
-              value={(item.blueprint_recipe_id as number | null) ?? ""}
-              onChange={handleNullableSelect}
-              disabled={!recipeOptions}
-              className="input-underline"
-            >
-              <option value="" className={optionClass}>{recipeOptions ? "—" : "Загрузка…"}</option>
-              {recipeOptions?.map((o) => (
-                <option key={o.id} value={o.id} className={optionClass}>{o.name}</option>
-              ))}
-            </select>
-          </Field>
-        </Section>
+      {conversionsSubcategory && (
+        <ItemConversionsEditor
+          itemId={selected}
+          subcategory={conversionsSubcategory}
+          rules={refiningRules}
+          rulesError={refiningRulesError}
+          onChange={handleConversionsChange}
+          saveError={conversionsError}
+        />
       )}
 
       {/* ── Gathering tools ── */}

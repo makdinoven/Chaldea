@@ -9,8 +9,6 @@ interface CraftConfirmModalProps {
 }
 
 const CraftConfirmModal = ({ recipe, onConfirm, onCancel, loading }: CraftConfirmModalProps) => {
-  const isBlueprint = recipe.source === 'blueprint';
-
   return (
     <AnimatePresence>
       <div className="modal-overlay" onClick={onCancel}>
@@ -76,15 +74,6 @@ const CraftConfirmModal = ({ recipe, onConfirm, onCancel, loading }: CraftConfir
               ))}
             </div>
           </div>
-
-          {/* Blueprint warning */}
-          {isBlueprint && (
-            <div className="mb-4 p-2.5 rounded-lg bg-site-red/10 border border-site-red/30">
-              <p className="text-site-red text-sm">
-                Чертёж будет использован и исчезнет из инвентаря.
-              </p>
-            </div>
-          )}
 
           {/* Buttons */}
           <div className="flex gap-3">

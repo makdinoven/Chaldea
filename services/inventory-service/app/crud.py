@@ -7,6 +7,7 @@ import random
 
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text, and_, or_, func
+from sqlalchemy.exc import IntegrityError
 import models
 import schemas
 from rabbitmq_publisher import publish_auction_notification
@@ -43,7 +44,22 @@ MAX_ENHANCEMENT_POINTS = 15
 MAX_STAT_SHARPEN = 5
 WHETSTONE_CHANCE = {1: 0.25, 2: 0.50, 3: 0.75}
 
-SHARPENABLE_TYPES = {'head', 'body', 'cloak', 'belt', 'weapon'}
+# FEAT-165: a stone fits one group of gear (items.whetstone_group)
+SHARPEN_GROUP_TYPES = {
+    "weapon_armor": frozenset({"weapon", "body", "head"}),        # blacksmith stones
+    "cloak_belt": frozenset({"cloak", "belt"}),                   # enchanter stones
+    "jewelry": frozenset({"ring", "necklace", "bracelet"}),       # jeweler stones
+}
+SHARPENABLE_TYPES = frozenset().union(*SHARPEN_GROUP_TYPES.values())
+
+
+def sharpen_group_for_type(item_type) -> Optional[str]:
+    """Stone group that fits this item type, or None if it cannot be sharpened."""
+    item_type = getattr(item_type, "value", item_type)
+    for group, types in SHARPEN_GROUP_TYPES.items():
+        if item_type in types:
+            return group
+    return None
 
 # ---------------------------------------------------------------------------
 # Gem socket constants
@@ -55,11 +71,62 @@ SHARPENABLE_TYPES = {'head', 'body', 'cloak', 'belt', 'weapon'}
 
 DURABILITY_SLOT_TYPES = {'head', 'body', 'cloak', 'main_weapon', 'additional_weapons'}
 
-JEWELRY_TYPES = {'ring', 'necklace', 'bracelet'}
-ARMOR_WEAPON_TYPES = {'head', 'body', 'cloak', 'belt', 'weapon'}
-SOCKETABLE_TYPES = JEWELRY_TYPES | ARMOR_WEAPON_TYPES
+JEWELRY_TYPES = frozenset({'ring', 'necklace', 'bracelet'})
+# FEAT-165: belts have no sockets any more; runes already in belts can still be extracted
+RUNE_INSERT_TYPES = frozenset({'head', 'body', 'cloak', 'weapon'})
+RUNE_EXTRACT_TYPES = RUNE_INSERT_TYPES | {'belt'}
+SOCKETABLE_TYPES = JEWELRY_TYPES | RUNE_INSERT_TYPES
 GEM_PRESERVATION_CHANCES = {1: 10, 2: 40, 3: 70}  # % chance gem/rune survives extraction, by profession rank
-GEM_XP_REWARD = 10
+# FEAT-165: who may EXTRACT (insertion is open to anyone holding the gem/rune)
+SOCKET_EXTRACTOR_BY_INSERTABLE = {'gem': 'jeweler', 'rune': 'enchanter'}
+
+
+def insertable_type_for_item(item_type) -> Optional[str]:
+    """'gem' for jewelry, 'rune' for rune-socket gear (incl. legacy belts), else None."""
+    item_type = getattr(item_type, "value", item_type)
+    if item_type in JEWELRY_TYPES:
+        return 'gem'
+    if item_type in RUNE_EXTRACT_TYPES:
+        return 'rune'
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Refining constants (FEAT-165)
+# ---------------------------------------------------------------------------
+
+RAW_SUBCATEGORIES = ("ore", "herb", "wood", "ingredient", "trophy")
+PRODUCT_SUBCATEGORIES = ("ingot", "magic_dust", "essence", "reagent", "material")
+TOOL_SUBCATEGORIES = ("whetstone", "repair_kit")
+
+RESOURCE_SUBCATEGORY_LABELS = {
+    "ore": "Руда", "herb": "Травы", "wood": "Древесина",
+    "ingredient": "Ингредиенты", "trophy": "Трофеи",
+    "ingot": "Слитки", "magic_dust": "Магическая пыль", "essence": "Эссенции",
+    "reagent": "Алхимические реагенты", "material": "Материалы",
+    "whetstone": "Камни заточки", "repair_kit": "Ремкомплекты",
+}
+
+# profession slug -> (accepted source subcategory, required result subcategory)
+REFINING_RULES = {
+    "blacksmith": ("ore", "ingot"),
+    "jeweler": ("ore", "magic_dust"),
+    "alchemist": ("reagent", "essence"),
+    "cook": ("ingredient", "reagent"),
+    "scholar": ("trophy", "material"),  # «Мистик»
+}
+# Chance that one refining step gives double result, by profession rank.
+# Ranks above the table use the highest listed rank.
+REFINE_DOUBLE_CHANCE_BY_RANK = {1: 0.05, 2: 0.10, 3: 0.20}
+# Profession XP per refining step, by result item rarity
+REFINE_XP_BY_RARITY = {"common": 5, "rare": 12, "epic": 25, "legendary": 50}
+CONVERSION_QTY_MIN = schemas.CONVERSION_QTY_MIN
+CONVERSION_QTY_MAX = schemas.CONVERSION_QTY_MAX
+REFINE_MAX_QUANTITY = schemas.REFINE_MAX_QUANTITY
+MAX_CONVERSIONS_PER_ITEM = len(REFINING_RULES)
+# Subcategories some profession accepts as refining input (not only raw ones: the
+# alchemist refines reagents, a cook's product)
+REFINING_SOURCE_SUBCATEGORIES = tuple(sorted({src for src, _ in REFINING_RULES.values()}))
 
 MAIN_STAT_FIELDS = [
     'strength_modifier', 'agility_modifier', 'intelligence_modifier', 'endurance_modifier',
@@ -163,40 +230,6 @@ def get_gem_modifiers_dict(gem_item: models.Items) -> dict:
             display_name = STAT_DISPLAY_NAMES.get(field, field)
             mods[display_name] = val
     return mods
-
-
-def find_recipe_for_item(db: Session, item_id: int, profession_slug: str = 'jeweler'):
-    """Find recipe where result_item_id == item_id and profession matches."""
-    return (
-        db.query(models.Recipe)
-        .join(models.Profession, models.Recipe.profession_id == models.Profession.id)
-        .filter(
-            models.Recipe.result_item_id == item_id,
-            models.Profession.slug == profession_slug,
-            models.Recipe.is_active == True,
-        )
-        .options(joinedload(models.Recipe.ingredients).joinedload(models.RecipeIngredient.item))
-        .first()
-    )
-
-
-def calculate_smelt_returns(recipe: models.Recipe) -> list:
-    """For each ingredient in recipe, return ~50% (floor, min 1)."""
-    results = []
-    for ing in recipe.ingredients:
-        qty = max(1, ing.quantity // 2)
-        results.append({
-            "item_id": ing.item_id,
-            "name": ing.item.name if ing.item else "Неизвестный",
-            "image": ing.item.image if ing.item else None,
-            "quantity": qty,
-        })
-    return results
-
-
-def get_junk_item(db: Session) -> models.Items:
-    """Find 'Ювелирный лом' item."""
-    return db.query(models.Items).filter(models.Items.name == "Ювелирный лом").first()
 
 
 # Получить инвентарь по ID персонажа
@@ -1258,10 +1291,90 @@ def get_character_profession(db: Session, character_id: int) -> Optional[models.
     )
 
 
-def choose_profession(db: Session, character_id: int, profession_id: int) -> Tuple[models.CharacterProfession, List[models.Recipe]]:
+def sync_auto_learned_recipes(db: Session, cp: models.CharacterProfession) -> List[dict]:
+    """Learn every active base recipe the character's profession and rank allow.
+
+    Base recipe = `auto_learn_rank IS NOT NULL AND auto_learn_rank <= current_rank`.
+    Idempotent; no commit (the caller commits). Returns the newly learned
+    recipes as [{"id", "name"}].
     """
-    Create character_professions row and auto-learn rank-1 recipes.
-    Returns (character_profession, auto_learned_recipes).
+    recipes = (
+        db.query(models.Recipe)
+        .filter(
+            models.Recipe.profession_id == cp.profession_id,
+            models.Recipe.auto_learn_rank.isnot(None),
+            models.Recipe.auto_learn_rank <= cp.current_rank,
+            models.Recipe.is_active == True,
+        )
+        .order_by(models.Recipe.id.asc())
+        .all()
+    )
+    if not recipes:
+        return []
+
+    known_ids = {
+        row[0] for row in db.query(models.CharacterRecipe.recipe_id)
+        .filter(models.CharacterRecipe.character_id == cp.character_id)
+        .all()
+    }
+    learned = []
+    for recipe in recipes:
+        if recipe.id in known_ids:
+            continue
+        db.add(models.CharacterRecipe(
+            character_id=cp.character_id,
+            recipe_id=recipe.id,
+            learned_at=datetime.utcnow(),
+        ))
+        learned.append({"id": recipe.id, "name": recipe.name})
+    if learned:
+        db.flush()
+    return learned
+
+
+def sync_auto_learned_recipes_and_commit(db: Session, cp: models.CharacterProfession) -> None:
+    """Lazy sync for read endpoints: commit, and survive a concurrent double insert."""
+    try:
+        sync_auto_learned_recipes(db, cp)
+        db.commit()
+    except IntegrityError:
+        # Another request learned the same recipe at the same time — it is learned either way
+        db.rollback()
+        logger.info("Auto-learn race for character %s ignored", cp.character_id)
+
+
+def award_profession_xp(db: Session, cp: models.CharacterProfession, base_xp: int) -> dict:
+    """Add profession XP (with the XP buff), rank up as far as the XP allows and
+    learn the base recipes of the reached rank. No commit (the caller commits).
+    """
+    xp_earned = int(base_xp * get_xp_multiplier(db, cp.character_id))
+    cp.experience += xp_earned
+
+    rank_up = False
+    new_rank_name = None
+    ranks = {r.rank_number: r for r in cp.profession.ranks}
+    while True:
+        next_rank = ranks.get(cp.current_rank + 1)
+        if next_rank is None or cp.experience < next_rank.required_experience:
+            break
+        cp.current_rank = next_rank.rank_number
+        rank_up = True
+        new_rank_name = next_rank.name
+
+    auto_learned = sync_auto_learned_recipes(db, cp)
+    return {
+        "xp_earned": xp_earned,
+        "new_total_xp": cp.experience,
+        "rank_up": rank_up,
+        "new_rank_name": new_rank_name,
+        "auto_learned_recipes": auto_learned,
+    }
+
+
+def choose_profession(db: Session, character_id: int, profession_id: int) -> Tuple[models.CharacterProfession, List[dict]]:
+    """
+    Create character_professions row and learn the base recipes of rank 1.
+    Returns (character_profession, auto_learned_recipes as [{"id", "name"}]).
     """
     cp = models.CharacterProfession(
         character_id=character_id,
@@ -1273,39 +1386,17 @@ def choose_profession(db: Session, character_id: int, profession_id: int) -> Tup
     db.add(cp)
     db.flush()
 
-    # Auto-learn rank-1 recipes
-    auto_recipes = (
-        db.query(models.Recipe)
-        .filter(
-            models.Recipe.profession_id == profession_id,
-            models.Recipe.auto_learn_rank == 1,
-            models.Recipe.is_active == True,
-        )
-        .all()
-    )
-
-    for recipe in auto_recipes:
-        existing = db.query(models.CharacterRecipe).filter(
-            models.CharacterRecipe.character_id == character_id,
-            models.CharacterRecipe.recipe_id == recipe.id,
-        ).first()
-        if not existing:
-            cr = models.CharacterRecipe(
-                character_id=character_id,
-                recipe_id=recipe.id,
-                learned_at=datetime.utcnow(),
-            )
-            db.add(cr)
+    auto_learned = sync_auto_learned_recipes(db, cp)
 
     db.commit()
     db.refresh(cp)
-    return cp, auto_recipes
+    return cp, auto_learned
 
 
-def change_profession(db: Session, cp: models.CharacterProfession, new_profession_id: int) -> Tuple[models.CharacterProfession, List[models.Recipe]]:
+def change_profession(db: Session, cp: models.CharacterProfession, new_profession_id: int) -> Tuple[models.CharacterProfession, List[dict]]:
     """
     Change character's profession. Reset rank/XP, keep learned recipes.
-    Auto-learn rank-1 recipes for the new profession.
+    Learn the base recipes of rank 1 of the new profession.
     """
     cp.profession_id = new_profession_id
     cp.current_rank = 1
@@ -1313,100 +1404,23 @@ def change_profession(db: Session, cp: models.CharacterProfession, new_professio
     cp.chosen_at = datetime.utcnow()
     db.flush()
 
-    # Auto-learn rank-1 recipes for new profession
-    auto_recipes = (
-        db.query(models.Recipe)
-        .filter(
-            models.Recipe.profession_id == new_profession_id,
-            models.Recipe.auto_learn_rank == 1,
-            models.Recipe.is_active == True,
-        )
-        .all()
-    )
-
-    for recipe in auto_recipes:
-        existing = db.query(models.CharacterRecipe).filter(
-            models.CharacterRecipe.character_id == cp.character_id,
-            models.CharacterRecipe.recipe_id == recipe.id,
-        ).first()
-        if not existing:
-            cr = models.CharacterRecipe(
-                character_id=cp.character_id,
-                recipe_id=recipe.id,
-                learned_at=datetime.utcnow(),
-            )
-            db.add(cr)
+    auto_learned = sync_auto_learned_recipes(db, cp)
 
     db.commit()
     db.refresh(cp)
-    return cp, auto_recipes
+    return cp, auto_learned
 
 
 def set_character_rank(db: Session, cp: models.CharacterProfession, rank_number: int) -> models.CharacterProfession:
-    """Admin: manually set character's profession rank. Auto-learn recipes for the new rank."""
+    """Admin: manually set character's profession rank. Learn base recipes up to it."""
     cp.current_rank = rank_number
     db.flush()
 
-    # Auto-learn recipes for the new rank and below
-    auto_recipes = (
-        db.query(models.Recipe)
-        .filter(
-            models.Recipe.profession_id == cp.profession_id,
-            models.Recipe.auto_learn_rank.isnot(None),
-            models.Recipe.auto_learn_rank <= rank_number,
-            models.Recipe.is_active == True,
-        )
-        .all()
-    )
-
-    for recipe in auto_recipes:
-        existing = db.query(models.CharacterRecipe).filter(
-            models.CharacterRecipe.character_id == cp.character_id,
-            models.CharacterRecipe.recipe_id == recipe.id,
-        ).first()
-        if not existing:
-            cr = models.CharacterRecipe(
-                character_id=cp.character_id,
-                recipe_id=recipe.id,
-                learned_at=datetime.utcnow(),
-            )
-            db.add(cr)
+    sync_auto_learned_recipes(db, cp)
 
     db.commit()
     db.refresh(cp)
     return cp
-
-
-def auto_learn_recipes_for_rank(
-    db: Session, character_id: int, profession_id: int, rank_number: int
-) -> List[dict]:
-    """Auto-learn recipes that have auto_learn_rank == rank_number. Returns list of {"id", "name"}."""
-    auto_recipes = (
-        db.query(models.Recipe)
-        .filter(
-            models.Recipe.profession_id == profession_id,
-            models.Recipe.auto_learn_rank == rank_number,
-            models.Recipe.is_active == True,
-        )
-        .all()
-    )
-
-    learned = []
-    for recipe in auto_recipes:
-        existing = db.query(models.CharacterRecipe).filter(
-            models.CharacterRecipe.character_id == character_id,
-            models.CharacterRecipe.recipe_id == recipe.id,
-        ).first()
-        if not existing:
-            cr = models.CharacterRecipe(
-                character_id=character_id,
-                recipe_id=recipe.id,
-                learned_at=datetime.utcnow(),
-            )
-            db.add(cr)
-            learned.append({"id": recipe.id, "name": recipe.name})
-
-    return learned
 
 
 # ---------------------------------------------------------------------------
@@ -1493,7 +1507,6 @@ def create_recipe(db: Session, data: schemas.RecipeCreate) -> models.Recipe:
         rarity=_result_item_rarity(db, data.result_item_id),  # payload rarity ignored
         icon=data.icon,
         auto_learn_rank=data.auto_learn_rank,
-        is_blueprint_recipe=data.is_blueprint_recipe,
         xp_reward=data.xp_reward,
     )
     db.add(recipe)
@@ -1614,7 +1627,7 @@ def get_available_recipes_for_character(
     db: Session, character_id: int, profession_id: Optional[int] = None
 ) -> List[dict]:
     """
-    Get union of learned recipes + blueprint-sourced recipes for a character.
+    Learned recipes of a character (single-use blueprints were removed in FEAT-165).
     Returns list of dicts ready for RecipeOut schema.
     """
     cp = get_character_profession(db, character_id)
@@ -1624,74 +1637,27 @@ def get_available_recipes_for_character(
     # Filter by profession: use explicit param or default to character's current profession
     filter_profession_id = profession_id if profession_id is not None else char_profession_id
 
-    results = []
-
-    # 1. Learned recipes
-    learned = (
-        db.query(models.CharacterRecipe)
-        .filter(models.CharacterRecipe.character_id == character_id)
-        .all()
-    )
-    learned_recipe_ids = {lr.recipe_id for lr in learned}
-
-    for lr in learned:
-        recipe = (
-            db.query(models.Recipe)
-            .options(
-                joinedload(models.Recipe.ingredients).joinedload(models.RecipeIngredient.item),
-                joinedload(models.Recipe.result_item),
-                joinedload(models.Recipe.profession),
-            )
-            .filter(models.Recipe.id == lr.recipe_id, models.Recipe.is_active == True)
-            .first()
+    query = (
+        db.query(models.Recipe)
+        .join(models.CharacterRecipe, models.CharacterRecipe.recipe_id == models.Recipe.id)
+        .options(
+            joinedload(models.Recipe.ingredients).joinedload(models.RecipeIngredient.item),
+            joinedload(models.Recipe.result_item),
+            joinedload(models.Recipe.profession),
         )
-        if not recipe:
-            continue
-        if filter_profession_id is not None and recipe.profession_id != filter_profession_id:
-            continue
-
-        recipe_dict = _build_recipe_out(db, recipe, character_id, char_profession_id, char_rank, "learned", None)
-        results.append(recipe_dict)
-
-    # 2. Blueprint-sourced recipes (blueprint items in inventory)
-    blueprint_items = (
-        db.query(models.CharacterInventory)
-        .join(models.Items, models.CharacterInventory.item_id == models.Items.id)
         .filter(
-            models.CharacterInventory.character_id == character_id,
-            models.Items.item_type == 'blueprint',
-            models.Items.blueprint_recipe_id.isnot(None),
+            models.CharacterRecipe.character_id == character_id,
+            models.Recipe.is_active == True,
         )
-        .all()
     )
+    if filter_profession_id is not None:
+        query = query.filter(models.Recipe.profession_id == filter_profession_id)
 
-    for bp_inv in blueprint_items:
-        bp_item = db.query(models.Items).filter(models.Items.id == bp_inv.item_id).first()
-        if not bp_item or not bp_item.blueprint_recipe_id:
-            continue
-        # Skip if already shown as a learned recipe
-        if bp_item.blueprint_recipe_id in learned_recipe_ids:
-            continue
-
-        recipe = (
-            db.query(models.Recipe)
-            .options(
-                joinedload(models.Recipe.ingredients).joinedload(models.RecipeIngredient.item),
-                joinedload(models.Recipe.result_item),
-                joinedload(models.Recipe.profession),
-            )
-            .filter(models.Recipe.id == bp_item.blueprint_recipe_id, models.Recipe.is_active == True)
-            .first()
-        )
-        if not recipe:
-            continue
-        if profession_id is not None and recipe.profession_id != profession_id:
-            continue
-
-        recipe_dict = _build_recipe_out(db, recipe, character_id, char_profession_id, char_rank, "blueprint", bp_inv.item_id)
-        results.append(recipe_dict)
-
-    return results
+    recipes = query.order_by(models.Recipe.id.asc()).all()
+    return [
+        _build_recipe_out(db, recipe, character_id, char_profession_id, char_rank)
+        for recipe in recipes
+    ]
 
 
 def _build_recipe_out(
@@ -1700,8 +1666,7 @@ def _build_recipe_out(
     character_id: int,
     char_profession_id: Optional[int],
     char_rank: int,
-    source: str,
-    blueprint_item_id: Optional[int],
+    source: str = "learned",
 ) -> dict:
     """Build a recipe dict for public listing."""
     ingredients = []
@@ -1756,27 +1721,38 @@ def _build_recipe_out(
         "ingredients": ingredients,
         "can_craft": can_craft,
         "source": source,
-        "blueprint_item_id": blueprint_item_id,
     }
+
+
+def _consume_from_stacks(db: Session, slots: List[models.CharacterInventory], quantity: int) -> None:
+    """Take `quantity` from already locked stacks (smallest first). Caller checked the total."""
+    remaining = quantity
+    for slot in slots:
+        if remaining <= 0:
+            break
+        if slot.quantity <= remaining:
+            remaining -= slot.quantity
+            db.delete(slot)
+        else:
+            slot.quantity -= remaining
+            remaining = 0
 
 
 def execute_craft(
     db: Session,
     character_id: int,
     recipe: models.Recipe,
-    blueprint_item_id: Optional[int],
     cp: Optional[models.CharacterProfession] = None,
 ) -> dict:
     """
     Execute crafting within a DB transaction.
-    Consumes materials, consumes blueprint if applicable, creates result item.
+    Consumes materials, creates the result item, awards profession XP.
     Uses SELECT ... FOR UPDATE on inventory rows for race condition prevention.
     """
     consumed_materials = []
 
     # 1. Consume materials
     for ing in recipe.ingredients:
-        remaining = ing.quantity
         slots = (
             db.query(models.CharacterInventory)
             .filter(
@@ -1795,15 +1771,7 @@ def execute_craft(
                 f"(нужно {ing.quantity}, есть {total_available})"
             )
 
-        for slot in slots:
-            if remaining <= 0:
-                break
-            if slot.quantity <= remaining:
-                remaining -= slot.quantity
-                db.delete(slot)
-            else:
-                slot.quantity -= remaining
-                remaining = 0
+        _consume_from_stacks(db, slots, ing.quantity)
 
         consumed_materials.append({
             "item_id": ing.item_id,
@@ -1811,77 +1779,37 @@ def execute_craft(
             "quantity": ing.quantity,
         })
 
-    # 2. Consume blueprint if applicable
-    blueprint_consumed = False
-    if blueprint_item_id is not None:
-        bp_slot = (
-            db.query(models.CharacterInventory)
-            .filter(
-                models.CharacterInventory.character_id == character_id,
-                models.CharacterInventory.item_id == blueprint_item_id,
-            )
-            .with_for_update()
-            .first()
-        )
-        if bp_slot:
-            bp_slot.quantity -= 1
-            if bp_slot.quantity <= 0:
-                db.delete(bp_slot)
-            blueprint_consumed = True
-
-    # 3. Create result item in inventory
+    # 2. Create result item in inventory
+    result_item = db.query(models.Items).filter(models.Items.id == recipe.result_item_id).first()
+    if result_item is None:
+        # _add_items_to_inventory would silently do nothing
+        raise ValueError("Результат рецепта не найден")
     _add_items_to_inventory(db, character_id, recipe.result_item_id, recipe.result_quantity)
 
     db.flush()
 
-    result_item = db.query(models.Items).filter(models.Items.id == recipe.result_item_id).first()
-
-    # 4. Award XP and check rank-up
-    xp_earned = 0
-    new_total_xp = 0
-    rank_up = False
-    new_rank_name = None
-    auto_learned = []
-
+    # 3. Award XP, rank-up and base recipes
+    xp = {
+        "xp_earned": 0,
+        "new_total_xp": 0,
+        "rank_up": False,
+        "new_rank_name": None,
+        "auto_learned_recipes": [],
+    }
     if cp is not None:
         base_xp = recipe.xp_reward if recipe.xp_reward is not None else RARITY_XP_MAP.get(recipe.rarity, 10)
-        multiplier = get_xp_multiplier(db, character_id)
-        xp_earned = int(base_xp * multiplier)
-        cp.experience += xp_earned
-        new_total_xp = cp.experience
-
-        # Check for rank-up (handle multi-rank jumps)
-        all_ranks = sorted(cp.profession.ranks, key=lambda r: r.rank_number)
-        while True:
-            next_ranks = [r for r in all_ranks if r.rank_number == cp.current_rank + 1]
-            if not next_ranks:
-                break  # Already at max rank
-            next_rank = next_ranks[0]
-            if cp.experience >= next_rank.required_experience:
-                cp.current_rank = next_rank.rank_number
-                rank_up = True
-                new_rank_name = next_rank.name
-                # Auto-learn recipes for the new rank
-                new_recipes = auto_learn_recipes_for_rank(db, cp.character_id, cp.profession_id, next_rank.rank_number)
-                auto_learned.extend(new_recipes)
-            else:
-                break
+        xp = award_profession_xp(db, cp, base_xp)
 
     return {
         "success": True,
         "crafted_item": {
             "item_id": recipe.result_item_id,
-            "name": result_item.name if result_item else "???",
-            "image": result_item.image if result_item else None,
+            "name": result_item.name,
+            "image": result_item.image,
             "quantity": recipe.result_quantity,
         },
         "consumed_materials": consumed_materials,
-        "blueprint_consumed": blueprint_consumed,
-        "xp_earned": xp_earned,
-        "new_total_xp": new_total_xp,
-        "rank_up": rank_up,
-        "new_rank_name": new_rank_name,
-        "auto_learned_recipes": auto_learned,
+        **xp,
     }
 
 
@@ -2021,6 +1949,364 @@ def get_xp_multiplier(db: Session, character_id: int) -> float:
     if buff:
         return 1.0 + buff.value
     return 1.0
+
+
+# ---------------------------------------------------------------------------
+# Refining (FEAT-165)
+# ---------------------------------------------------------------------------
+
+class RefineNotFoundError(ValueError):
+    """Maps to 404 in the endpoint (other ValueErrors map to 400)."""
+
+
+def _value(v):
+    return getattr(v, "value", v)
+
+
+def subcategory_label(subcategory: Optional[str]) -> str:
+    return RESOURCE_SUBCATEGORY_LABELS.get(_value(subcategory), "Прочее")
+
+
+def refine_double_chance(rank: int) -> float:
+    """Doubling chance for a refining step at this rank (ranks above the table use its top)."""
+    eligible = [r for r in REFINE_DOUBLE_CHANCE_BY_RANK if r <= rank]
+    return REFINE_DOUBLE_CHANCE_BY_RANK[max(eligible)] if eligible else 0.0
+
+
+def refine_xp_per_batch(result_rarity) -> int:
+    rarity = _value(result_rarity)
+    if rarity not in REFINE_XP_BY_RARITY:
+        # Resources are capped at legendary (FEAT-164); a legacy higher rarity counts as the top
+        logger.warning("Refine XP: unexpected result rarity %r, using the top value", rarity)
+        return max(REFINE_XP_BY_RARITY.values())
+    return REFINE_XP_BY_RARITY[rarity]
+
+
+def conversion_item_out(item: models.Items) -> dict:
+    return {
+        "id": item.id,
+        "name": item.name,
+        "image": item.image,
+        "item_rarity": _value(item.item_rarity),
+    }
+
+
+def get_refining_rules(db: Session) -> List[dict]:
+    """REFINING_RULES joined to active professions by slug (missing ones are skipped)."""
+    professions = (
+        db.query(models.Profession)
+        .filter(
+            models.Profession.slug.in_(list(REFINING_RULES.keys())),
+            models.Profession.is_active == True,
+        )
+        .order_by(models.Profession.sort_order.asc(), models.Profession.id.asc())
+        .all()
+    )
+    return [
+        {
+            "profession_id": p.id,
+            "profession_slug": p.slug,
+            "profession_name": p.name,
+            "source_subcategory": REFINING_RULES[p.slug][0],
+            "result_subcategory": REFINING_RULES[p.slug][1],
+        }
+        for p in professions
+    ]
+
+
+def _identified_filter():
+    return or_(
+        models.CharacterInventory.is_identified == True,
+        models.CharacterInventory.is_identified.is_(None),
+    )
+
+
+def get_refine_info(db: Session, character_id: int) -> dict:
+    empty = {
+        "can_refine": False,
+        "profession_slug": None,
+        "source_subcategory": None,
+        "result_subcategory": None,
+        "double_chance_pct": None,
+        "sources": [],
+    }
+    cp = get_character_profession(db, character_id)
+    if cp is None or cp.profession is None:
+        return empty
+    slug = cp.profession.slug
+    rule = REFINING_RULES.get(slug)
+    if rule is None:
+        return {**empty, "profession_slug": slug}
+    source_sub, result_sub = rule
+
+    owned_rows = (
+        db.query(
+            models.CharacterInventory.item_id,
+            func.sum(models.CharacterInventory.quantity),
+        )
+        .join(models.Items, models.Items.id == models.CharacterInventory.item_id)
+        .join(
+            models.ItemConversion,
+            and_(
+                models.ItemConversion.source_item_id == models.CharacterInventory.item_id,
+                models.ItemConversion.profession_id == cp.profession_id,
+            ),
+        )
+        .filter(
+            models.CharacterInventory.character_id == character_id,
+            _identified_filter(),
+            models.Items.item_type == "resource",
+            models.Items.resource_subcategory == source_sub,
+        )
+        .group_by(models.CharacterInventory.item_id)
+        .all()
+    )
+    owned = {item_id: int(qty or 0) for item_id, qty in owned_rows}
+
+    sources = []
+    if owned:
+        conversions = (
+            db.query(models.ItemConversion)
+            .options(
+                joinedload(models.ItemConversion.source_item),
+                joinedload(models.ItemConversion.result_item),
+            )
+            .filter(
+                models.ItemConversion.profession_id == cp.profession_id,
+                models.ItemConversion.source_item_id.in_(list(owned.keys())),
+            )
+            .all()
+        )
+        for conv in sorted(conversions, key=lambda c: c.source_item.name):
+            owned_qty = owned.get(conv.source_item_id, 0)
+            if owned_qty <= 0 or conv.result_item is None:
+                continue
+            src = conv.source_item
+            sources.append({
+                "source_item_id": src.id,
+                "name": src.name,
+                "image": src.image,
+                "item_rarity": _value(src.item_rarity),
+                "owned_quantity": owned_qty,
+                "source_quantity": conv.source_quantity,
+                "max_batches": owned_qty // conv.source_quantity,
+                "result_item": conversion_item_out(conv.result_item),
+                "result_quantity": conv.result_quantity,
+                "xp_per_batch": refine_xp_per_batch(conv.result_item.item_rarity),
+            })
+
+    return {
+        "can_refine": True,
+        "profession_slug": slug,
+        "source_subcategory": source_sub,
+        "result_subcategory": result_sub,
+        "double_chance_pct": int(round(refine_double_chance(cp.current_rank) * 100)),
+        "sources": sources,
+    }
+
+
+def refine_items(db: Session, character_id: int, source_item_id: int, quantity: int) -> dict:
+    """Refine `quantity` of one raw item. No commit (the caller commits).
+
+    Raises RefineNotFoundError (404) / ValueError (400) before any write.
+    """
+    cp = get_character_profession(db, character_id)
+    if cp is None or cp.profession is None:
+        raise ValueError("У персонажа нет профессии")
+    rule = REFINING_RULES.get(cp.profession.slug)
+    if rule is None:
+        raise ValueError("Ваша профессия не перерабатывает сырьё")
+    source_sub, _result_sub = rule
+
+    source_item = db.query(models.Items).filter(models.Items.id == source_item_id).first()
+    if source_item is None:
+        raise RefineNotFoundError("Предмет не найден")
+    if _value(source_item.item_type) != "resource" or _value(source_item.resource_subcategory) != source_sub:
+        raise ValueError("Этот предмет нельзя переработать")
+
+    conversion = (
+        db.query(models.ItemConversion)
+        .filter(
+            models.ItemConversion.source_item_id == source_item_id,
+            models.ItemConversion.profession_id == cp.profession_id,
+        )
+        .first()
+    )
+    if conversion is None:
+        raise ValueError("Для этого сырья не настроен результат переработки")
+    result_item = db.query(models.Items).filter(models.Items.id == conversion.result_item_id).first()
+    if result_item is None:
+        # never call _add_items_to_inventory with a missing item: it silently does nothing
+        raise ValueError("Результат переработки не найден")
+
+    stacks = (
+        db.query(models.CharacterInventory)
+        .filter(
+            models.CharacterInventory.character_id == character_id,
+            models.CharacterInventory.item_id == source_item_id,
+            _identified_filter(),
+        )
+        .order_by(models.CharacterInventory.quantity.asc())
+        .with_for_update()
+        .all()
+    )
+    owned = sum(s.quantity for s in stacks)
+    if quantity > owned:
+        raise ValueError("Недостаточно сырья")
+
+    batches = quantity // conversion.source_quantity
+    if batches <= 0:
+        raise ValueError(f"Нужно минимум {conversion.source_quantity} шт. для переработки")
+    consumed = batches * conversion.source_quantity
+    _consume_from_stacks(db, stacks, consumed)
+    db.flush()
+
+    chance = refine_double_chance(cp.current_rank)
+    doubled_batches = sum(1 for _ in range(batches) if random.random() < chance)
+    total = conversion.result_quantity * (batches + doubled_batches)
+    _add_items_to_inventory(db, character_id, result_item.id, total)
+
+    xp = award_profession_xp(db, cp, refine_xp_per_batch(result_item.item_rarity) * batches)
+
+    return {
+        "success": True,
+        "source_item_id": source_item_id,
+        "consumed_quantity": consumed,
+        "leftover_quantity": quantity - consumed,
+        "batches": batches,
+        "doubled_batches": doubled_batches,
+        "result_item": conversion_item_out(result_item),
+        "result_quantity": total,
+        **xp,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Refining config — admin (FEAT-165)
+# ---------------------------------------------------------------------------
+
+def build_item_conversions_response(db: Session, source_item_id: int) -> dict:
+    conversions = (
+        db.query(models.ItemConversion)
+        .options(
+            joinedload(models.ItemConversion.result_item),
+            joinedload(models.ItemConversion.profession),
+        )
+        .filter(models.ItemConversion.source_item_id == source_item_id)
+        .order_by(models.ItemConversion.profession_id.asc())
+        .all()
+    )
+    return {
+        "source_item_id": source_item_id,
+        "conversions": [
+            {
+                "id": c.id,
+                "profession_id": c.profession_id,
+                "profession_name": c.profession.name if c.profession else "",
+                "source_quantity": c.source_quantity,
+                "result_item": conversion_item_out(c.result_item),
+                "result_quantity": c.result_quantity,
+            }
+            for c in conversions
+            if c.result_item is not None
+        ],
+    }
+
+
+def replace_item_conversions(
+    db: Session, source_item: models.Items, entries: List[schemas.ItemConversionIn]
+) -> None:
+    """Validate and replace the whole refining config of a raw item. Commits.
+
+    Raises RefineNotFoundError (404) / ValueError (400) before any write.
+    """
+    if len(entries) > MAX_CONVERSIONS_PER_ITEM:
+        raise ValueError(f"Можно указать не больше {MAX_CONVERSIONS_PER_ITEM} настроек переработки")
+
+    source_type = _value(source_item.item_type)
+    source_sub = _value(source_item.resource_subcategory)
+    if entries and (source_type != "resource" or source_sub not in REFINING_SOURCE_SUBCATEGORIES):
+        accepted = ", ".join(subcategory_label(x).lower() for x in REFINING_SOURCE_SUBCATEGORIES)
+        raise ValueError(f"Перерабатывать можно только ресурсы с подкатегорией: {accepted}")
+
+    seen = set()
+    new_rows = []
+    for entry in entries:
+        if entry.profession_id in seen:
+            raise ValueError("Профессия указана несколько раз")
+        seen.add(entry.profession_id)
+
+        profession = db.query(models.Profession).filter(models.Profession.id == entry.profession_id).first()
+        if profession is None:
+            raise RefineNotFoundError("Профессия не найдена")
+        rule = REFINING_RULES.get(profession.slug)
+        if rule is None:
+            raise ValueError(f"Профессия {profession.name} не перерабатывает сырьё")
+        rule_source, rule_result = rule
+        if source_sub != rule_source:
+            raise ValueError(f"{profession.name} не перерабатывает эту подкатегорию")
+
+        if entry.result_item_id == source_item.id:
+            raise ValueError("Сырьё не может перерабатываться само в себя")
+        result_item = db.query(models.Items).filter(models.Items.id == entry.result_item_id).first()
+        if result_item is None:
+            raise RefineNotFoundError("Предмет-результат не найден")
+        if (
+            _value(result_item.item_type) != "resource"
+            or _value(result_item.resource_subcategory) != rule_result
+        ):
+            raise ValueError(
+                f"Результат для профессии {profession.name} должен иметь подкатегорию "
+                f"«{subcategory_label(rule_result)}»"
+            )
+        new_rows.append(models.ItemConversion(
+            source_item_id=source_item.id,
+            profession_id=profession.id,
+            source_quantity=entry.source_quantity,
+            result_item_id=result_item.id,
+            result_quantity=entry.result_quantity,
+        ))
+
+    db.query(models.ItemConversion).filter(
+        models.ItemConversion.source_item_id == source_item.id
+    ).delete(synchronize_session=False)
+    db.flush()
+    for row in new_rows:
+        db.add(row)
+    db.commit()
+
+
+def delete_stale_conversions(db: Session, item: models.Items) -> int:
+    """Drop refining config that no longer matches the item's type/subcategory.
+
+    Covers both sides: the item as raw source (its subcategory must still be the
+    one its profession accepts) and as result (it must still be the product that
+    profession yields). No commit. Returns the number of deleted rows.
+    """
+    item_type = _value(item.item_type)
+    item_sub = _value(item.resource_subcategory)
+    rows = (
+        db.query(models.ItemConversion)
+        .options(joinedload(models.ItemConversion.profession))
+        .filter(or_(
+            models.ItemConversion.source_item_id == item.id,
+            models.ItemConversion.result_item_id == item.id,
+        ))
+        .all()
+    )
+    deleted = 0
+    for row in rows:
+        rule = REFINING_RULES.get(row.profession.slug) if row.profession else None
+        expected = None
+        if rule is not None:
+            expected = rule[0] if row.source_item_id == item.id else rule[1]
+        if rule is None or item_type != "resource" or item_sub != expected:
+            db.delete(row)
+            deleted += 1
+    if deleted:
+        db.flush()
+        logger.info("Item %s: %d refining config row(s) removed after an edit", item.id, deleted)
+    return deleted
 
 
 # ---------------------------------------------------------------------------

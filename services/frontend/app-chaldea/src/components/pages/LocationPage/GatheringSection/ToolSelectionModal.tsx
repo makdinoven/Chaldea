@@ -28,11 +28,14 @@ import {
 import type { GatheringTool, GatheringCategory, ToolCategory } from '../../../../types/gathering';
 import type { ToolSelectionModalProps } from './gatheringSection.types';
 
-const NODE_CATEGORY_TO_TOOL: Record<GatheringCategory, ToolCategory> = {
+/** Toolless categories (ingredients) have no entry and never open this modal */
+const NODE_CATEGORY_TO_TOOL: Partial<Record<GatheringCategory, ToolCategory>> = {
   ore: 'pickaxe',
   herb: 'sickle',
   wood: 'axe',
 };
+
+const NO_TOOLS: GatheringTool[] = [];
 
 const TOOL_CATEGORY_LABELS: Record<ToolCategory, string> = {
   pickaxe: 'Кирка',
@@ -123,7 +126,9 @@ const ToolSelectionModal = ({
 }: ToolSelectionModalProps) => {
   const dispatch = useAppDispatch();
   const toolCategory = NODE_CATEGORY_TO_TOOL[node.category];
-  const tools = useAppSelector(selectToolsByCategory(toolCategory));
+  const tools = useAppSelector((state) =>
+    toolCategory ? selectToolsByCategory(toolCategory)(state) : NO_TOOLS,
+  );
   const isLoading = useAppSelector(selectGatheringIsLoadingTools);
   const error = useAppSelector(selectGatheringError);
 
@@ -134,6 +139,10 @@ const ToolSelectionModal = ({
   // ownership are fresh (player may have repaired/dropped tools elsewhere).
   useEffect(() => {
     let cancelled = false;
+    if (!toolCategory) {
+      setHasFetched(true);
+      return undefined;
+    }
     void dispatch(loadGatheringTools({ inventoryId, category: toolCategory }))
       .finally(() => {
         if (!cancelled) setHasFetched(true);
@@ -195,7 +204,7 @@ const ToolSelectionModal = ({
           Выбор инструмента
         </h3>
         <p className="text-white/70 text-xs sm:text-sm mb-4">
-          {`Категория: ${TOOL_CATEGORY_LABELS[toolCategory]}`}
+          {toolCategory ? `Категория: ${TOOL_CATEGORY_LABELS[toolCategory]}` : 'Инструмент не нужен'}
         </p>
 
         {showLoading && (

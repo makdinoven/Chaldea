@@ -22,6 +22,26 @@ import { BASE_URL } from '../../../api/api';
 import { EQUIPMENT_TYPES } from '../constants';
 import ConfirmationModal from '../../ui/ConfirmationModal';
 import RepairModal from './RepairModal';
+import SharpeningModal from '../CraftTab/SharpeningModal';
+import type { SharpenableItemRef } from '../CraftTab/SharpeningModal';
+import GemSocketModal from '../CraftTab/GemSocketModal';
+import type { JewelryItemRef } from '../CraftTab/GemSocketModal';
+import {
+  JEWELRY_SOCKET_TYPES,
+  MAX_ENHANCEMENT_POINTS,
+  RUNE_SOCKET_TYPES,
+  SHARPENABLE_ITEM_TYPES,
+} from '../../../constants/professions';
+
+const parseSocketedGems = (raw: string | null | undefined): (number | null)[] => {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as (number | null)[]) : [];
+  } catch {
+    return [];
+  }
+};
 
 interface ItemContextMenuProps {
   characterId: number;
@@ -51,6 +71,11 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
     inventoryItem: InventoryItem | null;
     source: string;
   }>({ isOpen: false, inventoryItem: null, source: 'inventory' });
+
+  // Sharpening modal state (any player with a matching stone, FEAT-165)
+  const [sharpenTarget, setSharpenTarget] = useState<SharpenableItemRef | null>(null);
+  // Socket modal state: anyone inserts, only the matching profession extracts
+  const [socketTarget, setSocketTarget] = useState<JewelryItemRef | null>(null);
 
   // Close on click outside
   useEffect(() => {
@@ -148,6 +173,62 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
             isOpen: true,
             inventoryItem,
             source,
+          });
+        },
+      });
+    }
+
+    // Заточить — any player; the modal lists only stones of the matching group
+    const pointsSpent = inventoryItem.enhancement_points_spent ?? 0;
+    if (
+      SHARPENABLE_ITEM_TYPES.has(itemType) &&
+      inventoryItem.id > 0 &&
+      (contextMenu.slotType || inventoryItem.is_identified !== false) &&
+      pointsSpent < MAX_ENHANCEMENT_POINTS
+    ) {
+      actions.push({
+        label: 'Заточить',
+        handler: () => {
+          dispatch(closeContextMenu());
+          setSharpenTarget({
+            rowId: inventoryItem.id,
+            itemId: item.id,
+            name: item.name,
+            image: item.image,
+            itemType,
+            itemRarity: item.item_rarity,
+            pointsSpent,
+            source: contextMenu.slotType ? 'equipment' : 'inventory',
+          });
+        },
+      });
+    }
+
+    // Гнёзда — runes (weapon/armor/helmet/cloak) or gems (jewelry) for everyone
+    const socketedGems = parseSocketedGems(inventoryItem.socketed_gems);
+    const hasSocketTypes = RUNE_SOCKET_TYPES.has(itemType) || JEWELRY_SOCKET_TYPES.has(itemType);
+    // Legacy belts are listed only while they still hold runes (extraction)
+    const legacyBeltWithRunes = itemType === 'belt' && socketedGems.some((g) => g !== null);
+    if (
+      ((hasSocketTypes && (item.socket_count ?? 0) > 0) || legacyBeltWithRunes) &&
+      inventoryItem.id > 0 &&
+      (contextMenu.slotType || inventoryItem.is_identified !== false)
+    ) {
+      actions.push({
+        label: 'Гнёзда',
+        handler: () => {
+          dispatch(closeContextMenu());
+          setSocketTarget({
+            rowId: inventoryItem.id,
+            itemId: item.id,
+            name: item.name,
+            image: item.image,
+            itemType,
+            itemRarity: item.item_rarity,
+            socketCount: item.socket_count ?? 0,
+            socketedGems,
+            enhancementPointsSpent: inventoryItem.enhancement_points_spent ?? 0,
+            source: contextMenu.slotType ? 'equipment' : 'inventory',
           });
         },
       });
@@ -416,6 +497,22 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
           inventoryItem={repairModal.inventoryItem}
           source={repairModal.source}
           onClose={() => setRepairModal({ isOpen: false, inventoryItem: null, source: 'inventory' })}
+        />
+      )}
+
+      {sharpenTarget && (
+        <SharpeningModal
+          characterId={characterId}
+          item={sharpenTarget}
+          onClose={() => setSharpenTarget(null)}
+        />
+      )}
+
+      {socketTarget && (
+        <GemSocketModal
+          characterId={characterId}
+          item={socketTarget}
+          onClose={() => setSocketTarget(null)}
         />
       )}
     </>

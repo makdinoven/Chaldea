@@ -1,5 +1,5 @@
 """
-FEAT-164 — rarity cap for crafting and transmutation.
+FEAT-164 — rarity cap for crafting.
 
 Rules (user decision 2026-09-17):
   * recipes have no quality of their own: recipes.rarity is derived from the
@@ -9,8 +9,7 @@ Rules (user decision 2026-09-17):
   * a non-equipment result above legendary (legacy rows only — the item
     validator forbids creating them) is rejected on create and on update,
     including when the update does not touch result_item_id (stored value);
-  * transmutation chain ends at legendary: legendary (and legacy mythical)
-    resources are not listed and cannot be transmuted; nothing yields mythical.
+  (transmutation was removed in FEAT-165, its cap tests went with it)
 """
 
 import pytest
@@ -222,78 +221,3 @@ class TestRecipeRarityCap:
     def test_no_token_401(self, client, db_session):
         resp = client.post("/inventory/admin/recipes", json={"name": "x", "profession_id": 1, "result_item_id": 1})
         assert resp.status_code == 401
-
-
-# ===========================================================================
-# Transmutation
-# ===========================================================================
-
-class TestTransmutationCap:
-
-    def test_chain_constants_end_at_legendary(self):
-        assert main.RARITY_CHAIN == {"common": "rare", "rare": "epic", "epic": "legendary"}
-        assert not set(main.RARITY_CHAIN.values()) & set(EQUIPMENT_ONLY)
-        assert not set(main.RARITY_CHAIN) & ({"legendary"} | set(EQUIPMENT_ONLY))
-        assert set(main.TRANSMUTE_RESULT_NAMES) == {"rare", "epic", "legendary"}
-
-    @pytest.fixture()
-    def alch_env(self, client, db_session):
-        db = db_session
-        _characters_table(db)
-        prof = _profession(db, prof_id=3, slug="alchemist", name="Алхимик")
-        db.add(models.ProfessionRank(profession_id=prof.id, rank_number=1, name="Ученик", required_experience=0))
-        db.add(models.CharacterProfession(character_id=1, profession_id=prof.id, current_rank=1, experience=0))
-        rows = {}
-        for iid, name, rarity in [
-            (100, "Обычная трава", "common"),
-            (101, "Эпическая трава", "epic"),
-            (102, "Легендарная трава", "legendary"),
-            (103, "Трансмутированный ресурс (мифический)", "mythical"),
-        ]:
-            _item(db, iid, name, "resource", rarity)
-            inv = models.CharacterInventory(character_id=1, item_id=iid, quantity=10)
-            db.add(inv)
-            db.flush()
-            rows[rarity] = inv.id
-        for iid, rarity in [(200, "rare"), (201, "epic"), (202, "legendary")]:
-            _item(db, iid, main.TRANSMUTE_RESULT_NAMES[rarity], "resource", rarity)
-        db.commit()
-        main.app.dependency_overrides[get_current_user_via_http] = lambda: _player
-        yield {"client": client, "db": db, "rows": rows}
-        main.app.dependency_overrides.pop(get_current_user_via_http, None)
-
-    def test_info_lists_only_below_legendary(self, alch_env):
-        resp = alch_env["client"].get("/inventory/crafting/1/transmute-info")
-        assert resp.status_code == 200
-        items = {i["item_rarity"]: i for i in resp.json()["items"]}
-        assert set(items) == {"common", "epic"}
-        assert items["epic"]["next_rarity"] == "legendary"
-        for i in resp.json()["items"]:
-            assert i["next_rarity"] not in EQUIPMENT_ONLY
-
-    @pytest.mark.parametrize("rarity", ["legendary", "mythical"])
-    def test_cannot_transmute_top_rarity(self, alch_env, rarity):
-        db = alch_env["db"]
-        resp = alch_env["client"].post(
-            "/inventory/crafting/1/transmute", json={"inventory_item_id": alch_env["rows"][rarity]},
-        )
-        assert resp.status_code == 400
-        assert resp.json()["detail"] == "Этот ресурс уже максимальной редкости для трансмутации"
-        db.expire_all()
-        assert db.query(models.CharacterInventory).get(alch_env["rows"][rarity]).quantity == 10
-
-    def test_epic_to_legendary_still_works(self, alch_env):
-        db = alch_env["db"]
-        resp = alch_env["client"].post(
-            "/inventory/crafting/1/transmute", json={"inventory_item_id": alch_env["rows"]["epic"]},
-        )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["result_item_rarity"] == "legendary"
-        db.expire_all()
-        assert db.query(models.CharacterInventory).get(alch_env["rows"]["epic"]).quantity == 5
-        got = db.query(models.CharacterInventory).filter_by(character_id=1, item_id=202).one()
-        assert got.quantity == 1
-
-    def test_foreign_character_forbidden(self, alch_env):
-        resp = alch_env["client"].post("/inventory/crafting/2/transmute", json={"inventory_item_id": 1})
-        assert resp.status_code == 403

@@ -4,7 +4,7 @@
  * the skill name, current rank, XP progress bar (gold gradient fill),
  * current bonuses and (when not at max rank) a next-rank preview footer.
  */
-import { Pickaxe, Sprout, Axe } from 'lucide-react';
+import { Pickaxe, Sprout, Axe, Carrot } from 'lucide-react';
 import type { GatheringCategory, GatheringSkill } from '../../../types/gathering';
 
 interface GatheringSkillCardProps {
@@ -18,6 +18,7 @@ const CATEGORY_ICON: Record<GatheringCategory, typeof Pickaxe> = {
   ore: Pickaxe,
   herb: Sprout,
   wood: Axe,
+  ingredient: Carrot,
 };
 
 /** Format a numeric bonus value, dropping the trailing ".0" when it's an integer. */

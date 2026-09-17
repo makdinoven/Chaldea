@@ -54,6 +54,7 @@ const SKILL_LABELS: Record<string, string> = {
   mining: 'руды',
   herbalism: 'трав',
   woodcutting: 'дерева',
+  foraging: 'ингредиентов',
 };
 
 const GatheringSection = ({

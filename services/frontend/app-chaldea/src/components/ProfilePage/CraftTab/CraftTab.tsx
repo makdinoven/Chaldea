@@ -27,12 +27,9 @@ import ProfessionRail from './ProfessionRail';
 import ProfessionInfo from './ProfessionInfo';
 import RecipeList from './RecipeList';
 import CraftConfirmModal from './CraftConfirmModal';
-import SharpeningSection from './SharpeningSection';
-import EssenceExtractionSection from './EssenceExtractionSection';
-import TransmutationSection from './TransmutationSection';
 import GemSocketSection from './GemSocketSection';
 import RuneSocketSection from './RuneSocketSection';
-import SmeltingSection from './SmeltingSection';
+import RefiningSection from './RefiningSection';
 import ActiveBuffIndicator from './ActiveBuffIndicator';
 
 interface CraftTabProps {
@@ -137,7 +134,6 @@ const CraftTab = ({ characterId }: CraftTabProps) => {
         craftItem({
           characterId,
           recipeId: craftRecipe.id,
-          blueprintItemId: craftRecipe.blueprint_item_id,
         }),
       );
 
@@ -218,20 +214,13 @@ const CraftTab = ({ characterId }: CraftTabProps) => {
             onChangeProfession={handleChangeProfession}
           />
           <ProfessionInfo characterProfession={characterProfession} />
-          {characterProfession.profession.slug === 'blacksmith' && (
-            <SharpeningSection characterId={characterId} />
-          )}
-          {characterProfession.profession.slug === 'alchemist' && (
-            <>
-              <EssenceExtractionSection characterId={characterId} />
-              <TransmutationSection characterId={characterId} />
-            </>
-          )}
+          <RefiningSection
+            characterId={characterId}
+            professionId={characterProfession.profession.id}
+            currentRank={characterProfession.current_rank}
+          />
           {characterProfession.profession.slug === 'jeweler' && (
-            <>
-              <GemSocketSection characterId={characterId} />
-              <SmeltingSection characterId={characterId} />
-            </>
+            <GemSocketSection characterId={characterId} />
           )}
           {characterProfession.profession.slug === 'enchanter' && (
             <RuneSocketSection characterId={characterId} />

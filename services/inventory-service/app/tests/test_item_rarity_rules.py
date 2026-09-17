@@ -22,7 +22,7 @@ USER = {"id": 2, "username": "player", "role": "user", "permissions": []}
 
 EQUIPMENT_TYPES = ["head", "body", "cloak", "belt", "ring", "necklace", "bracelet", "weapon"]
 NON_EQUIPMENT_TYPES = [
-    "consumable", "resource", "scroll", "misc", "blueprint", "recipe",
+    "consumable", "resource", "scroll", "misc", "recipe",
     "gem", "rune", "gathering_tool",
 ]
 EQUIPMENT_ONLY = ["mythical", "divine", "demonic"]

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
@@ -9,14 +10,18 @@ import {
   selectSharpenInfo,
   selectSharpenInfoLoading,
   selectSharpenLoading,
-  fetchCharacterProfession,
+  selectSharpenError,
 } from '../../../redux/slices/craftingSlice';
 import { fetchInventory, fetchEquipment } from '../../../redux/slices/profileSlice';
-import type { SharpenStatInfo, SharpenWhetstoneInfo } from '../../../types/professions';
+import type { SharpenStatInfo, SharpenWhetstoneInfo, SharpenResult } from '../../../types/professions';
+import {
+  MAX_ENHANCEMENT_POINTS as MAX_POINTS,
+  SHARPEN_GROUP_BY_ITEM_TYPE,
+  WHETSTONE_GROUP_LABELS,
+  WHETSTONE_GROUP_TARGETS,
+} from '../../../constants/professions';
 
-const MAX_POINTS = 15;
-
-interface SharpenableItemRef {
+export interface SharpenableItemRef {
   rowId: number;
   itemId: number;
   name: string;
@@ -38,6 +43,7 @@ const SharpeningModal = ({ characterId, item, onClose }: SharpeningModalProps) =
   const sharpenInfo = useAppSelector(selectSharpenInfo);
   const infoLoading = useAppSelector(selectSharpenInfoLoading);
   const sharpenLoading = useAppSelector(selectSharpenLoading);
+  const sharpenError = useAppSelector(selectSharpenError);
 
   const [selectedStat, setSelectedStat] = useState<string | null>(null);
   const [selectedWhetstone, setSelectedWhetstone] = useState<number | null>(null);
@@ -46,7 +52,6 @@ const SharpeningModal = ({ characterId, item, onClose }: SharpeningModalProps) =
     statName: string;
     oldValue: number;
     newValue: number;
-    xpEarned: number;
   } | null>(null);
 
   // Load sharpen info on open
@@ -82,33 +87,19 @@ const SharpeningModal = ({ characterId, item, onClose }: SharpeningModalProps) =
     }));
 
     if (result.meta.requestStatus === 'fulfilled') {
-      const data = result.payload as {
-        success: boolean;
-        stat_display_name: string;
-        old_value: number;
-        new_value: number;
-        xp_earned: number;
-        rank_up: boolean;
-        new_rank_name: string | null;
-      };
+      const data = result.payload as SharpenResult;
 
       setLastResult({
         success: data.success,
         statName: data.stat_display_name,
         oldValue: data.old_value,
         newValue: data.new_value,
-        xpEarned: data.xp_earned,
       });
 
       if (data.success) {
         toast.success(`Заточка успешна! ${data.stat_display_name} +1`);
       } else {
         toast.error('Неудача! Камень потрачен');
-      }
-
-      if (data.rank_up && data.new_rank_name) {
-        toast.success(`Повышение ранга: ${data.new_rank_name}!`, { duration: 5000 });
-        dispatch(fetchCharacterProfession(characterId));
       }
 
       // Refresh sharpen info and inventory
@@ -136,6 +127,10 @@ const SharpeningModal = ({ characterId, item, onClose }: SharpeningModalProps) =
   const selectedStatInfo = sharpenInfo?.stats.find((s) => s.field === selectedStat);
   const selectedWhInfo = sharpenInfo?.whetstones.find((w) => w.inventory_item_id === selectedWhetstone);
 
+  const group = sharpenInfo?.sharpen_group ?? SHARPEN_GROUP_BY_ITEM_TYPE[item.itemType];
+  const stoneLabel = group ? WHETSTONE_GROUP_LABELS[group] : 'Камень заточки';
+  const stoneTargets = group ? WHETSTONE_GROUP_TARGETS[group] : '';
+
   const canSharpen = Boolean(
     selectedStat &&
     selectedWhetstone &&
@@ -144,7 +139,7 @@ const SharpeningModal = ({ characterId, item, onClose }: SharpeningModalProps) =
     !infoLoading,
   );
 
-  return (
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
@@ -164,14 +159,19 @@ const SharpeningModal = ({ characterId, item, onClose }: SharpeningModalProps) =
             )}
           </div>
           <div className="flex-1 min-w-0">
-            <h2 className="gold-text text-xl font-medium uppercase truncate">{item.name}</h2>
+            <h2 className="gold-text text-lg sm:text-xl font-medium uppercase truncate">{item.name}</h2>
             <p className="text-white/60 text-sm">
               {pointsSpent}/{MAX_POINTS} поинтов потрачено
+            </p>
+            <p className="text-white/50 text-xs break-words">
+              Нужен: <span className="text-gold">{stoneLabel}</span>
+              {stoneTargets && ` (${stoneTargets})`}
             </p>
           </div>
           <button
             onClick={onClose}
-            className="text-white/50 hover:text-white transition-colors text-xl leading-none p-1"
+            aria-label="Закрыть"
+            className="self-start text-white/50 hover:text-site-blue transition-colors duration-200 ease-site text-xl leading-none p-1"
           >
             &times;
           </button>
@@ -212,7 +212,7 @@ const SharpeningModal = ({ characterId, item, onClose }: SharpeningModalProps) =
                 {sharpenInfo.stats.some((s) => !s.is_existing && s.sharpened_count === 0) && (
                   <>
                     <div className="border-t border-white/[0.06] my-2 pt-2">
-                      <span className="text-white/40 text-xs uppercase">Новые статы (2 поинта)</span>
+                      <span className="text-white/40 text-xs uppercase">Новые характеристики (1 очко)</span>
                     </div>
                     {sharpenInfo.stats
                       .filter((stat) => !stat.is_existing && stat.sharpened_count === 0)
@@ -231,9 +231,9 @@ const SharpeningModal = ({ characterId, item, onClose }: SharpeningModalProps) =
 
             {/* Whetstone selector */}
             <div className="mb-5">
-              <h3 className="text-white text-sm font-medium uppercase tracking-wide mb-2">Точильный камень</h3>
+              <h3 className="text-white text-sm font-medium uppercase tracking-wide mb-2">{stoneLabel}</h3>
               {sharpenInfo.whetstones.length === 0 ? (
-                <p className="text-site-red text-sm">Нет точильных камней в инвентаре</p>
+                <p className="text-site-red text-sm">Нет подходящих камней. Нужен «{stoneLabel}»</p>
               ) : (
                 <div className="flex flex-wrap gap-2">
                   {sharpenInfo.whetstones.map((ws) => (
@@ -262,8 +262,8 @@ const SharpeningModal = ({ characterId, item, onClose }: SharpeningModalProps) =
                   }`}
                 >
                   {lastResult.success
-                    ? `${lastResult.statName}: +${lastResult.oldValue} → +${lastResult.newValue} | +${lastResult.xpEarned} XP`
-                    : `Неудача! Камень потрачен | +${lastResult.xpEarned} XP`}
+                    ? `${lastResult.statName}: +${lastResult.oldValue} → +${lastResult.newValue}`
+                    : 'Неудача! Камень потрачен'}
                 </motion.div>
               )}
             </AnimatePresence>
@@ -302,11 +302,12 @@ const SharpeningModal = ({ characterId, item, onClose }: SharpeningModalProps) =
           </>
         ) : (
           <p className="text-site-red text-sm text-center py-4">
-            Не удалось загрузить информацию о заточке
+            {sharpenError ?? 'Не удалось загрузить информацию о заточке'}
           </p>
         )}
       </motion.div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 
@@ -362,7 +363,7 @@ const WhetstoneButton = ({ whetstone, isSelected, onSelect }: WhetstoneButtonPro
         }
       `}
     >
-      <span className="truncate max-w-[140px]">{whetstone.name}</span>
+      <span className="truncate max-w-[120px] sm:max-w-[160px]">{whetstone.name}</span>
       <span className="text-xs text-white/50">x{whetstone.quantity}</span>
       <span className={`text-xs font-medium ${isSelected ? 'text-gold-light' : 'text-site-blue'}`}>
         {whetstone.success_chance}%

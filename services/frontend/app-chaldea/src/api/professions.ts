@@ -10,8 +10,6 @@ import type {
   AdminRecipe,
   CraftRequest,
   CraftResult,
-  LearnRecipeRequest,
-  LearnRecipeResponse,
   ProfessionCreateRequest,
   ProfessionUpdateRequest,
   ProfessionRankCreateRequest,
@@ -21,16 +19,18 @@ import type {
   RecipesPaginatedResponse,
   AdminSetRankRequest,
   ProfessionRank,
-  ExtractInfoResponse,
-  ExtractEssenceResult,
-  TransmuteInfoResponse,
-  TransmuteResult,
   SharpenInfoResponse,
   SharpenRequest,
   SharpenResult,
   RepairItemRequest,
   RepairItemResult,
   ItemDetailResponse,
+  RefiningRule,
+  RefineInfo,
+  RefineRequest,
+  RefineResult,
+  ItemConversionsPayload,
+  ItemConversionsResponse,
 } from "../types/professions";
 import type {
   SocketInfoResponse,
@@ -38,9 +38,6 @@ import type {
   InsertGemResult,
   ExtractGemRequest,
   ExtractGemResult,
-  SmeltInfoResponse,
-  SmeltRequest,
-  SmeltResult,
 } from "../types/gems";
 
 /* ── Axios client for inventory-service (professions / crafting) ── */
@@ -69,15 +66,15 @@ client.interceptors.response.use(
           const field = d.loc?.slice(1).join(" \u2192 ") ?? "";
           return field ? `${field}: ${d.msg}` : (d.msg ?? "");
         });
-        throw new Error(msgs.join("; ") || e.response.statusText);
+        throw new Error(msgs.join("; ") || `Ошибка сервера (${e.response.status})`);
       }
       throw new Error(
-        typeof detail === "string"
+        typeof detail === "string" && detail
           ? detail
-          : JSON.stringify(detail) || e.response.statusText,
+          : `Ошибка сервера (${e.response.status})`,
       );
     }
-    throw e;
+    throw new Error("Сервер недоступен. Проверьте соединение и попробуйте ещё раз.");
   },
 );
 
@@ -142,57 +139,27 @@ export const craftItem = async (
   return data;
 };
 
-export const learnRecipe = async (
+/* ── Public: Refining (FEAT-165) ── */
+
+export const fetchRefiningRules = async (): Promise<RefiningRule[]> => {
+  const { data } = await client.get("/crafting/refining-rules");
+  return data;
+};
+
+export const fetchRefineInfo = async (
   characterId: number,
-  payload: LearnRecipeRequest,
-): Promise<LearnRecipeResponse> => {
+): Promise<RefineInfo> => {
+  const { data } = await client.get(`/crafting/${characterId}/refine-info`);
+  return data;
+};
+
+export const refineItem = async (
+  characterId: number,
+  payload: RefineRequest,
+): Promise<RefineResult> => {
   const { data } = await client.post(
-    `/crafting/${characterId}/learn-recipe`,
+    `/crafting/${characterId}/refine`,
     payload,
-  );
-  return data;
-};
-
-/* ── Public: Essence Extraction ── */
-
-export const fetchExtractInfo = async (
-  characterId: number,
-): Promise<ExtractInfoResponse> => {
-  const { data } = await client.get(
-    `/crafting/${characterId}/extract-info`,
-  );
-  return data;
-};
-
-export const extractEssence = async (
-  characterId: number,
-  crystalItemId: number,
-): Promise<ExtractEssenceResult> => {
-  const { data } = await client.post(
-    `/crafting/${characterId}/extract-essence`,
-    { crystal_item_id: crystalItemId },
-  );
-  return data;
-};
-
-/* ── Public: Transmutation ── */
-
-export const fetchTransmuteInfo = async (
-  characterId: number,
-): Promise<TransmuteInfoResponse> => {
-  const { data } = await client.get(
-    `/crafting/${characterId}/transmute-info`,
-  );
-  return data;
-};
-
-export const transmuteItem = async (
-  characterId: number,
-  inventoryItemId: number,
-): Promise<TransmuteResult> => {
-  const { data } = await client.post(
-    `/crafting/${characterId}/transmute`,
-    { inventory_item_id: inventoryItemId },
   );
   return data;
 };
@@ -367,29 +334,6 @@ export const extractGem = async (
   return data;
 };
 
-/* ── Public: Smelting ── */
-
-export const fetchSmeltInfo = async (
-  characterId: number,
-  itemRowId: number,
-): Promise<SmeltInfoResponse> => {
-  const { data } = await client.get(
-    `/crafting/${characterId}/smelt-info/${itemRowId}`,
-  );
-  return data;
-};
-
-export const smeltItem = async (
-  characterId: number,
-  payload: SmeltRequest,
-): Promise<SmeltResult> => {
-  const { data } = await client.post(
-    `/crafting/${characterId}/smelt`,
-    payload,
-  );
-  return data;
-};
-
 /* ── Public: Item Detail & Repair ── */
 
 export const fetchItemDetail = async (
@@ -423,6 +367,26 @@ export const adminSetRank = async (
 ): Promise<{ detail: string }> => {
   const { data } = await client.post(
     `/admin/professions/${characterId}/set-rank`,
+    payload,
+  );
+  return data;
+};
+
+/* ── Admin: Item conversions (refining config, FEAT-165) ── */
+
+export const fetchItemConversions = async (
+  itemId: number,
+): Promise<ItemConversionsResponse> => {
+  const { data } = await client.get(`/admin/items/${itemId}/conversions`);
+  return data;
+};
+
+export const putItemConversions = async (
+  itemId: number,
+  payload: ItemConversionsPayload,
+): Promise<ItemConversionsResponse> => {
+  const { data } = await client.put(
+    `/admin/items/${itemId}/conversions`,
     payload,
   );
   return data;

@@ -25,7 +25,6 @@ export const ITEM_TYPE_ICONS: Record<string, string> = {
   scroll: scrollIcon,
   resource: resourceIcon,
   misc: bagIcon,
-  blueprint: scrollIcon,
   recipe: scrollIcon,
   gem: resourceIcon,
   rune: resourceIcon,

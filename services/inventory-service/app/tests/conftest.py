@@ -47,6 +47,17 @@ database.SessionLocal = _TestSessionLocal
 
 # Patch ENUM columns to String for SQLite compatibility
 import models  # noqa: E402
+
+# Remember the real ENUM values before they are replaced by String below, so
+# tests can still compare the ORM enums with the Alembic migrations.
+# Key: "<table>.<column>" -> tuple of enum values.
+ORIGINAL_ENUM_VALUES = {}
+for _table in (models.Items.__table__, models.EquipmentSlot.__table__,
+               models.TradeOffer.__table__, models.GatheringSkill.__table__):
+    for _col in _table.columns:
+        if type(_col.type).__name__ == "Enum":
+            ORIGINAL_ENUM_VALUES[f"{_table.name}.{_col.name}"] = tuple(_col.type.enums)
+
 for col in models.Items.__table__.columns:
     col_type = type(col.type).__name__
     if col_type == "Enum":
@@ -165,6 +176,12 @@ def db_session():
         with _test_engine.connect() as conn:
             conn.execute(text("PRAGMA foreign_keys=ON"))
             conn.commit()
+
+
+@pytest.fixture(scope="session")
+def original_enum_values():
+    """ORM ENUM values captured before the SQLite String patch (see above)."""
+    return dict(ORIGINAL_ENUM_VALUES)
 
 
 @pytest.fixture()

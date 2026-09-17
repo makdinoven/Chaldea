@@ -1,5 +1,5 @@
 // FEAT-151 — recipe card per mock 1011-1037: 52px round icon with rarity ring,
-// name + qty, rarity label, source badge (Чертёж/Выучен), description,
+// name + qty, rarity label, description,
 // «Материалы» have/need list and the craft button (disabled style when short).
 import { motion } from 'motion/react';
 import type { Recipe } from '../../../types/professions';
@@ -54,7 +54,7 @@ const RecipeCard = ({ recipe, onCraft }: RecipeCardProps) => {
       }}
       className="relative rounded-card bg-black/30 border border-gold/[0.16] shadow-card flex flex-col gap-3 p-4 transition-colors duration-200 ease-site hover:border-gold/40"
     >
-      {/* Header: 52px round icon with rarity ring + name/qty/rarity + source badge */}
+      {/* Header: 52px round icon with rarity ring + name/qty/rarity */}
       <div className="flex items-start gap-3">
         <div className={`w-[52px] h-[52px] shrink-0 rounded-full p-[2px] ${ringClass}`}>
           <div className="w-full h-full rounded-full bg-site-dark flex items-center justify-center overflow-hidden">
@@ -84,16 +84,6 @@ const RecipeCard = ({ recipe, onCraft }: RecipeCardProps) => {
             {rarityLabel}
           </span>
         </div>
-        {/* Source badge */}
-        <span
-          className={`shrink-0 text-[9.5px] font-medium uppercase tracking-[0.04em] px-2 py-0.5 rounded ${
-            recipe.source === 'blueprint'
-              ? 'bg-gold/15 text-gold'
-              : 'bg-site-blue/15 text-site-blue'
-          }`}
-        >
-          {recipe.source === 'blueprint' ? 'Чертёж' : 'Выучен'}
-        </span>
       </div>
 
       {/* Description */}

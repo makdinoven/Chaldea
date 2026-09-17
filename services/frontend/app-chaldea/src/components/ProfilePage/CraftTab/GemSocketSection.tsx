@@ -45,6 +45,8 @@ const GemSocketSection = ({ characterId }: GemSocketSectionProps) => {
     for (const inv of inventory) {
       if (JEWELRY_TYPES.has(inv.item.item_type) && inv.item.socket_count > 0) {
         const gems = parseSocketedGems(inv.socketed_gems);
+        // Extraction section: only jewelry with something to extract
+        if (!gems.some((g) => g !== null)) continue;
         items.push({
           rowId: inv.id,
           itemId: inv.item.id,
@@ -63,6 +65,7 @@ const GemSocketSection = ({ characterId }: GemSocketSectionProps) => {
     for (const slot of equipment) {
       if (slot.item && JEWELRY_TYPES.has(slot.item.item_type) && slot.item.socket_count > 0) {
         const gems = parseSocketedGems(slot.socketed_gems);
+        if (!gems.some((g) => g !== null)) continue;
         items.push({
           rowId: slot.id ?? 0,
           itemId: slot.item.id,
@@ -96,15 +99,18 @@ const GemSocketSection = ({ characterId }: GemSocketSectionProps) => {
   return (
     <div className="rounded-card border border-white/[0.07] bg-black/25 p-5 space-y-3">
       <div className="space-y-1.5">
-        <SectionHeader title="Камни и слоты" />
+        <SectionHeader title="Извлечение огранок" />
         <p className="text-xs text-white/50">
-          Вставляйте камни в слоты украшений для усиления характеристик.
+          Вы можете извлекать огранки из украшений.
+        </p>
+        <p className="text-xs text-white/40">
+          Вставить огранку может любой игрок через меню предмета «Гнёзда».
         </p>
       </div>
 
       {jewelryItems.length === 0 ? (
         <p className="text-white/40 text-sm py-4 text-center">
-          Нет украшений со слотами
+          Нет украшений со вставленными огранками
         </p>
       ) : (
         <motion.div
@@ -152,7 +158,7 @@ const GemSocketSection = ({ characterId }: GemSocketSectionProps) => {
                 </div>
 
                 <span className="text-xs text-white/50">
-                  {filled}/{item.socketCount} камней
+                  {filled}/{item.socketCount} огранок
                 </span>
 
                 {item.enhancementPointsSpent > 0 && (

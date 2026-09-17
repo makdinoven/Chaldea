@@ -4,10 +4,10 @@ import { useAppSelector } from '../../../redux/store';
 import { selectInventory, selectEquipmentSlots } from '../../../redux/slices/profileSlice';
 import SectionHeader from '../shared/SectionHeader';
 import GemSocketModal from './GemSocketModal';
+import { RUNE_SOCKET_TYPES } from '../../../constants/professions';
 
-const ARMOR_WEAPON_TYPES = new Set([
-  'head', 'body', 'cloak', 'belt', 'weapon',
-]);
+// Legacy belts may still hold runes: they are listed for extraction only
+const RUNE_EXTRACT_TYPES = new Set([...RUNE_SOCKET_TYPES, 'belt']);
 
 interface SocketableItem {
   rowId: number;
@@ -44,8 +44,10 @@ const RuneSocketSection = ({ characterId }: RuneSocketSectionProps) => {
     const items: SocketableItem[] = [];
 
     for (const inv of inventory) {
-      if (ARMOR_WEAPON_TYPES.has(inv.item.item_type) && inv.item.socket_count > 0) {
+      if (RUNE_EXTRACT_TYPES.has(inv.item.item_type)) {
         const gems = parseSocketedGems(inv.socketed_gems);
+        // Extraction section: only items with something to extract
+        if (!gems.some((g) => g !== null)) continue;
         items.push({
           rowId: inv.id,
           itemId: inv.item.id,
@@ -53,7 +55,7 @@ const RuneSocketSection = ({ characterId }: RuneSocketSectionProps) => {
           image: inv.item.image,
           itemType: inv.item.item_type,
           itemRarity: inv.item.item_rarity,
-          socketCount: inv.item.socket_count,
+          socketCount: Math.max(inv.item.socket_count ?? 0, gems.length),
           socketedGems: gems,
           enhancementPointsSpent: inv.enhancement_points_spent ?? 0,
           source: 'inventory',
@@ -62,8 +64,9 @@ const RuneSocketSection = ({ characterId }: RuneSocketSectionProps) => {
     }
 
     for (const slot of equipment) {
-      if (slot.item && ARMOR_WEAPON_TYPES.has(slot.item.item_type) && slot.item.socket_count > 0) {
+      if (slot.item && RUNE_EXTRACT_TYPES.has(slot.item.item_type)) {
         const gems = parseSocketedGems(slot.socketed_gems);
+        if (!gems.some((g) => g !== null)) continue;
         items.push({
           rowId: slot.id ?? 0,
           itemId: slot.item.id,
@@ -71,7 +74,7 @@ const RuneSocketSection = ({ characterId }: RuneSocketSectionProps) => {
           image: slot.item.image,
           itemType: slot.item.item_type,
           itemRarity: slot.item.item_rarity,
-          socketCount: slot.item.socket_count,
+          socketCount: Math.max(slot.item.socket_count ?? 0, gems.length),
           socketedGems: gems,
           enhancementPointsSpent: slot.enhancement_points_spent ?? 0,
           source: 'equipment',
@@ -97,15 +100,18 @@ const RuneSocketSection = ({ characterId }: RuneSocketSectionProps) => {
   return (
     <div className="rounded-card border border-white/[0.07] bg-black/25 p-5 space-y-3">
       <div className="space-y-1.5">
-        <SectionHeader title="Руны и слоты" />
+        <SectionHeader title="Извлечение рун" />
         <p className="text-xs text-white/50">
-          Вставляйте руны в слоты оружия и брони для усиления характеристик.
+          Вы можете извлекать руны из предметов.
+        </p>
+        <p className="text-xs text-white/40">
+          Вставить руну может любой игрок через меню предмета «Гнёзда».
         </p>
       </div>
 
       {armorWeaponItems.length === 0 ? (
         <p className="text-white/40 text-sm py-4 text-center">
-          Нет оружия или брони со слотами
+          Нет предметов со вставленными рунами
         </p>
       ) : (
         <motion.div

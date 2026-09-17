@@ -1,8 +1,9 @@
 """
-Task 4.4 — QA tests for FEAT-083: Blacksmith sharpening system.
+Task 4.4 — QA tests for FEAT-083: sharpening system.
 
 Tests covering sharpening endpoint, sharpen-info endpoint, point-based mechanic,
-whetstone validation, profession checks, and build_modifiers_dict enhancement.
+whetstone validation and build_modifiers_dict enhancement.
+FEAT-165: anyone may sharpen with a stone of the matching group; no profession XP.
 """
 
 import json
@@ -79,6 +80,10 @@ def _create_rank(db, profession_id=1, rank_number=1, name="Ученик"):
 
 def _create_item(db, item_id, name, item_type="resource", max_stack=99,
                  whetstone_level=None, **kwargs):
+    if whetstone_level is not None:
+        # FEAT-165: a stone has a subcategory and a gear group
+        kwargs.setdefault("whetstone_group", "weapon_armor")
+        kwargs.setdefault("resource_subcategory", "whetstone")
     item = models.Items(
         id=item_id, name=name, item_level=1, item_type=item_type,
         item_rarity=kwargs.pop("item_rarity", "common"),
@@ -230,7 +235,7 @@ class TestSharpenHappyPath:
         assert data["points_remaining"] == 14
         assert data["point_cost"] == 1
         assert data["whetstone_consumed"] is True
-        assert data["xp_earned"] == 10
+        assert "xp_earned" not in data  # FEAT-165: no XP for sharpening
 
         # Verify DB state
         db.expire_all()
@@ -466,19 +471,18 @@ class TestNotEnoughPointsForNewStat:
 
 
 # ===========================================================================
-# 8. Non-blacksmith
+# 8. Non-blacksmith — allowed since FEAT-165
 # ===========================================================================
 
 class TestNonBlacksmith:
 
-    def test_alchemist_cannot_sharpen(self, sharpen_env):
-        """Alchemist tries to sharpen. Expect 400."""
+    def test_alchemist_can_sharpen(self, sharpen_env):
+        """Any profession may sharpen with a matching stone."""
         db = sharpen_env["db"]
         c = sharpen_env["client"]
         weapon_inv = sharpen_env["weapon_inv"]
         ws_inv = sharpen_env["ws_inv"]
 
-        # Change profession to alchemist
         cp = db.query(models.CharacterProfession).filter(
             models.CharacterProfession.character_id == 1
         ).first()
@@ -490,7 +494,8 @@ class TestNonBlacksmith:
         _assign_profession(db, 1, prof2.id, rank=1)
         db.commit()
 
-        with patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock):
+        with patch("main.random.random", return_value=0.1), \
+             patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock):
             resp = c.post("/inventory/crafting/1/sharpen", json={
                 "inventory_item_id": weapon_inv.id,
                 "whetstone_item_id": ws_inv.id,
@@ -498,8 +503,8 @@ class TestNonBlacksmith:
                 "source": "inventory",
             })
 
-        assert resp.status_code == 400
-        assert "кузнец" in resp.json()["detail"].lower()
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["success"] is True
 
 
 # ===========================================================================
@@ -734,18 +739,18 @@ class TestEquippedItemSharpening:
 
 
 # ===========================================================================
-# 16. XP awarded
+# 16. No XP for sharpening (FEAT-165)
 # ===========================================================================
 
 class TestXPAwarded:
 
-    def test_xp_awarded_on_sharpening(self, sharpen_env):
-        """Verify crafting XP is awarded after sharpening (success or failure)."""
+    def test_no_xp_on_sharpening(self, sharpen_env):
+        """Sharpening never changes profession XP."""
         c = sharpen_env["client"]
+        db = sharpen_env["db"]
         weapon_inv = sharpen_env["weapon_inv"]
         ws_inv = sharpen_env["ws_inv"]
 
-        # Even on failure, XP should be awarded
         with patch("main.random.random", return_value=0.99), \
              patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock):
             resp = c.post("/inventory/crafting/1/sharpen", json={
@@ -758,8 +763,12 @@ class TestXPAwarded:
         assert resp.status_code == 200
         data = resp.json()
         assert data["success"] is False
-        assert data["xp_earned"] == 10
-        assert data["new_total_xp"] == 10
+        assert "xp_earned" not in data
+        db.expire_all()
+        cp = db.query(models.CharacterProfession).filter(
+            models.CharacterProfession.character_id == 1
+        ).first()
+        assert cp.experience == 0
 
 
 # ===========================================================================
@@ -855,18 +864,25 @@ class TestSharpeningSecurity:
         })
         assert resp.status_code == 403
 
-    def test_sharpen_no_profession_400(self, sharpen_env):
-        """Character without profession tries to sharpen."""
+
+    def test_sharpen_without_profession_allowed(self, sharpen_env):
+        """A character without a profession sharpens its own item (FEAT-165)."""
         db = sharpen_env["db"]
         c = sharpen_env["client"]
 
         _insert_character(db, 3, user_id=1, name="NoProfChar")
+        ring = _create_item(db, 60, "Серебряное кольцо", "ring", max_stack=1)
+        ring_inv = _add_inventory(db, 3, ring.id, 1)
+        stone = _create_item(db, 61, "Гравировальный резец", "resource",
+                             whetstone_level=3, whetstone_group="jewelry")
+        stone_inv = _add_inventory(db, 3, stone.id, 1)
         db.commit()
 
-        resp = c.post("/inventory/crafting/3/sharpen", json={
-            "inventory_item_id": 1,
-            "whetstone_item_id": 2,
-            "stat_field": "strength_modifier",
-        })
-        assert resp.status_code == 400
-        assert "нет профессии" in resp.json()["detail"]
+        with patch("main.random.random", return_value=0.1):
+            resp = c.post("/inventory/crafting/3/sharpen", json={
+                "inventory_item_id": ring_inv.id,
+                "whetstone_item_id": stone_inv.id,
+                "stat_field": "luck_modifier",
+            })
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["success"] is True

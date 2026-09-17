@@ -20,7 +20,6 @@ class ItemType(str, Enum):
     scroll = "scroll"
     misc = "misc"
     bracelet = "bracelet"
-    blueprint = "blueprint"
     recipe = "recipe"
     gem = "gem"
     rune = "rune"
@@ -52,6 +51,42 @@ def is_rarity_allowed_for_type(item_type, item_rarity) -> bool:
         _enum_value(item_rarity) in EQUIPMENT_ONLY_RARITIES
         and _enum_value(item_type) not in EQUIPMENT_ITEM_TYPES
     )
+
+
+class ResourceSubcategory(str, Enum):
+    """FEAT-165: resource subcategory (only for item_type='resource')."""
+    # raw materials
+    ore = "ore"
+    herb = "herb"
+    wood = "wood"
+    ingredient = "ingredient"
+    trophy = "trophy"
+    # refined products
+    ingot = "ingot"
+    magic_dust = "magic_dust"
+    essence = "essence"
+    reagent = "reagent"
+    material = "material"
+    # profession consumables
+    whetstone = "whetstone"
+    repair_kit = "repair_kit"
+
+
+class WhetstoneGroup(str, Enum):
+    """FEAT-165: which gear a sharpening stone fits."""
+    weapon_armor = "weapon_armor"
+    cloak_belt = "cloak_belt"
+    jewelry = "jewelry"
+
+
+WHETSTONE_LEVELS = (1, 2, 3)
+# Items that may have socket_count > 0 (belt has no sockets since FEAT-165)
+SOCKETABLE_ITEM_TYPES = frozenset({"weapon", "head", "body", "cloak", "ring", "necklace", "bracelet"})
+
+# FEAT-165 conversions / refining bounds
+CONVERSION_QTY_MIN = 1
+CONVERSION_QTY_MAX = 100
+REFINE_MAX_QUANTITY = 9999
 
 
 class ArmorSubclass(str, Enum):
@@ -205,7 +240,9 @@ class ItemBase(BaseModel):
     socket_count: int = 0
     whetstone_level: Optional[int] = None
     identify_level: Optional[int] = None
-    essence_result_item_id: Optional[int] = None
+    # FEAT-165
+    resource_subcategory: Optional[ResourceSubcategory] = None
+    whetstone_group: Optional[WhetstoneGroup] = None
 
     # Buff fields (for consumable buff items like XP books)
     buff_type: Optional[str] = None
@@ -282,7 +319,7 @@ class ItemCreate(ItemBase):
     Схема для создания/обновления предмета.
     Включает валидацию специфичных для gathering_tool полей.
     """
-    # Blueprint -> the recipe it lets you craft once. Existence is checked in the endpoint.
+    # Recipe item -> the recipe it teaches. Existence is checked in the endpoint.
     blueprint_recipe_id: Optional[int] = None
 
     @root_validator
@@ -294,8 +331,43 @@ class ItemCreate(ItemBase):
             raise ValueError("Класс брони можно указать только для головы и тела")
         if values.get("weapon_subclass") is not None and item_type not in WEAPON_SUBCLASS_TYPES:
             raise ValueError("Подкласс оружия можно указать только для оружия")
-        if values.get("blueprint_recipe_id") is not None and item_type not in ("blueprint", "recipe"):
-            raise ValueError("Рецепт можно привязать только к чертежу")
+        if values.get("blueprint_recipe_id") is not None and item_type != "recipe":
+            raise ValueError("Рецепт можно привязать только к предмету-рецепту")
+        if (values.get("socket_count") or 0) > 0 and item_type not in SOCKETABLE_ITEM_TYPES:
+            raise ValueError("Слоты доступны только для оружия, брони, шлема, плаща и украшений")
+        return values
+
+    @root_validator
+    def _validate_resource_subcategory(cls, values):
+        """FEAT-165: subcategory, sharpening stone and repair kit fields."""
+        item_type = _enum_value(values.get("item_type"))
+        if item_type is None:
+            return values  # field-level validation already failed
+        subcategory = _enum_value(values.get("resource_subcategory"))
+        whetstone_level = values.get("whetstone_level")
+        whetstone_group = values.get("whetstone_group")
+        repair_power = values.get("repair_power")
+        has_level = whetstone_level not in (None, 0)
+        has_power = repair_power not in (None, 0)
+
+        if subcategory is not None and item_type != "resource":
+            raise ValueError("Подкатегорию можно указать только для ресурса")
+
+        if subcategory == ResourceSubcategory.whetstone.value:
+            if not has_level or whetstone_group is None:
+                raise ValueError("Для камня заточки укажите уровень и группу")
+            if whetstone_level not in WHETSTONE_LEVELS:
+                raise ValueError("Уровень камня заточки должен быть 1, 2 или 3")
+        elif has_level or whetstone_group is not None:
+            raise ValueError(
+                "Уровень и группу камня заточки можно указать только для камня заточки"
+            )
+
+        if subcategory == ResourceSubcategory.repair_kit.value:
+            if repair_power is None or repair_power <= 0:
+                raise ValueError("Для ремкомплекта укажите силу ремонта больше 0")
+        elif has_power and item_type == "resource":
+            raise ValueError("Сила ремонта указывается только для ремкомплекта")
         return values
 
     @root_validator
@@ -841,8 +913,7 @@ class RecipeOut(BaseModel):
     xp_reward: Optional[int] = None
     ingredients: List[RecipeIngredientOut] = []
     can_craft: bool = False
-    source: str  # "learned" or "blueprint"
-    blueprint_item_id: Optional[int] = None
+    source: str = "learned"  # always "learned" since FEAT-165 (kept for compatibility)
 
     class Config:
         orm_mode = True
@@ -864,7 +935,6 @@ class RecipeCreate(BaseModel):
     rarity: Optional[str] = None
     icon: Optional[str] = None
     auto_learn_rank: Optional[int] = None
-    is_blueprint_recipe: bool = False
     xp_reward: Optional[int] = None
     ingredients: List[RecipeIngredientCreate] = []
 
@@ -880,21 +950,18 @@ class RecipeUpdate(BaseModel):
     icon: Optional[str] = None
     auto_learn_rank: Optional[int] = None
     is_active: Optional[bool] = None
-    is_blueprint_recipe: Optional[bool] = None
     xp_reward: Optional[int] = None
     ingredients: Optional[List[RecipeIngredientCreate]] = None
 
 
 class CraftRequest(BaseModel):
     recipe_id: int
-    blueprint_item_id: Optional[int] = None
 
 
 class CraftResult(BaseModel):
     success: bool
     crafted_item: dict
     consumed_materials: list
-    blueprint_consumed: bool = False
     xp_earned: int = 0
     new_total_xp: int = 0
     rank_up: bool = False
@@ -919,7 +986,6 @@ class RecipeAdminOut(BaseModel):
     rarity: str
     icon: Optional[str] = None
     xp_reward: Optional[int] = None
-    is_blueprint_recipe: bool
     is_active: bool
     auto_learn_rank: Optional[int] = None
     ingredients: List[RecipeIngredientOut] = []
@@ -959,10 +1025,6 @@ class SharpenResult(BaseModel):
     points_remaining: int
     point_cost: int
     whetstone_consumed: bool
-    xp_earned: int
-    new_total_xp: int
-    rank_up: bool
-    new_rank_name: Optional[str] = None
 
 
 class SharpenStatInfo(BaseModel):
@@ -981,6 +1043,7 @@ class SharpenWhetstoneInfo(BaseModel):
     name: str
     quantity: int
     success_chance: int
+    whetstone_group: str
 
 
 class SharpenInfoResponse(BaseModel):
@@ -988,78 +1051,9 @@ class SharpenInfoResponse(BaseModel):
     item_type: str
     points_spent: int
     points_remaining: int
+    sharpen_group: str
     stats: List[SharpenStatInfo] = []
     whetstones: List[SharpenWhetstoneInfo] = []
-
-
-# -----------------------------------------------------------------------------
-# 10. Essence extraction schemas
-# -----------------------------------------------------------------------------
-
-class ExtractEssenceRequest(BaseModel):
-    crystal_item_id: int  # character_inventory.id of the crystal
-
-
-class ExtractEssenceResult(BaseModel):
-    success: bool
-    crystal_name: str
-    essence_name: Optional[str] = None
-    crystal_consumed: bool = True
-    xp_earned: int = 0
-    new_total_xp: int = 0
-    rank_up: bool = False
-    new_rank_name: Optional[str] = None
-
-
-class CrystalInfo(BaseModel):
-    inventory_item_id: int
-    item_id: int
-    name: str
-    image: Optional[str] = None
-    quantity: int
-    essence_name: str
-    essence_image: Optional[str] = None
-    success_chance: int = 75
-
-
-class ExtractInfoResponse(BaseModel):
-    crystals: List[CrystalInfo] = []
-
-
-# -----------------------------------------------------------------------------
-# 11. Transmutation schemas
-# -----------------------------------------------------------------------------
-
-class TransmuteRequest(BaseModel):
-    inventory_item_id: int  # character_inventory.id of the resource to transmute
-
-
-class TransmuteResult(BaseModel):
-    success: bool
-    consumed_item_name: str
-    consumed_quantity: int
-    result_item_name: str
-    result_item_rarity: str
-    xp_earned: int
-    new_total_xp: int
-    rank_up: bool
-    new_rank_name: Optional[str] = None
-
-
-class TransmuteItemInfo(BaseModel):
-    inventory_item_id: int
-    item_id: int
-    name: str
-    image: Optional[str] = None
-    quantity: int
-    item_rarity: str
-    next_rarity: str
-    can_transmute: bool
-    required_quantity: int = 5
-
-
-class TransmuteInfoResponse(BaseModel):
-    items: List[TransmuteItemInfo] = []
 
 
 # -----------------------------------------------------------------------------
@@ -1087,6 +1081,10 @@ class SocketInfoResponse(BaseModel):
     item_name: str
     item_type: str
     socket_count: int
+    insertable_type: str  # "gem" (jewelry) or "rune"
+    can_insert: bool  # anyone may insert; False for legacy belts
+    can_extract: bool  # jeweler -> gems, enchanter -> runes
+    extract_preservation_chance: Optional[int] = None
     slots: List[GemSlotInfo] = []
     available_gems: List[AvailableGemInfo] = []
 
@@ -1103,10 +1101,6 @@ class InsertGemResult(BaseModel):
     item_name: str
     gem_name: str
     slot_index: int
-    xp_earned: int
-    new_total_xp: int
-    rank_up: bool
-    new_rank_name: Optional[str] = None
 
 
 class ExtractGemRequest(BaseModel):
@@ -1122,45 +1116,119 @@ class ExtractGemResult(BaseModel):
     gem_preserved: bool
     preservation_chance: int
     slot_index: int
-    xp_earned: int
-    new_total_xp: int
-    rank_up: bool
-    new_rank_name: Optional[str] = None
 
 
 # -----------------------------------------------------------------------------
-# 13. Smelting schemas
+# 13. Refining schemas (FEAT-165)
 # -----------------------------------------------------------------------------
 
-class SmeltIngredientReturn(BaseModel):
-    item_id: int
+class RefiningRuleOut(BaseModel):
+    profession_id: int
+    profession_slug: str
+    profession_name: str
+    source_subcategory: str
+    result_subcategory: str
+
+
+class ConversionItemOut(BaseModel):
+    id: int
     name: str
     image: Optional[str] = None
+    item_rarity: str
+
+
+class ItemConversionIn(BaseModel):
+    profession_id: int
+    source_quantity: int
+    result_item_id: int
+    result_quantity: int
+
+    @validator("profession_id", "result_item_id")
+    def _positive_id(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Идентификатор должен быть положительным")
+        return v
+
+    @validator("source_quantity", "result_quantity")
+    def _quantity_in_bounds(cls, v: int) -> int:
+        if not CONVERSION_QTY_MIN <= v <= CONVERSION_QTY_MAX:
+            raise ValueError(
+                f"Количество должно быть от {CONVERSION_QTY_MIN} до {CONVERSION_QTY_MAX}"
+            )
+        return v
+
+
+class ItemConversionsPayload(BaseModel):
+    conversions: List[ItemConversionIn] = []
+
+
+class ItemConversionOut(BaseModel):
+    id: int
+    profession_id: int
+    profession_name: str
+    source_quantity: int
+    result_item: ConversionItemOut
+    result_quantity: int
+
+
+class ItemConversionsResponse(BaseModel):
+    source_item_id: int
+    conversions: List[ItemConversionOut] = []
+
+
+class RefineSourceOut(BaseModel):
+    source_item_id: int
+    name: str
+    image: Optional[str] = None
+    item_rarity: str
+    owned_quantity: int
+    source_quantity: int
+    max_batches: int
+    result_item: ConversionItemOut
+    result_quantity: int
+    xp_per_batch: int
+
+
+class RefineInfoResponse(BaseModel):
+    can_refine: bool
+    profession_slug: Optional[str] = None
+    source_subcategory: Optional[str] = None
+    result_subcategory: Optional[str] = None
+    double_chance_pct: Optional[int] = None
+    sources: List[RefineSourceOut] = []
+
+
+class RefineRequest(BaseModel):
+    source_item_id: int
     quantity: int
 
+    @validator("source_item_id")
+    def _positive_source(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Идентификатор предмета должен быть положительным")
+        return v
 
-class SmeltInfoResponse(BaseModel):
-    item_name: str
-    item_type: str
-    has_gems: bool
-    gem_count: int
-    has_recipe: bool
-    ingredients: List[SmeltIngredientReturn] = []
+    @validator("quantity")
+    def _quantity_in_bounds(cls, v: int) -> int:
+        if not 1 <= v <= REFINE_MAX_QUANTITY:
+            raise ValueError(f"Количество должно быть от 1 до {REFINE_MAX_QUANTITY}")
+        return v
 
 
-class SmeltRequest(BaseModel):
-    inventory_item_id: int
-
-
-class SmeltResult(BaseModel):
+class RefineResult(BaseModel):
     success: bool
-    item_name: str
-    gems_destroyed: int
-    materials_returned: list
+    source_item_id: int
+    consumed_quantity: int
+    leftover_quantity: int
+    batches: int
+    doubled_batches: int
+    result_item: ConversionItemOut
+    result_quantity: int
     xp_earned: int
     new_total_xp: int
     rank_up: bool
     new_rank_name: Optional[str] = None
+    auto_learned_recipes: List[dict] = []
 
 
 # -----------------------------------------------------------------------------
@@ -1498,6 +1566,9 @@ class FreeSlotsCheckResponse(BaseModel):
     is_full: bool
 
 
+GATHERING_SKILL_SLUGS = frozenset({"mining", "herbalism", "woodcutting", "foraging"})
+
+
 class GatheringAwardRequest(BaseModel):
     """Тело запроса internal-эндпоинта /gathering/award.
 
@@ -1515,7 +1586,7 @@ class GatheringAwardRequest(BaseModel):
 
     @validator("skill_slug")
     def _slug_in_set(cls, v: str) -> str:
-        if v not in {"mining", "herbalism", "woodcutting"}:
+        if v not in GATHERING_SKILL_SLUGS:
             raise ValueError("Неизвестный навык добычи")
         return v
 

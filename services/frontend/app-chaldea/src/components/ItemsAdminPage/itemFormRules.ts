@@ -10,6 +10,17 @@ import {
   isEquipmentOnlyRarity,
   isWearableType,
 } from "../../constants/items";
+import {
+  JEWELRY_SOCKET_TYPES,
+  RAW_RESOURCE_SUBCATEGORIES,
+  RESOURCE_SUBCATEGORY_LABELS,
+  RUNE_SOCKET_TYPES,
+  WHETSTONE_GROUPS,
+  WHETSTONE_GROUP_LABELS,
+  WHETSTONE_GROUP_TARGETS,
+  type ResourceSubcategory,
+  type WhetstoneGroup,
+} from "../../constants/professions";
 
 export const EQUIPMENT_TYPES: readonly string[] = [
   "head", "body", "cloak", "belt", "weapon",
@@ -93,16 +104,18 @@ export const RECOVERY_FIELDS: ModDef[] = [
   { key: "stamina_recovery", label: "Выносливость" },
 ];
 
-/* ── Resource kinds ── */
+/* ── Resources ── */
 
-export type ResourceKind = "plain" | "repair_kit" | "whetstone" | "crystal";
+export const WHETSTONE_GROUP_OPTIONS: { value: WhetstoneGroup; label: string }[] = WHETSTONE_GROUPS.map((g) => ({
+  value: g,
+  label: `${WHETSTONE_GROUP_LABELS[g]} — ${WHETSTONE_GROUP_TARGETS[g]}`,
+}));
 
-export const RESOURCE_KIND_LABELS: Record<ResourceKind, string> = {
-  plain: "Обычный ресурс",
-  repair_kit: "Ремкомплект",
-  whetstone: "Точильный камень",
-  crystal: "Кристалл (даёт эссенцию)",
-};
+export const isResourceSubcategory = (value: unknown): value is ResourceSubcategory =>
+  typeof value === "string" && value in RESOURCE_SUBCATEGORY_LABELS;
+
+export const isRawSubcategory = (value: unknown): value is ResourceSubcategory =>
+  typeof value === "string" && (RAW_RESOURCE_SUBCATEGORIES as readonly string[]).includes(value);
 
 export const REPAIR_POWER_OPTIONS = [25, 50, 75, 100] as const;
 
@@ -123,16 +136,6 @@ export const BUFF_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "xp_bonus", label: "Бонус к опыту" },
 ];
 
-const isSet = (v: unknown) => v !== null && v !== undefined && v !== "";
-
-/** Which resource kind a loaded item is, judging by the field it carries */
-export const detectResourceKind = (item: Record<string, unknown>): ResourceKind => {
-  if (isSet(item.repair_power)) return "repair_kit";
-  if (isSet(item.whetstone_level)) return "whetstone";
-  if (isSet(item.essence_result_item_id)) return "crystal";
-  return "plain";
-};
-
 /* ── Per-type visibility ── */
 
 export interface FieldRules {
@@ -146,8 +149,8 @@ export interface FieldRules {
   recovery: boolean;
   buff: boolean;
   identify: boolean;
-  resourceKind: boolean;
-  blueprintRecipe: boolean;
+  /** Resource subcategory select (+ whetstone / repair kit fields, refining config) */
+  resource: boolean;
   recipeAuto: boolean;
   gatheringTool: boolean;
   /** "Еда" checkbox (consumables only) */
@@ -163,7 +166,8 @@ export const rulesFor = (itemType: string, isFood = false): FieldRules => {
     // Food bonuses use the same modifier columns as equipment
     modifiers: equipment || jewelry || itemType === "gem" || itemType === "rune" || eatable,
     durability: equipment || itemType === "gathering_tool",
-    sockets: equipment ? "runes" : jewelry ? "gems" : null,
+    // Belts have no sockets (quick slots only, FEAT-165)
+    sockets: RUNE_SOCKET_TYPES.has(itemType) ? "runes" : JEWELRY_SOCKET_TYPES.has(itemType) ? "gems" : null,
     fastSlotBonus: equipment || jewelry,
     armorSubclass: ARMOR_SUBCLASS_TYPES.includes(itemType),
     weaponFields: WEAPON_SUBCLASS_TYPES.includes(itemType),
@@ -171,8 +175,7 @@ export const rulesFor = (itemType: string, isFood = false): FieldRules => {
     // Food cannot be a buff item
     buff: itemType === "consumable" && !eatable,
     identify: itemType === "scroll",
-    resourceKind: itemType === "resource",
-    blueprintRecipe: itemType === "blueprint",
+    resource: itemType === "resource",
     recipeAuto: itemType === "recipe",
     gatheringTool: itemType === "gathering_tool",
     food,
@@ -193,10 +196,7 @@ const numOrNull = (v: unknown): number | null =>
  * Normalise raw form state (inputs keep strings) into the API payload and
  * reset every field the chosen type does not use.
  */
-export const buildItemPayload = (
-  item: Record<string, unknown>,
-  resourceKind: ResourceKind,
-): Record<string, unknown> => {
+export const buildItemPayload = (item: Record<string, unknown>): Record<string, unknown> => {
   const type = String(item.item_type);
   const rules = rulesFor(type, Boolean(item.is_food));
   const payload: Record<string, unknown> = { ...item };
@@ -234,16 +234,16 @@ export const buildItemPayload = (
 
   payload.identify_level = rules.identify ? numOrNull(item.identify_level) : null;
 
-  payload.repair_power =
-    rules.resourceKind && resourceKind === "repair_kit" ? numOrNull(item.repair_power) : null;
-  payload.whetstone_level =
-    rules.resourceKind && resourceKind === "whetstone" ? numOrNull(item.whetstone_level) : null;
-  payload.essence_result_item_id =
-    rules.resourceKind && resourceKind === "crystal" ? numOrNull(item.essence_result_item_id) : null;
+  const subcategory = rules.resource && item.resource_subcategory ? String(item.resource_subcategory) : null;
+  payload.resource_subcategory = subcategory;
+  payload.repair_power = subcategory === "repair_kit" ? numOrNull(item.repair_power) : null;
+  const whetstone = subcategory === "whetstone";
+  payload.whetstone_level = whetstone ? numOrNull(item.whetstone_level) : null;
+  payload.whetstone_group = whetstone ? item.whetstone_group || null : null;
 
   // Recipe items are managed by the recipe editor: keep their link untouched
   if (!rules.recipeAuto) {
-    payload.blueprint_recipe_id = rules.blueprintRecipe ? numOrNull(item.blueprint_recipe_id) : null;
+    payload.blueprint_recipe_id = null;
   }
 
   payload.tool_category = rules.gatheringTool ? item.tool_category || null : null;

@@ -13,7 +13,19 @@ import {
   WEAPON_SUBCLASS_LABELS,
   type ItemCategoryKey,
 } from "../../constants/items";
+import {
+  RESOURCE_SUBCATEGORY_GROUPS,
+  RESOURCE_SUBCATEGORY_LABELS,
+  RESOURCE_SUBCATEGORY_NONE_LABEL,
+  resourceSubcategoryLabel,
+} from "../../constants/professions";
 import type { ItemData } from "./ItemsAdminPage";
+
+/** Subcategory filter value for resources without a subcategory («Прочее») */
+const NO_SUBCATEGORY = "__none__";
+
+const subcategoryOf = (item: ItemData): string | null =>
+  typeof item.resource_subcategory === "string" && item.resource_subcategory ? item.resource_subcategory : null;
 
 /* ── Sort ── */
 
@@ -50,6 +62,7 @@ const ItemList = ({ category, onCategoryChange, onSelect, onCreate, onIssue }: I
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [filterType, setFilterType] = useState("");
   const [filterRarity, setFilterRarity] = useState("");
+  const [filterSubcategory, setFilterSubcategory] = useState("");
 
   // The whole catalogue is loaded once; categories, filters and search are local
   useEffect(() => {
@@ -60,7 +73,10 @@ const ItemList = ({ category, onCategoryChange, onSelect, onCreate, onIssue }: I
   }, []);
 
   // A type filter from another category would hide everything
-  useEffect(() => setFilterType(""), [category]);
+  useEffect(() => {
+    setFilterType("");
+    setFilterSubcategory("");
+  }, [category]);
 
   const currentCategory = ITEM_CATEGORIES.find((c) => c.key === category) ?? ITEM_CATEGORIES[0];
 
@@ -80,6 +96,11 @@ const ItemList = ({ category, onCategoryChange, onSelect, onCreate, onIssue }: I
         types.includes(i.item_type) &&
         (!filterType || i.item_type === filterType) &&
         (!filterRarity || i.item_rarity === filterRarity) &&
+        (!filterSubcategory ||
+          (i.item_type === "resource" &&
+            (filterSubcategory === NO_SUBCATEGORY
+              ? subcategoryOf(i) === null
+              : subcategoryOf(i) === filterSubcategory))) &&
         (!q || i.name.toLowerCase().includes(q) || String(i.id) === q),
     );
 
@@ -95,7 +116,11 @@ const ItemList = ({ category, onCategoryChange, onSelect, onCreate, onIssue }: I
       }
       return sortDir === "asc" ? cmp : -cmp;
     });
-  }, [items, currentCategory, filterType, filterRarity, query, sortKey, sortDir]);
+  }, [items, currentCategory, filterType, filterRarity, filterSubcategory, query, sortKey, sortDir]);
+
+  // Resource subcategories: shown for the craft category or the resource type filter
+  const showSubcategoryFilter =
+    filterType === "resource" || (currentCategory.types as readonly string[]).includes("resource");
 
   const handleDelete = async (item: ItemData) => {
     if (!confirm(`Удалить предмет «${item.name}»?`)) return;
@@ -195,6 +220,26 @@ const ItemList = ({ category, onCategoryChange, onSelect, onCreate, onIssue }: I
             ))}
           </select>
         )}
+        {showSubcategoryFilter && (
+          <select
+            className="input-underline bg-transparent text-sm w-full min-[420px]:w-[190px]"
+            value={filterSubcategory}
+            onChange={(e) => setFilterSubcategory(e.target.value)}
+            aria-label="Подкатегория ресурса"
+          >
+            <option value="" className="bg-site-dark">Все подкатегории</option>
+            {RESOURCE_SUBCATEGORY_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label} className="bg-site-dark">
+                {group.items.map((value) => (
+                  <option key={value} value={value} className="bg-site-dark">
+                    {RESOURCE_SUBCATEGORY_LABELS[value]}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+            <option value={NO_SUBCATEGORY} className="bg-site-dark">{RESOURCE_SUBCATEGORY_NONE_LABEL}</option>
+          </select>
+        )}
         <select
           className="input-underline bg-transparent text-sm w-full min-[420px]:w-[170px]"
           value={filterRarity}
@@ -256,6 +301,9 @@ const ItemList = ({ category, onCategoryChange, onSelect, onCreate, onIssue }: I
                 <td className="px-3 py-2 text-sm text-white/70">
                   {ITEM_TYPE_LABELS[i.item_type] ?? i.item_type}
                   {subclassLabel(i) && <span className="block text-xs text-white/40">{subclassLabel(i)}</span>}
+                  {i.item_type === "resource" && (
+                    <span className="block text-xs text-white/40">{resourceSubcategoryLabel(subcategoryOf(i))}</span>
+                  )}
                 </td>
                 <td className={`px-3 py-2 text-sm font-medium ${RARITY_TEXT_COLORS[i.item_rarity] ?? "text-white/70"}`}>
                   {itemHasRarity(i.item_type) ? RARITY_LABELS[i.item_rarity] ?? i.item_rarity : "—"}
@@ -278,6 +326,7 @@ const ItemList = ({ category, onCategoryChange, onSelect, onCreate, onIssue }: I
                 <p className="text-xs text-white/50 truncate">
                   #{i.id} · {ITEM_TYPE_LABELS[i.item_type] ?? i.item_type}
                   {subclassLabel(i) ? ` · ${subclassLabel(i)}` : ""}
+                  {i.item_type === "resource" ? ` · ${resourceSubcategoryLabel(subcategoryOf(i))}` : ""}
                 </p>
                 {itemHasRarity(i.item_type) && (
                   <p className={`text-xs font-medium ${RARITY_TEXT_COLORS[i.item_rarity] ?? "text-white/70"}`}>

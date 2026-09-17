@@ -6317,6 +6317,7 @@ _CATEGORY_TO_SKILL_SLUG = {
     "ore": "mining",
     "herb": "herbalism",
     "wood": "woodcutting",
+    "ingredient": "foraging",  # FEAT-165
 }
 
 
@@ -6857,6 +6858,7 @@ async def fetch_gathering_nodes_with_active_sessions(
             "current_bank": int(n.current_bank or 0),
             "daily_bank_max": int(n.daily_bank_max or 0),
             "allow_concurrent_gather": bool(n.allow_concurrent_gather),
+            "tool_required": is_tool_required_for_category(str(n.category)),
             "depleted_at": _ensure_aware_utc(n.depleted_at),
             "restore_at": _ensure_aware_utc(n.restore_at),
             "is_enabled": bool(n.is_enabled),
@@ -6898,7 +6900,15 @@ _GATHER_NODE_CATEGORY_TO_SKILL_SLUG = {
     "ore": "mining",
     "herb": "herbalism",
     "wood": "woodcutting",
+    "ingredient": "foraging",  # FEAT-165
 }
+# FEAT-165: categories gathered without any tool. For these a tool is not
+# accepted, there is no x2 time penalty and the rank double chance applies.
+TOOLLESS_GATHER_CATEGORIES = frozenset({"ingredient"})
+
+
+def is_tool_required_for_category(node_category: str) -> bool:
+    return str(node_category) not in TOOLLESS_GATHER_CATEGORIES
 
 # Caps from FEAT-128 §3.6.
 _GATHER_SPEED_CAP_PCT = 60.0
@@ -7119,12 +7129,17 @@ def _compute_effective_gather_params(
     has_tool: bool,
     rank_bonuses: Dict[str, float],
     tool_bonuses: Dict[str, float],
+    tool_required: bool = True,
 ) -> Dict[str, float]:
     """Apply the FEAT-128 §3.6 formulas (lenient no-tool variant).
 
     Returns a dict with effective_seconds (int), effective_stamina_paid (int),
     effective_speed_bonus_pct (float, capped), effective_double_chance_pct
     (float, gated on tool), effective_stamina_bonus_pct (float, capped).
+
+    FEAT-165: the x2 time penalty and the "no double chance" gate apply only
+    when `tool_required and not has_tool`. Toolless categories get the rank
+    bonuses with the same caps and zero tool bonuses.
     """
     base_seconds = int(base_stamina) * 5 * 60  # 1 stamina = 5 min
 
@@ -7141,9 +7156,11 @@ def _compute_effective_gather_params(
         t_stamina = 0.0
         t_double = 0.0
 
+    missing_required_tool = tool_required and not has_tool
+
     speed_total_pct = min(s_speed + t_speed, _GATHER_SPEED_CAP_PCT)
     seconds = math.floor(base_seconds * (1.0 - speed_total_pct / 100.0))
-    if not has_tool:
+    if missing_required_tool:
         seconds = seconds * 2  # ×2 penalty AFTER rank speed bonus
     seconds = max(int(seconds), _GATHER_MIN_SECONDS)
 
@@ -7151,10 +7168,10 @@ def _compute_effective_gather_params(
     paid = math.ceil(int(base_stamina) * (1.0 - stamina_total_pct / 100.0))
     paid = max(int(paid), _GATHER_MIN_STAMINA)
 
-    if has_tool:
-        double_chance = min(s_double + t_double, _GATHER_DOUBLE_CHANCE_CAP_PCT)
-    else:
+    if missing_required_tool:
         double_chance = 0.0
+    else:
+        double_chance = min(s_double + t_double, _GATHER_DOUBLE_CHANCE_CAP_PCT)
 
     return {
         "effective_seconds": int(seconds),
@@ -7362,6 +7379,12 @@ async def start_gathering(
     # 9. Tool validation (if provided). Reads from shared DB inside the same
     # transaction as the FOR UPDATE on the node.
     has_tool = tool_inventory_item_id is not None
+    tool_required = is_tool_required_for_category(str(node.category))
+    if has_tool and not tool_required:
+        raise HTTPException(
+            status_code=422,
+            detail="Для сбора этого ресурса инструмент не нужен",
+        )
     tool_bonuses: Dict[str, float] = {
         "gather_double_chance_bonus": 0.0,
         "gather_speed_bonus_pct": 0.0,
@@ -7381,6 +7404,7 @@ async def start_gathering(
         has_tool=has_tool,
         rank_bonuses=rank_bonuses,
         tool_bonuses=tool_bonuses,
+        tool_required=tool_required,
     )
 
     # 11. Stamina sufficiency check (read first, consume after pre-flight).

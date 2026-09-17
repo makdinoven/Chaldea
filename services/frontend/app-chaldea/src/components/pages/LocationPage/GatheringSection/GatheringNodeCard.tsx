@@ -5,7 +5,8 @@
  * node name, the resulting item, the daily-bank counter, the cost summary
  * (stamina × time), and a status-specific call-to-action:
  *
- *  - available  → "Собрать" button (opens <ToolSelectionModal>)
+ *  - available  → "Собрать" button (opens <ToolSelectionModal>, or starts
+ *                  right away for toolless nodes: `tool_required === false`)
  *  - depleted   → live MM:SS countdown until restore_at
  *  - occupied   → "Занято: <name>" when single-gather slot is held
  *  - disabled   → "Недоступна" stub
@@ -53,6 +54,7 @@ const CATEGORY_LABELS: Record<GatheringCategory, string> = {
   ore: 'Руда',
   herb: 'Травы',
   wood: 'Дерево',
+  ingredient: 'Ингредиенты',
 };
 
 const formatHhMmSs = (totalSeconds: number): string => {
@@ -141,6 +143,11 @@ const GatheringNodeCard = ({
   const handleStartClick = (): void => {
     if (!canGather) {
       if (blockedReason) toast.error(blockedReason);
+      return;
+    }
+    // Toolless categories (ingredients) start without the tool prompt
+    if (node.tool_required === false) {
+      void handleConfirm(null);
       return;
     }
     setModalOpen(true);

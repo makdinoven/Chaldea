@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
@@ -10,12 +11,13 @@ import {
   selectSocketInfo,
   selectSocketInfoLoading,
   selectSocketLoading,
-  fetchCharacterProfession,
+  selectSocketError,
 } from '../../../redux/slices/craftingSlice';
 import { fetchInventory, fetchEquipment } from '../../../redux/slices/profileSlice';
 import type { AvailableGem, SocketGemInfo } from '../../../types/gems';
+import { JEWELRY_SOCKET_TYPES } from '../../../constants/professions';
 
-interface JewelryItemRef {
+export interface JewelryItemRef {
   rowId: number;
   itemId: number;
   name: string;
@@ -71,18 +73,22 @@ const MODIFIER_LABELS: Record<string, string> = {
   vul_air: 'Уяз. воздуху',
 };
 
-const JEWELRY_TYPES = new Set(['ring', 'necklace', 'bracelet']);
-
 const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => {
   const dispatch = useAppDispatch();
   const socketInfo = useAppSelector(selectSocketInfo);
   const infoLoading = useAppSelector(selectSocketInfoLoading);
   const socketLoading = useAppSelector(selectSocketLoading);
+  const socketError = useAppSelector(selectSocketError);
 
-  const isJewelry = JEWELRY_TYPES.has(item.itemType);
-  const insertableName = isJewelry ? 'камень' : 'руну';
-  const insertableNamePlural = isJewelry ? 'камней' : 'рун';
-  const insertableLabel = isJewelry ? 'Камень' : 'Руна';
+  const isJewelry = socketInfo
+    ? socketInfo.insertable_type === 'gem'
+    : JEWELRY_SOCKET_TYPES.has(item.itemType);
+  const canInsert = socketInfo?.can_insert ?? false;
+  const canExtract = socketInfo?.can_extract ?? false;
+  const extractorName = isJewelry ? 'ювелир' : 'зачарователь';
+  const insertableName = isJewelry ? 'огранку' : 'руну';
+  const insertableNamePlural = isJewelry ? 'огранок' : 'рун';
+  const insertableLabel = isJewelry ? 'Огранка' : 'Руна';
 
   const [selectedSlotIndex, setSelectedSlotIndex] = useState<number | null>(null);
   const [selectedGem, setSelectedGem] = useState<AvailableGem | null>(null);
@@ -144,19 +150,7 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
     }));
 
     if (result.meta.requestStatus === 'fulfilled') {
-      const data = result.payload as {
-        xp_earned: number;
-        rank_up: boolean;
-        new_rank_name: string | null;
-      };
-      toast.success(`${insertableLabel} вставлен${isJewelry ? '' : 'а'}!`);
-      if (data.xp_earned > 0) {
-        toast.success(`+${data.xp_earned} XP`, { duration: 3000 });
-      }
-      if (data.rank_up && data.new_rank_name) {
-        toast.success(`Повышение ранга: ${data.new_rank_name}!`, { duration: 5000 });
-        dispatch(fetchCharacterProfession(characterId));
-      }
+      toast.success(`${insertableLabel} вставлена!`);
       setMode('idle');
       setSelectedSlotIndex(null);
       setSelectedGem(null);
@@ -165,7 +159,7 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
       const err = result.payload as string | undefined;
       toast.error(err ?? `Не удалось вставить ${insertableName}`);
     }
-  }, [dispatch, characterId, item, selectedSlotIndex, selectedGem, refreshData, insertableLabel, isJewelry, insertableName]);
+  }, [dispatch, characterId, item, selectedSlotIndex, selectedGem, refreshData, insertableLabel, insertableName]);
 
   const handleExtract = useCallback(async () => {
     if (selectedSlotIndex === null) return;
@@ -183,22 +177,12 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
       const data = result.payload as {
         gem_preserved: boolean;
         gem_name: string;
-        xp_earned: number;
-        rank_up: boolean;
-        new_rank_name: string | null;
       };
 
       if (data.gem_preserved) {
-        toast.success(`${insertableLabel} извлечен${isJewelry ? '' : 'а'}! "${data.gem_name}" сохранён в инвентаре.`);
+        toast.success(`${insertableLabel} извлечена! «${data.gem_name}» сохранена в инвентаре.`);
       } else {
-        toast.error(`${insertableLabel} разрушен${isJewelry ? '' : 'а'}! "${data.gem_name}" уничтожен${isJewelry ? '' : 'а'}.`);
-      }
-      if (data.xp_earned > 0) {
-        toast.success(`+${data.xp_earned} XP`, { duration: 3000 });
-      }
-      if (data.rank_up && data.new_rank_name) {
-        toast.success(`Повышение ранга: ${data.new_rank_name}!`, { duration: 5000 });
-        dispatch(fetchCharacterProfession(characterId));
+        toast.error(`${insertableLabel} разрушена! «${data.gem_name}» уничтожена.`);
       }
       setMode('idle');
       setSelectedSlotIndex(null);
@@ -207,7 +191,7 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
       const err = result.payload as string | undefined;
       toast.error(err ?? `Не удалось извлечь ${insertableName}`);
     }
-  }, [dispatch, characterId, item, selectedSlotIndex, refreshData, insertableLabel, isJewelry, insertableName]);
+  }, [dispatch, characterId, item, selectedSlotIndex, refreshData, insertableLabel, insertableName]);
 
   const selectedSlot = socketInfo?.slots.find((s) => s.slot_index === selectedSlotIndex);
 
@@ -220,7 +204,7 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
       });
   };
 
-  return (
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
@@ -240,7 +224,7 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
             )}
           </div>
           <div className="flex-1 min-w-0">
-            <h2 className="gold-text text-xl font-medium uppercase truncate">{item.name}</h2>
+            <h2 className="gold-text text-lg sm:text-xl font-medium uppercase truncate">{item.name}</h2>
             <p className="text-white/60 text-sm">
               {ITEM_TYPE_LABELS[item.itemType] ?? item.itemType}
               {item.source === 'equipment' && (
@@ -250,7 +234,8 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
           </div>
           <button
             onClick={onClose}
-            className="text-white/50 hover:text-white transition-colors text-xl leading-none p-1"
+            aria-label="Закрыть"
+            className="self-start text-white/50 hover:text-site-blue transition-colors duration-200 ease-site text-xl leading-none p-1"
           >
             &times;
           </button>
@@ -324,7 +309,9 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
                   <h3 className="text-white text-sm font-medium uppercase tracking-wide mb-2">
                     Выберите {insertableName} для слота #{selectedSlotIndex + 1}
                   </h3>
-                  {socketInfo.available_gems.length === 0 ? (
+                  {!canInsert ? (
+                    <p className="text-white/50 text-sm py-2">В этот предмет больше нельзя вставлять {insertableNamePlural}</p>
+                  ) : socketInfo.available_gems.length === 0 ? (
                     <p className="text-site-red text-sm py-2">Нет {insertableNamePlural} в инвентаре</p>
                   ) : (
                     <div className="space-y-1 max-h-[200px] overflow-y-auto gold-scrollbar pr-1">
@@ -365,7 +352,7 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
                   )}
 
                   {/* Selected gem preview + insert button */}
-                  {selectedGem && (
+                  {canInsert && selectedGem && (
                     <div className="mt-3 p-3 rounded-card bg-white/[0.04] border border-gold/20">
                       <div className="flex items-center gap-2 mb-2">
                         <div className="w-8 h-8 rounded-full overflow-hidden bg-white/[0.05] flex-shrink-0 flex items-center justify-center">
@@ -411,7 +398,7 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
                   className="mb-5"
                 >
                   <h3 className="text-white text-sm font-medium uppercase tracking-wide mb-2">
-                    Извлечение {isJewelry ? 'камня' : 'руны'} из слота #{(selectedSlot.slot_index) + 1}
+                    {isJewelry ? 'Огранка' : 'Руна'} в слоте #{(selectedSlot.slot_index) + 1}
                   </h3>
                   <div className="p-3 rounded-card bg-white/[0.04] border border-white/10">
                     <div className="flex items-center gap-2 mb-2">
@@ -431,25 +418,36 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
                         ))}
                       </div>
                     )}
-                    <div className="bg-site-red/10 border border-site-red/30 rounded-lg p-2 mb-3">
-                      <p className="text-site-red text-xs text-center">
-                        {insertableLabel} может быть разрушен{isJewelry ? '' : 'а'} при извлечении. Шанс сохранения зависит от вашего ранга.
+                    {canExtract ? (
+                      <>
+                        <div className="bg-site-red/10 border border-site-red/30 rounded-card p-2 mb-3">
+                          <p className="text-site-red text-xs text-center">
+                            {insertableLabel} может быть разрушена при извлечении.
+                            {socketInfo.extract_preservation_chance != null
+                              ? ` Шанс сохранения: ${socketInfo.extract_preservation_chance}%.`
+                              : ' Шанс сохранения зависит от вашего ранга.'}
+                          </p>
+                        </div>
+                        <button
+                          onClick={handleExtract}
+                          disabled={socketLoading}
+                          className={`btn-blue w-full text-sm py-2 px-4 ${socketLoading ? 'opacity-40 cursor-not-allowed' : ''}`}
+                        >
+                          {socketLoading ? (
+                            <span className="flex items-center justify-center gap-2">
+                              <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              Извлечение...
+                            </span>
+                          ) : (
+                            `Извлечь ${insertableName}`
+                          )}
+                        </button>
+                      </>
+                    ) : (
+                      <p className="text-white/50 text-xs text-center">
+                        Извлекать {insertableNamePlural} может только {extractorName}.
                       </p>
-                    </div>
-                    <button
-                      onClick={handleExtract}
-                      disabled={socketLoading}
-                      className={`btn-blue w-full text-sm py-2 ${socketLoading ? 'opacity-40 cursor-not-allowed' : ''}`}
-                    >
-                      {socketLoading ? (
-                        <span className="flex items-center justify-center gap-2">
-                          <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                          Извлечение...
-                        </span>
-                      ) : (
-                        `Извлечь ${insertableName}`
-                      )}
-                    </button>
+                    )}
                   </div>
                 </motion.div>
               )}
@@ -464,11 +462,12 @@ const GemSocketModal = ({ characterId, item, onClose }: GemSocketModalProps) => 
           </>
         ) : (
           <p className="text-site-red text-sm text-center py-4">
-            Не удалось загрузить информацию о слотах
+            {socketError ?? 'Не удалось загрузить информацию о слотах'}
           </p>
         )}
       </motion.div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 

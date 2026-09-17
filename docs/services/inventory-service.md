@@ -45,10 +45,11 @@ inventory-service/app/
 ### Каталог предметов
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/inventory/items?q=&page=&page_size=` | Поиск предметов (пагинация) |
+| GET | `/inventory/items?q=&item_types=&exclude_types=&resource_subcategory=&page=&page_size=` | Поиск предметов (пагинация); `resource_subcategory` — FEAT-165, неизвестное значение → 422 |
 | POST | `/inventory/items` | Создать предмет (включая `gathering_tool` с `tool_category` + 3 бонуса) |
 | GET | `/inventory/items/{id}` | Предмет по ID |
-| PUT | `/inventory/items/{id}` | Обновить предмет |
+| PUT | `/inventory/items/{id}` | Обновить предмет (FEAT-165: настройки переработки, переставшие подходить к подкатегории предмета, удаляются в той же транзакции — и как у сырья, и как у результата) |
+| GET / PUT | `/inventory/admin/items/{id}/conversions` | FEAT-165: настройки переработки сырья (`items:read` / `items:update`), PUT заменяет весь набор |
 | DELETE | `/inventory/items/{id}` | Удалить предмет |
 | GET | `/inventory/{id}/items?item_type=gathering_tool&category=pickaxe` | Фильтр по типу + tool_category (FEAT-128, для модалки выбора инструмента) |
 
@@ -57,7 +58,7 @@ inventory-service/app/
 #### Player-facing (auth required)
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/inventory/characters/{character_id}/gathering-skills` | 3-скилла payload (Горное дело/Травничество/Лесорубство), lazy-create rows на первом запросе. Видимо read-only на чужих профилях |
+| GET | `/inventory/characters/{character_id}/gathering-skills` | Навыки добычи из БД (Горное дело/Травничество/Лесорубство/Собирательство), lazy-create rows на первом запросе. Видимо read-only на чужих профилях |
 
 #### Internal (no JWT, защищено Nginx + INTERNAL_SERVICE_TOKEN на API-gateway)
 | Метод | Путь | Описание |
@@ -70,13 +71,17 @@ inventory-service/app/
 ### items (каталог)
 - Базовые: id, name (unique), image, item_level, description, price, max_stack_size, is_unique
 - **image / full_image** (миграция 018): `full_image` — исходная картинка, `image` — квадратная иконка, вырезанная из неё photo-service. Оба поля пишет только photo-service; `full_image` отдаётся в `GET /items/{id}` и в аукционных ответах, через `PUT /items/{id}` не меняется. У старых предметов `full_image` = NULL — окна описания показывают `image`
-- **item_type** enum: head, body, cloak, belt, ring, necklace, bracelet, main_weapon, consumable, additional_weapons, resource, scroll, misc, blueprint, recipe, gem, rune, **gathering_tool** (FEAT-128). Тип `shield` удалён миграцией 019: щит — обычное оружие вида buckler/targe/tower_shield
+- **item_type** enum: head, body, cloak, belt, ring, necklace, bracelet, weapon, consumable, resource, scroll, misc, recipe, gem, rune, **gathering_tool** (FEAT-128). Тип `shield` удалён миграцией 019 (щит — обычное оружие вида buckler/targe/tower_shield), тип `blueprint` — миграцией 022 (FEAT-165, одноразовых чертежей больше нет)
+- **resource_subcategory** (FEAT-165, миграция 022, индекс) — только для `resource`, NULL = «Прочее»: сырьё `ore/herb/wood/ingredient/trophy`, продукты переработки `ingot/magic_dust/essence/reagent/material`, расходники профессий `whetstone/repair_kit`
+- **whetstone_level** (1/2/3 → шанс 25/50/75 %) + **whetstone_group** (FEAT-165: `weapon_armor` / `cloak_belt` / `jewelry`) — только у подкатегории `whetstone` (оба обязательны); **repair_power** у ресурса — только у `repair_kit` (> 0)
+- **socket_count > 0** — только weapon/head/body/cloak/ring/necklace/bracelet (у пояса гнёзд нет с FEAT-165)
+- `essence_result_item_id` удалён миграцией 022 (извлечение эссенций убрано)
 - **Поля для gathering_tool** (FEAT-128, NULL для других типов): `tool_category` enum(pickaxe/sickle/axe), `gather_double_chance_bonus` FLOAT, `gather_speed_bonus_pct` FLOAT, `gather_stamina_bonus_pct` FLOAT (все в диапазоне 0..50)
 - **item_rarity** enum: common, rare, epic, legendary, mythical, divine, demonic
 - **armor_subclass**: cloth, light_armor, medium_armor, heavy_armor — только для head/body (валидация в `ItemCreate`)
 - **weapon_subclass** (вид оружия, миграция 019): 38 видов, каждый входит ровно в одну категорию — одноручное, полуторное, двуручное, древковое, стрелковое, щиты, другое, магическое. Категория не хранится, а берётся из `WEAPON_KIND_CATEGORY` (`schemas.py`, зеркало во фронте `constants/items.ts`). Только для main_weapon/additional_weapons. Под класс брони и вид/категорию оружия планируются ограничения экипировки по классу персонажа
 - **res_\*/vul_\*/crit** — Float в БД и в схемах (раньше схема обрезала дробные до int)
-- **blueprint_recipe_id** — принимается в `ItemCreate` только для чертежа, эндпоинт проверяет существование рецепта (400)
+- **blueprint_recipe_id** — связь предмета-рецепта (`item_type='recipe'`) с рецептом; принимается только для `recipe` (422), эндпоинт проверяет существование рецепта (400). Имя колонки историческое, её читает photo-service
 - **primary_damage_type**: physical, catting, crushing, piercing, magic, fire, ice, watering, electricity, wind, sainting, damning
 - **Модификаторы статов** (30+ полей): strength/agility/intelligence/endurance/health/energy/mana/stamina/charisma/luck/damage/dodge_modifier
 - **Модификаторы сопротивлений** (13 полей): res_physical_modifier, res_fire_modifier, ...
@@ -92,7 +97,11 @@ inventory-service/app/
 - id, character_id, slot_type (enum: head/body/cloak/belt/ring/necklace/bracelet/main_weapon/additional_weapons/fast_slot_1..10), item_id (FK), is_enabled
 
 ### gathering_skills (FEAT-128, каталог)
-- id, slug (UNIQUE: mining/herbalism/woodcutting), name, category (UNIQUE: ore/herb/wood), description, icon, max_rank=5
+- id, slug (UNIQUE: mining/herbalism/woodcutting/foraging), name, category (UNIQUE: ore/herb/wood/ingredient), description, icon, max_rank=5
+- `foraging` «Собирательство» (категория `ingredient`) добавлен миграцией 022 (FEAT-165); ранги скопированы с `herbalism`. `GatheringAwardRequest.skill_slug` принимает все четыре слага
+
+### item_conversions (FEAT-165, настройки переработки)
+- id, source_item_id (FK items CASCADE), profession_id (FK professions CASCADE), source_quantity, result_item_id (FK items CASCADE), result_quantity (оба 1..100, CHECK), created_at, updated_at. UNIQUE(source_item_id, profession_id)
 
 ### gathering_skill_ranks (FEAT-128)
 - id, skill_id (FK CASCADE), rank_number (1..5), required_experience (XP для входа в ранг: 0/10/25/50/100), double_chance_bonus, speed_bonus_pct, stamina_bonus_pct (значения 0/4/8/12/20). UNIQUE(skill_id, rank_number)
@@ -133,8 +142,33 @@ inventory-service/app/
 - Мифическая, божественная и демоническая редкость — только у снаряжения (`head, body, cloak, belt, ring, necklace, bracelet, weapon`; `schemas.EQUIPMENT_ITEM_TYPES` / `EQUIPMENT_ONLY_RARITIES`, это множества, без порядка редкостей). Любой другой тип — максимум легендарная (400/422 «Мифическая, божественная и демоническая редкость доступны только для снаряжения»).
 - **У рецептов нет своего качества** — оно есть только у результата. `POST/PUT /inventory/admin/recipes`: поле `rarity` в запросе устарело и игнорируется; `recipes.rarity` всегда записывается из редкости результирующего предмета (при создании и при каждом обновлении — нужен для `RARITY_XP_MAP` и фильтра `?rarity=`). Ответы по-прежнему содержат `rarity` (= редкость результата).
 - Лимит проверяется по результату: не-снаряжение с мифической/божественной/демонической редкостью (только старые строки) → 400 «Крафт не может создавать предметы мифической, божественной или демонической редкости». Для снаряжения в результате эти редкости разрешены.
-- Автосоздаваемый предмет-рецепт (`item_type='recipe'`) не имеет качества: хранится как `common` (колонка NOT NULL). Фронтенд скрывает редкость для `item_type` `recipe` (и `blueprint` — чертежи тоже не имеют качества по смыслу, хотя их редкость задаёт админ и бэкенд её не трогает).
-- Трансмутация: цепочка `common → rare → epic → legendary`, дальше не идёт; легендарные ресурсы не показываются в списке и не трансмутируются. Существующий на проде «Трансмутированный ресурс (мифический)» не тронут (миграция 021 только логирует такие предметы/рецепты).
+- Автосоздаваемый предмет-рецепт (`item_type='recipe'`) не имеет качества: хранится как `common` (колонка NOT NULL). Фронтенд скрывает редкость для `item_type` `recipe`.
+- Трансмутация убрана в FEAT-165. Существующий на проде «Трансмутированный ресурс (мифический)» не тронут (миграция 021 только логирует такие предметы/рецепты).
+
+## Профессии, крафт, переработка, заточка, гнёзда (FEAT-165)
+
+Таблицы: `professions` (slug `scholar` теперь называется «Мистик», миграция 022), `profession_ranks`, `recipes` (колонка `is_blueprint_recipe` удалена), `recipe_ingredients`, `character_professions`, `character_recipes`, `item_conversions`.
+
+**Опыт профессии — только за создание:** крафт по рецепту и переработку. Всё начисление идёт через `crud.award_profession_xp(db, cp, base_xp)` (множитель XP-баффа, повышение ранга, выдача базовых рецептов); без коммита, коммитит вызывающий. За заточку, вставку и извлечение камней/рун опыта нет.
+
+**Рецепты:**
+- Изучение: `POST /inventory/crafting/{cid}/learn-from-item` (тратит предмет-рецепт) или автоматически — базовые рецепты (`auto_learn_rank IS NOT NULL AND auto_learn_rank <= current_rank`, активные, своей профессии) через идемпотентный `crud.sync_auto_learned_recipes`. Он вызывается при выборе/смене профессии, админском `set-rank`, в `award_profession_xp` и лениво в `GET /professions/{cid}/my` и `GET /crafting/{cid}/recipes` (гонка двойной вставки гасится откатом, GET не падает). Так рецепт, созданный админом позже, доходит до уже прокачанных игроков.
+- Бесплатный `POST /crafting/{cid}/learn-recipe` удалён (404).
+- `POST /crafting/{cid}/craft` body `{recipe_id}` — рецепт должен быть изучен (лишнее поле `blueprint_item_id` игнорируется). Ответ без `blueprint_consumed`. `GET /crafting/{cid}/recipes` — только изученные, `source` всегда `"learned"`.
+
+**Переработка** (константы в `crud.py`):
+- `REFINING_RULES` (slug → подкатегория сырья, подкатегория результата): кузнец руда→слитки, ювелир руда→магическая пыль, алхимик реагенты→эссенции, повар ингредиенты→реагенты, Мистик (`scholar`) трофеи→материалы. У зачарователя переработки нет.
+- `REFINE_DOUBLE_CHANCE_BY_RANK = {1: 0.05, 2: 0.10, 3: 0.20}` — шанс удвоения, бросается на каждый шаг (ранги выше таблицы берут верхнее значение); `REFINE_XP_BY_RARITY = {common: 5, rare: 12, epic: 25, legendary: 50}` — опыт за шаг по редкости результата.
+- `GET /crafting/refining-rules` (JWT) — правила, привязанные к активным профессиям.
+- `GET /crafting/{cid}/refine-info` (JWT + владелец) — сырьё из инвентаря (опознанные стопки, суммарно) с настроенным результатом для профессии персонажа; без профессии/правила → `can_refine: false` (200).
+- `POST /crafting/{cid}/refine` `{source_item_id, quantity 1..9999}` (JWT + владелец, не в бою, не на сборе): одна транзакция, `FOR UPDATE` на стопках сырья; `шаги = quantity // source_quantity`, остаток не тратится; результат `result_quantity × (шаги + удвоенные)`; всегда успешно; без проверки места в инвентаре (как крафт). Ошибки до любой записи: 400 (нет профессии/правила, не та подкатегория, нет настройки, нет результата, не хватает сырья, меньше одного шага), 404 (нет предмета), 500 «Ошибка при переработке».
+- `GET/PUT /admin/items/{id}/conversions` — проверки: сырьё = ресурс сырьевой подкатегории, которую принимает профессия; результат ≠ сырью, ресурс нужной подкатегории; без повторов профессий; не больше числа правил (5); количества 1..100 (422).
+
+**Заточка:** точить может любой персонаж (без профессии тоже). Камень должен подходить к предмету: `SHARPEN_GROUP_TYPES` — `weapon_armor` (оружие, броня, шлем), `cloak_belt` (плащ, пояс), `jewelry` (кольцо, ожерелье, браслет). `sharpen-info` отдаёт `sharpen_group` и только подходящие камни (`whetstone_group` у каждого). Неподходящий камень → 400 «Этот камень не подходит для этого предмета», камень не тратится. Бюджет 15 очков, +5 на стат, шансы по `whetstone_level` — без изменений. Ответ без полей опыта.
+
+**Гнёзда:** вставлять может любой персонаж с камнем/руной: огранки (`gem`) → кольцо/ожерелье/браслет, руны (`rune`) → оружие/броня/шлем/плащ (`RUNE_INSERT_TYPES`); пояс → 400 «Этот тип предмета не поддерживает руны». Извлекать — только ювелир (огранки из украшений) и зачарователь (руны, включая старые руны в поясах, `RUNE_EXTRACT_TYPES`). `socket-info` доступен без профессии и отдаёт `insertable_type`, `can_insert`, `can_extract`, `extract_preservation_chance`; пояс показывается, только пока в нём есть руны. Ответы insert/extract без полей опыта.
+
+**Удалено:** извлечение эссенций (`extract-info`, `extract-essence`), трансмутация (`transmute-info`, `transmute`), переплавка украшений (`smelt-info`, `smelt`). Старые предметы (кристаллы, трансмутированные ресурсы, «Ювелирный лом», эссенции стихий) не тронуты — подкатегория «Прочее», админ удалит сам.
 
 ## Быстрые слоты
 
@@ -146,12 +180,12 @@ inventory-service/app/
 ## Коммуникация
 
 ### HTTP (исходящие)
-- `character-attributes-service:8002` -> POST `/attributes/{id}/apply_modifiers` (при equip/unequip)
+- `character-attributes-service:8002` -> POST `/attributes/{id}/apply_modifiers` (при equip/unequip, заточке и вставке/извлечении у надетого предмета)
 - `character-attributes-service:8002` -> POST `/attributes/{id}/recover` (при use_item)
 - `character-attributes-service:8002` -> POST `/attributes/internal/{id}/satiety` (при eat-food, sync httpx, timeout 5 с)
 
 ### check_not_gathering integration (FEAT-128)
-Защитная проверка `is_character_gathering` (raw SQL `SELECT 1 FROM gathering_sessions WHERE character_id=:cid AND status='active' AND complete_at > NOW()`) добавлена в 11 action-эндпоинтов: `equip`, `unequip`, `craft`, `sharpen`, `extract-essence`, `transmute`, `insert-gem`, `extract-gem`, `smelt`, `identify`, `use-buff-item`, `use_item`. Возвращает 400 «Действие заблокировано во время добычи» если у персонажа активная сессия. Зеркальный паттерн `is_character_in_battle`.
+Защитная проверка `is_character_gathering` (raw SQL `SELECT 1 FROM gathering_sessions WHERE character_id=:cid AND status='active' AND complete_at > NOW()`) добавлена в action-эндпоинты: `equip`, `unequip`, `craft`, `refine`, `sharpen`, `insert-gem`, `extract-gem`, `identify`, `use-buff-item`, `use_item`. Возвращает 400 «Действие заблокировано во время добычи» если у персонажа активная сессия. Зеркальный паттерн `is_character_in_battle`.
 
 ## Известные проблемы
 

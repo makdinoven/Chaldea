@@ -1,7 +1,19 @@
-from sqlalchemy import Column, Integer, String, Enum, Boolean, DECIMAL, Text, ForeignKey, Float, DateTime, UniqueConstraint, Index
+from sqlalchemy import Column, Integer, String, Enum, Boolean, DECIMAL, Text, ForeignKey, Float, DateTime, UniqueConstraint, Index, CheckConstraint
 from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime
+
+# FEAT-165 enum values. Migration 022 keeps its own copies; a test compares them.
+RESOURCE_SUBCATEGORIES = (
+    # raw materials
+    'ore', 'herb', 'wood', 'ingredient', 'trophy',
+    # refined products
+    'ingot', 'magic_dust', 'essence', 'reagent', 'material',
+    # profession consumables
+    'whetstone', 'repair_kit',
+)
+WHETSTONE_GROUPS = ('weapon_armor', 'cloak_belt', 'jewelry')
+GATHERING_CATEGORIES = ('ore', 'herb', 'wood', 'ingredient')
 
 # Определяем модель для хранения инвентаря персонажа
 class Items(Base):
@@ -16,8 +28,10 @@ class Items(Base):
     item_type = Column(Enum(
         'head', 'body', 'cloak', 'belt', 'ring', 'necklace', 'bracelet', 'weapon',
         'consumable', 'resource', 'scroll', 'misc',
-        'blueprint', 'recipe', 'gem', 'rune', 'gathering_tool'
+        'recipe', 'gem', 'rune', 'gathering_tool'
     ), nullable=False)
+    # Links a recipe item (item_type='recipe') to its recipe. Name kept for
+    # compatibility (photo-service reads it); blueprints were removed in FEAT-165.
     blueprint_recipe_id = Column(Integer, ForeignKey('recipes.id', ondelete='SET NULL'), nullable=True)
     item_rarity = Column(Enum(
         'common', 'rare', 'epic', 'legendary', 'mythical', 'divine', 'demonic'
@@ -28,8 +42,17 @@ class Items(Base):
     description = Column(Text)
 
     whetstone_level = Column(Integer, nullable=True, default=None)  # 1=common(25%), 2=rare(50%), 3=legendary(75%)
-
-    essence_result_item_id = Column(Integer, ForeignKey('items.id', ondelete='SET NULL'), nullable=True)
+    # FEAT-165: which gear a sharpening stone fits (see crud.SHARPEN_GROUP_TYPES)
+    whetstone_group = Column(
+        Enum(*WHETSTONE_GROUPS, name='whetstone_group_enum'),
+        nullable=True,
+    )
+    # FEAT-165: resource subcategory, only for item_type='resource'; NULL = «Прочее»
+    resource_subcategory = Column(
+        Enum(*RESOURCE_SUBCATEGORIES, name='resource_subcategory_enum'),
+        nullable=True,
+        index=True,
+    )
 
     socket_count = Column(Integer, default=0)  # Количество слотов для камней/рун
 
@@ -146,7 +169,6 @@ class Items(Base):
     inventories = relationship("CharacterInventory", back_populates="item")
     equipment_slots = relationship("EquipmentSlot", back_populates="item")
     blueprint_recipe = relationship("Recipe", foreign_keys=[blueprint_recipe_id], back_populates="blueprint_items")
-    essence_result_item = relationship("Items", foreign_keys=[essence_result_item_id], remote_side=[id])
 
 # Определяем модель для хранения инвентаря персонажа
 class CharacterInventory(Base):
@@ -289,7 +311,6 @@ class Recipe(Base):
     rarity = Column(String(20), nullable=False, default='common')
     xp_reward = Column(Integer, nullable=True)
     icon = Column(String(255), nullable=True)
-    is_blueprint_recipe = Column(Boolean, nullable=False, default=False)
     is_active = Column(Boolean, nullable=False, default=True)
     auto_learn_rank = Column(Integer, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -413,6 +434,32 @@ class AuctionStorage(Base):
     item = relationship("Items")
 
 
+class ItemConversion(Base):
+    """FEAT-165 refining config: what a profession gets from one raw item."""
+    __tablename__ = "item_conversions"
+    __table_args__ = (
+        UniqueConstraint('source_item_id', 'profession_id', name='uq_item_conversion'),
+        CheckConstraint(
+            'source_quantity BETWEEN 1 AND 100 AND result_quantity BETWEEN 1 AND 100',
+            name='ck_item_conv_qty',
+        ),
+        Index('ix_item_conversions_result', 'result_item_id'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_item_id = Column(Integer, ForeignKey('items.id', ondelete='CASCADE', name='fk_item_conv_source'), nullable=False)
+    profession_id = Column(Integer, ForeignKey('professions.id', ondelete='CASCADE', name='fk_item_conv_prof'), nullable=False)
+    source_quantity = Column(Integer, nullable=False, default=1)
+    result_item_id = Column(Integer, ForeignKey('items.id', ondelete='CASCADE', name='fk_item_conv_result'), nullable=False)
+    result_quantity = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    source_item = relationship("Items", foreign_keys=[source_item_id])
+    result_item = relationship("Items", foreign_keys=[result_item_id])
+    profession = relationship("Profession")
+
+
 # Gathering system models
 class GatheringSkill(Base):
     __tablename__ = "gathering_skills"
@@ -421,7 +468,7 @@ class GatheringSkill(Base):
     slug = Column(String(50), nullable=False, unique=True)
     name = Column(String(100), nullable=False)
     category = Column(
-        Enum('ore', 'herb', 'wood', name='gathering_skill_category_enum'),
+        Enum(*GATHERING_CATEGORIES, name='gathering_skill_category_enum'),
         nullable=False,
         unique=True,
     )
