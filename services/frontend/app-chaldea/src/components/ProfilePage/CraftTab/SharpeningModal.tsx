@@ -1,5 +1,6 @@
+// FEAT-166: shared portaled ModalShell; opened from the character tab's item
+// context menu (props/exports unchanged).
 import { useEffect, useState, useCallback } from 'react';
-import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
@@ -20,6 +21,12 @@ import {
   WHETSTONE_GROUP_LABELS,
   WHETSTONE_GROUP_TARGETS,
 } from '../../../constants/professions';
+import ModalShell from '../shared/ModalShell';
+import GoldIconFrame from '../shared/GoldIconFrame';
+import SectionHeader from '../shared/SectionHeader';
+import ProgressBar from '../shared/ProgressBar';
+import LoadingState from '../shared/LoadingState';
+import ErrorState from '../shared/ErrorState';
 
 export interface SharpenableItemRef {
   rowId: number;
@@ -139,175 +146,152 @@ const SharpeningModal = ({ characterId, item, onClose }: SharpeningModalProps) =
     !infoLoading,
   );
 
-  return createPortal(
-    <div className="modal-overlay" onClick={onClose}>
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
-        className="modal-content gold-outline gold-outline-thick w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto gold-scrollbar"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-14 h-14 rounded-full overflow-hidden bg-white/[0.05] flex-shrink-0 flex items-center justify-center">
-            {item.image ? (
-              <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
-            ) : (
-              <span className="text-white/30 text-xl">?</span>
-            )}
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="gold-text text-lg sm:text-xl font-medium uppercase truncate">{item.name}</h2>
-            <p className="text-white/60 text-sm">
-              {pointsSpent}/{MAX_POINTS} поинтов потрачено
-            </p>
-            <p className="text-white/50 text-xs break-words">
-              Нужен: <span className="text-gold">{stoneLabel}</span>
-              {stoneTargets && ` (${stoneTargets})`}
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Закрыть"
-            className="self-start text-white/50 hover:text-site-blue transition-colors duration-200 ease-site text-xl leading-none p-1"
-          >
-            &times;
+  return (
+    <ModalShell
+      open
+      onClose={onClose}
+      title={item.name}
+      size="md"
+      footer={!infoLoading && sharpenInfo ? (
+        <>
+          <button type="button" onClick={onClose} className="btn-line w-full sm:w-auto">
+            Закрыть
           </button>
-        </div>
-
-        {/* Progress bar */}
-        <div className="w-full h-2 bg-white/[0.08] rounded-full mb-5 overflow-hidden">
-          <motion.div
-            className="h-full rounded-full bg-gradient-to-r from-gold-dark to-gold-light"
-            initial={{ width: 0 }}
-            animate={{ width: `${(pointsSpent / MAX_POINTS) * 100}%` }}
-            transition={{ duration: 0.4, ease: 'easeOut' }}
-          />
-        </div>
-
-        {infoLoading ? (
-          <div className="flex items-center justify-center py-10">
-            <div className="w-6 h-6 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : sharpenInfo ? (
-          <>
-            {/* Stats list */}
-            <div className="space-y-1 mb-5">
-              <h3 className="text-white text-sm font-medium uppercase tracking-wide mb-2">Статы для заточки</h3>
-              <div className="space-y-1 max-h-[240px] overflow-y-auto gold-scrollbar pr-1">
-                {sharpenInfo.stats
-                  .filter((stat) => stat.is_existing || stat.sharpened_count > 0)
-                  .map((stat) => (
-                    <StatRow
-                      key={stat.field}
-                      stat={stat}
-                      isSelected={selectedStat === stat.field}
-                      onSelect={() => setSelectedStat(stat.field)}
-                    />
-                  ))}
-
-                {/* Non-existing stats (new stats that can be added) */}
-                {sharpenInfo.stats.some((s) => !s.is_existing && s.sharpened_count === 0) && (
-                  <>
-                    <div className="border-t border-white/[0.06] my-2 pt-2">
-                      <span className="text-white/40 text-xs uppercase">Новые характеристики (1 очко)</span>
-                    </div>
-                    {sharpenInfo.stats
-                      .filter((stat) => !stat.is_existing && stat.sharpened_count === 0)
-                      .map((stat) => (
-                        <StatRow
-                          key={stat.field}
-                          stat={stat}
-                          isSelected={selectedStat === stat.field}
-                          onSelect={() => setSelectedStat(stat.field)}
-                        />
-                      ))}
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Whetstone selector */}
-            <div className="mb-5">
-              <h3 className="text-white text-sm font-medium uppercase tracking-wide mb-2">{stoneLabel}</h3>
-              {sharpenInfo.whetstones.length === 0 ? (
-                <p className="text-site-red text-sm">Нет подходящих камней. Нужен «{stoneLabel}»</p>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {sharpenInfo.whetstones.map((ws) => (
-                    <WhetstoneButton
-                      key={ws.inventory_item_id}
-                      whetstone={ws}
-                      isSelected={selectedWhetstone === ws.inventory_item_id}
-                      onSelect={() => setSelectedWhetstone(ws.inventory_item_id)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Result flash */}
-            <AnimatePresence>
-              {lastResult && (
-                <motion.div
-                  initial={{ opacity: 0, y: -5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -5 }}
-                  className={`text-center py-2 px-3 rounded-card mb-4 text-sm font-medium ${
-                    lastResult.success
-                      ? 'bg-green-900/30 text-green-300 border border-green-500/30'
-                      : 'bg-red-900/30 text-site-red border border-site-red/30'
-                  }`}
-                >
-                  {lastResult.success
-                    ? `${lastResult.statName}: +${lastResult.oldValue} → +${lastResult.newValue}`
-                    : 'Неудача! Камень потрачен'}
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Sharpen button */}
-            <div className="flex flex-col sm:flex-row gap-2">
-              <button
-                onClick={handleSharpen}
-                disabled={!canSharpen}
-                className={`
-                  btn-blue flex-1 text-sm py-2.5
-                  ${!canSharpen ? 'opacity-40 cursor-not-allowed' : ''}
-                `}
-              >
-                {sharpenLoading ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Заточка...
-                  </span>
-                ) : selectedStatInfo ? (
-                  `Заточить ${selectedStatInfo.name}${selectedWhInfo ? ` (${selectedWhInfo.success_chance}%)` : ''}`
-                ) : (
-                  'Выберите стат'
-                )}
-              </button>
-              <button onClick={onClose} className="btn-line text-sm py-2.5 sm:w-auto">
-                Закрыть
-              </button>
-            </div>
-
-            {pointsRemaining <= 0 && (
-              <p className="text-site-red text-xs text-center mt-3">
-                Бюджет заточки исчерпан ({MAX_POINTS}/{MAX_POINTS})
-              </p>
+          <button
+            type="button"
+            onClick={handleSharpen}
+            disabled={!canSharpen}
+            className={`btn-blue w-full sm:w-auto ${!canSharpen ? 'opacity-40 cursor-not-allowed' : ''}`}
+          >
+            {sharpenLoading ? (
+              <span className="flex items-center justify-center gap-2">
+                <LoadingState size="xs" />
+                Заточка...
+              </span>
+            ) : selectedStatInfo ? (
+              `Заточить ${selectedStatInfo.name}${selectedWhInfo ? ` (${selectedWhInfo.success_chance}%)` : ''}`
+            ) : (
+              'Выберите стат'
             )}
-          </>
-        ) : (
-          <p className="text-site-red text-sm text-center py-4">
-            {sharpenError ?? 'Не удалось загрузить информацию о заточке'}
+          </button>
+        </>
+      ) : undefined}
+    >
+      {/* Item identity + sharpening budget */}
+      <div className="flex items-center gap-3 mb-4 min-w-0">
+        <GoldIconFrame
+          size={56}
+          shape="circle"
+          src={item.image}
+          alt={item.name}
+          fallback={<span className="text-white/30 text-xl">?</span>}
+        />
+        <div className="flex-1 min-w-0">
+          <p className="text-white/60 text-sm">
+            {pointsSpent}/{MAX_POINTS} поинтов потрачено
           </p>
-        )}
-      </motion.div>
-    </div>,
-    document.body,
+          <p className="text-white/50 text-xs break-words">
+            Нужен: <span className="text-gold">{stoneLabel}</span>
+            {stoneTargets && ` (${stoneTargets})`}
+          </p>
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <ProgressBar value={pointsSpent} max={MAX_POINTS} variant="gold" className="mb-5" />
+
+      {infoLoading ? (
+        <LoadingState size="sm" className="!py-10" />
+      ) : sharpenInfo ? (
+        <>
+          {/* Stats list */}
+          <div className="space-y-1 mb-5">
+            <SectionHeader title="Статы для заточки" className="mb-2" />
+            <div className="space-y-1 max-h-[240px] overflow-y-auto gold-scrollbar pr-1">
+              {sharpenInfo.stats
+                .filter((stat) => stat.is_existing || stat.sharpened_count > 0)
+                .map((stat) => (
+                  <StatRow
+                    key={stat.field}
+                    stat={stat}
+                    isSelected={selectedStat === stat.field}
+                    onSelect={() => setSelectedStat(stat.field)}
+                  />
+                ))}
+
+              {/* Non-existing stats (new stats that can be added) */}
+              {sharpenInfo.stats.some((s) => !s.is_existing && s.sharpened_count === 0) && (
+                <>
+                  <div className="border-t border-white/[0.06] my-2 pt-2">
+                    <span className="text-white/40 text-xs uppercase">Новые характеристики (1 очко)</span>
+                  </div>
+                  {sharpenInfo.stats
+                    .filter((stat) => !stat.is_existing && stat.sharpened_count === 0)
+                    .map((stat) => (
+                      <StatRow
+                        key={stat.field}
+                        stat={stat}
+                        isSelected={selectedStat === stat.field}
+                        onSelect={() => setSelectedStat(stat.field)}
+                      />
+                    ))}
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Whetstone selector */}
+          <div className="mb-5">
+            <SectionHeader title={stoneLabel} className="mb-2" />
+            {sharpenInfo.whetstones.length === 0 ? (
+              <p className="text-site-red text-sm">Нет подходящих камней. Нужен «{stoneLabel}»</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {sharpenInfo.whetstones.map((ws) => (
+                  <WhetstoneButton
+                    key={ws.inventory_item_id}
+                    whetstone={ws}
+                    isSelected={selectedWhetstone === ws.inventory_item_id}
+                    onSelect={() => setSelectedWhetstone(ws.inventory_item_id)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Result flash */}
+          <AnimatePresence>
+            {lastResult && (
+              <motion.div
+                initial={{ opacity: 0, y: -5 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -5 }}
+                className={`text-center py-2 px-3 rounded-card mb-4 text-sm font-medium border ${
+                  lastResult.success
+                    ? 'bg-stat-energy/10 text-stat-energy border-stat-energy/30'
+                    : 'bg-site-red/10 text-site-red border-site-red/30'
+                }`}
+              >
+                {lastResult.success
+                  ? `${lastResult.statName}: +${lastResult.oldValue} → +${lastResult.newValue}`
+                  : 'Неудача! Камень потрачен'}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {pointsRemaining <= 0 && (
+            <p className="text-site-red text-xs text-center">
+              Бюджет заточки исчерпан ({MAX_POINTS}/{MAX_POINTS})
+            </p>
+          )}
+        </>
+      ) : (
+        <ErrorState
+          message={sharpenError ?? 'Не удалось загрузить информацию о заточке'}
+          className="!py-6"
+        />
+      )}
+    </ModalShell>
   );
 };
 
@@ -324,6 +308,7 @@ const StatRow = ({ stat, isSelected, onSelect }: StatRowProps) => {
 
   return (
     <button
+      type="button"
       onClick={onSelect}
       disabled={!stat.can_sharpen}
       className={`
@@ -353,6 +338,7 @@ interface WhetstoneButtonProps {
 const WhetstoneButton = ({ whetstone, isSelected, onSelect }: WhetstoneButtonProps) => {
   return (
     <button
+      type="button"
       onClick={onSelect}
       className={`
         flex items-center gap-2 px-3 py-2 rounded-card text-sm

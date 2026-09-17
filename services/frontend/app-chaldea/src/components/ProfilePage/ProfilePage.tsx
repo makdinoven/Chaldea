@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
+import { UserX } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
@@ -8,7 +9,6 @@ import {
   selectProfileError,
 } from '../../redux/slices/profileSlice';
 import ProfileTabs from './ProfileTabs';
-import PlaceholderTab from './PlaceholderTab';
 import CharacterTab from './CharacterTab/CharacterTab';
 import SkillsTab from './SkillsTab/SkillsTab';
 import PerksTab from './PerksTab/PerksTab';
@@ -17,9 +17,12 @@ import GatheringTab from './GatheringTab/GatheringTab';
 import QuestsTab from './QuestsTab/QuestsTab';
 import BattlesTab from './BattlesTab/BattlesTab';
 import LogsTab from './LogsTab/LogsTab';
+import PostHistoryTab from './PostHistoryTab/PostHistoryTab';
 import TitlesTab from './TitlesTab/TitlesTab';
 import CraftTab from './CraftTab/CraftTab';
 import ErrorBoundary from '../ui/ErrorBoundary';
+import EmptyState from './shared/EmptyState';
+import LoadingState from './shared/LoadingState';
 
 const ProfilePage = () => {
   const dispatch = useAppDispatch();
@@ -44,19 +47,17 @@ const ProfilePage = () => {
 
   if (!characterId) {
     return (
-      <div className="flex items-center justify-center py-32">
-        <p className="text-white/50 text-lg">
-          Персонаж не найден. Создайте персонажа, чтобы просматривать профиль.
-        </p>
-      </div>
+      <EmptyState
+        icon={<UserX size={32} strokeWidth={1.5} className="text-white/20" />}
+        message="Персонаж не найден. Создайте персонажа, чтобы просматривать профиль."
+        className="py-32 px-4"
+      />
     );
   }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-32">
-        <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-      </div>
+      <LoadingState className="py-32" />
     );
   }
 
@@ -82,6 +83,8 @@ const ProfilePage = () => {
         return <BattlesTab characterId={characterId} />;
       case 'logs':
         return <LogsTab characterId={characterId} />;
+      case 'posts':
+        return <PostHistoryTab characterId={characterId} />;
       case 'titles':
         return <TitlesTab characterId={characterId} />;
       case 'craft':
@@ -91,7 +94,7 @@ const ProfilePage = () => {
           </ErrorBoundary>
         );
       default:
-        return <PlaceholderTab tabName={activeTab} />;
+        return null;
     }
   };
 
@@ -102,7 +105,7 @@ const ProfilePage = () => {
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="-mt-12"
     >
-      <ProfileTabs activeTab={activeTab} onTabChange={setActiveTab} characterId={characterId} />
+      <ProfileTabs activeTab={activeTab} onTabChange={setActiveTab} />
       {renderTabContent()}
     </motion.div>
   );

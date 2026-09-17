@@ -1,11 +1,18 @@
-// FEAT-151 — recipes section (mock 1003-1039): SectionHeader «Рецепты» with a
-// count, search preserved, responsive card grid, EmptyState when empty.
+// FEAT-151/166 — «Рецепты» panel of the Craft tab: PanelShell with the
+// filtered count in the header, the search in a fixed toolbar and the card
+// grid in the scroll area (internal scroll on lg+ only).
 import { useState, useMemo } from 'react';
+import type { ReactNode } from 'react';
 import { motion } from 'motion/react';
-import { Hammer } from 'lucide-react';
+import { BookOpen, Hammer } from 'lucide-react';
 import type { Recipe } from '../../../types/professions';
-import SectionHeader from '../shared/SectionHeader';
+import PanelShell, { PANEL_DESKTOP_HEIGHT_CLASS } from '../PanelShell';
+import PanelCounter from '../shared/PanelCounter';
+import PanelToolbar from '../shared/PanelToolbar';
+import PanelScrollArea from '../shared/PanelScrollArea';
 import EmptyState from '../shared/EmptyState';
+import ErrorState from '../shared/ErrorState';
+import LoadingState from '../shared/LoadingState';
 import RecipeCard from './RecipeCard';
 
 interface RecipeListProps {
@@ -29,64 +36,59 @@ const RecipeList = ({ recipes, loading, error, onCraft }: RecipeListProps) => {
     );
   }, [recipes, search]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="w-6 h-6 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
+  const isReady = !loading && !error;
 
-  if (error) {
-    return (
-      <div className="py-8 text-center">
-        <p className="text-site-red text-sm">{error}</p>
-      </div>
+  let content: ReactNode;
+  if (loading) {
+    content = <LoadingState />;
+  } else if (error) {
+    content = <ErrorState message={error} />;
+  } else if (filtered.length === 0) {
+    content = (
+      <EmptyState
+        icon={<Hammer size={32} strokeWidth={1.5} className="text-white/20" />}
+        message={recipes.length === 0 ? 'Нет доступных рецептов' : 'Ничего не найдено'}
+      />
+    );
+  } else {
+    content = (
+      <motion.div
+        initial="hidden"
+        animate="visible"
+        variants={{
+          hidden: {},
+          visible: { transition: { staggerChildren: 0.04 } },
+        }}
+        className="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3 gap-3.5"
+      >
+        {filtered.map((recipe) => (
+          <RecipeCard key={recipe.id} recipe={recipe} onCraft={onCraft} />
+        ))}
+      </motion.div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <SectionHeader
-        title="Рецепты"
-        extra={
-          <span className="font-mono tabular-nums text-xs text-white/45">
-            {filtered.length}
-          </span>
-        }
-      />
-
-      {/* Search */}
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Поиск рецептов..."
-        className="input-underline w-full max-w-sm"
-      />
-
-      {/* Recipes grid */}
-      {filtered.length === 0 ? (
-        <EmptyState
-          icon={<Hammer size={32} strokeWidth={1.5} className="text-white/20" />}
-          message={recipes.length === 0 ? 'Нет доступных рецептов' : 'Ничего не найдено'}
-        />
-      ) : (
-        <motion.div
-          initial="hidden"
-          animate="visible"
-          variants={{
-            hidden: {},
-            visible: { transition: { staggerChildren: 0.04 } },
-          }}
-          className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"
-        >
-          {filtered.map((recipe) => (
-            <RecipeCard key={recipe.id} recipe={recipe} onCraft={onCraft} />
-          ))}
-        </motion.div>
+    <PanelShell
+      title="Рецепты"
+      icon={<BookOpen size={18} strokeWidth={1.8} className="text-gold shrink-0" />}
+      headerExtra={isReady ? <PanelCounter>{filtered.length}</PanelCounter> : undefined}
+      className={PANEL_DESKTOP_HEIGHT_CLASS}
+      bodyClassName="flex-1 min-h-0 flex flex-col"
+    >
+      {isReady && (
+        <PanelToolbar>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Поиск рецептов..."
+            className="input-underline w-full sm:max-w-sm"
+          />
+        </PanelToolbar>
       )}
-    </div>
+      <PanelScrollArea className={isReady ? '' : '!pt-4'}>{content}</PanelScrollArea>
+    </PanelShell>
   );
 };
 

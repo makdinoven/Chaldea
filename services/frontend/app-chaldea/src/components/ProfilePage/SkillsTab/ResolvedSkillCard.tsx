@@ -1,6 +1,7 @@
 // Player-facing resolved skill info card (FEAT-125).
 // Displays cost / damage / effects / selected perks from a ResolvedSkillRead
-// payload, fully localized to Russian.
+// payload, fully localized to Russian. Also rendered by the battle page
+// SkillPicker. FEAT-166: design-system tokens and shared profile primitives.
 import {
   Zap,
   Droplet,
@@ -28,6 +29,9 @@ import {
   type EffectCategory,
   type ParsedEffect,
 } from '../../SkillTreeView/skillLabels';
+import ProfileCard from '../shared/ProfileCard';
+import GoldIconFrame from '../shared/GoldIconFrame';
+import SectionHeader from '../shared/SectionHeader';
 
 interface ResolvedSkillCardProps {
   resolved: ResolvedSkill;
@@ -35,9 +39,9 @@ interface ResolvedSkillCardProps {
 }
 
 const SKILL_TYPE_BADGE: Record<string, string> = {
-  attack: 'bg-red-500/20 text-red-300 border-red-500/30',
-  defense: 'bg-sky-500/20 text-sky-300 border-sky-500/30',
-  support: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+  attack: 'bg-stat-hp/15 text-stat-hp border-stat-hp/30',
+  defense: 'bg-site-blue/15 text-site-blue border-site-blue/30',
+  support: 'bg-stat-energy/15 text-stat-energy border-stat-energy/30',
 };
 
 const CATEGORY_ORDER: EffectCategory[] = ['buff', 'resist', 'stat', 'complex'];
@@ -46,10 +50,10 @@ const CATEGORY_META: Record<
   EffectCategory,
   { Icon: typeof ArrowUp; color: string; title: string }
 > = {
-  buff: { Icon: ArrowUp, color: 'text-amber-300', title: 'Баффы' },
-  resist: { Icon: Shield, color: 'text-sky-300', title: 'Резисты' },
-  stat: { Icon: BarChart3, color: 'text-purple-300', title: 'Характеристики' },
-  complex: { Icon: Skull, color: 'text-red-300', title: 'Особые эффекты' },
+  buff: { Icon: ArrowUp, color: 'text-gold', title: 'Баффы' },
+  resist: { Icon: Shield, color: 'text-site-blue', title: 'Резисты' },
+  stat: { Icon: BarChart3, color: 'text-rarity-epic', title: 'Характеристики' },
+  complex: { Icon: Skull, color: 'text-site-red', title: 'Особые эффекты' },
 };
 
 const formatSigned = (n: number): string => (n > 0 ? `+${n}` : `${n}`);
@@ -97,15 +101,15 @@ const DamageGroup = ({
     .join(' + ');
 
   return (
-    <div className="bg-white/5 rounded-lg px-3 py-2 border border-white/5">
+    <ProfileCard className="px-3 py-2">
       <div className="flex items-baseline justify-between gap-2 flex-wrap">
         <span className="text-white/70 text-sm">{label}:</span>
-        <span className="text-white font-semibold text-base">{sumText}</span>
+        <span className="text-white font-semibold text-base font-mono tabular-nums">{sumText}</span>
       </div>
       {byType.size > 1 && (
         <div className="text-white/40 text-xs mt-1">{breakdown}</div>
       )}
-    </div>
+    </ProfileCard>
   );
 };
 
@@ -162,12 +166,6 @@ const EffectRow = ({
   );
 };
 
-const SectionHeader = ({ children }: { children: React.ReactNode }) => (
-  <h4 className="gold-text uppercase tracking-wide text-xs font-medium pb-1 border-b border-white/10">
-    {children}
-  </h4>
-);
-
 const ResolvedSkillCard = ({ resolved, skill }: ResolvedSkillCardProps) => {
   const skillType = resolved.skill_type || skill?.skill_type || '';
   const typeLabel = ruSkillType(skillType);
@@ -194,23 +192,20 @@ const ResolvedSkillCard = ({ resolved, skill }: ResolvedSkillCardProps) => {
     : [];
 
   return (
-    <div className="gray-bg rounded-card border border-white/10 p-4 space-y-4">
+    <div className="flex flex-col gap-5 min-w-0">
       {/* Header */}
       <div className="flex items-start gap-3">
-        {skillImage ? (
-          <img
-            src={skillImage}
-            alt={skillName}
-            className="w-10 h-10 rounded-lg object-cover border border-white/10 flex-shrink-0"
-          />
-        ) : (
-          <div className="w-10 h-10 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0">
-            <Zap size={18} className="text-white/30" />
-          </div>
-        )}
+        <GoldIconFrame
+          size={52}
+          src={skillImage}
+          alt={skillName}
+          fallback={<Zap size={20} strokeWidth={1.6} className="text-gold/70" />}
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="gold-text text-lg sm:text-xl font-bold truncate">{skillName}</h3>
+            <h3 className="gold-text text-lg sm:text-xl font-medium uppercase tracking-[0.04em] break-words min-w-0">
+              {skillName}
+            </h3>
             {typeLabel && (
               <span
                 className={`text-[10px] uppercase tracking-wide font-medium px-2 py-0.5 rounded-full border ${typeBadge}`}
@@ -226,14 +221,14 @@ const ResolvedSkillCard = ({ resolved, skill }: ResolvedSkillCardProps) => {
       </div>
 
       {/* Cost row */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-white/70">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-white/70 border-y border-white/10 py-3">
         <span className="flex items-center gap-1">
-          <Zap size={14} className="text-amber-300" />
+          <Zap size={14} className="text-gold" />
           {resolved.cost_energy} энергии
         </span>
         <span className="text-white/20">·</span>
         <span className="flex items-center gap-1">
-          <Droplet size={14} className="text-sky-300" />
+          <Droplet size={14} className="text-site-blue" />
           {resolved.cost_mana} маны
         </span>
         <span className="text-white/20">·</span>
@@ -243,15 +238,15 @@ const ResolvedSkillCard = ({ resolved, skill }: ResolvedSkillCardProps) => {
         </span>
         <span className="text-white/20">·</span>
         <span className="flex items-center gap-1">
-          <TrendingUp size={14} className="text-emerald-300" />
+          <TrendingUp size={14} className="text-stat-energy" />
           ур. {resolved.level_requirement}
         </span>
       </div>
 
       {/* Damage section */}
       {resolved.damage_entries.length > 0 && (
-        <div className="space-y-2">
-          <SectionHeader>Урон</SectionHeader>
+        <div className="flex flex-col gap-2.5">
+          <SectionHeader title="Урон" />
           <div className="space-y-2">
             {Array.from(damageByTarget.entries()).map(([targetSide, entries]) => (
               <DamageGroup key={targetSide} targetSide={targetSide} entries={entries} />
@@ -262,8 +257,8 @@ const ResolvedSkillCard = ({ resolved, skill }: ResolvedSkillCardProps) => {
 
       {/* Effects section */}
       {resolved.effects.length > 0 && (
-        <div className="space-y-2">
-          <SectionHeader>Эффекты</SectionHeader>
+        <div className="flex flex-col gap-2.5">
+          <SectionHeader title="Эффекты" />
           <div className="space-y-3">
             {CATEGORY_ORDER.map((category) => {
               const items = grouped.get(category);
@@ -287,15 +282,12 @@ const ResolvedSkillCard = ({ resolved, skill }: ResolvedSkillCardProps) => {
 
       {/* Perks section */}
       {selectedPerks.length > 0 && (
-        <div className="space-y-2">
-          <SectionHeader>Перки</SectionHeader>
+        <div className="flex flex-col gap-2.5">
+          <SectionHeader title="Перки" />
           <div className="space-y-2">
             {selectedPerks.map((perk) => (
-              <div
-                key={perk.id}
-                className="flex items-start gap-2 bg-white/5 rounded-lg px-3 py-2 border border-white/5"
-              >
-                <Check size={16} className="text-emerald-300 mt-0.5 flex-shrink-0" />
+              <ProfileCard key={perk.id} className="flex items-start gap-2 px-3 py-2">
+                <Check size={16} className="text-stat-energy mt-0.5 flex-shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div className="gold-text text-sm font-medium">{perk.name}</div>
                   {perk.description && (
@@ -304,7 +296,7 @@ const ResolvedSkillCard = ({ resolved, skill }: ResolvedSkillCardProps) => {
                     </div>
                   )}
                 </div>
-              </div>
+              </ProfileCard>
             ))}
           </div>
         </div>

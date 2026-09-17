@@ -59,7 +59,7 @@ const BuffItem = ({ buff, characterId }: { buff: ActiveBuff; characterId: number
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.9 }}
       transition={{ duration: 0.2 }}
-      className="flex items-center gap-2 px-3 py-1.5 rounded-card bg-site-bg gold-outline relative"
+      className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-gold/30 bg-gold/[0.06] whitespace-nowrap"
     >
       <span className="text-xs font-medium text-gold">
         +{bonusPct}% {label}
@@ -85,7 +85,7 @@ const ActiveBuffIndicator = ({ characterId }: ActiveBuffIndicatorProps) => {
   if (!activeBuffs || activeBuffs.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap items-center gap-2 min-w-0">
       <AnimatePresence>
         {activeBuffs.map((buff) => (
           <BuffItem

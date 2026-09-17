@@ -2,9 +2,13 @@
 // horizontal chips. The active one is gold-highlighted; the rest are dimmed.
 // Clicking a non-active profession opens the existing change-profession modal
 // (with its progress-loss warning), preselecting the clicked profession.
+// FEAT-166: the dialog uses the shared portaled ModalShell.
 import { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { Hammer } from 'lucide-react';
 import type { CharacterProfession, Profession } from '../../../types/professions';
+import ModalShell from '../shared/ModalShell';
+import ProfileCard from '../shared/ProfileCard';
+import GoldIconFrame from '../shared/GoldIconFrame';
 
 interface ProfessionRailProps {
   /** All professions from craftingSlice (filtered to is_active inside) */
@@ -96,76 +100,63 @@ const ProfessionRail = ({
         })}
       </div>
 
-      {/* Change-profession confirmation modal (existing flow, progress-loss warning) */}
-      <AnimatePresence>
-        {showChangeModal && (
-          <div className="modal-overlay" onClick={closeModal}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick max-w-md w-full mx-4"
-              onClick={(e) => e.stopPropagation()}
+      {/* Change-profession confirmation dialog (existing flow, progress-loss warning) */}
+      <ModalShell
+        open={showChangeModal}
+        onClose={closeModal}
+        title="Сменить профессию"
+        icon={<Hammer size={18} strokeWidth={1.8} className="text-gold shrink-0" />}
+        size="sm"
+        footer={
+          <>
+            <button type="button" onClick={closeModal} className="btn-line w-full sm:w-auto">
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmChange}
+              disabled={loading || selectedNewId === null}
+              className="btn-blue w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <h2 className="gold-text text-xl font-medium uppercase mb-3">
-                Сменить профессию
-              </h2>
+              {loading ? 'Смена...' : 'Сменить'}
+            </button>
+          </>
+        }
+      >
+        {/* Warning */}
+        <ProfileCard variant="danger" className="mb-4 p-2.5">
+          <p className="text-site-red text-sm">
+            Прогресс будет потерян, выученные рецепты сохранятся. Продолжить?
+          </p>
+        </ProfileCard>
 
-              {/* Warning */}
-              <div className="mb-4 p-2.5 rounded-card bg-site-red/10 border border-site-red/30">
-                <p className="text-site-red text-sm">
-                  Прогресс будет потерян, выученные рецепты сохранятся. Продолжить?
-                </p>
+        {/* Profession selector */}
+        <div className="flex flex-col gap-2">
+          {otherProfessions.map((p) => (
+            <ProfileCard
+              key={p.id}
+              as="button"
+              interactive
+              active={selectedNewId === p.id}
+              onClick={() => setSelectedNewId(p.id)}
+              className="!flex items-center gap-3 p-2.5"
+            >
+              <GoldIconFrame
+                size={36}
+                src={p.icon}
+                alt={p.name}
+                fallback={<span className="text-gold text-sm">{p.name.charAt(0)}</span>}
+              />
+              <div className="min-w-0">
+                <p className="text-white text-sm font-medium break-words">{p.name}</p>
+                {p.description && (
+                  <p className="text-white/40 text-xs line-clamp-1">{p.description}</p>
+                )}
               </div>
-
-              {/* Profession selector */}
-              <div className="space-y-2 mb-5 max-h-60 overflow-y-auto gold-scrollbar">
-                {otherProfessions.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => setSelectedNewId(p.id)}
-                    className={`w-full flex items-center gap-3 p-2.5 rounded-card text-left transition-all duration-200 ease-site ${
-                      selectedNewId === p.id
-                        ? 'bg-site-blue/20 border border-site-blue/40'
-                        : 'bg-white/[0.03] border border-transparent hover:bg-white/[0.06]'
-                    }`}
-                  >
-                    {p.icon ? (
-                      <img src={p.icon} alt={p.name} className="w-8 h-8 rounded object-cover" />
-                    ) : (
-                      <div className="w-8 h-8 rounded bg-white/10 flex items-center justify-center">
-                        <span className="text-gold text-sm">{p.name.charAt(0)}</span>
-                      </div>
-                    )}
-                    <div>
-                      <p className="text-white text-sm font-medium">{p.name}</p>
-                      {p.description && (
-                        <p className="text-white/40 text-xs line-clamp-1">{p.description}</p>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-
-              {/* Buttons */}
-              <div className="flex gap-3">
-                <button
-                  onClick={handleConfirmChange}
-                  disabled={loading || selectedNewId === null}
-                  className="btn-blue flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {loading ? 'Смена...' : 'Сменить'}
-                </button>
-                <button onClick={closeModal} className="btn-line flex-1">
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+            </ProfileCard>
+          ))}
+        </div>
+      </ModalShell>
     </>
   );
 };

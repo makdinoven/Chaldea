@@ -1,7 +1,10 @@
 // FEAT-151 — «Создать отряд» card for the no-party state (mock composition,
 // design-system styles). Create flow preserved from FEAT-144.
+// FEAT-166 — title moved into the PanelShell header band, shared primitives.
 import { Check, MapPin, Plus, Star, Swords } from 'lucide-react';
 import PanelShell from '../PanelShell';
+import ProfileCard from '../shared/ProfileCard';
+import GoldIconFrame from '../shared/GoldIconFrame';
 
 const PARTY_NAME_MAX_LENGTH = 60;
 
@@ -21,20 +24,16 @@ interface PartyCreateCardProps {
 const PartyCreateCard = ({ name, onNameChange, busy, onCreate }: PartyCreateCardProps) => {
   return (
     <PanelShell
-      className="bg-gradient-to-b from-gold/[0.06] to-transparent"
-      bodyClassName="flex flex-col gap-4 p-5 sm:p-6"
+      title="Создать отряд"
+      icon={<Plus size={18} strokeWidth={1.8} className="text-gold shrink-0" />}
+      bodyClassName="flex flex-col gap-4 p-4 lg:p-5"
     >
-      {/* Heading: gold icon frame + title */}
-      <div className="flex items-center gap-3.5">
-        <div className="w-[54px] h-[54px] shrink-0 rounded-[14px] p-[2px] bg-gradient-to-b from-gold-light to-gold-dark shadow-[0_0_16px_rgba(240,217,92,0.35)]">
-          <div className="w-full h-full rounded-xl bg-site-dark flex items-center justify-center">
-            <Swords size={26} strokeWidth={1.6} className="text-gold" />
-          </div>
-        </div>
-        <div className="flex flex-col gap-1 min-w-0">
-          <h4 className="text-white text-lg font-medium">Создать отряд</h4>
-          <span className="text-xs text-white/50">Вы пока не состоите в отряде</span>
-        </div>
+      {/* Intro: gold icon frame + status line */}
+      <div className="flex items-center gap-3.5 min-w-0">
+        <GoldIconFrame size={54} shape="circle" glow>
+          <Swords size={24} strokeWidth={1.6} className="text-gold" />
+        </GoldIconFrame>
+        <span className="text-sm text-white/60 min-w-0">Вы пока не состоите в отряде</span>
       </div>
 
       {/* Party name input */}
@@ -45,7 +44,7 @@ const PartyCreateCard = ({ name, onNameChange, busy, onCreate }: PartyCreateCard
         >
           Название отряда
         </label>
-        <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-black/30 border border-gold/20 focus-within:border-gold/50 transition-colors duration-200 ease-site">
+        <div className="flex items-center gap-2.5 px-4 py-3 rounded-card bg-white/[0.03] border border-white/10 focus-within:border-gold/50 transition-colors duration-200 ease-site">
           <Star size={16} strokeWidth={1.8} className="text-gold/70 shrink-0" />
           <input
             id="party-name-input"
@@ -54,7 +53,7 @@ const PartyCreateCard = ({ name, onNameChange, busy, onCreate }: PartyCreateCard
             maxLength={PARTY_NAME_MAX_LENGTH}
             onChange={(e) => onNameChange(e.target.value)}
             placeholder="Напр. «Хранители Зари»"
-            className="flex-1 min-w-0 bg-transparent outline-none border-none text-white text-sm placeholder-white/30"
+            className="flex-1 min-w-0 bg-transparent outline-none border-none text-white text-base sm:text-sm placeholder-white/30"
           />
           <span className="font-mono tabular-nums text-[11px] text-white/35 shrink-0">
             {name.length}/{PARTY_NAME_MAX_LENGTH}
@@ -63,7 +62,7 @@ const PartyCreateCard = ({ name, onNameChange, busy, onCreate }: PartyCreateCard
       </div>
 
       {/* Benefits list */}
-      <div className="flex flex-col gap-2.5 rounded-xl bg-white/[0.03] border border-white/[0.07] p-4">
+      <ProfileCard className="flex flex-col gap-2.5 p-4">
         <span className="text-[11px] uppercase tracking-[0.08em] text-white/45">
           Что даёт отряд
         </span>
@@ -73,7 +72,7 @@ const PartyCreateCard = ({ name, onNameChange, busy, onCreate }: PartyCreateCard
             <span className="text-[13px] text-white/80">{benefit}</span>
           </div>
         ))}
-      </div>
+      </ProfileCard>
 
       {/* Location hint */}
       <div className="flex items-center gap-2 text-[11px] text-white/40">
@@ -85,7 +84,7 @@ const PartyCreateCard = ({ name, onNameChange, busy, onCreate }: PartyCreateCard
         type="button"
         disabled={busy}
         onClick={onCreate}
-        className="btn-blue w-full flex items-center justify-center gap-2 py-3 text-xs font-medium uppercase tracking-[0.05em] disabled:opacity-50"
+        className="btn-blue w-full sm:w-auto sm:self-start flex items-center justify-center gap-2 py-3 text-xs font-medium uppercase tracking-[0.05em] disabled:opacity-50"
       >
         <Plus size={16} strokeWidth={2} className="shrink-0" />
         Создать отряд

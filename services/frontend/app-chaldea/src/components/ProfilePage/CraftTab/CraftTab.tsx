@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { motion } from 'motion/react';
 import toast from 'react-hot-toast';
+import { Hammer } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import {
   fetchProfessions,
@@ -27,10 +28,14 @@ import ProfessionRail from './ProfessionRail';
 import ProfessionInfo from './ProfessionInfo';
 import RecipeList from './RecipeList';
 import CraftConfirmModal from './CraftConfirmModal';
-import GemSocketSection from './GemSocketSection';
-import RuneSocketSection from './RuneSocketSection';
+import SocketItemsSection from './SocketItemsSection';
 import RefiningSection from './RefiningSection';
 import ActiveBuffIndicator from './ActiveBuffIndicator';
+import PanelShell, { PANEL_DESKTOP_HEIGHT_CLASS } from '../PanelShell';
+import LoadingState from '../shared/LoadingState';
+
+const WORKSHOP_TITLE = 'Мастерская';
+const workshopIcon = <Hammer size={18} strokeWidth={1.8} className="text-gold shrink-0" />;
 
 interface CraftTabProps {
   characterId: number;
@@ -172,9 +177,9 @@ const CraftTab = ({ characterId }: CraftTabProps) => {
 
   if (isInitialLoading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-      </div>
+      <PanelShell title={WORKSHOP_TITLE} icon={workshopIcon}>
+        <LoadingState />
+      </PanelShell>
     );
   }
 
@@ -189,52 +194,56 @@ const CraftTab = ({ characterId }: CraftTabProps) => {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="flex flex-col gap-4"
     >
-      {/* Header: gold title + active craft buffs (mock 932-939) */}
-      <div className="flex items-center justify-between flex-wrap gap-3.5">
-        <h3 className="gold-text text-sm font-medium uppercase tracking-[0.12em]">
-          Мастерская
-        </h3>
-        <ActiveBuffIndicator characterId={characterId} />
-      </div>
-
       {!hasProfession ? (
         <ProfessionSelect
           professions={safeProfs}
           loading={charProfLoading}
           onSelect={handleSelectProfession}
+          headerExtra={<ActiveBuffIndicator characterId={characterId} />}
         />
       ) : (
-        <>
-          <ProfessionRail
-            professions={safeProfs}
-            characterProfession={characterProfession}
-            loading={charProfLoading}
-            onChangeProfession={handleChangeProfession}
-          />
-          <ProfessionInfo characterProfession={characterProfession} />
-          <RefiningSection
-            characterId={characterId}
-            professionId={characterProfession.profession.id}
-            currentRank={characterProfession.current_rank}
-          />
-          {characterProfession.profession.slug === 'jeweler' && (
-            <GemSocketSection characterId={characterId} />
-          )}
-          {characterProfession.profession.slug === 'enchanter' && (
-            <RuneSocketSection characterId={characterId} />
-          )}
+        <div className="grid grid-cols-1 lg:grid-cols-[392px_1fr] gap-5 items-start">
+          {/* Left: workshop — buffs, profession rail/info, refining, socket extraction */}
+          <PanelShell
+            title={WORKSHOP_TITLE}
+            icon={workshopIcon}
+            className={PANEL_DESKTOP_HEIGHT_CLASS}
+          >
+            <div className="flex flex-col gap-6">
+              <ActiveBuffIndicator characterId={characterId} />
+              <ProfessionRail
+                professions={safeProfs}
+                characterProfession={characterProfession}
+                loading={charProfLoading}
+                onChangeProfession={handleChangeProfession}
+              />
+              <ProfessionInfo characterProfession={characterProfession} />
+              <RefiningSection
+                characterId={characterId}
+                professionId={characterProfession.profession.id}
+                currentRank={characterProfession.current_rank}
+              />
+              {characterProfession.profession.slug === 'jeweler' && (
+                <SocketItemsSection characterId={characterId} variant="gem" />
+              )}
+              {characterProfession.profession.slug === 'enchanter' && (
+                <SocketItemsSection characterId={characterId} variant="rune" />
+              )}
+            </div>
+          </PanelShell>
+
+          {/* Right: recipes panel (toolbar search + scrolling grid) */}
           <RecipeList
             recipes={safeRecipes}
             loading={recipesLoading}
             error={recipesError}
             onCraft={handleCraft}
           />
-        </>
+        </div>
       )}
 
-      {/* Craft confirmation modal */}
+      {/* Craft confirmation modal (portaled via ModalShell) */}
       {craftRecipe && (
         <CraftConfirmModal
           recipe={craftRecipe}

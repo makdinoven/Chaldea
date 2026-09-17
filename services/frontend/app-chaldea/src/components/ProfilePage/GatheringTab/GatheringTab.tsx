@@ -1,7 +1,8 @@
 /**
  * "Сбор" profile tab — shows the character's gathering skills
  * (mining / herbalism / woodcutting / foraging) with rank, XP progress, and bonuses.
- * Restyled per Claude Design mock (FEAT-151); data/redux flow unchanged.
+ * Restyled per Claude Design mock (FEAT-151), moved into a single PanelShell
+ * (FEAT-166); data/redux flow unchanged.
  *
  * Visible read-only on other players' profiles per FEAT-128 §2.7 #4.
  * No interactive controls — rank-up is automatic via XP gain.
@@ -19,7 +20,10 @@ import {
   clearGatheringError,
 } from '../../../redux/slices/gatheringSlice';
 import GatheringSkillCard from './GatheringSkillCard';
+import PanelShell, { PANEL_DESKTOP_HEIGHT_CLASS } from '../PanelShell';
 import EmptyState from '../shared/EmptyState';
+import LoadingState from '../shared/LoadingState';
+import PanelCounter from '../shared/PanelCounter';
 
 interface GatheringTabProps {
   characterId: number;
@@ -61,62 +65,45 @@ const GatheringTab = ({ characterId, isOwnProfile = true }: GatheringTabProps) =
     }
   }, [error, dispatch]);
 
-  if (loading && skills.length === 0) {
+  const retryLoad = () => {
+    setLoadFailed(false);
+    dispatch(loadGatheringSkills(characterId))
+      .unwrap()
+      .catch(() => setLoadFailed(true));
+  };
+
+  const renderContent = () => {
+    if (loading && skills.length === 0) {
+      return <LoadingState label="Загрузка..." />;
+    }
+
+    if (!loading && skills.length === 0) {
+      return (
+        <EmptyState
+          icon={<Pickaxe size={32} strokeWidth={1.5} className="text-white/20" />}
+          message={
+            loadFailed
+              ? 'Не удалось загрузить навыки сбора.'
+              : isOwnProfile
+                ? 'Навыки сбора ещё не получены.'
+                : 'У игрока пока нет навыков сбора.'
+          }
+          action={
+            loadFailed ? (
+              <button
+                type="button"
+                onClick={retryLoad}
+                className="text-sm text-site-blue hover:text-white transition-colors duration-200 ease-site"
+              >
+                Попробовать снова
+              </button>
+            ) : undefined
+          }
+        />
+      );
+    }
+
     return (
-      <div className="flex flex-col items-center justify-center py-20 gap-4">
-        <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-        <p className="text-white/50 text-sm uppercase tracking-[0.06em]">Загрузка...</p>
-      </div>
-    );
-  }
-
-  if (!loading && skills.length === 0) {
-    return (
-      <EmptyState
-        icon={<Pickaxe size={32} strokeWidth={1.5} className="text-white/20" />}
-        message={
-          loadFailed
-            ? 'Не удалось загрузить навыки сбора.'
-            : isOwnProfile
-              ? 'Навыки сбора ещё не получены.'
-              : 'У игрока пока нет навыков сбора.'
-        }
-        action={
-          loadFailed ? (
-            <button
-              type="button"
-              onClick={() => {
-                setLoadFailed(false);
-                dispatch(loadGatheringSkills(characterId))
-                  .unwrap()
-                  .catch(() => setLoadFailed(true));
-              }}
-              className="text-sm text-site-blue hover:text-white transition-colors duration-200 ease-site"
-            >
-              Попробовать снова
-            </button>
-          ) : undefined
-        }
-      />
-    );
-  }
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="flex flex-col gap-4"
-    >
-      {/* Header */}
-      <div className="flex items-center gap-2.5">
-        <Pickaxe size={17} strokeWidth={1.8} className="text-gold shrink-0" />
-        <h3 className="gold-text text-sm font-medium uppercase tracking-[0.12em]">
-          Навыки сбора
-        </h3>
-      </div>
-
-      {/* Skill cards */}
       <motion.div
         initial="hidden"
         animate="visible"
@@ -124,7 +111,7 @@ const GatheringTab = ({ characterId, isOwnProfile = true }: GatheringTabProps) =
           hidden: {},
           visible: { transition: { staggerChildren: 0.05 } },
         }}
-        className="grid grid-cols-1 md:grid-cols-2 gap-4"
+        className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"
       >
         {skills.map((skill) => (
           <motion.div
@@ -138,6 +125,25 @@ const GatheringTab = ({ characterId, isOwnProfile = true }: GatheringTabProps) =
           </motion.div>
         ))}
       </motion.div>
+    );
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+    >
+      <PanelShell
+        title="Навыки сбора"
+        icon={<Pickaxe size={18} strokeWidth={1.8} className="text-gold shrink-0" />}
+        headerExtra={
+          skills.length > 0 ? <PanelCounter>{skills.length}</PanelCounter> : undefined
+        }
+        className={PANEL_DESKTOP_HEIGHT_CLASS}
+      >
+        {renderContent()}
+      </PanelShell>
     </motion.div>
   );
 };

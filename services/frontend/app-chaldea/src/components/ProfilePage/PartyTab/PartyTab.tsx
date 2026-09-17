@@ -1,5 +1,6 @@
 // ProfilePage PartyTab — redesigned per Claude Design mock (FEAT-151),
-// party system from FEAT-144. Three states: member / leader / no-party.
+// party system from FEAT-144, moved into PanelShells (FEAT-166).
+// Three states: member / leader / no-party.
 // All existing actions preserved: create / invite / respond / leave /
 // disband / rename / avatar upload.
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -27,8 +28,22 @@ import PartyMemberCard from './PartyMemberCard';
 import InviteFromLocationPanel from './InviteFromLocationPanel';
 import PartyInvitesPanel from './PartyInvitesPanel';
 import PartyCreateCard from './PartyCreateCard';
+import PanelShell, { PANEL_DESKTOP_HEIGHT_CLASS } from '../PanelShell';
+import LoadingState from '../shared/LoadingState';
+import PanelCounter from '../shared/PanelCounter';
+import SectionHeader from '../shared/SectionHeader';
 
 const PARTY_MAX_SIZE = 4;
+/** Each right-column panel gets half the desktop height when both are shown */
+const HALF_PANEL_DESKTOP_MAX_HEIGHT_CLASS = 'lg:max-h-[calc((100vh-150px)/2)]';
+
+const tabMotion = {
+  initial: { opacity: 0, y: 10 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.3, ease: 'easeOut' },
+} as const;
+
+const partyIcon = <Users size={18} strokeWidth={1.8} className="text-gold shrink-0" />;
 
 interface PartyTabProps {
   characterId: number;
@@ -156,9 +171,11 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-24">
-        <div className="w-7 h-7 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-      </div>
+      <motion.div {...tabMotion}>
+        <PanelShell title="Отряд" icon={partyIcon}>
+          <LoadingState />
+        </PanelShell>
+      </motion.div>
     );
   }
 
@@ -168,43 +185,59 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
   // Invites can arrive while already in a party — keep the panel visible then.
   const showInvitesPanel = !party || invites.length > 0;
   const hasRightColumn = isLeader || showInvitesPanel;
+  const bothRightPanels = isLeader && showInvitesPanel;
+
+  // Hidden file input for the squad avatar (leader only)
+  const avatarInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept="image/*"
+      className="hidden"
+      onChange={handleAvatarChange}
+    />
+  );
+
+  if (!party) {
+    return (
+      <motion.div {...tabMotion}>
+        {avatarInput}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+          <PartyCreateCard
+            name={name}
+            onNameChange={setName}
+            busy={busy}
+            onCreate={handleCreate}
+          />
+          <PartyInvitesPanel invites={invites} busy={busy} onRespond={handleRespond} />
+        </div>
+      </motion.div>
+    );
+  }
+
+  const acceptedCount = party.members.filter((m) => m.status === 'accepted').length;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="flex flex-col gap-4"
-    >
-      {/* Hidden file input for the squad avatar (leader only) */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleAvatarChange}
-      />
-
-      {/* Header row */}
-      <div className="flex items-center gap-3.5">
-        <h3 className="gold-text text-sm font-medium uppercase tracking-[0.12em]">Отряд</h3>
-        {party && (
-          <span className="font-mono tabular-nums text-[13px] text-white/50">
-            {party.members.filter((m) => m.status === 'accepted').length}/{PARTY_MAX_SIZE}
-          </span>
-        )}
-      </div>
+    <motion.div {...tabMotion}>
+      {avatarInput}
 
       <div
-        className={
-          hasRightColumn
-            ? 'grid gap-4 items-start lg:grid-cols-[1.15fr_0.85fr]'
-            : 'flex flex-col gap-4'
-        }
+        className={`grid grid-cols-1 gap-5 items-start ${
+          hasRightColumn ? 'lg:grid-cols-[1fr_392px]' : ''
+        }`}
       >
-        {/* Left column */}
-        {party ? (
-          <section className="flex flex-col gap-4 min-w-0">
+        {/* Left panel: identity band, members, actions */}
+        <PanelShell
+          title="Отряд"
+          icon={partyIcon}
+          headerExtra={
+            <PanelCounter>
+              {acceptedCount}/{PARTY_MAX_SIZE}
+            </PanelCounter>
+          }
+          className={PANEL_DESKTOP_HEIGHT_CLASS}
+        >
+          <div className="flex flex-col gap-6">
             <PartyHeaderCard
               party={party}
               isLeader={isLeader}
@@ -213,45 +246,49 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
               onRename={handleRename}
             />
 
-            {/* Member grid + free-slot placeholders */}
-            <motion.div
-              initial="hidden"
-              animate="visible"
-              variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.05 } } }}
-              className="grid grid-cols-1 sm:grid-cols-2 gap-3.5"
-            >
-              {party.members.map((m) => (
-                <motion.div
-                  key={m.character_id}
-                  variants={{
-                    hidden: { opacity: 0, y: 10 },
-                    visible: { opacity: 1, y: 0 },
-                  }}
-                >
-                  <PartyMemberCard member={m} ownLocationId={myLocationId} />
-                </motion.div>
-              ))}
-              {Array.from({ length: freeSlots }, (_, i) => (
-                <motion.div
-                  key={`free-${i}`}
-                  variants={{
-                    hidden: { opacity: 0, y: 10 },
-                    visible: { opacity: 1, y: 0 },
-                  }}
-                  className="flex flex-col items-center justify-center gap-2 min-h-[104px] rounded-card border-[1.5px] border-dashed border-gold/[0.18] bg-white/[0.02] text-gold/45"
-                >
-                  <Users size={22} strokeWidth={1.7} />
-                  <span className="text-[11px] uppercase tracking-[0.05em]">Свободный слот</span>
-                </motion.div>
-              ))}
-            </motion.div>
+            <div className="flex flex-col gap-3.5">
+              <SectionHeader title="Участники" />
+
+              {/* Member grid + free-slot placeholders */}
+              <motion.div
+                initial="hidden"
+                animate="visible"
+                variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.05 } } }}
+                className="grid grid-cols-1 sm:grid-cols-2 gap-3.5"
+              >
+                {party.members.map((m) => (
+                  <motion.div
+                    key={m.character_id}
+                    variants={{
+                      hidden: { opacity: 0, y: 10 },
+                      visible: { opacity: 1, y: 0 },
+                    }}
+                  >
+                    <PartyMemberCard member={m} ownLocationId={myLocationId} />
+                  </motion.div>
+                ))}
+                {Array.from({ length: freeSlots }, (_, i) => (
+                  <motion.div
+                    key={`free-${i}`}
+                    variants={{
+                      hidden: { opacity: 0, y: 10 },
+                      visible: { opacity: 1, y: 0 },
+                    }}
+                    className="flex flex-col items-center justify-center gap-2 min-h-[104px] rounded-card border-[1.5px] border-dashed border-white/15 text-white/35"
+                  >
+                    <Users size={22} strokeWidth={1.7} />
+                    <span className="text-[11px] uppercase tracking-[0.05em]">Свободный слот</span>
+                  </motion.div>
+                ))}
+              </motion.div>
+            </div>
 
             {isLeader ? (
               <button
                 type="button"
                 disabled={busy}
                 onClick={handleDisband}
-                className="self-start flex items-center gap-2 px-[18px] py-2.5 rounded-[10px] text-xs font-medium uppercase tracking-[0.04em] text-site-red/85 bg-site-red/[0.08] border border-site-red/35 cursor-pointer hover:bg-site-red/[0.18] transition-colors duration-200 ease-site disabled:opacity-50"
+                className="w-full sm:w-auto sm:self-start flex items-center justify-center gap-2 px-[18px] py-2.5 rounded-[10px] text-xs font-medium uppercase tracking-[0.04em] text-site-red/85 bg-site-red/[0.08] border border-site-red/35 cursor-pointer hover:bg-site-red/[0.18] transition-colors duration-200 ease-site disabled:opacity-50"
               >
                 <Trash2 size={15} strokeWidth={2} className="shrink-0" />
                 Распустить отряд
@@ -261,24 +298,17 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
                 type="button"
                 disabled={busy}
                 onClick={handleLeave}
-                className="self-start px-[18px] py-2.5 rounded-[10px] text-xs font-medium uppercase tracking-[0.04em] text-white/70 border border-white/15 cursor-pointer hover:text-site-red hover:border-site-red/40 transition-colors duration-200 ease-site disabled:opacity-50"
+                className="w-full sm:w-auto sm:self-start px-[18px] py-2.5 rounded-[10px] text-xs font-medium uppercase tracking-[0.04em] text-white/70 border border-white/15 cursor-pointer hover:text-site-red hover:border-site-red/40 transition-colors duration-200 ease-site disabled:opacity-50"
               >
                 Покинуть отряд
               </button>
             )}
-          </section>
-        ) : (
-          <PartyCreateCard
-            name={name}
-            onNameChange={setName}
-            busy={busy}
-            onCreate={handleCreate}
-          />
-        )}
+          </div>
+        </PanelShell>
 
         {/* Right column */}
         {hasRightColumn && (
-          <div className="flex flex-col gap-4 min-w-0">
+          <div className="flex flex-col gap-5 min-w-0">
             {isLeader && (
               <InviteFromLocationPanel
                 locationName={myLocationName}
@@ -286,10 +316,18 @@ const PartyTab = ({ characterId }: PartyTabProps) => {
                 players={invitable}
                 busy={busy}
                 onInvite={handleInvite}
+                className={
+                  bothRightPanels ? HALF_PANEL_DESKTOP_MAX_HEIGHT_CLASS : PANEL_DESKTOP_HEIGHT_CLASS
+                }
               />
             )}
             {showInvitesPanel && (
-              <PartyInvitesPanel invites={invites} busy={busy} onRespond={handleRespond} />
+              <PartyInvitesPanel
+                invites={invites}
+                busy={busy}
+                onRespond={handleRespond}
+                className={bothRightPanels ? HALF_PANEL_DESKTOP_MAX_HEIGHT_CLASS : ''}
+              />
             )}
           </div>
         )}

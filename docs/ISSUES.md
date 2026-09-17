@@ -128,20 +128,23 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 **Обнаружено:** FEAT-165 (Reviewer, 2026-09-18), вживую через gateway: запрос без токена доходит до обработчика (404 «Предмет не найден» на несуществующий id, а не 401). Предсуществующее, фичей не внесено.
 **Описание:** у эндпоинта нет ни `get_current_user_via_http`, ни `X-Internal-Token`, а nginx не закрывает путь. Любой клиент может положить в инвентарь любого персонажа любой предмет в любом количестве (камни заточки, руны, сырьё для переработки и т.д.).
 **Возможное решение:** выяснить потребителей (соседние сервисы, админская «Выдать»), для межсервисных вызовов — отдельный internal-маршрут с `verify_internal_token`, для админки — `require_permission("items:update")`; публичный вариант закрыть.
+**Дополнено (Codebase Analyst, FEAT-167):** потребители выяснены, ровно две аудитории и ни одного игрового вызова. Сервисы: `battle-service/app/main.py:356`, `battle-pass-service/app/crud.py:534`, `dungeon-service/app/http_clients.py:248`, `locations-service/app/main.py:2184/2739/3040` (три последних пробрасывают токен **игрока**). Админка: `frontend/src/api/items.ts:128` (`issueItem`) и `src/api/adminCharacters.ts:159` (`addInventoryItem`). Сбор ресурсов идёт не сюда, а через `/inventory/internal/characters/{id}/gathering/award`. У самого inventory-service нет `verify_internal_token` (только исходящий хелпер `main.py:28`), и `/inventory/internal/*` тоже держится лишь на nginx. В `test_endpoint_auth.py` кейса на этот POST нет — поэтому дыра и выжила.
 
 ### Уязвимость: изменяющие эндпоинты character-attributes-service открыты через gateway без авторизации
 **Сервис:** character-attributes-service (+ nginx)
-**Файлы:** `services/character-attributes-service/app/main.py` (`POST /{id}/apply_modifiers` ~542, `POST /{id}/recover` ~700, `PUT /{id}/active_experience` ~734, `PUT /{id}/passive_experience` ~768, `POST /{id}/consume_stamina` ~801, `POST /{id}/refund_stamina` ~840), `docker/api-gateway/nginx.conf` (`location /attributes/`), `nginx.prod.conf`
-**Обнаружено:** FEAT-164 (Codebase Analyst, 2026-09-17), по коду; вживую не проверялось.
-**Описание:** у этих эндпоинтов нет ни JWT, ни `X-Internal-Token`, а nginx закрывает только `/attributes/internal/`. Любой клиент может снаружи вылечить любого персонажа (`/recover`), выдать ему произвольные статы (`/apply_modifiers`), начислить опыт (`/passive_experience`, `/active_experience`) или обнулить выносливость. Вызываются только другими сервисами (inventory, dungeon, locations, character-service).
+**Файлы:** `services/character-attributes-service/app/main.py` (`POST /{id}/apply_modifiers` 723, `POST /{id}/recover` 886, `PUT /{id}/active_experience` 925, `PUT /{id}/passive_experience` 959, `POST /{id}/consume_stamina` 992, `POST /{id}/refund_stamina` 1044), `docker/api-gateway/nginx.conf:197` (`location /attributes/`), `nginx.prod.conf:216`
+**Обнаружено:** FEAT-164 (Codebase Analyst, 2026-09-17), по коду; вживую не проверялось. Номера строк актуализированы FEAT-167 (после FEAT-164 сдвинулись).
+**Описание:** у этих эндпоинтов нет ни JWT, ни `X-Internal-Token`, а nginx закрывает только `/attributes/internal/`. Любой клиент может снаружи вылечить любого персонажа (`/recover`), выдать ему произвольные статы (`/apply_modifiers`), начислить опыт (`/passive_experience`, `/active_experience`) или обнулить выносливость. Вызываются только другими сервисами (inventory, dungeon, locations, skills, party) — фронтенд не вызывает ни один из шести.
 **Возможное решение:** перенести под `/attributes/internal/` (или добавить `Depends(verify_internal_token)`) и синхронно обновить вызывающих; отдельной задачей.
+**Дополнено (Codebase Analyst, FEAT-167):** у самого сервиса нет `verify_internal_token` — `/attributes/internal/*` (`settle-regen` 422, `satiety` 439, `reconcile-perks` 1365) держатся только на nginx. Закрывать нужно **только эти шесть**: восстановление FEAT-164 живёт в `GET /attributes/{id}` (341) и `GET /{id}/rest-status` (372), их читают battle-service на каждой атаке, skills-service и профиль. Блокер: `INTERNAL_SERVICE_TOKEN` не проброшен party-service и battle-pass-service ни в dev, ни в prod compose.
 
 ### Баг: `damage_modifier` оружия засчитывается в урон дважды
 **Сервисы:** inventory-service, battle-service
-**Файлы:** `services/inventory-service/app/crud.py:533` (`build_modifiers_dict`), `services/battle-service/app/battle_engine.py:155-157`
-**Обнаружено:** 2026-09-15, при разборе полей предметов для реорганизации админки
+**Файлы:** `services/inventory-service/app/crud.py:571` (в `build_modifiers_dict`, def на 533), `services/battle-service/app/battle_engine.py:156-157`
+**Обнаружено:** 2026-09-15, при разборе полей предметов для реорганизации админки. Подтверждено вживую пользователем 2026-09-18 (персонаж «Арлекино»: 25 без меча, 55 с мечом вместо 45).
 **Описание:** при надевании оружия `build_modifiers_dict` кладёт его `damage_modifier` в атрибут `damage` персонажа. В бою `battle_engine` строит базовый урон как `base_stat + attacker_attr["damage"] + weapon["damage_modifier"]` — то есть тот же модификатор оружия прибавляется второй раз. Оружие с «Урон +10» даёт +20. Касается только оружия: у брони и украшений `damage_modifier` идёт лишь через атрибут.
-**Возможное решение:** решение за балансом — убрать `weapon_mod` из формулы в `battle_engine` (оружие действует через атрибут, как остальная экипировка) либо не складывать `damage_modifier` оружия в атрибут. Вынесено в отдельную задачу по просьбе пользователя; перед правкой сверить с автобоем и тестами battle-service.
+**Возможное решение:** решение за балансом — убрать `weapon_mod` из формулы в `battle_engine` (оружие действует через атрибут, как остальная экипировка) либо не складывать `damage_modifier` оружия в атрибут. Взято в FEAT-167 (первый вариант, по решению пользователя).
+**Дополнено (Codebase Analyst, FEAT-167):** тот же дубль есть в мёртвой `compute_single_damage_entry` (`battle_engine.py:85-86`, никем не импортируется) и **в UI** — `frontend/src/components/ProfilePage/StatsTab/DerivedStatsSection.tsx:58` считает ту же тройную сумму. Автобой, подземелья, мобы/NPC и заточка/камни отдельных мест сложения не имеют — формула одна. Бэкфилл не нужен: в БД значение верное, ошибается только формула. Побочно правка чинит и то, что сломанное (durability 0) оружие всё ещё даёт свой урон в бою — `fetch_weapons` прочность не смотрит.
 
 ### Долг: `INTERNAL_SERVICE_TOKEN` имеет публично известный fallback `dev-internal-token-change-me`
 **Сервисы:** character-service, character-attributes-service, locations-service, battle-service, inventory-service, party-service (все, кому токен задан в compose)
@@ -150,6 +153,7 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 **Описание:** во всех compose-файлах токен объявлен как `${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}`. Если переменная не задана в prod `.env` на VPS, все сервисы поднимутся с дефолтом, прописанным прямо в публичном репозитории. После FEAT-162 на этом токене держится второй (и для шести эндпоинтов — фактически единственный прикладной) слой защиты internal-маршрутов: `verify_internal_token` сравнивает заголовок именно с ним. Тот же класс проблемы, что и запись 27 про `JWT_SECRET_KEY`.
 **Почему не CRITICAL:** первый слой (nginx `return 403` на всех `/internal/`-префиксах) остаётся, и порты сервисов в prod наружу не открыты — эксплуатация требует доступа внутрь compose-сети либо ошибки в ingress.
 **Возможное решение:** сгенерировать криптостойкое значение (`openssl rand -hex 32`), прописать `INTERNAL_SERVICE_TOKEN` в prod `.env`, добавить в `.env.example` маскированную заглушку и рассмотреть удаление fallback-значения из `docker-compose.prod.yml` (fail-closed: без токена сервис отдаёт 503 — механизм уже реализован).
+**Дополнено (Codebase Analyst, FEAT-167):** токен вообще не проброшен **party-service** и **battle-pass-service** — ни в `docker-compose.yml`, ни в `docker-compose.prod.yml`. Оба вызывают эндпоинты, которые FEAT-167 закрывает (party → `active_experience`/`passive_experience`, battle-pass → `POST /inventory/{id}/items`), и оба проглатывают ошибку с warning'ом. Без правки compose тихо пропадут опыт отряда и предметные награды боевого пропуска. FEAT-167 добавляет переменную обоим; после этого каждый новый сервис-вызывающий обязан получать её сразу.
 
 ### ~~Баг: ZSET `battle:deadlines` никто не читает — таймаут хода не срабатывает сам по себе~~ DONE (FEAT-163)
 ~~**Сервис:** battle-service~~
@@ -247,6 +251,19 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 ~~**Исправлено в FEAT-044:** `convert_to_webp` теперь определяет анимированные GIF (`image.format == 'GIF'` + `is_animated`) и сохраняет их как GIF с `save_all=True`, сохраняя все кадры и анимацию. Статические изображения по-прежнему конвертируются в WebP. S3 получает корректный `ContentType` (`image/gif` или `image/webp`).~~
 
 ## MEDIUM
+
+### Баг: синхронизация опыта при смене уровня тихо падает — character-service дёргает RBAC-роут без токена
+**Сервисы:** character-service, character-attributes-service
+**Файлы:** `services/character-service/app/main.py:747-772`
+**Обнаружено:** FEAT-167 (Codebase Analyst, 2026-09-18), по коду; вживую не проверялось.
+**Описание:** при смене уровня персонажа (админкой) character-service читает `GET /attributes/{id}/passive_experience`, а затем, если опыта не хватает, PUT-ит `/attributes/admin/{id}` — а этот роут защищён `require_permission("characters:update")` (`character-attributes-service/app/main.py:1083-1088`). Никакого `Authorization` character-service не отправляет, поэтому получает 403, пишет warning (`main.py:766-772`) и продолжает как будто всё хорошо. Итог: уровень меняется, `passive_experience` под него не подтягивается. Классический тихий отказ.
+**Возможное решение:** либо отдельный internal-роут в char-attrs под `verify_internal_token` для этой синхронизации, либо честно пробросить админский токен вызывающего. Заодно перестать проглатывать 4xx на этом вызове.
+
+### Баг: страница боя на 360px вылезает за экран, карточки бойцов перекрывают слоты навыков
+**Сервис:** frontend (страница боя, `components/pages/BattlePage/`)
+**Обнаружено:** FEAT-166 (Frontend Dev T2, 2026-09-18), вживую в headless-браузере; скриншот `dbg-battle-load-360.png` в scratchpad сессии. Предсуществующее, фичей не внесено.
+**Описание:** на ширине 360px страница боя прокручивается по горизонтали, а карточки бойцов перекрывают слоты навыков — обычным касанием до слотов не достать. Проявляется ещё до открытия выбора навыка.
+**Возможное решение:** адаптивная раскладка страницы боя (стопка на мобильных, `min-w-0`, без фиксированных ширин), проверка на 360px.
 
 ### Баг: админ не может вернуть рецепт из «базовых» в «изучаемые по предмету»
 **Сервис:** inventory-service (`app/crud.py`, `update_recipe`)

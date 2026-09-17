@@ -1,10 +1,25 @@
+// ProfilePage PerksTab. FEAT-166: the tree sits in a PanelShell (auto height,
+// no inner scroll). The wheel layout is derived from the backdrop's five 72°
+// sectors in PerkTree.tsx — keep node placement and the art aligned together.
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { motion } from 'motion/react';
 import toast from 'react-hot-toast';
 import axios from 'axios';
+import { Star } from 'lucide-react';
 import type { CharacterPerk, PerksResponse } from '../../../types/perks';
+import PanelShell from '../PanelShell';
+import PanelCounter from '../shared/PanelCounter';
+import LoadingState from '../shared/LoadingState';
+import ErrorState from '../shared/ErrorState';
 import PerkTree from './PerkTree';
 import PerkDetailModal from './PerkDetailModal';
+
+const PANEL_TITLE = 'Перки';
+const PANEL_ICON = <Star size={18} strokeWidth={1.8} className="text-gold shrink-0" />;
+// Mobile: the tree's own list variant already has p-4, so the panel adds none
+// there (keeps the list width unchanged); md+ tree gets the standard padding.
+const PANEL_BODY_CLASS = 'p-0 md:p-4 lg:p-5';
 
 interface PerksTabProps {
   characterId: number;
@@ -34,48 +49,41 @@ const PerksTab = ({ characterId }: PerksTabProps) => {
     fetchPerks();
   }, [characterId]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  if (error && perks.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <p className="text-white/50 text-lg">{error}</p>
-      </div>
-    );
-  }
-
   const unlockedCount = perks.filter((p) => p.is_unlocked).length;
+  const fatalError = !loading && error !== null && perks.length === 0;
+
+  let content: ReactNode;
+  if (loading) {
+    content = <LoadingState />;
+  } else if (fatalError) {
+    content = <ErrorState message={error ?? ''} />;
+  } else {
+    content = <PerkTree perks={perks} onSelectPerk={setSelectedPerk} />;
+  }
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="space-y-4"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h3 className="gold-text text-xl font-medium uppercase">
-          Перки ({unlockedCount}/{perks.length})
-        </h3>
-      </div>
+      <PanelShell
+        title={PANEL_TITLE}
+        icon={PANEL_ICON}
+        headerExtra={
+          loading || fatalError ? undefined : (
+            <PanelCounter>
+              {unlockedCount}/{perks.length}
+            </PanelCounter>
+          )
+        }
+        bodyClassName={PANEL_BODY_CLASS}
+      >
+        {content}
+      </PanelShell>
 
-      {/* Perk tree */}
-      <PerkTree perks={perks} onSelectPerk={setSelectedPerk} />
-
-      {/* Detail modal */}
-      {selectedPerk && (
-        <PerkDetailModal
-          perk={selectedPerk}
-          onClose={() => setSelectedPerk(null)}
-        />
-      )}
+      {/* Detail dialog (portaled) */}
+      <PerkDetailModal perk={selectedPerk} onClose={() => setSelectedPerk(null)} />
     </motion.div>
   );
 };

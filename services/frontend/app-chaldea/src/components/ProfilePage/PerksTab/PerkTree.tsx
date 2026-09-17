@@ -3,16 +3,21 @@ import { motion } from 'motion/react';
 import { isPerkActive } from '../../../types/perks';
 import type { CharacterPerk } from '../../../types/perks';
 import PerkNode, { HEX_SIZE } from './PerkNode';
-import perksBackdrop from '../../../assets/perksBackdrop.png';
+import perksBackdrop from '../../../assets/perksWheelBackdrop.png';
 
 /* ── Backdrop ── */
 
 /**
- * The artwork is painted for this layout: its five coloured zones sit on the
- * same bearings as the tree's five branches. Measured against the tree's own
- * sector angles, the zones land within a degree or two — red -90.6° against
- * -90°, gold -18.5° against -18°, purple -162.2° against -162°, with green and
- * blue the loose ones at +6° and -10°.
+ * The artwork is a wheel of five equal sectors, centred in its own square file
+ * and painted on the same bearings the tree uses: red straight up (-90°), then
+ * gold (-18°), blue (+54°), green (+126°) and purple (-162°) — measured off the
+ * picture at -89.5°, -21.5°, +50°, +125° and -162°, so within a few degrees of
+ * the ideal 72° star, and no rotation of the picture improves on that, so it is
+ * drawn square-on.
+ *
+ * The layout is measured off it rather than the other way round: the tiers fill
+ * each 72° wedge between the picture's central disc and its rim rings (see
+ * `TREE_HALF` and the band constants below).
  *
  * So it is drawn inside the SVG rather than behind the panel, anchored on the
  * tree's own centre and measured in the tree's own units. The viewBox then
@@ -51,35 +56,51 @@ const CATEGORY_CONFIG: Record<string, { label: string; color: string }> = {
 const CATEGORY_ORDER = ['combat', 'trade', 'exploration', 'progression', 'usage'];
 
 /**
- * Where each branch points, in degrees, 0 = right and growing clockwise.
+ * Where each branch points, in degrees, 0 = right and growing clockwise:
+ * `index * 72 - 90`, red straight up and the rest following clockwise, which is
+ * what the backdrop is painted on.
  *
- * Not simply five even steps of 72°: these are the bearings of the painted
- * zones behind them, measured off the backdrop as the centroid of each zone's
- * colour. The artwork's lobes are hand-composed and sit a few degrees off a
- * perfect star — trade by -8.5°, exploration by -6.8°, the rest within three —
- * so an evenly spread tree left some perks over the edge of their own zone.
- * Aiming each branch at its zone instead is what puts them back inside it.
- *
- * These belong to this backdrop. Replace the picture and they must be measured
- * again, or dropped back to `index * 72 - 90`.
+ * They used to be measured off the older, hand-painted rosette, whose lobes
+ * were uneven, and that left each fan a few degrees off its sector once the
+ * even five-sector wheel replaced it — trade and exploration by 7-8°, enough to
+ * read as crooked. An even star is the whole point now: every fan sits in the
+ * middle of its own sector.
  */
 const BRANCH_BEARING: Record<string, number> = {
-  combat: -88.4,        // красный, вверх
-  trade: -26.5,         // золотой, вправо-вверх
-  exploration: 47.2,    // синий, вправо-вниз
-  progression: 128.5,   // зелёный, влево-вниз
-  usage: -155.3,        // фиолетовый, влево-вверх
+  combat: -90,          // красный, вверх
+  trade: -18,           // золотой, вправо-вверх
+  exploration: 54,      // синий, вправо-вниз
+  progression: 126,     // зелёный, влево-вниз
+  usage: -162,          // фиолетовый, влево-вверх
 };
 
 /**
  * How far the backdrop is nudged to bring its composition onto the hub, as a
- * fraction of its own size. The artwork sits a little high in its file — the
- * measurements put it between half and one percent, depending on how you pick
- * the centre out of a hand-painted rosette — which showed up as the "Перки"
- * label sitting below the middle of the art. Positive moves the picture down.
+ * fraction of its rendered size. Positive moves the picture right and down.
+ *
+ * Aligned on the ring around the central disc, because that is the feature the
+ * eye compares with the hub hexagon sitting inside it. A least-squares circle
+ * through it lands at (625.5, 605.8) with r=96.9 in the 1254px file (residual
+ * 1.0px), that is 1.0px left and 20.7px above the middle of the image, so the
+ * picture is pushed back by exactly that.
+ *
+ * The picture is not concentric with itself — its rim ring fits at (624.8,
+ * 620.3), 14.4px below the disc — so aligning the disc leaves the rim about 9px
+ * low in the frame, where a decorative circle against the edge is far less
+ * noticeable than a hub sitting off-centre in its disc. Rim-based alignment is
+ * what put the hub 2.5px right of the disc before.
  */
-const ART_NUDGE_X = 0;
-const ART_NUDGE_Y = 0.008;
+const ART_NUDGE_X = 0.0008;
+const ART_NUDGE_Y = 0.0165;
+
+/**
+ * The wheel's rim sits at 0.930 of the file's half-size, so drawn edge to edge
+ * it would leave a black ring inside the frame. Scaling by 1/0.930 puts the
+ * painted rim on the frame instead, and carries the coloured band out to the
+ * outermost ring of nodes (0.85 of the radius) with the gold rim rings still
+ * inside the circle.
+ */
+const ART_SCALE = 1.0757;
 
 const RARITY_LABELS: Record<string, string> = {
   common: 'Обычный',
@@ -108,11 +129,43 @@ function hexPoints(cx: number, cy: number, size: number): string {
   return pts.join(' ');
 }
 
-/* ── Constellation layout v2: tiered rings within sectors ── */
+/* ── Constellation layout v3: arcs that fill the painted wedge ── */
 
-const MIN_NODE_SPACING = HEX_SIZE * 2.8; // minimum px between node centers
-const RING_SPACING = 65; // distance between concentric rings
-const FIRST_RING = 90; // distance of first ring from center
+/**
+ * The frame is fixed, not fitted to the data: `half` is a constant, so the
+ * wheel behind the tree and the tree itself always share one scale. It keeps
+ * the viewBox this tab has had since the art was aligned (1132.8 units across
+ * the circle's 760px), which is what makes the two line up.
+ */
+const TREE_HALF = 566.4;
+
+/**
+ * Where the art's own rings sit, as fractions of `TREE_HALF`, measured on the
+ * rendered wheel: the gold ring around the central disc at 0.172 (65px of the
+ * 380px radius) and the innermost of the rim rings at 0.876 (333px). Nodes live
+ * between the two, so the hub disc stays clear and nothing runs into the rim.
+ */
+const ART_DISC_FRACTION = 0.172;
+const ART_RING_FRACTION = 0.876;
+
+/**
+ * Clearance from a hexagon's corner to the art's rings and to a sector edge, in
+ * the tree's units — about 13px and 15px on the rendered 760px circle, which is
+ * enough for the painted gold boundary ray to read as a gap rather than a line
+ * through the hexagons.
+ */
+const ART_CLEARANCE = 20;
+const BOUNDARY_CLEARANCE = 22;
+
+/** Radial band the tiers are spread across. */
+const BAND_INNER = ART_DISC_FRACTION * TREE_HALF + HEX_SIZE + ART_CLEARANCE;
+const BAND_OUTER = ART_RING_FRACTION * TREE_HALF - HEX_SIZE - ART_CLEARANCE;
+
+/** Hexagons touch flat to flat at 2·inradius; this keeps a visible gap. */
+const MIN_NODE_SPACING = HEX_SIZE * 2.3;
+
+/** More tiers than this leaves the arcs too thin to read as rings. */
+const MAX_TIERS = 7;
 
 interface NodePos {
   perk: CharacterPerk;
@@ -121,12 +174,89 @@ interface NodePos {
   category: string;
 }
 
+/** Half the angle a tier may use at this radius, in degrees. */
+function tierHalfSpan(radius: number, sectorHalfDeg: number): number {
+  const blocked = Math.asin(Math.min(1, (HEX_SIZE + BOUNDARY_CLEARANCE) / radius));
+  return Math.max(0, sectorHalfDeg - (blocked * 180) / Math.PI);
+}
+
+/** Tier radii, evenly spread across the band. */
+function tierRadii(tiers: number): number[] {
+  if (tiers <= 1) return [BAND_INNER];
+  return Array.from(
+    { length: tiers },
+    (_, i) => BAND_INNER + ((BAND_OUTER - BAND_INNER) * i) / (tiers - 1),
+  );
+}
+
 /**
- * Place perks in concentric rings within each category's sector.
- * Ring 1 (closest): up to 2 nodes
- * Ring 2: up to 3 nodes
- * Ring 3+: up to 4 nodes each
- * Nodes within a ring are spaced evenly across the sector angle.
+ * Split `count` nodes between tiers in proportion to how long each tier's arc
+ * is, so an outer tier — with more room — carries more of them and the wedge
+ * fills out instead of bunching at the narrow end. Largest remainder, so the
+ * counts add up exactly.
+ */
+function allocate(count: number, radii: number[], sectorHalfDeg: number): number[] {
+  const arcs = radii.map((r) => r * ((2 * tierHalfSpan(r, sectorHalfDeg) * Math.PI) / 180));
+  const total = arcs.reduce((sum, a) => sum + a, 0) || 1;
+  const exact = arcs.map((a) => (count * a) / total);
+  const counts = exact.map((x) => Math.floor(x));
+  const short = count - counts.reduce((sum, c) => sum + c, 0);
+  [...counts.keys()]
+    .sort((a, b) => exact[b] - counts[b] - (exact[a] - counts[a]))
+    .slice(0, short)
+    .forEach((i) => {
+      counts[i] += 1;
+    });
+  return counts;
+}
+
+/** Angles within one tier, evenly spread across its usable arc. */
+function tierAngles(count: number, radius: number, sectorHalfDeg: number): number[] {
+  if (count <= 0) return [];
+  if (count === 1) return [0];
+  const span = 2 * tierHalfSpan(radius, sectorHalfDeg);
+  return Array.from({ length: count }, (_, i) => -span / 2 + (span * i) / (count - 1));
+}
+
+/**
+ * How many tiers to use. Every option that keeps the hexagons apart is legal,
+ * so the pick is the one whose radial step is closest to its angular step: that
+ * is what reads as an even constellation rather than rows or columns.
+ */
+function chooseTiers(count: number, sectorHalfDeg: number): number {
+  let best = 1;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (let tiers = 1; tiers <= Math.min(MAX_TIERS, count); tiers++) {
+    const radii = tierRadii(tiers);
+    const counts = allocate(count, radii, sectorHalfDeg);
+    const gaps: number[] = [];
+    let fits = true;
+    radii.forEach((r, i) => {
+      if (counts[i] <= 1) return;
+      const arc = r * ((2 * tierHalfSpan(r, sectorHalfDeg) * Math.PI) / 180);
+      const gap = arc / (counts[i] - 1);
+      if (gap < MIN_NODE_SPACING) fits = false;
+      gaps.push(gap);
+    });
+    if (!fits) continue;
+    const radialGap = tiers > 1 ? radii[1] - radii[0] : 0;
+    const meanGap = gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : radialGap;
+    const score = Math.abs(radialGap - meanGap);
+    if (score < bestScore - 1e-9) {
+      bestScore = score;
+      best = tiers;
+    }
+  }
+  return best;
+}
+
+/**
+ * Place every branch's perks as arcs inside its own painted wedge.
+ *
+ * Tier order follows the order the perks arrive in, so the first ones stay
+ * nearest the hub and depth still reads outwards. The data carries no tier or
+ * prerequisite field (no `has_perk` conditions in it either), so that order is
+ * the only depth there is to honour, and no connecting lines are drawn.
  */
 function computePositions(
   /** Every category, in a fixed order — including the ones with no perks. */
@@ -139,52 +269,28 @@ function computePositions(
   // against these bearings; if they shifted with the data it could never line
   // up.
   const catCount = categories.length || 1;
-  const sectorAngle = (2 * Math.PI) / catCount;
+  const sectorHalfDeg = 180 / catCount;
 
   categories.forEach(([cat, catPerks], catIdx) => {
-    // The painted zone's bearing where there is one; an even share otherwise,
+    if (catPerks.length === 0) return;
+    // The painted sector's bearing where there is one; an even share otherwise,
     // so an unknown category still gets a place rather than piling up at 0.
-    const bearing = BRANCH_BEARING[cat];
-    const sectorCenter =
-      bearing === undefined
-        ? catIdx * sectorAngle - Math.PI / 2
-        : (bearing * Math.PI) / 180;
+    const bearingDeg = BRANCH_BEARING[cat] ?? catIdx * sectorHalfDeg * 2 - 90;
 
-    // Distribute perks into rings
-    const rings: CharacterPerk[][] = [];
-    let remaining = [...catPerks];
-    const capacities = [1, 2, 3, 3, 4, 4, 5, 5]; // nodes per ring
+    const tiers = chooseTiers(catPerks.length, sectorHalfDeg);
+    const radii = tierRadii(tiers);
+    const counts = allocate(catPerks.length, radii, sectorHalfDeg);
 
-    for (let r = 0; remaining.length > 0; r++) {
-      const cap = capacities[Math.min(r, capacities.length - 1)];
-      rings.push(remaining.slice(0, cap));
-      remaining = remaining.slice(cap);
-    }
-
-    rings.forEach((ringPerks, ringIdx) => {
-      const dist = FIRST_RING + ringIdx * RING_SPACING;
-      const count = ringPerks.length;
-
-      // Angular spread: wider for outer rings, but stay within sector
-      const maxSpread = Math.min(
-        sectorAngle * 0.7,
-        // Ensure min spacing: arc length >= MIN_NODE_SPACING * (count-1)
-        count > 1 ? (MIN_NODE_SPACING * (count - 1)) / dist + 0.05 : 0,
-      );
-
-      ringPerks.forEach((perk, nodeIdx) => {
-        let angle: number;
-        if (count === 1) {
-          angle = sectorCenter;
-        } else {
-          const t = nodeIdx / (count - 1) - 0.5; // -0.5..+0.5
-          angle = sectorCenter + t * maxSpread;
-        }
-
+    let taken = 0;
+    radii.forEach((radius, tierIdx) => {
+      const tierPerks = catPerks.slice(taken, taken + counts[tierIdx]);
+      taken += counts[tierIdx];
+      tierAngles(tierPerks.length, radius, sectorHalfDeg).forEach((offsetDeg, nodeIdx) => {
+        const angle = ((bearingDeg + offsetDeg) * Math.PI) / 180;
         positions.push({
-          perk,
-          x: center + dist * Math.cos(angle),
-          y: center + dist * Math.sin(angle),
+          perk: tierPerks[nodeIdx],
+          x: center + radius * Math.cos(angle),
+          y: center + radius * Math.sin(angle),
           category: cat,
         });
       });
@@ -192,34 +298,6 @@ function computePositions(
   });
 
   return positions;
-}
-
- 
-
-function lineHitsNode(
-  x1: number, y1: number, x2: number, y2: number,
-  allNodes: NodePos[],
-  skip1: NodePos, skip2: NodePos,
-  radius: number,
-): boolean {
-  for (const node of allNodes) {
-    if (node === skip1 || node === skip2) continue;
-    const d = distToSegment(node.x, node.y, x1, y1, x2, y2);
-    if (d < radius) return true;
-  }
-  return false;
-}
-
-function distToSegment(
-  px: number, py: number,
-  x1: number, y1: number, x2: number, y2: number,
-): number {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return Math.sqrt((px - x1) ** 2 + (py - y1) ** 2);
-  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
-  return Math.sqrt((px - (x1 + t * dx)) ** 2 + (py - (y1 + t * dy)) ** 2);
 }
 
 /* ── Component ── */
@@ -254,27 +332,14 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
   );
 
   /*
-    A square window centred on the hub, wide enough for the furthest node.
+    A square window centred on the hub, of a fixed size.
 
     Square and hub-centred on purpose: the frame is a circle and the artwork is
-    square, so this is what makes all three agree. A bounding box round the
-    nodes would be neither — a five-sector fan reaches further down than up —
-    and centring on it is exactly what used to push the picture off to one side.
+    square, so this is what makes all three agree. It no longer grows with the
+    data either — the layout is measured off this window (see `TREE_HALF`), so
+    the wheel behind the nodes keeps the same scale whatever the perk list does.
   */
-  const half = useMemo(() => {
-    // Measured radially, not by how far a node strays along an axis. Taking
-    // the larger of dx and dy let whichever branch happened to point straight
-    // up set the size, so that branch ended up against the rim while the ones
-    // pointing diagonally stopped well short of it. Radius treats every
-    // bearing alike.
-    const reach = nodePositions.reduce(
-      (worst, p) => Math.max(worst, Math.hypot(p.x - CENTER, p.y - CENTER)),
-      0,
-    );
-    // A margin that grows with the tree, with a floor for the small ones, so
-    // the outermost nodes always sit about a sixth of the radius inside.
-    return Math.max(reach * 1.18, reach + 70);
-  }, [nodePositions]);
+  const half = TREE_HALF;
 
   const viewBox = `${CENTER - half} ${CENTER - half} ${half * 2} ${half * 2}`;
 
@@ -307,13 +372,15 @@ const PerkTree = ({ perks, onSelectPerk }: PerkTreeProps) => {
                 xmlns="http://www.w3.org/2000/svg"
               >
               {/* Square art in a square window, both centred on the hub, so
-                  it lands where the branches are without any fitting to do */}
+                  it lands where the branches are: scaled so the painted rim
+                  meets the frame, then nudged onto the hub. Anything past the
+                  window is clipped by the SVG viewport and the round frame. */}
               <image
                 href={perksBackdrop}
-                x={CENTER - half + ART_NUDGE_X * half * 2}
-                y={CENTER - half + ART_NUDGE_Y * half * 2}
-                width={half * 2}
-                height={half * 2}
+                x={CENTER - half * ART_SCALE + ART_NUDGE_X * half * 2 * ART_SCALE}
+                y={CENTER - half * ART_SCALE + ART_NUDGE_Y * half * 2 * ART_SCALE}
+                width={half * 2 * ART_SCALE}
+                height={half * 2 * ART_SCALE}
                 preserveAspectRatio="xMidYMid slice"
               />
               {/* Just enough darkening for the nodes and labels to read over it */}

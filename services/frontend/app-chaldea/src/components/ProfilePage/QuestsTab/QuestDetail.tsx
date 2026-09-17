@@ -1,9 +1,13 @@
 // FEAT-151 — QuestsTab detail panel (right column of the master-detail layout):
 // header with icon/title/type, description, objectives with progress bars,
 // reward chips, «Сдать задание» / «Отказаться» actions.
+// FEAT-166 — sits under the «Детали» PanelShell header; shared primitives.
 import { motion } from 'motion/react';
 import { Check, Coins, Scroll, Star, X } from 'lucide-react';
 import SectionHeader from '../shared/SectionHeader';
+import GoldIconFrame from '../shared/GoldIconFrame';
+import LoadingState from '../shared/LoadingState';
+import ProgressBar from '../shared/ProgressBar';
 import {
   type ActiveQuest,
   QUEST_TYPE_BADGES,
@@ -40,14 +44,11 @@ const QuestDetail = ({
       transition={{ duration: 0.25, ease: 'easeOut' }}
       className="flex flex-col flex-1 min-h-0"
     >
-      {/* Detail header */}
-      <div className="flex items-start gap-4 p-5 border-b border-white/[0.08] bg-black/20 rounded-t-card shrink-0">
-        {/* 56px icon in gold-gradient frame */}
-        <div className="w-14 h-14 shrink-0 rounded-xl p-[2px] bg-gradient-to-b from-gold-light to-gold-dark">
-          <div className="w-full h-full rounded-[10px] bg-site-dark flex items-center justify-center">
-            <Scroll size={24} strokeWidth={1.6} className="text-gold/70" />
-          </div>
-        </div>
+      {/* Identity band: icon + title + type badges */}
+      <div className="flex items-start gap-4 px-4 py-4 lg:px-5 border-b border-white/10 shrink-0">
+        <GoldIconFrame size={56} glow>
+          <Scroll size={24} strokeWidth={1.6} className="text-gold/70" />
+        </GoldIconFrame>
         <div className="flex flex-col gap-2 flex-1 min-w-0">
           <h3 className="text-white text-lg sm:text-xl font-medium leading-tight">
             {quest.title}
@@ -68,7 +69,7 @@ const QuestDetail = ({
       </div>
 
       {/* Scrollable body */}
-      <div className="flex-1 min-h-0 lg:overflow-y-auto gold-scrollbar-wide p-5 flex flex-col gap-6">
+      <div className="flex-1 min-h-0 lg:overflow-y-auto gold-scrollbar-wide p-4 lg:p-5 flex flex-col gap-6">
         <p className="text-sm leading-relaxed text-white/70">{quest.description}</p>
 
         {/* Objectives */}
@@ -77,12 +78,11 @@ const QuestDetail = ({
             <SectionHeader title="Задачи" />
             {quest.objectives.map((obj) => {
               const done = obj.current_count >= obj.target_count;
-              const progress = Math.min(obj.current_count / Math.max(obj.target_count, 1), 1);
               return (
-                <div key={obj.objective_id} className="flex flex-col gap-1.5">
+                <div key={obj.objective_id} className="flex flex-col gap-1.5 min-w-0">
                   <div className="flex items-center justify-between gap-2.5">
                     <span
-                      className={`flex items-center gap-2 text-[13px] ${
+                      className={`flex items-center gap-2 min-w-0 text-[13px] ${
                         done ? 'text-stat-energy line-through' : 'text-white/80'
                       }`}
                     >
@@ -105,12 +105,11 @@ const QuestDetail = ({
                       {obj.current_count}/{obj.target_count}
                     </span>
                   </div>
-                  <div className="stat-bar">
-                    <div
-                      className={`stat-bar-fill ${done ? 'stat-bar-energy' : 'stat-bar-mana'}`}
-                      style={{ width: `${progress * 100}%` }}
-                    />
-                  </div>
+                  <ProgressBar
+                    value={obj.current_count}
+                    max={Math.max(obj.target_count, 1)}
+                    variant={done ? 'energy' : 'mana'}
+                  />
                 </div>
               );
             })}
@@ -143,19 +142,13 @@ const QuestDetail = ({
                   key={ri.item_id}
                   className="flex items-center gap-2 pl-1.5 pr-3 py-1.5 rounded-[10px] border border-white/10 bg-white/[0.04]"
                 >
-                  <span className="w-8 h-8 shrink-0 rounded-full p-[2px] bg-gradient-to-b from-gold-light to-gold-dark">
-                    <span className="w-full h-full rounded-full bg-site-dark flex items-center justify-center overflow-hidden">
-                      {ri.item_image ? (
-                        <img
-                          src={ri.item_image}
-                          alt={ri.item_name}
-                          className="w-full h-full object-cover rounded-full"
-                        />
-                      ) : (
-                        <span className="text-[9px] text-white/30">?</span>
-                      )}
-                    </span>
-                  </span>
+                  <GoldIconFrame
+                    size={32}
+                    shape="circle"
+                    src={ri.item_image}
+                    alt={ri.item_name}
+                    fallback={<span className="text-[9px] text-white/30">?</span>}
+                  />
                   <span className="text-xs text-white/85">
                     {ri.item_name}{' '}
                     <span className="font-mono tabular-nums font-medium text-white">
@@ -175,10 +168,10 @@ const QuestDetail = ({
               type="button"
               onClick={onComplete}
               disabled={busy}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-[10px] border border-stat-energy/50 bg-stat-energy/[0.14] text-stat-energy text-[13px] font-medium uppercase tracking-[0.04em] cursor-pointer transition-colors duration-200 ease-site hover:bg-stat-energy/[0.24] disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full sm:w-auto sm:flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-[10px] border border-stat-energy/50 bg-stat-energy/[0.14] text-stat-energy text-[13px] font-medium uppercase tracking-[0.04em] cursor-pointer transition-colors duration-200 ease-site hover:bg-stat-energy/[0.24] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {completing ? (
-                <span className="w-4 h-4 border-2 border-stat-energy/30 border-t-stat-energy rounded-full animate-spin" />
+                <LoadingState size="xs" />
               ) : (
                 <Check size={16} strokeWidth={2.4} className="shrink-0" />
               )}
@@ -189,10 +182,10 @@ const QuestDetail = ({
             type="button"
             onClick={onAbandon}
             disabled={busy}
-            className="flex items-center justify-center gap-2 px-5 py-3 rounded-[10px] border border-white/[0.16] text-white/65 text-[13px] font-medium uppercase tracking-[0.04em] cursor-pointer transition-colors duration-200 ease-site hover:text-site-red hover:border-site-red/60 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-[10px] border border-white/[0.16] text-white/65 text-[13px] font-medium uppercase tracking-[0.04em] cursor-pointer transition-colors duration-200 ease-site hover:text-site-red hover:border-site-red/60 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {abandoning ? (
-              <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              <LoadingState size="xs" />
             ) : (
               <X size={16} strokeWidth={2} className="shrink-0" />
             )}

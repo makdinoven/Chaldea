@@ -15,6 +15,10 @@ import type { RefineSource } from '../../../types/professions';
 import { RARITY_TEXT_COLORS } from '../../../constants/items';
 import { resourceSubcategoryLabel } from '../../../constants/professions';
 import SectionHeader from '../shared/SectionHeader';
+import { MotionProfileCard } from '../shared/ProfileCard';
+import GoldIconFrame from '../shared/GoldIconFrame';
+import LoadingState from '../shared/LoadingState';
+import ErrorState from '../shared/ErrorState';
 import RefineModal from './RefineModal';
 
 interface RefiningSectionProps {
@@ -41,24 +45,17 @@ const RefiningSection = ({ characterId, professionId, currentRank }: RefiningSec
 
   if (!info) {
     if (loading) {
-      return (
-        <div className="flex items-center justify-center py-6">
-          <div className="w-6 h-6 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-        </div>
-      );
+      return <LoadingState size="sm" />;
     }
     if (error) {
       return (
-        <div className="rounded-card border border-white/[0.07] bg-black/25 p-5 space-y-2">
+        <div className="flex flex-col gap-3">
           <SectionHeader title="Переработка" />
-          <p className="text-site-red text-sm">{error}</p>
-          <button
-            type="button"
-            onClick={() => dispatch(fetchRefineInfo(characterId))}
-            className="site-link text-xs"
-          >
-            Повторить
-          </button>
+          <ErrorState
+            message={error}
+            onRetry={() => dispatch(fetchRefineInfo(characterId))}
+            className="!py-6"
+          />
         </div>
       );
     }
@@ -72,13 +69,11 @@ const RefiningSection = ({ characterId, professionId, currentRank }: RefiningSec
   const sources = Array.isArray(info.sources) ? info.sources : [];
 
   return (
-    <div className="rounded-card border border-white/[0.07] bg-black/25 p-4 sm:p-5 space-y-3">
+    <div className="flex flex-col gap-3">
       <div className="space-y-1.5">
         <SectionHeader
           title="Переработка"
-          extra={loading ? (
-            <span className="block w-3.5 h-3.5 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-          ) : undefined}
+          extra={loading ? <LoadingState size="xs" /> : undefined}
         />
         <p className="text-xs text-white/50">
           {sourceLabel} → {resultLabel.toLowerCase()}
@@ -98,7 +93,7 @@ const RefiningSection = ({ characterId, professionId, currentRank }: RefiningSec
         </p>
       ) : (
         <motion.div
-          className="grid grid-cols-1 sm:grid-cols-2 gap-3"
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2.5"
           initial="hidden"
           animate="visible"
           variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.04 } } }}
@@ -106,18 +101,18 @@ const RefiningSection = ({ characterId, professionId, currentRank }: RefiningSec
           {sources.map((src) => {
             const canRefine = src.max_batches > 0;
             return (
-              <motion.div
+              <MotionProfileCard
                 key={src.source_item_id}
                 variants={{ hidden: { opacity: 0, y: 8 }, visible: { opacity: 1, y: 0 } }}
-                className="flex flex-wrap items-center gap-3 p-3 rounded-card bg-white/[0.04] border border-white/[0.07] min-w-0"
+                className="flex flex-wrap items-center gap-3 p-3 min-w-0"
               >
-                <div className="w-12 h-12 shrink-0 rounded-full overflow-hidden bg-white/[0.05] flex items-center justify-center">
-                  {src.image ? (
-                    <img src={src.image} alt={src.name} className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-white/30 text-lg">?</span>
-                  )}
-                </div>
+                <GoldIconFrame
+                  size={48}
+                  shape="circle"
+                  src={src.image}
+                  alt={src.name}
+                  fallback={<span className="text-white/30 text-lg">?</span>}
+                />
                 <div className="flex-1 min-w-[10rem] space-y-0.5">
                   <p className={`text-sm font-medium break-words ${RARITY_TEXT_COLORS[src.item_rarity] ?? 'text-white'}`}>
                     {src.name}
@@ -139,7 +134,7 @@ const RefiningSection = ({ characterId, professionId, currentRank }: RefiningSec
                 >
                   Переработать
                 </button>
-              </motion.div>
+              </MotionProfileCard>
             );
           })}
         </motion.div>

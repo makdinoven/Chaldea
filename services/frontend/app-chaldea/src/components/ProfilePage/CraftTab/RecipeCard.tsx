@@ -1,20 +1,10 @@
-// FEAT-151 — recipe card per mock 1011-1037: 52px round icon with rarity ring,
+// FEAT-151 — recipe card per mock 1011-1037: round result icon,
 // name + qty, rarity label, description,
 // «Материалы» have/need list and the craft button (disabled style when short).
-import { motion } from 'motion/react';
+// FEAT-166: flat ProfileCard (dimmed when it cannot be crafted) + 48px gold frame.
 import type { Recipe } from '../../../types/professions';
-
-// Ring color around the 52px round icon (design-system rarity tokens only;
-// divine/demonic map to the closest existing tokens)
-const RARITY_RING: Record<string, string> = {
-  common: 'bg-white/25',
-  rare: 'bg-rarity-rare',
-  epic: 'bg-rarity-epic',
-  mythical: 'bg-rarity-mythical',
-  legendary: 'bg-gradient-to-b from-gold-light to-gold-dark',
-  divine: 'bg-gradient-to-b from-gold-light to-gold-dark',
-  demonic: 'bg-rarity-mythical',
-};
+import { MotionProfileCard } from '../shared/ProfileCard';
+import GoldIconFrame from '../shared/GoldIconFrame';
 
 const RARITY_LABEL: Record<string, string> = {
   common: 'Обычный',
@@ -42,33 +32,27 @@ interface RecipeCardProps {
 }
 
 const RecipeCard = ({ recipe, onCraft }: RecipeCardProps) => {
-  const ringClass = RARITY_RING[recipe.rarity] ?? 'bg-white/25';
   const rarityTextClass = RARITY_TEXT[recipe.rarity] ?? 'text-white/60';
   const rarityLabel = RARITY_LABEL[recipe.rarity] ?? recipe.rarity;
 
   return (
-    <motion.div
+    <MotionProfileCard
       variants={{
         hidden: { opacity: 0, y: 10 },
         visible: { opacity: 1, y: 0 },
       }}
-      className="relative rounded-card bg-black/30 border border-gold/[0.16] shadow-card flex flex-col gap-3 p-4 transition-colors duration-200 ease-site hover:border-gold/40"
+      locked={!recipe.can_craft}
+      className="flex flex-col gap-3 p-3.5 min-w-0"
     >
-      {/* Header: 52px round icon with rarity ring + name/qty/rarity */}
+      {/* Header: 48px round icon + name/qty/rarity */}
       <div className="flex items-start gap-3">
-        <div className={`w-[52px] h-[52px] shrink-0 rounded-full p-[2px] ${ringClass}`}>
-          <div className="w-full h-full rounded-full bg-site-dark flex items-center justify-center overflow-hidden">
-            {recipe.result_item?.image ? (
-              <img
-                src={recipe.result_item.image}
-                alt={recipe.result_item?.name ?? recipe.name}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <span className="text-white/30 text-base">?</span>
-            )}
-          </div>
-        </div>
+        <GoldIconFrame
+          size={48}
+          shape="circle"
+          src={recipe.result_item?.image}
+          alt={recipe.result_item?.name ?? recipe.name}
+          fallback={<span className="text-white/30 text-base">?</span>}
+        />
         <div className="flex flex-col gap-1 flex-1 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-white text-[15px] font-medium leading-tight truncate">
@@ -141,7 +125,7 @@ const RecipeCard = ({ recipe, onCraft }: RecipeCardProps) => {
       >
         Создать
       </button>
-    </motion.div>
+    </MotionProfileCard>
   );
 };
 

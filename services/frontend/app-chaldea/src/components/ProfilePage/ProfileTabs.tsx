@@ -1,5 +1,3 @@
-import { Link } from 'react-router-dom';
-
 interface Tab {
   key: string;
   label: string;
@@ -14,6 +12,7 @@ const TABS: Tab[] = [
   { key: 'quests', label: 'Задания' },
   { key: 'battles', label: 'Бои' },
   { key: 'logs', label: 'Логи персонажа' },
+  { key: 'posts', label: 'История постов' },
   { key: 'titles', label: 'Титулы' },
   { key: 'craft', label: 'Крафт' },
 ];
@@ -21,10 +20,9 @@ const TABS: Tab[] = [
 interface ProfileTabsProps {
   activeTab: string;
   onTabChange: (tabKey: string) => void;
-  characterId?: number | null;
 }
 
-const ProfileTabs = ({ activeTab, onTabChange, characterId }: ProfileTabsProps) => {
+const ProfileTabs = ({ activeTab, onTabChange }: ProfileTabsProps) => {
   return (
     <nav className="flex items-center gap-4 sm:gap-8 mb-8 overflow-x-auto pb-1 gold-scrollbar">
       {TABS.map((tab) => {
@@ -32,8 +30,9 @@ const ProfileTabs = ({ activeTab, onTabChange, characterId }: ProfileTabsProps) 
         return (
           <button
             key={tab.key}
+            type="button"
             onClick={() => onTabChange(tab.key)}
-            className={`relative pb-2 text-sm font-medium uppercase tracking-[0.06em] transition-all duration-200 ease-site gold-text ${
+            className={`relative pb-2 whitespace-nowrap shrink-0 text-sm font-medium uppercase tracking-[0.06em] transition-all duration-200 ease-site gold-text ${
               isActive
                 ? ''
                 : 'opacity-70 hover:opacity-100'
@@ -41,19 +40,11 @@ const ProfileTabs = ({ activeTab, onTabChange, characterId }: ProfileTabsProps) 
           >
             {tab.label}
             {isActive && (
-              <span className="absolute bottom-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#999] to-transparent" />
+              <span className="absolute bottom-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-gold/60 to-transparent" />
             )}
           </button>
         );
       })}
-      {characterId && (
-        <Link
-          to={`/post-history/${characterId}`}
-          className="pb-2 text-sm font-medium uppercase tracking-[0.06em] gold-text opacity-70 hover:opacity-100 transition-all duration-200 ease-site whitespace-nowrap shrink-0 ml-2"
-        >
-          История постов
-        </Link>
-      )}
     </nav>
   );
 };

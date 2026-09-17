@@ -1,12 +1,15 @@
-// FEAT-151 — gold party header card (mock's leader header, composition only).
+// FEAT-151 — party header (mock's leader header, composition only); FEAT-166 —
+// restyled as an identity band inside the «Отряд» panel (like CharacterPanel).
 // Preserves the existing leader entry points: avatar upload (click on avatar)
 // and party rename (inline edit), both from FEAT-144.
 import { useState } from 'react';
 import { Check, Crown, Swords, X } from 'lucide-react';
 import type { Party } from '../../../api/squads';
+import GoldIconFrame from '../shared/GoldIconFrame';
 
 const PARTY_MAX_SIZE = 4;
 const PARTY_NAME_MAX_LENGTH = 60;
+const AVATAR_SIZE = 56;
 
 interface PartyHeaderCardProps {
   party: Party;
@@ -46,41 +49,40 @@ const PartyHeaderCard = ({
     setEditing(false);
   };
 
-  const avatarInner = (
-    <div className="w-full h-full rounded-xl bg-site-dark flex items-center justify-center overflow-hidden">
-      {party.avatar ? (
-        <img src={party.avatar} alt={party.name} className="w-full h-full object-cover" />
-      ) : (
-        <Swords size={24} strokeWidth={1.6} className="text-gold" />
-      )}
-    </div>
+  const avatar = (
+    <GoldIconFrame
+      size={AVATAR_SIZE}
+      shape="circle"
+      glow
+      src={party.avatar}
+      alt={party.name}
+      fallback={<Swords size={24} strokeWidth={1.6} className="text-gold" />}
+    />
   );
 
   return (
-    <div className="relative rounded-card border border-gold/[0.22] bg-site-bg bg-gradient-to-b from-gold/[0.07] to-transparent shadow-card flex items-center gap-4 p-4 sm:px-5">
-      {/* 56px avatar in glowing gold frame; leader → upload entry point */}
+    <div className="flex items-center gap-3.5 min-w-0">
+      {/* 56px round avatar in glowing gold frame; leader → upload entry point */}
       {isLeader ? (
         <button
           type="button"
           disabled={busy}
           onClick={onAvatarClick}
           title="Сменить аватар отряда"
-          className="relative w-14 h-14 shrink-0 rounded-[14px] p-[2px] bg-gradient-to-b from-gold-light to-gold-dark shadow-[0_0_16px_rgba(240,217,92,0.35)] cursor-pointer group disabled:opacity-50"
+          className="relative shrink-0 rounded-full cursor-pointer group disabled:opacity-50"
         >
-          {avatarInner}
-          <span className="absolute inset-[2px] rounded-xl bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ease-site flex items-center justify-center text-[10px] text-white leading-tight text-center">
+          {avatar}
+          <span className="absolute inset-[2px] rounded-full bg-site-dark/70 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ease-site flex items-center justify-center text-[10px] text-white leading-tight text-center">
             Сменить
           </span>
         </button>
       ) : (
-        <div className="w-14 h-14 shrink-0 rounded-[14px] p-[2px] bg-gradient-to-b from-gold-light to-gold-dark shadow-[0_0_16px_rgba(240,217,92,0.35)]">
-          {avatarInner}
-        </div>
+        avatar
       )}
 
       <div className="flex flex-col gap-1 flex-1 min-w-0">
         {editing ? (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <input
               type="text"
               value={draftName}
@@ -98,7 +100,7 @@ const PartyHeaderCard = ({
               disabled={busy}
               onClick={saveName}
               title="Сохранить название"
-              className="text-stat-energy hover:opacity-80 transition-opacity duration-200 ease-site disabled:opacity-40 shrink-0"
+              className="flex items-center justify-center w-8 h-8 text-stat-energy hover:opacity-80 transition-opacity duration-200 ease-site disabled:opacity-40 shrink-0"
             >
               <Check size={17} strokeWidth={2.2} />
             </button>
@@ -107,14 +109,16 @@ const PartyHeaderCard = ({
               disabled={busy}
               onClick={() => setEditing(false)}
               title="Отмена"
-              className="text-white/40 hover:text-white transition-colors duration-200 ease-site disabled:opacity-40 shrink-0"
+              className="flex items-center justify-center w-8 h-8 text-white/40 hover:text-white transition-colors duration-200 ease-site disabled:opacity-40 shrink-0"
             >
               <X size={17} strokeWidth={2.2} />
             </button>
           </div>
         ) : (
           <div className="flex items-center gap-2.5 min-w-0">
-            <h4 className="text-white text-lg font-medium truncate">{party.name}</h4>
+            <h4 className="gold-text text-xl font-medium uppercase leading-tight truncate">
+              {party.name}
+            </h4>
             {isLeader && (
               <span className="flex items-center gap-1 shrink-0 text-[10px] font-medium uppercase tracking-[0.05em] px-2 py-0.5 rounded text-gold bg-gold/[0.14]">
                 <Crown size={11} strokeWidth={2.2} />
@@ -124,8 +128,8 @@ const PartyHeaderCard = ({
           </div>
         )}
 
-        <div className="flex items-center gap-2.5">
-          <span className="text-xs text-white/55">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          <span className="text-xs text-white/75">
             {acceptedCount} / {PARTY_MAX_SIZE} в отряде
           </span>
           {isLeader && !editing && (

@@ -1,23 +1,32 @@
-// FEAT-151 — CraftTab no-profession screen (§3.4.3, user decision — the mock
-// has no such screen): gold-framed PanelShell with a heading and 4 profession
-// cards (gold icon frame, name, short description, «Выбрать»).
-// The confirmation modal flow is preserved from the previous version.
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+// FEAT-151/166 — CraftTab no-profession screen: full-width PanelShell
+// «Выбор профессии» with profession cards (gold icon frame, name, short
+// description, «Выбрать») and the confirmation dialog (ModalShell, portaled).
+import { useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { motion } from 'motion/react';
 import { Hammer } from 'lucide-react';
 import type { Profession } from '../../../types/professions';
 import PanelShell from '../PanelShell';
+import { MotionProfileCard } from '../shared/ProfileCard';
+import GoldIconFrame from '../shared/GoldIconFrame';
+import ModalShell from '../shared/ModalShell';
 
 interface ProfessionSelectProps {
   professions: Profession[];
   loading: boolean;
   onSelect: (professionId: number) => void;
+  /** Right side of the panel header (active craft buffs) */
+  headerExtra?: ReactNode;
 }
 
-const ProfessionSelect = ({ professions, loading, onSelect }: ProfessionSelectProps) => {
+const ProfessionSelect = ({ professions, loading, onSelect, headerExtra }: ProfessionSelectProps) => {
   const [confirmId, setConfirmId] = useState<number | null>(null);
 
   const confirmProfession = professions.find((p) => p.id === confirmId);
+  // Keep the last shown profession so the dialog body stays filled during its exit animation
+  const shownProfessionRef = useRef<Profession | undefined>(undefined);
+  if (confirmProfession) shownProfessionRef.current = confirmProfession;
+  const shownProfession = shownProfessionRef.current;
 
   const handleConfirm = () => {
     if (confirmId !== null) {
@@ -29,7 +38,8 @@ const ProfessionSelect = ({ professions, loading, onSelect }: ProfessionSelectPr
   return (
     <PanelShell
       title="Выбор профессии"
-      icon={<Hammer size={16} strokeWidth={1.8} className="text-gold shrink-0" />}
+      icon={<Hammer size={18} strokeWidth={1.8} className="text-gold shrink-0" />}
+      headerExtra={headerExtra}
     >
       <p className="text-white/50 text-sm mb-4">
         Профессия определяет, какие предметы вы сможете создавать. Выбрать можно только одну.
@@ -42,32 +52,30 @@ const ProfessionSelect = ({ professions, loading, onSelect }: ProfessionSelectPr
           hidden: {},
           visible: { transition: { staggerChildren: 0.06 } },
         }}
-        className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5"
+        className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3.5"
       >
         {[...professions]
           .filter((p) => p.is_active)
           .sort((a, b) => a.sort_order - b.sort_order)
           .map((prof) => (
-            <motion.div
+            <MotionProfileCard
               key={prof.id}
+              interactive
               variants={{
                 hidden: { opacity: 0, y: 10 },
                 visible: { opacity: 1, y: 0 },
               }}
-              className="relative rounded-card bg-black/30 border border-gold/[0.16] shadow-card flex flex-col gap-3 p-4 transition-colors duration-200 ease-site hover:border-gold/40"
+              className="flex flex-col gap-3 p-4 !cursor-default"
             >
               {/* Icon frame + name */}
-              <div className="flex items-center gap-3">
-                <div className="w-[54px] h-[54px] shrink-0 rounded-[13px] p-[2px] bg-gradient-to-b from-gold-light to-gold-dark">
-                  <div className="w-full h-full rounded-[11px] bg-site-dark flex items-center justify-center overflow-hidden">
-                    {prof.icon ? (
-                      <img src={prof.icon} alt={prof.name} className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-gold text-lg">{prof.name.charAt(0)}</span>
-                    )}
-                  </div>
-                </div>
-                <h4 className="text-white text-[15px] font-medium leading-tight">
+              <div className="flex items-center gap-3 min-w-0">
+                <GoldIconFrame
+                  size={56}
+                  src={prof.icon}
+                  alt={prof.name}
+                  fallback={<span className="text-gold text-lg">{prof.name.charAt(0)}</span>}
+                />
+                <h4 className="text-white text-[15px] font-medium leading-tight break-words min-w-0">
                   {prof.name}
                 </h4>
               </div>
@@ -88,48 +96,44 @@ const ProfessionSelect = ({ professions, loading, onSelect }: ProfessionSelectPr
               >
                 Выбрать
               </button>
-            </motion.div>
+            </MotionProfileCard>
           ))}
       </motion.div>
 
-      {/* Confirmation modal */}
-      <AnimatePresence>
-        {confirmProfession && (
-          <div className="modal-overlay" onClick={() => setConfirmId(null)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick max-w-sm w-full mx-4"
-              onClick={(e) => e.stopPropagation()}
+      {/* Confirmation dialog */}
+      <ModalShell
+        open={Boolean(confirmProfession)}
+        onClose={() => setConfirmId(null)}
+        title="Подтверждение"
+        icon={<Hammer size={18} strokeWidth={1.8} className="text-gold shrink-0" />}
+        size="sm"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setConfirmId(null)}
+              className="btn-line w-full sm:w-auto"
             >
-              <h2 className="gold-text text-xl font-medium uppercase mb-3">
-                Подтверждение
-              </h2>
-              <p className="text-white mb-5">
-                Вы уверены, что хотите выбрать профессию{' '}
-                <span className="text-gold font-medium">{confirmProfession.name}</span>?
-              </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={handleConfirm}
-                  disabled={loading}
-                  className="btn-blue flex-1 disabled:opacity-50"
-                >
-                  {loading ? 'Выбор...' : 'Подтвердить'}
-                </button>
-                <button
-                  onClick={() => setConfirmId(null)}
-                  className="btn-line flex-1"
-                >
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirm}
+              disabled={loading}
+              className="btn-blue w-full sm:w-auto disabled:opacity-50"
+            >
+              {loading ? 'Выбор...' : 'Подтвердить'}
+            </button>
+          </>
+        }
+      >
+        {shownProfession && (
+          <p className="text-white text-sm sm:text-base">
+            Вы уверены, что хотите выбрать профессию{' '}
+            <span className="text-gold font-medium">{shownProfession.name}</span>?
+          </p>
         )}
-      </AnimatePresence>
+      </ModalShell>
     </PanelShell>
   );
 };

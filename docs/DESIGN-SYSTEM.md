@@ -195,6 +195,8 @@ Framed toggle chip: subtle white border + fill, text brightens on hover; `chip-o
 </div>
 ```
 
+In profile tabs (and anywhere below a blurred/transformed ancestor) use the portaled `ModalShell`, see §18.
+
 ### Scrollbar
 ```html
 <div class="gold-scrollbar overflow-y-auto max-h-[300px]">
@@ -470,6 +472,8 @@ Use these consistent patterns across the project:
 
 New classes added for the profile and inventory page (FEAT-009).
 
+> Profile panel layout, shared `ProfilePage/shared/*` primitives and the modal portal rule are in **§18 Profile Panels**.
+
 ### Color Tokens
 
 Added to `tailwind.config.js`:
@@ -624,6 +628,8 @@ Equipment icons located in `src/assets/icons/equipment/`:
 | Line button | LineButton | `LineButton.module.scss` |
 | Dropdown styling | World page dropdowns | `DropdownLayout.module.scss` |
 | Dark bottom gradient | PlayerCard, NeighborCard | `PlayerCard.module.scss` |
+| Profile panel (gold ring + blur + header band) | PanelShell | `ProfilePage/PanelShell.tsx` (§18) |
+| Profile cards, icon frames, states, modal shell, progress, toolbar/scroll area | `shared/*` primitives | `ProfilePage/shared/` (§18) |
 
 ---
 
@@ -761,6 +767,152 @@ invisible, and on this wizard a missed instruction costs the player a rejected a
   `components/pages/MyRequestsPage/RequestEditor.tsx`, which reuses those steps.
   ⚠️ The rest of the app still uses the old `text-white/40 text-[11px]` footnote pattern —
   bringing it onto `field-hint` is a separate, larger pass.
+
+---
+
+## 18. Profile Panels (FEAT-148/149/151/166)
+
+The `/profile` page language: **everything sits inside gold panels**. The reference is the
+«Персонаж» tab (`ProfilePage/CharacterTab/`). All other profile tabs follow the same rules.
+Everything below lives in `src/components/ProfilePage/`.
+
+### PanelShell
+
+`ProfilePage/PanelShell.tsx`: a gold-outlined, blurred panel with a header band.
+
+| Prop | Type | Notes |
+|------|------|-------|
+| `title` | `string?` | Gold uppercase title. Without it, the header band is not rendered |
+| `icon` | `ReactNode?` | lucide `size={18} strokeWidth={1.8} className="text-gold shrink-0"` or a project SVG `w-[18px] h-[18px]` |
+| `headerExtra` | `ReactNode?` | Right-aligned: `PanelCounter`, small chips. Must wrap or truncate at 360px |
+| `className` | `string?` | Outer `<section>` classes: widths, heights, order |
+| `bodyClassName` | `string?` | **Replaces** the default body `flex-1 min-h-0 p-4 lg:p-5 lg:overflow-y-auto gold-scrollbar-wide` |
+
+`PANEL_DESKTOP_HEIGHT_CLASS` (`lg:h-[calc(100vh-130px)]`) gives a fixed height from `lg` up.
+Below `lg`, panels have auto height and the page scrolls.
+
+### Tab composition rule
+
+1. The tab root is a `motion.div` with the standard fade (§12). It has **no loose page-level
+   `h3`**: the title, icon and counter go into the `PanelShell` header band.
+2. Multi-panel tabs use `grid grid-cols-1 lg:grid-cols-[392px_1fr] gap-5 items-start`, where the
+   fixed column is **392px**, as in the reference. On mobile the grid is a single column.
+3. **Long lists:** on `lg+` the panel gets `PANEL_DESKTOP_HEIGHT_CLASS`. Filters/search go in a
+   fixed `PanelToolbar` and the list goes in `PanelScrollArea`. Below `lg` there is no internal
+   scroll and no `max-h` cap.
+4. Inner cards use `ProfileCard`, not a second blurred gold ring. Icon and avatar frames use
+   `GoldIconFrame`. In-panel sections use `SectionHeader`, stacked with `flex flex-col gap-6`.
+5. Loading, error and empty states use `LoadingState` / `ErrorState` / `EmptyState`, rendered
+   **inside** the tab's main panel (same title and icon), so the layout does not jump.
+6. Every modal uses `ModalShell` (see the portal rule below).
+
+```tsx
+<motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
+  <PanelShell
+    title="Навыки"
+    icon={<Sparkles size={18} strokeWidth={1.8} className="text-gold shrink-0" />}
+    headerExtra={<PanelCounter>{filtered.length}/{skills.length}</PanelCounter>}
+    className={PANEL_DESKTOP_HEIGHT_CLASS}
+    bodyClassName="flex-1 min-h-0 flex flex-col"
+  >
+    <PanelToolbar>
+      <FilterChips items={chips} active={filter} onChange={setFilter} className="flex-1 min-w-0" />
+      <button type="button" className="btn-blue w-full sm:w-auto">Дерево навыков</button>
+    </PanelToolbar>
+    <PanelScrollArea>
+      {loading ? <LoadingState /> : error ? <ErrorState message={error} /> : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3.5">
+          {filtered.map((s) => (
+            <ProfileCard key={s.id} as="button" interactive onClick={() => open(s)} className="p-3.5 flex gap-3">
+              <GoldIconFrame size={62} src={s.image} alt={s.name} />
+              …
+            </ProfileCard>
+          ))}
+        </div>
+      )}
+    </PanelScrollArea>
+  </PanelShell>
+</motion.div>
+```
+
+### Shared primitives (`ProfilePage/shared/`)
+
+| Component | Props | Look / use |
+|-----------|-------|------------|
+| `ProfileCard` | `as?: 'div'\|'button'\|'li'`, `variant?: 'default'\|'accent'\|'danger'`, `interactive?`, `active?`, `locked?`, `className?`, `children`, plus any HTML attrs (`onClick`, `type`, `disabled`, `aria-*`). Forwards `ref` | Flat inner card: `rounded-card border border-white/10 bg-white/[0.03]`. `interactive`: gold hover. `active`: `border-gold/50 bg-gold/[0.06]`. `locked`: `opacity-60`. `accent`: gold wash. `danger`: `site-red` tint. **No padding**: the caller adds it (usually `p-3.5`). `as="button"` defaults to `type="button"` and is full-width, left-aligned. `MotionProfileCard` (named export) = `motion.create(ProfileCard)` for staggered grids |
+| `GoldIconFrame` | `size: number` (px), `shape?: 'circle'\|'square'` (default square), `glow?`, `src?`, `alt?`, `fallback?`, `className?`, `children?` | 2px gold-gradient ring with an inner `bg-site-dark`. `src` → cover image, otherwise `fallback` or `children` |
+| `LoadingState` | `size?: 'xs'\|'sm'\|'md'` (default md), `label?`, `className?` | The only allowed spinner. `md`: 32px in `py-20` (tab/panel). `sm`: 24px in `py-6` (section). `xs`: bare inline 16px spinner for buttons and «Загрузить ещё» |
+| `ErrorState` | `message: string`, `onRetry?`, `className?` | `AlertTriangle` in `text-site-red/60` + message. The «Повторить» `btn-line` appears **only** with `onRetry`. Pass it only where a retry already exists |
+| `EmptyState` | `icon?`, `message`, `hint?`, `action?`, `className?` | Faded icon (the caller styles it `text-white/20`) + `text-white/40` message + optional `text-xs text-white/30` hint |
+| `ModalShell` | `open`, `onClose`, `title?`, `icon?`, `size?: 'sm'\|'md'\|'lg'` (default md), `closeOnBackdrop?` (default true), `dismissible?` (default true), `footer?`, `bodyClassName?`, `children` | Portaled `modal-overlay` + `modal-content gold-outline gold-outline-thick`. Widths: `max-w-md` / `max-w-xl` / `max-w-3xl`, `max-h-[90dvh]`. The header band matches PanelShell and has an X button (`aria-label="Закрыть"`). Without `title`, the X floats top-right. The body scrolls (`p-4 sm:p-6`). The footer is pinned with a top border. Escape and backdrop close only when `dismissible`. `dismissible={false}` also hides the X (use it while a request is in flight) |
+| `ProgressBar` | `value`, `max`, `variant?: 'gold'\|'neutral'\|'hp'\|'mana'\|'energy'\|'epic'` (default gold), `size?: 'sm'\|'md'` (default md), `label?`, `showValues?`, `className?` | Built on `.stat-bar`. `neutral` (`bg-white/60`) is for progress that must not read as a reward or an achievement — e.g. condition bars on locked common titles. `md` is the DS 9px bar, `sm` is 6px with a softer border. Clamped to 0–100%, and `max <= 0` → empty. The caption row (label left, `value/max` right in mono) is shown only when requested. Use `MiniStatBar` for compact HP/MP rows |
+| `PanelCounter` | `children`, `className?` | `text-white/50 text-xs font-medium font-mono tabular-nums`, for `headerExtra` |
+| `PanelToolbar` | `children`, `className?` | `shrink-0 px-4 lg:px-5 pt-3.5 pb-2 flex flex-wrap items-center gap-3`: the fixed filters/search strip |
+| `PanelScrollArea` | `children`, `className?` | `flex-1 min-h-0 px-4 lg:px-5 pt-2 pb-4 lg:overflow-y-auto gold-scrollbar-wide`. Needs `PanelShell bodyClassName="flex-1 min-h-0 flex flex-col"` |
+| `SectionHeader` | `title`, `extra?`, `className?` | Small gold label + fading gold rule, used for in-panel sections |
+| `FilterChips` | `items`, `active`, `onChange`, `className?` | `chip-outline` pill row that scrolls horizontally |
+| `StatTile` | `value`, `label`, `className?` | Large gold number + small label on the flat `ProfileCard` surface |
+| `MiniStatBar` | `variant: 'hp'\|'mana'`, `label?`, `current`, `max`, `showValues?` | Thin HP/MP bar. Renders nothing for null values |
+
+```tsx
+<ModalShell
+  open={confirmOpen}
+  onClose={() => setConfirmOpen(false)}
+  title="Подтверждение"
+  icon={<Hammer size={18} strokeWidth={1.8} className="text-gold shrink-0" />}
+  size="sm"
+  dismissible={!loading}
+  footer={
+    <>
+      <button type="button" className="btn-line w-full sm:w-auto" onClick={() => setConfirmOpen(false)}>Отмена</button>
+      <button type="button" className="btn-blue w-full sm:w-auto" onClick={submit} disabled={loading}>
+        {loading ? <LoadingState size="xs" /> : 'Создать'}
+      </button>
+    </>
+  }
+>
+  <p className="text-white/85 text-sm">…</p>
+</ModalShell>
+
+<ProgressBar value={xp} max={nextXp} label="Опыт" showValues />
+<EmptyState icon={<ScrollText size={40} className="text-white/20" />} message="Нет записей" hint="Попробуйте другой фильтр" />
+```
+
+### Class conflicts (Tailwind v3)
+
+Two utilities for the same CSS property (for example `border-white/10` and `border-gold/50`) have no guaranteed winner: the stylesheet order decides, not the order in `className`. The primitives therefore emit only one value per property:
+- `ProfileCard` picks exactly one surface (border + background) with the priority `active` > `variant` (`accent` / `danger`) > default. An active card keeps `border-gold/50 bg-gold/[0.06]` and gets no hover wash. `active` + `accent` drops the accent gradient.
+- `LoadingState`, `EmptyState` and `ErrorState` (`className`) and the `ModalShell` body (`bodyClassName`) drop their default padding when the caller passes **any** padding class (`py-32`, `!py-10`, `p-0`, `sm:p-4`…). The caller's padding then fully replaces the default (`shared/classUtils.ts → hasPaddingClass`).
+- Everything else (a border colour on a card, `flex` on `ProfileCard as="button"` (which is `block`), `text-center`, partial padding on `PanelToolbar` / `PanelScrollArea`): override with the important modifier (`!border-rarity-epic`, `!flex`, `!pt-4`).
+
+### Portal rule
+
+**Any modal rendered below a blurred or transformed ancestor must be portaled.** `PanelShell`
+(`backdrop-blur`) and every `motion.div` with a transform create a containing block, so an
+in-place `position: fixed` overlay gets clipped or misplaced. `ModalShell` always renders
+through `createPortal(…, document.body)`. After FEAT-166, profile tabs contain no in-place
+`modal-overlay`. Pass `open` rather than mounting conditionally, so the exit animation plays.
+
+### Status colours → tokens
+
+Do not use raw `green/red/emerald/purple/amber/yellow-*` classes or `#hex` values.
+
+| Meaning | Use |
+|---------|-----|
+| success / green | `text-stat-energy`, `bg-stat-energy/..`, `border-stat-energy/..` |
+| error / red | `text-site-red` (HP-like red → `text-stat-hp`) |
+| rune / purple | `text-rarity-epic`, `bg-rarity-epic/..` |
+| warning / amber / yellow | `text-gold`, `text-gold-light` |
+| info / blue | `text-site-blue` |
+
+Exception: the perk wheel internals (`PerksTab/PerkTree.tsx`, `PerkNode.tsx`) — node placement is computed from the backdrop's five 72° sectors, so change layout and art alignment together and re-verify each node sits on its own colour.
+
+### Banned ad-hoc surfaces (profile tabs)
+
+These may not appear in profile tabs. Use `ProfileCard` / `PanelShell` / `LoadingState` instead:
+`bg-black/30 border border-gold/[0.16]`, `border-white/[0.07] bg-black/25`, `bg-black/50`,
+`bg-black/60`, `bg-site-bg border` as a card, `bg-[#…]`, `<option>` with `bg-[#1a1a2e]`,
+hand-rolled `animate-spin` spinners, and loose page-level `h3.gold-text` tab headers.
 
 ---
 
