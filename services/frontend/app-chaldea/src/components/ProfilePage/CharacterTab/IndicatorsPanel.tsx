@@ -30,8 +30,6 @@ const IndicatorsPanel = ({ characterId }: IndicatorsPanelProps) => {
   const equipment = useAppSelector(selectEquipment);
 
   const classId = raceInfo?.id_class ?? null;
-  const mainWeaponSlot = equipment.find((slot) => slot.slot_type === 'main_weapon');
-  const mainWeaponDamageModifier = mainWeaponSlot?.item?.damage_modifier ?? 0;
   const statPoints = profile?.stat_points ?? 0;
 
   return (
@@ -65,7 +63,7 @@ const IndicatorsPanel = ({ characterId }: IndicatorsPanelProps) => {
           <DerivedStatsSection
             attributes={attributes}
             classId={classId}
-            mainWeaponDamageModifier={mainWeaponDamageModifier}
+            equipment={equipment}
           />
         )}
       </div>

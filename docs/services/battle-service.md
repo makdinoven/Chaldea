@@ -92,15 +92,56 @@ battle-service/app/
 
 ### Формула урона (compute_damage_with_rolls)
 ```
-1. base_attack = attacker_damage + weapon_damage_modifier
+1. base = главная характеристика класса (CLASS_MAIN_ATTRIBUTE[class_id])
+          + attrs["damage"]                    # база: перки, броня, украшения, баффы/еда
+          + weapon["effective_damage"]         # урон оружия выбранного слота (0, если слот пуст)
 2. damage_type -> определить тип (или взять с оружия если "all")
-3. raw_damage = base_attack + skill_damage_amount
+3. raw_damage = base + skill_damage_amount
 4. raw_damage *= (1 + percent_buffs / 100)
 5. Roll dodge -> если попал, урон = 0
 6. Roll hit_chance -> если промах, урон = 0
 7. Roll crit -> если крит, raw_damage *= crit_multiplier
 8. final = raw_damage * (1 - resists / 100)
 ```
+
+### Три значения урона и `effective_damage` (FEAT-167)
+
+Урон оружия **не входит** в характеристику `damage` — она хранит только «базу»
+(характеристики, перки, броня и украшения с их заточкой и камнями, баффы, еда).
+Урон конкретного оружия считает **inventory-service** и отдаёт его полем
+`effective_damage` в `GET /inventory/{character_id}/equipment`
+(шаблонный `damage_modifier` + заточка + вставленные камни этого оружия; `0.0`,
+если предмет сломан — `max_durability > 0` и `current_durability <= 0`).
+
+`fetch_weapons()` (`battle_engine.py`) прикрепляет `effective_damage` слота к
+словарю оружия, а `compute_damage_with_rolls` берёт урон оружия **только** из
+этого поля. Шаблонный `items.damage_modifier` в battle-service больше не читается
+— именно его повторное сложение давало двойной урон (25 без меча / 55 с мечом
+вместо 45).
+
+`weapon_slot` элемента `damage_entries` выбирает, какое из трёх значений считается
+(`main.py`, выбор оружия перед вызовом движка):
+
+| `weapon_slot` | `weapon` | Базовый урон |
+|---|---|---|
+| `no_weapon` | `None` | главная характеристика + `damage` (честный безоружный урон) |
+| `main_weapon` (и любой неизвестный слот → `main_weapon`) | оружие основной руки | база + `effective_damage` основного |
+| `additional_weapons` | оружие доп. руки | база + `effective_damage` дополнительного |
+
+Следствия:
+- значения основной и дополнительной руки реально различаются — урон каждого
+  оружия учитывается ровно один раз и только в своём слоте;
+- сломанное оружие даёт 0 урона, но остаётся в слоте и по-прежнему определяет
+  `primary_damage_type` для `damage_type == "all"`;
+- профиль игрока считает те же три числа тем же способом
+  (`frontend/src/components/ProfilePage/StatsTab/damage.ts`), поэтому «Осн. урон»
+  в профиле обязан совпадать с `base` в логе боя;
+- autobattle-service своей математики урона не имеет — он вызывает эти же
+  эндпоинты, паритет формулы автоматический.
+
+Мёртвая функция `compute_single_damage_entry` (второй, ошибочный экземпляр той же
+формулы) удалена в FEAT-167 — новую логику урона добавлять только в
+`compute_damage_with_rolls`.
 
 ## Система эффектов
 
@@ -127,6 +168,7 @@ battle-service/app/
 | inventory:8004 | GET `/inventory/{id}/equipment` | Экипировка |
 | inventory:8004 | GET `/inventory/items/{id}` | Данные предмета |
 | inventory:8004 | GET `/inventory/{id}/fast_slots` | Быстрые слоты |
+| character-attributes:8002 | POST `/attributes/cumulative_stats/increment` | Кумулятивная статистика по итогам боя (`_track_cumulative_stats`). **FEAT-167 задача #17: роут стал internal-only** — обязателен `X-Internal-Token` (`main._internal_token_headers()`, читает env в момент вызова). Вызов fire-and-forget: ошибка логируется и глотается, поэтому потеря заголовка молча остановила бы учёт побед, убийств и разблокировку перков — покрыто тестами в `tests/test_cumulative_stats.py` |
 
 ## FEAT-125: перк-система (контракт с skills-service)
 

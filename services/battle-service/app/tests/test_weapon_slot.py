@@ -5,11 +5,11 @@ Covers:
   1. fetch_weapons() — returns both weapon slots correctly
   2. fetch_weapons() — handles empty/missing slots
   3. fetch_main_weapon() — backward compatibility wrapper
-  4. compute_damage_with_rolls() — weapon_mod from main_weapon
-  5. compute_damage_with_rolls() — weapon_mod from additional_weapons
+  4. compute_damage_with_rolls() — effective_damage from main_weapon
+  5. compute_damage_with_rolls() — effective_damage from additional_weapons
   6. Damage entry with specific weapon_slot + non-"all" damage_type
   7. Damage entry with missing weapon_slot defaults to main_weapon
-  8. Damage entry with weapon_slot pointing to empty slot — weapon_mod = 0
+  8. Damage entry with weapon_slot pointing to empty slot — weapon damage = 0
 """
 
 import sys
@@ -153,7 +153,20 @@ def _simple_damage_entry(amount=10, damage_type="physical", chance=100, weapon_s
     return entry
 
 
-def _mock_weapon(damage_modifier=10, primary_damage_type="physical"):
+def _mock_weapon(effective_damage=10, primary_damage_type="physical"):
+    """Weapon dict in the shape `fetch_weapons()` returns it: item template fields
+    plus the slot's `effective_damage`. FEAT-167: `effective_damage` is the ONLY
+    damage number the engine reads, so the template `damage_modifier` is left out
+    on purpose — if it ever gets summed again, these tests break."""
+    return {
+        "effective_damage": effective_damage,
+        "primary_damage_type": primary_damage_type,
+    }
+
+
+def _mock_item(damage_modifier=10, primary_damage_type="physical"):
+    """Raw item template as inventory-service returns it from /inventory/items/{id}
+    (no `effective_damage` — that field lives on the equipment slot)."""
     return {
         "damage_modifier": damage_modifier,
         "primary_damage_type": primary_damage_type,
@@ -168,11 +181,25 @@ def _restore_real_engine():
     sys.modules["battle_engine"] = _be_mod
 
 
-def _make_equipment_response(main_weapon_item_id=None, additional_weapons_item_id=None):
-    """Build a mock equipment response from inventory-service."""
+def _make_equipment_response(
+    main_weapon_item_id=None,
+    additional_weapons_item_id=None,
+    main_effective_damage=0.0,
+    additional_effective_damage=0.0,
+):
+    """Build a mock equipment response from inventory-service.
+    Weapon slots carry `effective_damage` (FEAT-167)."""
     slots = []
-    slots.append({"slot_type": "main_weapon", "item_id": main_weapon_item_id})
-    slots.append({"slot_type": "additional_weapons", "item_id": additional_weapons_item_id})
+    slots.append({
+        "slot_type": "main_weapon",
+        "item_id": main_weapon_item_id,
+        "effective_damage": main_effective_damage,
+    })
+    slots.append({
+        "slot_type": "additional_weapons",
+        "item_id": additional_weapons_item_id,
+        "effective_damage": additional_effective_damage,
+    })
     # Add some non-weapon slots for realism
     slots.append({"slot_type": "head", "item_id": None})
     slots.append({"slot_type": "body", "item_id": None})
@@ -192,11 +219,13 @@ class TestFetchWeapons:
         """Both main_weapon and additional_weapons are equipped."""
         _restore_real_engine()
 
-        main_item = _mock_weapon(damage_modifier=15, primary_damage_type="physical")
-        additional_item = _mock_weapon(damage_modifier=8, primary_damage_type="fire")
+        main_item = _mock_item(damage_modifier=15, primary_damage_type="physical")
+        additional_item = _mock_item(damage_modifier=8, primary_damage_type="fire")
         equipment = _make_equipment_response(
             main_weapon_item_id=101,
             additional_weapons_item_id=202,
+            main_effective_damage=17.0,
+            additional_effective_damage=8.0,
         )
 
         mock_responses = {
@@ -222,8 +251,9 @@ class TestFetchWeapons:
         with patch("battle_engine.httpx.AsyncClient", return_value=mock_client):
             result = await _REAL_fetch_weapons(42)
 
-        assert result["main_weapon"] == main_item
-        assert result["additional_weapons"] == additional_item
+        # Item template fields survive, and the slot's effective_damage is attached
+        assert result["main_weapon"] == {**main_item, "effective_damage": 17.0}
+        assert result["additional_weapons"] == {**additional_item, "effective_damage": 8.0}
 
     @pytest.mark.asyncio
     async def test_returns_none_for_empty_slots(self):
@@ -260,10 +290,11 @@ class TestFetchWeapons:
         """main_weapon occupied, additional_weapons empty."""
         _restore_real_engine()
 
-        main_item = _mock_weapon(damage_modifier=12, primary_damage_type="ice")
+        main_item = _mock_item(damage_modifier=12, primary_damage_type="ice")
         equipment = _make_equipment_response(
             main_weapon_item_id=101,
             additional_weapons_item_id=None,
+            main_effective_damage=12.0,
         )
 
         mock_responses = {
@@ -288,7 +319,7 @@ class TestFetchWeapons:
         with patch("battle_engine.httpx.AsyncClient", return_value=mock_client):
             result = await _REAL_fetch_weapons(42)
 
-        assert result["main_weapon"] == main_item
+        assert result["main_weapon"] == {**main_item, "effective_damage": 12.0}
         assert result["additional_weapons"] is None
 
 
@@ -305,12 +336,14 @@ class TestFetchMainWeaponCompat:
         """fetch_main_weapon should return the same as fetch_weapons()['main_weapon']."""
         _restore_real_engine()
 
-        main_item = _mock_weapon(damage_modifier=20, primary_damage_type="physical")
+        main_item = _mock_item(damage_modifier=20, primary_damage_type="physical")
         equipment = _make_equipment_response(
             main_weapon_item_id=101,
             additional_weapons_item_id=202,
+            main_effective_damage=20.0,
+            additional_effective_damage=5.0,
         )
-        additional_item = _mock_weapon(damage_modifier=5, primary_damage_type="fire")
+        additional_item = _mock_item(damage_modifier=5, primary_damage_type="fire")
 
         mock_responses = {
             "/inventory/99/equipment": equipment,
@@ -335,7 +368,7 @@ class TestFetchMainWeaponCompat:
         with patch("battle_engine.httpx.AsyncClient", return_value=mock_client):
             result = await _REAL_fetch_main_weapon(99)
 
-        assert result == main_item
+        assert result == {**main_item, "effective_damage": 20.0}
 
     @pytest.mark.asyncio
     async def test_returns_none_when_no_main_weapon(self):
@@ -372,15 +405,15 @@ class TestFetchMainWeaponCompat:
 
 
 class TestComputeDamageWeaponSlot:
-    """Verify compute_damage_with_rolls uses the correct weapon modifier."""
+    """Verify compute_damage_with_rolls uses the correct weapon's effective damage."""
 
     @pytest.mark.asyncio
-    async def test_main_weapon_damage_modifier(self):
-        """Passing a main_weapon dict uses its damage_modifier."""
+    async def test_main_weapon_effective_damage(self):
+        """Passing a main_weapon dict uses its effective_damage."""
         _restore_real_engine()
         attacker = _base_attacker_attrs(strength=10)
         defender = _base_defender_attrs()
-        weapon = _mock_weapon(damage_modifier=15, primary_damage_type="physical")
+        weapon = _mock_weapon(effective_damage=15, primary_damage_type="physical")
         entry = _simple_damage_entry(amount=0, damage_type="physical")
 
         with patch.object(_be_mod, "roll_dodge", return_value=False), \
@@ -395,12 +428,12 @@ class TestComputeDamageWeaponSlot:
         assert final == 30.0
 
     @pytest.mark.asyncio
-    async def test_additional_weapon_damage_modifier(self):
-        """Passing an additional_weapons dict uses its damage_modifier."""
+    async def test_additional_weapon_effective_damage(self):
+        """Passing an additional_weapons dict uses its effective_damage."""
         _restore_real_engine()
         attacker = _base_attacker_attrs(strength=10)
         defender = _base_defender_attrs()
-        weapon = _mock_weapon(damage_modifier=7, primary_damage_type="fire")
+        weapon = _mock_weapon(effective_damage=7, primary_damage_type="fire")
         entry = _simple_damage_entry(amount=0, damage_type="physical")
 
         with patch.object(_be_mod, "roll_dodge", return_value=False), \
@@ -415,13 +448,13 @@ class TestComputeDamageWeaponSlot:
         assert final == 22.0
 
     @pytest.mark.asyncio
-    async def test_fire_damage_type_with_main_weapon_modifier(self):
-        """damage_type='fire' + weapon_slot='main_weapon': uses main weapon modifier
+    async def test_fire_damage_type_with_main_weapon_damage(self):
+        """damage_type='fire' + weapon_slot='main_weapon': uses the main weapon damage
         but fire resistance applies (not weapon's primary_damage_type)."""
         _restore_real_engine()
         attacker = _base_attacker_attrs(strength=10)
         defender = _base_defender_attrs()
-        weapon = _mock_weapon(damage_modifier=10, primary_damage_type="physical")
+        weapon = _mock_weapon(effective_damage=10, primary_damage_type="physical")
         entry = _simple_damage_entry(amount=5, damage_type="fire")
         resists = {"fire": 20}  # 20% fire resistance
 
@@ -442,7 +475,7 @@ class TestComputeDamageWeaponSlot:
 
     @pytest.mark.asyncio
     async def test_weapon_none_empty_slot_gives_zero_mod(self):
-        """When weapon is None (empty slot), weapon_mod = 0."""
+        """When weapon is None (empty slot), the weapon damage term is 0."""
         _restore_real_engine()
         attacker = _base_attacker_attrs(strength=10)
         defender = _base_defender_attrs()
@@ -466,7 +499,7 @@ class TestComputeDamageWeaponSlot:
         _restore_real_engine()
         attacker = _base_attacker_attrs(strength=10)
         defender = _base_defender_attrs()
-        weapon = _mock_weapon(damage_modifier=5, primary_damage_type="fire")
+        weapon = _mock_weapon(effective_damage=5, primary_damage_type="fire")
         entry = _simple_damage_entry(amount=0, damage_type="all")
 
         with patch.object(_be_mod, "roll_dodge", return_value=False), \
@@ -506,13 +539,14 @@ class TestWeaponSelectionPerDamageEntry:
 
     @pytest.mark.asyncio
     async def test_two_entries_use_different_weapons(self):
-        """Two damage entries with different weapon_slots use different weapon modifiers."""
+        """Two damage entries with different weapon_slots use different weapon damage
+        values — FEAT-167 keeps the hands numerically distinct."""
         _restore_real_engine()
         attacker = _base_attacker_attrs(strength=10)
         defender = _base_defender_attrs()
 
-        main_weapon = _mock_weapon(damage_modifier=10, primary_damage_type="physical")
-        additional_weapon = _mock_weapon(damage_modifier=5, primary_damage_type="fire")
+        main_weapon = _mock_weapon(effective_damage=10, primary_damage_type="physical")
+        additional_weapon = _mock_weapon(effective_damage=5, primary_damage_type="fire")
         weapons = {"main_weapon": main_weapon, "additional_weapons": additional_weapon}
 
         entry_main = _simple_damage_entry(amount=0, damage_type="physical", weapon_slot="main_weapon")
@@ -547,8 +581,8 @@ class TestWeaponSelectionPerDamageEntry:
         attacker = _base_attacker_attrs(strength=10)
         defender = _base_defender_attrs()
 
-        main_weapon = _mock_weapon(damage_modifier=10, primary_damage_type="physical")
-        additional_weapon = _mock_weapon(damage_modifier=5, primary_damage_type="fire")
+        main_weapon = _mock_weapon(effective_damage=10, primary_damage_type="physical")
+        additional_weapon = _mock_weapon(effective_damage=5, primary_damage_type="fire")
         weapons = {"main_weapon": main_weapon, "additional_weapons": additional_weapon}
 
         # Entry WITHOUT weapon_slot key (old data)
@@ -564,7 +598,7 @@ class TestWeaponSelectionPerDamageEntry:
                 entry, attacker, weapon, {}, defender, {}, class_id=1
             )
 
-        # Should use main_weapon (modifier=10): base = 10 + 5 + 10 = 25
+        # Should use main_weapon (effective_damage=10): base = 10 + 5 + 10 = 25
         assert log["base"] == 25
         assert final == 25.0
 
@@ -575,7 +609,7 @@ class TestWeaponSelectionPerDamageEntry:
         attacker = _base_attacker_attrs(strength=10)
         defender = _base_defender_attrs()
 
-        main_weapon = _mock_weapon(damage_modifier=10, primary_damage_type="physical")
+        main_weapon = _mock_weapon(effective_damage=10, primary_damage_type="physical")
         weapons = {"main_weapon": main_weapon, "additional_weapons": None}
 
         entry = _simple_damage_entry(amount=5, damage_type="fire", weapon_slot="additional_weapons")
@@ -589,7 +623,7 @@ class TestWeaponSelectionPerDamageEntry:
                 entry, attacker, weapon, {}, defender, {}, class_id=1
             )
 
-        # weapon_mod = 0 (no weapon): base = 10 + 5 + 0 = 15
+        # weapon damage = 0 (no weapon): base = 10 + 5 + 0 = 15
         # raw = 15 + 5 = 20
         assert log["base"] == 15
         assert final == 20.0

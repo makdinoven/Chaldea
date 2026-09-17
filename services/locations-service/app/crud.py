@@ -173,6 +173,7 @@ async def award_post_xp_and_log(
                 await client.put(
                     f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{character_id}/passive_experience",
                     json={"amount": xp},
+                    headers=_internal_token_headers(),
                 )
                 # Party self-bonus (FEAT-144 Ф2): posts grant the poster +10% when
                 # a squadmate is co-located. Posts do NOT trickle to others.
@@ -7197,7 +7198,11 @@ async def _consume_stamina_via_attributes(
     )
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(url, json={"amount": int(amount)})
+            resp = await client.post(
+                url,
+                json={"amount": int(amount)},
+                headers=_internal_token_headers(),
+            )
         if resp.status_code != 200:
             logger.warning(
                 "consume_stamina returned %s for char %s: %s",
@@ -7583,7 +7588,11 @@ async def _refund_stamina_via_attributes(
     )
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(url, json={"amount": int(amount)})
+            resp = await client.post(
+                url,
+                json={"amount": int(amount)},
+                headers=_internal_token_headers(),
+            )
         if resp.status_code != 200:
             logger.warning(
                 "refund_stamina returned %s for char %s: %s",

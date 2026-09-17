@@ -694,6 +694,11 @@ def reload_row(db, character_id=CID):
     return db.query(models.CharacterAttributes).filter_by(character_id=character_id).one()
 
 
+
+# FEAT-167: the mutating /attributes/ endpoints require the internal token.
+# conftest sets INTERNAL_SERVICE_TOKEN to this value before auth_http is imported.
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+
 class TestEndpointWiring:
     def test_get_attributes_settles_and_persists(self, client, db):
         seed(db, cur=0, mx=100, anchor=_utcnow_s() - timedelta(hours=2))
@@ -736,7 +741,10 @@ class TestEndpointWiring:
 
     def test_consume_stamina_settles_before_check(self, client, db):
         seed(db, cur=0, mx=100, anchor=_utcnow_s() - timedelta(hours=2))
-        resp = client.post(f"/attributes/{CID}/consume_stamina", json={"amount": 8})
+        resp = client.post(
+            f"/attributes/{CID}/consume_stamina", json={"amount": 8},
+            headers=INTERNAL_HEADERS,
+        )
         assert resp.status_code == 200, resp.text
         db.expire_all()
         row = db.query(models.CharacterAttributes).filter_by(character_id=CID).one()
@@ -744,7 +752,10 @@ class TestEndpointWiring:
 
     def test_consume_stamina_insufficient_still_commits_settle(self, client, db):
         seed(db, cur=0, mx=100, anchor=_utcnow_s() - timedelta(hours=2))
-        resp = client.post(f"/attributes/{CID}/consume_stamina", json={"amount": 50})
+        resp = client.post(
+            f"/attributes/{CID}/consume_stamina", json={"amount": 50},
+            headers=INTERNAL_HEADERS,
+        )
         assert resp.status_code == 400
         db.expire_all()
         row = db.query(models.CharacterAttributes).filter_by(character_id=CID).one()
@@ -752,7 +763,10 @@ class TestEndpointWiring:
 
     def test_recover_settles_first(self, client, db):
         seed(db, cur=0, mx=100, anchor=_utcnow_s() - timedelta(hours=2))
-        resp = client.post(f"/attributes/{CID}/recover", json={"health_recovery": 3})
+        resp = client.post(
+            f"/attributes/{CID}/recover", json={"health_recovery": 3},
+            headers=INTERNAL_HEADERS,
+        )
         assert resp.status_code == 200, resp.text
         db.expire_all()
         row = db.query(models.CharacterAttributes).filter_by(character_id=CID).one()

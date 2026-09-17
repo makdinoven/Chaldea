@@ -27,6 +27,15 @@ INVENTORY_SERVICE_URL = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-ser
 
 logger = logging.getLogger("skills-service")
 
+
+def _internal_token_headers() -> dict:
+    """Headers for outgoing internal service-to-service calls (FEAT-167 §3.2.5).
+
+    The token is read from env at call time (not import time) so tests can set
+    it without reloading the module.
+    """
+    return {"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")}
+
 app = FastAPI(title="Async Skill Service")
 
 cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
@@ -511,9 +520,11 @@ async def upgrade_character_skill(
     # Track cumulative stat (non-fatal)
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
+            # FEAT-167 #17: internal-only endpoint — send the shared token.
             await client.post(
                 f"{ATTRIBUTES_SERVICE_URL}/cumulative_stats/increment",
                 json={"character_id": character_id, "increments": {"skills_used": 1}},
+                headers=_internal_token_headers(),
             )
     except Exception as e:
         import logging
@@ -701,7 +712,9 @@ async def deduct_active_experience(character_id: int, amount: int) -> int:
     """Deduct active_experience via character-attributes-service. Returns new balance."""
     async with httpx.AsyncClient() as client:
         url = f"{ATTRIBUTES_SERVICE_URL}/{character_id}/active_experience"
-        resp = await client.put(url, json={"amount": -amount})
+        resp = await client.put(
+            url, json={"amount": -amount}, headers=_internal_token_headers()
+        )
         if resp.status_code == 400:
             raise HTTPException(400, detail="Недостаточно опыта")
         if resp.status_code != 200:

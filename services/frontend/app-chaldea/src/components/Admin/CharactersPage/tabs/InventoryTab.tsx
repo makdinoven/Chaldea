@@ -10,6 +10,7 @@ import {
   selectAdminInventory,
   selectAdminEquipment,
   selectAdminDetailLoading,
+  selectAdminDetailError,
 } from '../../../../redux/slices/adminCharactersSlice';
 import { searchItemsCatalog } from '../../../../api/adminCharacters';
 import { EQUIPMENT_SLOT_ORDER, EQUIPMENT_SLOT_LABELS } from '../../../ProfilePage/constants';
@@ -26,6 +27,7 @@ const InventoryTab = ({ characterId }: InventoryTabProps) => {
   const inventory = useAppSelector(selectAdminInventory);
   const equipment = useAppSelector(selectAdminEquipment);
   const loading = useAppSelector(selectAdminDetailLoading);
+  const detailError = useAppSelector(selectAdminDetailError);
 
   // Add item state
   const [showAddPanel, setShowAddPanel] = useState(false);
@@ -34,6 +36,7 @@ const InventoryTab = ({ characterId }: InventoryTabProps) => {
   const [searching, setSearching] = useState(false);
   const [selectedItem, setSelectedItem] = useState<ItemData | null>(null);
   const [addQuantity, setAddQuantity] = useState(1);
+  const [adding, setAdding] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Confirm delete state
@@ -78,15 +81,21 @@ const InventoryTab = ({ characterId }: InventoryTabProps) => {
     };
   }, []);
 
+  // FEAT-167: the grant route is now behind `items:update`, so it can fail with
+  // 401/403. On failure the panel stays open with the selection intact and the
+  // reason from `detailError` visible — the admin can fix it and retry.
   const handleAddItem = async () => {
     if (!selectedItem) return;
-    await dispatch(
+    setAdding(true);
+    const result = await dispatch(
       addAdminInventoryItem({
         characterId,
         itemId: selectedItem.id,
         quantity: addQuantity,
       }),
     );
+    setAdding(false);
+    if (addAdminInventoryItem.rejected.match(result)) return;
     setSelectedItem(null);
     setSearchQuery('');
     setSearchResults([]);
@@ -226,7 +235,7 @@ const InventoryTab = ({ characterId }: InventoryTabProps) => {
                 )}
 
                 {selectedItem && (
-                  <div className="flex items-center gap-4">
+                  <div className="flex flex-wrap items-center gap-3 sm:gap-4">
                     <span className="text-white text-sm">
                       Выбрано: <span className="text-gold">{selectedItem.name}</span>
                     </span>
@@ -240,8 +249,12 @@ const InventoryTab = ({ characterId }: InventoryTabProps) => {
                         onChange={(e) => setAddQuantity(Math.max(1, Number(e.target.value)))}
                       />
                     </div>
-                    <button className="btn-blue text-sm" onClick={handleAddItem}>
-                      Добавить
+                    <button
+                      className="btn-blue text-sm"
+                      onClick={handleAddItem}
+                      disabled={adding}
+                    >
+                      {adding ? 'Добавляем…' : 'Добавить'}
                     </button>
                     <button
                       className="text-white/50 text-sm hover:text-site-blue transition-colors duration-200"
@@ -253,6 +266,16 @@ const InventoryTab = ({ characterId }: InventoryTabProps) => {
                       Отмена
                     </button>
                   </div>
+                )}
+
+                {/* FEAT-167: 401/403/5xx from the grant route, in Russian */}
+                {detailError && (
+                  <p
+                    role="alert"
+                    className="text-site-red text-sm leading-snug break-words rounded-card border border-site-red/30 bg-site-red/10 px-3 py-2"
+                  >
+                    {detailError}
+                  </p>
                 )}
               </div>
             </motion.div>

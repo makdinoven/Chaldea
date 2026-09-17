@@ -180,6 +180,7 @@ services:
       CHARACTER_SERVICE_URL: http://character-service:8005
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       USER_SERVICE_URL: http://user-service:8000
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
 
   notification-service:
     <<: *restart
@@ -267,6 +268,7 @@ services:
       CHARACTER_SERVICE_URL: http://character-service:8005
       ATTRIBUTES_SERVICE_URL: http://character-attributes-service:8002/attributes/
       USER_SERVICE_URL: http://user-service:8000
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
 
   # --- Celery: no watchfiles wrapper ---
   celery-worker:

@@ -192,6 +192,11 @@ export interface EquipmentSlot {
   slot_type: string;
   item_id: number | null;
   is_enabled: boolean;
+  /**
+   * FEAT-167: effective damage of the weapon in this slot (template modifier +
+   * sharpening + gems, 0 when broken). Optional — only weapon slots carry it.
+   */
+  effective_damage?: number;
   item: ItemData | null;
 }
 

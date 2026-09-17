@@ -605,3 +605,82 @@ class TestMobAIAutoRegistration:
                 )
         finally:
             app.dependency_overrides.pop(get_db, None)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-167: the loot grant goes to the INTERNAL inventory route, with the token
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestLootGrantIsInternalAndAuthenticated:
+    """`POST /inventory/{cid}/items` is admin-gated now; the PvE loot drop must
+    use `POST /inventory/internal/characters/{cid}/items` and send
+    `X-Internal-Token`. Without the header inventory-service answers 401 and the
+    drop is lost silently (the call site only logs), so this is asserted on the
+    real caller."""
+
+    @pytest.mark.asyncio
+    @patch("main.httpx.AsyncClient")
+    async def test_loot_post_uses_internal_path_with_token(self, mock_client_cls):
+        battle_state = _make_battle_state()
+        turn_events = []
+
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=_mock_httpx_response(200, MOB_REWARD_DATA))
+        mock_client.put = AsyncMock(return_value=_mock_httpx_response(200, {"ok": True}))
+        mock_client.post = AsyncMock(return_value=_mock_httpx_response(200, {}))
+
+        with patch.dict(os.environ, {"INTERNAL_SERVICE_TOKEN": "test-internal-token"}), \
+             patch("main.random.random", return_value=0.01), \
+             patch("main.random.randint", return_value=2):
+            rewards = await _distribute_pve_rewards(battle_state, 0, turn_events)
+
+        assert rewards is not None and len(rewards.items) == 2
+
+        item_calls = [
+            call for call in mock_client.post.call_args_list
+            if "/items" in str(call.args[0] if call.args else call.kwargs.get("url", ""))
+        ]
+        assert item_calls, "no inventory grant call was made for the dropped loot"
+        for call in item_calls:
+            url = call.args[0]
+            assert "/inventory/internal/characters/" in url, (
+                f"loot grant still uses the admin-gated route: {url}"
+            )
+            headers = call.kwargs.get("headers") or {}
+            assert headers.get("X-Internal-Token") == "test-internal-token", (
+                "loot grant dropped the X-Internal-Token header — inventory-service "
+                "would answer 401 and the drop would be lost"
+            )
+
+    @pytest.mark.asyncio
+    @patch("main.httpx.AsyncClient")
+    async def test_loot_header_is_read_from_env_at_call_time(self, mock_client_cls):
+        """The helper must not cache the token at import time, otherwise a
+        container started before the env var is set sends an empty header."""
+        battle_state = _make_battle_state()
+        turn_events = []
+
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=_mock_httpx_response(200, MOB_REWARD_DATA))
+        mock_client.put = AsyncMock(return_value=_mock_httpx_response(200, {"ok": True}))
+        mock_client.post = AsyncMock(return_value=_mock_httpx_response(200, {}))
+
+        with patch.dict(os.environ, {"INTERNAL_SERVICE_TOKEN": "rotated-token"}), \
+             patch("main.random.random", return_value=0.01), \
+             patch("main.random.randint", return_value=2):
+            await _distribute_pve_rewards(battle_state, 0, turn_events)
+
+        item_calls = [
+            call for call in mock_client.post.call_args_list
+            if call.args and "/items" in call.args[0]
+        ]
+        assert item_calls
+        assert all(
+            (call.kwargs.get("headers") or {}).get("X-Internal-Token") == "rotated-token"
+            for call in item_calls
+        )

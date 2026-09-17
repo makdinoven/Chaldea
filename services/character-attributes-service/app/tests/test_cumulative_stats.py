@@ -52,6 +52,20 @@ import models  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from main import app, get_db  # noqa: E402
 
+# FEAT-167 #17: POST /attributes/cumulative_stats/increment is internal-only.
+# conftest sets INTERNAL_SERVICE_TOKEN to this value before auth_http is imported.
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+
+@pytest.fixture(autouse=True)
+def _internal_token_is_pinned(monkeypatch):
+    """`auth_http` resolves INTERNAL_SERVICE_TOKEN into a module constant at
+    import time, so a container that already exports a different value would
+    make INTERNAL_HEADERS wrong. Pin the constant instead of the env var."""
+    import auth_http
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN",
+                        INTERNAL_HEADERS["X-Internal-Token"])
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -160,6 +174,7 @@ class TestIncrementCumulativeStats:
                 "character_id": 42,
                 "increments": {"total_battles": 1},
             },
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -185,6 +200,7 @@ class TestIncrementCumulativeStats:
                 "character_id": 1,
                 "increments": {"pvp_wins": 3},
             },
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
 
@@ -209,6 +225,7 @@ class TestIncrementCumulativeStats:
                 "increments": {},
                 "set_max": {"max_damage_single_battle": 500},
             },
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
 
@@ -233,6 +250,7 @@ class TestIncrementCumulativeStats:
                 "increments": {},
                 "set_max": {"max_damage_single_battle": 100},
             },
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
 
@@ -252,6 +270,7 @@ class TestIncrementCumulativeStats:
                 "character_id": 1,
                 "increments": {"nonexistent_field": 10},
             },
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 400
         assert "nonexistent_field" in resp.json()["detail"]
@@ -265,6 +284,7 @@ class TestIncrementCumulativeStats:
                 "increments": {},
                 "set_max": {"bogus_column": 99},
             },
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 400
         assert "bogus_column" in resp.json()["detail"]
@@ -289,6 +309,7 @@ class TestIncrementCumulativeStats:
                     "pvp_wins": 1,
                 },
             },
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
 
@@ -310,6 +331,7 @@ class TestIncrementCumulativeStats:
                 "character_id": 1,
                 "increments": {"total_battles": 1},
             },
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -334,6 +356,7 @@ class TestIncrementCumulativeStats:
                 "increments": {"total_damage_dealt": 300},
                 "set_max": {"max_damage_single_battle": 400},
             },
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
 

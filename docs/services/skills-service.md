@@ -132,7 +132,9 @@ physical, catting, crushing, piercing, magic, fire, ice, watering, electricity, 
 ## Коммуникация
 
 ### HTTP (исходящие)
-- Определены URL для character-service и attributes-service, но **не используются активно**
+- `character-attributes-service:8002` -> GET `/attributes/{id}` (баланс активного опыта), PUT `/attributes/{id}/active_experience` (списание за покупку/прокачку навыка; FEAT-167: обязателен заголовок `X-Internal-Token`, хелпер `main._internal_token_headers()` читает `INTERNAL_SERVICE_TOKEN` из env в момент вызова), POST `/attributes/cumulative_stats/increment` (счётчик `skills_used` при улучшении навыка; FEAT-167 задача #17: тот же заголовок. Вызов fire-and-forget, поэтому потеря заголовка была бы молчаливой — покрыт тестом `tests/test_internal_headers.py`)
+- `character-service:8005` -> GET `/characters/{id}/race_info`
+- `inventory-service:8004` -> POST `/inventory/internal/characters/{id}/revalidate-equipment`
 
 ### RabbitMQ
 Полностью закомментирован.

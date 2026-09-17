@@ -27,15 +27,16 @@ inventory-service/app/
 ### Инвентарь
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/inventory/` | Создать инвентарь + слоты экипировки для персонажа |
+| POST | `/inventory/` | Создать инвентарь + слоты экипировки для персонажа. **FEAT-167 (задача #18): только межсервисный вызов**, требует `X-Internal-Token` (fail-closed: пустой `INTERNAL_SERVICE_TOKEN` → 503 «Internal service token не настроен», неверный/отсутствующий заголовок → 401 «Недействительный internal token»). Единственный вызывающий — character-service `crud.send_inventory_request` (стартовый набор при создании персонажа). До FEAT-167 роут не имел ни одной зависимости: анонимный запрос через gateway доходил до обработчика (422 по схеме, а не 401) и позволял создавать инвентарь и слоты экипировки для произвольного `character_id`. Nginx вторым слоем — точный блок `location = /inventory/` с `limit_except GET HEAD`; остальные роуты `/inventory/` не затронуты |
 | GET | `/inventory/{id}/items` | Предметы в инвентаре |
-| POST | `/inventory/{id}/items` | Добавить предмет (с учётом стаков) |
+| POST | `/inventory/{id}/items` | Админская выдача предмета (с учётом стаков). FEAT-167: JWT + разрешение `items:update` |
+| POST | `/inventory/internal/characters/{id}/items` | FEAT-167: та же выдача для межсервисных вызовов, только `X-Internal-Token` (fail-closed: пустой env → 503, неверный заголовок → 401) |
 | DELETE | `/inventory/{id}/items/{item_id}?quantity=N` | Убрать предмет |
 
 ### Экипировка
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/inventory/{id}/equipment` | Слоты экипировки |
+| GET | `/inventory/{id}/equipment` | Слоты экипировки. FEAT-167: у каждого слота есть `effective_damage` — фактический урон оружия в этом слоте |
 | POST | `/inventory/{id}/equip` | Экипировать предмет (транзакция с модификаторами) |
 | POST | `/inventory/{id}/unequip` | Снять предмет (обратные модификаторы) |
 | POST | `/inventory/{id}/use_item` | Использовать расходник (еду — нельзя, 400 «Еду нужно съесть») |
@@ -187,6 +188,16 @@ inventory-service/app/
 ### check_not_gathering integration (FEAT-128)
 Защитная проверка `is_character_gathering` (raw SQL `SELECT 1 FROM gathering_sessions WHERE character_id=:cid AND status='active' AND complete_at > NOW()`) добавлена в action-эндпоинты: `equip`, `unequip`, `craft`, `refine`, `sharpen`, `insert-gem`, `extract-gem`, `identify`, `use-buff-item`, `use_item`. Возвращает 400 «Действие заблокировано во время добычи» если у персонажа активная сессия. Зеркальный паттерн `is_character_in_battle`.
 
+## Урон оружия (FEAT-167)
+
+Урон оружия **не входит** в общую характеристику `character_attributes.damage`. Он считается отдельно по слоту, ровно один раз.
+
+- `crud.compute_item_damage(item, enhancement_bonuses, gem_items, current_durability, max_durability)` — **единственный источник числа**: `items.damage_modifier` + заточка по `damage_modifier` (+1 за очко) + сумма `damage_modifier` вставленных камней/рун; `0.0`, если предмет сломан (`max_durability > 0` и `current_durability <= 0`).
+- `crud.build_modifiers_dict(..., slot_type=...)` берёт значение ключа `"damage"` из `compute_item_damage` (арифметика не может разойтись) и **выбрасывает** этот ключ для слотов `main_weapon` / `additional_weapons`. `slot_type` обязателен во всех местах, где модификаторы применяются к **надетому** предмету: снятие при ревалидации, экипировка (старый и новый предмет), снятие, заточка, вставка и извлечение камня, ремонт сломанного, обнуление прочности, экипировка/снятие NPC. Без `slot_type` урон оружия снова утечёт в атрибут.
+- `GET /inventory/{id}/equipment` отдаёт `effective_damage` по каждому слоту (`crud.get_equipment_slots_with_damage`): 0.0 для пустого слота, неоружейного слота и сломанного оружия. Это число читают battle-service (`fetch_weapons`) и профиль на фронтенде — одна формула на все три значения урона (основной / дополнительный / без оружия).
+- Заточка и камни **на самом оружии** принадлежат этому оружию; на броне и украшениях — по-прежнему идут в `damage`.
+- Одноразовый пересчёт: миграция `023_weapon_damage_backfill` вычитает фактический урон надетого оружия из `character_attributes.damage` (кламп на 0, предупреждение в лог по аномалиям, downgrade прибавляет обратно). Пишет в таблицу char-attrs намеренно — только inventory-service знает заточку, камни и прочность.
+
 ## Известные проблемы
 
 1. **Race conditions** - `with_for_update()` только в unequip, не в equip
@@ -194,4 +205,4 @@ inventory-service/app/
 3. **build_modifiers_dict()** пропускает нулевые значения (может быть ошибкой)
 4. **Fast slots 5-10 не полностью поддержаны** в is_item_compatible_with_slot
 5. **RabbitMQ закомментирован**
-6. **Нет аутентификации** на эндпоинтах
+6. **Нет аутентификации** на части эндпоинтов (`GET /inventory/{id}/items`, `/inventory/internal/*` кроме нового роута выдачи — защищены только через Nginx)

@@ -23,3 +23,11 @@ os.environ.setdefault("DB_HOST", "localhost")
 os.environ.setdefault("DB_USERNAME", "testuser")
 os.environ.setdefault("DB_PASSWORD", "testpass")
 os.environ.setdefault("DB_DATABASE", "testdb")
+
+# FEAT-167: the six mutating /attributes/{id}/... endpoints are gated by
+# `verify_internal_token`. Set the shared secret BEFORE auth_http is imported so
+# its module-level constant picks it up; tests send INTERNAL_HEADERS with it.
+os.environ.setdefault("INTERNAL_SERVICE_TOKEN", "test-internal-token")
+
+INTERNAL_TOKEN = os.environ["INTERNAL_SERVICE_TOKEN"]
+INTERNAL_HEADERS = {"X-Internal-Token": INTERNAL_TOKEN}

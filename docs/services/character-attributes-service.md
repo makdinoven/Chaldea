@@ -30,13 +30,70 @@ character-attributes-service/app/
 | GET | `/attributes/{character_id}` | Получить все атрибуты |
 | GET | `/attributes/{character_id}/passive_experience` | Пассивный опыт |
 | POST | `/attributes/{character_id}/upgrade` | Прокачать статы (тратит stat points) |
-| POST | `/attributes/{character_id}/apply_modifiers` | Применить модификаторы (экипировка/баффы) |
-| POST | `/attributes/{character_id}/recover` | Восстановить ресурсы (health/mana/energy/stamina) |
-| PUT | `/attributes/{character_id}/active_experience` | Изменить активный опыт |
-| POST | `/attributes/{character_id}/consume_stamina` | Потратить стамину (с блокировкой строки) |
+| POST | `/attributes/{character_id}/apply_modifiers` | **internal** (FEAT-167): применить модификаторы (экипировка/баффы) |
+| POST | `/attributes/{character_id}/recover` | **internal** (FEAT-167): восстановить ресурсы (health/mana/energy/stamina) |
+| PUT | `/attributes/{character_id}/active_experience` | **internal** (FEAT-167): изменить активный опыт |
+| PUT | `/attributes/{character_id}/passive_experience` | **internal** (FEAT-167): изменить пассивный опыт |
+| POST | `/attributes/{character_id}/consume_stamina` | **internal** (FEAT-167): потратить стамину (с блокировкой строки) |
+| POST | `/attributes/{character_id}/refund_stamina` | **internal** (FEAT-167): вернуть стамину (FEAT-128) |
 | GET | `/attributes/{character_id}/rest-status` | FEAT-164: состояние восстановления в покое и активная сытость |
 | POST | `/attributes/internal/{character_id}/satiety` | FEAT-164, internal: применить сытость (вызывает inventory-service `/eat-food`) |
 | POST | `/attributes/internal/settle-regen` | FEAT-164, internal: досчитать восстановление для списка персонажей (до 50 id) |
+
+## Аутентификация изменяющих эндпоинтов (FEAT-167)
+
+Шесть изменяющих эндпоинтов доступны **только для межсервисных вызовов** и
+закрыты зависимостью `verify_internal_token` (`app/auth_http.py`, копия
+`character-service/app/auth_http.py`):
+
+`POST /{id}/apply_modifiers`, `POST /{id}/recover`,
+`PUT /{id}/active_experience`, `PUT /{id}/passive_experience`,
+`POST /{id}/consume_stamina`, `POST /{id}/refund_stamina`.
+
+- Требуется заголовок `X-Internal-Token` со значением `INTERNAL_SERVICE_TOKEN`.
+- **Fail-closed:** пустой/не заданный `INTERNAL_SERVICE_TOKEN` в сервисе →
+  `503 «Internal service token не настроен»` для любого запроса.
+- Неверный или отсутствующий заголовок → `401 «Недействительный internal token»`
+  (значение полученного заголовка не логируется и не возвращается).
+- Nginx вторым слоем отдаёт `403` на эти шесть путей извне.
+- **GET-эндпоинты не закрыты специально:** `GET /attributes/{id}` и
+  `GET /attributes/{id}/rest-status` доигрывают восстановление FEAT-164 и
+  читаются battle-service на каждой атаке, skills-service, character-service и
+  профилем игрока. Так же не тронуты `POST /{id}/upgrade` (JWT),
+  `/attributes/admin/*` (RBAC) и `/attributes/internal/*` (пока только nginx).
+
+Вызывающие (все посылают заголовок): inventory-service (apply_modifiers,
+recover), locations-service (consume/refund stamina, passive_experience),
+dungeon-service (consume_stamina, recover), skills-service
+(active_experience), party-service (active/passive_experience).
+
+### Дополнение (FEAT-167, задача #17) — ещё два закрытых роута
+
+Тем же пушем закрыты два предсуществующих отверстия того же класса, найденные
+при ревью FEAT-167. Оба лежали **вне** префикса `/attributes/internal/`, поэтому
+nginx их не резал, и ни одной зависимости в сервисе у них не было:
+
+| Роут | Было | Стало |
+|---|---|---|
+| `POST /attributes/cumulative_stats/increment` | анонимный запрос через gateway → `200 «Stats updated»`; накручивал `pve_kills`, `pvp_wins`, `total_damage_dealt`, серии побед **и открывал перки** (в ответе `newly_unlocked_perks`) | `Depends(verify_internal_token)` |
+| `POST /attributes/` (создание строки атрибутов) | анонимный запрос доходил до обработчика (`422` по схеме, а не `401`) | `Depends(verify_internal_token)` |
+
+Поведение и тексты ошибок те же, что у шести роутов выше (401 / 503 fail-closed).
+
+Вызывающие `cumulative_stats/increment` (все посылают заголовок):
+battle-service (итоги боя), locations-service (посты, перемещение, лавка NPC,
+квесты — семь мест через один хелпер `_track_cumulative_stats`),
+inventory-service (крафт и сбор), skills-service (`skills_used` при улучшении
+навыка). Вызывающий `POST /attributes/` — только character-service:
+`crud.send_attributes_request` (создание персонажа — **хард-фейл**, и создание
+NPC из админки) и `crud._sync_send_attributes_request` (спавн моба).
+
+**Не тронут** `GET /attributes/{character_id}/cumulative_stats` — это чтение,
+его использует профиль.
+
+Nginx вторым слоем: точные блоки `location = /attributes/cumulative_stats/increment`
+и `location = /attributes/` с `limit_except GET HEAD` в обоих конфигах. Именно
+точное совпадение — под префиксом `/attributes/` живут все игровые роуты.
 
 ## Восстановление в покое и сытость (FEAT-164)
 

@@ -353,8 +353,9 @@ async def _distribute_pve_rewards(
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     resp = await client.post(
-                        f"{inv_service}/inventory/{winner_id}/items",
+                        f"{inv_service}/inventory/internal/characters/{winner_id}/items",
                         json={"item_id": item.item_id, "quantity": item.quantity},
+                        headers=_internal_token_headers(),
                     )
                     if resp.status_code == 200:
                         logger.info(f"Предмет {item.item_id} x{item.quantity} добавлен в инвентарь {winner_id}")
@@ -565,7 +566,11 @@ async def _track_cumulative_stats(
 
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(url, json=payload)
+                # FEAT-167 #17: /attributes/cumulative_stats/increment is
+                # internal-only now — send the shared token.
+                resp = await client.post(
+                    url, json=payload, headers=_internal_token_headers()
+                )
                 if resp.status_code == 200:
                     logger.info(
                         f"[CUMULATIVE] Статистика обновлена для персонажа {char_id}: "

@@ -224,9 +224,11 @@ class TestAwardPostXpAndLog:
             )
 
             # Verify passive XP call
+            # FEAT-167: /passive_experience is internal-only — the header must go out.
             mock_client.put.assert_called_once_with(
                 "http://attrs:8002/attributes/1/passive_experience",
                 json={"amount": 4},
+                headers=crud._internal_token_headers(),
             )
 
             # Verify log creation call (post is now also used for the party

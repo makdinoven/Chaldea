@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from rabbitmq_consumer import start_consumer
 from sqlalchemy import text
-from auth_http import get_current_user_via_http, get_admin_user, require_permission
+from auth_http import get_current_user_via_http, get_admin_user, require_permission, verify_internal_token
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -87,9 +87,17 @@ def check_not_gathering(db: Session, character_id: int, message: str = "Дейс
 
 
 @router.post("/", response_model=schemas.InventoryResponse)
-def create_inventory(inventory_request: schemas.InventoryRequest, db: Session = Depends(get_db)):
+def create_inventory(
+    inventory_request: schemas.InventoryRequest,
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
     """
     Создание инвентаря и слотов экипировки для персонажа.
+
+    Только для межсервисных вызовов (FEAT-167 #18): требуется заголовок
+    `X-Internal-Token`. Единственный вызывающий — character-service при
+    создании персонажа.
     """
     character_id = inventory_request.character_id
     items_to_add = inventory_request.items
@@ -365,10 +373,11 @@ def get_character_inventory(
     return query.all()
 
 
-@router.post("/{character_id}/items", response_model=List[schemas.CharacterInventory])
-def add_item_to_inventory(character_id: int, item_data: schemas.InventoryItem, db: Session = Depends(get_db)):
-    """
-    Добавить предмет в инвентарь персонажа с учётом максимального стека.
+def _add_item_to_inventory_core(character_id: int, item_data: schemas.InventoryItem, db: Session):
+    """Положить предмет в инвентарь персонажа с учётом максимального стека.
+
+    Общее тело для админского (`POST /inventory/{cid}/items`) и внутреннего
+    (`POST /inventory/internal/characters/{cid}/items`) роутов — FEAT-167 §3.2.
     """
     db_item = db.query(models.Items).filter(models.Items.id == item_data.item_id).first()
     if not db_item:
@@ -424,6 +433,34 @@ def add_item_to_inventory(character_id: int, item_data: schemas.InventoryItem, d
         logger.warning(f"Quest auto-progress (collect) error for char {character_id}: {e}")
 
     return inventory_items
+
+
+@router.post("/internal/characters/{character_id}/items", response_model=List[schemas.CharacterInventory])
+def add_item_to_inventory_internal(
+    character_id: int,
+    item_data: schemas.InventoryItem,
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """Выдача предмета персонажу для межсервисных вызовов (FEAT-167 §3.2.2).
+
+    Только service-to-service: требует заголовок `X-Internal-Token`.
+    """
+    return _add_item_to_inventory_core(character_id, item_data, db)
+
+
+@router.post("/{character_id}/items", response_model=List[schemas.CharacterInventory])
+def add_item_to_inventory(
+    character_id: int,
+    item_data: schemas.InventoryItem,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("items:update")),
+):
+    """Админская выдача предмета в инвентарь персонажа (FEAT-167 §3.2.3).
+
+    Требует JWT и разрешение `items:update`.
+    """
+    return _add_item_to_inventory_core(character_id, item_data, db)
 
 
 @router.delete("/{character_id}/items/{item_id}", response_model=List[schemas.CharacterInventory])
@@ -496,6 +533,7 @@ async def _move_slot_item_to_inventory(db: Session, character_id: int, slot: mod
         minus_mods = crud.build_modifiers_dict(
             old_item, negative=True, enhancement_bonuses=enh_bonuses, gem_items=gem_items,
             current_durability=current_durability, max_durability=old_item.max_durability,
+            slot_type=slot.slot_type,
         )
         if minus_mods:
             await apply_modifiers_in_attributes_service(character_id, minus_mods)
@@ -698,7 +736,9 @@ async def revalidate_equipment_internal(character_id: int, db: Session = Depends
 
 @router.get("/{character_id}/equipment", response_model=List[schemas.EquipmentSlot])
 def get_equipment_slots(character_id: int, db: Session = Depends(get_db)):
-    return crud.get_equipment_slots(db, character_id)
+    # FEAT-167: each slot carries `effective_damage` — the single source of the
+    # weapon's damage for the battle engine and for the profile.
+    return crud.get_equipment_slots_with_damage(db, character_id)
 
 
 # -----------------------------------------------------------------------------
@@ -710,7 +750,8 @@ async def apply_modifiers_in_attributes_service(character_id: int, modifiers: di
     """
     url = f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}/apply_modifiers"
     async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=modifiers)
+        # FEAT-167: /apply_modifiers is internal-only now — send the shared token.
+        resp = await client.post(url, json=modifiers, headers=_internal_token_headers())
         resp.raise_for_status()
 
 
@@ -724,7 +765,10 @@ def _track_cumulative_stats(character_id: int, increments: dict, set_max: dict =
         payload["set_max"] = set_max
     try:
         url = f"{settings.ATTRIBUTES_SERVICE_URL}cumulative_stats/increment"
-        resp = httpx.post(url, json=payload, timeout=5.0)
+        # FEAT-167 #17: internal-only endpoint — send the shared token.
+        resp = httpx.post(
+            url, json=payload, headers=_internal_token_headers(), timeout=5.0
+        )
         if resp.status_code != 200:
             logger.warning(f"Cumulative stats tracking failed for char {character_id}: {resp.text}")
     except Exception as e:
@@ -752,7 +796,8 @@ async def recover_in_attributes_service(character_id: int, recovery: dict):
     """
     url = f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}/recover"
     async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=recovery)
+        # FEAT-167: /recover is internal-only now — send the shared token.
+        resp = await client.post(url, json=recovery, headers=_internal_token_headers())
         resp.raise_for_status()
 
 
@@ -859,7 +904,7 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
                         db.flush()
                 # вычитаем его бонусы (отправляем отрицательные значения)
                 old_gem_items = crud.load_gem_items(db, old_socketed_gems) if old_socketed_gems else []
-                minus_mods = crud.build_modifiers_dict(old_item, negative=True, enhancement_bonuses=old_enh_bonuses, gem_items=old_gem_items, current_durability=old_current_durability, max_durability=old_item.max_durability)
+                minus_mods = crud.build_modifiers_dict(old_item, negative=True, enhancement_bonuses=old_enh_bonuses, gem_items=old_gem_items, current_durability=old_current_durability, max_durability=old_item.max_durability, slot_type=slot.slot_type)
                 if minus_mods:
                     await apply_modifiers_in_attributes_service(character_id, minus_mods)
 
@@ -896,7 +941,7 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
 
         # 5) Добавляем модификаторы (положительные)
         inv_gem_items = crud.load_gem_items(db, inv_socketed_gems) if inv_socketed_gems else []
-        plus_mods = crud.build_modifiers_dict(db_item, negative=False, enhancement_bonuses=inv_enh_bonuses, gem_items=inv_gem_items, current_durability=inv_current_durability, max_durability=db_item.max_durability)
+        plus_mods = crud.build_modifiers_dict(db_item, negative=False, enhancement_bonuses=inv_enh_bonuses, gem_items=inv_gem_items, current_durability=inv_current_durability, max_durability=db_item.max_durability, slot_type=slot.slot_type)
         if plus_mods:
             await apply_modifiers_in_attributes_service(character_id, plus_mods)
 
@@ -1001,7 +1046,7 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
 
         # 3) Убираем его бонусы => negative=True
         slot_gem_items = crud.load_gem_items(db, slot_socketed_gems) if slot_socketed_gems else []
-        minus_mods = crud.build_modifiers_dict(old_item, negative=True, enhancement_bonuses=slot_enh_bonuses, gem_items=slot_gem_items, current_durability=slot_current_durability, max_durability=old_item.max_durability)
+        minus_mods = crud.build_modifiers_dict(old_item, negative=True, enhancement_bonuses=slot_enh_bonuses, gem_items=slot_gem_items, current_durability=slot_current_durability, max_durability=old_item.max_durability, slot_type=slot.slot_type)
         if minus_mods:
             await apply_modifiers_in_attributes_service(character_id, minus_mods)
 
@@ -2573,6 +2618,10 @@ async def sharpen_item(
                     delta[key] = 1
                 elif req.stat_field in crud.FLOAT_STAT_FIELDS:
                     delta[key] = 0.1
+                # FEAT-167: sharpening a weapon's damage belongs to that hand,
+                # not to the shared `damage` attribute.
+                if eq_slot is not None and eq_slot.slot_type in crud.WEAPON_SLOTS:
+                    delta.pop("damage", None)
                 if delta:
                     await apply_modifiers_in_attributes_service(character_id, delta)
         else:
@@ -2854,6 +2903,9 @@ async def insert_gem(
                 val = getattr(gem_item, field, 0) or 0
                 if val:
                     gem_only_mods[field.replace('_modifier', '')] = val
+            # FEAT-167: a rune's damage in a weapon belongs to that hand.
+            if row.slot_type in crud.WEAPON_SLOTS:
+                gem_only_mods.pop("damage", None)
             if gem_only_mods:
                 await apply_modifiers_in_attributes_service(character_id, gem_only_mods)
 
@@ -2947,6 +2999,9 @@ async def extract_gem(
                 val = getattr(gem_item, field, 0) or 0
                 if val:
                     gem_neg_mods[field.replace('_modifier', '')] = -val
+            # FEAT-167: a rune's damage in a weapon belongs to that hand.
+            if row.slot_type in crud.WEAPON_SLOTS:
+                gem_neg_mods.pop("damage", None)
             if gem_neg_mods:
                 await apply_modifiers_in_attributes_service(character_id, gem_neg_mods)
 
@@ -3344,6 +3399,7 @@ async def repair_item(
                 item_template, negative=False,
                 enhancement_bonuses=enh_bonuses, gem_items=gem_items,
                 current_durability=new_durability, max_durability=item_template.max_durability,
+                slot_type=row.slot_type,
             )
             if plus_mods:
                 await apply_modifiers_in_attributes_service(character_id, plus_mods)
@@ -3501,6 +3557,7 @@ async def update_durability_internal(
                     enhancement_bonuses=enh_bonuses, gem_items=gem_items,
                     # Pass durability that makes it NOT broken for the negative calc
                     current_durability=1, max_durability=item_template.max_durability,
+                    slot_type=slot.slot_type,
                 )
                 if minus_mods:
                     await apply_modifiers_in_attributes_service(req.character_id, minus_mods)

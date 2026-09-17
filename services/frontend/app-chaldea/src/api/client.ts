@@ -6,6 +6,15 @@ import { attachAuthInterceptors } from './axiosSetup';
  * default instance: consumers in `items.ts` rely on its error-normalization
  * semantics — see the response interceptor below).
  */
+/**
+ * The normalized error thrown by this instance: a plain `Error` carrying the
+ * readable backend message, plus the HTTP status so callers can tell a 403
+ * (no permission) from a 500 without parsing the text (FEAT-167).
+ */
+export interface ApiError extends Error {
+  status?: number;
+}
+
 const client = axios.create({
   baseURL: '/inventory',
   withCredentials: true,
@@ -29,7 +38,9 @@ client.interceptors.response.use(
       const text = Array.isArray(detail)
         ? detail.map((d) => d?.msg).filter(Boolean).join('; ')
         : detail;
-      throw new Error(text || e.response.statusText);
+      const normalized = new Error(text || e.response.statusText) as ApiError;
+      normalized.status = e.response.status;
+      throw normalized;
     }
     throw e;
   },

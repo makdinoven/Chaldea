@@ -40,7 +40,8 @@ async def _track_cumulative_stats(character_id: int, increments: dict, set_max: 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/cumulative_stats/increment"
-            resp = await client.post(url, json=payload)
+            # FEAT-167 #17: internal-only endpoint — send the shared token.
+            resp = await client.post(url, json=payload, headers=_internal_token_headers())
             if resp.status_code != 200:
                 logger.warning(f"Cumulative stats tracking failed for char {character_id}: {resp.text}")
     except Exception as e:
@@ -1338,7 +1339,11 @@ async def move_and_post(
     # 7. Списываем выносливость (вызываем эндпоинт consume_stamina в Attributes‑service)
     async with httpx.AsyncClient(timeout=5.0) as client:
         consume_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{movement.character_id}/consume_stamina"
-        consume_resp = await client.post(consume_url, json={"amount": movement_cost})
+        consume_resp = await client.post(
+            consume_url,
+            json={"amount": movement_cost},
+            headers=_internal_token_headers(),
+        )
         if consume_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Не удалось списать выносливость за переход")
 
@@ -1598,7 +1603,11 @@ async def quick_move(
     # 7. Списываем удвоенную выносливость
     async with httpx.AsyncClient(timeout=5.0) as client:
         consume_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{body.character_id}/consume_stamina"
-        consume_resp = await client.post(consume_url, json={"amount": movement_cost})
+        consume_resp = await client.post(
+            consume_url,
+            json={"amount": movement_cost},
+            headers=_internal_token_headers(),
+        )
         if consume_resp.status_code != 200:
             raise HTTPException(status_code=500, detail="Не удалось списать выносливость")
 
@@ -2178,14 +2187,18 @@ async def pickup_loot(
         )
         raise HTTPException(status_code=400, detail="Лут не принадлежит этой локации")
 
-    # 4. Добавляем предмет в инвентарь через inventory-service
-    auth_header = request.headers.get("authorization", "")
+    # 4. Добавляем предмет в инвентарь через inventory-service.
+    # FEAT-167: internal-only route + internal token (владение лутом уже
+    # проверено выше, токен игрока сюда больше не пересылается).
     async with httpx.AsyncClient(timeout=5.0) as client:
-        add_url = f"{settings.INVENTORY_SERVICE_URL}/inventory/{body.character_id}/items"
+        add_url = (
+            f"{settings.INVENTORY_SERVICE_URL}"
+            f"/inventory/internal/characters/{body.character_id}/items"
+        )
         add_resp = await client.post(
             add_url,
             json={"item_id": loot_data["item_id"], "quantity": loot_data["quantity"]},
-            headers={"Authorization": auth_header},
+            headers=_internal_token_headers(),
         )
         if add_resp.status_code != 200:
             # Компенсация: вернуть лут обратно
@@ -2732,15 +2745,18 @@ async def buy_from_npc(
     if new_balance is None:
         raise HTTPException(status_code=400, detail="Недостаточно валюты")
 
-    # 6. Add item to inventory via inventory-service
-    auth_header = request.headers.get("authorization", "")
+    # 6. Add item to inventory via inventory-service.
+    # FEAT-167: internal-only route + internal token (оплата уже списана выше).
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            add_url = f"{settings.INVENTORY_SERVICE_URL}/inventory/{body.character_id}/items"
+            add_url = (
+                f"{settings.INVENTORY_SERVICE_URL}"
+                f"/inventory/internal/characters/{body.character_id}/items"
+            )
             add_resp = await client.post(
                 add_url,
                 json={"item_id": shop_item.item_id, "quantity": body.quantity},
-                headers={"Authorization": auth_header},
+                headers=_internal_token_headers(),
             )
             if add_resp.status_code != 200:
                 # Compensate: refund currency
@@ -3029,7 +3045,6 @@ async def complete_quest(
 
     # Award items via inventory-service
     if quest.reward_items:
-        auth_header = request.headers.get("authorization", "")
         for reward_item in quest.reward_items:
             item_id = reward_item.get("item_id")
             quantity = reward_item.get("quantity", 1)
@@ -3037,11 +3052,15 @@ async def complete_quest(
                 continue
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
-                    add_url = f"{settings.INVENTORY_SERVICE_URL}/inventory/{body.character_id}/items"
+                    # FEAT-167: internal-only route + internal token
+                    add_url = (
+                        f"{settings.INVENTORY_SERVICE_URL}"
+                        f"/inventory/internal/characters/{body.character_id}/items"
+                    )
                     add_resp = await client.post(
                         add_url,
                         json={"item_id": item_id, "quantity": quantity},
-                        headers={"Authorization": auth_header},
+                        headers=_internal_token_headers(),
                     )
                     if add_resp.status_code != 200:
                         logger.warning(

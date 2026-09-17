@@ -1,6 +1,6 @@
 import os
 import requests
-from fastapi import HTTPException, status, Depends
+from fastapi import HTTPException, status, Depends, Header
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import List, Optional
@@ -53,6 +53,35 @@ def get_admin_user(user: UserRead = Depends(get_current_user_via_http)) -> UserR
             detail="Только администраторы и модераторы могут выполнять это действие",
         )
     return user
+
+
+# ============================================================
+# Internal service-to-service authentication (FEAT-167 §3.3)
+# ============================================================
+# Copied from character-service (`app/auth_http.py`): the caller must present
+# `X-Internal-Token` matching the INTERNAL_SERVICE_TOKEN env var. Fail-closed:
+# an unset/empty env var rejects every request with 503, so a missing config can
+# never silently disable auth on an internal endpoint.
+
+INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
+
+
+def verify_internal_token(
+    x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
+) -> None:
+    """Reject the request unless `X-Internal-Token` matches
+    `INTERNAL_SERVICE_TOKEN` from env. Empty env -> always reject.
+    """
+    if not INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Internal service token не настроен",
+        )
+    if not x_internal_token or x_internal_token != INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Недействительный internal token",
+        )
 
 
 def require_permission(permission: str):

@@ -105,6 +105,11 @@ def _seed_attributes(db_session, character_id=1, passive_experience=0):
 # ---------------------------------------------------------------------------
 
 
+# FEAT-167: the mutating /attributes/ endpoints require the internal token.
+# conftest sets INTERNAL_SERVICE_TOKEN to this value before auth_http is imported.
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+
+
 class TestUpdatePassiveExperience:
     """Tests for the PUT passive_experience endpoint."""
 
@@ -115,6 +120,7 @@ class TestUpdatePassiveExperience:
         resp = client.put(
             "/attributes/10/passive_experience",
             json={"amount": 3},
+            headers=INTERNAL_HEADERS,
         )
 
         assert resp.status_code == 200
@@ -128,6 +134,7 @@ class TestUpdatePassiveExperience:
         resp = client.put(
             "/attributes/20/passive_experience",
             json={"amount": -2},
+            headers=INTERNAL_HEADERS,
         )
 
         assert resp.status_code == 200
@@ -141,6 +148,7 @@ class TestUpdatePassiveExperience:
         resp = client.put(
             "/attributes/30/passive_experience",
             json={"amount": -10},
+            headers=INTERNAL_HEADERS,
         )
 
         assert resp.status_code == 400
@@ -151,6 +159,7 @@ class TestUpdatePassiveExperience:
         resp = client.put(
             "/attributes/99999/passive_experience",
             json={"amount": 5},
+            headers=INTERNAL_HEADERS,
         )
 
         assert resp.status_code == 404
@@ -162,6 +171,7 @@ class TestUpdatePassiveExperience:
         resp = client.put(
             "/attributes/40/passive_experience",
             json={"amount": 0},
+            headers=INTERNAL_HEADERS,
         )
 
         assert resp.status_code == 200

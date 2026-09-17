@@ -260,7 +260,7 @@ async def test_pvp_wins_losses_set_correctly():
     with patch("main.httpx.AsyncClient") as MockClient:
         mock_client_inst = AsyncMock()
 
-        async def _capture_post(url, json=None):
+        async def _capture_post(url, json=None, **kwargs):  # **kwargs: FEAT-167 #17 headers
             if "cumulative_stats" in str(url):
                 payloads.append(json)
             return mock_response
@@ -306,7 +306,7 @@ async def test_pvp_wins_not_tracked_for_pve_battle():
     with patch("main.httpx.AsyncClient") as MockClient:
         mock_client_inst = AsyncMock()
 
-        async def _capture_post(url, json=None):
+        async def _capture_post(url, json=None, **kwargs):  # **kwargs: FEAT-167 #17 headers
             if "cumulative_stats" in str(url):
                 payloads.append(json)
             return mock_response
@@ -348,7 +348,7 @@ async def test_pve_points_level_weighted():
     with patch("main.httpx.AsyncClient") as MockClient:
         mock_client_inst = AsyncMock()
 
-        async def _capture_post(url, json=None):
+        async def _capture_post(url, json=None, **kwargs):  # **kwargs: FEAT-167 #17 headers
             if "cumulative_stats" in str(url):
                 payloads.append(json)
             return mock_response
@@ -391,7 +391,7 @@ async def test_pve_kills_counted_from_defeated_npcs():
     with patch("main.httpx.AsyncClient") as MockClient:
         mock_client_inst = AsyncMock()
 
-        async def _capture_post(url, json=None):
+        async def _capture_post(url, json=None, **kwargs):  # **kwargs: FEAT-167 #17 headers
             if "cumulative_stats" in str(url):
                 payloads.append(json)
             return mock_response
@@ -443,7 +443,7 @@ async def test_low_hp_wins_incremented():
     with patch("main.httpx.AsyncClient") as MockClient:
         mock_client_inst = AsyncMock()
 
-        async def _capture_post(url, json=None):
+        async def _capture_post(url, json=None, **kwargs):  # **kwargs: FEAT-167 #17 headers
             if "cumulative_stats" in str(url):
                 payloads.append(json)
             return mock_response
@@ -484,7 +484,7 @@ async def test_no_low_hp_wins_when_hp_above_threshold():
     with patch("main.httpx.AsyncClient") as MockClient:
         mock_client_inst = AsyncMock()
 
-        async def _capture_post(url, json=None):
+        async def _capture_post(url, json=None, **kwargs):  # **kwargs: FEAT-167 #17 headers
             if "cumulative_stats" in str(url):
                 payloads.append(json)
             return mock_response
@@ -524,7 +524,7 @@ async def test_max_damage_single_battle_sent_via_set_max():
     with patch("main.httpx.AsyncClient") as MockClient:
         mock_client_inst = AsyncMock()
 
-        async def _capture_post(url, json=None):
+        async def _capture_post(url, json=None, **kwargs):  # **kwargs: FEAT-167 #17 headers
             if "cumulative_stats" in str(url):
                 payloads.append(json)
             return mock_response
@@ -565,7 +565,7 @@ async def test_no_set_max_when_zero_damage():
     with patch("main.httpx.AsyncClient") as MockClient:
         mock_client_inst = AsyncMock()
 
-        async def _capture_post(url, json=None):
+        async def _capture_post(url, json=None, **kwargs):  # **kwargs: FEAT-167 #17 headers
             if "cumulative_stats" in str(url):
                 payloads.append(json)
             return mock_response
@@ -604,7 +604,7 @@ async def test_current_win_streak_incremented_on_win():
     with patch("main.httpx.AsyncClient") as MockClient:
         mock_client_inst = AsyncMock()
 
-        async def _capture_post(url, json=None):
+        async def _capture_post(url, json=None, **kwargs):  # **kwargs: FEAT-167 #17 headers
             if "cumulative_stats" in str(url):
                 payloads.append(json)
             return mock_response
@@ -700,7 +700,7 @@ async def test_draw_no_winner_team():
     with patch("main.httpx.AsyncClient") as MockClient:
         mock_client_inst = AsyncMock()
 
-        async def _capture_post(url, json=None):
+        async def _capture_post(url, json=None, **kwargs):  # **kwargs: FEAT-167 #17 headers
             if "cumulative_stats" in str(url):
                 payloads.append(json)
             return mock_response
@@ -749,7 +749,7 @@ async def test_zero_damage_entries_filtered_out():
     with patch("main.httpx.AsyncClient") as MockClient:
         mock_client_inst = AsyncMock()
 
-        async def _capture_post(url, json=None):
+        async def _capture_post(url, json=None, **kwargs):  # **kwargs: FEAT-167 #17 headers
             if "cumulative_stats" in str(url):
                 payloads.append(json)
             return mock_response
@@ -839,3 +839,87 @@ def test_redis_state_structure_has_accumulator_fields():
     assert "total_damage_received" in participant_state
     assert participant_state["total_damage_dealt"] == 0
     assert participant_state["total_damage_received"] == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FEAT-167 #17 — the outgoing header
+# ──────────────────────────────────────────────────────────────────────────────
+# `POST /attributes/cumulative_stats/increment` is internal-only now. Every test
+# above mocks the HTTP client, so none of them would notice a missing
+# `X-Internal-Token` — and this call is fire-and-forget (errors are logged and
+# swallowed), so in production the loss would be silent: no PvP wins, no PvE
+# kills, no win streaks and no perk unlocks after a battle.
+
+@pytest.mark.asyncio
+async def test_cumulative_stats_post_sends_the_internal_token(monkeypatch):
+    monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "test-internal-token")
+
+    battle_state = _make_battle_state({
+        "1": _make_participant(character_id=10, team=1, hp=50, total_damage_dealt=100),
+    })
+    db_session = _mock_db_is_npc(npc_char_ids=set())
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = "ok"
+
+    with patch("main.httpx.AsyncClient") as MockClient:
+        mock_client_inst = AsyncMock()
+        mock_client_inst.post = AsyncMock(return_value=mock_response)
+        mock_client_inst.__aenter__ = AsyncMock(return_value=mock_client_inst)
+        mock_client_inst.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = mock_client_inst
+
+        await _track_cumulative_stats(
+            battle_state=battle_state,
+            winner_team=1,
+            battle_type="pvp_training",
+            turn_number=5,
+            db_session=db_session,
+        )
+
+        stats_calls = [
+            call for call in mock_client_inst.post.call_args_list
+            if "cumulative_stats" in str(call.args[0] if call.args
+                                         else call.kwargs.get("url", ""))
+        ]
+        assert stats_calls, "no cumulative-stats POST was made at all"
+        for call in stats_calls:
+            headers = call.kwargs.get("headers") or {}
+            assert headers.get("X-Internal-Token") == "test-internal-token", (
+                "battle-service dropped X-Internal-Token — every battle would "
+                "silently stop recording cumulative stats and perk unlocks"
+            )
+
+
+@pytest.mark.asyncio
+async def test_cumulative_stats_token_is_read_at_call_time(monkeypatch):
+    """The helper must not freeze the secret at import time."""
+    battle_state = _make_battle_state({
+        "1": _make_participant(character_id=10, team=1, hp=50, total_damage_dealt=100),
+    })
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = "ok"
+
+    seen = []
+    for value in ("first", "second"):
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", value)
+        db_session = _mock_db_is_npc(npc_char_ids=set())
+        with patch("main.httpx.AsyncClient") as MockClient:
+            inst = AsyncMock()
+            inst.post = AsyncMock(return_value=mock_response)
+            inst.__aenter__ = AsyncMock(return_value=inst)
+            inst.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = inst
+            await _track_cumulative_stats(
+                battle_state=battle_state, winner_team=1,
+                battle_type="pvp_training", turn_number=1, db_session=db_session,
+            )
+            for call in inst.post.call_args_list:
+                url = str(call.args[0] if call.args else call.kwargs.get("url", ""))
+                if "cumulative_stats" in url:
+                    seen.append((call.kwargs.get("headers") or {}).get("X-Internal-Token"))
+                    break
+
+    assert seen == ["first", "second"]

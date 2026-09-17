@@ -12,7 +12,13 @@ from config import settings
 import httpx
 import logging
 from rabbitmq_consumer import start_consumer
-from auth_http import get_admin_user, get_current_user_via_http, require_permission, UserRead
+from auth_http import (
+    get_admin_user,
+    get_current_user_via_http,
+    require_permission,
+    verify_internal_token,
+    UserRead,
+)
 from sqlalchemy import text
 from datetime import datetime
 import regen
@@ -75,7 +81,17 @@ def get_db():
 # 1. Создание атрибутов
 # -----------------------------
 @router.post("/", response_model=schemas.CharacterAttributesResponse)
-def create_character_attributes(attributes: schemas.CharacterAttributesCreate, db: Session = Depends(get_db)):
+def create_character_attributes(
+    attributes: schemas.CharacterAttributesCreate,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Создание строки атрибутов для персонажа.
+
+    Только для межсервисных вызовов (FEAT-167 #17): требуется заголовок
+    `X-Internal-Token`. Единственные вызывающие — character-service
+    (создание персонажа и спавн моба).
+    """
     try:
         logger.info(f"Создание атрибутов для персонажа ID {attributes.character_id}")
         db_attributes = crud.create_character_attributes(db, attributes)
@@ -721,9 +737,17 @@ from constants import (
 )
 
 @router.post("/{character_id}/apply_modifiers")
-def apply_modifiers(character_id: int, modifiers: dict, db: Session = Depends(get_db)):
+def apply_modifiers(
+    character_id: int,
+    modifiers: dict,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
     """
     Применяем модификаторы к CharacterAttributes.
+
+    Только для межсервисных вызовов (FEAT-167): требуется заголовок
+    `X-Internal-Token`.
     'health', 'mana', 'energy', 'stamina' => пересчитываем max_/current_.
     Остальные поля (strength, damage, res_fire и т.д.) просто складываем.
     """
@@ -884,9 +908,17 @@ def apply_modifiers(character_id: int, modifiers: dict, db: Session = Depends(ge
 # 6. Восстановление (recover)
 # -----------------------------
 @router.post("/{character_id}/recover")
-def recover_resources(character_id: int, recovery: dict, db: Session = Depends(get_db)):
+def recover_resources(
+    character_id: int,
+    recovery: dict,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
     """
     Восстанавливаем здоровье, ману, энергию, выносливость (current_*) но не превышаем max_*.
+
+    Только для межсервисных вызовов (FEAT-167): требуется заголовок
+    `X-Internal-Token`.
     """
     with db.begin():
         attr = db.query(models.CharacterAttributes).filter(
@@ -926,12 +958,16 @@ def recover_resources(character_id: int, recovery: dict, db: Session = Depends(g
 def update_active_experience(
     character_id: int,
     request: schemas.UpdateActiveExperienceRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
     Увеличивает или уменьшает active_experience на указанное значение.
     request.amount > 0 => добавляем
     request.amount < 0 => снимаем
+
+    Только для межсервисных вызовов (FEAT-167): требуется заголовок
+    `X-Internal-Token`.
     """
     attr = db.query(models.CharacterAttributes).filter(
         models.CharacterAttributes.character_id == character_id
@@ -960,12 +996,16 @@ def update_active_experience(
 def update_passive_experience(
     character_id: int,
     request: schemas.UpdatePassiveExperienceRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
     Увеличивает или уменьшает passive_experience на указанное значение.
     request.amount > 0 => добавляем
     request.amount < 0 => снимаем
+
+    Только для межсервисных вызовов (FEAT-167): требуется заголовок
+    `X-Internal-Token`.
     """
     attr = db.query(models.CharacterAttributes).filter(
         models.CharacterAttributes.character_id == character_id
@@ -990,9 +1030,17 @@ def update_passive_experience(
 
 
 @router.post("/{character_id}/consume_stamina")
-def consume_stamina(character_id: int, payload: dict, db: Session = Depends(get_db)):
+def consume_stamina(
+    character_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
     """
     Списывает указанное количество выносливости (stamina) у персонажа.
+
+    Только для межсервисных вызовов (FEAT-167): требуется заголовок
+    `X-Internal-Token`.
 
     Запрос:
       {
@@ -1046,6 +1094,7 @@ def refund_stamina(
     character_id: int,
     payload: schemas.RefundStaminaRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
     Возвращает (рефандит) выносливость персонажу. Парный к consume_stamina эндпоинт (FEAT-128).
@@ -1062,8 +1111,8 @@ def refund_stamina(
       - Избыточный рефанд молча обрезается (не ошибка).
       - amount<=0 отвергается через Pydantic (422).
 
-    Аутентификация: как у consume_stamina — без HTTP-auth, только через
-    внутреннюю docker-сеть (Nginx не проксирует /attributes/ наружу).
+    Аутентификация: как у consume_stamina — только для межсервисных вызовов
+    (FEAT-167), требуется заголовок `X-Internal-Token`.
     """
     attr, refunded = crud.refund_stamina(db, character_id, payload.amount)
     if attr is None:
@@ -1297,11 +1346,16 @@ def get_cumulative_stats(character_id: int, db: Session = Depends(get_db)):
 def increment_cumulative_stats(
     payload: schemas.CumulativeStatsIncrement,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
     Atomically increments cumulative stat counters for a character.
     Creates the row lazily if it doesn't exist.
-    Internal endpoint (service-to-service), no auth required.
+
+    Только для межсервисных вызовов (FEAT-167 #17): требуется заголовок
+    `X-Internal-Token`. Эндпоинт не только крутит счётчики (`pve_kills`,
+    `pvp_wins`, суммарный урон, серии побед), но и открывает перки —
+    без авторизации это бесплатная прокачка снаружи.
     """
     from crud import CUMULATIVE_STATS_COLUMNS
 

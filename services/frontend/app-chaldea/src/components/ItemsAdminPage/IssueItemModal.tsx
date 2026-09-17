@@ -3,6 +3,7 @@ import { fetchCharacters } from "../../api/characters";
 import { fetchItems, issueItem } from "../../api/items";
 import useDebounce from "../../hooks/useDebounce";
 import toast from "react-hot-toast";
+import { itemGrantErrorMessage } from "../../api/errors";
 import { motion, AnimatePresence } from "motion/react";
 import type { ItemData } from "./ItemsAdminPage";
 
@@ -29,6 +30,9 @@ const IssueItemModal = ({ open, onClose, initialItem }: IssueItemModalProps) => 
   const [selectedItem, setSelectedItem] = useState<ItemData | null>(initialItem || null);
   const [selectedChar, setSelectedChar] = useState<Character | null>(null);
   const [qty, setQty] = useState(1);
+  const [issuing, setIssuing] = useState(false);
+  /** Inline copy of the last failure — the toast alone can be missed. */
+  const [issueError, setIssueError] = useState<string | null>(null);
 
   const debItem = useDebounce(itemQ);
   const debChar = useDebounce(charQ);
@@ -56,13 +60,20 @@ const IssueItemModal = ({ open, onClose, initialItem }: IssueItemModalProps) => 
 
   const give = async () => {
     if (!selectedChar || !selectedItem) return;
+    setIssuing(true);
+    setIssueError(null);
     try {
       await issueItem(selectedChar.id, selectedItem.id, qty);
       toast.success(`Предмет «${selectedItem.name}» выдан персонажу «${selectedChar.name}»`);
       onClose();
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Ошибка при выдаче предмета";
+      // FEAT-167: the grant route is now behind `items:update`, so 401/403 are
+      // expected outcomes and must be explained in Russian, never swallowed.
+      const msg = itemGrantErrorMessage(e);
+      setIssueError(msg);
       toast.error(msg);
+    } finally {
+      setIssuing(false);
     }
   };
 
@@ -75,7 +86,7 @@ const IssueItemModal = ({ open, onClose, initialItem }: IssueItemModalProps) => 
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
             transition={{ duration: 0.2, ease: "easeOut" }}
-            className="modal-content gold-outline gold-outline-thick w-[480px] max-h-[85vh] flex flex-col gap-4 overflow-auto gold-scrollbar"
+            className="modal-content gold-outline gold-outline-thick w-full max-w-[480px] mx-4 !p-5 sm:!p-8 max-h-[85dvh] flex flex-col gap-4 overflow-auto gold-scrollbar"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="gold-text text-2xl font-medium uppercase tracking-[0.06em]">
@@ -160,14 +171,24 @@ const IssueItemModal = ({ open, onClose, initialItem }: IssueItemModalProps) => 
               />
             </label>
 
+            {/* ── Error ── */}
+            {issueError && (
+              <p
+                role="alert"
+                className="text-site-red text-sm leading-snug break-words rounded-card border border-site-red/30 bg-site-red/10 px-3 py-2"
+              >
+                {issueError}
+              </p>
+            )}
+
             {/* ── Buttons ── */}
-            <div className="flex justify-end gap-4 pt-2">
+            <div className="flex flex-col sm:flex-row sm:justify-end gap-3 sm:gap-4 pt-2">
               <button
                 className="btn-blue !text-base !px-6 !py-2"
                 onClick={give}
-                disabled={!selectedChar || !selectedItem}
+                disabled={!selectedChar || !selectedItem || issuing}
               >
-                Выдать
+                {issuing ? "Выдаём…" : "Выдать"}
               </button>
               <button
                 className="btn-line !w-auto !px-6"

@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import type { RootState, AppDispatch } from '../store';
 import * as api from '../../api/adminCharacters';
+import { itemGrantErrorMessage } from '../../api/errors';
 import type {
   AdminCharacterListItem,
   AdminCharacterUpdate,
@@ -259,9 +260,12 @@ export const addAdminInventoryItem = createAsyncThunk<
       await api.addInventoryItem(characterId, itemId, quantity);
       toast.success('Предмет добавлен');
       thunkAPI.dispatch(fetchAdminInventory(characterId));
-    } catch {
-      toast.error('Не удалось добавить предмет');
-      return thunkAPI.rejectWithValue('Не удалось добавить предмет');
+    } catch (error: unknown) {
+      // FEAT-167: the grant route now requires `items:update`, so a moderator
+      // without that permission gets a 403 — say so instead of «не удалось».
+      const message = itemGrantErrorMessage(error, 'Не удалось добавить предмет');
+      toast.error(message);
+      return thunkAPI.rejectWithValue(message);
     }
   },
 );
@@ -544,6 +548,15 @@ const adminCharactersSlice = createSlice({
       .addCase(fetchAdminInventory.rejected, (state, action) => {
         state.detailLoading = false;
         state.detailError = action.payload ?? 'Не удалось загрузить инвентарь';
+      })
+
+      // FEAT-167: the grant can now fail with 401/403 — keep the reason in the
+      // state so the inventory tab renders it inline, not only as a toast.
+      .addCase(addAdminInventoryItem.pending, (state) => {
+        state.detailError = null;
+      })
+      .addCase(addAdminInventoryItem.rejected, (state, action) => {
+        state.detailError = action.payload ?? 'Не удалось добавить предмет';
       })
 
       .addCase(fetchAdminEquipment.pending, (state) => {

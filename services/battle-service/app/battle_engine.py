@@ -53,7 +53,13 @@ async def fetch_weapons(character_id: int) -> Dict[str, Dict | None]:
                     f"{INVENTORY_SERVICE_URL}/inventory/items/{slot['item_id']}"
                 )
                 item_resp.raise_for_status()
-                result[slot_type] = item_resp.json()
+                # effective_damage — единственный источник урона оружия (FEAT-167):
+                # шаблонный damage_modifier + заточка + камни этого оружия,
+                # 0.0 у сломанного предмета. Считает inventory-service.
+                result[slot_type] = {
+                    **item_resp.json(),
+                    "effective_damage": float(slot.get("effective_damage") or 0.0),
+                }
 
     return result
 
@@ -69,57 +75,6 @@ async def fetch_main_weapon(character_id: int) -> Dict | None:
 CLASS_MAIN_ATTRIBUTE = {1: "strength", 2: "agility", 3: "intelligence"}
 
 # ---------- основной расчёт ------------------------------------------------
-async def compute_single_damage_entry(
-    damage_entry: Dict,                # один элемент из SkillRank.damage_entries
-    attacker_attr: Dict,               # ответа attributes-service
-    weapon_item: Dict | None,          # JSON main_weapon или None
-    percent_buffs: Dict[str, float],   # {'all':10, 'fire':5, ...}
-    defender_resist: Dict,             # attributes-service цели
-) -> Tuple[float, Dict]:
-    """
-    Возвращает кортеж:
-      (фактический итоговый урон, log-словарь для battle-log)
-    """
-    # -------- 1. базовый урон игрока (damage атрибут + weapon) -------------
-    base_attack_value: float = attacker_attr["damage"]
-    if weapon_item and weapon_item["damage_modifier"]:
-        base_attack_value += weapon_item["damage_modifier"]
-
-    # -------- 2. определяем финальный damage_type -------------------------
-    damage_type: str = damage_entry["damage_type"]
-    if damage_type == "all":
-        damage_type = (
-            weapon_item["primary_damage_type"]
-            if weapon_item
-            else "physical"
-        )
-
-    # -------- 3. «сырое» значение -----------------------------------------
-    raw_damage: float = base_attack_value + damage_entry["amount"]
-
-    # -------- 4. применяем баффы % на общий и конкретный тип --------------
-    buff_percent = percent_buffs.get("all", 0.0) + percent_buffs.get(
-        damage_type, 0.0
-    )
-    raw_damage *= 1 + buff_percent / 100.0
-
-    # -------- 5. сопротивления цели ---------------------------------------
-    resist_field = f"res_{damage_type}"
-    resist_percent = (
-        defender_resist.get(resist_field, 0.0)
-        + defender_resist.get("res_effects", 0.0)
-    )
-    final_damage = raw_damage * (1 - resist_percent / 100.0)
-
-    # -------- 6. строим лог-объект ----------------------------------------
-    log_entry = {
-        "damage_type": damage_type,
-        "raw": round(raw_damage, 2),
-        "resist_percent": resist_percent,
-        "final": round(final_damage, 2),
-    }
-    return final_damage, log_entry
-
 def roll_dodge(dodge_percent: float) -> bool:
     """True — уклонился."""
     return random() < dodge_percent / 100.0
@@ -149,12 +104,16 @@ async def compute_damage_with_rolls(
     • class_id определяет основной атрибут урона (1=strength, 2=agility, 3=intelligence)
     • luck атакующего добавляет +0.1% за единицу ко всем шансовым проверкам
     """
-    # 1) базовый урон = основной атрибут класса + модификатор оружия + бонус damage
+    # 1) базовый урон = основной атрибут класса + база damage + урон оружия слота.
+    #    FEAT-167: урон оружия учитывается РОВНО ОДИН РАЗ и берётся только из
+    #    effective_damage (его считает inventory-service: шаблон + заточка + камни,
+    #    0.0 у сломанного). В attacker_attr["damage"] урона оружия больше нет,
+    #    поэтому weapon=None (навык no_weapon) даёт честный безоружный урон.
     main_attr_key = CLASS_MAIN_ATTRIBUTE.get(class_id, "strength")
     base_stat = attacker_attr.get(main_attr_key, 0)
     damage_bonus = attacker_attr.get("damage", 0)
-    weapon_mod = weapon["damage_modifier"] if weapon else 0
-    base = max(0, base_stat + damage_bonus + weapon_mod)
+    weapon_dmg = float(weapon.get("effective_damage") or 0.0) if weapon else 0.0
+    base = max(0, base_stat + damage_bonus + weapon_dmg)
     dmg_type = damage_entry["damage_type"]
     if dmg_type == "all":
         dmg_type = weapon["primary_damage_type"] if weapon else "physical"

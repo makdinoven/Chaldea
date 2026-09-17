@@ -43,4 +43,45 @@ export const apiErrorMessage = (error: unknown, fallback: string): string => {
   return fallback;
 };
 
+/**
+ * HTTP status of a failure, whether it arrived as a raw `AxiosError` or as the
+ * normalized `ApiError` thrown by the inventory axios instance (`api/client`).
+ */
+const errorStatus = (error: unknown): number | undefined => {
+  if (axios.isAxiosError(error)) return error.response?.status;
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === 'number' ? status : undefined;
+};
+
+/**
+ * FEAT-167 — `POST /inventory/{id}/items` is now behind RBAC
+ * (`require_permission("items:update")`), so an admin screen can legitimately
+ * get a 401 or a 403. Both admin item-grant flows show this message, so the
+ * reason is never swallowed: a moderator without `items:update` must see *why*
+ * the grant failed, not a generic «не удалось».
+ */
+export const itemGrantErrorMessage = (
+  error: unknown,
+  fallback = 'Не удалось выдать предмет. Попробуйте позже.',
+): string => {
+  const status = errorStatus(error);
+  if (status === 403) {
+    return 'Не удалось выдать предмет: недостаточно прав (требуется разрешение items:update)';
+  }
+  if (status === 401) {
+    return 'Не удалось выдать предмет: сессия истекла — войдите заново';
+  }
+  // `api/client` already unwrapped the backend `detail` (Russian across all
+  // services) into the message — surface it instead of a generic fallback.
+  if (
+    status !== undefined &&
+    !axios.isAxiosError(error) &&
+    error instanceof Error &&
+    error.message.trim()
+  ) {
+    return `Ошибка выдачи предмета: ${error.message}`;
+  }
+  return apiErrorMessage(error, fallback);
+};
+
 export default apiErrorMessage;

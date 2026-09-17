@@ -85,6 +85,12 @@ export interface EquipmentSlotData {
   /* Optional: synthetic empty-slot placeholders (EquipmentPanel, AvatarEquipmentGrid) omit these. */
   socketed_gems?: string | null;
   current_durability?: number | null;
+  /**
+   * FEAT-167: effective damage of the weapon in this slot as computed by
+   * inventory-service (template modifier + sharpening + gems, 0 when broken).
+   * Optional: 0.0 for non-weapon slots and absent on synthetic placeholders.
+   */
+  effective_damage?: number;
   item: ItemData | null;
 }
 

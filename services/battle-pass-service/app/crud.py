@@ -1,5 +1,6 @@
 import math
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
@@ -19,6 +20,16 @@ logger = logging.getLogger(__name__)
 
 # Stub mission types that always return 0 progress
 STUB_MISSION_TYPES = {"quest_complete", "dungeon_run", "resource_gather"}
+
+
+def _internal_token_headers() -> dict:
+    """Headers for outgoing calls into another service's /internal/ routes
+    (FEAT-167 §3.2.5).
+
+    The token is read from env at call time (not import time), matching the
+    helpers in inventory-service and battle-service.
+    """
+    return {"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")}
 
 
 # ---------------------------------------------------------------------------
@@ -530,11 +541,21 @@ async def _deliver_gold_xp(character_id: int, xp: int = 0, gold: int = 0):
 
 
 async def _deliver_item(character_id: int, item_id: int, quantity: int = 1):
-    """POST to inventory-service /inventory/{char_id}/items."""
-    url = f"{settings.INVENTORY_SERVICE_URL}/inventory/{character_id}/items"
+    """POST to inventory-service /inventory/internal/characters/{char_id}/items.
+
+    Internal-only route (FEAT-167): requires the `X-Internal-Token` header.
+    """
+    url = (
+        f"{settings.INVENTORY_SERVICE_URL}"
+        f"/inventory/internal/characters/{character_id}/items"
+    )
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json={"item_id": item_id, "quantity": quantity})
+            resp = await client.post(
+                url,
+                json={"item_id": item_id, "quantity": quantity},
+                headers=_internal_token_headers(),
+            )
             resp.raise_for_status()
     except Exception as e:
         logger.error(f"Failed to deliver item {item_id} to character {character_id}: {e}")

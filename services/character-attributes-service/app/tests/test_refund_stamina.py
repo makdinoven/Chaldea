@@ -110,12 +110,20 @@ def _seed_attributes(db_session, character_id, current_stamina, max_stamina):
 # ---------------------------------------------------------------------------
 
 
+
+# FEAT-167: the mutating /attributes/ endpoints require the internal token.
+# conftest sets INTERNAL_SERVICE_TOKEN to this value before auth_http is imported.
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+
 class TestRefundStaminaHappyPath:
     def test_refund_basic_increment(self, client, db_session):
         """amount=3 -> current_stamina += 3, refunded=3, response matches schema."""
         _seed_attributes(db_session, character_id=10, current_stamina=20, max_stamina=50)
 
-        resp = client.post("/attributes/10/refund_stamina", json={"amount": 3})
+        resp = client.post(
+            "/attributes/10/refund_stamina", json={"amount": 3},
+            headers=INTERNAL_HEADERS,
+        )
 
         assert resp.status_code == 200
         data = resp.json()
@@ -130,7 +138,10 @@ class TestRefundStaminaHappyPath:
         """current=8, max=10, refund=5 -> capped: current=10, refunded=2."""
         _seed_attributes(db_session, character_id=20, current_stamina=8, max_stamina=10)
 
-        resp = client.post("/attributes/20/refund_stamina", json={"amount": 5})
+        resp = client.post(
+            "/attributes/20/refund_stamina", json={"amount": 5},
+            headers=INTERNAL_HEADERS,
+        )
 
         assert resp.status_code == 200
         data = resp.json()
@@ -142,7 +153,10 @@ class TestRefundStaminaHappyPath:
         """Refund when current==max -> nothing credited, refunded=0, no error."""
         _seed_attributes(db_session, character_id=21, current_stamina=50, max_stamina=50)
 
-        resp = client.post("/attributes/21/refund_stamina", json={"amount": 4})
+        resp = client.post(
+            "/attributes/21/refund_stamina", json={"amount": 4},
+            headers=INTERNAL_HEADERS,
+        )
 
         assert resp.status_code == 200
         data = resp.json()
@@ -153,7 +167,10 @@ class TestRefundStaminaHappyPath:
         """After a successful refund, the DB row reflects the new value."""
         _seed_attributes(db_session, character_id=30, current_stamina=15, max_stamina=100)
 
-        resp = client.post("/attributes/30/refund_stamina", json={"amount": 7})
+        resp = client.post(
+            "/attributes/30/refund_stamina", json={"amount": 7},
+            headers=INTERNAL_HEADERS,
+        )
         assert resp.status_code == 200
 
         # Read back from DB via a fresh query (test session)
@@ -171,27 +188,39 @@ class TestRefundStaminaValidation:
     def test_amount_zero_returns_422(self, client, db_session):
         _seed_attributes(db_session, character_id=40, current_stamina=10, max_stamina=50)
 
-        resp = client.post("/attributes/40/refund_stamina", json={"amount": 0})
+        resp = client.post(
+            "/attributes/40/refund_stamina", json={"amount": 0},
+            headers=INTERNAL_HEADERS,
+        )
 
         assert resp.status_code == 422
 
     def test_amount_negative_returns_422(self, client, db_session):
         _seed_attributes(db_session, character_id=41, current_stamina=10, max_stamina=50)
 
-        resp = client.post("/attributes/41/refund_stamina", json={"amount": -1})
+        resp = client.post(
+            "/attributes/41/refund_stamina", json={"amount": -1},
+            headers=INTERNAL_HEADERS,
+        )
 
         assert resp.status_code == 422
 
     def test_missing_amount_returns_422(self, client, db_session):
         _seed_attributes(db_session, character_id=42, current_stamina=10, max_stamina=50)
 
-        resp = client.post("/attributes/42/refund_stamina", json={})
+        resp = client.post(
+            "/attributes/42/refund_stamina", json={},
+            headers=INTERNAL_HEADERS,
+        )
 
         assert resp.status_code == 422
 
     def test_nonexistent_character_returns_404(self, client):
         """No CharacterAttributes row for cid=99999 -> 404."""
-        resp = client.post("/attributes/99999/refund_stamina", json={"amount": 5})
+        resp = client.post(
+            "/attributes/99999/refund_stamina", json={"amount": 5},
+            headers=INTERNAL_HEADERS,
+        )
 
         assert resp.status_code == 404
         assert "не найдены" in resp.json()["detail"]
@@ -232,7 +261,10 @@ class TestRefundStaminaConcurrency:
 
         def _do_refund():
             try:
-                r = client.post("/attributes/50/refund_stamina", json={"amount": 3})
+                r = client.post(
+                    "/attributes/50/refund_stamina", json={"amount": 3},
+                    headers=INTERNAL_HEADERS,
+                )
                 results.append(r)
             except Exception as e:  # pragma: no cover — debugging helper
                 errors.append(e)
@@ -289,7 +321,10 @@ class TestRefundStaminaConcurrency:
         results = []
 
         def _do_refund():
-            r = client.post("/attributes/51/refund_stamina", json={"amount": 10})
+            r = client.post(
+                "/attributes/51/refund_stamina", json={"amount": 10},
+                headers=INTERNAL_HEADERS,
+            )
             results.append(r)
 
         t1 = threading.Thread(target=_do_refund)

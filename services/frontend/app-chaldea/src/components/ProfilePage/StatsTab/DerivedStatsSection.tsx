@@ -1,10 +1,16 @@
-import { CharacterAttributes } from '../../../redux/slices/profileSlice';
-import { STAT_LABELS, PERCENTAGE_STATS, CLASS_MAIN_ATTRIBUTE } from '../constants';
+import { AlertTriangle } from 'lucide-react';
+import { CharacterAttributes, EquipmentSlotData } from '../../../redux/slices/profileSlice';
+import { STAT_LABELS, PERCENTAGE_STATS } from '../constants';
+import { computeDamageValues } from './damage';
+
+/** Shown under a damage card when that hand's weapon is broken (FEAT-167). */
+const BROKEN_WEAPON_NOTE = 'Оружие сломано';
 
 interface DerivedStatsSectionProps {
   attributes: CharacterAttributes;
   classId: number | null;
-  mainWeaponDamageModifier: number;
+  /** Equipment slots — `effective_damage` per weapon slot (FEAT-167). */
+  equipment: EquipmentSlotData[];
 }
 
 // FEAT-149: «В бою» — 2-column stat cards for the core combat values.
@@ -12,7 +18,9 @@ interface DerivedStatsSectionProps {
 // «Инициатива» is kept — it is a real FEAT-143 computed value already shown here).
 // Short labels fit the narrow panel; full names live in the `title` tooltip.
 const COMBAT_CARD_LABELS: Record<string, string> = {
-  damage: 'Урон',
+  damage_main: 'Осн. урон',
+  damage_additional: 'Доп. урон',
+  damage_unarmed: 'Без оружия',
   initiative: 'Инициатива',
   dodge: 'Уклонение',
   critical_hit_chance: 'Крит. шанс',
@@ -43,20 +51,13 @@ const formatStatValue = (value: number | string, isPercent: boolean): string => 
   return isPercent ? `${text}%` : text;
 };
 
-const DerivedStatsSection = ({ attributes, classId, mainWeaponDamageModifier }: DerivedStatsSectionProps) => {
-  // Damage shown exactly as the battle engine computes the base: class main
-  // attribute + the flat `damage` stat (where perk/item bonuses live) + weapon
-  // modifier. Previously the flat `damage` was dropped, so perk damage bonuses
-  // were invisible here while battle used them (FEAT-143).
-  const getDisplayDamage = (): number => {
-    const damageBonus = Number(attributes.damage ?? 0);
-    const mainAttrKey =
-      (classId != null && CLASS_MAIN_ATTRIBUTE[classId]) || "strength";
-    const mainAttrValue = Number(
-      attributes[mainAttrKey as keyof CharacterAttributes] ?? 0,
-    );
-    return mainAttrValue + damageBonus + mainWeaponDamageModifier;
-  };
+const DerivedStatsSection = ({ attributes, classId, equipment }: DerivedStatsSectionProps) => {
+  // FEAT-167: the three damage values, computed by the shared helper from the
+  // same two inputs the battle engine uses — the base attribute damage and the
+  // per-slot `effective_damage`. The weapon is never counted twice: while the
+  // backend has not yet started sending `effective_damage`, the helper reads it
+  // as 0 and all three cards simply show the unarmed (base) value.
+  const damage = computeDamageValues(attributes, classId, equipment);
 
   // Initiative (FEAT-143): agility ×1.0 + (strength + intelligence) ×0.75.
   // Drives turn order in battle after the initiator.
@@ -71,8 +72,39 @@ const DerivedStatsSection = ({ attributes, classId, mainWeaponDamageModifier }: 
     isPercent: boolean;
     highlighted: boolean;
     tooltip?: string;
+    fullWidth?: boolean;
+    /** Small red badge under the value (broken weapon, FEAT-167 §3.9.3). */
+    note?: string;
   }[] = [
-    { key: 'damage', value: getDisplayDamage(), isPercent: false, highlighted: true },
+    {
+      key: 'damage_main',
+      value: damage.main,
+      isPercent: false,
+      highlighted: true,
+      fullWidth: true,
+      tooltip: damage.mainBroken
+        ? 'Основной урон — оружие в основной руке сломано и не даёт бонусов, пока его не починят'
+        : 'Основной урон — база + оружие в основной руке',
+      note: damage.mainBroken ? BROKEN_WEAPON_NOTE : undefined,
+    },
+    {
+      key: 'damage_additional',
+      value: damage.additional,
+      isPercent: false,
+      highlighted: false,
+      tooltip: damage.additionalBroken
+        ? 'Дополнительный урон — оружие в дополнительной руке сломано и не даёт бонусов, пока его не починят'
+        : 'Дополнительный урон — база + оружие в дополнительной руке',
+      note: damage.additionalBroken ? BROKEN_WEAPON_NOTE : undefined,
+    },
+    {
+      key: 'damage_unarmed',
+      value: damage.unarmed,
+      isPercent: false,
+      highlighted: false,
+      tooltip:
+        'Урон без оружия — только характеристики, перки и снаряжение без оружия',
+    },
     {
       key: 'initiative',
       value: initiative,
@@ -115,26 +147,38 @@ const DerivedStatsSection = ({ attributes, classId, mainWeaponDamageModifier }: 
 
       {/* Combat stat cards — 2 columns per mock */}
       <div className="grid grid-cols-2 gap-2">
-        {combatCards.map(({ key, value, isPercent, highlighted, tooltip }) => (
+        {combatCards.map(({ key, value, isPercent, highlighted, tooltip, fullWidth, note }) => (
           <div
             key={key}
             title={tooltip ?? STAT_LABELS[key] ?? COMBAT_CARD_LABELS[key]}
-            className={`flex items-center justify-between gap-2 py-2 px-3 rounded-card border transition-colors duration-200 ease-site ${
+            className={`flex flex-col gap-1 py-2 px-3 rounded-card border transition-colors duration-200 ease-site ${
+              fullWidth ? 'col-span-2' : ''
+            } ${
               highlighted
                 ? 'bg-gold/5 border-gold/20'
                 : 'bg-white/[0.03] border-white/[0.07] hover:bg-white/5'
             }`}
           >
-            <span
-              className={`text-xs min-w-0 truncate ${highlighted ? 'text-gold/90 font-medium' : 'text-white/70'}`}
-            >
-              {COMBAT_CARD_LABELS[key] ?? STAT_LABELS[key] ?? key}
-            </span>
-            <span
-              className={`text-sm font-medium font-mono shrink-0 ${highlighted ? 'text-gold' : 'text-white'}`}
-            >
-              {formatStatValue(value, isPercent)}
-            </span>
+            <div className="flex items-center justify-between gap-2">
+              <span
+                className={`text-xs min-w-0 truncate ${highlighted ? 'text-gold/90 font-medium' : 'text-white/70'}`}
+              >
+                {COMBAT_CARD_LABELS[key] ?? STAT_LABELS[key] ?? key}
+              </span>
+              <span
+                className={`text-sm font-medium font-mono shrink-0 ${highlighted ? 'text-gold' : 'text-white'}`}
+              >
+                {formatStatValue(value, isPercent)}
+              </span>
+            </div>
+            {/* Broken weapon: without it the player cannot tell why the value
+                equals «Без оружия» (FEAT-167). Own line, so it fits at 360px. */}
+            {note && (
+              <span className="flex items-center gap-1 self-start text-[10px] leading-tight text-site-red/90">
+                <AlertTriangle size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+                {note}
+              </span>
+            )}
           </div>
         ))}
       </div>

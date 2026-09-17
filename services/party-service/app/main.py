@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import List, Optional
 
 import httpx
@@ -43,16 +44,31 @@ def _require_owned(db: Session, character_id: int, current_user: UserRead) -> di
     return info
 
 
+def _internal_token_headers() -> dict:
+    """Headers for outgoing internal service-to-service calls (FEAT-167 §3.2.5).
+
+    The token is read from env at call time (not import time) so tests can set
+    it without reloading the module.
+    """
+    return {"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")}
+
+
 def _charge_active_xp(character_id: int, amount: int) -> None:
     """Deduct active experience for creating a squad (no-op while cost is 0)."""
     if amount <= 0:
         return
     try:
-        httpx.put(
+        resp = httpx.put(
             f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}/active_experience",
             json={"amount": -amount},
+            headers=_internal_token_headers(),
             timeout=5.0,
         )
+        if resp.status_code != 200:
+            logger.warning(
+                f"Списание активного опыта у {character_id} вернуло "
+                f"{resp.status_code}: {resp.text[:200]}"
+            )
     except Exception as e:
         logger.warning(f"Не удалось списать активный опыт у {character_id}: {e}")
 
@@ -62,11 +78,17 @@ def _award_passive_xp(character_id: int, amount: int) -> None:
     if amount == 0:
         return
     try:
-        httpx.put(
+        resp = httpx.put(
             f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}/passive_experience",
             json={"amount": amount},
+            headers=_internal_token_headers(),
             timeout=5.0,
         )
+        if resp.status_code != 200:
+            logger.warning(
+                f"Начисление пассивного опыта {character_id} вернуло "
+                f"{resp.status_code}: {resp.text[:200]}"
+            )
     except Exception as e:
         logger.warning(f"Не удалось начислить пассивный опыт {character_id}: {e}")
 

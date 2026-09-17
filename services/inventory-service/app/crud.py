@@ -24,6 +24,10 @@ NPC_EQUIPMENT_SLOTS = [
     'main_weapon', 'additional_weapons',
 ]
 
+# FEAT-167: weapon damage is NOT folded into character_attributes.damage.
+# It is accounted per hand (see compute_item_damage / effective_damage).
+WEAPON_SLOTS = ('main_weapon', 'additional_weapons')
+
 
 RARITY_XP_MAP = {
     "common": 10,
@@ -358,7 +362,7 @@ def admin_equip_npc_item(db: Session, character_id: int, slot_type: str, item_id
     if slot.item_id:
         old_item = db.query(models.Items).filter(models.Items.id == slot.item_id).first()
         if old_item:
-            old_mods = build_modifiers_dict(old_item, negative=True)
+            old_mods = build_modifiers_dict(old_item, negative=True, slot_type=slot_type)
 
     # 7) Обновляем слот
     slot.item_id = db_item.id
@@ -370,7 +374,7 @@ def admin_equip_npc_item(db: Session, character_id: int, slot_type: str, item_id
     db.flush()
 
     # 8) Формируем положительные модификаторы для нового предмета
-    new_mods = build_modifiers_dict(db_item, negative=False)
+    new_mods = build_modifiers_dict(db_item, negative=False, slot_type=slot_type)
 
     return slot, old_mods, new_mods
 
@@ -405,7 +409,7 @@ def admin_unequip_npc_item(db: Session, character_id: int, slot_type: str):
     old_item = db.query(models.Items).filter(models.Items.id == slot.item_id).first()
     minus_mods = {}
     if old_item:
-        minus_mods = build_modifiers_dict(old_item, negative=True)
+        minus_mods = build_modifiers_dict(old_item, negative=True, slot_type=slot_type)
 
     # 5) Очищаем слот
     slot.item_id = None
@@ -424,6 +428,41 @@ def get_inventory_items(db: Session, character_id: int):
 
 def get_equipment_slots(db: Session, character_id: int):
     return db.query(models.EquipmentSlot).filter(models.EquipmentSlot.character_id == character_id).all()
+
+
+EQUIPMENT_SLOT_FIELDS = (
+    'id', 'character_id', 'slot_type', 'item_id', 'is_enabled',
+    'enhancement_points_spent', 'enhancement_bonuses', 'socketed_gems',
+    'current_durability',
+)
+
+
+def get_equipment_slots_with_damage(db: Session, character_id: int) -> list:
+    """Equipment slots as plain dicts enriched with `effective_damage` (FEAT-167 §3.2.1).
+
+    `effective_damage` is 0.0 for an empty slot, a non-weapon slot and a broken
+    weapon; for a weapon it is `compute_item_damage` over the slot's own
+    sharpening / gems / durability.
+    """
+    slots = get_equipment_slots(db, character_id)
+    result = []
+    for slot in slots:
+        data = {field: getattr(slot, field) for field in EQUIPMENT_SLOT_FIELDS}
+        data['item'] = slot.item
+        effective_damage = 0.0
+        if slot.slot_type in WEAPON_SLOTS and slot.item_id and slot.item is not None:
+            gem_ids = get_socketed_gems(slot)
+            gem_items = load_gem_items(db, gem_ids) if gem_ids else []
+            effective_damage = compute_item_damage(
+                slot.item,
+                enhancement_bonuses=get_enhancement_bonuses(slot),
+                gem_items=gem_items,
+                current_durability=slot.current_durability,
+                max_durability=slot.item.max_durability,
+            )
+        data['effective_damage'] = effective_damage
+        result.append(data)
+    return result
 
 def is_item_compatible_with_slot(item_type: str, slot_type: str) -> bool:
     """
@@ -530,7 +569,37 @@ def return_item_to_inventory(db: Session, character_id: int, item_obj: models.It
     db.add(new_inv)
     db.flush()
 
-def build_modifiers_dict(item_obj: models.Items, negative: bool = False, enhancement_bonuses: dict = None, gem_items: list = None, current_durability: int = None, max_durability: int = 0) -> dict:
+def compute_item_damage(item_obj: models.Items, enhancement_bonuses: dict = None,
+                        gem_items: list = None, current_durability: int = None,
+                        max_durability: int = 0) -> float:
+    """Effective damage of one concrete item instance (FEAT-167 §3.1.1).
+
+    = items.damage_modifier + 1 x sharpening count on `damage_modifier`
+      + sum of socketed gems' damage_modifier
+    = 0.0 when the item is broken (max_durability > 0 and current_durability <= 0).
+
+    THE single source of the number: `build_modifiers_dict` takes its "damage"
+    value from here, and the `effective_damage` field of
+    `GET /inventory/{cid}/equipment` is computed from here too, so the attribute
+    path and the displayed/battle value can never drift apart.
+    """
+    if max_durability > 0 and current_durability is not None and current_durability <= 0:
+        return 0.0
+
+    total = float(item_obj.damage_modifier or 0)
+
+    if enhancement_bonuses:
+        # damage_modifier is a main stat: +1 per sharpening point
+        total += float(enhancement_bonuses.get('damage_modifier', 0) or 0) * 1
+
+    if gem_items:
+        for gem in gem_items:
+            total += float(getattr(gem, 'damage_modifier', 0) or 0)
+
+    return total
+
+
+def build_modifiers_dict(item_obj: models.Items, negative: bool = False, enhancement_bonuses: dict = None, gem_items: list = None, current_durability: int = None, max_durability: int = 0, slot_type: str = None) -> dict:
     """
     Формируем словарь модификаторов (ключ -> величина),
     основываясь на полях *_modifier у объекта Items.
@@ -539,6 +608,10 @@ def build_modifiers_dict(item_obj: models.Items, negative: bool = False, enhance
     gem_items: list of Items objects for gems in sockets — their modifiers are added to the total.
     current_durability: current durability of the item instance (None = full).
     max_durability: max durability from item template (0 = no durability system).
+    slot_type: the equipment slot this item sits in (None for a bag item / display).
+        For weapon slots (`main_weapon`, `additional_weapons`) the "damage" key is
+        dropped — weapon damage is accounted per hand via `compute_item_damage`
+        and must never enter `character_attributes.damage` (FEAT-167 §3.1.2).
     """
 
     # If item has durability system and is broken, return empty dict (no modifiers)
@@ -659,6 +732,22 @@ def build_modifiers_dict(item_obj: models.Items, negative: bool = False, enhance
                 if val:
                     key = field.replace('_modifier', '')
                     mods[key] = mods.get(key, 0) + val
+
+    # FEAT-167: the "damage" key is authoritative only through compute_item_damage.
+    # For weapon slots it is dropped entirely (the hand owns that number); for
+    # everything else it is re-taken from the single source, so the arithmetic of
+    # the attribute path and of `effective_damage` cannot drift.
+    if slot_type in WEAPON_SLOTS:
+        mods.pop("damage", None)
+    else:
+        item_damage = compute_item_damage(
+            item_obj, enhancement_bonuses=enhancement_bonuses, gem_items=gem_items,
+            current_durability=current_durability, max_durability=max_durability,
+        )
+        if item_damage:
+            mods["damage"] = item_damage
+        else:
+            mods.pop("damage", None)
 
     if negative:
         mods = {k: -v for k, v in mods.items()}

@@ -1,5 +1,11 @@
 """
-Tests for POST /inventory/{character_id}/items endpoint.
+Tests for the item-grant handler shared by the two grant routes (FEAT-167).
+
+The stacking / validation behaviour below is exercised through the internal
+route `POST /inventory/internal/characters/{cid}/items` (X-Internal-Token),
+which reuses the same handler body as the admin route
+`POST /inventory/{cid}/items` (JWT + `items:update`). Auth cases for both
+routes live in `test_endpoint_auth.py`.
 
 Covers:
 - Successfully adding an item to a character's inventory
@@ -11,7 +17,17 @@ Covers:
 """
 
 import pytest
+import auth_http
 from models import Items, CharacterInventory
+
+_TOKEN = "test-internal-token"
+_HEADERS = {"X-Internal-Token": _TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _internal_token(monkeypatch):
+    """The grant route is internal-only now — pin the module constant (FEAT-167)."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", _TOKEN)
 
 
 def _create_item(db_session, **overrides):
@@ -42,8 +58,9 @@ def test_add_item_to_empty_inventory(client, db_session):
     item = _create_item(db_session, name="Potion", item_type="consumable", max_stack_size=10)
 
     response = client.post(
-        "/inventory/1/items",
+        "/inventory/internal/characters/1/items",
         json={"item_id": item.id, "quantity": 3},
+        headers=_HEADERS,
     )
 
     assert response.status_code == 200
@@ -60,8 +77,9 @@ def test_add_item_quantity_one(client, db_session):
     item = _create_item(db_session, name="Unique Ring", item_type="ring", max_stack_size=1)
 
     response = client.post(
-        "/inventory/1/items",
+        "/inventory/internal/characters/1/items",
         json={"item_id": item.id, "quantity": 1},
+        headers=_HEADERS,
     )
 
     assert response.status_code == 200
@@ -76,8 +94,9 @@ def test_add_item_quantity_one(client, db_session):
 def test_add_nonexistent_item_returns_404(client, db_session):
     """Attempting to add an item that doesn't exist returns 404."""
     response = client.post(
-        "/inventory/1/items",
+        "/inventory/internal/characters/1/items",
         json={"item_id": 99999, "quantity": 1},
+        headers=_HEADERS,
     )
 
     assert response.status_code == 404
@@ -99,8 +118,9 @@ def test_stacking_fills_existing_slot(client, db_session):
     db_session.refresh(existing)
 
     response = client.post(
-        "/inventory/1/items",
+        "/inventory/internal/characters/1/items",
         json={"item_id": item.id, "quantity": 5},
+        headers=_HEADERS,
     )
 
     assert response.status_code == 200
@@ -123,8 +143,9 @@ def test_stacking_overflow_creates_new_slot(client, db_session):
     db_session.commit()
 
     response = client.post(
-        "/inventory/1/items",
+        "/inventory/internal/characters/1/items",
         json={"item_id": item.id, "quantity": 3},
+        headers=_HEADERS,
     )
 
     assert response.status_code == 200
@@ -150,8 +171,9 @@ def test_stacking_partial_fill_then_new_slot(client, db_session):
 
     # Add 8 more: 3 fill the existing slot to 10, 5 go to a new slot
     response = client.post(
-        "/inventory/1/items",
+        "/inventory/internal/characters/1/items",
         json={"item_id": item.id, "quantity": 8},
+        headers=_HEADERS,
     )
 
     assert response.status_code == 200
@@ -171,8 +193,8 @@ def test_add_item_to_different_characters(client, db_session):
     """Items added for different character_ids are kept separate."""
     item = _create_item(db_session, name="Gem", item_type="resource", max_stack_size=99)
 
-    client.post("/inventory/1/items", json={"item_id": item.id, "quantity": 2})
-    client.post("/inventory/2/items", json={"item_id": item.id, "quantity": 5})
+    client.post("/inventory/internal/characters/1/items", json={"item_id": item.id, "quantity": 2}, headers=_HEADERS)
+    client.post("/inventory/internal/characters/2/items", json={"item_id": item.id, "quantity": 5}, headers=_HEADERS)
 
     rows_c1 = db_session.query(CharacterInventory).filter_by(character_id=1, item_id=item.id).all()
     rows_c2 = db_session.query(CharacterInventory).filter_by(character_id=2, item_id=item.id).all()
@@ -187,8 +209,9 @@ def test_add_item_to_different_characters(client, db_session):
 def test_invalid_payload_returns_422(client, db_session):
     """Missing required fields in the request body returns 422."""
     response = client.post(
-        "/inventory/1/items",
+        "/inventory/internal/characters/1/items",
         json={"item_id": 1},  # missing quantity
+        headers=_HEADERS,
     )
     assert response.status_code == 422
 
@@ -198,8 +221,9 @@ def test_non_integer_character_id_returns_422(client, db_session):
     item = _create_item(db_session, name="Shield", item_type="body", max_stack_size=1)
 
     response = client.post(
-        "/inventory/abc/items",
+        "/inventory/internal/characters/abc/items",
         json={"item_id": item.id, "quantity": 1},
+        headers=_HEADERS,
     )
     assert response.status_code == 422
 
@@ -220,8 +244,9 @@ def test_stacking_fills_multiple_partial_slots(client, db_session):
 
     # Add 5 more: should fill existing slots (2+3 or 2+4+... depending on order)
     response = client.post(
-        "/inventory/1/items",
+        "/inventory/internal/characters/1/items",
         json={"item_id": item.id, "quantity": 5},
+        headers=_HEADERS,
     )
 
     assert response.status_code == 200
@@ -250,8 +275,9 @@ def test_stacking_fills_multiple_slots_and_overflows(client, db_session):
 
     # Add 7: fills 1+2=3 spaces in existing, 4 overflow into a new slot
     response = client.post(
-        "/inventory/1/items",
+        "/inventory/internal/characters/1/items",
         json={"item_id": item.id, "quantity": 7},
+        headers=_HEADERS,
     )
 
     assert response.status_code == 200
@@ -274,8 +300,9 @@ def test_stacking_fills_multiple_slots_and_overflows(client, db_session):
 def test_sql_injection_in_item_id(client, db_session):
     """SQL injection attempt in JSON body should not crash the server."""
     response = client.post(
-        "/inventory/1/items",
+        "/inventory/internal/characters/1/items",
         json={"item_id": "1; DROP TABLE items; --", "quantity": 1},
+        headers=_HEADERS,
     )
     # Should return 422 (invalid int) — must NOT return 500
     assert response.status_code == 422

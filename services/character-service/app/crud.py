@@ -27,6 +27,18 @@ logger = logging.getLogger("character-service.crud")
 CHARACTER_LIMIT_DISABLED = 0
 
 
+def _internal_token_headers() -> dict:
+    """Headers for outgoing calls into another service's internal-only routes
+    (FEAT-167 #17/#18: `POST /attributes/`, `POST /inventory/`).
+
+    Imported lazily and read at call time: `auth_http` resolves the env var into
+    a module-level constant at import time, and tests override that attribute.
+    Mirrors `locations_client._internal_headers`.
+    """
+    import auth_http
+    return {"X-Internal-Token": auth_http.INTERNAL_SERVICE_TOKEN}
+
+
 def get_character_limit() -> Optional[int]:
     """
     Действующий лимит персонажей на аккаунт или ``None``, если лимита нет.
@@ -947,7 +959,12 @@ async def send_inventory_request(character_id: int, items: list):
 
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(f"{settings.INVENTORY_SERVICE_URL}", json=inventory_data)
+            # FEAT-167 #18: POST /inventory/ is internal-only — send the token.
+            response = await client.post(
+                f"{settings.INVENTORY_SERVICE_URL}",
+                json=inventory_data,
+                headers=_internal_token_headers(),
+            )
             logger.info(f"Ответ от inventory-service: статус {response.status_code}, тело {response.text}")
             if response.status_code == 200:
                 return response.json()
@@ -998,7 +1015,12 @@ async def send_attributes_request(character_id: int, attributes: dict):
         async with httpx.AsyncClient() as client:
             logger.info(f"Отправка запроса на создание атрибутов для персонажа {character_id} с данными: {attributes}")
 
-            response = await client.post(f"{settings.ATTRIBUTES_SERVICE_URL}", json=attributes)
+            # FEAT-167 #17: POST /attributes/ is internal-only — send the token.
+            response = await client.post(
+                f"{settings.ATTRIBUTES_SERVICE_URL}",
+                json=attributes,
+                headers=_internal_token_headers(),
+            )
 
             logger.info(f"Статус-код ответа от сервиса атрибутов: {response.status_code}")
             logger.info(f"Тело ответа: {response.text}")
@@ -1577,6 +1599,8 @@ def _sync_send_attributes_request(character_id: int, attributes: dict):
         response = httpx.post(
             f"{settings.ATTRIBUTES_SERVICE_URL}",
             json=attributes,
+            # FEAT-167 #17: POST /attributes/ is internal-only — send the token.
+            headers=_internal_token_headers(),
             timeout=10.0,
         )
         if response.status_code == 200:

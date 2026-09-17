@@ -289,11 +289,13 @@ class TestComputeDamageClassAware:
 
     @pytest.mark.asyncio
     async def test_class_damage_with_weapon(self):
-        """Weapon damage modifier is added to class base stat."""
+        """The weapon's effective_damage is added to the class base stat.
+        FEAT-167: the template `damage_modifier` is NOT read any more — the
+        weapon dict deliberately does not carry it."""
         _restore_real_engine()
         attacker = _base_attacker_attrs(strength=10, agility=25, intelligence=5)
         defender = _base_defender_attrs()
-        weapon = {"damage_modifier": 15, "primary_damage_type": "physical"}
+        weapon = {"effective_damage": 15, "primary_damage_type": "physical"}
         entry = _simple_damage_entry(amount=5)
 
         with patch.object(_be_mod, "roll_dodge", return_value=False), \
@@ -303,21 +305,49 @@ class TestComputeDamageClassAware:
                 entry, attacker, weapon, {}, defender, {}, class_id=2
             )
 
-        # base = agility(25) + damage(5) + weapon(15) = 45
+        # base = agility(25) + damage(5) + weapon effective_damage(15) = 45
         # raw = 45 + amount(5) = 50
         assert log["base"] == 45
         assert final == 50.0
 
     @pytest.mark.asyncio
+    async def test_template_damage_modifier_is_ignored(self):
+        """FEAT-167 regression guard: the item template's `damage_modifier` must
+        never reach the damage sum — only `effective_damage` counts, so a weapon
+        with a template modifier but no effective damage (e.g. broken) adds 0."""
+        _restore_real_engine()
+        attacker = _base_attacker_attrs(strength=20, agility=5, intelligence=5)
+        defender = _base_defender_attrs()
+        weapon = {
+            "damage_modifier": 15,
+            "effective_damage": 0.0,
+            "primary_damage_type": "physical",
+        }
+        entry = _simple_damage_entry(amount=0)
+
+        with patch.object(_be_mod, "roll_dodge", return_value=False), \
+             patch.object(_be_mod, "roll_chance", return_value=True), \
+             patch.object(_be_mod, "roll_crit", return_value=False):
+            final, log = await _REAL_compute_damage_with_rolls(
+                entry, attacker, weapon, {}, defender, {}, class_id=1
+            )
+
+        # base = strength(20) + damage(5) + 0 = 25 — the 15 is NOT counted
+        assert log["base"] == 25
+        assert final == 25.0
+
+    @pytest.mark.asyncio
     async def test_no_weapon_is_attribute_only(self):
         """'Без оружия' (weapon=None): damage is computed from attributes only —
-        the equipped weapon's damage_modifier is excluded. main.py maps the
-        weapon_slot value "no_weapon" to None before calling this."""
+        the equipped weapon's effective damage is excluded. main.py maps the
+        weapon_slot value "no_weapon" to None before calling this.
+        FEAT-167: attacker_attr["damage"] no longer contains weapon damage, so
+        this really is the unarmed value."""
         _restore_real_engine()
         attacker = _base_attacker_attrs(strength=20, agility=5, intelligence=5)
         defender = _base_defender_attrs()
         entry = _simple_damage_entry(amount=0)
-        weapon = {"damage_modifier": 15, "primary_damage_type": "physical"}
+        weapon = {"effective_damage": 15, "primary_damage_type": "physical"}
 
         with patch.object(_be_mod, "roll_dodge", return_value=False), \
              patch.object(_be_mod, "roll_chance", return_value=True), \
@@ -334,7 +364,7 @@ class TestComputeDamageClassAware:
         assert with_weapon == 40.0
         assert no_weapon == 25.0
         assert log["base"] == 25
-        assert with_weapon - no_weapon == 15.0  # exactly the weapon modifier
+        assert with_weapon - no_weapon == 15.0  # exactly the weapon's effective damage
 
     @pytest.mark.asyncio
     async def test_class_damage_with_buffs_and_resists(self):

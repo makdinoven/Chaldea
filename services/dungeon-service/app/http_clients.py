@@ -183,7 +183,9 @@ async def consume_stamina(character_id: int, amount: int) -> bool:
     url = f"{settings.CHAR_ATTRS_SERVICE_URL}/attributes/{character_id}/consume_stamina"
     try:
         async with _client() as client:
-            resp = await client.post(url, json={"amount": amount})
+            resp = await client.post(
+                url, json={"amount": amount}, headers=_internal_token_headers()
+            )
             if resp.status_code == 400:
                 # Insufficient stamina — not a server error, return False
                 return False
@@ -220,7 +222,9 @@ async def recover_character(
     }
     try:
         async with _client() as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(
+                url, json=payload, headers=_internal_token_headers()
+            )
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:
@@ -239,17 +243,23 @@ async def recover_character(
 
 async def add_item_to_character(character_id: int, item_id: int, quantity: int) -> dict:
     """
-    POST /inventory/{character_id}/items
+    POST /inventory/internal/characters/{character_id}/items
     Body: {"item_id": N, "quantity": N}
 
     Adds the item to the character's inventory (with stack support).
+    Internal-only route (FEAT-167): requires the `X-Internal-Token` header.
     Returns the response from inventory-service.
     """
-    url = f"{settings.INVENTORY_SERVICE_URL}/inventory/{character_id}/items"
+    url = (
+        f"{settings.INVENTORY_SERVICE_URL}"
+        f"/inventory/internal/characters/{character_id}/items"
+    )
     payload = {"item_id": item_id, "quantity": quantity}
     try:
         async with _client() as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(
+                url, json=payload, headers=_internal_token_headers()
+            )
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:

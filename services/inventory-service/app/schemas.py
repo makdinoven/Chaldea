@@ -600,6 +600,9 @@ class EquipmentSlotBase(BaseModel):
     enhancement_bonuses: Optional[str] = None
     socketed_gems: Optional[str] = None
     current_durability: Optional[int] = None
+    # FEAT-167: effective damage of the item in this slot (weapon slots only;
+    # 0.0 for an empty slot, a non-weapon slot and a broken weapon).
+    effective_damage: float = 0.0
 
 class EquipmentSlotCreate(EquipmentSlotBase):
     """
