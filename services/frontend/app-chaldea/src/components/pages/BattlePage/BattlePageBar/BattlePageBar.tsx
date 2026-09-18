@@ -12,7 +12,9 @@ import toast from "react-hot-toast";
 import { BASE_URL_BATTLES, postAutobattleSpeed } from "../../../../api/api";
 import { formatServerDateTime } from "../../../../utils/serverDate";
 import { DAMAGE_TYPES } from "../../../AdminSkillsPage/skillConstants";
-import { describeEffect, type EffectLike } from "../battleEffects";
+import { describeEffect, pluralizeTurn, type EffectLike } from "../battleEffects";
+import { EQUIPMENT_SLOT_LABELS } from "../../../ProfilePage/constants";
+import type { WeaponCoating } from "../../../../utils/itemEffects";
 import SkillPicker, {
   type BattleSkill,
   type BattleItem,
@@ -36,6 +38,8 @@ interface RuntimeParticipant {
   energy: number;
   fast_slots: unknown;
   team: number;
+  /** FEAT-168 — absent for battles started before the feature shipped */
+  weapon_coating?: WeaponCoating | null;
 }
 
 interface RuntimeState {
@@ -122,6 +126,19 @@ interface BattleEvent {
   energy?: number;
   mana?: number;
   stamina?: number;
+  // FEAT-168 — item effects, weapon coating and cleanse. All optional: an
+  // older log (or a backend that has not shipped yet) simply omits them.
+  reason?: string;
+  slot?: string;
+  action?: string;
+  source_kind?: string;
+  turns?: number;
+  bonus_damage?: number;
+  turns_left?: number;
+  active_coating?: string | null;
+  quantity_left?: number;
+  item_id?: number;
+  removed?: Array<EffectLike | string>;
   [key: string]: unknown;
 }
 
@@ -212,6 +229,29 @@ const DAMAGE_TYPE_ICONS: Record<string, string> = {
   sainting: "☀️",  // ☀️ святой
   damning: "\u{1F480}",      // 💀 проклятие
 };
+
+/**
+ * Russian names for events the shared `BATTLE_EVENTS_TRANSLATE` map does not
+ * carry. Every one of them has its own branch below; this map is the safety net
+ * so that a shape we did not anticipate still reads as Russian and never leaks
+ * a raw English event name into the player's log (ISSUES #2).
+ */
+const EXTRA_EVENT_LABELS: Record<string, string> = {
+  item_rejected: "не смог применить предмет",
+  item_broken: "сломал снаряжение",
+  weapon_coating_applied: "наносит яд на оружие",
+  weapon_coating_expired: "яд на оружии выдохся",
+  effects_removed: "снимает эффекты",
+  effect_tick: "получает урон от эффекта",
+  control_skip: "пропускает ход",
+  control_block: "навык заблокирован",
+  skill_use: "применяет навык",
+  participant_defeated: "повержен",
+  participant_timed_out: "не успел сделать ход",
+};
+
+const itemName = (event: { item_name?: string }): string =>
+  event.item_name?.trim() || "предмет";
 
 // --- Kind labels for skill_use events ---
 const SKILL_KIND_LABELS: Record<string, string> = {
@@ -494,7 +534,9 @@ const BattlePageBar = ({
       return (
         <span className="flex flex-wrap items-center gap-x-1.5">
           {getName(event.who)}
-          <span className="text-white/60">получает:</span>
+          <span className="text-white/60">
+            {event.kind === "item" ? "получает от предмета:" : "получает:"}
+          </span>
           {effects.map((effect, i) => {
             const d = describeEffect(effect);
             return (
@@ -517,14 +559,124 @@ const BattlePageBar = ({
       if (rec.health) parts.push(`+${rec.health} здоровья`);
       if (rec.mana) parts.push(`+${rec.mana} маны`);
       if (rec.energy) parts.push(`+${rec.energy} энергии`);
+      // Stamina was applied by the engine but never shown (ISSUES #6).
+      if (rec.stamina) parts.push(`+${rec.stamina} выносливости`);
+      // The detailed outcome (effects, cleanse, damage) arrives as its own
+      // events, so this line stays about the item itself: recovery and stock.
+      const left = event.quantity_left;
       return (
         <span className="flex flex-wrap items-center gap-1">
           {getName(event.who)}
           <span className="text-white/60">использует</span>
-          <span className="text-site-blue">{event.item_name}</span>
+          <span className="text-site-blue">{itemName(event)}</span>
           {parts.length > 0 && (
             <span className="text-green-400/80">({parts.join(", ")})</span>
           )}
+          {typeof left === "number" && (
+            <span className="text-white/35 text-[11px]">
+              {left > 0 ? `осталось ${left}` : "последний"}
+            </span>
+          )}
+        </span>
+      );
+    }
+
+    // FEAT-168 — the item could not be used, but the turn still resolved. The
+    // only reason today is a coating already on the weapon.
+    if (event.event === "item_rejected") {
+      const active =
+        typeof event.active_coating === "string" && event.active_coating.trim()
+          ? `«${event.active_coating}»`
+          : "яд";
+      const left = Number(event.turns_left ?? 0);
+      const why =
+        event.reason === "coating_active"
+          ? `на оружии ещё действует ${active}${left > 0 ? ` (${pluralizeTurn(left)})` : ""}`
+          : "предмет сейчас нельзя применить";
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.who)}
+          <span className="text-white/60">не может применить</span>
+          <span className="text-site-blue">{itemName(event)}</span>
+          <span className="text-site-red">— {why}</span>
+        </span>
+      );
+    }
+
+    if (event.event === "weapon_coating_applied") {
+      const turns = Number(event.turns ?? event.coating_turns ?? 0);
+      const bonus = Math.round(Number(event.bonus_damage ?? 0));
+      // The coating already buffs this turn's attack, so N turns means N buffed
+      // attacks counting the one it was applied on.
+      const detail = [
+        bonus ? `+${bonus} к урону` : "",
+        turns > 0 ? `${pluralizeTurn(turns)}, считая текущий` : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.who)}
+          <span className="text-white/60">наносит</span>
+          <span className="text-site-blue">{itemName(event)}</span>
+          <span className="text-white/60">на оружие</span>
+          {detail && <span className="text-white/45">({detail})</span>}
+        </span>
+      );
+    }
+
+    if (event.event === "weapon_coating_expired") {
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.who)}
+          <span className="text-white/60">— яд на оружии выдохся</span>
+          {event.item_name && (
+            <span className="text-white/45">({itemName(event)})</span>
+          )}
+        </span>
+      );
+    }
+
+    if (event.event === "effects_removed") {
+      // `who` and `target` are the cleansed participant; `source` is whoever
+      // used the item. Entries in `removed` are effect objects.
+      const removed = event.removed ?? event.effects ?? [];
+      const names = removed
+        .map((entry) =>
+          typeof entry === "string"
+            ? describeEffect({ name: entry }).label
+            : describeEffect(entry).label,
+        )
+        .filter(Boolean);
+      const cleansed = event.target ?? event.who;
+      const byOther = event.source != null && event.source !== cleansed;
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {byOther ? getName(event.source) : getName(cleansed)}
+          {event.item_name && (
+            <span className="text-site-blue">«{itemName(event)}»</span>
+          )}
+          <span className="text-white/60">
+            {byOther ? "снимает с" : "снимает с себя"}
+          </span>
+          {byOther && getName(cleansed)}
+          <span className="text-white/85">
+            {names.length > 0 ? `: ${names.join(", ")}` : ": вредные эффекты"}
+          </span>
+        </span>
+      );
+    }
+
+    // Durability roll broke a piece of gear. The backend has emitted this since
+    // FEAT-146 but the log printed the raw English name (ISSUES #2).
+    if (event.event === "item_broken") {
+      const slot = event.slot ? EQUIPMENT_SLOT_LABELS[event.slot] ?? event.slot : null;
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.who)}
+          <span className="text-site-red">
+            сломал снаряжение{slot ? `: ${slot}` : ""}
+          </span>
         </span>
       );
     }
@@ -596,7 +748,13 @@ const BattlePageBar = ({
         return (
           <span className="flex flex-wrap items-center gap-1">
             {getName(event.target)}
-            <span className="text-site-red">уклонился от удара</span>
+            <span className="text-site-red">
+              {event.source_kind === "item" ? "уклонился от" : "уклонился от удара"}
+            </span>
+            {/* A scroll / thrown flask misses too — name it, not a weapon swing */}
+            {event.source_kind === "item" && (
+              <span className="text-site-blue">«{itemName(event)}»</span>
+            )}
             {getName(event.source)}
           </span>
         );
@@ -615,6 +773,10 @@ const BattlePageBar = ({
       return (
         <span className="flex flex-wrap items-center gap-1">
           {getName(event.source)}
+          {/* FEAT-168: a damage scroll / thrown flask, not a weapon swing */}
+          {event.source_kind === "item" && (
+            <span className="text-site-blue">«{itemName(event)}»</span>
+          )}
           <span className="text-white/40">→</span>
           {getName(event.target)}
           {damageIcon(event.damage_type)}
@@ -648,7 +810,10 @@ const BattlePageBar = ({
         <span className="text-white/60">
           {BATTLE_EVENTS_TRANSLATE[
             event.event as keyof typeof BATTLE_EVENTS_TRANSLATE
-          ] || event.event}
+          ] ||
+            EXTRA_EVENT_LABELS[event.event] ||
+            // Last resort: a readable placeholder, never the raw English name.
+            "совершает действие"}
         </span>
         {getName(event.target)}
       </span>
@@ -1033,6 +1198,9 @@ const BattlePageBar = ({
               items={allItems}
               cooldowns={cooldowns}
               characterId={myData.character_id ?? 0}
+              weaponCoating={
+                pid != null ? runtimeData.participants[pid]?.weapon_coating ?? null : null
+              }
               selectedId={selectedId}
               onSelectSkill={(skill) =>
                 setTurnData((prev) => ({

@@ -47,9 +47,9 @@ inventory-service/app/
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/inventory/items?q=&item_types=&exclude_types=&resource_subcategory=&page=&page_size=` | Поиск предметов (пагинация); `resource_subcategory` — FEAT-165, неизвестное значение → 422 |
-| POST | `/inventory/items` | Создать предмет (включая `gathering_tool` с `tool_category` + 3 бонуса) |
-| GET | `/inventory/items/{id}` | Предмет по ID |
-| PUT | `/inventory/items/{id}` | Обновить предмет (FEAT-165: настройки переработки, переставшие подходить к подкатегории предмета, удаляются в той же транзакции — и как у сырья, и как у результата) |
+| POST | `/inventory/items` | Создать предмет (включая `gathering_tool` с `tool_category` + 3 бонуса). FEAT-168: принимает вложенные `effects` / `damage_entries` |
+| GET | `/inventory/items/{id}` | Предмет по ID. FEAT-168: отдаёт `effects`, `damage_entries`, `consumable_action`, `coating_turns`, `coating_bonus_damage` (у предмета без боевого содержимого — пустые списки и NULL) |
+| PUT | `/inventory/items/{id}` | Обновить предмет (FEAT-165: настройки переработки, переставшие подходить к подкатегории предмета, удаляются в той же транзакции — и как у сырья, и как у результата); FEAT-168: `effects` / `damage_entries` заменяются целиком, но только если клиент их прислал) |
 | GET / PUT | `/inventory/admin/items/{id}/conversions` | FEAT-165: настройки переработки сырья (`items:read` / `items:update`), PUT заменяет весь набор |
 | DELETE | `/inventory/items/{id}` | Удалить предмет |
 | GET | `/inventory/{id}/items?item_type=gathering_tool&category=pickaxe` | Фильтр по типу + tool_category (FEAT-128, для модалки выбора инструмента) |
@@ -66,6 +66,8 @@ inventory-service/app/
 |-------|------|----------|
 | POST | `/inventory/internal/characters/{cid}/gathering/award` | Атомарная транзакция: SELECT FOR UPDATE на character_inventory + tool + character_gathering_skills, добавление ресурса (с обработкой full-inventory), декремент durability, добавление XP, rank-up loop. Вызывается locations-service на finalize |
 | POST | `/inventory/internal/characters/{cid}/free_slots_check` | Возвращает `{free_slot_count, is_full}`. Вызывается locations-service на старте добычи (preflight) |
+| GET | `/inventory/internal/characters/{cid}/xp-multiplier?buff_type=` | FEAT-168: множитель опыта по активному баффу (`{character_id, buff_type, multiplier}`), с учётом зонтичного `character_xp_bonus`. Защищён `verify_internal_token` (401 без `X-Internal-Token`), 400 на неизвестный `buff_type`, 404 если персонажа нет. Вызывают character-service и locations-service перед записью опыта персонажа |
+| GET | `/inventory/internal/characters/{cid}/xp-multipliers?buff_types=a,b` | FEAT-168 #6: батч-вариант, `{character_id, multipliers: {тип: множитель}}`. Та же защита; 400 на пустой список, неизвестный тип или больше 8 типов |
 
 ## Таблицы БД
 
@@ -90,6 +92,17 @@ inventory-service/app/
 - **Восстановление**: health/energy/mana/stamina_recovery
 - **Крит**: critical_hit_chance_modifier, critical_damage_modifier
 - **fast_slot_bonus** - доп. быстрые слоты от предмета
+- **buff_type / buff_value / buff_duration_minutes** — книги опыта, **устаревшая одиночная форма**. FEAT-168: `buff_type` больше не свободная строка, а белый список из 8 типов (см. «Книги опыта»); всё остальное → 422. FEAT-168 #6: настоящий источник — таблица `item_xp_buffs`, эти колонки читаются только у предметов без строк в ней
+- **consumable_action / coating_turns / coating_bonus_damage** (FEAT-168, миграция 024, все nullable): как расходник применяется в бою — NULL/`instant`, `weapon_coating` (яд на оружие, тогда `coating_turns` 1..50 и `coating_bonus_damage` 0..10000 обязательны), `cleanse`. VARCHAR, а не ENUM: изменение ENUM блокирует таблицу `items` (грабли FEAT-165)
+
+### item_effects (FEAT-168, миграция 024)
+- id, item_id (FK items CASCADE, индекс), target_side (`self`/`enemy`/`ally`/`all_allies`), effect_name, description, chance (0..100), duration (0..100), magnitude (−10000..10000), attribute_key
+- Форма строки — зеркало `skill_perk_effects` из skills-service, чтобы battle-service отдавал её в `buffs.apply_new_effects` без перевода. Не больше 20 строк на предмет
+
+### item_damage_entries (FEAT-168, миграция 024)
+- id, item_id (FK items CASCADE, индекс), damage_type, amount (−10000..10000), description, weapon_slot (по умолчанию `no_weapon` — свитки считаются без оружия), target_side (по умолчанию `enemy`), chance (0..100), aoe_shape, aoe_falloff (0..100), aoe_max_targets (1..10)
+- **aoe_shape** — только те формы, которые реально реализует `resolve_aoe_targets` в battle-service: `single` (одна цель), `splash` (оба соседа по строю), `cleave` (следующий), `all` (все враги), `random_n` (ещё `aoe_max_targets - 1` случайных). Любое другое значение → 422: форма, которую движок не знает, молча превратилась бы в удар по одной цели. Этот же список — кнопки в админке (`ItemEffectSections.tsx`)
+- Форма строки — зеркало `skill_perk_damage`, идёт напрямую в `battle_engine.compute_damage_with_rolls`. Не больше 10 строк на предмет
 
 ### character_inventory
 - id, character_id, item_id (FK -> items), quantity
@@ -178,15 +191,53 @@ inventory-service/app/
 - Пересчёт (`recalc_fast_slots`) при каждом equip/unequip
 - При уменьшении доступных слотов: лишние предметы возвращаются в инвентарь
 
+`GET /inventory/characters/{cid}/fast_slots` (FEAT-168, additive): вместе со `slot_type / item_id / quantity / name / image` слот теперь отдаёт `health/mana/energy/stamina_recovery`, `consumable_action`, `coating_turns`, `coating_bonus_damage`, `effects[]` и `damage_entries[]`. battle-service снимает с этого ответа снапшот в состояние боя на старте, поэтому у боёв, начатых до деплоя, новых ключей нет — читать только через `.get(..., default)`.
+
 ## Коммуникация
 
 ### HTTP (исходящие)
 - `character-attributes-service:8002` -> POST `/attributes/{id}/apply_modifiers` (при equip/unequip, заточке и вставке/извлечении у надетого предмета)
 - `character-attributes-service:8002` -> POST `/attributes/{id}/recover` (при use_item)
 - `character-attributes-service:8002` -> POST `/attributes/internal/{id}/satiety` (при eat-food, sync httpx, timeout 5 с)
+- `character-attributes-service:8002` -> POST `/attributes/cumulative_stats/increment` (накопительные характеристики для перков)
+- `character-attributes-service:8002` -> POST `/attributes/internal/{id}/reconcile-perks` (после equip/unequip)
+- `character-service:8005` -> POST `/characters/internal/evaluate-titles` (после equip/unequip)
+
+### ⚠️ Правило: никаких блокирующих HTTP-вызовов в `async def` (ревью #5 FEAT-168)
+
+inventory-service запускается **одним воркером uvicorn**. Блокирующий `httpx.post` внутри `async def`
+замораживает не текущий запрос, а **весь сервис** на время вызова (до таймаута).
+
+Это не «просто медленно». character-service, обрабатывая `evaluate-titles`, **ходит обратно сюда** за
+`GET /inventory/internal/characters/{cid}/xp-multiplier`. Пока event loop заморожен, этот запрос никто не
+обслуживает: у character-service срабатывает пятисекундный таймаут, срабатывает fail-open (множитель 1.0)
+— и игрок молча теряет книгу опыта, за которую заплатил. Ревью #5 измерило: надевание предмета, открывающее
+титул с пассивным опытом, занимало **5429 мс**, опыт начислялся 1000 вместо 2000.
+
+Поэтому «fire-and-forget» вызовы существуют в двух вариантах:
+
+| Вызов | Для `def` обработчиков (threadpool) | Для `async def` обработчиков |
+|---|---|---|
+| накопительные характеристики | `_track_cumulative_stats` | `_track_cumulative_stats_async` |
+| пересчёт перков | `_reconcile_perks` | `_reconcile_perks_async` |
+| пересчёт титулов | — | `_evaluate_titles_async` (только async) |
+
+`apply_modifiers_in_attributes_service` и `recover_in_attributes_service` асинхронны с самого начала.
+Оставшиеся блокирующие `httpx` в `main.py` (`_add_item_to_inventory_core`, `eat_food`, синхронные варианты
+из таблицы) вызываются **только** из синхронных обработчиков, которые FastAPI выполняет в threadpool —
+там блокировка event loop невозможна. `auth_http.get_current_user_via_http` тоже синхронный `def`, то есть
+тоже threadpool.
+
+Правило закреплено статическими тестами (`tests/test_outgoing_internal_headers.py`,
+`TestNoBlockingHttpOnTheEventLoop`): они разбирают `main.py` в AST и падают, если блокирующий клиентский
+вызов или синхронный `_track_cumulative_stats` / `_reconcile_perks` окажется внутри `async def`. Юнит-тесты
+мокают HTTP-границу и **саму взаимоблокировку увидеть не могут** — поэтому проверяется форма кода, которая
+делает её невозможной.
 
 ### check_not_gathering integration (FEAT-128)
 Защитная проверка `is_character_gathering` (raw SQL `SELECT 1 FROM gathering_sessions WHERE character_id=:cid AND status='active' AND complete_at > NOW()`) добавлена в action-эндпоинты: `equip`, `unequip`, `craft`, `refine`, `sharpen`, `insert-gem`, `extract-gem`, `identify`, `use-buff-item`, `use_item`. Возвращает 400 «Действие заблокировано во время добычи» если у персонажа активная сессия. Зеркальный паттерн `is_character_in_battle`.
+
+FEAT-168: `use_item` был единственным «использовать предмет» роутом без `check_not_in_battle` — проверка добавлена, в бою расходники применяются только из быстрых слотов через battle-service.
 
 ## Урон оружия (FEAT-167)
 
@@ -197,6 +248,32 @@ inventory-service/app/
 - `GET /inventory/{id}/equipment` отдаёт `effective_damage` по каждому слоту (`crud.get_equipment_slots_with_damage`): 0.0 для пустого слота, неоружейного слота и сломанного оружия. Это число читают battle-service (`fetch_weapons`) и профиль на фронтенде — одна формула на все три значения урона (основной / дополнительный / без оружия).
 - Заточка и камни **на самом оружии** принадлежат этому оружию; на броне и украшениях — по-прежнему идут в `damage`.
 - Одноразовый пересчёт: миграция `023_weapon_damage_backfill` вычитает фактический урон надетого оружия из `character_attributes.damage` (кламп на 0, предупреждение в лог по аномалиям, downgrade прибавляет обратно). Пишет в таблицу char-attrs намеренно — только inventory-service знает заточку, камни и прочность.
+
+## Книги опыта (FEAT-168)
+
+Восемь типов баффа в таблице `active_buffs` (одна строка на `(character_id, buff_type)`, upsert обновляет длительность и никогда не складывается, протухание ленивое):
+
+| `buff_type` | Что ускоряет | Кто читает |
+|---|---|---|
+| `xp_bonus` | опыт профессии (семантика не менялась) | `crud.award_profession_xp` |
+| `gathering_xp_bonus` | опыт сбора | `crud.award_gathering` — множитель применяется после масштабирования XP по частично влезшему стаку |
+| `character_xp_bonus` | **весь** опыт персонажа (зонтичный тип) | складывается со всеми пятью типами ниже |
+| `character_xp_battle_bonus` | опыт персонажа за бои / PvE | character-service `crud.add_rewards_to_character` |
+| `character_xp_post_bonus` | опыт персонажа за отыгрыш (посты) | locations-service `crud.award_post_xp_and_log` |
+| `character_xp_quest_bonus` | опыт персонажа за задания | locations-service `crud.add_experience` |
+| `character_xp_title_bonus` | опыт персонажа за титулы (только пассивный) | character-service `crud._grant_title_xp` |
+| `character_xp_pass_bonus` | опыт персонажа за боевой пропуск | battle-pass-service → `add_rewards` c `xp_source` |
+
+`crud.get_xp_multiplier(db, character_id, buff_type="xp_bonus")` — единственная точка чтения; значение по умолчанию сохраняет поведение всех вызовов, написанных до FEAT-168. **Зонтичное правило:** для точечного источника множитель = `1.0 + value(точечный) + value(character_xp_bonus)` (таблица `schemas.XP_BUFF_PARENTS`), то есть 25 % за задания вместе с 10 % на весь опыт дают ×1.35. Сложение живёт в сервисе, а не у вызывающих. `crud.get_xp_multipliers(...)` — батч-вариант. Сообщение `use-buff-item` собирается по словарю `BUFF_TYPE_LABELS` (`main.py`), а не хардкодом «XP».
+
+### item_xp_buffs (FEAT-168 #6, миграция 025)
+- id, item_id (FK items CASCADE, индекс), buff_type (белый список выше), value (>0, ≤10.0 — доля, 0.25 = +25 %), duration_minutes (1..10080); уникальность `(item_id, buff_type)`, не больше 8 строк на предмет
+- Один предмет может ускорять несколько видов опыта сразу — админка редактирует список, а не одно поле. Только `consumable`/`scroll`, не еда
+- Старые колонки `items.buff_type / buff_value / buff_duration_minutes` **оставлены и по-прежнему работают**: `crud.get_item_xp_buffs` отдаёт строки таблицы, а если их нет — одну строку из старых колонок. Миграция переносит существующие книги в новую таблицу; сохранение списка из админки — **в том числе пустого** — очищает старые колонки, чтобы у предмета не было двух источников правды (иначе удаление последней строки воскрешало бы старый бафф). Клиент, который поле `xp_buffs` вообще не прислал, работает как раньше: старая тройка не трогается
+- `POST /inventory/{cid}/use-buff-item` применяет все строки разом (по `apply_buff` на тип, независимые сроки); ответ сохранил старые одиночные поля и получил список `buffs`
+- Откат миграции = `DROP TABLE item_xp_buffs`; старые колонки не трогались, поэтому всё, что работало до фичи, переживает откат
+- **Перенос старых книг (миграция 025) фильтрует данные.** До FEAT-168 `items.buff_type` был свободной строкой, поэтому на проде могут лежать значения, которых нет в белом списке. Строка с неизвестным/пустым типом или с прибавкой не в диапазоне `0 < value <= 10` **пропускается** (старые колонки при этом не трогаются, ничего не теряется), длительность вне `1..10080` минут **обрезается** в диапазон. Каждый пропуск и каждое обрезание пишутся в лог миграции с id предмета и причиной
+- **Схемы ответа (`ItemXpBuffOut`, `ItemEffectOut`, `ItemDamageOut`) намеренно не наследуют валидаторы запроса.** Иначе одна кривая строка в базе превращала бы обычное чтение `GET /inventory/items/{id}` в 500. Валидация — только на записи; чтение обязано отдавать то, что лежит в базе
 
 ## Известные проблемы
 

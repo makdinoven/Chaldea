@@ -8,7 +8,7 @@ from datetime import datetime
 import httpx
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, APIRouter, Query, BackgroundTasks, Response
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 import models
 import schemas
 import crud
@@ -143,7 +143,14 @@ def list_items(
     db: Session = Depends(get_db),
 ):
     """Возвращает список предметов с поиском и пагинацией."""
-    query = db.query(models.Items)
+    # FEAT-168: effects/damage_entries/xp_buffs едут в ответе — грузим их пачкой,
+    # иначе на странице в 500 предметов получится 1500 лишних запросов.
+    # Любая новая связь в schemas.Item обязана попасть и сюда.
+    query = db.query(models.Items).options(
+        selectinload(models.Items.effects),
+        selectinload(models.Items.damage_entries),
+        selectinload(models.Items.xp_buffs),
+    )
     if q:
         query = query.filter(models.Items.name.ilike(f"%{q}%"))
     if item_types:
@@ -178,8 +185,20 @@ def create_item(item_in: schemas.ItemCreate, db: Session = Depends(get_db), curr
     if db.query(models.Items).filter(models.Items.name == item_in.name).first():
         raise HTTPException(status_code=400, detail="Предмет с таким названием уже существует")
     _ensure_linked_recipe_exists(db, item_in)
-    db_item = models.Items(**item_in.dict(exclude_unset=True))
+    # FEAT-168: `effects` / `damage_entries` are child tables, not item columns.
+    payload = item_in.dict(exclude_unset=True)
+    for field in crud.ITEM_NESTED_EFFECT_FIELDS:
+        payload.pop(field, None)
+    db_item = models.Items(**payload)
     db.add(db_item)
+    db.flush()
+    crud.replace_item_effects(db, db_item, item_in.effects)
+    crud.replace_item_damage_entries(db, db_item, item_in.damage_entries)
+    # Only when the client actually submitted the list: `replace_item_xp_buffs`
+    # clears the legacy buff triple, and a client that posts only the old
+    # `buff_type/buff_value/buff_duration_minutes` must keep working.
+    if "xp_buffs" in item_in.__fields_set__:
+        crud.replace_item_xp_buffs(db, db_item, item_in.xp_buffs)
     db.commit()
     db.refresh(db_item)
     return db_item
@@ -270,8 +289,18 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, background_tasks: Bac
     _ensure_linked_recipe_exists(db, item_in)
     wearability_before = (db_item.item_type, db_item.weapon_subclass, db_item.armor_subclass)
     for field, value in item_in.dict(exclude_unset=True).items():
+        if field in crud.ITEM_NESTED_EFFECT_FIELDS:
+            continue  # FEAT-168: child tables, written below
         setattr(db_item, field, value)
     db.flush()
+    # FEAT-168: replace-all, but only for the lists the client actually sent —
+    # a payload that omits them leaves the existing rows untouched.
+    if "effects" in item_in.__fields_set__:
+        crud.replace_item_effects(db, db_item, item_in.effects)
+    if "damage_entries" in item_in.__fields_set__:
+        crud.replace_item_damage_entries(db, db_item, item_in.damage_entries)
+    if "xp_buffs" in item_in.__fields_set__:
+        crud.replace_item_xp_buffs(db, db_item, item_in.xp_buffs)
     # FEAT-165: refining config must keep matching the item's subcategory
     crud.delete_stale_conversions(db, db_item)
     db.commit()
@@ -629,7 +658,7 @@ async def _revalidate_equipment(db: Session, character_id: int) -> List[str]:
         raise
 
     crud.recalc_fast_slots(db, character_id)
-    _reconcile_perks(character_id)
+    await _reconcile_perks_async(character_id)
     logger.info("Unequipped forbidden items for character %s: %s", character_id, removed)
     return removed
 
@@ -755,19 +784,44 @@ async def apply_modifiers_in_attributes_service(character_id: int, modifiers: di
         resp.raise_for_status()
 
 
-def _track_cumulative_stats(character_id: int, increments: dict, set_max: dict = None):
-    """
-    Fire-and-forget: increment cumulative stats for perk tracking.
-    Non-fatal — errors are logged but do not affect the main operation.
-    """
+# ---------------------------------------------------------------------------
+# Fire-and-forget side calls (cumulative stats, perks, titles)
+# ---------------------------------------------------------------------------
+# Every one of these exists in two flavours. The rule is simple and not
+# optional:
+#
+#   * a `def` handler runs in FastAPI's threadpool  -> use the SYNC variant;
+#   * an `async def` handler runs ON the event loop -> use the `_async` variant.
+#
+# inventory-service runs a SINGLE uvicorn worker, so a blocking `httpx.post`
+# inside an `async def` freezes the whole service for the duration of that call.
+# That is not merely slow: character-service calls back into this service
+# (`/inventory/internal/characters/{cid}/xp-multiplier`) while we are waiting on
+# it, so the callback cannot be served, times out after 5 s and silently
+# fails open to a multiplier of 1.0 — the player loses an XP book they paid for.
+# Review #5 measured exactly that: 5429 ms for an equip that unlocks a
+# passive-XP title. See docs/services/inventory-service.md.
+FIRE_AND_FORGET_TIMEOUT = 5.0
+
+
+def _cumulative_stats_request(character_id: int, increments: dict, set_max: dict = None):
     payload = {"character_id": character_id, "increments": increments}
     if set_max:
         payload["set_max"] = set_max
+    # FEAT-167 #17: internal-only endpoint — send the shared token.
+    return f"{settings.ATTRIBUTES_SERVICE_URL}cumulative_stats/increment", payload
+
+
+def _track_cumulative_stats(character_id: int, increments: dict, set_max: dict = None):
+    """Increment cumulative stats for perk tracking. **Sync handlers only.**
+
+    Non-fatal — errors are logged but do not affect the main operation.
+    """
+    url, payload = _cumulative_stats_request(character_id, increments, set_max)
     try:
-        url = f"{settings.ATTRIBUTES_SERVICE_URL}cumulative_stats/increment"
-        # FEAT-167 #17: internal-only endpoint — send the shared token.
         resp = httpx.post(
-            url, json=payload, headers=_internal_token_headers(), timeout=5.0
+            url, json=payload, headers=_internal_token_headers(),
+            timeout=FIRE_AND_FORGET_TIMEOUT,
         )
         if resp.status_code != 200:
             logger.warning(f"Cumulative stats tracking failed for char {character_id}: {resp.text}")
@@ -775,19 +829,68 @@ def _track_cumulative_stats(character_id: int, increments: dict, set_max: dict =
         logger.warning(f"Cumulative stats tracking error for char {character_id}: {e}")
 
 
+async def _track_cumulative_stats_async(character_id: int, increments: dict, set_max: dict = None):
+    """Same call, awaited — for `async def` handlers (see the note above)."""
+    url, payload = _cumulative_stats_request(character_id, increments, set_max)
+    try:
+        async with httpx.AsyncClient(timeout=FIRE_AND_FORGET_TIMEOUT) as client:
+            resp = await client.post(url, json=payload, headers=_internal_token_headers())
+        if resp.status_code != 200:
+            logger.warning(f"Cumulative stats tracking failed for char {character_id}: {resp.text}")
+    except Exception as e:
+        logger.warning(f"Cumulative stats tracking error for char {character_id}: {e}")
+
+
+def _reconcile_perks_url(character_id: int) -> str:
+    return f"{settings.ATTRIBUTES_SERVICE_URL}internal/{character_id}/reconcile-perks"
+
+
 def _reconcile_perks(character_id: int):
-    """
-    Fire-and-forget: re-evaluate perks after a stat-affecting change (equip /
-    unequip) so attribute-condition perks activate/deactivate (FEAT-143).
-    Non-fatal — errors are logged but do not affect the main operation.
+    """Re-evaluate perks after a stat-affecting change. **Sync handlers only.**
+
+    Equip/unequip change attributes, so attribute-condition perks may need to
+    activate or deactivate (FEAT-143). Non-fatal.
     """
     try:
-        url = f"{settings.ATTRIBUTES_SERVICE_URL}internal/{character_id}/reconcile-perks"
-        resp = httpx.post(url, timeout=5.0)
+        resp = httpx.post(_reconcile_perks_url(character_id), timeout=FIRE_AND_FORGET_TIMEOUT)
         if resp.status_code != 200:
             logger.warning(f"Perk reconcile failed for char {character_id}: {resp.text}")
     except Exception as e:
         logger.warning(f"Perk reconcile error for char {character_id}: {e}")
+
+
+async def _reconcile_perks_async(character_id: int):
+    """Same call, awaited — for `async def` handlers (see the note above)."""
+    try:
+        async with httpx.AsyncClient(timeout=FIRE_AND_FORGET_TIMEOUT) as client:
+            resp = await client.post(_reconcile_perks_url(character_id))
+        if resp.status_code != 200:
+            logger.warning(f"Perk reconcile failed for char {character_id}: {resp.text}")
+    except Exception as e:
+        logger.warning(f"Perk reconcile error for char {character_id}: {e}")
+
+
+async def _evaluate_titles_async(character_id: int, action: str):
+    """Ask character-service to re-evaluate titles. **Awaited, never blocking.**
+
+    `action` is only used in the log line ("equip" / "unequip"). Non-fatal: a
+    failure here must never fail the equip itself.
+
+    This is the call review #5 pinned down. It must stay awaited: character-service
+    reads this service's XP-multiplier endpoint while handling it, so blocking the
+    loop here deadlocks the pair until character-service's 5 s timeout fires.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=FIRE_AND_FORGET_TIMEOUT) as client:
+            await client.post(
+                f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
+                json={"character_id": character_id},
+                headers=_internal_token_headers(),
+            )
+    except Exception as e:
+        logger.warning(
+            f"Title evaluation error after {action} for character {character_id}: {e}"
+        )
 
 
 async def recover_in_attributes_service(character_id: int, recovery: dict):
@@ -971,21 +1074,14 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
     # NOT (FEAT-143 bug 4). Re-equip abuse of the same item is a known limitation
     # of a cumulative counter (needs a distinct/current-count redesign).
     if not str(getattr(slot, "slot_type", "")).startswith("fast_slot_"):
-        _track_cumulative_stats(character_id, {"items_equipped": 1})
+        await _track_cumulative_stats_async(character_id, {"items_equipped": 1})
 
     # Re-evaluate perks — equipping changed attributes (FEAT-143 dynamic perks).
-    _reconcile_perks(character_id)
+    await _reconcile_perks_async(character_id)
 
-    # Trigger title evaluation after equip (non-fatal)
-    try:
-        httpx.post(
-            f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
-            json={"character_id": character_id},
-            headers=_internal_token_headers(),
-            timeout=5.0,
-        )
-    except Exception as e:
-        logger.warning(f"Title evaluation error after equip for character {character_id}: {e}")
+    # Trigger title evaluation after equip (non-fatal). Awaited, not blocking:
+    # character-service calls this service back while handling it.
+    await _evaluate_titles_async(character_id, "equip")
 
     return slot
 
@@ -1077,18 +1173,10 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
 
     # Re-evaluate perks — unequipping changed attributes; attribute-condition
     # perks may need to deactivate (FEAT-143 dynamic perks).
-    _reconcile_perks(character_id)
+    await _reconcile_perks_async(character_id)
 
-    # Trigger title evaluation after unequip (non-fatal)
-    try:
-        httpx.post(
-            f"{settings.CHARACTER_SERVICE_URL}/characters/internal/evaluate-titles",
-            json={"character_id": character_id},
-            headers=_internal_token_headers(),
-            timeout=5.0,
-        )
-    except Exception as e:
-        logger.warning(f"Title evaluation error after unequip for character {character_id}: {e}")
+    # Trigger title evaluation after unequip (non-fatal). Awaited, not blocking.
+    await _evaluate_titles_async(character_id, "unequip")
 
     return slot
 
@@ -1104,6 +1192,9 @@ async def use_item(character_id: int, req: schemas.InventoryItem, db: Session = 
       2) Если есть health_recovery и т.п., вызываем /recover
     """
     verify_character_ownership(db, character_id, current_user.id)
+    # FEAT-168: в бою расходники применяются только из быстрых слотов
+    # (battle-service), иначе предмет списывается впустую.
+    check_not_in_battle(db, character_id, "Нельзя использовать предметы во время боя")
     check_not_gathering(db, character_id, "Нельзя использовать предметы во время добычи")
     db_item = db.query(models.Items).filter(models.Items.id == req.item_id).first()
     if not db_item:
@@ -1202,13 +1293,24 @@ def get_fast_slots(
         if not item:
             continue  # на всякий случай
 
-        # 3) Добавляем в ответ
+        # 3) Добавляем в ответ.
+        # FEAT-168: восстановление и боевые эффекты едут вместе со слотом —
+        # battle-service снимает с этого ответа снапшот в состояние боя.
         result.append(schemas.FastSlot(
             slot_type=slot.slot_type,
             item_id=slot.item_id,
             quantity=qty,
             name=item.name,
             image=item.image or "",
+            health_recovery=item.health_recovery or 0,
+            mana_recovery=item.mana_recovery or 0,
+            energy_recovery=item.energy_recovery or 0,
+            stamina_recovery=item.stamina_recovery or 0,
+            consumable_action=item.consumable_action,
+            coating_turns=item.coating_turns,
+            coating_bonus_damage=item.coating_bonus_damage,
+            effects=[schemas.ItemEffectOut.from_orm(e) for e in item.effects],
+            damage_entries=[schemas.ItemDamageOut.from_orm(d) for d in item.damage_entries],
         ))
 
     return result
@@ -1659,6 +1761,81 @@ def gathering_award_internal(
     инвентарь, прочность инструмента, опыт и rank-up.
     """
     return crud.award_gathering(db, character_id, req)
+
+
+# ---------------------------------------------------------------------------
+# Internal: XP buff multiplier (FEAT-168 §3.3.4)
+# ---------------------------------------------------------------------------
+# character-service reads this before writing character XP, so a «книга опыта
+# персонажа» works from another service without duplicating `active_buffs`.
+# Guarded by X-Internal-Token like the other write-capable /internal/ routes.
+
+@router.get(
+    "/internal/characters/{character_id}/xp-multiplier",
+    response_model=schemas.XpMultiplierResponse,
+)
+def get_xp_multiplier_internal(
+    character_id: int,
+    buff_type: str = Query("xp_bonus", description="Тип баффа опыта"),
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """Множитель опыта персонажа по активному баффу (1.0, если баффа нет)."""
+    if buff_type not in schemas.ALLOWED_BUFF_TYPES:
+        raise HTTPException(status_code=400, detail="Недопустимый тип баффа")
+
+    exists = db.execute(
+        text("SELECT id FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    ).fetchone()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    multiplier = crud.get_xp_multiplier(db, character_id, buff_type)
+    # get_active_buff deletes an expired row and flushes; persist that cleanup.
+    db.commit()
+    return {
+        "character_id": character_id,
+        "buff_type": buff_type,
+        "multiplier": multiplier,
+    }
+
+
+MAX_XP_MULTIPLIER_BATCH = len(schemas.ALLOWED_BUFF_TYPES)
+
+
+@router.get(
+    "/internal/characters/{character_id}/xp-multipliers",
+    response_model=schemas.XpMultipliersResponse,
+)
+def get_xp_multipliers_internal(
+    character_id: int,
+    buff_types: str = Query(..., description="Типы баффов опыта через запятую"),
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """FEAT-168 #6: множители сразу по нескольким источникам опыта, одним запросом."""
+    requested = [p.strip() for p in (buff_types or "").split(",")]
+    requested = [p for p in requested if p]
+    if not requested:
+        raise HTTPException(status_code=400, detail="Параметр buff_types не должен быть пустым")
+    if len(requested) > MAX_XP_MULTIPLIER_BATCH:
+        raise HTTPException(status_code=400, detail="Слишком много типов баффов в запросе")
+    unknown = [p for p in requested if p not in schemas.ALLOWED_BUFF_TYPES]
+    if unknown:
+        raise HTTPException(status_code=400, detail="Недопустимый тип баффа")
+
+    exists = db.execute(
+        text("SELECT id FROM characters WHERE id = :cid"),
+        {"cid": character_id},
+    ).fetchone()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+
+    multipliers = crud.get_xp_multipliers(db, character_id, requested)
+    # get_active_buff deletes expired rows and flushes; persist that cleanup.
+    db.commit()
+    return {"character_id": character_id, "multipliers": multipliers}
 
 
 # ---------------------------------------------------------------------------
@@ -3107,6 +3284,21 @@ async def identify_item(
 # Buff endpoints
 # ---------------------------------------------------------------------------
 
+# FEAT-168: человекочитаемые названия типов баффов для сообщений игроку.
+# Ключи — ровно schemas.ALLOWED_BUFF_TYPES.
+BUFF_TYPE_LABELS = {
+    schemas.XP_BUFF_PROFESSION: "к опыту профессии",
+    schemas.XP_BUFF_GATHERING: "к опыту сбора",
+    schemas.XP_BUFF_CHARACTER_ALL: "ко всему опыту персонажа",
+    schemas.XP_BUFF_CHARACTER_BATTLE: "к опыту персонажа за бои",
+    schemas.XP_BUFF_CHARACTER_POST: "к опыту персонажа за отыгрыш",
+    schemas.XP_BUFF_CHARACTER_QUEST: "к опыту персонажа за задания",
+    schemas.XP_BUFF_CHARACTER_TITLE: "к опыту персонажа за титулы",
+    schemas.XP_BUFF_CHARACTER_PASS: "к опыту персонажа за боевой пропуск",
+}
+DEFAULT_BUFF_TYPE_LABEL = "к опыту"
+
+
 @router.post("/{character_id}/use-buff-item", response_model=schemas.UseBuffItemResult)
 def use_buff_item(
     character_id: int,
@@ -3136,8 +3328,11 @@ def use_buff_item(
         if item_obj.is_food:
             raise HTTPException(status_code=400, detail=FOOD_REJECT_MESSAGE)
 
-        # 3. Validate it's a buff item
-        if not item_obj.buff_type or item_obj.buff_value is None or item_obj.buff_duration_minutes is None:
+        # 3. Validate it's a buff item.
+        # FEAT-168 #6: один предмет может ускорять несколько видов опыта сразу;
+        # у предметов, созданных до этого, список собирается из старых колонок.
+        buff_rows = crud.get_item_xp_buffs(db, item_obj)
+        if not buff_rows:
             raise HTTPException(status_code=400, detail="Этот предмет не является баффовым")
 
         # 4. Consume 1 item
@@ -3146,26 +3341,35 @@ def use_buff_item(
             db.delete(inv_row)
         db.flush()
 
-        # 5. Apply buff (upsert)
-        crud.apply_buff(
-            db,
-            character_id=character_id,
-            buff_type=item_obj.buff_type,
-            value=item_obj.buff_value,
-            duration_minutes=item_obj.buff_duration_minutes,
-            source_name=item_obj.name,
-        )
+        # 5. Apply every buff (upsert per type)
+        for row in buff_rows:
+            crud.apply_buff(
+                db,
+                character_id=character_id,
+                buff_type=row["buff_type"],
+                value=row["value"],
+                duration_minutes=row["duration_minutes"],
+                source_name=item_obj.name,
+            )
 
         db.commit()
 
-        bonus_pct = int(item_obj.buff_value * 100)
+        # FEAT-168: текст зависит от типа баффа (раньше всегда писалось «XP»)
+        parts = [
+            f"+{int(row['value'] * 100)}% "
+            f"{BUFF_TYPE_LABELS.get(row['buff_type'], DEFAULT_BUFF_TYPE_LABEL)} "
+            f"на {row['duration_minutes']} мин"
+            for row in buff_rows
+        ]
+        primary = buff_rows[0]
         return {
             "success": True,
-            "buff_type": item_obj.buff_type,
-            "value": item_obj.buff_value,
-            "duration_minutes": item_obj.buff_duration_minutes,
+            "buff_type": primary["buff_type"],
+            "value": primary["value"],
+            "duration_minutes": primary["duration_minutes"],
             "source_item_name": item_obj.name,
-            "message": f"Бафф активирован: +{bonus_pct}% XP на {item_obj.buff_duration_minutes} мин",
+            "message": "Бафф активирован: " + ", ".join(parts),
+            "buffs": buff_rows,
         }
 
     except HTTPException:

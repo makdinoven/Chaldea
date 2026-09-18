@@ -528,12 +528,20 @@ async def deliver_reward(
         await _deliver_cosmetic(user_id, cosmetic_type, reward.cosmetic_slug)
 
 
+# FEAT-168 #6: награда боевого пропуска ускоряется своей книгой опыта
+# («к опыту персонажа за боевой пропуск»), а не книгой на бои.
+BATTLE_PASS_XP_SOURCE = "character_xp_pass_bonus"
+
+
 async def _deliver_gold_xp(character_id: int, xp: int = 0, gold: int = 0):
     """POST to character-service /characters/{char_id}/add_rewards."""
     url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/add_rewards"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json={"xp": xp, "gold": gold})
+            resp = await client.post(
+                url,
+                json={"xp": xp, "gold": gold, "xp_source": BATTLE_PASS_XP_SOURCE},
+            )
             resp.raise_for_status()
     except Exception as e:
         logger.error(f"Failed to deliver gold/xp to character {character_id}: {e}")

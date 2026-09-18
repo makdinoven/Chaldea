@@ -41,7 +41,7 @@ from inventory_client import get_fast_slots, consume_item, get_equipment_durabil
 from character_client import get_character_profile
 from buffs import decrement_durations, aggregate_modifiers, apply_new_effects, build_percent_damage_buffs, \
     build_percent_resist_buffs, _normalize_effect, tick_periodic_effects, evaluate_control, \
-    first_cycle_limit_skills
+    first_cycle_limit_skills, remove_effects
 from battle_engine import fetch_full_attributes, apply_flat_modifiers, fetch_main_weapon, fetch_weapons, compute_damage_with_rolls, roll_chance, roll_dodge
 from redis_state import init_battle_state, load_state, save_state, get_redis_client, ZSET_DEADLINES, cache_snapshot, \
     get_cached_snapshot, KEY_BATTLE_TURNS, state_key, compute_initiative, \
@@ -191,6 +191,109 @@ def _filter_effects_by_chance(
         if roll_chance(actual_chance):
             passed.append(eff)
     return passed
+
+
+# ---------------------------------------------------------------------------
+# FEAT-168: боевые эффекты расходников (зелья, свитки, яды на оружие)
+#
+# Всё состояние предмета едет в снапшоте быстрых слотов и в состоянии участника
+# (Redis, TTL 48 ч). Бои, начатые ДО деплоя, этих полей не содержат — поэтому
+# каждое новое поле читается через .get(..., default), а предмет без боевой
+# настройки проходит ровно тот же путь, что и раньше (только восстановление).
+# ---------------------------------------------------------------------------
+
+ITEM_ACTION_INSTANT = "instant"
+ITEM_ACTION_WEAPON_COATING = "weapon_coating"
+ITEM_ACTION_CLEANSE = "cleanse"
+
+# Строка эффекта с таким именем не накладывает эффект, а СНИМАЕТ его
+# (противоядие / свиток очищения). Что именно снимать — в attribute_key,
+# сколько штук — в magnitude (0 = все подходящие).
+CLEANSE_EFFECT_NAME = "cleanse"
+
+# Стороны цели, которые понимает предмет (зеркало EFFECT_TARGET_SIDES
+# в inventory-service).
+ITEM_TARGET_SELF = "self"
+ITEM_TARGET_ENEMY = "enemy"
+ITEM_TARGET_ALLY = "ally"
+ITEM_TARGET_ALL_ALLIES = "all_allies"
+
+
+def _item_action(slot: Dict) -> str:
+    """Как применяется предмет: instant | weapon_coating | cleanse.
+
+    Слот из старого состояния (до FEAT-168) поля не имеет — это `instant`.
+    """
+    return (slot.get("consumable_action") or ITEM_ACTION_INSTANT).strip().lower()
+
+
+def _normalize_item_effect_row(row: Dict) -> Dict | None:
+    """Приводит строку item_effects к форме, которую ждёт движок эффектов
+    (та же, что у skill_perk_effects). Возвращает None для мусорной строки —
+    без эффекта, но и без падения хода.
+    """
+    if not isinstance(row, dict):
+        return None
+    effect_name = (row.get("effect_name") or "").strip()
+    if not effect_name:
+        return None
+    target_side = (row.get("target_side") or ITEM_TARGET_SELF).strip().lower()
+    return {
+        "target_side": target_side,
+        "effect_name": effect_name,
+        "chance": row.get("chance", 100),
+        "duration": row.get("duration", 1),
+        "magnitude": row.get("magnitude", 0) or 0,
+        "attribute_key": row.get("attribute_key"),
+    }
+
+
+def _is_cleanse_row(row: Dict) -> bool:
+    return (row.get("effect_name") or "").strip().lower() == CLEANSE_EFFECT_NAME
+
+
+def _active_coating(part: Dict) -> Dict | None:
+    """Действующий яд на оружии участника или None (в т.ч. для старого state)."""
+    coating = part.get("weapon_coating")
+    if not isinstance(coating, dict):
+        return None
+    try:
+        turns_left = int(coating.get("turns_left", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    return coating if turns_left > 0 else None
+
+
+def _coating_bonus_damage(part: Dict) -> float:
+    """Прибавка к урону от нанесённого на оружие яда (0, если яда нет)."""
+    coating = _active_coating(part)
+    if not coating:
+        return 0.0
+    try:
+        return float(coating.get("bonus_damage") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _tick_weapon_coating(part: Dict) -> Dict | None:
+    """Убавляет длительность яда на оружии в конце хода его владельца.
+
+    Возвращает снятый (выдохшийся) яд, если он закончился, иначе None.
+    Чистая функция над словарём участника — тестируется без Redis.
+    """
+    coating = part.get("weapon_coating")
+    if not isinstance(coating, dict):
+        return None
+    try:
+        turns_left = int(coating.get("turns_left", 0) or 0)
+    except (TypeError, ValueError):
+        turns_left = 0
+    turns_left -= 1
+    if turns_left > 0:
+        coating["turns_left"] = turns_left
+        return None
+    part.pop("weapon_coating", None)
+    return coating
 
 
 async def build_participant_info(char_id: int, participant_id: int) -> dict:
@@ -1308,6 +1411,10 @@ async def get_state_internal(battle_id: int):
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
                 # FEAT-163 3.8: additive, defaults to False for pre-deploy states.
                 "dropped_out": bool(state["participants"][pid].get("dropped_out", False)),
+                # FEAT-168: нанесённый на оружие яд (или None). Клиент по нему
+                # показывает баннер и блокирует второй яд. В боях, начатых до
+                # деплоя, ключа нет — отдаём None.
+                "weapon_coating": state["participants"][pid].get("weapon_coating"),
             }
             for pid in state["participants"]
         },
@@ -1403,6 +1510,8 @@ async def get_state(
                             "dropped_out": bool(
                                 state["participants"][pid].get("dropped_out", False)
                             ),
+                            # FEAT-168: яд на оружии (или None).
+                            "weapon_coating": state["participants"][pid].get("weapon_coating"),
                         }
                             for pid in state["participants"]
                     },
@@ -1497,6 +1606,10 @@ async def spectate_battle(
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
                 # FEAT-163 3.8: additive, defaults to False for pre-deploy states.
                 "dropped_out": bool(state["participants"][pid].get("dropped_out", False)),
+                # FEAT-168: нанесённый на оружие яд (или None). Клиент по нему
+                # показывает баннер и блокирует второй яд. В боях, начатых до
+                # деплоя, ключа нет — отдаём None.
+                "weapon_coating": state["participants"][pid].get("weapon_coating"),
             }
             for pid in state["participants"]
         },
@@ -2599,49 +2712,315 @@ async def _make_action_core(
         if matched_slot is None:
             logger.warning(f"[ITEM] item_id={item_id} not found in fast_slots for participant {me}, skipping")
         else:
-            # 2) Try to consume item in inventory (best-effort, does not block usage)
-            try:
-                consume_result = await consume_item(attacker_character_id, item_id)
-                if consume_result.get("status") != "ok":
-                    logger.warning(
-                        f"[ITEM] Failed to consume item_id={item_id} in inventory for character "
-                        f"{attacker_character_id}: {consume_result.get('detail', 'unknown error')}"
-                    )
-            except Exception as exc:
-                logger.warning(f"[ITEM] consume_item call failed for item_id={item_id}: {exc}")
+            item_name = matched_slot.get("name") or f"item#{item_id}"
+            item_action = _item_action(matched_slot)
 
-            # 3) Apply recovery from CACHED slot fields (always — slot exists in battle)
-            recovery_payload = {
-                key.replace("_recovery", ""): matched_slot[key]
-                for key in (
-                    "health_recovery",
-                    "mana_recovery",
-                    "energy_recovery",
-                    "stamina_recovery",
+            # 2) Яд на оружие — пока действует прежний, новый нанести нельзя.
+            # Отказываем ТОЛЬКО в применении предмета: предмет не расходуется,
+            # остальной ход (навыки, урон) отыгрывается как обычно. Ошибка 400
+            # стоила бы игроку хода — так нельзя (§3.5).
+            active_coating = _active_coating(part)
+            if item_action == ITEM_ACTION_WEAPON_COATING and active_coating:
+                turn_events.append({
+                    "event": "item_rejected",
+                    "who": request.participant_id,
+                    "item_id": item_id,
+                    "item_name": item_name,
+                    "reason": "coating_active",
+                    "active_coating": active_coating.get("name"),
+                    "turns_left": active_coating.get("turns_left"),
+                })
+                logger.info(
+                    "[ITEM] coating item_id=%s rejected for participant %s: "
+                    "coating %r still active", item_id, me, active_coating.get("name"),
                 )
-                if matched_slot.get(key)
-            }
+            else:
+                # 3) Try to consume item in inventory (best-effort, does not block usage)
+                try:
+                    consume_result = await consume_item(attacker_character_id, item_id)
+                    if consume_result.get("status") != "ok":
+                        logger.warning(
+                            f"[ITEM] Failed to consume item_id={item_id} in inventory for character "
+                            f"{attacker_character_id}: {consume_result.get('detail', 'unknown error')}"
+                        )
+                except Exception as exc:
+                    logger.warning(f"[ITEM] consume_item call failed for item_id={item_id}: {exc}")
 
-            for res, delta in recovery_payload.items():
-                old = part[res if res != "health" else "hp"]
-                mx = part[f"max_{res if res != 'health' else 'hp'}"]
-                new = min(old + delta, mx)
-                part[res if res != "health" else "hp"] = new
+                # 4) Apply recovery from CACHED slot fields (always — slot exists in battle)
+                recovery_payload = {
+                    key.replace("_recovery", ""): matched_slot[key]
+                    for key in (
+                        "health_recovery",
+                        "mana_recovery",
+                        "energy_recovery",
+                        "stamina_recovery",
+                    )
+                    if matched_slot.get(key)
+                }
 
-            # 4) Remove used slot from fast_slots array (one-time use)
-            part["fast_slots"].pop(matched_idx)
+                for res, delta in recovery_payload.items():
+                    old = part[res if res != "health" else "hp"]
+                    mx = part[f"max_{res if res != 'health' else 'hp'}"]
+                    new = min(old + delta, mx)
+                    part[res if res != "health" else "hp"] = new
 
-            # 5) Log item_use event
-            turn_events.append({
-                "event": "item_use",
-                "who": request.participant_id,
-                "item_id": item_id,
-                "item_name": matched_slot.get("name", f"item#{item_id}"),
-                "recovery": recovery_payload,
-            })
-            logger.debug(
-                f"[ITEM] consumed item_id={item_id}, recovery={recovery_payload}"
-            )
+                # ── 5) Боевые эффекты предмета (FEAT-168).
+                # Строки приходят в той же форме, что у навыков, поэтому их
+                # можно отдать движку без перевода. У предмета без эффектов
+                # список пуст — шаги 5–7 просто не выполняются.
+                item_effect_rows = [
+                    r for r in (
+                        _normalize_item_effect_row(raw)
+                        for raw in (matched_slot.get("effects") or [])
+                    ) if r is not None
+                ]
+
+                def _item_targets(side: str) -> List[int]:
+                    if side == ITEM_TARGET_ENEMY:
+                        return [defender_pid]
+                    if side == ITEM_TARGET_ALLY:
+                        return [ally_target_pid]
+                    if side == ITEM_TARGET_ALL_ALLIES:
+                        return list(alive_allies)
+                    return [request.participant_id]
+
+                async def _endurance_of(pid: int) -> float:
+                    _pd = participants_map.get(str(pid))
+                    if not _pd:
+                        return 0
+                    return (await attrs(_pd["character_id"])).get("endurance", 0)
+
+                # Яд на оружие: его enemy-строки — это то, что получает цель ПРИ
+                # ПОПАДАНИИ, а не сейчас. Они уезжают в weapon_coating.
+                coating_effect_rows: List[Dict] = []
+                if item_action == ITEM_ACTION_WEAPON_COATING:
+                    def _goes_on_the_blade(r: Dict) -> bool:
+                        return r["target_side"] == ITEM_TARGET_ENEMY and not _is_cleanse_row(r)
+
+                    coating_effect_rows = [r for r in item_effect_rows if _goes_on_the_blade(r)]
+                    item_effect_rows = [r for r in item_effect_rows if not _goes_on_the_blade(r)]
+
+                applied_effect_log: List[Dict] = []
+                removed_effect_log: List[Dict] = []
+
+                for row in item_effect_rows:
+                    side = row["target_side"]
+                    targets = _item_targets(side)
+                    is_enemy_side = side == ITEM_TARGET_ENEMY
+                    for _tpid in targets:
+                        # Бросок шанса — та же формула, что у навыков
+                        # (удача атакующего, стойкость цели для вражеских строк).
+                        _passed = _filter_effects_by_chance(
+                            [row],
+                            attacker_luck_bonus,
+                            (await _endurance_of(_tpid)) if is_enemy_side else 0,
+                        )
+                        if not _passed:
+                            continue
+                        if _is_cleanse_row(row):
+                            # Очищение: что снимать — attribute_key, сколько —
+                            # magnitude (0 = все подходящие). Полный контроль
+                            # с пропуском хода не снимается никогда (buffs.py).
+                            try:
+                                _limit = int(row.get("magnitude") or 0)
+                            except (TypeError, ValueError):
+                                _limit = 0
+                            removed = remove_effects(
+                                battle_state, _tpid,
+                                selector=row.get("attribute_key") or "",
+                                limit=max(0, _limit),
+                            )
+                            if removed:
+                                removed_effect_log.extend(removed)
+                                turn_events.append({
+                                    "event": "effects_removed",
+                                    "who": _tpid,
+                                    "target": _tpid,
+                                    "source": request.participant_id,
+                                    "item_id": item_id,
+                                    "item_name": item_name,
+                                    "removed": removed,
+                                })
+                            continue
+                        apply_new_effects(
+                            battle_state, _tpid, [dict(row)],
+                            is_enemy=is_enemy_side,
+                            owner_pid=request.participant_id,
+                            # Эффекты ПРЕДМЕТА обновляются, а не копятся: тот же
+                            # предмет продлевает свою запись, чужой предмет и
+                            # навыки не трогаются (FEAT-168).
+                            source=("item", item_id),
+                        )
+                        _normalized = _normalize_effect(row)
+                        applied_effect_log.append(_normalized)
+                        turn_events.append({
+                            "event": "apply_effects",
+                            "who": _tpid,
+                            "kind": "item",
+                            "item_id": item_id,
+                            "item_name": item_name,
+                            "effects": [_normalized],
+                        })
+
+                # ── 6) Урон от предмета (свитки) — та же формула, что у навыков:
+                # криты, сопротивления, уклонение, AoE.
+                item_damage_rows = matched_slot.get("damage_entries") or []
+                item_damage_total = 0
+                if item_damage_rows:
+                    _item_mods = aggregate_modifiers(
+                        battle_state.get("active_effects", {}).get(me, [])
+                    )
+                    _item_attacker_attrs = apply_flat_modifiers(
+                        base_attacker_attributes, _item_mods
+                    )
+                    _item_pct_damage = build_percent_damage_buffs(_item_mods)
+                    _item_ctx: Dict[int, Dict] = {}
+                    _item_dodge_logged: set = set()
+
+                    async def _item_ctx_for(pid: int) -> Dict:
+                        if pid not in _item_ctx:
+                            _pd = participants_map[str(pid)]
+                            _mods = aggregate_modifiers(
+                                battle_state.get("active_effects", {}).get(str(pid), [])
+                            )
+                            _tattrs = apply_flat_modifiers(
+                                await attrs(_pd["character_id"]), _mods
+                            )
+                            _item_ctx[pid] = {
+                                "attrs": _tattrs,
+                                "resists": build_percent_resist_buffs(_mods),
+                                "dodged": roll_dodge(_tattrs.get("dodge", 0)),
+                            }
+                        return _item_ctx[pid]
+
+                    # Поле `chance` у строк урона НЕ бросается — намеренно, ровно
+                    # как в шаге атаки для урона навыков: попадание решают
+                    # уклонение и сопротивления. Админка поле шанса у строк урона
+                    # не показывает, чтобы не обещать несуществующий бросок.
+                    for dmg in item_damage_rows:
+                        if not isinstance(dmg, dict):
+                            continue
+                        _side = (dmg.get("target_side") or ITEM_TARGET_ENEMY).strip().lower()
+                        if _side == ITEM_TARGET_ENEMY:
+                            _targets = resolve_aoe_targets(
+                                dmg.get("aoe_shape", "single"), defender_pid, alive_enemies,
+                                dmg.get("aoe_falloff", 50), dmg.get("aoe_max_targets", 3),
+                            )
+                        else:
+                            _targets = [(p, 1.0) for p in _item_targets(_side)]
+                        for _tpid, _tmult in _targets:
+                            _tpart = participants_map.get(str(_tpid))
+                            if not _tpart or _tpart.get("hp", 0) <= 0:
+                                continue
+                            _ctx = await _item_ctx_for(_tpid)
+                            if _ctx["dodged"]:
+                                if _tpid not in _item_dodge_logged:
+                                    _item_dodge_logged.add(_tpid)
+                                    turn_events.append({
+                                        "event": "damage", "source": request.participant_id,
+                                        "target": _tpid, "dodged": True, "final": 0,
+                                        "source_kind": "item", "item_id": item_id,
+                                        "item_name": item_name,
+                                    })
+                                continue
+                            dealt, log = await compute_damage_with_rolls(
+                                damage_entry=dmg,
+                                attacker_attr=_item_attacker_attrs,
+                                weapon=(
+                                    None
+                                    if dmg.get("weapon_slot", "no_weapon") == "no_weapon"
+                                    else attacker_weapons.get(dmg.get("weapon_slot"))
+                                ),
+                                percent_buffs=_item_pct_damage,
+                                defender_attr=_ctx["attrs"],
+                                percent_resists=_ctx["resists"],
+                                class_id=attacker_class_id,
+                                apply_dodge=False,
+                            )
+                            if _tmult != 1.0:
+                                dealt *= _tmult
+                                log = {**log, "final": round(dealt, 2), "aoe_falloff": _tmult}
+                            participants_map[str(_tpid)]["hp"] -= dealt
+                            dealt_int = int(round(dealt))
+                            item_damage_total += dealt_int
+                            part["total_damage_dealt"] = part.get("total_damage_dealt", 0) + dealt_int
+                            participants_map[str(_tpid)]["total_damage_received"] = (
+                                participants_map[str(_tpid)].get("total_damage_received", 0) + dealt_int
+                            )
+                            turn_events.append({
+                                "event": "damage", "source": request.participant_id,
+                                "target": _tpid, **log,
+                                "source_kind": "item", "item_id": item_id,
+                                "item_name": item_name,
+                            })
+
+                # ── 7) Нанесение яда на оружие.
+                if item_action == ITEM_ACTION_WEAPON_COATING:
+                    try:
+                        _coating_turns = int(matched_slot.get("coating_turns") or 0)
+                    except (TypeError, ValueError):
+                        _coating_turns = 0
+                    try:
+                        _coating_bonus = float(matched_slot.get("coating_bonus_damage") or 0)
+                    except (TypeError, ValueError):
+                        _coating_bonus = 0.0
+                    if _coating_turns > 0:
+                        part["weapon_coating"] = {
+                            "item_id": item_id,
+                            "name": item_name,
+                            "bonus_damage": _coating_bonus,
+                            "turns_left": _coating_turns,
+                            "effects": [dict(r) for r in coating_effect_rows],
+                        }
+                        turn_events.append({
+                            "event": "weapon_coating_applied",
+                            "who": request.participant_id,
+                            "item_id": item_id,
+                            "item_name": item_name,
+                            "turns": _coating_turns,
+                            "bonus_damage": _coating_bonus,
+                        })
+                    else:
+                        logger.warning(
+                            "[ITEM] item_id=%s помечен как weapon_coating, но coating_turns=%s "
+                            "— яд не нанесён", item_id, matched_slot.get("coating_turns"),
+                        )
+
+                # ── 8) Расход стопки: списываем одну штуку, слот убираем на нуле.
+                # Раньше слот удалялся целиком, сколько бы зелий в нём ни лежало
+                # (ISSUES #4). Поле quantity есть и у слотов, снятых до FEAT-168
+                # (его клали ещё в inventory_client), поэтому бои, начатые до
+                # деплоя, тоже получают все применения стопки. Дефолт нужен для
+                # мусорных значений (нет ключа, None, 0, не число) — тогда
+                # считаем, что штука одна, и слот уходит после применения.
+                try:
+                    _quantity = int(matched_slot.get("quantity", 1) or 1)
+                except (TypeError, ValueError):
+                    _quantity = 1
+                quantity_left = max(0, _quantity - 1)
+                if quantity_left > 0:
+                    matched_slot["quantity"] = quantity_left
+                else:
+                    part["fast_slots"].pop(matched_idx)
+
+                # 9) Log item_use event
+                turn_events.append({
+                    "event": "item_use",
+                    "who": request.participant_id,
+                    "item_id": item_id,
+                    "item_name": item_name,
+                    "recovery": recovery_payload,
+                    "action": item_action,
+                    "effects": applied_effect_log,
+                    "removed": removed_effect_log,
+                    "damage": item_damage_total,
+                    "quantity_left": quantity_left,
+                })
+                logger.debug(
+                    f"[ITEM] consumed item_id={item_id}, action={item_action}, "
+                    f"recovery={recovery_payload}, effects={len(applied_effect_log)}, "
+                    f"damage={item_damage_total}, left={quantity_left}"
+                )
 
     # ------------------------------------------------------------------------------
     # 9. ATTACK-навык
@@ -2782,8 +3161,26 @@ async def _make_action_core(
                 }
             return _atk_ctx[pid]
 
+        # FEAT-168: нанесённый на оружие яд действует на КАЖДУЮ строку урона,
+        # которая бьёт оружием (no_weapon — свитки и голые руки — не в счёт).
+        # Прибавка к урону идёт в amount ДО формулы, поэтому проходит через
+        # баффы, крит и сопротивления, как любой другой урон. Яда нет (или бой
+        # начат до деплоя) → строка не считается отравленной и ничего не меняется.
+        #
+        # ВАЖНО: «строка отравлена» определяется наличием яда и слотом оружия, а
+        # НЕ величиной прибавки. Яд без прибавки к урону (`coating_bonus_damage`
+        # = 0) — нормальная настройка: вся его сила в периодическом уроне. Такой
+        # яд обязан вешать свои эффекты на тех, кого ударили.
+        _coating = _active_coating(participant_info)
+        _coating_bonus = _coating_bonus_damage(participant_info)
+        _coating_hit_targets: List[int] = []
+
         # damage_entries — each entry resolves its own AoE target set (FEAT-146).
         for dmg in attack_rank.get("damage_entries", []):
+            _weapon_slot = dmg.get("weapon_slot", "main_weapon")
+            _coated_entry = _coating is not None and _weapon_slot != "no_weapon"
+            if _coated_entry and _coating_bonus:
+                dmg = {**dmg, "amount": (dmg.get("amount") or 0) + _coating_bonus}
             aoe_targets = resolve_aoe_targets(
                 dmg.get("aoe_shape", "single"), defender_pid, alive_enemies,
                 dmg.get("aoe_falloff", 50), dmg.get("aoe_max_targets", 3),
@@ -2824,9 +3221,46 @@ async def _make_action_core(
                 battle_state["participants"][str(_tpid)]["total_damage_received"] = (
                     battle_state["participants"][str(_tpid)].get("total_damage_received", 0) + dealt_int
                 )
+                if _coated_entry and _tpid not in _coating_hit_targets:
+                    _coating_hit_targets.append(_tpid)
                 turn_events.append({
                     "event": "damage", "source": request.participant_id,
                     "target": _tpid, **log
+                })
+
+        # FEAT-168: эффекты яда вешаются на тех, кто реально получил урон
+        # отравленным оружием — по одному разу за ход на цель, с обычным
+        # броском шанса (удача атакующего против стойкости цели).
+        _coating_effects = (_coating or {}).get("effects") or []
+        if _coating_effects and _coating_hit_targets:
+            for _tpid in _coating_hit_targets:
+                _tpd = participants_map.get(str(_tpid))
+                if not _tpd:
+                    continue
+                _rows = _filter_effects_by_chance(
+                    [dict(r) for r in _coating_effects if isinstance(r, dict)],
+                    attacker_luck_bonus,
+                    (await attrs(_tpd["character_id"])).get("endurance", 0),
+                )
+                if not _rows:
+                    continue
+                apply_new_effects(
+                    battle_state, _tpid, _rows, is_enemy=True,
+                    owner_pid=request.participant_id,
+                    # Источник — сам яд: повторные попадания продлевают его
+                    # эффект, а не складывают несколько отравлений. У яда из
+                    # старого состояния item_id может не быть — тогда источник
+                    # не задаём и запись ведёт себя как эффект навыка.
+                    source=(
+                        ("item", _coating.get("item_id"))
+                        if _coating.get("item_id") else None
+                    ),
+                )
+                turn_events.append({
+                    "event": "apply_effects", "who": _tpid, "kind": "item",
+                    "item_id": _coating.get("item_id"),
+                    "item_name": _coating.get("name"),
+                    "effects": [_normalize_effect(r) for r in _rows],
                 })
 
     # ------------------------------------------------------------------------------
@@ -2918,6 +3352,19 @@ async def _make_action_core(
     # в конце ЕГО собственного хода.
     # ------------------------------------------------------------------------------
     decrement_durations(battle_state, request.participant_id)
+
+    # ------------------------------------------------------------------------------
+    # 9.4b. FEAT-168: яд на оружии живёт по тем же часам — убывает в конце хода
+    # своего владельца. На нуле снимается, о чём сообщаем в журнал.
+    # ------------------------------------------------------------------------------
+    _expired_coating = _tick_weapon_coating(participant_info)
+    if _expired_coating:
+        turn_events.append({
+            "event": "weapon_coating_expired",
+            "who": request.participant_id,
+            "item_id": _expired_coating.get("item_id"),
+            "item_name": _expired_coating.get("name"),
+        })
 
     # ------------------------------------------------------------------------------
     # 9.5. Проверка HP <= 0 — завершение боя при гибели участника
@@ -4941,6 +5388,10 @@ def _build_runtime(state: dict) -> dict:
                 "max_stamina": state["participants"][pid].get("max_stamina", 0),
                 # FEAT-163 3.8: additive, defaults to False for pre-deploy states.
                 "dropped_out": bool(state["participants"][pid].get("dropped_out", False)),
+                # FEAT-168: нанесённый на оружие яд (или None). Клиент по нему
+                # показывает баннер и блокирует второй яд. В боях, начатых до
+                # деплоя, ключа нет — отдаём None.
+                "weapon_coating": state["participants"][pid].get("weapon_coating"),
             }
             for pid in state["participants"]
         },

@@ -11,9 +11,7 @@ interface ActiveBuffIndicatorProps {
   characterId: number;
 }
 
-const BUFF_TYPE_LABELS: Record<string, string> = {
-  xp_bonus: 'XP',
-};
+import { xpBuffLabel } from '../../../utils/itemEffects';
 
 const formatTime = (totalSeconds: number): string => {
   if (totalSeconds <= 0) return '0:00';
@@ -51,20 +49,25 @@ const BuffItem = ({ buff, characterId }: { buff: ActiveBuff; characterId: number
   if (remaining <= 0) return null;
 
   const bonusPct = Math.round(buff.value * 100);
-  const label = BUFF_TYPE_LABELS[buff.buff_type] || buff.buff_type;
+  // All 8 XP sources are labelled in the shared map (FEAT-168 §3.9-bis A).
+  const label = xpBuffLabel(buff.buff_type);
 
+  // The labels grew long with the 8 XP sources (§3.9-bis), so the pill wraps
+  // instead of pushing the row past a 360px viewport: the countdown stays
+  // pinned to the right and the label takes whatever space is left.
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.9 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.9 }}
       transition={{ duration: 0.2 }}
-      className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-gold/30 bg-gold/[0.06] whitespace-nowrap"
+      className="flex items-center gap-2 min-w-0 max-w-full px-2.5 py-1 rounded-card sm:rounded-full border border-gold/30 bg-gold/[0.06]"
+      title={`+${bonusPct}% ${label}`}
     >
-      <span className="text-xs font-medium text-gold">
+      <span className="text-[11px] sm:text-xs font-medium text-gold min-w-0 break-words">
         +{bonusPct}% {label}
       </span>
-      <span className="text-xs text-white/70">
+      <span className="text-[11px] sm:text-xs text-white/70 shrink-0 tabular-nums">
         {formatTime(remaining)}
       </span>
     </motion.div>

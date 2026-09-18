@@ -137,6 +137,19 @@ def admin_client(db_session):
 # Tests for XP sync on level change
 # ===========================================================================
 
+def _passive_experience_gets(mock_instance):
+    """GET-вызовы именно за passive_experience.
+
+    FEAT-168 #6: обработчик дополнительно спрашивает у inventory-service
+    множитель книги опыта за титулы (тоже через AsyncClient и тот же мок),
+    поэтому считать все GET подряд больше нельзя.
+    """
+    return [
+        c for c in mock_instance.get.call_args_list
+        if "passive_experience" in str(c.args) + str(c.kwargs)
+    ]
+
+
 class TestAdminUpdateLevelXpSync:
     """Tests for passive_experience synchronisation when admin changes level."""
 
@@ -181,7 +194,7 @@ class TestAdminUpdateLevelXpSync:
         assert ch.level == 5
 
         # Verify GET was called for passive_experience
-        mock_instance.get.assert_called_once()
+        assert len(_passive_experience_gets(mock_instance)) == 1
 
         # Verify PUT was called with correct passive_experience
         mock_instance.put.assert_called_once()
@@ -219,7 +232,7 @@ class TestAdminUpdateLevelXpSync:
         assert resp.status_code == 200
 
         # Verify GET was called (to check current XP)
-        mock_instance.get.assert_called_once()
+        assert len(_passive_experience_gets(mock_instance)) == 1
 
         # Verify PUT was NOT called (XP is already sufficient)
         mock_instance.put.assert_not_called()

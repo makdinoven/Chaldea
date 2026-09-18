@@ -55,7 +55,7 @@ battle-service/app/
 - **battle_snapshots** - battle_id, participants[] (полные данные на начало боя)
 
 ### Redis (runtime state)
-- `battle:{id}:state` - JSON: participants (hp/mana/energy/stamina/cooldowns/active_effects), turn_order, turn_number, next_actor (TTL: 48h)
+- `battle:{id}:state` - JSON: participants (hp/mana/energy/stamina/cooldowns/fast_slots/weapon_coating), active_effects, turn_order, turn_number, next_actor (TTL: 48h)
 - `battle:{id}:snapshot` - кэш снапшота из MongoDB (TTL: 24h)
 - `battle:{id}:turns` - ZSET номеров ходов
 - `battle:deadlines` - ZSET дедлайнов: `{battle_id}:{participant_id}` -> unix_timestamp. **Читается свипером** (FEAT-163), держит не более одной записи на бой
@@ -81,7 +81,7 @@ battle-service/app/
 4. Валидировать владение навыками
 5. Обработать SUPPORT-навык (эффекты на себя и врага)
 6. Обработать DEFENSE-навык (эффекты на себя и врага)
-7. Использовать предмет из быстрого слота (восстановление ресурсов)
+7. Использовать предмет из быстрого слота (восстановление, боевые эффекты, урон, яд на оружие — FEAT-168)
 8. Обработать ATTACK-навык + расчёт урона
 9. Списать ресурсы (mana, energy) за использованные навыки
 10. Установить кулдауны
@@ -145,10 +145,118 @@ battle-service/app/
 
 ## Система эффектов
 
-- Эффекты имеют: name, magnitude, duration, target_side (self/enemy)
-- **Instant**: здоровье/мана/энергия/стамина - применяются сразу (clamped to max)
-- **Buff**: хранятся в `active_effects[pid]`, влияют на damage/resist модификаторы
-- Duration уменьшается каждый ход, удаляется при 0
+Актуализировано FEAT-168 (Codebase Analyst, 2026-09-18) — раздел отставал от FEAT-143/146.
+
+Исходная строка эффекта (та же форма, что у `skill_perk_effects` в skills-service):
+`{target_side, effect_name, chance, duration, magnitude, attribute_key}`. `target_side` —
+`self` / `enemy` / `ally` / `all_allies` / `all_enemies`. Шанс срабатывания фильтруется в
+`main._filter_effects_by_chance` (`chance + удача×0.1 − живучесть цели×0.2`).
+
+- **Instant**: `hp` / `mana` / `energy` / `stamina` — применяются сразу, clamp 0..max
+  (`buffs.apply_new_effects`). Для врага положительная magnitude инвертируется в урон.
+- **Модификаторы**: хранятся в `state["active_effects"][pid]` как
+  `{name, attribute, magnitude, duration, owner_id, fresh}`; `aggregate_modifiers` складывает их
+  в движковые каналы (`percent_damage_*`, `percent_resist_*`, плоские атрибуты).
+- **Сложные эффекты** (`buffs._expand_complex_effect`): ArmorBreak, Freeze, Electrify, Daze, Wet,
+  Holy, Curse раскрываются в те же каналы.
+- **Периодический урон (DoT)**: `buffs.tick_periodic_effects` — Bleeding, Burn и Poison с
+  `attribute_key="periodic_damage"`; событие `effect_tick`.
+- **Контроли**: `buffs.evaluate_control` — Stun и Poison:paralysis обнуляют весь ход (включая
+  предмет), Knockdown и Windburn блокируют один тип навыка; события `control_skip` / `control_block`.
+- **Тик длительности**: по ВЛАДЕЛЬЦУ (`owner_id`), а не по носителю — дебафф на враге убывает в конце
+  хода кастера. Свеженаложенный эффект (`fresh`) не тикает в ход применения. Удаляется при duration == 0.
+- **Накопление vs обновление** (FEAT-168) — зависит от ИСТОЧНИКА эффекта
+  (`apply_new_effects(..., source=("item", item_id))`, по умолчанию `source=None`):
+  - **Навыки** (`source=None`) — накапливаются: каждое применение добавляет отдельную запись со своей
+    длительностью и силой, записи тикают независимо. Кровотечение на 2 хода по 5 и кровотечение на
+    3 хода по 10 идут параллельно.
+  - **Предметы** (`source=("item", id)`) — не накапливаются: повторное применение ТОГО ЖЕ предмета
+    обновляет его собственную запись на месте — `duration = max(старая, новая)`, `magnitude = новая`.
+    Ключ обновления — `(source, имя, нормализованный attribute, owner_id)`, поэтому эффект другого
+    предмета или навыка с тем же именем не затрагивается.
+  - Флаг `fresh` ставится только у по-настоящему новой записи; у уже активного эффекта он не трогается —
+    иначе эффект пропустил бы один тик (подновлённый яд переставал бы наносить урон на ход).
+  - `source` хранится в записи эффекта строкой `"item:42"` (состояние сериализуется в JSON, кортеж после
+    round-trip стал бы списком). Нормализация — `buffs.normalize_source(source)`.
+- **Снятие эффектов** (FEAT-168, `buffs.remove_effects(state, pid, *, selector, limit=0)`):
+  селекторы `debuff` (всё, что повесил другой участник), `periodic_damage`, `control_partial`
+  (Knockdown / Windburn), `stat_down` (отрицательный вклад в модификаторы), `all`, либо имя
+  конкретного эффекта (`Bleeding`). Пустой селектор = `debuff`. `limit = 0` — снять все подходящие,
+  иначе снимаются первые N (самые старые). Возвращает снятые записи для события `effects_removed`.
+  **Полный контроль с пропуском хода (Stun, Poison с атрибутом `paralysis`) не снимается никогда**,
+  в том числе селектором `all` — это правило движка (`buffs.is_unremovable`, список берётся из
+  `evaluate_control`), его нельзя обойти настройкой предмета.
+- **Совместимость со старым состоянием**: записи из Redis, созданные до FEAT-143/168 (без `owner_id`
+  и `fresh`), обрабатываются как принадлежащие участнику, в чьём списке лежат.
+
+### Расходники в бою (FEAT-168)
+
+Предмет применяется полем `skills.item_id` того же POST-а, что и навыки: ход он не тратит, но за
+ход можно применить ровно один предмет — второго канала нет по конструкции. Полный контроль
+(Stun / Poison:paralysis) обнуляет и предмет.
+
+Вся боевая настройка предмета едет в снапшоте быстрых слотов (`inventory_client.get_fast_slots`,
+снимается на старте боя): `*_recovery`, `consumable_action`, `coating_turns`,
+`coating_bonus_damage`, `effects`, `damage_entries`. Строки эффектов и урона имеют ту же форму,
+что у навыков, поэтому идут в тот же движок без перевода. **Каждое из этих полей читается через
+`.get(..., default)`**: бой, начатый до FEAT-168, их не содержит, и предмет без боевой настройки
+проходит ровно прежний путь (только восстановление).
+
+Порядок внутри шага 8 (`main.py`, секция 8):
+
+1. Слот ищется по `item_id` в `fast_slots`; не нашли — предупреждение в лог, шаг пропускается.
+2. `consumable_action` (`instant` по умолчанию | `weapon_coating` | `cleanse`).
+3. **Яд при действующем яде** — событие `item_rejected` (`reason: "coating_active"`), предмет НЕ
+   расходуется, остальной ход отыгрывается полностью. Отказ 400 стоил бы игроку хода.
+4. `consume_item` в inventory-service — best-effort, как и раньше: ошибка логируется и не мешает.
+5. Восстановление здоровья/маны/энергии/выносливости из закэшированного слота, clamp по максимумам.
+6. Строки `effects`: бросок шанса той же формулой, что у навыков; `Cleanse` снимает эффекты
+   (`buffs.remove_effects`, селектор в `attribute_key`, число в `magnitude`, 0 = все), остальные
+   накладываются на `self` / `ally` / `all_allies` / `enemy` c `source=("item", item_id)` —
+   повторное применение того же предмета обновляет свою запись, а не копит их.
+7. Строки `damage_entries`: `resolve_aoe_targets` + та же `compute_damage_with_rolls`, что у атаки
+   (криты, сопротивления, уклонение один раз на цель), `weapon=None` при `weapon_slot="no_weapon"`.
+   Поле `chance` у строк урона **не бросается** — намеренно, ровно как в шаге атаки для урона
+   навыков: попадание решают уклонение и сопротивления. Админка поле шанса у строк урона не
+   показывает, чтобы не обещать несуществующий бросок.
+8. `weapon_coating` — яд записывается в состояние участника (см. ниже).
+9. Расход стопки: `quantity − 1`, слот уходит из пояса только на нуле. `quantity` есть и у слотов,
+   снятых до FEAT-168, поэтому бои, начатые до деплоя, тоже получают все применения стопки; дефолт
+   `1` нужен только для мусорного значения (нет ключа / None / 0 / не число) — такой слот тратится
+   за одно применение.
+
+### Яд на оружии (weapon_coating)
+
+Поле участника в Redis, по умолчанию отсутствующее:
+
+```json
+"weapon_coating": {"item_id": 91, "name": "Яд гадюки", "bonus_damage": 12.0,
+                   "turns_left": 4, "effects": [ …строки item_effects с target_side=enemy… ]}
+```
+
+- `bonus_damage` прибавляется к `amount` КАЖДОЙ строки урона, бьющей оружием
+  (`weapon_slot != "no_weapon"`), ДО формулы — значит проходит через баффы, крит и сопротивления.
+- `effects` вешаются на тех, кто реально получил урон отравленным оружием, по одному разу за ход,
+  с обычным броском шанса (удача атакующего против стойкости цели). «Строка отравлена» определяется
+  наличием яда и слотом оружия, а **не** величиной прибавки: яд с `coating_bonus_damage = 0` —
+  нормальная настройка (вся сила в периодическом уроне) и обязан вешать свои эффекты.
+- `turns_left` убывает в конце хода владельца, рядом с `decrement_durations`; на нуле яд снимается
+  и пишется `weapon_coating_expired`.
+- Живёт только в состоянии боя, поэтому кончается вместе с боем. Оружие в бою не меняется.
+- Отдаётся клиенту в `runtime.participants[pid].weapon_coating` (схема
+  `BattleRuntimeParticipant.weapon_coating`, необязательное поле, `None` для старых боёв).
+
+### События журнала боя от предметов
+
+| Событие | Ключи |
+|---|---|
+| `item_use` | `who, item_id, item_name, recovery{health,mana,energy,stamina}, action, effects[], removed[], damage, quantity_left` |
+| `item_rejected` | `who, item_id, item_name, reason ("coating_active"), active_coating, turns_left` |
+| `apply_effects` (от предмета) | `who, kind: "item", item_id, item_name, effects[]` |
+| `damage` (от предмета) | обычные поля + `source_kind: "item"`, `item_id`, `item_name` |
+| `effects_removed` | `who, target, source, item_id, item_name, removed[]` (снятые записи эффектов) |
+| `weapon_coating_applied` | `who, item_id, item_name, turns, bonus_damage` |
+| `weapon_coating_expired` | `who, item_id, item_name` |
 
 ## Celery задача
 

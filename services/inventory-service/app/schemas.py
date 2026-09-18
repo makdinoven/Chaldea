@@ -1,3 +1,5 @@
+import re
+
 from pydantic import BaseModel, root_validator, validator, constr
 from typing import List, Optional, Any, Dict
 from enum import Enum
@@ -217,6 +219,302 @@ class ItemRarity(str, Enum):
     demonic = "demonic"
 
 # -----------------------------------------------------------------------------
+# FEAT-168: боевые эффекты расходников
+# -----------------------------------------------------------------------------
+
+# Whitelisted vocabulary. Kept in sync with the skills admin
+# (frontend/src/components/AdminSkillsPage/skillConstants.ts) so items and
+# skills can never describe an effect the battle engine does not understand.
+EFFECT_TARGET_SIDES = frozenset({"self", "enemy", "ally", "all_allies"})
+DAMAGE_TARGET_SIDES = frozenset({"self", "enemy", "ally", "all_allies"})
+DAMAGE_WEAPON_SLOTS = frozenset({"main_weapon", "additional_weapons", "no_weapon"})
+DAMAGE_TYPES = frozenset({
+    "all", "physical", "catting", "crushing", "piercing", "magic", "fire",
+    "ice", "watering", "electricity", "wind", "sainting", "damning",
+})
+# Exactly the shapes battle-service implements in `resolve_aoe_targets`
+# (`battle-service/app/main.py`): single = one target, splash = both neighbours
+# in the enemy lineup, cleave = the next one, all = every enemy, random_n =
+# `aoe_max_targets - 1` random extras. Anything else would save and then
+# silently degrade to single-target, so it is rejected here.
+AOE_SHAPES = frozenset({"single", "splash", "cleave", "all", "random_n"})
+
+# How a consumable behaves in battle. NULL is the same as "instant".
+CONSUMABLE_ACTIONS = frozenset({"instant", "weapon_coating", "cleanse"})
+
+# Only these item types may carry a battle effect payload.
+BATTLE_EFFECT_ITEM_TYPES = frozenset({"consumable", "scroll"})
+
+# --- XP buff types (FEAT-168 #6) -------------------------------------------
+# One item may carry several of these at once (`item_xp_buffs`), so an admin can
+# build e.g. «книга: +25 % к опыту за задания и +10 % к опыту профессии».
+#
+# `xp_bonus` keeps its historic meaning (profession XP) — `active_buffs` rows and
+# item definitions written before FEAT-168 must not break, so it is NOT renamed.
+XP_BUFF_PROFESSION = "xp_bonus"
+XP_BUFF_GATHERING = "gathering_xp_bonus"
+# Umbrella: every character-XP source at once.
+XP_BUFF_CHARACTER_ALL = "character_xp_bonus"
+# Granular character-XP sources.
+XP_BUFF_CHARACTER_BATTLE = "character_xp_battle_bonus"
+XP_BUFF_CHARACTER_POST = "character_xp_post_bonus"
+XP_BUFF_CHARACTER_QUEST = "character_xp_quest_bonus"
+XP_BUFF_CHARACTER_TITLE = "character_xp_title_bonus"
+XP_BUFF_CHARACTER_PASS = "character_xp_pass_bonus"
+
+# Granular source → umbrella type that also applies to it.
+XP_BUFF_PARENTS = {
+    XP_BUFF_CHARACTER_BATTLE: XP_BUFF_CHARACTER_ALL,
+    XP_BUFF_CHARACTER_POST: XP_BUFF_CHARACTER_ALL,
+    XP_BUFF_CHARACTER_QUEST: XP_BUFF_CHARACTER_ALL,
+    XP_BUFF_CHARACTER_TITLE: XP_BUFF_CHARACTER_ALL,
+    XP_BUFF_CHARACTER_PASS: XP_BUFF_CHARACTER_ALL,
+}
+
+# Buff types allowed on an item (`items.buff_type` and `item_xp_buffs.buff_type`).
+# Until FEAT-168 `items.buff_type` was an unvalidated free string; every row
+# written before it uses "xp_bonus".
+ALLOWED_BUFF_TYPES = frozenset({
+    XP_BUFF_PROFESSION,
+    XP_BUFF_GATHERING,
+    XP_BUFF_CHARACTER_ALL,
+    XP_BUFF_CHARACTER_BATTLE,
+    XP_BUFF_CHARACTER_POST,
+    XP_BUFF_CHARACTER_QUEST,
+    XP_BUFF_CHARACTER_TITLE,
+    XP_BUFF_CHARACTER_PASS,
+})
+
+# Guard rails for the admin form: a book may not be stronger than +1000 % and
+# may not last longer than a week.
+MAX_XP_BUFF_ROWS = len(ALLOWED_BUFF_TYPES)
+MAX_XP_BUFF_VALUE = 10.0
+MAX_XP_BUFF_DURATION_MINUTES = 7 * 24 * 60
+
+MAX_ITEM_EFFECT_ROWS = 20
+MAX_ITEM_DAMAGE_ROWS = 10
+MAX_EFFECT_MAGNITUDE = 10000.0
+MAX_COATING_TURNS = 50
+MAX_COATING_BONUS_DAMAGE = 10000.0
+
+# Effect names / attribute keys reach the battle engine as-is, so they may only
+# contain plain identifier characters (latin, digits, _ - : and space).
+_EFFECT_TOKEN_RE = re.compile(r"^[A-Za-z0-9_:\- ]+$")
+
+
+def _check_effect_token(value: Optional[str], field_label: str, max_len: int) -> Optional[str]:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if len(value) > max_len:
+        raise ValueError(f"{field_label}: не длиннее {max_len} символов")
+    if not _EFFECT_TOKEN_RE.match(value):
+        raise ValueError(f"{field_label}: допустимы только латинские буквы, цифры, _ - : и пробел")
+    return value
+
+
+class ItemXpBuffIn(BaseModel):
+    """FEAT-168 #6: одна строка ускорения опыта у предмета (книги, свитки)."""
+    buff_type: str
+    # Доля: 0.25 = +25 %
+    value: float
+    duration_minutes: int = 60
+
+    @validator("buff_type")
+    def _v_buff_type(cls, v):
+        if v not in ALLOWED_BUFF_TYPES:
+            raise ValueError("Недопустимый тип опыта")
+        return v
+
+    @validator("value")
+    def _v_value(cls, v):
+        if not 0 < v <= MAX_XP_BUFF_VALUE:
+            raise ValueError(
+                f"Прибавка к опыту должна быть больше 0 и не больше {int(MAX_XP_BUFF_VALUE * 100)} %"
+            )
+        return v
+
+    @validator("duration_minutes")
+    def _v_duration(cls, v):
+        if not 1 <= v <= MAX_XP_BUFF_DURATION_MINUTES:
+            raise ValueError(
+                f"Длительность баффа опыта должна быть от 1 до {MAX_XP_BUFF_DURATION_MINUTES} минут"
+            )
+        return v
+
+
+# NOTE (FEAT-168, review #1 issue 2): the *Out schemas below deliberately do NOT
+# inherit from their *In counterparts. Inheriting would re-run the request
+# validators on the way out, so one bad row already in the database (a legacy
+# free-string `buff_type`, a `value` of 0, a shape written before a whitelist
+# existed) would turn a plain read into a 500. Reading stored data must never
+# fail: validation belongs on the write path only.
+
+class ItemXpBuffOut(BaseModel):
+    """Ответная форма строки ускорения опыта — без валидации.
+
+    Отдаёт то, что лежит в базе, каким бы оно ни было: чтение не должно падать
+    из-за строки, записанной до появления белого списка.
+    """
+    id: int
+    buff_type: str
+    value: float
+    duration_minutes: int
+
+    class Config:
+        orm_mode = True
+
+
+class ItemEffectIn(BaseModel):
+    """Одна строка эффекта предмета (зеркало skill_perk_effects)."""
+    target_side: str = "self"
+    effect_name: str
+    description: Optional[str] = None
+    chance: int = 100
+    duration: int = 1
+    magnitude: float = 0.0
+    attribute_key: Optional[str] = None
+
+    @validator("target_side")
+    def _v_target_side(cls, v):
+        if v not in EFFECT_TARGET_SIDES:
+            raise ValueError("Недопустимая цель эффекта")
+        return v
+
+    @validator("effect_name")
+    def _v_effect_name(cls, v):
+        name = _check_effect_token(v, "Название эффекта", 50)
+        if not name:
+            raise ValueError("Название эффекта обязательно")
+        return name
+
+    @validator("attribute_key")
+    def _v_attribute_key(cls, v):
+        return _check_effect_token(v, "Ключ характеристики", 50)
+
+    @validator("chance")
+    def _v_chance(cls, v):
+        if not 0 <= v <= 100:
+            raise ValueError("Шанс эффекта должен быть от 0 до 100")
+        return v
+
+    @validator("duration")
+    def _v_duration(cls, v):
+        if not 0 <= v <= 100:
+            raise ValueError("Длительность эффекта должна быть от 0 до 100 ходов")
+        return v
+
+    @validator("magnitude")
+    def _v_magnitude(cls, v):
+        if not -MAX_EFFECT_MAGNITUDE <= v <= MAX_EFFECT_MAGNITUDE:
+            raise ValueError(
+                f"Сила эффекта должна быть от -{int(MAX_EFFECT_MAGNITUDE)} до {int(MAX_EFFECT_MAGNITUDE)}"
+            )
+        return v
+
+
+class ItemEffectOut(BaseModel):
+    """Ответная форма строки эффекта — без валидации (см. заметку выше)."""
+    id: int
+    target_side: str
+    effect_name: str
+    description: Optional[str] = None
+    chance: int
+    duration: int
+    magnitude: float
+    attribute_key: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+class ItemDamageIn(BaseModel):
+    """Одна строка урона предмета (зеркало skill_perk_damage)."""
+    damage_type: str
+    amount: float = 0.0
+    description: Optional[str] = None
+    weapon_slot: str = "no_weapon"
+    target_side: str = "enemy"
+    # Хранится и валидируется, но боевой движок его НЕ бросает: у строк урона
+    # предмета шанс игнорируется ровно так же, как у атакующих строк навыка
+    # (battle-service `_make_action_core`). Поле оставлено ради единой формы
+    # строки с skill_perk_damage; админка его намеренно не показывает.
+    chance: int = 100
+    aoe_shape: str = "single"
+    aoe_falloff: int = 50
+    aoe_max_targets: int = 3
+
+    @validator("damage_type")
+    def _v_damage_type(cls, v):
+        if v not in DAMAGE_TYPES:
+            raise ValueError("Недопустимый тип урона")
+        return v
+
+    @validator("weapon_slot")
+    def _v_weapon_slot(cls, v):
+        if v not in DAMAGE_WEAPON_SLOTS:
+            raise ValueError("Недопустимый слот оружия")
+        return v
+
+    @validator("target_side")
+    def _v_target_side(cls, v):
+        if v not in DAMAGE_TARGET_SIDES:
+            raise ValueError("Недопустимая цель урона")
+        return v
+
+    @validator("aoe_shape")
+    def _v_aoe_shape(cls, v):
+        if v not in AOE_SHAPES:
+            raise ValueError("Недопустимая форма области урона")
+        return v
+
+    @validator("chance")
+    def _v_chance(cls, v):
+        if not 0 <= v <= 100:
+            raise ValueError("Шанс урона должен быть от 0 до 100")
+        return v
+
+    @validator("amount")
+    def _v_amount(cls, v):
+        if not -MAX_EFFECT_MAGNITUDE <= v <= MAX_EFFECT_MAGNITUDE:
+            raise ValueError(
+                f"Урон должен быть от -{int(MAX_EFFECT_MAGNITUDE)} до {int(MAX_EFFECT_MAGNITUDE)}"
+            )
+        return v
+
+    @validator("aoe_falloff")
+    def _v_aoe_falloff(cls, v):
+        if not 0 <= v <= 100:
+            raise ValueError("Затухание области должно быть от 0 до 100")
+        return v
+
+    @validator("aoe_max_targets")
+    def _v_aoe_max_targets(cls, v):
+        if not 1 <= v <= 10:
+            raise ValueError("Число целей области должно быть от 1 до 10")
+        return v
+
+
+class ItemDamageOut(BaseModel):
+    """Ответная форма строки урона — без валидации (см. заметку выше)."""
+    id: int
+    damage_type: str
+    amount: float
+    description: Optional[str] = None
+    weapon_slot: str
+    target_side: str
+    chance: int
+    aoe_shape: str
+    aoe_falloff: int
+    aoe_max_targets: int
+
+    class Config:
+        orm_mode = True
+
+
+# -----------------------------------------------------------------------------
 # 2. Схемы для предметов (Items)
 # -----------------------------------------------------------------------------
 
@@ -251,6 +549,11 @@ class ItemBase(BaseModel):
 
     # FEAT-164: food gives "Сытость" (24h) when eaten via /eat-food
     is_food: bool = False
+
+    # FEAT-168: battle behaviour of a consumable (NULL == "instant")
+    consumable_action: Optional[str] = None
+    coating_turns: Optional[int] = None
+    coating_bonus_damage: Optional[float] = None
 
     max_durability: int = 0
     repair_power: Optional[int] = None
@@ -321,6 +624,85 @@ class ItemCreate(ItemBase):
     """
     # Recipe item -> the recipe it teaches. Existence is checked in the endpoint.
     blueprint_recipe_id: Optional[int] = None
+
+    # FEAT-168: nested battle effect rows. Replace-all semantics on update.
+    effects: List[ItemEffectIn] = []
+    damage_entries: List[ItemDamageIn] = []
+    # FEAT-168 #6: nested XP acceleration rows. Replace-all semantics on update.
+    xp_buffs: List[ItemXpBuffIn] = []
+
+    @root_validator
+    def _validate_xp_buffs(cls, values):
+        """FEAT-168 #6: список ускорений опыта у предмета."""
+        rows = values.get("xp_buffs") or []
+        if not rows:
+            return values
+
+        if len(rows) > MAX_XP_BUFF_ROWS:
+            raise ValueError(f"Не больше {MAX_XP_BUFF_ROWS} строк опыта у предмета")
+
+        seen = set()
+        for row in rows:
+            if row.buff_type in seen:
+                raise ValueError("Один тип опыта можно указать у предмета только один раз")
+            seen.add(row.buff_type)
+
+        if values.get("is_food"):
+            raise ValueError("Еда не может ускорять опыт")
+
+        # An XP book is consumed like any other consumable/scroll.
+        item_type = _enum_value(values.get("item_type"))
+        if item_type not in BATTLE_EFFECT_ITEM_TYPES:
+            raise ValueError("Ускорение опыта доступно только для расходников и свитков")
+
+        # Exactly one source of truth: the rows replace the legacy single-buff
+        # columns, which the endpoint clears on save.
+        return values
+
+    @root_validator
+    def _validate_battle_effects(cls, values):
+        """FEAT-168: effect payload, coating settings and the buff_type whitelist."""
+        item_type = _enum_value(values.get("item_type"))
+        effects = values.get("effects") or []
+        damage_entries = values.get("damage_entries") or []
+        action = values.get("consumable_action")
+        coating_turns = values.get("coating_turns")
+        coating_bonus = values.get("coating_bonus_damage")
+
+        if len(effects) > MAX_ITEM_EFFECT_ROWS:
+            raise ValueError(f"Не больше {MAX_ITEM_EFFECT_ROWS} эффектов у предмета")
+        if len(damage_entries) > MAX_ITEM_DAMAGE_ROWS:
+            raise ValueError(f"Не больше {MAX_ITEM_DAMAGE_ROWS} строк урона у предмета")
+
+        if action is not None:
+            if action not in CONSUMABLE_ACTIONS:
+                raise ValueError("Недопустимый тип применения расходника")
+            if action == "instant":
+                # Stored as NULL — "instant" is the absence of a special action.
+                values["consumable_action"] = action = None
+
+        has_battle_payload = bool(effects or damage_entries) or action is not None or \
+            coating_turns is not None or coating_bonus is not None
+        if has_battle_payload:
+            if item_type not in BATTLE_EFFECT_ITEM_TYPES:
+                raise ValueError("Боевые эффекты доступны только для расходников и свитков")
+            if values.get("is_food"):
+                raise ValueError("Еда не может иметь боевых эффектов")
+
+        if action == "weapon_coating":
+            if coating_turns is None or not 1 <= coating_turns <= MAX_COATING_TURNS:
+                raise ValueError(f"Длительность яда должна быть от 1 до {MAX_COATING_TURNS} ходов")
+            if coating_bonus is None or not 0 <= coating_bonus <= MAX_COATING_BONUS_DAMAGE:
+                raise ValueError(
+                    f"Прибавка урона от яда должна быть от 0 до {int(MAX_COATING_BONUS_DAMAGE)}"
+                )
+        elif coating_turns is not None or coating_bonus is not None:
+            raise ValueError("Параметры яда указываются только для предмета «яд на оружие»")
+
+        buff_type = values.get("buff_type")
+        if buff_type and buff_type not in ALLOWED_BUFF_TYPES:
+            raise ValueError("Недопустимый тип баффа")
+        return values
 
     @root_validator
     def _validate_type_bound_fields(cls, values):
@@ -452,6 +834,11 @@ class Item(ItemBase):
     blueprint_recipe_id: Optional[int] = None
     # Read-only here: set by photo-service on upload, not accepted in ItemCreate
     full_image: Optional[str] = None
+    # FEAT-168: empty lists for every item that has no battle payload
+    effects: List[ItemEffectOut] = []
+    damage_entries: List[ItemDamageOut] = []
+    # FEAT-168 #6: which XP the item accelerates (empty for every other item)
+    xp_buffs: List[ItemXpBuffOut] = []
 
     class Config:
         orm_mode = True
@@ -700,6 +1087,17 @@ class FastSlot(BaseModel):
     quantity: int
     name : str
     image : str
+    # FEAT-168 — additive: battle-service snapshots these into the Redis battle
+    # state at battle start. Consumers written before FEAT-168 ignore them.
+    health_recovery: int = 0
+    mana_recovery: int = 0
+    energy_recovery: int = 0
+    stamina_recovery: int = 0
+    consumable_action: Optional[str] = None
+    coating_turns: Optional[int] = None
+    coating_bonus_damage: Optional[float] = None
+    effects: List[ItemEffectOut] = []
+    damage_entries: List[ItemDamageOut] = []
 
 
 # -----------------------------------------------------------------------------
@@ -1297,13 +1695,37 @@ class EatFoodResponse(BaseModel):
     satiety: SatietyInfo
 
 
+class XpMultiplierResponse(BaseModel):
+    """FEAT-168 §3.3.4 — внутренний ответ для character-service."""
+    character_id: int
+    buff_type: str
+    multiplier: float
+
+
+class XpMultipliersResponse(BaseModel):
+    """FEAT-168 #6 — батч-вариант: множители сразу по нескольким источникам."""
+    character_id: int
+    multipliers: Dict[str, float] = {}
+
+
+class AppliedBuffOut(BaseModel):
+    """FEAT-168 #6: один применённый бафф опыта."""
+    buff_type: str
+    value: float
+    duration_minutes: int
+
+
 class UseBuffItemResult(BaseModel):
     success: bool
+    # Первый (или единственный) применённый бафф — поля оставлены ради
+    # обратной совместимости с клиентами, написанными до FEAT-168 #6.
     buff_type: str
     value: float
     duration_minutes: int
     source_item_name: str
     message: str
+    # Полный список — предмет может ускорять несколько видов опыта сразу.
+    buffs: List[AppliedBuffOut] = []
 
 
 # -----------------------------------------------------------------------------

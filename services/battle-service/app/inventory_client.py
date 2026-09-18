@@ -1,5 +1,4 @@
 # inventory_client.py
-import asyncio
 import httpx
 from config import settings
 
@@ -90,40 +89,56 @@ async def update_durability(character_id: int, entries: list[dict]) -> dict:
 
 async def get_fast_slots(character_id: int) -> list[dict]:
     """
-    Возвращает список слотов вида:
+    Возвращает список быстрых слотов (пояс) со всем, что нужно бою:
+
     [
       {
         "slot_type": "fast_slot_1",
         "item_id": 3,
-        "quantity": 5
+        "quantity": 5,
+        "name": "...", "image": "...",
+        "health_recovery": 30,            # только ненулевые
+        "consumable_action": None,        # None | weapon_coating | cleanse
+        "coating_turns": None,
+        "coating_bonus_damage": None,
+        "effects": [...],                 # строки item_effects
+        "damage_entries": [...],          # строки item_damage_entries
       }, …
     ]
-    и подмешивает recovery-поля из самого предмета.
+
+    FEAT-168: inventory-service отдаёт восстановление и боевую настройку
+    предмета прямо в ответе fast_slots, поэтому дозапрос карточки каждого
+    предмета больше не нужен. Всё читается через .get(..., default): если
+    inventory-service почему-то отдаст старый ответ, слот просто останется
+    без боевых эффектов и сработает как раньше.
+
+    Результат снапшотится в состояние боя (Redis, TTL 48 ч) на старте боя.
     """
     async with httpx.AsyncClient() as client:
         r = await client.get(f"{BASE}/inventory/characters/{character_id}/fast_slots")
         r.raise_for_status()
         slots = r.json()
 
-    # Параллельно тянем данные по каждому item_id
-    coros = [get_item(s["item_id"]) for s in slots]
-    items = await asyncio.gather(*coros)
-
     out = []
-    for slot, item in zip(slots, items):
-        # оставляем только нужные recovery-поля
-        rec = {k: item.get(k, 0) for k in (
+    for slot in slots:
+        # восстановление кладём, только если оно ненулевое — как и раньше
+        rec = {k: slot.get(k, 0) for k in (
             "health_recovery",
             "mana_recovery",
             "energy_recovery",
             "stamina_recovery",
-        ) if item.get(k)}
+        ) if slot.get(k)}
         out.append({
-            "slot_type": slot["slot_type"],
-            "item_id": slot["item_id"],
+            "slot_type": slot.get("slot_type"),
+            "item_id": slot.get("item_id"),
             "quantity": slot.get("quantity", 0),
-            "name": slot.get("name", item.get("name")),
-            "image": slot.get("image", item.get("image")),
-            **rec
+            "name": slot.get("name"),
+            "image": slot.get("image"),
+            **rec,
+            "consumable_action": slot.get("consumable_action"),
+            "coating_turns": slot.get("coating_turns"),
+            "coating_bonus_damage": slot.get("coating_bonus_damage"),
+            "effects": slot.get("effects") or [],
+            "damage_entries": slot.get("damage_entries") or [],
         })
     return out

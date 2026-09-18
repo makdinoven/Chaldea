@@ -638,6 +638,56 @@ class TestGatheringAwardInternal:
         assert d["rank_up"] is False
         assert d["new_rank_bonuses"] is None
 
+    def test_gathering_xp_buff_multiplies_xp(self, client, db_session):
+        """FEAT-168: активная книга опыта сбора умножает награду."""
+        import crud
+
+        _ensure_characters_table(db_session)
+        _seed_gathering_skills(db_session)
+        _seed_resource_item(db_session, 4711, "Железная руда")
+        crud.apply_buff(
+            db_session, character_id=1, buff_type="gathering_xp_bonus",
+            value=0.5, duration_minutes=60, source_name="Книга сбора",
+        )
+        db_session.commit()
+
+        body = {
+            "skill_slug": "mining",
+            "result_item_id": 4711,
+            "result_quantity": 4,
+            "xp_to_add": 4,
+            "tool_inventory_item_id": None,
+            "tool_durability_to_consume": 0,
+        }
+        resp = self._do_award(client, body)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["xp_awarded"] == 6  # 4 * 1.5
+
+    def test_profession_xp_buff_does_not_touch_gathering(self, client, db_session):
+        """FEAT-168: xp_bonus — это опыт профессии, к сбору он не применяется."""
+        import crud
+
+        _ensure_characters_table(db_session)
+        _seed_gathering_skills(db_session)
+        _seed_resource_item(db_session, 4711, "Железная руда")
+        crud.apply_buff(
+            db_session, character_id=1, buff_type="xp_bonus",
+            value=0.5, duration_minutes=60, source_name="Книга профессии",
+        )
+        db_session.commit()
+
+        body = {
+            "skill_slug": "mining",
+            "result_item_id": 4711,
+            "result_quantity": 4,
+            "xp_to_add": 4,
+            "tool_inventory_item_id": None,
+            "tool_durability_to_consume": 0,
+        }
+        resp = self._do_award(client, body)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["xp_awarded"] == 4
+
     def test_happy_path_with_tool(self, client, db_session):
         """With tool: durability decremented, items + xp awarded."""
         _ensure_characters_table(db_session)

@@ -1165,11 +1165,23 @@ class MobPackRosterResponse(BaseModel):
 class AddRewardsRequest(BaseModel):
     xp: int = 0
     gold: int = 0
+    # FEAT-168 #6: какой книгой опыта ускоряется эта награда. По умолчанию —
+    # опыт за бои: именно для боёв эндпоинт и писался, старые клиенты (battle-service,
+    # dungeon-service) поля не шлют и работают как раньше.
+    xp_source: str = "character_xp_battle_bonus"
 
     @validator("xp", "gold")
     def validate_non_negative(cls, v):
         if v < 0:
             raise ValueError("Значение награды не может быть отрицательным")
+        return v
+
+    @validator("xp_source")
+    def validate_xp_source(cls, v):
+        # Импорт внутри валидатора: schemas не должен зависеть от crud на уровне модуля.
+        from crud import CHARACTER_XP_SOURCES
+        if v not in CHARACTER_XP_SOURCES:
+            raise ValueError("Недопустимый источник опыта")
         return v
 
 

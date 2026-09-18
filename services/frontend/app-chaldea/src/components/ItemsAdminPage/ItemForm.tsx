@@ -30,7 +30,6 @@ import {
 } from "../../constants/professions";
 import {
   ATTR_MODS,
-  BUFF_TYPE_OPTIONS,
   DEFAULT_DURABILITY,
   DEFAULT_DURABILITY_TYPES,
   DEFAULT_TOOL_DURABILITY,
@@ -48,8 +47,20 @@ import {
   isRawSubcategory,
   isResourceSubcategory,
   rulesFor,
+  validateBattleConfig,
+  validateXpBuffs,
   type ModDef,
 } from "./itemFormRules";
+import ItemEffectSections from "./ItemEffectSections";
+import ItemXpBuffsEditor from "./ItemXpBuffsEditor";
+import {
+  normalizeAction,
+  resolveXpBuffs,
+  type ItemBattleConfig,
+  type ItemDamageEntry,
+  type ItemEffect,
+  type ItemXpBuff,
+} from "../../utils/itemEffects";
 
 /* ── State ── */
 
@@ -103,6 +114,13 @@ const initialState = (itemType: string): ItemFormState => {
     gather_double_chance_bonus: 0,
     gather_speed_bonus_pct: 0,
     gather_stamina_bonus_pct: 0,
+    // Battle effects (FEAT-168): replace-all lists sent with the item
+    effects: [] as ItemEffect[],
+    damage_entries: [] as ItemDamageEntry[],
+    xp_buffs: [] as ItemXpBuff[],
+    consumable_action: null,
+    coating_turns: null,
+    coating_bonus_damage: null,
   };
 };
 
@@ -193,7 +211,19 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
   useEffect(() => {
     if (!selected) return;
     fetchItem(selected)
-      .then((loaded: ItemFormState) => setItem(loaded))
+      .then((loaded: ItemFormState) =>
+        // A payload from before FEAT-168 has no effect lists at all: fill them in
+        // so the editor never reads an undefined array.
+        setItem({
+          ...initialState(String(loaded.item_type)),
+          ...loaded,
+          effects: Array.isArray(loaded.effects) ? loaded.effects : [],
+          damage_entries: Array.isArray(loaded.damage_entries) ? loaded.damage_entries : [],
+          // An item saved before §3.9-bis has no rows but may carry the legacy
+          // single buff — show it as one row so editing it does not drop it.
+          xp_buffs: resolveXpBuffs(loaded as ItemBattleConfig),
+        }),
+      )
       .catch((e: Error) => toast.error(e.message || "Не удалось загрузить предмет"));
   }, [selected]);
 
@@ -289,6 +319,22 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
     e.preventDefault();
     if (!rarityAllowed) {
       toast.error(RARITY_CAP_MESSAGE);
+      return;
+    }
+    if (rules.battleEffects) {
+      const battleError = validateBattleConfig(item);
+      if (battleError) {
+        toast.error(battleError);
+        return;
+      }
+    }
+    const xpError = validateXpBuffs(
+      rules.buff ? ((item.xp_buffs as ItemXpBuff[] | undefined) ?? []) : [],
+      item.item_type,
+      Boolean(item.is_food),
+    );
+    if (xpError) {
+      toast.error(xpError);
       return;
     }
     const draft = showConversions ? conversionsDraft : null;
@@ -574,37 +620,35 @@ const ItemForm = ({ selected, defaultType = "head", onSuccess, onCancel }: ItemF
         </Section>
       )}
 
+      {/* ── Battle effects (FEAT-168) ── */}
+      {rules.battleEffects && (
+        <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] min-w-0">
+          <legend className={`${labelText} px-2`}>Боевые эффекты</legend>
+          <div className="mt-2">
+            <ItemEffectSections
+              effects={(item.effects as ItemEffect[] | undefined) ?? []}
+              damageEntries={(item.damage_entries as ItemDamageEntry[] | undefined) ?? []}
+              action={normalizeAction(item.consumable_action as string | null)}
+              coatingTurns={item.coating_turns == null ? null : Number(item.coating_turns)}
+              coatingBonusDamage={
+                item.coating_bonus_damage == null ? null : Number(item.coating_bonus_damage)
+              }
+              onFieldChange={setField}
+            />
+          </div>
+        </fieldset>
+      )}
+
       {rules.buff && (
-        <Section title="Бафф" hint="Бонус к опыту задаётся в процентах: 50 = +50% опыта на время действия.">
-          <Field label="Тип баффа">
-            <select
-              name="buff_type"
-              value={(item.buff_type as string) ?? ""}
-              onChange={handleNullableSelect}
-              className="input-underline"
-            >
-              <option value="" className={optionClass}>Нет</option>
-              {BUFF_TYPE_OPTIONS.map(({ value, label }) => (
-                <option key={value} value={value} className={optionClass}>{label}</option>
-              ))}
-            </select>
-          </Field>
-          {Boolean(item.buff_type) && (
-            <>
-              <Field label="Сила, %">
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={item.buff_value == null ? "" : Math.round(Number(item.buff_value) * 100)}
-                  onChange={(e) => setField("buff_value", e.target.value === "" ? null : Number(e.target.value) / 100)}
-                  className="input-underline"
-                />
-              </Field>
-              <Field label="Длительность, мин">{numberInput("buff_duration_minutes", { min: 1 })}</Field>
-            </>
-          )}
-        </Section>
+        <fieldset className="border border-white/10 rounded-card p-4 bg-white/[0.03] min-w-0">
+          <legend className={`${labelText} px-2`}>Ускорение опыта</legend>
+          <div className="mt-2">
+            <ItemXpBuffsEditor
+              rows={(item.xp_buffs as ItemXpBuff[] | undefined) ?? []}
+              onChange={(rows) => setField("xp_buffs", rows)}
+            />
+          </div>
+        </fieldset>
       )}
 
       {rules.identify && (

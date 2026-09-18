@@ -131,6 +131,15 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 ~~Найдено Reviewer'ом в FEAT-167: `POST /attributes/` и `POST /inventory/` не имели ни одной зависимости, и nginx их не резал — снаружи можно было создавать строки атрибутов и инвентаря для произвольных `character_id`.~~
 **Исправлено в том же пуше:** оба под `Depends(verify_internal_token)`; единственный вызывающий, character-service, шлёт заголовок из всех трёх мест (`crud.send_attributes_request`, `crud.send_inventory_request`, `crud._sync_send_attributes_request` — спавн моба). Проверено вживую: анонимно оба → 401, все три клиентские функции в живом контейнере → 200 с созданием строк. **Остаётся открытым** более широкий долг ниже — «большинство внутренних эндпоинтов защищены только nginx».
 
+### Уязвимость: `GET /inventory/characters/{id}/fast_slots` отдаётся без авторизации
+**Сервис:** inventory-service
+**Файл:** `services/inventory-service/app/main.py:1186-1193` (`get_fast_slots` — единственная зависимость `Depends(get_db)`)
+**Обнаружено:** FEAT-168 (QA, 2026-09-19) — предсуществующий долг, фичей не внесён.
+**Приоритет:** HIGH
+**Описание:** маршрут лежит под публичным префиксом `/inventory/` (nginx его не режет) и не проверяет ни JWT, ни владение персонажем: любой анонимный запрос отдаёт содержимое пояса произвольного `character_id`. После FEAT-168 ответ стал заметно богаче — к составу пояса добавились боевая настройка предмета (`consumable_action`, `coating_turns`, `coating_bonus_damage`) и полные строки `item_effects` / `item_damage_entries`, то есть разведка снаряжения противника перед боем стала точнее. Записи в БД маршрут не меняет, поэтому это утечка, а не порча данных. Архитектурная секция фичи (§3.3.3) утверждает «Auth unchanged (`get_current_user_via_http` + ownership check)» — в коде этой проверки нет ни до, ни после FEAT-168.
+**Тест:** `services/inventory-service/app/tests/test_fast_slots_payload.py::TestFastSlotsAuth::test_fast_slots_requires_auth` — помечен `xfail` (non-strict), станет зелёным сам, когда проверку добавят.
+**Возможное решение:** повесить `Depends(get_current_user_via_http)` + `verify_character_ownership`; учесть, что battle-service ходит сюда сервер-сервер (`battle-service/app/inventory_client.py:118`) — ему понадобится либо `X-Internal-Token`, либо отдельный internal-маршрут.
+
 ### Долг: оставшиеся `/internal/*` маршруты char-attrs и inventory защищены только nginx
 **Сервисы:** character-attributes-service, inventory-service
 **Файлы:** `character-attributes-service/app/main.py` (`POST /attributes/internal/settle-regen`, `/internal/{id}/satiety`, `/internal/{id}/reconcile-perks`), `inventory-service/app/main.py` (`POST /inventory/internal/characters/{id}/revalidate-equipment`, `/internal/characters/{id}/consume_item`, `/internal/characters/{id}/free_slots_check`, `/internal/characters/{id}/gathering/award`, `/internal/update-durability`)
@@ -183,6 +192,13 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 **Описание:** Эндпоинт делает по одному синхронному `httpx.get` к user-service на каждого уникального `user_id` в выдаче (до 5 с каждый), не закрывая сессию БД, и продолжает пользоваться `db` после. Это тот же паттерн, что вызвал prod-инцидент 2026-09-04 в `get_character_profile`, но здесь эндпоинт объявлен обычным `def` (то есть исполняется в threadpool и не блокирует event loop) и доступен только админам, поэтому риск ниже.
 **Что сделать:** батчить запрос имён одним вызовом к user-service либо закрывать сессию до HTTP-фазы. Отдельной задачей — в рамках инцидента не трогалось, чтобы не раздувать дифф.
 
+### Долг: claim_reward держит сессию БД через все HTTP-вызовы выдачи награды
+**Сервис:** battle-pass-service
+**Файл:** `services/battle-pass-service/app/crud.py` (`claim_reward`, вызов `deliver_reward`)
+**Описание:** К моменту выдачи награды в сессии уже прошли несколько SELECT (сезон, уровень, прогресс, награда), то есть транзакция открыта. `deliver_reward` из неё делает от одного до трёх HTTP-вызовов в character-service / inventory-service / user-service (таймаут 10 с каждый), и только потом пишется строка `bp_user_rewards`. Тот же паттерн, что вызвал прод-инцидент 2026-09-04 у character-service; здесь пул отдельный и нагрузка ниже, поэтому приоритет не критичный. Найдено в FEAT-168 (обнаружено при правке #6, существовало до неё).
+**Что сделать:** вынести выдачу за пределы транзакции, материализовав нужные поля награды до сетевой фазы. **Нельзя чинить откатом сессии** (`rollback` ради возврата соединения в пул): в async-сессии он протухает загруженные ORM-объекты, и следующее же обращение к их полям падает с `MissingGreenlet` — ровно так сломался первый заход в review #2 FEAT-168.
+**Приоритет:** MEDIUM
+
 ### Долг: ~93 эндпоинта character-service объявлены `async def`, но ходят в БД синхронно
 **Сервис:** character-service
 **Файл:** `services/character-service/app/main.py`
@@ -221,12 +237,19 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 ~~**Описание:** `LAST_STATS` dict растёт бесконечно — записи никогда не удаляются после завершения боя.~~
 **Частично исправлено:** `_cleanup_battle()` добавлена, но cleanup LAST_STATS не работает корректно из-за бага #22 (несовпадение ключей).
 
-### Баг: DoT-эффекты и контроли не работают в боёвке
-**Сервис:** battle-service
-**Файлы:**
-- `services/battle-service/app/buffs.py` (строки 5-35 `_normalize_effect`, 38-61 `apply_new_effects`, 64-75 `decrement_durations`)
-- `services/battle-service/app/main.py:1068`
-**Описание:** Все 14 сложных эффектов из `COMPLEX_EFFECTS` (Bleeding, Burn, Poison, ArmorBreak, Stun, Knockdown, Daze, MagicImpact, Freeze, Wet, Electrify, Windburn, Holy, Curse) молча игнорируются боевым движком. `_normalize_effect` распознаёт только префиксы `Buff:` / `Resist:` и StatModifier — всё остальное проваливается в else-ветку и превращается в произвольный атрибут (`bleeding`, `burn`, ...). Эти атрибуты не входят в `inst_attrs = {hp,mana,energy,stamina}`, поэтому `apply_new_effects` не применяет мгновенный урон. На последующих ходах единственный per-turn вызов — `decrement_durations()` — только уменьшает `duration`, но никогда не читает `magnitude` и не вычитает HP. DoT-эффекты сохраняются в state, тикают по длительности, но не наносят урона. Аналогично сломан контроль: `next_actor` в `main.py` не консультируется с `active_effects` для пропуска хода оглушённых целей.
+### ~~Баг: DoT-эффекты и контроли не работают в боёвке~~ DONE (FEAT-143)
+**Проверено Codebase Analyst 2026-09-18 (FEAT-168) по коду на f50284f — запись устарела, исправлено в FEAT-143:**
+- периодический урон: `buffs.py:132 tick_periodic_effects()` (+ `_is_periodic_damage` :86), вызывается в `main.py:2906` ДО `decrement_durations` (`main.py:2920`), тикает по владельцу эффекта;
+- сложные эффекты-модификаторы раскрываются в движковые каналы: `buffs.py:216 _expand_complex_effect()` (ArmorBreak/Freeze/Electrify/Daze/Wet/Holy/Curse), агрегация — `buffs.py:238`;
+- контроли: `buffs.py:94 evaluate_control()` (Stun, Poison:paralysis, Knockdown/Windburn по типу навыка), вызывается в `main.py:2297`, обнуляет навыки и пишет события `control_skip` / `control_block`;
+- фронтенд знает тот же словарь: `BattlePage/battleEffects.ts:27-29`, предупреждение игроку — `BattlePage.tsx:751-766`.
+Оставлено ниже как исторический контекст.
+
+~~**Сервис:** battle-service~~
+~~**Файлы:**~~
+- ~~`services/battle-service/app/buffs.py` (строки 5-35 `_normalize_effect`, 38-61 `apply_new_effects`, 64-75 `decrement_durations`)~~
+- ~~`services/battle-service/app/main.py:1068`~~
+**Описание (устарело):** Все 14 сложных эффектов из `COMPLEX_EFFECTS` (Bleeding, Burn, Poison, ArmorBreak, Stun, Knockdown, Daze, MagicImpact, Freeze, Wet, Electrify, Windburn, Holy, Curse) молча игнорируются боевым движком. `_normalize_effect` распознаёт только префиксы `Buff:` / `Resist:` и StatModifier — всё остальное проваливается в else-ветку и превращается в произвольный атрибут (`bleeding`, `burn`, ...). Эти атрибуты не входят в `inst_attrs = {hp,mana,energy,stamina}`, поэтому `apply_new_effects` не применяет мгновенный урон. На последующих ходах единственный per-turn вызов — `decrement_durations()` — только уменьшает `duration`, но никогда не читает `magnitude` и не вычитает HP. DoT-эффекты сохраняются в state, тикают по длительности, но не наносят урона. Аналогично сломан контроль: `next_actor` в `main.py` не консультируется с `active_effects` для пропуска хода оглушённых целей.
 **Impact:** DoT-навыки (кровотечение, ожог, яд) бесполезны в бою. Контролей фактически нет. Замечено пользователем во время тестирования FEAT-125, но баг существовал и до FEAT-125 — это не регресс, а латентный баг боевого движка.
 **Решение:** Добавить функцию `tick_dot_effects(state)` в `buffs.py`, вызвать её перед `decrement_durations()` в `main.py:1068`. Контроли — отдельная задача (модификация `next_actor` с чтением `active_effects` для пропуска хода при Stun/Freeze/Knockdown).
 
@@ -245,6 +268,23 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 ~~**Исправлено в FEAT-044:** `convert_to_webp` теперь определяет анимированные GIF (`image.format == 'GIF'` + `is_animated`) и сохраняет их как GIF с `save_all=True`, сохраняя все кадры и анимацию. Статические изображения по-прежнему конвертируются в WebP. S3 получает корректный `ContentType` (`image/gif` или `image/webp`).~~
 
 ## MEDIUM
+
+### Долг: оценка перков тянет весь `/full_profile` ради одного поля и транзитивно дёргает inventory-service
+**Сервис:** character-attributes-service
+**Файл:** `services/character-attributes-service/app/perk_evaluator.py:63` (`_fetch_gold_balance`)
+**Обнаружено:** FEAT-168 (Backend Dev + Reviewer, 2026-09-19). Предсуществующее, фичей не внесено.
+**Приоритет:** MEDIUM
+**Описание:** чтобы узнать баланс золота, вызывается блокирующий `httpx.get` на character-service `/full_profile` с таймаутом 5 с. Вызов идёт из синхронного обработчика (значит, в threadpool, цикл событий не блокируется) и fail-open, поэтому это не авария. Но ради одного поля выкачивается весь профиль, а после FEAT-168 `/full_profile` стал тяжелее: при повышении уровня он может запустить выдачу титулов и запрос множителя опыта в inventory-service, то есть оценка перков транзитивно доходит до инвентаря. В нагруженные моменты уже наблюдался `Failed to fetch gold balance … timed out`.
+**Возможное решение:** лёгкий внутренний эндпоинт «только баланс золота» (или передавать баланс в вызов оценки перков), плюс таймаут поменьше.
+
+### ~~Баг: событие `item_broken` не переводится в журнале боя~~ — DONE (FEAT-168)
+**Исправлено в FEAT-168:** у `formatBattleEvent` появилась ветка `item_broken` со словарём слотов по-русски (`EQUIPMENT_SLOT_LABELS`), а общий fallback больше никогда не печатает английское имя события — он берёт название из локальной таблицы `EXTRA_EVENT_LABELS`, а в крайнем случае пишет нейтральное «совершает действие». Заодно добавлены ветки для всех новых событий FEAT-168 (`item_rejected`, `weapon_coating_applied`, `weapon_coating_expired`, `effects_removed`) и выносливость в `item_use`.
+
+**Сервисы:** battle-service, frontend
+**Файлы:** `services/battle-service/app/main.py:2849, 2860`; `services/frontend/app-chaldea/src/components/pages/BattlePage/BattlePageBar/BattlePageBar.tsx:462-656`; `services/frontend/app-chaldea/src/helpers/commonConstants.js:29-34`
+**Обнаружено:** FEAT-168 (Codebase Analyst, 2026-09-18), по коду.
+**Описание:** движок шлёт `{"event": "item_broken", "who": …, "slot": …}` при обнулении прочности, но у `formatBattleEvent` нет ветки для этого типа, а в `BATTLE_EVENTS_TRANSLATE` всего четыре ключа (`apply_effects`, `damage`, `resource_spend`, `item_use`). Срабатывает общий fallback (`BattlePageBar.tsx:644-655`) и игрок видит в журнале английскую строку `item_broken` вместо «Сломалось: нагрудник». Так же поведут себя любые новые типы событий.
+**Возможное решение:** ветка в `formatBattleEvent` со словарём слотов по-русски; заодно завести правило «новый тип события = новая ветка в том же PR».
 
 ### Баг: синхронизация опыта при смене уровня тихо падает — character-service дёргает RBAC-роут без токена
 **Сервисы:** character-service, character-attributes-service
@@ -925,8 +965,8 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 | CRITICAL | 1 |
 | HIGH | 10 |
 | MEDIUM | 22 |
-| LOW | 32 |
-| **Итого** | **65** |
+| LOW | 33 |
+| **Итого** | **66** |
 
 _Пересчитано 2026-09-14 (FEAT-163): таблица разошлась с содержимым файла — считаются только
 незакрытые записи (`###`-заголовки без зачёркивания) в секциях CRITICAL/HIGH/MEDIUM/LOW._

@@ -35,26 +35,95 @@ def _normalize_effect(row: Dict) -> Dict:
     }
 
 
+def normalize_source(source) -> str | None:
+    """Нормализует «источник эффекта» в строку вида "item:42".
+
+    Принимает кортеж/список `(kind, id)`, готовую строку "item:42" или None.
+    Строка выбрана специально: состояние боя сериализуется в JSON и лежит в
+    Redis до 48 часов, а кортеж после round-trip превратился бы в список и
+    перестал совпадать сам с собой.
+    Возвращает None, если источник не задан (эффекты навыков).
+    """
+    if source is None:
+        return None
+    if isinstance(source, (tuple, list)):
+        if len(source) != 2:
+            raise ValueError("source должен быть парой (kind, id)")
+        kind, ident = source
+    elif isinstance(source, str):
+        text = source.strip()
+        return text or None
+    else:
+        raise TypeError("source должен быть парой (kind, id), строкой или None")
+    kind = str(kind).strip().lower()
+    ident = str(ident).strip()
+    if not kind or not ident:
+        return None
+    return f"{kind}:{ident}"
+
+
+def _effect_identity(eff: Dict, list_pid: int) -> tuple | None:
+    """Ключ «то же самое применение» для обновления вместо накопления (FEAT-168).
+
+    Ключ существует ТОЛЬКО у эффектов с известным источником (`source`), то
+    есть у эффектов предметов. Эффекты навыков источника не имеют и никогда не
+    объединяются: каждое применение — независимый экземпляр со своей
+    длительностью и силой (кровотечение на 2 хода по 5 и кровотечение на
+    3 хода по 10 тикают параллельно).
+
+    Для эффектов предмета совпадать должны источник, имя, нормализованный
+    атрибут и владелец (кастер). Записи из старого состояния Redis не имеют ни
+    source, ни owner_id: source отсутствует ⇒ ключа нет ⇒ такие записи никогда
+    не обновляются и не мешают (та же совместимость, что в decrement_durations).
+    """
+    src = eff.get("source")
+    if not src:
+        return None
+    return (
+        str(src),
+        (eff.get("name") or "").strip().lower(),
+        (eff.get("attribute") or "").strip().lower(),
+        int(eff.get("owner_id", list_pid)),
+    )
+
+
 def apply_new_effects(
     state: Dict,
     pid: int,
     raw_effect_rows: List[Dict],
     is_enemy: bool = False,
     owner_pid: int | None = None,
+    source=None,
 ) -> None:
     """
     • Для hp/mana/energy/stamina — применяем сразу (clamp 0..max_*)
-    • Для остальных — нормализуем и добавляем в active_effects[pid]
+    • Для остальных — нормализуем и кладём в active_effects[pid]
     • is_enemy=True — эффекты применяются к врагу (положительные мгновенные
       значения инвертируются в урон, чтобы не лечить противника)
     • owner_pid — id участника, который КАСТанул эффект (caster). Если None,
       считаем, что владелец = target (legacy-поведение). Owner используется
       для тика длительности: эффект убывает только в конце хода владельца,
       даже если лежит в active_effects цели.
+    • source — источник эффекта, пара (kind, id), например ("item", 42).
+      По умолчанию None — так его передают НАВЫКИ.
+
+    FEAT-168, правило накопления:
+    • НАВЫКИ (source=None) — накапливаются как раньше: каждое применение
+      добавляет отдельную запись со своей длительностью и силой, записи тикают
+      независимо друг от друга.
+    • ПРЕДМЕТЫ (source=("item", item_id)) — не накапливаются: повторное
+      применение ТОГО ЖЕ предмета обновляет его собственную запись на месте
+      (duration = max(старая, новая), magnitude = новая). Эффекты другого
+      предмета или навыка с тем же именем не трогаются — ключ включает источник.
+
+    Флаг `fresh` выставляется ТОЛЬКО у по-настоящему новой записи; при
+    обновлении уже активного эффекта он не трогается, иначе эффект пропустил бы
+    один тик (подновлённый яд переставал бы наносить урон на ход).
     """
     inst_attrs = {"hp", "mana", "energy", "stamina"}
     aid = str(pid)
     owner_id = int(owner_pid) if owner_pid is not None else int(pid)
+    source_key = normalize_source(source)
 
     for row in raw_effect_rows:
         eff = _normalize_effect(row)
@@ -74,7 +143,30 @@ def apply_new_effects(
             # remaining duration stays equal to the applied value until the next
             # owner turn (FEAT-143 — keeps active-effect duration == log duration).
             eff["fresh"] = True
-            state.setdefault("active_effects", {}).setdefault(aid, []).append(eff)
+            if source_key:
+                eff["source"] = source_key
+            lst = state.setdefault("active_effects", {}).setdefault(aid, [])
+            key = _effect_identity(eff, int(pid))
+            existing = None
+            if key is not None:  # источника нет (навык) ⇒ всегда новая запись
+                existing = next(
+                    (e for e in lst if _effect_identity(e, int(pid)) == key), None
+                )
+            if existing is None:
+                lst.append(eff)
+                continue
+            # Refresh-in-place: длительность не суммируется, а продлевается до
+            # большей из двух; сила эффекта берётся новая.
+            # Флаг `fresh` НЕ выставляется заново: он существует только для
+            # пропуска первого тика в ход наложения. Если сбрасывать его при
+            # обновлении, уже работающий DoT (например, подновлённый яд) терял
+            # бы один тик урона — игрок этого не ожидает. Уже висящий эффект
+            # продолжает тикать в своём ритме.
+            old_duration = existing.get("duration") or 0
+            new_duration = eff.get("duration") or 0
+            existing["duration"] = max(old_duration, new_duration)
+            existing["magnitude"] = eff["magnitude"]
+            existing["owner_id"] = owner_id
 
 
 # Complex effects that deal periodic HP damage each turn (magnitude = HP/turn).
@@ -277,3 +369,132 @@ def build_percent_resist_buffs(mods: Dict[str, float]) -> Dict[str, float]:
         elif k.startswith("percent_resist_"):
             out[k[len("percent_resist_"):]] = v
     return out
+
+
+# ──────────────────────────────────────────────────────────
+# FEAT-168: снятие эффектов (противоядия, свитки очищения)
+#
+# Селектор приходит из строки предмета (item_effects.attribute_key у строки
+# с effect_name="Cleanse") — то есть настраивается админом. Что бы админ ни
+# настроил, полный контроль с пропуском хода снять нельзя: это правило движка.
+
+SELECTOR_DEBUFF = "debuff"                  # всё, что повесил кто-то другой
+SELECTOR_PERIODIC_DAMAGE = "periodic_damage"  # только DoT
+SELECTOR_CONTROL_PARTIAL = "control_partial"  # Knockdown / Windburn
+SELECTOR_STAT_DOWN = "stat_down"            # эффекты с отрицательным вкладом
+SELECTOR_ALL = "all"                        # всё снимаемое, включая свои баффы
+
+# Набор именованных селекторов; любое другое значение трактуется как имя
+# конкретного эффекта (например "Bleeding").
+CLEANSE_SELECTORS = frozenset({
+    SELECTOR_DEBUFF,
+    SELECTOR_PERIODIC_DAMAGE,
+    SELECTOR_CONTROL_PARTIAL,
+    SELECTOR_STAT_DOWN,
+    SELECTOR_ALL,
+})
+
+# Селектор по умолчанию, если у строки Cleanse не задан attribute_key —
+# поведение обычного противоядия.
+DEFAULT_CLEANSE_SELECTOR = SELECTOR_DEBUFF
+
+
+def is_unremovable(eff: Dict) -> bool:
+    """True для эффектов, дающих полный пропуск хода (Stun, Poison:paralysis).
+
+    Такие эффекты не снимаются НИКАКИМ очищением, включая селектор "all".
+    Правило движка, а не настройка предмета (FEAT-168 §3.2).
+    Список полного контроля берётся из evaluate_control, чтобы две функции
+    не разъезжались.
+    """
+    full_skip, _ = evaluate_control([eff])
+    return full_skip is not None
+
+
+def _is_partial_control(eff: Dict) -> bool:
+    _, blocked = evaluate_control([eff])
+    return bool(blocked)
+
+
+def _is_stat_down(eff: Dict) -> bool:
+    """Эффект уменьшает характеристики/сопротивления/урон цели."""
+    # aggregate_modifiers ожидает нормализованный attribute; у записей из
+    # старого состояния он всегда есть, но подстрахуемся без глотания ошибки.
+    probe = dict(eff)
+    if not probe.get("attribute"):
+        probe["attribute"] = (probe.get("name") or "").replace(" ", "_").lower()
+    probe.setdefault("magnitude", 0)
+    mods = aggregate_modifiers([probe])
+    return any((value or 0) < 0 for value in mods.values())
+
+
+def _matches_selector(eff: Dict, selector: str, list_pid: int) -> bool:
+    if selector == SELECTOR_ALL:
+        return True
+    if selector == SELECTOR_DEBUFF:
+        return int(eff.get("owner_id", list_pid)) != list_pid
+    if selector == SELECTOR_PERIODIC_DAMAGE:
+        return _is_periodic_damage(eff)
+    if selector == SELECTOR_CONTROL_PARTIAL:
+        return _is_partial_control(eff)
+    if selector == SELECTOR_STAT_DOWN:
+        return _is_stat_down(eff)
+    # Конкретный эффект по имени (или по нормализованному атрибуту —
+    # админ может указать и то, и другое, например "Bleeding"/"bleeding").
+    name = (eff.get("name") or "").strip().lower()
+    attribute = (eff.get("attribute") or "").strip().lower()
+    return selector in (name, attribute)
+
+
+def remove_effects(
+    state: Dict,
+    pid: int,
+    *,
+    selector: str,
+    limit: int = 0,
+) -> List[Dict]:
+    """Снимает с участника `pid` эффекты, подходящие под `selector`.
+
+    selector: debuff | periodic_damage | control_partial | stat_down | all
+              либо имя конкретного эффекта ("Bleeding").
+              Пустое значение трактуется как "debuff" (обычное противоядие).
+    limit:    сколько эффектов снять; 0 (и любое значение <= 0) — снять все
+              подходящие. Снимаются самые старые записи из списка.
+
+    Возвращает список снятых эффектов (как они лежали в состоянии) — для
+    события `effects_removed` в журнале боя.
+
+    НИКОГДА не снимает полный контроль с пропуском хода (Stun, Poison с
+    атрибутом 'paralysis'), даже при selector="all" — правило движка.
+
+    Записи из старого состояния Redis (без owner_id / fresh) обрабатываются
+    так же, как в decrement_durations: владельцем считается участник, в чьём
+    списке лежит эффект.
+    """
+    active = state.get("active_effects", {})
+    aid = str(pid)
+    lst = active.get(aid)
+    if not lst:
+        return []
+
+    sel = (selector or "").strip().lower() or DEFAULT_CLEANSE_SELECTOR
+    max_removals = int(limit or 0)
+    list_pid = int(pid)
+
+    kept: List[Dict] = []
+    removed: List[Dict] = []
+    for eff in lst:
+        if is_unremovable(eff):
+            kept.append(eff)
+            continue
+        if max_removals > 0 and len(removed) >= max_removals:
+            kept.append(eff)
+            continue
+        if _matches_selector(eff, sel, list_pid):
+            removed.append(eff)
+        else:
+            kept.append(eff)
+
+    if removed:
+        active[aid] = kept
+    return removed

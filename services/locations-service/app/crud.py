@@ -4,12 +4,13 @@ import logging
 import random
 import re
 import math
+import time
 import httpx
 from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import List, Optional, Dict, Tuple
+from typing import List, NamedTuple, Optional, Dict, Tuple
 from sqlalchemy.orm import selectinload
 from sqlalchemy import text, delete, func as sa_func
 from sqlalchemy.exc import IntegrityError
@@ -158,6 +159,106 @@ def calculate_post_xp(content: str) -> Tuple[int, int]:
     return (char_count, xp)
 
 
+# ---------------------------------------------------------------------------
+# FEAT-168 #6: XP books — character-XP multiplier from inventory-service
+# ---------------------------------------------------------------------------
+# Roleplay posts and quest rewards are two of the character-XP sources an admin
+# can accelerate with a book. The buff rows live in inventory-service, so both
+# write points ask it for the multiplier of their own source.
+
+XP_SOURCE_POST = "character_xp_post_bonus"
+XP_SOURCE_QUEST = "character_xp_quest_bonus"
+CHARACTER_XP_SOURCES = frozenset({XP_SOURCE_POST, XP_SOURCE_QUEST})
+XP_MULTIPLIER_TIMEOUT_SECONDS = 5.0
+
+
+class XpMultiplierLookup(NamedTuple):
+    """Результат запроса множителя книги опыта.
+
+    `multiplier` всегда пригоден для умножения (fail-open: 1.0 при любой беде).
+    `ok` отличает «книги нет» от «спросить не получилось» — без этого флага
+    молчаливая деградация неотличима от штатной работы (ревью #5, #36).
+    """
+    multiplier: float
+    ok: bool
+    reason: Optional[str] = None
+    elapsed_ms: int = 0
+
+
+async def lookup_character_xp_multiplier(character_id: int, xp_source: str) -> XpMultiplierLookup:
+    """Запрос множителя с признаком успеха. Fail-open: при любой беде 1.0.
+
+    Провал логируется уровнем `error` — бонус игрока молча пропал, и это должно
+    быть видно в логах, а не тонуть среди предупреждений.
+    """
+    if xp_source not in CHARACTER_XP_SOURCES:
+        logger.warning("Неизвестный источник опыта %s, множитель 1.0", xp_source)
+        return XpMultiplierLookup(1.0, False, "unknown_source", 0)
+
+    url = (
+        f"{settings.INVENTORY_SERVICE_URL}/inventory/internal/characters/"
+        f"{character_id}/xp-multiplier"
+    )
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=XP_MULTIPLIER_TIMEOUT_SECONDS) as client:
+            response = await client.get(
+                url,
+                params={"buff_type": xp_source},
+                headers=_internal_token_headers(),
+            )
+            response.raise_for_status()
+            multiplier = float(response.json().get("multiplier", 1.0))
+    except Exception as exc:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        logger.error(
+            "Не удалось получить множитель опыта (%s) для персонажа %s за %s мс: %s — "
+            "начисляю базовый опыт, бонус книги потерян",
+            xp_source, character_id, elapsed_ms, exc,
+        )
+        return XpMultiplierLookup(1.0, False, "request_failed", elapsed_ms)
+
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    # NaN/inf проходят и через float(), и через сравнение `< 1.0` (NaN ложно во
+    # всех сравнениях), а int(xp * nan) уронил бы начисление — опыт важнее бонуса.
+    if not math.isfinite(multiplier) or multiplier < 1.0:
+        logger.error(
+            "Некорректный множитель опыта %s для персонажа %s (%s мс), использую 1.0",
+            multiplier, character_id, elapsed_ms,
+        )
+        return XpMultiplierLookup(1.0, False, "out_of_range", elapsed_ms)
+    return XpMultiplierLookup(multiplier, True, None, elapsed_ms)
+
+
+async def get_character_xp_multiplier(character_id: int, xp_source: str) -> float:
+    """Множитель опыта персонажа для одного источника (1.0, если баффа нет).
+
+    Fail-open: недоступный inventory-service не должен стоить игроку опыта —
+    начисляем базовую величину и пишем ошибку в лог. Кому нужно отличить
+    «книги нет» от «спросить не вышло» — `lookup_character_xp_multiplier`.
+    """
+    return (await lookup_character_xp_multiplier(character_id, xp_source)).multiplier
+
+
+def multiply_xp(xp: int, xp_multiplier: Optional[float]) -> int:
+    """Опыт с учётом книги. Округление вниз — то же правило, что у опыта профессии."""
+    if xp <= 0 or xp_multiplier is None:
+        return xp
+    return int(xp * xp_multiplier)
+
+
+async def apply_character_xp_buff(character_id: int, xp: int, xp_source: str) -> int:
+    """Опыт с учётом книги опыта, вместе с запросом множителя.
+
+    Годится только там, где сессии БД нет вовсе (путь постов — фоновая задача на
+    одних HTTP-вызовах). Где есть сессия, множитель берут заранее на входе
+    запроса и передают параметром.
+    """
+    if xp <= 0:
+        return xp
+    return multiply_xp(xp, await get_character_xp_multiplier(character_id, xp_source))
+
+
 async def award_post_xp_and_log(
     character_id: int,
     post_id: int,
@@ -167,12 +268,15 @@ async def award_post_xp_and_log(
     xp: int,
 ):
     """Fire-and-forget: award passive XP and create a character log entry."""
+    # FEAT-168 #6: книга «опыт за отыгрыш» ускоряет только сам пост.
+    # Бонус группы считается от базового опыта, чтобы книга не усиливала ещё и его.
+    awarded_xp = await apply_character_xp_buff(character_id, xp, XP_SOURCE_POST)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            if xp > 0:
+            if awarded_xp > 0:
                 await client.put(
                     f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{character_id}/passive_experience",
-                    json={"amount": xp},
+                    json={"amount": awarded_xp},
                     headers=_internal_token_headers(),
                 )
                 # Party self-bonus (FEAT-144 Ф2): posts grant the poster +10% when
@@ -190,7 +294,7 @@ async def award_post_xp_and_log(
                     )
                 except Exception as e:
                     logger.warning(f"party xp-bonus (post) failed for {character_id}: {e}")
-            description = f"Написал пост в {location_name}, получил {xp} XP"
+            description = f"Написал пост в {location_name}, получил {awarded_xp} XP"
             await client.post(
                 f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/logs",
                 headers=_internal_token_headers(),
@@ -200,7 +304,7 @@ async def award_post_xp_and_log(
                     "metadata": {
                         "post_id": post_id,
                         "location_id": location_id,
-                        "xp_earned": xp,
+                        "xp_earned": awarded_xp,
                         "char_count": char_count,
                     },
                 },
@@ -5070,8 +5174,25 @@ async def abandon_quest(session: AsyncSession, character_id: int, quest_id: int)
     return result.rowcount > 0
 
 
-async def add_experience(session: AsyncSession, character_id: int, amount: int) -> None:
-    """Add passive experience to a character via direct SQL on shared DB."""
+async def add_experience(
+    session: AsyncSession,
+    character_id: int,
+    amount: int,
+    xp_multiplier: Optional[float] = None,
+) -> int:
+    """Add passive experience to a character via direct SQL on shared DB.
+
+    FEAT-168 #6: the amount is multiplied by the character's active XP book.
+    Returns the amount actually awarded so the caller can report it.
+
+    `xp_multiplier` must be resolved by the **caller**, at the entry point of the
+    request and before any DB work: an open transaction may never wait on another
+    service (prod incident 2026-09-04), and rolling the session back to free the
+    connection is not an option either — it expires the caller's loaded ORM
+    objects, which then explode on their next attribute read. `None` means «no
+    book» and awards the base amount.
+    """
+    amount = multiply_xp(amount, xp_multiplier)
     await session.execute(
         text("""
             UPDATE character_attributes
@@ -5081,6 +5202,7 @@ async def add_experience(session: AsyncSession, character_id: int, amount: int) 
         {"cid": character_id, "amount": amount},
     )
     await session.commit()
+    return amount
 
 
 # -------------------------------

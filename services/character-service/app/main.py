@@ -650,6 +650,38 @@ def admin_list_characters(
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
+async def _evaluate_titles_with_book(db: Session, character_id: int):
+    """Автовыдача титулов с книгой опыта, без лишних походов в inventory-service.
+
+    Три шага (ревью #3 и #4):
+      1. решение — чисто чтение, сети не касается;
+      2. множитель книги — ТОЛЬКО если титул реально открылся и у него есть
+         пассивный опыт. На надевании предмета, когда титулов не открылось,
+         обращений в inventory-service не происходит вовсе, поэтому круг
+         «инвентарь ждёт нас, мы ждём инвентарь» не возникает;
+      3. запись — одна транзакция, сетевых вызовов внутри нет.
+
+    Осознанный размен: на шаге 2 транзакция уже открыта чтениями шага 1, то есть
+    соединение БД удерживается на время запроса (до 5 с). Ветка редкая — титул
+    открывается считанные разы за жизнь персонажа, — а «чинить» это откатом
+    сессии НЕЛЬЗЯ: откат протухает загруженные объекты и ломает вызывающего
+    (см. запись про battle-pass в docs/ISSUES.md). Вызов асинхронный, event loop
+    не блокируется; при недоступном inventory-service множитель = 1.0.
+    """
+    candidates = crud.find_unlockable_titles(db, character_id)
+    if not candidates:
+        return []
+
+    xp_multiplier = None
+    if crud.title_reward_needs_the_book(candidates):
+        xp_multiplier = await crud.get_character_xp_multiplier_async(
+            character_id, crud.XP_SOURCE_TITLE,
+        )
+    return crud.grant_unlocked_titles(
+        db, character_id, candidates, xp_multiplier=xp_multiplier,
+    )
+
+
 @router.put("/admin/{character_id}")
 async def admin_update_character(
     character_id: int,
@@ -776,7 +808,7 @@ async def admin_update_character(
 
         # Trigger title evaluation after admin level change (non-fatal)
         try:
-            newly_unlocked = crud.evaluate_titles(db, character_id)
+            newly_unlocked = await _evaluate_titles_with_book(db, character_id)
             if newly_unlocked and character.user_id:
                 for title_info in newly_unlocked:
                     try:
@@ -1215,8 +1247,15 @@ def admin_grant_title(
     current_user=Depends(require_permission("titles:grant")),
 ):
     """Grant a title to a character. Admin only."""
+    # FEAT-168 #6: множитель книги опыта берём до любой работы с БД, чтобы
+    # проверка «уже есть титул» и вставка остались в одной транзакции.
+    # Обработчик синхронный (обычный `def` — FastAPI уводит его в threadpool),
+    # поэтому здесь правильный вариант именно блокирующий.
+    xp_multiplier = crud.get_character_xp_multiplier(data.character_id, crud.XP_SOURCE_TITLE)
     try:
-        result, status = crud.grant_title(db, data.character_id, data.title_id)
+        result, status = crud.grant_title(
+            db, data.character_id, data.title_id, xp_multiplier=xp_multiplier,
+        )
         if status == "title_not_found":
             raise HTTPException(status_code=404, detail="Титул не найден")
         if status == "character_not_found":
@@ -1271,8 +1310,11 @@ async def internal_evaluate_titles(
     FEAT-162 §3.4: живёт под префиксом /characters/internal/, который nginx
     отдаёт наружу как 403, и дополнительно требует заголовок X-Internal-Token.
     """
+    # FEAT-168 #6: множитель книги спрашивается только если титул реально
+    # открылся (см. _evaluate_titles_with_book). Этот роут зовёт inventory-service
+    # после надевания предмета, поэтому безусловный запрос замыкал бы круг.
     try:
-        newly_unlocked = crud.evaluate_titles(db, body.character_id)
+        newly_unlocked = await _evaluate_titles_with_book(db, body.character_id)
 
         # Send notification for each newly unlocked title
         for title_info in newly_unlocked:
@@ -1800,8 +1842,10 @@ async def get_titles_for_character(character_id: int, db: Session = Depends(get_
     """
     try:
         # Evaluate titles first (safety net) to auto-grant any newly earned titles
+        # FEAT-168 #6: горячий эндпоинт чтения — за множителем ходим только в тот
+        # редкий раз, когда титул действительно открылся.
         try:
-            newly_unlocked = crud.evaluate_titles(db, character_id)
+            newly_unlocked = await _evaluate_titles_with_book(db, character_id)
             # Send notifications for newly unlocked titles
             if newly_unlocked:
                 character = db.query(models.Character).filter(
@@ -1897,7 +1941,9 @@ async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
     # Trigger title evaluation if character leveled up
     if character.level > old_level:
         try:
-            newly_unlocked = crud.evaluate_titles(db, character_id)
+            # FEAT-168 #6: и ветка редкая (реальное повышение уровня), и внутри
+            # за множителем ходим только если титул открылся.
+            newly_unlocked = await _evaluate_titles_with_book(db, character_id)
             if newly_unlocked and character.user_id:
                 for title_info in newly_unlocked:
                     try:
@@ -3459,7 +3505,18 @@ def add_rewards(
     Internal endpoint (no auth) — adds XP and gold to a character.
     Called by battle-service after PvE victory.
     """
-    result = crud.add_rewards_to_character(db, character_id, data.xp, data.gold)
+    # FEAT-168 #6: книга опыта запрашивается до любой работы с БД — сессия не
+    # должна ждать соседний сервис с открытой транзакцией (инцидент 2026-09-04).
+    # Обработчик синхронный (обычный `def`), поэтому блокирующий вызов уместен:
+    # он исполняется в threadpool и event loop не трогает.
+    xp_multiplier = (
+        crud.get_character_xp_multiplier(character_id, data.xp_source)
+        if data.xp > 0 else None
+    )
+    result = crud.add_rewards_to_character(
+        db, character_id, data.xp, data.gold,
+        xp_source=data.xp_source, xp_multiplier=xp_multiplier,
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="Персонаж не найден")
 

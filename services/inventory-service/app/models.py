@@ -80,6 +80,14 @@ class Items(Base):
     # FEAT-164: food — eaten via /eat-food, gives "Сытость" for 24h
     is_food = Column(Boolean, nullable=False, default=False, server_default="0")
 
+    # FEAT-168: how a consumable is used in battle.
+    # NULL / 'instant' — applied immediately; 'weapon_coating' — poison on the
+    # weapon (see coating_* below); 'cleanse' — removes effects.
+    # VARCHAR and not ENUM on purpose: an ENUM change locks `items` (FEAT-165).
+    consumable_action = Column(String(20), nullable=True)
+    coating_turns = Column(Integer, nullable=True)
+    coating_bonus_damage = Column(Float, nullable=True)
+
     armor_subclass = Column(
         Enum('cloth', 'light_armor', 'medium_armor', 'heavy_armor', name="armor_subclass_enum"),
         nullable=True,
@@ -169,6 +177,91 @@ class Items(Base):
     inventories = relationship("CharacterInventory", back_populates="item")
     equipment_slots = relationship("EquipmentSlot", back_populates="item")
     blueprint_recipe = relationship("Recipe", foreign_keys=[blueprint_recipe_id], back_populates="blueprint_items")
+    # FEAT-168: battle effect payload of a consumable/scroll
+    effects = relationship(
+        "ItemEffect", back_populates="item",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
+    damage_entries = relationship(
+        "ItemDamageEntry", back_populates="item",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
+    # FEAT-168 #6: XP книги — сколько и какого опыта ускоряет предмет
+    xp_buffs = relationship(
+        "ItemXpBuff", back_populates="item",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
+
+
+class ItemXpBuff(Base):
+    """FEAT-168 #6: one XP-acceleration row of an item.
+
+    Replaces the single `items.buff_type/buff_value/buff_duration_minutes`
+    triple with a list, so one book can accelerate several XP sources at once.
+    The legacy columns stay in place and are still honoured for items that have
+    no rows here (see `crud.get_item_xp_buffs`).
+    """
+    __tablename__ = "item_xp_buffs"
+    __table_args__ = (
+        UniqueConstraint("item_id", "buff_type", name="uq_item_xp_buff_type"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    buff_type = Column(String(50), nullable=False)
+    # Доля: 0.25 = +25 %
+    value = Column(Float, nullable=False, default=0.0, server_default="0")
+    duration_minutes = Column(Integer, nullable=False, default=60, server_default="60")
+
+    item = relationship("Items", back_populates="xp_buffs")
+
+
+class ItemEffect(Base):
+    """FEAT-168: one battle effect row of an item.
+
+    Row shape mirrors skills-service `skill_perk_effects` so battle-service can
+    hand it to `buffs.apply_new_effects` without any translation.
+    """
+    __tablename__ = "item_effects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    target_side = Column(String(10), nullable=False, default="self", server_default="self")
+    effect_name = Column(String(50), nullable=False)
+    description = Column(Text, nullable=True)
+    chance = Column(Integer, nullable=False, default=100, server_default="100")
+    duration = Column(Integer, nullable=False, default=1, server_default="1")
+    magnitude = Column(Float, nullable=False, default=0.0, server_default="0")
+    attribute_key = Column(String(50), nullable=True)
+
+    item = relationship("Items", back_populates="effects")
+
+
+class ItemDamageEntry(Base):
+    """FEAT-168: one damage row of an item (damage scrolls, thrown flasks).
+
+    Row shape mirrors skills-service `skill_perk_damage` so battle-service can
+    feed it to `battle_engine.compute_damage_with_rolls` unchanged.
+    """
+    __tablename__ = "item_damage_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    damage_type = Column(String(50), nullable=False)
+    amount = Column(Float, nullable=False, default=0.0, server_default="0")
+    description = Column(Text, nullable=True)
+    # Scrolls default to unarmed math — no equipped weapon is involved.
+    weapon_slot = Column(String(20), nullable=False, default="no_weapon", server_default="no_weapon")
+    target_side = Column(String(10), nullable=False, default="enemy", server_default="enemy")
+    chance = Column(Integer, nullable=False, default=100, server_default="100")
+    aoe_shape = Column(String(12), nullable=False, default="single", server_default="single")
+    aoe_falloff = Column(Integer, nullable=False, default=50, server_default="50")
+    aoe_max_targets = Column(Integer, nullable=False, default=3, server_default="3")
+
+    item = relationship("Items", back_populates="damage_entries")
 
 # Определяем модель для хранения инвентаря персонажа
 class CharacterInventory(Base):

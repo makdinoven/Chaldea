@@ -252,3 +252,150 @@ class TestCreateInventoryRouteIsGated:
             )
             return
         raise AssertionError("POST /inventory/ is missing from the route table")
+
+
+# ---------------------------------------------------------------------------
+# Review #5 — no blocking HTTP call may sit on the event loop
+# ---------------------------------------------------------------------------
+# inventory-service runs a SINGLE uvicorn worker. A blocking `httpx.post` inside
+# an `async def` handler freezes the whole service for up to its timeout. That
+# is not just slow: character-service calls back into this service
+# (`/inventory/internal/characters/{cid}/xp-multiplier`) while handling
+# `evaluate-titles`, so the callback cannot be served, times out at 5 s and
+# fails open to a multiplier of 1.0 — the player silently loses an XP book.
+# Review #5 measured 5429 ms for an equip that unlocks a passive-XP title.
+#
+# Unit tests mock the HTTP boundary and therefore cannot observe the deadlock
+# itself (the reviewer said so explicitly). What they CAN do is guarantee the
+# shape that makes it impossible: no blocking client call anywhere on an async
+# path. That is a static property, so it is checked statically — and it covers
+# every future handler, not just the two that were broken.
+
+_BLOCKING_CLIENT_METHODS = {"get", "post", "put", "delete", "patch", "request", "stream"}
+# Sync fire-and-forget helpers: fine from a `def` handler (threadpool),
+# forbidden from an `async def` one — each has an `_async` twin.
+_SYNC_ONLY_HELPERS = {"_track_cumulative_stats", "_reconcile_perks"}
+
+
+def _main_ast():
+    import ast
+
+    source = open(os.path.join(_APP_DIR, "main.py"), encoding="utf-8").read()
+    return ast, ast.parse(source)
+
+
+def _enclosing_functions(ast, tree):
+    """[(name, is_async, start, end)] for every function in the module."""
+    found = []
+
+    class _V(ast.NodeVisitor):
+        def visit_FunctionDef(self, node):
+            found.append((node.name, False, node.lineno, node.end_lineno))
+            self.generic_visit(node)
+
+        def visit_AsyncFunctionDef(self, node):
+            found.append((node.name, True, node.lineno, node.end_lineno))
+            self.generic_visit(node)
+
+    _V().visit(tree)
+    return found
+
+
+def _innermost(functions, line):
+    matches = [f for f in functions if f[2] <= line <= f[3]]
+    matches.sort(key=lambda f: f[3] - f[2])
+    return matches[0] if matches else ("<module>", False, 0, 0)
+
+
+class TestNoBlockingHttpOnTheEventLoop:
+
+    def test_no_blocking_httpx_call_inside_an_async_function(self):
+        ast, tree = _main_ast()
+        functions = _enclosing_functions(ast, tree)
+
+        offenders = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            module = getattr(node.func.value, "id", None)
+            if module not in ("httpx", "requests"):
+                continue
+            if node.func.attr not in _BLOCKING_CLIENT_METHODS:
+                continue
+            name, is_async, _, _ = _innermost(functions, node.lineno)
+            if is_async:
+                offenders.append(f"main.py:{node.lineno} {module}.{node.func.attr}() in async def {name}")
+
+        assert offenders == [], (
+            "blocking HTTP call on the event loop — inventory-service has one "
+            "uvicorn worker, so this freezes the whole service and deadlocks "
+            "the character-service XP-multiplier callback:\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_async_handlers_use_the_async_fire_and_forget_helpers(self):
+        ast, tree = _main_ast()
+        functions = _enclosing_functions(ast, tree)
+
+        offenders = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                continue
+            if node.func.id not in _SYNC_ONLY_HELPERS:
+                continue
+            name, is_async, _, _ = _innermost(functions, node.lineno)
+            if is_async:
+                offenders.append(
+                    f"main.py:{node.lineno} {node.func.id}() in async def {name} "
+                    f"— use {node.func.id}_async() instead"
+                )
+
+        assert offenders == [], (
+            "sync fire-and-forget helper called from an async handler; it makes "
+            "a blocking httpx call and freezes the event loop:\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_the_async_twins_exist_and_are_coroutines(self):
+        for name in ("_track_cumulative_stats_async", "_reconcile_perks_async",
+                     "_evaluate_titles_async"):
+            fn = getattr(main, name, None)
+            assert fn is not None, f"main.{name} is gone — async handlers have nothing to await"
+            assert inspect.iscoroutinefunction(fn), f"main.{name} must be a coroutine function"
+
+    def test_evaluate_titles_goes_through_async_client(self, monkeypatch, token_env):
+        """The title call must use AsyncClient — and carry the internal token."""
+        import asyncio
+
+        calls = []
+
+        class _FakeAsyncClient:
+            def __init__(self, **kwargs):
+                calls.append({"init": kwargs})
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def post(self, url, **kwargs):
+                calls.append({"url": url, **kwargs})
+                return _Resp()
+
+        # Any blocking use would hit this and fail the test loudly.
+        def _boom(*a, **kw):
+            raise AssertionError("evaluate-titles used a blocking httpx call")
+
+        monkeypatch.setattr(main.httpx, "AsyncClient", _FakeAsyncClient)
+        monkeypatch.setattr(main.httpx, "post", _boom)
+
+        asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+            main._evaluate_titles_async(7, "equip")
+        )
+
+        posted = [c for c in calls if "url" in c]
+        assert len(posted) == 1, calls
+        assert posted[0]["url"].endswith("/characters/internal/evaluate-titles")
+        assert posted[0]["json"] == {"character_id": 7}
+        assert posted[0]["headers"]["X-Internal-Token"] == TOKEN

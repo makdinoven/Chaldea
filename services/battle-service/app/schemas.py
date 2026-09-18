@@ -321,6 +321,11 @@ class BattleRuntimeParticipant(BaseModel):
     max_energy: float = 0
     max_stamina: float = 0
     dropped_out: bool = False
+    # FEAT-168 §3.5: яд, нанесённый на оружие участника
+    # ({item_id, name, bonus_damage, turns_left, effects}) — или None.
+    # Поле additive и необязательное: у боёв, начатых до FEAT-168, его в
+    # состоянии нет, и клиент получает None.
+    weapon_coating: Optional[dict] = None
 
     class Config:
         orm_mode = True

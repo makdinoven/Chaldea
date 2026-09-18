@@ -153,3 +153,54 @@ class TestUnequipInBattle:
         assert response.status_code == 400
         detail = response.json()["detail"]
         assert "бо" in detail.lower(), f"Expected Russian battle-related message, got: {detail}"
+
+
+# ===========================================================================
+# Test 3: Use a consumable while in battle -> 400  (FEAT-168, ISSUES #3)
+# ===========================================================================
+class TestUseItemInBattle:
+    """`/use_item` was the only "use" endpoint without the battle guard."""
+
+    def _seed_potion(self, db_session):
+        import models
+
+        item = models.Items(
+            id=300,
+            name="Зелье лечения",
+            item_level=1,
+            item_type="consumable",
+            item_rarity="common",
+            max_stack_size=10,
+            is_unique=False,
+            health_recovery=50,
+        )
+        db_session.add(item)
+        db_session.flush()
+        db_session.add(models.CharacterInventory(character_id=1, item_id=300, quantity=5))
+        db_session.commit()
+
+    def test_use_item_blocked_in_battle(self, authed_client, db_session):
+        """POST /{character_id}/use_item returns 400 when in battle."""
+        self._seed_potion(db_session)
+        _put_character_in_battle(db_session)
+
+        response = authed_client.post(
+            "/inventory/1/use_item",
+            json={"item_id": 300, "quantity": 1},
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert "бо" in detail.lower(), f"Expected Russian battle-related message, got: {detail}"
+
+    def test_use_item_allowed_outside_battle(self, authed_client, db_session):
+        """The guard must not break the normal out-of-battle path."""
+        self._seed_potion(db_session)
+
+        with patch("main.recover_in_attributes_service", new_callable=AsyncMock):
+            response = authed_client.post(
+                "/inventory/1/use_item",
+                json={"item_id": 300, "quantity": 1},
+            )
+
+        assert response.status_code == 200, response.text

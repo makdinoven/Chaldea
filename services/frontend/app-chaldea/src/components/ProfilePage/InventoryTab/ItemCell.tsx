@@ -11,6 +11,7 @@ import { EQUIPMENT_ITEM_TYPES, FAST_SLOT_ITEM_TYPES } from './dnd/constants';
 import { useInventoryCharacterId } from './dnd/InventoryDndContext';
 import type { DragItemData } from './dnd/InventoryDndContext';
 import useClickHandler from './dnd/useClickHandler';
+import { describeXpBuffLines, itemBattleSummary } from '../../../utils/itemEffects';
 
 interface ItemCellProps {
   inventoryItem?: InventoryItem;
@@ -115,12 +116,24 @@ const ItemCell = ({ inventoryItem, placeholderType }: ItemCellProps) => {
 
   const iconSrc = ITEM_TYPE_ICONS[item.item_type];
 
+  // Short hover description: name, why it is unusable, and what it does in
+  // battle (FEAT-168). An item without battle effects keeps its old tooltip.
+  const battleSummary = isUnidentified ? '' : itemBattleSummary(item);
+  const xpSummary = isUnidentified ? '' : describeXpBuffLines(item).join(' · ');
+  const cellTitle = [
+    isForbidden ? `${item.name} — недоступно для вашего класса/подкласса` : item.name,
+    battleSummary,
+    xpSummary,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
   return (
     <div className="relative">
       <motion.div
         ref={setNodeRef}
         className={`item-cell w-full h-auto aspect-square ${rarityClass} cursor-pointer hover:scale-105 ${isDragging ? 'opacity-50' : ''} ${isUnidentified ? 'opacity-60' : ''} ${isForbidden ? 'opacity-40 grayscale' : ''}`}
-        title={isForbidden ? `${item.name} — недоступно для вашего класса/подкласса` : item.name}
+        title={cellTitle}
         {...attributes}
         {...listeners}
         {...clickHandlers}

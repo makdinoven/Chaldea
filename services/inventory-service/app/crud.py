@@ -2032,12 +2032,36 @@ def get_active_buffs(db: Session, character_id: int) -> List[models.ActiveBuff]:
     ).all()
 
 
-def get_xp_multiplier(db: Session, character_id: int) -> float:
-    """Returns XP multiplier: 1.0 + buff_value if active xp_bonus exists, else 1.0."""
-    buff = get_active_buff(db, character_id, "xp_bonus")
-    if buff:
-        return 1.0 + buff.value
-    return 1.0
+def get_xp_multiplier(db: Session, character_id: int, buff_type: str = "xp_bonus") -> float:
+    """Returns the XP multiplier for this XP source: 1.0 + Σ matching buff values.
+
+    FEAT-168: `buff_type` defaults to "xp_bonus" (profession XP) so every call
+    site written before this feature keeps its exact behaviour.
+
+    FEAT-168 #6: a character-XP source also picks up the umbrella buff
+    "character_xp_bonus" ("ко всему опыту персонажа"), and the two add up:
+    a +25 % quest book together with a +10 % all-character-XP book gives ×1.35.
+    """
+    total = 0.0
+    for candidate in _xp_buff_chain(buff_type):
+        buff = get_active_buff(db, character_id, candidate)
+        if buff:
+            total += buff.value
+    return 1.0 + total
+
+
+def _xp_buff_chain(buff_type: str) -> List[str]:
+    """The buff types that contribute to one XP source (specific first)."""
+    chain = [buff_type]
+    parent = schemas.XP_BUFF_PARENTS.get(buff_type)
+    if parent:
+        chain.append(parent)
+    return chain
+
+
+def get_xp_multipliers(db: Session, character_id: int, buff_types) -> Dict[str, float]:
+    """FEAT-168 #6: batch variant — one multiplier per requested XP source."""
+    return {bt: get_xp_multiplier(db, character_id, bt) for bt in buff_types}
 
 
 # ---------------------------------------------------------------------------
@@ -2363,6 +2387,83 @@ def replace_item_conversions(
     for row in new_rows:
         db.add(row)
     db.commit()
+
+
+# ---------------------------------------------------------------------------
+# FEAT-168: item battle effect rows
+# ---------------------------------------------------------------------------
+
+# Fields of the nested payloads that are not columns of the item itself.
+ITEM_NESTED_EFFECT_FIELDS = ("effects", "damage_entries", "xp_buffs")
+
+
+def replace_item_effects(db: Session, db_item: models.Items, effects) -> None:
+    """Replace-all write of `item_effects` for one item. No commit."""
+    db.query(models.ItemEffect).filter(
+        models.ItemEffect.item_id == db_item.id
+    ).delete(synchronize_session=False)
+    for row in effects or []:
+        db.add(models.ItemEffect(item_id=db_item.id, **row.dict()))
+    db.flush()
+
+
+def replace_item_damage_entries(db: Session, db_item: models.Items, damage_entries) -> None:
+    """Replace-all write of `item_damage_entries` for one item. No commit."""
+    db.query(models.ItemDamageEntry).filter(
+        models.ItemDamageEntry.item_id == db_item.id
+    ).delete(synchronize_session=False)
+    for row in damage_entries or []:
+        db.add(models.ItemDamageEntry(item_id=db_item.id, **row.dict()))
+    db.flush()
+
+
+def replace_item_xp_buffs(db: Session, db_item: models.Items, xp_buffs) -> None:
+    """FEAT-168 #6: replace-all write of `item_xp_buffs` for one item. No commit.
+
+    Whenever the admin submits the list — including an **empty** one — the legacy
+    single-buff columns are cleared, so there is exactly one source of truth for
+    the item. Clearing only on a non-empty list would let `get_item_xp_buffs`
+    resurrect the old triple after the admin deleted the last row (review #1 §5).
+    """
+    db.query(models.ItemXpBuff).filter(
+        models.ItemXpBuff.item_id == db_item.id
+    ).delete(synchronize_session=False)
+    for row in xp_buffs or []:
+        db.add(models.ItemXpBuff(item_id=db_item.id, **row.dict()))
+    db_item.buff_type = None
+    db_item.buff_value = None
+    db_item.buff_duration_minutes = None
+    db.flush()
+
+
+def get_item_xp_buffs(db: Session, item: models.Items) -> List[Dict[str, Any]]:
+    """Effective XP buffs of an item, as plain dicts.
+
+    `item_xp_buffs` rows win. An item that has none but still carries the legacy
+    `buff_type/buff_value/buff_duration_minutes` triple (written before
+    FEAT-168 #6, or by an older client) yields exactly one row — so nothing that
+    worked before this feature stops working.
+    """
+    rows = db.query(models.ItemXpBuff).filter(
+        models.ItemXpBuff.item_id == item.id
+    ).order_by(models.ItemXpBuff.id.asc()).all()
+    if rows:
+        return [
+            {
+                "buff_type": r.buff_type,
+                "value": r.value,
+                "duration_minutes": r.duration_minutes,
+            }
+            for r in rows
+        ]
+
+    if item.buff_type and item.buff_value is not None and item.buff_duration_minutes is not None:
+        return [{
+            "buff_type": item.buff_type,
+            "value": item.buff_value,
+            "duration_minutes": item.buff_duration_minutes,
+        }]
+    return []
 
 
 def delete_stale_conversions(db: Session, item: models.Items) -> int:
@@ -4063,6 +4164,11 @@ def award_gathering(
         # Edge case: caller asked to award 0 items (allowed). No XP, no spend.
         xp_award = 0
         durability_to_spend = 0
+
+    # FEAT-168: книга опыта сбора. Множитель применяется после масштабирования
+    # по частично влезшему стаку, так же как в award_profession_xp.
+    if xp_award > 0:
+        xp_award = int(xp_award * get_xp_multiplier(db, character_id, "gathering_xp_bonus"))
 
     # -- Tool durability decrement -------------------------------------------
     tool_durability_remaining: Optional[int] = None

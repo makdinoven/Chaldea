@@ -21,6 +21,23 @@ import {
   type ResourceSubcategory,
   type WhetstoneGroup,
 } from "../../constants/professions";
+import { STAT_MODIFIERS } from "../AdminSkillsPage/skillConstants";
+import { STAT_MODIFIER_NAME } from "../AdminSkillsPage/SkillEffectSections";
+import {
+  CLEANSE_EFFECT_NAME,
+  CLEANSE_SELECTORS,
+} from "../pages/BattlePage/battleEffects";
+import {
+  MAX_XP_BUFF_DURATION_MINUTES,
+  MAX_XP_BUFF_ROWS,
+  MAX_XP_BUFF_VALUE,
+  XP_BUFF_TYPES,
+  normalizeAction,
+  resolveXpBuffs,
+  type ItemDamageEntry,
+  type ItemEffect,
+  type ItemXpBuff,
+} from "../../utils/itemEffects";
 
 export const EQUIPMENT_TYPES: readonly string[] = [
   "head", "body", "cloak", "belt", "weapon",
@@ -131,10 +148,147 @@ export const IDENTIFY_LEVEL_OPTIONS: { value: number; label: string }[] = [
   { value: 3, label: "3 — любые" },
 ];
 
-/** The only buff the backend applies today (crud.py: xp_bonus) */
-export const BUFF_TYPE_OPTIONS: { value: string; label: string }[] = [
-  { value: "xp_bonus", label: "Бонус к опыту" },
-];
+/* ── XP books (FEAT-168 §3.9-bis): a repeatable list, not one buff ── */
+
+export const newXpBuff = (buffType: string): ItemXpBuff => ({
+  buff_type: buffType,
+  value: 0.25,
+  duration_minutes: 60,
+});
+
+/** The first type not already used in another row, or null when all 8 are taken. */
+export const firstFreeXpBuffType = (rows: ItemXpBuff[]): string | null =>
+  XP_BUFF_TYPES.find((t) => !rows.some((r) => r.buff_type === t)) ?? null;
+
+/**
+ * Client-side mirror of the server rules in §3.9-bis C, with the same Russian
+ * messages. Server errors are still surfaced — this only saves a round trip.
+ */
+export const validateXpBuffs = (
+  rows: ItemXpBuff[],
+  itemType: string,
+  isFood: boolean,
+): string | null => {
+  if (rows.length === 0) return null;
+  if (rows.length > MAX_XP_BUFF_ROWS) return `Не больше ${MAX_XP_BUFF_ROWS} строк опыта у предмета`;
+
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (!XP_BUFF_TYPES.includes(row.buff_type)) return "Недопустимый тип опыта";
+    if (seen.has(row.buff_type))
+      return "Один тип опыта можно указать у предмета только один раз";
+    seen.add(row.buff_type);
+
+    const value = Number(row.value ?? 0);
+    if (!Number.isFinite(value) || value <= 0 || value > MAX_XP_BUFF_VALUE)
+      return `Прибавка к опыту должна быть больше 0 и не больше ${MAX_XP_BUFF_VALUE * 100} %`;
+
+    const minutes = Number(row.duration_minutes ?? 0);
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > MAX_XP_BUFF_DURATION_MINUTES)
+      return `Длительность баффа опыта должна быть от 1 до ${MAX_XP_BUFF_DURATION_MINUTES} минут`;
+  }
+
+  if (isFood) return "Еда не может ускорять опыт";
+  if (itemType !== "consumable" && itemType !== "scroll")
+    return "Ускорение опыта доступно только для расходников и свитков";
+  return null;
+};
+
+/* ── Battle effects on consumables / scrolls (FEAT-168) ── */
+
+export const MAX_ITEM_EFFECTS = 20;
+export const MAX_ITEM_DAMAGE_ENTRIES = 10;
+export const MAX_COATING_TURNS = 50;
+export const MAX_COATING_BONUS_DAMAGE = 10000;
+export const MAX_EFFECT_MAGNITUDE = 10000;
+/** Defaults written into the state when the admin picks «яд на оружие» */
+export const DEFAULT_COATING_TURNS = 1;
+export const DEFAULT_COATING_BONUS_DAMAGE = 0;
+
+export const newItemEffect = (): ItemEffect => ({
+  target_side: "self",
+  effect_name: STAT_MODIFIER_NAME,
+  description: "",
+  chance: 100,
+  duration: 3,
+  magnitude: 0,
+  attribute_key: STAT_MODIFIERS[0].key,
+});
+
+export const newCleanseEffect = (): ItemEffect => ({
+  target_side: "self",
+  effect_name: CLEANSE_EFFECT_NAME,
+  description: "",
+  chance: 100,
+  duration: 0,
+  magnitude: 0,
+  attribute_key: CLEANSE_SELECTORS[0].value,
+});
+
+export const newItemDamageEntry = (): ItemDamageEntry => ({
+  damage_type: "fire",
+  amount: 0,
+  description: "",
+  weapon_slot: "no_weapon",
+  target_side: "enemy",
+  chance: 100,
+  aoe_shape: "single",
+  aoe_falloff: 50,
+  aoe_max_targets: 3,
+});
+
+const inRange = (value: unknown, min: number, max: number): boolean => {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) && n >= min && n <= max;
+};
+
+/**
+ * Client-side mirror of the server validation (§3.12). Returns a Russian error
+ * for the first problem found, or null when the configuration is acceptable.
+ *
+ * The strings are **verbatim copies of the inventory-service messages** so the
+ * admin reads the same sentence whether the form or the API catches the
+ * problem. Changing one without the other is the bug this comment prevents.
+ */
+export const validateBattleConfig = (item: Record<string, unknown>): string | null => {
+  const effects = (item.effects as ItemEffect[] | undefined) ?? [];
+  const damage = (item.damage_entries as ItemDamageEntry[] | undefined) ?? [];
+
+  if (effects.length > MAX_ITEM_EFFECTS)
+    return `Не больше ${MAX_ITEM_EFFECTS} эффектов у предмета`;
+  if (damage.length > MAX_ITEM_DAMAGE_ENTRIES)
+    return `Не больше ${MAX_ITEM_DAMAGE_ENTRIES} строк урона у предмета`;
+
+  for (const row of effects) {
+    if (!row.effect_name || !String(row.effect_name).trim())
+      return "Название эффекта обязательно";
+    if (!inRange(row.chance ?? 100, 0, 100))
+      return "Шанс эффекта должен быть от 0 до 100";
+    if (!inRange(row.duration ?? 0, 0, 100))
+      return "Длительность эффекта должна быть от 0 до 100 ходов";
+    if (!inRange(row.magnitude ?? 0, -MAX_EFFECT_MAGNITUDE, MAX_EFFECT_MAGNITUDE))
+      return `Сила эффекта должна быть от -${MAX_EFFECT_MAGNITUDE} до ${MAX_EFFECT_MAGNITUDE}`;
+  }
+
+  for (const row of damage) {
+    if (!inRange(row.chance ?? 100, 0, 100)) return "Шанс урона должен быть от 0 до 100";
+    if (!inRange(row.amount ?? 0, -MAX_EFFECT_MAGNITUDE, MAX_EFFECT_MAGNITUDE))
+      return `Урон должен быть от -${MAX_EFFECT_MAGNITUDE} до ${MAX_EFFECT_MAGNITUDE}`;
+    if (!inRange(row.aoe_falloff ?? 50, 0, 100))
+      return "Затухание области должно быть от 0 до 100";
+    if (!inRange(row.aoe_max_targets ?? 3, 1, 10))
+      return "Число целей области должно быть от 1 до 10";
+  }
+
+  if (normalizeAction(item.consumable_action as string | null) === "weapon_coating") {
+    if (!inRange(item.coating_turns ?? 0, 1, MAX_COATING_TURNS))
+      return `Длительность яда должна быть от 1 до ${MAX_COATING_TURNS} ходов`;
+    if (!inRange(item.coating_bonus_damage ?? 0, 0, MAX_COATING_BONUS_DAMAGE))
+      return `Прибавка урона от яда должна быть от 0 до ${MAX_COATING_BONUS_DAMAGE}`;
+  }
+
+  return null;
+};
 
 /* ── Per-type visibility ── */
 
@@ -155,6 +309,8 @@ export interface FieldRules {
   gatheringTool: boolean;
   /** "Еда" checkbox (consumables only) */
   food: boolean;
+  /** Battle effect editor: potions, poisons, scrolls — never food (FEAT-168) */
+  battleEffects: boolean;
 }
 
 export const rulesFor = (itemType: string, isFood = false): FieldRules => {
@@ -172,13 +328,14 @@ export const rulesFor = (itemType: string, isFood = false): FieldRules => {
     armorSubclass: ARMOR_SUBCLASS_TYPES.includes(itemType),
     weaponFields: WEAPON_SUBCLASS_TYPES.includes(itemType),
     recovery: itemType === "consumable" || itemType === "scroll",
-    // Food cannot be a buff item
-    buff: itemType === "consumable" && !eatable,
+    // XP books: consumables and scrolls, never food (§3.9-bis E)
+    buff: (itemType === "consumable" || itemType === "scroll") && !eatable,
     identify: itemType === "scroll",
     resource: itemType === "resource",
     recipeAuto: itemType === "recipe",
     gatheringTool: itemType === "gathering_tool",
     food,
+    battleEffects: (itemType === "consumable" || itemType === "scroll") && !eatable,
   };
 };
 
@@ -225,10 +382,24 @@ export const buildItemPayload = (item: Record<string, unknown>): Record<string, 
   payload.weapon_subclass = rules.weaponFields ? item.weapon_subclass || null : null;
   payload.primary_damage_type = rules.weaponFields ? item.primary_damage_type || null : null;
 
-  const hasBuff = rules.buff && Boolean(item.buff_type);
-  payload.buff_type = hasBuff ? item.buff_type : null;
-  payload.buff_value = hasBuff ? num(item.buff_value) : null;
-  payload.buff_duration_minutes = hasBuff ? num(item.buff_duration_minutes) : null;
+  // XP books (§3.9-bis): `xp_buffs` is the single source of truth and is always
+  // sent; the backend clears the legacy columns when the list is non-empty. The
+  // legacy triple is never written from the form any more.
+  const xpRows = rules.buff ? ((item.xp_buffs as ItemXpBuff[] | undefined) ?? []) : [];
+  payload.xp_buffs = xpRows.map(({ id: _id, ...row }) => ({
+    buff_type: row.buff_type,
+    value: Number(row.value ?? 0),
+    duration_minutes: Math.round(num(row.duration_minutes)),
+  }));
+  // Clear the legacy columns only when the admin actually left rows behind: the
+  // backend clears them itself for a non-empty list, and nulling them on an
+  // empty list would silently strip the book from an item this form never
+  // touched (a type without the editor, or a row the admin did not open).
+  if (!rules.buff || xpRows.length > 0) {
+    payload.buff_type = null;
+    payload.buff_value = null;
+    payload.buff_duration_minutes = null;
+  }
 
   payload.is_food = rules.food && Boolean(item.is_food);
 
@@ -245,6 +416,34 @@ export const buildItemPayload = (item: Record<string, unknown>): Record<string, 
   if (!rules.recipeAuto) {
     payload.blueprint_recipe_id = null;
   }
+
+  // Battle effects (FEAT-168) — replace-all lists. A type without the editor
+  // sends empty lists so switching a poison to a ring never leaves rows behind.
+  const action = rules.battleEffects ? normalizeAction(item.consumable_action as string | null) : "instant";
+  const coating = action === "weapon_coating";
+  payload.consumable_action = rules.battleEffects && action !== "instant" ? action : null;
+  payload.coating_turns = coating ? Math.max(1, num(item.coating_turns)) : null;
+  payload.coating_bonus_damage = coating ? num(item.coating_bonus_damage) : null;
+  payload.effects = rules.battleEffects
+    ? ((item.effects as ItemEffect[] | undefined) ?? []).map(({ id: _id, ...row }) => ({
+        ...row,
+        chance: num(row.chance ?? 100),
+        duration: num(row.duration ?? 0),
+        magnitude: num(row.magnitude ?? 0),
+        target_side: row.target_side || "self",
+      }))
+    : [];
+  payload.damage_entries = rules.battleEffects
+    ? ((item.damage_entries as ItemDamageEntry[] | undefined) ?? []).map(({ id: _id, ...row }) => ({
+        ...row,
+        amount: num(row.amount ?? 0),
+        chance: num(row.chance ?? 100),
+        aoe_falloff: num(row.aoe_falloff ?? 50),
+        aoe_max_targets: Math.max(1, num(row.aoe_max_targets ?? 3)),
+        weapon_slot: row.weapon_slot || "no_weapon",
+        target_side: row.target_side || "enemy",
+      }))
+    : [];
 
   payload.tool_category = rules.gatheringTool ? item.tool_category || null : null;
   for (const key of ["gather_double_chance_bonus", "gather_speed_bonus_pct", "gather_stamina_bonus_pct"]) {

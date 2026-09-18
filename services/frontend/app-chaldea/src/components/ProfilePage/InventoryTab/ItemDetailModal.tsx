@@ -14,6 +14,7 @@ import { STAT_LABELS, PERCENTAGE_STATS } from '../constants';
 import toast from 'react-hot-toast';
 import ItemArtwork from '../../CommonComponents/ItemArtwork';
 import ItemTypeLine from '../../CommonComponents/ItemTypeLine';
+import { describeItemBattleLines, describeXpBuffLines } from '../../../utils/itemEffects';
 
 /** Modifier field keys that are numeric on ItemData */
 const MODIFIER_FIELDS = [
@@ -241,6 +242,12 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
   const needsRepair = hasDurability && effectiveDurability < maxDurability;
 
 
+  // Battle effects (FEAT-168). Empty for every item without a configuration,
+  // so an effect-less item's card is unchanged.
+  const battleLines = isUnidentified ? [] : describeItemBattleLines(item);
+  // XP books (§3.9-bis): several sources per item, legacy single buff included.
+  const xpLines = isUnidentified ? [] : describeXpBuffLines(item);
+
   // Collect base modifiers
   const baseModMap: Record<string, number> = {};
   for (const field of MODIFIER_FIELDS) {
@@ -363,6 +370,47 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
                 {item.description && (
                   <div className="mb-4">
                     <p className="text-white/80 text-sm leading-relaxed">{item.description}</p>
+                  </div>
+                )}
+
+                {/* Battle effects (FEAT-168) */}
+                {battleLines.length > 0 && (
+                  <div className="mb-4">
+                    <h3 className="gold-text text-base font-medium uppercase mb-2">
+                      В бою
+                    </h3>
+                    <ul className="flex flex-col gap-1">
+                      {battleLines.map((line, i) => (
+                        <li
+                          key={i}
+                          className="text-site-blue text-xs sm:text-sm leading-relaxed break-words"
+                        >
+                          {line}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-white/40 text-xs mt-2">
+                      Действует только в бою. Применяется из быстрого слота и не тратит ход.
+                    </p>
+                  </div>
+                )}
+
+                {/* XP acceleration (FEAT-168 §3.9-bis) */}
+                {xpLines.length > 0 && (
+                  <div className="mb-4">
+                    <h3 className="gold-text text-base font-medium uppercase mb-2">
+                      Ускорение опыта
+                    </h3>
+                    <ul className="flex flex-col gap-1">
+                      {xpLines.map((line, i) => (
+                        <li
+                          key={i}
+                          className="text-gold text-xs sm:text-sm leading-relaxed break-words"
+                        >
+                          {line}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 )}
 

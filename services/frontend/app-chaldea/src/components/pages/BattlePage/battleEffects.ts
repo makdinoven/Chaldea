@@ -61,8 +61,36 @@ export const evaluateControl = (
   return { fullSkip, blocked: [...blocked] };
 };
 
-const damageLabel = (value: string): string =>
+export const damageLabel = (value: string): string =>
   DAMAGE_TYPES.find((d) => d.value === value)?.label ?? value;
+
+/**
+ * FEAT-168 — cleanse rows (`effect_name === "Cleanse"`). `attribute_key` says
+ * what the item removes; the engine never removes a full skip-turn control
+ * (Stun / Poison-паралич), whatever the selector says.
+ */
+export const CLEANSE_EFFECT_NAME = "Cleanse";
+
+export const CLEANSE_SELECTORS: { value: string; label: string }[] = [
+  { value: "debuff", label: "чужие эффекты" },
+  { value: "periodic_damage", label: "периодический урон" },
+  { value: "control_partial", label: "частичный контроль" },
+  { value: "stat_down", label: "ослабление характеристик" },
+  { value: "all", label: "все эффекты" },
+];
+
+export const CLEANSE_HINT =
+  "Полный контроль с пропуском хода (оглушение, паралич) не снимается никогда — это правило боя, а не настройка предмета.";
+
+/** Selector -> Russian. An effect name (e.g. `Bleeding`) falls back to its own label. */
+export const cleanseSelectorLabel = (key: string | null | undefined): string => {
+  if (!key) return CLEANSE_SELECTORS[0].label;
+  const known = CLEANSE_SELECTORS.find((s) => s.value === key);
+  if (known) return known.label;
+  const complex = COMPLEX_EFFECTS.find((c) => c.value === key);
+  if (complex) return complex.label.toLowerCase();
+  return key;
+};
 
 const complexOption = (name: string) =>
   COMPLEX_EFFECTS.find((c) => c.value === name);
@@ -124,6 +152,17 @@ export const describeEffect = (e: EffectLike): EffectDescription => {
       label: `Изменение защиты${dt ? ` (${dt})` : ""}`,
       detail: join([turns, magPart]),
       positive: mag >= 0,
+    };
+  }
+
+  // Cleanse (FEAT-168) — an item that strips effects. `attribute` is the
+  // selector, `magnitude` the cap (0 / empty = all matching).
+  if (name === CLEANSE_EFFECT_NAME) {
+    const limit = mag > 0 ? `не более ${Math.round(mag)}` : "";
+    return {
+      label: `Очищение: ${cleanseSelectorLabel(attr)}`,
+      detail: join([limit]),
+      positive: true,
     };
   }
 

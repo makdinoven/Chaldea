@@ -1,6 +1,7 @@
 import httpx
 import math
 import re
+import time
 import models, schemas
 import locations_client
 from config import settings
@@ -15,7 +16,7 @@ from models import (
     MobPack, MobPackMember, ActiveMobPack,
 )
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import NamedTuple, Optional
 from fastapi import HTTPException
 import logging
 
@@ -37,6 +38,172 @@ def _internal_token_headers() -> dict:
     """
     import auth_http
     return {"X-Internal-Token": auth_http.INTERNAL_SERVICE_TOKEN}
+
+
+# ---------------------------------------------------------------------------
+# FEAT-168 #6: XP books — character-XP multiplier from inventory-service
+# ---------------------------------------------------------------------------
+# An item may accelerate a specific character-XP source (battles, roleplay
+# posts, quests, titles, battle pass) or all of them at once. The buff rows live
+# in inventory-service (`active_buffs`).
+#
+# **Ordering rule (review #2).** The multiplier is resolved at the *entry point*
+# of a request — before any ORM object is loaded and before the transaction is
+# opened — and handed down to the award function as the `xp_multiplier`
+# parameter. A DB session must never wait on another service (prod incident
+# 2026-09-04, QueuePool), and we must never end someone else's transaction to
+# make room for a network call either: a rollback expires every loaded object
+# and the caller then blows up on its next attribute read.
+
+XP_SOURCE_BATTLE = "character_xp_battle_bonus"
+XP_SOURCE_POST = "character_xp_post_bonus"
+XP_SOURCE_QUEST = "character_xp_quest_bonus"
+XP_SOURCE_TITLE = "character_xp_title_bonus"
+XP_SOURCE_PASS = "character_xp_pass_bonus"
+
+CHARACTER_XP_SOURCES = frozenset({
+    XP_SOURCE_BATTLE,
+    XP_SOURCE_POST,
+    XP_SOURCE_QUEST,
+    XP_SOURCE_TITLE,
+    XP_SOURCE_PASS,
+})
+
+XP_MULTIPLIER_TIMEOUT_SECONDS = 5.0
+
+
+class XpMultiplierLookup(NamedTuple):
+    """Результат запроса множителя книги опыта.
+
+    `multiplier` всегда пригоден для умножения (fail-open: 1.0 при любой беде —
+    опыт терять нельзя). `ok` отличает «книги нет» от «спросить не получилось»:
+    без этого флага молчаливая деградация неотличима от штатной работы, и
+    пятисекундный таймаут спокойно доезжает до прода зелёным (ревью #5, #36).
+    """
+    multiplier: float
+    ok: bool
+    reason: Optional[str] = None
+    elapsed_ms: int = 0
+
+
+def _xp_multiplier_url(character_id: int) -> str:
+    return f"{settings.INVENTORY_SERVICE_URL}internal/characters/{character_id}/xp-multiplier"
+
+
+def _parse_xp_multiplier(payload, character_id: int, elapsed_ms: int) -> XpMultiplierLookup:
+    """Разбор ответа inventory-service. Никогда не бросает — только 1.0 в худшем случае."""
+    try:
+        multiplier = float(payload.get("multiplier", 1.0))
+    except Exception:
+        logger.error(
+            "Нечитаемый ответ множителя опыта для персонажа %s (%s мс) — "
+            "начисляю без баффа, бонус потерян",
+            character_id, elapsed_ms,
+        )
+        return XpMultiplierLookup(1.0, False, "bad_payload", elapsed_ms)
+    # NaN/inf проходят через float() и через сравнение `< 1.0` (NaN ложно во всех
+    # сравнениях), а int(xp * nan) уронил бы начисление — опыт важнее бонуса.
+    if not math.isfinite(multiplier) or multiplier < 1.0:
+        logger.error(
+            "Некорректный множитель опыта %s для персонажа %s (%s мс) — использую 1.0",
+            multiplier, character_id, elapsed_ms,
+        )
+        return XpMultiplierLookup(1.0, False, "out_of_range", elapsed_ms)
+    return XpMultiplierLookup(multiplier, True, None, elapsed_ms)
+
+
+def _xp_multiplier_failed(character_id: int, xp_source: str, exc, elapsed_ms: int) -> XpMultiplierLookup:
+    """Провал запроса — это ошибка, а не рутина: бонус игрока молча пропал.
+
+    Уровень `error` намеренный: `warning` тонет в шуме, а именно по этой записи
+    видно, что книга опыта перестала работать (ревью #5, #36).
+    """
+    logger.error(
+        "Не удалось получить множитель опыта (%s) для персонажа %s за %s мс: %s — "
+        "начисляю базовый опыт, бонус книги потерян",
+        xp_source, character_id, elapsed_ms, exc,
+    )
+    return XpMultiplierLookup(1.0, False, "request_failed", elapsed_ms)
+
+
+def _unknown_xp_source(xp_source: str) -> XpMultiplierLookup:
+    logger.warning("Неизвестный источник опыта %s, множитель 1.0", xp_source)
+    return XpMultiplierLookup(1.0, False, "unknown_source", 0)
+
+
+def lookup_character_xp_multiplier(character_id: int, xp_source: str) -> XpMultiplierLookup:
+    """Запрос множителя с признаком успеха. **Только для синхронного контекста.**"""
+    if xp_source not in CHARACTER_XP_SOURCES:
+        return _unknown_xp_source(xp_source)
+    started = time.monotonic()
+    try:
+        response = httpx.get(
+            _xp_multiplier_url(character_id),
+            params={"buff_type": xp_source},
+            headers=_internal_token_headers(),
+            timeout=XP_MULTIPLIER_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        return _xp_multiplier_failed(
+            character_id, xp_source, exc, int((time.monotonic() - started) * 1000),
+        )
+    return _parse_xp_multiplier(payload, character_id, int((time.monotonic() - started) * 1000))
+
+
+async def lookup_character_xp_multiplier_async(character_id: int, xp_source: str) -> XpMultiplierLookup:
+    """То же самое для `async def` обработчиков — не блокирует event loop."""
+    if xp_source not in CHARACTER_XP_SOURCES:
+        return _unknown_xp_source(xp_source)
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=XP_MULTIPLIER_TIMEOUT_SECONDS) as client:
+            response = await client.get(
+                _xp_multiplier_url(character_id),
+                params={"buff_type": xp_source},
+                headers=_internal_token_headers(),
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:
+        return _xp_multiplier_failed(
+            character_id, xp_source, exc, int((time.monotonic() - started) * 1000),
+        )
+    return _parse_xp_multiplier(payload, character_id, int((time.monotonic() - started) * 1000))
+
+
+def get_character_xp_multiplier(character_id: int, xp_source: str) -> float:
+    """Множитель опыта персонажа для одного источника (1.0, если баффа нет).
+
+    **Только для синхронного контекста** — обработчиков, объявленных обычным
+    `def` (FastAPI уводит их в threadpool, где блокирующий вызов никому не
+    мешает). В `async def` брать `get_character_xp_multiplier_async`: этот
+    вариант на 5 секунд останавливает весь event loop (ревью #3, находка 25).
+
+    Fail-open by design: if inventory-service is unreachable, slow or answers
+    with an error, the character still gets their XP at the base rate — losing
+    XP because a buff lookup failed would be far worse than losing the bonus.
+    Кому важно отличить «книги нет» от «спросить не вышло» —
+    `lookup_character_xp_multiplier`, у неё есть флаг `ok`.
+    """
+    return lookup_character_xp_multiplier(character_id, xp_source).multiplier
+
+
+async def get_character_xp_multiplier_async(character_id: int, xp_source: str) -> float:
+    """То же самое для `async def` обработчиков — не блокирует event loop.
+
+    Поведение (белый список источников, fail-open, зажим NaN/inf и значений
+    меньше 1.0) полностью совпадает с синхронным вариантом.
+    """
+    return (await lookup_character_xp_multiplier_async(character_id, xp_source)).multiplier
+
+
+def multiply_xp(xp: int, xp_multiplier: Optional[float]) -> int:
+    """Опыт с учётом книги. Округление вниз — то же правило, что у опыта профессии."""
+    if xp <= 0 or xp_multiplier is None:
+        return xp
+    return int(xp * xp_multiplier)
 
 
 def get_character_limit() -> Optional[int]:
@@ -2133,12 +2300,30 @@ def log_gold_transaction(
 # Rewards (Phase 4)
 # ============================================================
 
-def add_rewards_to_character(db: Session, character_id: int, xp: int, gold: int):
+def add_rewards_to_character(
+    db: Session,
+    character_id: int,
+    xp: int,
+    gold: int,
+    xp_source: str = XP_SOURCE_BATTLE,
+    xp_multiplier: Optional[float] = None,
+):
     """
     Adds gold to character's currency_balance and XP via shared DB (character_attributes table).
     Returns (new_balance, new_xp) or None if character not found.
+
+    FEAT-168 #6: `xp_source` says which XP book applies. It defaults to battle
+    XP — the source this helper was written for — so every caller written before
+    this feature keeps its exact behaviour. The battle pass passes its own source.
+
+    `xp_multiplier` is resolved by the caller, before any DB work (see the
+    ordering rule above). `None` simply means «no book» and awards the base XP —
+    this function never makes a network call of its own.
     """
     from sqlalchemy import text as sa_text
+
+    # FEAT-168 #6: книга опыта персонажа.
+    xp = multiply_xp(xp, xp_multiplier)
 
     character = db.query(Character).filter(Character.id == character_id).first()
     if not character:
@@ -2504,14 +2689,30 @@ def get_bestiary(db: Session, character_id: int = None):
 # ========== Title CRUD + XP Rewards ==========
 
 
-def _grant_title_xp(db: Session, character_id: int, passive_exp: int, active_exp: int):
+def _grant_title_xp(
+    db: Session,
+    character_id: int,
+    passive_exp: int,
+    active_exp: int,
+    *,
+    xp_multiplier: Optional[float],
+):
     """
     Grant XP rewards for unlocking a title.
     Updates passive_experience and active_experience in character_attributes (shared DB).
     Checks for level-up based on new passive experience.
+
+    FEAT-168 #6: `xp_multiplier` is **required** (keyword-only) and must already
+    be resolved by the caller, before the transaction was opened — this function
+    runs deep inside one and may not make a network call. `None` means «no book»
+    and awards the base XP.
     """
     if passive_exp <= 0 and active_exp <= 0:
         return
+
+    # FEAT-168 #6: книга опыта за титулы ускоряет только пассивный опыт;
+    # активный опыт (очки навыков) книгами не ускоряется.
+    passive_exp = multiply_xp(passive_exp, xp_multiplier)
 
     new_passive_xp = None
     try:
@@ -2622,10 +2823,19 @@ def delete_title_full(db: Session, title_id: int):
     return True
 
 
-def grant_title(db: Session, character_id: int, title_id: int):
+def grant_title(
+    db: Session,
+    character_id: int,
+    title_id: int,
+    xp_multiplier: Optional[float] = None,
+):
     """
     Grant title to character with is_custom=True. Idempotent.
     Does NOT auto-set as active. Grants XP reward on first grant.
+
+    FEAT-168 #6: `xp_multiplier` comes from the endpoint, resolved before any DB
+    work. `None` = «no book» and awards the base XP; this function never makes a
+    network call, so the check-and-insert below is one uninterrupted transaction.
     """
     title = db.query(models.Title).filter(models.Title.id_title == title_id).first()
     if not title:
@@ -2649,11 +2859,27 @@ def grant_title(db: Session, character_id: int, title_id: int):
         is_custom=True,
     )
     db.add(ct)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # Проигранная гонка: между проверкой выше и вставкой тот же титул выдал
+        # другой запрос (двойной клик в админке, два автоисточника разом).
+        # Первичный ключ character_titles ловит это за нас — отвечаем так же,
+        # как при обычном повторе. Награда опытом НЕ выдаётся: flush падает до
+        # неё, и откат снимает вставку целиком.
+        db.rollback()
+        logger.info(
+            "Титул %s персонажу %s уже выдан параллельным запросом",
+            title_id, character_id,
+        )
+        return True, "already_has"
 
     # Grant XP reward
     if title.reward_passive_exp > 0 or title.reward_active_exp > 0:
-        _grant_title_xp(db, character_id, title.reward_passive_exp, title.reward_active_exp)
+        _grant_title_xp(
+            db, character_id, title.reward_passive_exp, title.reward_active_exp,
+            xp_multiplier=xp_multiplier,
+        )
 
     db.commit()
 
@@ -2906,10 +3132,27 @@ def _compare(current_value, operator: str, target_value) -> bool:
     return False
 
 
-def evaluate_titles(db: Session, character_id: int):
+def evaluate_titles(db: Session, character_id: int, xp_multiplier: Optional[float] = None):
+    """Decide **and** grant in one call — the synchronous convenience wrapper.
+
+    `async def` handlers should use the two halves instead
+    (`find_unlockable_titles` + `grant_unlocked_titles`), so the XP-book lookup
+    can be awaited between them and only when something actually unlocks.
+
+    FEAT-168 #6: `xp_multiplier` is supplied by the caller; `None` = «no book»
+    and awards the base XP. This function never makes a network call.
     """
-    Check all active titles the character doesn't have.
-    Grant titles whose ALL conditions are met. Return list of newly unlocked titles.
+    return grant_unlocked_titles(
+        db, character_id, find_unlockable_titles(db, character_id),
+        xp_multiplier=xp_multiplier,
+    )
+
+
+def find_unlockable_titles(db: Session, character_id: int):
+    """Read-only phase: which active titles this character has just earned.
+
+    Writes nothing, so a caller may await the XP-book lookup on its result and
+    only pay for it when the list is non-empty (review #4).
     """
     # 1. Query all active titles not yet earned
     earned_ids_rows = db.query(models.CharacterTitle.title_id).filter(
@@ -2957,7 +3200,7 @@ def evaluate_titles(db: Session, character_id: int):
                 attrs_dict[col_name] = val or 0
 
     # 4. Evaluate each title
-    newly_unlocked = []
+    unlockable = []
 
     for title in unearned:
         conditions = title.conditions if isinstance(title.conditions, list) else []
@@ -3017,6 +3260,35 @@ def evaluate_titles(db: Session, character_id: int):
         if not all_met:
             continue
 
+        unlockable.append(title)
+
+    return unlockable
+
+
+def title_reward_needs_the_book(candidates) -> bool:
+    """True when at least one earned title carries passive XP.
+
+    The signal a caller uses to decide whether the XP-book lookup is worth a
+    network call at all — a title without a passive reward never needs one.
+    """
+    return any((t.reward_passive_exp or 0) > 0 for t in candidates or [])
+
+
+def grant_unlocked_titles(
+    db: Session,
+    character_id: int,
+    candidates,
+    xp_multiplier: Optional[float] = None,
+):
+    """Write phase: grant the titles `find_unlockable_titles` selected.
+
+    FEAT-168 #6: `xp_multiplier` comes from the caller (`None` = «no book»,
+    base XP). No network call happens here — the duplicate re-check, the INSERT
+    and the XP write share one transaction.
+    """
+    newly_unlocked = []
+
+    for title in candidates or []:
         # Check race condition
         existing = db.query(models.CharacterTitle).filter(
             models.CharacterTitle.character_id == character_id,
@@ -3036,7 +3308,10 @@ def evaluate_titles(db: Session, character_id: int):
 
         # Grant XP reward
         if title.reward_passive_exp > 0 or title.reward_active_exp > 0:
-            _grant_title_xp(db, character_id, title.reward_passive_exp, title.reward_active_exp)
+            _grant_title_xp(
+                db, character_id, title.reward_passive_exp, title.reward_active_exp,
+                xp_multiplier=xp_multiplier,
+            )
 
         newly_unlocked.append({
             "id_title": title.id_title,

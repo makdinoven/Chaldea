@@ -3040,8 +3040,31 @@ async def complete_quest(
         )
 
     # Award experience
+    # FEAT-168 #6: книга «опыт за задания» может увеличить награду — игроку
+    # показываем фактически начисленный опыт, а не базовый.
+    awarded_exp = quest.reward_exp
     if quest.reward_exp > 0:
-        await crud.add_experience(session, body.character_id, quest.reward_exp)
+        # FEAT-168 #6: книга «опыт за задания» спрашивается только у квестов,
+        # которые вообще дают опыт (ревью #3). Вызов асинхронный, event loop не
+        # блокируется.
+        #
+        # ОСОЗНАННЫЙ РАЗМЕН (ревью #4): сюда мы попадаем уже с открытой
+        # транзакцией — выше были SELECT-ы (проверка владения, проверка квеста,
+        # начисление валюты), поэтому соединение БД удерживается на время этого
+        # запроса, до 5 с. Ветка редкая (сдача квеста с наградой опытом), и это
+        # дешевле, чем спрашивать множитель на каждом запросе заранее.
+        # «Починить» это откатом сессии НЕЛЬЗЯ: откат протухает уже загруженный
+        # квест, и обработчик падает с MissingGreenlet на чтении своих же полей —
+        # ровно та ловушка, о которой предупреждает запись про battle-pass в
+        # docs/ISSUES.md. Если понадобится убрать удержание — выносить начисление
+        # за пределы транзакции, а не откатывать её.
+        xp_multiplier = await crud.get_character_xp_multiplier(
+            body.character_id, crud.XP_SOURCE_QUEST,
+        )
+        awarded_exp = await crud.add_experience(
+            session, body.character_id, quest.reward_exp,
+            xp_multiplier=xp_multiplier,
+        )
 
     # Award items via inventory-service
     if quest.reward_items:
@@ -3086,7 +3109,7 @@ async def complete_quest(
         "success": True,
         "message": "Квест выполнен! Награды получены.",
         "reward_currency": quest.reward_currency,
-        "reward_exp": quest.reward_exp,
+        "reward_exp": awarded_exp,
         "reward_items": quest.reward_items,
         "new_balance": new_balance,
     }

@@ -313,11 +313,12 @@ def _run_action(patches_dict, payload=None):
 
 class TestItemUsageSuccess:
     """Verify that a valid item in fast_slots is consumed, recovery applied,
-    and the slot is removed."""
+    and the stack is decremented (the slot goes away only at zero)."""
 
-    def test_consume_item_called_and_slot_removed(self):
-        """When item_id matches a fast_slot, consume_item is called and
-        the slot is removed from fast_slots."""
+    def test_consume_item_called_and_quantity_decremented(self):
+        """When item_id matches a fast_slot, consume_item is called and the
+        stack loses exactly one unit (FEAT-168: a stack of 5 gives 5 uses —
+        previously the whole slot was dropped after the first use)."""
         fast_slots = [
             {
                 "slot_type": "fast_slot_1",
@@ -342,13 +343,72 @@ class TestItemUsageSuccess:
         # consume_item should have been called with character_id=10, item_id=3
         consume_mock.assert_called_once_with(10, 3)
 
-        # After usage, fast_slots should be empty (slot removed)
+        # After usage the slot stays in the belt with one unit less.
         # Check via save_state mock — the state passed to save_state
         save_state_mock = patches["main.save_state"]
         if save_state_mock.called:
             saved_state = save_state_mock.call_args[0][1]
             p1_slots = saved_state["participants"]["1"]["fast_slots"]
-            assert len(p1_slots) == 0, "Used slot should be removed from fast_slots"
+            assert len(p1_slots) == 1, "A stack of 5 must not vanish after one use"
+            assert p1_slots[0]["quantity"] == 4, "Exactly one unit should be spent"
+
+    def test_last_unit_removes_slot(self):
+        """The slot disappears only when the last unit of the stack is used."""
+        fast_slots = [
+            {
+                "slot_type": "fast_slot_1",
+                "item_id": 3,
+                "quantity": 1,
+                "name": "Health Potion",
+                "image": "potion.png",
+                "health_recovery": 50,
+            },
+        ]
+        state = _make_battle_state(hp_p1=60, fast_slots_p1=fast_slots)
+
+        patches = _build_common_patches(state, consume_result={"status": "ok", "remaining_quantity": 0})
+        payload = _make_action_payload(item_id=3)
+        response, ctx = _run_action(patches, payload)
+
+        assert response.status_code == 200
+
+        save_state_mock = patches["main.save_state"]
+        if save_state_mock.called:
+            saved_state = save_state_mock.call_args[0][1]
+            p1_slots = saved_state["participants"]["1"]["fast_slots"]
+            assert len(p1_slots) == 0, "The last unit must free the fast slot"
+
+    def test_slot_with_unusable_quantity_is_removed(self):
+        """A slot whose `quantity` is missing or unusable (None / 0 / garbage)
+        counts as a single unit and leaves the belt after one use.
+
+        Note: belts snapshotted before FEAT-168 DO carry `quantity` (the old
+        `inventory_client.get_fast_slots` already wrote it), so they simply get
+        the full stack of uses. This test covers the defensive default, not a
+        pre-deploy state."""
+        fast_slots = [
+            {
+                "slot_type": "fast_slot_1",
+                "item_id": 3,
+                "quantity": 0,
+                "name": "Health Potion",
+                "image": "potion.png",
+                "health_recovery": 50,
+            },
+        ]
+        state = _make_battle_state(hp_p1=60, fast_slots_p1=fast_slots)
+
+        patches = _build_common_patches(state, consume_result={"status": "ok", "remaining_quantity": 0})
+        payload = _make_action_payload(item_id=3)
+        response, ctx = _run_action(patches, payload)
+
+        assert response.status_code == 200
+
+        save_state_mock = patches["main.save_state"]
+        if save_state_mock.called:
+            saved_state = save_state_mock.call_args[0][1]
+            p1_slots = saved_state["participants"]["1"]["fast_slots"]
+            assert len(p1_slots) == 0, "Unusable quantity: one use, then removed"
 
     def test_health_recovery_applied(self):
         """Item with health_recovery increases HP (capped at max_hp)."""
@@ -404,8 +464,8 @@ class TestItemUsageSuccess:
             assert p1["hp"] <= 100, "HP should not exceed max_hp"
             assert p1["mana"] <= 100, "Mana should not exceed max_mana"
 
-    def test_only_matching_slot_removed(self):
-        """When multiple fast_slots exist, only the matching one is removed."""
+    def test_only_matching_slot_touched(self):
+        """When multiple fast_slots exist, only the matching one is spent."""
         fast_slots = [
             {
                 "slot_type": "fast_slot_1",
@@ -436,8 +496,10 @@ class TestItemUsageSuccess:
         if save_state_mock.called:
             saved_state = save_state_mock.call_args[0][1]
             p1_slots = saved_state["participants"]["1"]["fast_slots"]
-            assert len(p1_slots) == 1, "Only the used slot should be removed"
-            assert p1_slots[0]["item_id"] == 7, "Remaining slot should be the unused one"
+            assert len(p1_slots) == 2, "Neither stack is empty, so both slots stay"
+            by_item = {s["item_id"]: s for s in p1_slots}
+            assert by_item[3]["quantity"] == 4, "Only the used stack loses a unit"
+            assert by_item[7]["quantity"] == 2, "The untouched stack keeps its quantity"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -590,3 +652,126 @@ class TestItemNotInFastSlots:
 
         assert response.status_code == 200
         consume_mock.assert_not_called()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Test Group: Weapon coating (FEAT-168)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+_POISON_EFFECT_ROW = {
+    "target_side": "enemy",
+    "effect_name": "Poison",
+    "attribute_key": "periodic_damage",
+    "magnitude": 6,
+    "duration": 3,
+    "chance": 100,
+}
+
+
+def _coated_state(bonus_damage: float) -> dict:
+    """Battle state where P1's weapon already carries a poison coating."""
+    state = _make_battle_state(hp_p1=100)
+    state["participants"]["1"]["weapon_coating"] = {
+        "item_id": 91,
+        "name": "Яд гадюки",
+        "bonus_damage": bonus_damage,
+        "turns_left": 4,
+        "effects": [dict(_POISON_EFFECT_ROW)],
+    }
+    return state
+
+
+def _attack_rank_with_weapon_damage() -> dict:
+    return {
+        "id": 1,
+        "skill_id": 1,
+        "cooldown": 0,
+        "cost_energy": 0,
+        "cost_mana": 0,
+        "cost_stamina": 0,
+        "effects": [],
+        "damage_entries": [
+            {
+                "damage_type": "physical",
+                "amount": 10,
+                "weapon_slot": "main_weapon",
+                "aoe_shape": "single",
+            }
+        ],
+    }
+
+
+def _coating_patches(state):
+    patches = _build_common_patches(
+        state,
+        attack_rank=_attack_rank_with_weapon_damage(),
+        damage_result=(12.0, {"damage_type": "physical", "final": 12.0}),
+    )
+    # `buffs` is mocked module-wide in this file, so _normalize_effect would
+    # otherwise return a MagicMock that cannot be serialized into the response.
+    patches["main._normalize_effect"] = MagicMock(side_effect=lambda row: {
+        "name": row.get("effect_name"),
+        "attribute": row.get("attribute_key"),
+        "magnitude": row.get("magnitude"),
+        "duration": row.get("duration"),
+    })
+    patches["main.apply_new_effects"] = MagicMock()
+    return patches
+
+
+class TestWeaponCoatingOnHit:
+    """A poison on the weapon must infect whoever it hits — including a poison
+    whose whole value is the DoT and whose bonus damage is zero (FEAT-168
+    review #1: the on-hit effects used to be gated on the bonus being non-zero,
+    so a DoT-only poison silently did nothing)."""
+
+    def _run_attack(self, bonus_damage: float):
+        state = _coated_state(bonus_damage)
+        patches = _coating_patches(state)
+        payload = _make_action_payload(attack_skill_id=1)
+        response, ctx = _run_action(patches, payload)
+        assert response.status_code == 200
+        return response.json()["events"], patches["main.apply_new_effects"]
+
+    def test_zero_bonus_coating_still_applies_its_effects(self):
+        """coating_bonus_damage = 0 → no extra damage, but the poison lands."""
+        events, apply_mock = self._run_attack(0.0)
+
+        assert apply_mock.called, "A DoT-only coating must still apply its effects"
+        # (state, target_pid, rows, ...) — the enemy is participant 2
+        called_targets = {call.args[1] for call in apply_mock.call_args_list}
+        assert 2 in called_targets
+
+        coating_events = [
+            e for e in events
+            if e.get("event") == "apply_effects" and e.get("kind") == "item"
+            and e.get("item_id") == 91
+        ]
+        assert coating_events, "The coating's effects must be logged"
+        assert coating_events[0]["who"] == 2
+
+    def test_coating_with_bonus_applies_effects_too(self):
+        """The non-zero-bonus case keeps working (guards the fix both ways)."""
+        events, apply_mock = self._run_attack(12.0)
+
+        assert apply_mock.called
+        assert any(
+            e.get("event") == "apply_effects" and e.get("kind") == "item"
+            and e.get("item_id") == 91
+            for e in events
+        )
+
+    def test_no_coating_applies_nothing(self):
+        """Without a coating nothing extra happens — the pre-FEAT-168 path."""
+        state = _make_battle_state(hp_p1=100)
+        patches = _coating_patches(state)
+        payload = _make_action_payload(attack_skill_id=1)
+        response, ctx = _run_action(patches, payload)
+
+        assert response.status_code == 200
+        events = response.json()["events"]
+        assert not any(
+            e.get("event") == "apply_effects" and e.get("kind") == "item"
+            for e in events
+        )

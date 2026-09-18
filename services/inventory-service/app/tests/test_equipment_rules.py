@@ -80,7 +80,12 @@ def player(client, world):
 
     user = UserRead(id=USER, username="player", role="user", permissions=[])
     app.dependency_overrides[get_current_user_via_http] = lambda: user
+    # equip/unequip are `async def`, so they use the awaited `_async` variants
+    # of the fire-and-forget calls (review #5) — those are the ones to stub.
     with patch("main.apply_modifiers_in_attributes_service", new_callable=AsyncMock), \
+         patch("main._reconcile_perks_async", new_callable=AsyncMock), \
+         patch("main._track_cumulative_stats_async", new_callable=AsyncMock), \
+         patch("main._evaluate_titles_async", new_callable=AsyncMock), \
          patch("main._reconcile_perks"), patch("main._track_cumulative_stats"), \
          patch("main.httpx.post"):
         yield client

@@ -12,6 +12,14 @@ import type {
   ResolvedSkill,
   SkillWithPerks,
 } from "../../../SkillTreeView/types";
+import {
+  COATING_BLOCKED_MESSAGE,
+  describeActiveCoating,
+  describeItemBattleLines,
+  isCoatingBlocked,
+  type ItemBattleConfig,
+  type WeaponCoating,
+} from "../../../../utils/itemEffects";
 
 // --- Battle data shapes (flat snapshot rows) ---
 export interface BattleSkill {
@@ -25,7 +33,11 @@ export interface BattleSkill {
   [key: string]: unknown;
 }
 
-export interface BattleItem {
+/**
+ * A fast slot as snapshotted into the battle state. Every FEAT-168 field is
+ * optional: a battle started before this feature carries slots without them.
+ */
+export interface BattleItem extends ItemBattleConfig {
   item_id: number;
   name?: string;
   image?: string;
@@ -58,6 +70,8 @@ interface SkillPickerProps {
   items: BattleItem[];
   cooldowns: Record<string, number>;
   characterId: number;
+  /** Poison currently on the viewer's weapon — blocks a second coating (FEAT-168) */
+  weaponCoating?: WeaponCoating | null;
   selectedId: number | null;
   onSelectSkill: (skill: BattleSkill) => void;
   onSelectItem: (item: BattleItem) => void;
@@ -71,6 +85,7 @@ const SkillPicker = ({
   items,
   cooldowns,
   characterId,
+  weaponCoating = null,
   selectedId,
   onSelectSkill,
   onSelectItem,
@@ -148,6 +163,8 @@ const SkillPicker = ({
     return parts.join(", ");
   };
 
+  const activeCoatingText = describeActiveCoating(weaponCoating);
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
@@ -192,43 +209,68 @@ const SkillPicker = ({
             items.length === 0 ? (
               <p className="text-white/40 text-center py-8">Нет предметов</p>
             ) : (
-              <ul className="flex flex-col gap-2">
-                {items.map((it) => {
-                  const selected = selectedId === it.item_id;
-                  const rec = recoveryText(it);
-                  return (
-                    <li key={it.item_id}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onSelectItem(it);
-                          onClose();
-                        }}
-                        className={`w-full flex items-center gap-3 p-2.5 rounded-card border text-left transition-all duration-200 ease-site ${
-                          selected
-                            ? "border-gold/60 bg-gold/10"
-                            : "border-white/10 bg-white/[0.03] hover:border-white/25"
-                        }`}
-                      >
-                        <ItemIcon image={it.image} />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-white text-sm font-medium truncate">
-                            {it.name ?? `Предмет #${it.item_id}`}
-                            {it.quantity ? (
-                              <span className="text-white/40"> ×{it.quantity}</span>
-                            ) : null}
-                          </p>
-                          {rec && (
-                            <p className="text-emerald-300/80 text-xs mt-0.5 truncate">
-                              {rec}
+              <>
+                {activeCoatingText && (
+                  <p className="mb-2 px-2.5 py-1.5 rounded-card border border-gold/30 bg-gold/[0.06] text-gold text-xs">
+                    {activeCoatingText}
+                  </p>
+                )}
+                <ul className="flex flex-col gap-2">
+                  {items.map((it) => {
+                    const selected = selectedId === it.item_id;
+                    const rec = recoveryText(it);
+                    const effectLines = describeItemBattleLines(it);
+                    // A second poison cannot be applied while one is active —
+                    // the server refuses it, so do not let the player waste the turn's item.
+                    const blocked = isCoatingBlocked(it, weaponCoating);
+                    return (
+                      <li key={it.item_id}>
+                        <button
+                          type="button"
+                          disabled={blocked}
+                          title={blocked ? COATING_BLOCKED_MESSAGE : undefined}
+                          onClick={() => {
+                            onSelectItem(it);
+                            onClose();
+                          }}
+                          className={`w-full flex items-center gap-3 p-2.5 rounded-card border text-left transition-all duration-200 ease-site ${
+                            blocked
+                              ? "border-white/10 bg-white/[0.02] opacity-50 cursor-not-allowed"
+                              : selected
+                                ? "border-gold/60 bg-gold/10"
+                                : "border-white/10 bg-white/[0.03] hover:border-white/25"
+                          }`}
+                        >
+                          <ItemIcon image={it.image} />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-white text-sm font-medium truncate">
+                              {it.name ?? `Предмет #${it.item_id}`}
+                              {it.quantity ? (
+                                <span className="text-white/40"> ×{it.quantity}</span>
+                              ) : null}
                             </p>
-                          )}
-                        </div>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
+                            {rec && (
+                              <p className="text-emerald-300/80 text-xs mt-0.5 break-words">
+                                {rec}
+                              </p>
+                            )}
+                            {effectLines.map((line, i) => (
+                              <p key={i} className="text-site-blue text-xs mt-0.5 break-words">
+                                {line}
+                              </p>
+                            ))}
+                            {blocked && (
+                              <p className="text-site-red text-xs mt-0.5 break-words">
+                                {COATING_BLOCKED_MESSAGE}
+                              </p>
+                            )}
+                          </div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
             )
           ) : sortedSkills.length === 0 ? (
             <p className="text-white/40 text-center py-8">

@@ -3,6 +3,7 @@ import axios from 'axios';
 import type { RootState, AppDispatch } from '../store';
 import { getMe } from './userSlice';
 import type { EquipmentRules } from '../../utils/equipmentRules';
+import type { ItemDamageEntry, ItemEffect, ItemXpBuff } from '../../utils/itemEffects';
 
 // --- Types ---
 
@@ -53,6 +54,17 @@ export interface ItemData {
   repair_power: number | null;
   /** Food gives satiety when eaten (FEAT-164); older payloads may omit it */
   is_food?: boolean;
+  /**
+   * Battle configuration (FEAT-168). Every field is optional: an item payload
+   * from before the feature — or any non-consumable — simply omits them.
+   */
+  consumable_action?: string | null;
+  coating_turns?: number | null;
+  coating_bonus_damage?: number | null;
+  effects?: ItemEffect[] | null;
+  damage_entries?: ItemDamageEntry[] | null;
+  /** XP books (§3.9-bis): wins over the legacy `buff_*` triple above */
+  xp_buffs?: ItemXpBuff[] | null;
 }
 
 export interface InventoryItem {
