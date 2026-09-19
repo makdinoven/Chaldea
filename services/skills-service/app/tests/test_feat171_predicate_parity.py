@@ -100,6 +100,14 @@ async def db():
         yield session
     async with _engine.begin() as conn:
         await conn.execute(text("DROP TABLE IF EXISTS characters"))
+    # aiosqlite runs every connection on its own NON-daemon thread. An engine
+    # left undisposed keeps that thread alive, and the interpreter then blocks
+    # forever in `threading._shutdown()` AFTER pytest has already reported its
+    # results — a green suite whose process never exits. That is what timed the
+    # locations-service CI job out at 6 minutes on 2026-09-19 (run 35464515284,
+    # `1444 passed in 15.67s` followed by five silent minutes), and it is why
+    # every other engine-using test file in these suites disposes its engine.
+    await _engine.dispose()
 
 
 def _user(user_id, role, permissions=()):
