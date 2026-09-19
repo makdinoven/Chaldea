@@ -64,8 +64,19 @@ export const fetchAllItems = async (opts: Omit<FetchItemsOptions, "page" | "page
   }
 };
 
+/**
+ * The FULL item template for the admin editors.
+ *
+ * FEAT-171 thinned the public `GET /inventory/items/{id}` down to the six-key
+ * card (id, name, description, image_url, rarity, type), which the editor would
+ * happily load and then write back — silently zeroing the item's real data on
+ * the next PUT. The admin door `GET /inventory/admin/items/{id}`
+ * (JWT + `items:read`) keeps serving the unmodified fat `Item`.
+ *
+ * Admin-only by design: anything non-admin must use the public thin card.
+ */
 export const fetchItem = async (id: number) => {
-  const { data } = await client.get(`/items/${id}`);
+  const { data } = await client.get(`/admin/items/${id}`);
   return data;
 };
 

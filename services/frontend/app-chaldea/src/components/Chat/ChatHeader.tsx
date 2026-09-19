@@ -5,6 +5,11 @@ interface ChatHeaderProps {
   activeChannel: ChatChannel;
   onChannelChange: (channel: ChatChannel) => void;
   onClose: () => void;
+  /**
+   * FEAT-171: `/chat/history` is behind `ProtectedRoute` now, so for a guest
+   * the link would only bounce them to the login page — it is not rendered.
+   */
+  isAuthenticated: boolean;
 }
 
 const CHANNEL_LABELS: Record<ChatChannel, string> = {
@@ -15,7 +20,12 @@ const CHANNEL_LABELS: Record<ChatChannel, string> = {
 
 const CHANNELS: ChatChannel[] = ['general', 'trade', 'help'];
 
-const ChatHeader = ({ activeChannel, onChannelChange, onClose }: ChatHeaderProps) => {
+const ChatHeader = ({
+  activeChannel,
+  onChannelChange,
+  onClose,
+  isAuthenticated,
+}: ChatHeaderProps) => {
   return (
     <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
       <div className="flex gap-1">
@@ -35,12 +45,14 @@ const ChatHeader = ({ activeChannel, onChannelChange, onClose }: ChatHeaderProps
         ))}
       </div>
       <div className="flex items-center gap-2">
-        <Link
-          to="/chat/history"
-          className="text-xs text-site-blue hover:text-white transition-colors duration-200 ease-site"
-        >
-          История
-        </Link>
+        {isAuthenticated && (
+          <Link
+            to="/chat/history"
+            className="text-xs text-site-blue hover:text-white transition-colors duration-200 ease-site"
+          >
+            История
+          </Link>
+        )}
         <button
           onClick={onClose}
           aria-label="Закрыть чат"

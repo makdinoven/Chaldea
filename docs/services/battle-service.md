@@ -37,8 +37,8 @@ battle-service/app/
 | POST | `/battles/` | Создать бой (список участников с командами) |
 | GET | `/battles/{battle_id}/state` | Текущее состояние боя + снапшот |
 | POST | `/battles/{battle_id}/action` | Выполнить ход (атака/защита/поддержка + предмет) |
-| GET | `/battles/{battle_id}/logs` | Логи всех ходов |
-| GET | `/battles/{battle_id}/logs/{turn_number}` | Логи конкретного хода |
+| GET | `/battles/battles/{battle_id}/logs` | Логи всех ходов. **FEAT-171 (фикс по ревью #2):** требует JWT + `battle_visibility.require_battle_log_access` |
+| GET | `/battles/battles/{battle_id}/logs/{turn_number}` | Логи конкретного хода. Тот же гейт |
 | POST | `/battles/admin/{battle_id}/force-finish` | Принудительно завершить бой (`battles:manage`) |
 | POST | `/battles/admin/{battle_id}/freeze` | Заморозить бой с причиной (`battles:manage`, FEAT-163) |
 | POST | `/battles/admin/{battle_id}/unfreeze` | Разморозить бой (`battles:manage`, FEAT-163) |
@@ -109,7 +109,7 @@ battle-service/app/
 Урон оружия **не входит** в характеристику `damage` — она хранит только «базу»
 (характеристики, перки, броня и украшения с их заточкой и камнями, баффы, еда).
 Урон конкретного оружия считает **inventory-service** и отдаёт его полем
-`effective_damage` в `GET /inventory/{character_id}/equipment`
+`effective_damage` в `GET /inventory/internal/characters/{character_id}/equipment`
 (шаблонный `damage_modifier` + заточка + вставленные камни этого оружия; `0.0`,
 если предмет сломан — `max_durability > 0` и `current_durability <= 0`).
 
@@ -269,12 +269,12 @@ battle-service/app/
 
 | Сервис | Endpoint | Назначение |
 |--------|----------|-----------|
-| character-attributes:8002 | GET `/attributes/{id}` | Боевые характеристики |
+| character-attributes:8002 | GET `/attributes/internal/{id}` | Боевые характеристики. **FEAT-171:** игровой `/attributes/{id}` уходит под гейт владельца, бой читает внутренний двойник с `X-Internal-Token` (`battle_engine._internal_token_headers()`). У мобов и НПС владельца нет, проверка владения для них невозможна |
 | character:8005 | GET `/characters/{id}/profile` | Имя, аватар |
 | skills:8003 | GET `/skills/admin/skill_ranks/{id}` | Данные навыка |
 | skills:8003 | GET `/skills/characters/{id}/skills` | Навыки персонажа |
-| inventory:8004 | GET `/inventory/{id}/equipment` | Экипировка |
-| inventory:8004 | GET `/inventory/items/{id}` | Данные предмета |
+| inventory:8004 | GET `/inventory/internal/characters/{id}/equipment` | Экипировка (полное тело: `effective_damage`, заточка, вставки, прочность, включая `fast_slot_*`). **FEAT-171:** игровой `/inventory/{id}/equipment` уходит под гейт владельца, бой читает внутренний двойник с `X-Internal-Token`. Два вызывающих: `battle_engine.fetch_weapons` и `inventory_client.get_equipment_durability` |
+| inventory:8004 | GET `/inventory/internal/items/{id}` | Данные предмета (полный шаблон). **FEAT-171:** публичный `/inventory/items/{id}` стал тонкой карточкой (id, name, description, image_url, rarity, type) без цифр, поэтому бой читает внутренний двойник с `X-Internal-Token`. Вызывающие: `battle_engine.fetch_weapons`, `inventory_client.get_item`, `skills_client.get_item` |
 | inventory:8004 | GET `/inventory/internal/characters/{id}/fast_slots` | Быстрые слоты (пояс) — снимок на старте боя. **FEAT-169:** игровой путь `/inventory/characters/{id}/fast_slots` закрыт JWT + проверкой владения, поэтому бой ходит во внутренний двойник с `X-Internal-Token`. Проверка владения для internal-двойника не применяется — у мобов и НПС нет владельца. Заголовок даёт `inventory_client._internal_token_headers()` (модуль-локальный: импорт из `main` был бы циклическим) |
 | inventory:8004 | POST `/inventory/internal/characters/{id}/consume_item` | Трата предмета пояса в бою. **FEAT-169:** обязателен `X-Internal-Token`; ошибка возвращается игроку |
 | inventory:8004 | POST `/inventory/internal/update-durability` | Запись прочности после боя. **FEAT-169:** обязателен `X-Internal-Token`; вызов best-effort — без заголовка прочность молча перестала бы сохраняться |
@@ -559,7 +559,40 @@ NPC исключаются (`c.is_npc = 0`) во всех запросах ув�
 
 - Все три синхронизации ресурсов в `character_attributes` (обычное завершение боя, HP=1 проигравшему в `pvp_training`, force-finish/таймаут) дополнительно ставят `regen_anchor_at = UTC_TIMESTAMP()` — время боя не засчитывается как покой. Если колонки ещё нет (миграция character-attributes-service не применена), выполняется старый UPDATE без якоря с WARNING в логе (`_execute_with_anchor_fallback`).
 - `battle_participants.joined_at` — начало «занятого» интервала участника для character-attributes-service (для поздно вступивших — свой момент входа).
-- Старт боя не менялся: `build_participant_info` → `GET /attributes/{id}` досчитывает восстановление до `joined_at`.
+- Старт боя не менялся: `build_participant_info` → `GET /attributes/internal/{id}` (FEAT-171) досчитывает восстановление до `joined_at`.
+
+## FEAT-171 (фикс по ревью): кто может читать логи боя
+
+`app/battle_visibility.py` — `can_view_battle_logs` / `require_battle_log_access`.
+До фикса `GET /battles/battles/{battle_id}/logs` и `.../logs/{turn_number}` не имели
+**ни одной** зависимости и проходили через gateway, так что гость перебором
+последовательных `battle_id` читал `{"event":"pve_rewards","xp":30,"gold":5}` и
+`{"event":"skill_use","skill_id":9003}` — опыт, деньги и навыки, то есть ровно то, что
+FEAT-171 объявила приватным.
+
+Правило (сначала 404, потом 403 — как во всей фиче):
+
+| Зритель | Результат |
+|---|---|
+| гость (без токена) | 401 |
+| участник боя (владеет персонажем в `battle_participants`) | 200, в том числе для завершённого боя |
+| наблюдатель: бой активен и у зрителя есть персонаж в `battles.location_id` | 200 |
+| тот же наблюдатель, но бой завершён | 403 |
+| админ/модератор **с** правом `characters:read` | 200 |
+| модератор **без** этого права | 403 |
+| чужой игрок | 403 |
+| несуществующий `battle_id` | 404 «Бой не найден» |
+
+Ветка наблюдателя — **дословно** правило `GET /battles/{battle_id}/spectate`: панель
+логов живёт на той же странице, что и состояние боя, которое наблюдатель уже читает.
+Сузить гейт логов, не сузив `/spectate`, значило бы сломать панель, не закрыв при этом
+более богатую утечку (открытая запись в `docs/ISSUES.md` про снапшот наблюдателя:
+`build_participant_info` отдаёт `attributes`, `skills`, `fast_slots`). Это **отдельный
+путь кода**, продуктовое решение по нему не принято; когда его сузят — сужать оба
+правила вместе.
+
+Фронтенд не менялся: `BattlePageBar.tsx` ходит через дефолтный инстанс axios, которому
+`api/axiosSetup.ts` уже добавляет Bearer-токен.
 
 ## Известные проблемы
 

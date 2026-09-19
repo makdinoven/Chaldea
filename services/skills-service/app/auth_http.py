@@ -17,6 +17,7 @@ class UserRead(BaseModel):
 
 
 OAUTH2_SCHEME = OAuth2PasswordBearer(tokenUrl="token")
+OAUTH2_SCHEME_OPTIONAL = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
 AUTH_SERVICE_URL = os.environ.get("AUTH_SERVICE_URL", "http://user-service:8000")
 
@@ -41,6 +42,22 @@ def get_current_user_via_http(token: str = Depends(OAUTH2_SCHEME)) -> UserRead:
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Не удалось подтвердить учётные данные",
     )
+
+
+def get_optional_user(
+    token: Optional[str] = Depends(OAUTH2_SCHEME_OPTIONAL),
+) -> Optional[UserRead]:
+    """Same as `get_current_user_via_http`, but returns None instead of raising.
+
+    Mirror of features/FEAT-171 §3.1 D3. Deliberately a sync `def`, so FastAPI
+    runs it in the threadpool even for `async def` handlers.
+    """
+    if not token:
+        return None
+    try:
+        return get_current_user_via_http(token)
+    except HTTPException:
+        return None
 
 
 def require_permission(permission: str):

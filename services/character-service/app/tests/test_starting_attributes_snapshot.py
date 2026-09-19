@@ -30,7 +30,13 @@ from fastapi.testclient import TestClient
 import database
 from database import Base
 import models
-from auth_http import get_admin_user, get_current_user_via_http, OAUTH2_SCHEME, UserRead
+from auth_http import (
+    get_admin_user,
+    get_current_user_via_http,
+    get_optional_user,
+    OAUTH2_SCHEME,
+    UserRead,
+)
 from main import app, get_db
 
 
@@ -104,6 +110,9 @@ def client(db_session):
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_admin_user] = lambda: _ADMIN_USER
     app.dependency_overrides[get_current_user_via_http] = lambda: _ADMIN_USER
+    # FEAT-171 §3.4 C3: стартовые характеристики в паспорте приватные. Зритель
+    # здесь — тот же админ с characters:read, поэтому видит полный паспорт.
+    app.dependency_overrides[get_optional_user] = lambda: _ADMIN_USER
     app.dependency_overrides[OAUTH2_SCHEME] = lambda: "fake-token"
     yield TestClient(app)
     app.dependency_overrides.clear()

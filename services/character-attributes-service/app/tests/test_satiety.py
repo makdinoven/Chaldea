@@ -373,14 +373,23 @@ class TestRestStatus:
         assert body["busy_reason"] is None
         assert body["satiety"] is None
 
-    def test_404(self, client):
+    def test_404_when_the_character_does_not_exist(self, client):
+        """FEAT-171: the visibility gate runs first and must not reveal whether
+        the id exists — so it is 404 «Персонаж не найден», never 403."""
+        resp = client.get("/attributes/5555/rest-status")
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Персонаж не найден"
+
+    def test_404_when_the_character_has_no_attributes_row(self, client, db):
+        add_character(db, 5555)
         resp = client.get("/attributes/5555/rest-status")
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Атрибуты персонажа не найдены"
 
     def test_public_read_cannot_farm_resources(self, client, db):
-        """rest-status is public (no auth, like GET /attributes/{id});
-        hammering it must not grant anything beyond real elapsed rest time."""
+        """rest-status is readable here because `seed` creates an NPC
+        (`user_id IS NULL`, FEAT-171 Q6); hammering it must not grant anything
+        beyond real elapsed rest time."""
         seed(db, current_health=0)
         for _ in range(20):
             assert client.get(f"/attributes/{CID}/rest-status").status_code == 200

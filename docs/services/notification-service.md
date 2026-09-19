@@ -33,6 +33,7 @@ notification-service/app/
 | GET | `/notifications/{user_id}/full` | Все уведомления | Нет |
 | PUT | `/notifications/{user_id}/mark-as-read` | Отметить как прочитанные | Нет |
 | PUT | `/notifications/{user_id}/mark-all-as-read` | Отметить все как прочитанные | Нет |
+| GET | `/notifications/chat/messages?channel=` | История канала чата, постранично. **FEAT-171 (N1):** закрыта от неавторизованных — гость получает **401** «Войдите в аккаунт, чтобы читать чат» (зависимость `chat_routes.require_chat_reader`: схема с `auto_error=False` + собственное русское сообщение, дальше обычная проверка токена через user-service). Тело ответа для вошедшего не изменилось. `POST` на том же роутере уже требовал JWT, `DELETE` — `chat:delete` | Да |
 
 ## Таблица БД
 

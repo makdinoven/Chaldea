@@ -134,8 +134,13 @@ class CharacterRequestUpdate(CharacterRequestBase):
     user_id: Optional[int] = None
 
 
-class CharacterPublicResponse(BaseModel):
-    """Публичный паспорт персонажа (GET /characters/{character_id}/public)."""
+class CharacterPublicStrangerResponse(BaseModel):
+    """Паспорт персонажа так, как его видит ЧУЖОЙ (FEAT-171 §3.4 C3, стиль A).
+
+    Полная схема `CharacterPublicResponse` наследуется от этой и лишь добавляет
+    приватные поля — второго списка полей нет (§3.2 D5), поэтому публичная форма
+    не может отстать от полной.
+    """
 
     id: int
     name: str
@@ -171,6 +176,22 @@ class CharacterPublicResponse(BaseModel):
     user_id: Optional[int] = None
     username: Optional[str] = None
 
+    # Замороженный слепок выданного набора (rule 12d / D17). Если слепка нет —
+    # здесь живой resolve, а granted_kit_is_snapshot = False (D18).
+    # FEAT-171 §3.4 C3 / D4 архитектуры: набор остаётся ПУБЛИЧНЫМ — это запись
+    # о вступлении (список id предметов), а не характеристики.
+    granted_kit: Optional[Dict[str, Any]] = None
+    granted_kit_is_snapshot: bool = False
+
+
+class CharacterPublicResponse(CharacterPublicStrangerResponse):
+    """Полный паспорт: то же плюс приватные стартовые характеристики.
+
+    Отдаётся только владельцу, админу/модератору с `characters:read` и на NPC
+    (у него нет приватного слоя). Для чужого используется базовая схема, и тогда
+    этих ключей в JSON просто НЕТ (§3.2 D4).
+    """
+
     # FEAT-155: ЗАМОРОЖЕННЫЕ стартовые характеристики — то, с чем персонаж
     # вступил в Скитальцы (правило 27, по образцу granted_kit / правило 12d).
     # Текущие статы здесь НЕ отдаются намеренно: паспорт это запись о вступлении,
@@ -180,11 +201,6 @@ class CharacterPublicResponse(BaseModel):
     # True — слепок, снятый при одобрении. False — реконструкция из пресета
     # подрасы для персонажа, созданного до FEAT-155 (по образцу D18).
     starting_attributes_is_snapshot: bool = False
-
-    # Замороженный слепок выданного набора (rule 12d / D17). Если слепка нет —
-    # здесь живой resolve, а granted_kit_is_snapshot = False (D18).
-    granted_kit: Optional[Dict[str, Any]] = None
-    granted_kit_is_snapshot: bool = False
 
 
 # Схема для создания персонажа (эквивалент CharacterCreate)
@@ -374,6 +390,34 @@ class FullProfileResponse(BaseModel):
     active_title: Optional[str]
     active_title_rarity: Optional[str] = None
     avatar: Optional[str]
+
+
+class PublicProfileResponse(BaseModel):
+    """Витрина персонажа для чужого (FEAT-171 §3.4 C1, стиль A).
+
+    Ни денег, ни очков характеристик, ни прогресса уровня, ни текущих
+    hp/mana/energy/stamina: эти ключи в ответе ОТСУТСТВУЮТ, а не равны null.
+    Строится единственной проекцией `public_profile(full)` (§3.2 D5).
+    """
+
+    id: int
+    name: str
+    level: int
+    active_title: Optional[str] = None
+    active_title_rarity: Optional[str] = None
+    avatar: Optional[str] = None
+
+
+def public_profile(character_id: int, full: FullProfileResponse) -> PublicProfileResponse:
+    """Единственная проекция полного профиля в публичный (§3.2 D5)."""
+    return PublicProfileResponse(
+        id=character_id,
+        name=full.name,
+        level=full.level,
+        active_title=full.active_title,
+        active_title_rarity=full.active_title_rarity,
+        avatar=full.avatar,
+    )
 
 
 class CharacterBaseInfoResponse(BaseModel):
@@ -1384,19 +1428,30 @@ class TeleportResult(BaseModel):
     last_teleport_at: datetime
 
 
-class PostHistoryItem(BaseModel):
+class PublicPostHistoryItem(BaseModel):
+    """Пост так, как его видит чужой (FEAT-171 §3.4 C7, Q4b): без `xp_earned`."""
+
     id: int
     character_id: int
     location_id: int
     location_name: str
     content: str
     char_count: int
-    xp_earned: int
     created_at: datetime
+
+
+class PostHistoryItem(PublicPostHistoryItem):
+    """То же плюс начисленный опыт — только владельцу/админу/NPC."""
+
+    xp_earned: int
 
 
 class PostHistoryResponse(BaseModel):
     posts: List[PostHistoryItem]
+
+
+class PublicPostHistoryResponse(BaseModel):
+    posts: List[PublicPostHistoryItem]
 
 
 class SetTravelCooldownRequest(BaseModel):

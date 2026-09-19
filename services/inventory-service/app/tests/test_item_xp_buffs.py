@@ -26,7 +26,20 @@ import pytest
 from sqlalchemy import text
 
 import crud
+import auth_http
 import models
+
+# FEAT-171 I3: `GET /inventory/items/{id}` is now the thin public card; the fat
+# item template moved to the internal twin, which requires `X-Internal-Token`.
+_INTERNAL_TOKEN = "test-internal-token"
+_INTERNAL_HEADERS = {"X-Internal-Token": _INTERNAL_TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _pin_internal_token(monkeypatch):
+    """`verify_internal_token` reads a module-level constant — pin it."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", _INTERNAL_TOKEN)
+
 import schemas
 from auth_http import UserRead, get_current_user_via_http
 
@@ -252,13 +265,13 @@ class TestXpBuffRoundTrip:
         assert len(resp.json()["xp_buffs"]) == 3
         assert _read_xp_buffs(db_session, item_id) == rows
 
-        got = client.get(f"/inventory/items/{item_id}")
+        got = client.get(f"/inventory/internal/items/{item_id}", headers=_INTERNAL_HEADERS)
         assert [r["buff_type"] for r in got.json()["xp_buffs"]] == \
             [QUEST, PROFESSION, GATHERING]
 
     def test_item_without_rows_returns_empty_list(self, client, db_session):
         item_id = _post(client, _body(name="Просто зелье")).json()["id"]
-        assert client.get(f"/inventory/items/{item_id}").json()["xp_buffs"] == []
+        assert client.get(f"/inventory/internal/items/{item_id}", headers=_INTERNAL_HEADERS).json()["xp_buffs"] == []
         assert _read_xp_buffs(db_session, item_id) == []
 
     def test_saving_rows_clears_the_legacy_columns(self, client, db_session):

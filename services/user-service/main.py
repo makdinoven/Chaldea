@@ -28,6 +28,9 @@ import bleach
 import re
 import asyncio
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_TAGS = [
     "p", "br", "strong", "em", "u", "s",
@@ -89,6 +92,17 @@ router = APIRouter(prefix="/users")
 CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8005")
 LOCATION_SERVICE_URL = os.getenv("LOCATION_SERVICE_URL", "http://locations-service:8006")
 
+
+def _internal_token_headers() -> dict:
+    """Заголовок для обращений во внутренние двойники соседних сервисов.
+
+    FEAT-171 C4i: `/users/me` и `/users/{id}/profile` собираются из
+    `short_info` персонажа, а публичный `short_info` теряет `currency_balance`.
+    Баланс остаётся только во внутреннем двойнике, поэтому user-service ходит
+    туда с X-Internal-Token. Токен читается из окружения в момент вызова.
+    """
+    return {"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")}
+
 # Optional OAuth2 scheme that doesn't raise 401 when no token is present
 optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login", auto_error=False)
 
@@ -111,14 +125,44 @@ def get_optional_user(
         return None
 
 
+# ==================== PRIVILEGED-VIEWER RULE (FEAT-171 §5 #4/#5) ====================
+# Локальный аналог `visibility.can_view_private` из character-/inventory-/
+# character-attributes-/skills-service: привилегированный зритель — это роль
+# admin/moderator **и** конкретное разрешение. Проверять одну роль мало:
+# у модератора разрешение может быть отозвано через `user_permissions`, и
+# тогда он получает 403 на `/characters/{id}/full_profile`, но раньше всё
+# равно видел золото здесь.
+PRIVILEGED_ROLES = ("admin", "moderator")
+CHARACTER_PRIVATE_PERMISSION = "characters:read"   # приватный слой персонажа
+USER_PRIVATE_PERMISSION = "users:read"             # персональные данные учётки
+
+
+def _is_privileged_viewer(db: Session, user, permission: str) -> bool:
+    """True, если `user` — админ/модератор И у него есть `permission`."""
+    if user is None:
+        return False
+    if not is_admin_or_moderator(db, user):
+        return False
+    return permission in get_effective_permissions(db, user)
+
+
 async def _fetch_character_short(char_id: int):
-    """Fetch character short info + location, reused by /me and /profile."""
-    char_url = f"{CHARACTER_SERVICE_URL}/characters/{char_id}/short_info"
+    """Fetch character short info + location, reused by /me and /profile.
+
+    FEAT-171 C4i: публичный `short_info` больше не отдаёт `currency_balance`,
+    поэтому баланс для счётчика золота берётся из внутреннего двойника
+    `/characters/internal/{id}/short_info` с заголовком X-Internal-Token.
+    """
+    char_url = f"{CHARACTER_SERVICE_URL}/characters/internal/{char_id}/short_info"
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
-            resp = await client.get(char_url)
+            resp = await client.get(char_url, headers=_internal_token_headers())
             resp.raise_for_status()
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "short_info lookup failed for character %s via %s: %s",
+                char_id, char_url, exc,
+            )
             return None
 
         ch_json = resp.json()
@@ -722,8 +766,11 @@ def get_all_users(
     )
 
 
-@router.get("/admins", response_model=List[UserRead])
+@router.get("/admins", response_model=List[schemas.UserPublicRead])
 def get_admin_users(db: Session = Depends(get_db)):
+    """Список админов. FEAT-171 §5 #2: раньше отвечал `UserRead` и отдавал
+    анонимному вызывающему e-mail **всех** администраторов сразу. Единственный
+    потребитель — consumer notification-service, которому нужен только `id`."""
     # Query by role_id (admin role_id=4) with fallback to legacy role string
     admin_role = db.query(models.Role).filter(models.Role.name == "admin").first()
     if admin_role:
@@ -1551,13 +1598,30 @@ async def get_user_characters(
 
 # ==================== USER PROFILE ====================
 
-@router.get("/{user_id}/profile", response_model=schemas.UserProfileResponse)
+@router.get(
+    "/{user_id}/profile",
+    response_model=None,
+    responses={
+        200: {
+            "description": (
+                "Владелец профиля и админ/модератор получают UserProfileResponse "
+                "(в character есть currency_balance); любой другой зритель — "
+                "UserProfileStrangerResponse без этого ключа."
+            )
+        }
+    },
+)
 async def get_user_profile(
     user_id: int,
     current_user: Optional[models.User] = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
-    """Получить полный профиль пользователя."""
+    """Получить полный профиль пользователя.
+
+    FEAT-171 §3.4 U1: золото персонажа — приватное. Чужому зрителю ключ
+    `character.currency_balance` не отдаётся вовсе (его нет в JSON, а не null);
+    `/users/me` по-прежнему отдаёт баланс для счётчика в шапке.
+    """
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
@@ -1620,7 +1684,27 @@ async def get_user_profile(
         except (json.JSONDecodeError, TypeError):
             style_settings = None
 
-    return schemas.UserProfileResponse(
+    # FEAT-171 §5 #4: страховка на случай, если `_fetch_character_short`
+    # однажды начнёт возвращать модель вместо dict — Pydantic v1 пропустил бы
+    # экземпляр подкласса `CharacterShort` вместе с `currency_balance` даже в
+    # ответ чужому зрителю.
+    if isinstance(character_data, BaseModel):
+        character_data = character_data.dict()
+
+    # Золото видит только сам владелец профиля и админ/модератор с правом
+    # `characters:read` — FEAT-171 §5 #5: та же формула, что и в
+    # `visibility.can_view_private` четырёх сервисов фичи. Роли самой по себе
+    # мало: у модератора право может быть отозвано.
+    may_see_gold = current_user is not None and (
+        current_user.id == user_id
+        or _is_privileged_viewer(db, current_user, CHARACTER_PRIVATE_PERMISSION)
+    )
+    response_cls = (
+        schemas.UserProfileResponse if may_see_gold
+        else schemas.UserProfileStrangerResponse
+    )
+
+    return response_cls(
         id=user.id,
         username=user.username,
         avatar=user.avatar,
@@ -2202,12 +2286,42 @@ def internal_unlock_cosmetic(
 
 # ==================== GET USER BY ID (catch-all, must be last) ====================
 
-@router.get("/{user_id}", response_model=UserRead)
-def get_user_by_id(user_id: int, db: Session = Depends(get_db)):
+@router.get(
+    "/{user_id}",
+    response_model=None,
+    responses={
+        200: {
+            "description": (
+                "Сам пользователь и админ/модератор с правом users:read получают "
+                "UserRead (с e-mail); любой другой зритель — UserPublicRead без него."
+            )
+        }
+    },
+)
+def get_user_by_id(
+    user_id: int,
+    current_user: Optional[models.User] = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    """Карточка пользователя по id.
+
+    FEAT-171 §5 #2: маршрут не имел никакой авторизации и отдавал анонимному
+    вызывающему `email` реального человека. E-mail — персональные данные, он
+    остаётся только владельцу учётки и админу/модератору с правом
+    `users:read`. Все межсервисные вызывающие (character-service
+    `main.py`, locations-service `crud.py`) читают отсюда только `username`,
+    поэтому внутренний двойник не нужен.
+    """
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    may_see_email = current_user is not None and (
+        current_user.id == user_id
+        or _is_privileged_viewer(db, current_user, USER_PRIVATE_PERMISSION)
+    )
+    schema = schemas.UserRead if may_see_email else schemas.UserPublicRead
+    return schema.from_orm(user)
 
 
 app.include_router(router)

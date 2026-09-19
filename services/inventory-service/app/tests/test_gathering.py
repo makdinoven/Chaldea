@@ -441,8 +441,10 @@ class TestToolItemValidation:
 class TestListToolsEndpoint:
     """GET /inventory/{cid}/items?item_type=gathering_tool&category=..."""
 
-    def test_filter_by_gathering_tool(self, client, db_session):
+    def test_filter_by_gathering_tool(self, client, db_session, private_viewer):
         """item_type=gathering_tool returns only tools with all fields."""
+        # FEAT-171: the inventory read is owner-gated now.
+        private_viewer(character_id=1, user_id=1)
         pickaxe = _seed_tool_item(db_session, item_id=100, tool_category="pickaxe", name="Кирка")
         sickle = _seed_tool_item(db_session, item_id=101, tool_category="sickle", name="Серп")
         sword = _seed_resource_item(db_session, item_id=102, name="Меч", item_type="weapon")
@@ -465,8 +467,10 @@ class TestListToolsEndpoint:
             assert "gather_stamina_bonus_pct" in inner
             assert entry["current_durability"] in (45, 30)
 
-    def test_filter_by_category_pickaxe(self, client, db_session):
+    def test_filter_by_category_pickaxe(self, client, db_session, private_viewer):
         """category=pickaxe returns only pickaxes."""
+        # FEAT-171: the inventory read is owner-gated now.
+        private_viewer(character_id=1, user_id=1)
         _seed_tool_item(db_session, item_id=100, tool_category="pickaxe", name="Кирка")
         _seed_tool_item(db_session, item_id=101, tool_category="sickle", name="Серп")
         _add_inventory_row(db_session, 1, 100)
@@ -478,18 +482,24 @@ class TestListToolsEndpoint:
         assert len(data) == 1
         assert data[0]["item"]["tool_category"] == "pickaxe"
 
-    def test_invalid_category_returns_422(self, client, db_session):
+    def test_invalid_category_returns_422(self, client, db_session, private_viewer):
         """category=hammer (invalid) → 422."""
+        # FEAT-171: the inventory read is owner-gated now.
+        private_viewer(character_id=1, user_id=1)
         response = client.get("/inventory/1/items?item_type=gathering_tool&category=hammer")
         assert response.status_code == 422
 
-    def test_category_without_gathering_tool_returns_422(self, client, db_session):
+    def test_category_without_gathering_tool_returns_422(self, client, db_session, private_viewer):
         """Setting category without item_type=gathering_tool → 422."""
+        # FEAT-171: the inventory read is owner-gated now.
+        private_viewer(character_id=1, user_id=1)
         response = client.get("/inventory/1/items?category=pickaxe")
         assert response.status_code == 422
 
-    def test_mixed_inventory_filter_excludes_non_tools(self, client, db_session):
+    def test_mixed_inventory_filter_excludes_non_tools(self, client, db_session, private_viewer):
         """A character with mixed items: filter must exclude non-tools."""
+        # FEAT-171: the inventory read is owner-gated now.
+        private_viewer(character_id=1, user_id=1)
         _seed_tool_item(db_session, item_id=100, tool_category="pickaxe", name="Кирка")
         _seed_resource_item(db_session, item_id=200, name="Камень")
         _seed_resource_item(db_session, item_id=300, name="Зелье", item_type="consumable")
@@ -1277,8 +1287,10 @@ class TestGatheringSecurity:
         # Must be 422 (validation), never 500 (crash)
         assert resp.status_code == 422
 
-    def test_sql_injection_in_category_param(self, client, db_session):
+    def test_sql_injection_in_category_param(self, client, db_session, private_viewer):
         """Malicious `category` → 422 (validated against whitelist)."""
+        # FEAT-171: the inventory read is owner-gated now.
+        private_viewer(character_id=1, user_id=1)
         resp = client.get(
             "/inventory/1/items?item_type=gathering_tool&category=' OR 1=1 --",
         )

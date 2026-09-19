@@ -12,7 +12,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import auth_http
 import models
+
+# FEAT-171 I3: `GET /inventory/items/{id}` is now the thin public card; the fat
+# item template moved to the internal twin, which requires `X-Internal-Token`.
+_INTERNAL_TOKEN = "test-internal-token"
+_INTERNAL_HEADERS = {"X-Internal-Token": _INTERNAL_TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _pin_internal_token(monkeypatch):
+    """`verify_internal_token` reads a module-level constant — pin it."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", _INTERNAL_TOKEN)
+
 import schemas
 
 HEADERS = {"Authorization": "Bearer admin-token"}
@@ -205,7 +218,7 @@ class TestFoodFlag:
 
     def test_item_list_exposes_is_food(self, client, db_session):
         _seed_item(db_session, item_type="consumable", is_food=True)
-        resp = client.get("/inventory/items/900")
+        resp = client.get("/inventory/internal/items/900", headers=_INTERNAL_HEADERS)
         assert resp.status_code == 200
         assert resp.json()["is_food"] is True
 

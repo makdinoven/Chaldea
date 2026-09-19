@@ -106,7 +106,7 @@ const CharacterPanel = () => {
                 <div className="flex items-center gap-1">
                   <div className="skill-point-dot" />
                   <span className="text-site-blue text-sm font-medium">
-                    {profile.stat_points}
+                    {profile.stat_points ?? 0}
                   </span>
                 </div>
               </div>
@@ -119,7 +119,7 @@ const CharacterPanel = () => {
               <div className="flex items-center gap-2">
                 <img src={goldCoinsIcon} alt="Валюта" className="w-[18px] h-[18px]" />
                 <span className="gold-text text-sm font-medium">
-                  {profile.currency_balance.toLocaleString('ru-RU')}
+                  {(profile.currency_balance ?? 0).toLocaleString('ru-RU')}
                 </span>
               </div>
               <div className="flex items-center gap-2">

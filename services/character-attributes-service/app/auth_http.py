@@ -17,6 +17,9 @@ class UserRead(BaseModel):
 
 
 OAUTH2_SCHEME = OAuth2PasswordBearer(tokenUrl="token")
+# FEAT-171 §3.1 D3: same scheme, but a missing Authorization header is not
+# an error — it just yields `None` (see `get_optional_user`).
+OAUTH2_SCHEME_OPTIONAL = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
 AUTH_SERVICE_URL = os.environ.get("AUTH_SERVICE_URL", "http://user-service:8000")
 
@@ -41,6 +44,24 @@ def get_current_user_via_http(token: str = Depends(OAUTH2_SCHEME)) -> UserRead:
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Не удалось подтвердить учётные данные",
     )
+
+
+def get_optional_user(
+    token: Optional[str] = Depends(OAUTH2_SCHEME_OPTIONAL),
+) -> Optional[UserRead]:
+    """Optional authentication (FEAT-171 §3.1 D3).
+
+    Same as `get_current_user_via_http`, but returns `None` instead of raising
+    when the request carries no token or the token is not valid. Deliberately a
+    sync `def`: FastAPI then runs it in the threadpool, so the blocking
+    `requests` call never sits on the event loop.
+    """
+    if not token:
+        return None
+    try:
+        return get_current_user_via_http(token)
+    except HTTPException:
+        return None
 
 
 def get_admin_user(user: UserRead = Depends(get_current_user_via_http)) -> UserRead:

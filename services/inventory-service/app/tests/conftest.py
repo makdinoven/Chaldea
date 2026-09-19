@@ -195,3 +195,56 @@ def client(db_session):
     app.dependency_overrides[main_get_db] = override_get_db
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+# ── FEAT-171: reading a character's PRIVATE data ─────────────────────────
+# `GET /inventory/{cid}/items` and `GET /inventory/{cid}/equipment` are gated by
+# `visibility.require_private_access`, which needs (a) a row in the shared
+# `characters` table and (b) a viewer that `get_optional_user` recognises.
+# This fixture gives player-shaped tests both, so they keep exercising the real
+# player route instead of drifting onto the internal twin.
+
+@pytest.fixture()
+def private_viewer(db_session):
+    """Factory: seed `characters` and authenticate the client as a viewer.
+
+    ``private_viewer(character_id=1, user_id=1)`` — the owner (the default).
+    ``private_viewer(..., role="admin", permissions=["characters:read"])`` — staff.
+    ``private_viewer(..., user_id=None)`` — an NPC/mob: public per FEAT-171 Q6.
+    """
+    from auth_http import UserRead, get_optional_user
+
+    def _setup(character_id=1, user_id=1, role="user", permissions=(),
+               viewer_id=None, extra_characters=()):
+        db_session.execute(text("DROP TABLE IF EXISTS characters"))
+        db_session.execute(text(
+            """CREATE TABLE characters (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT 'TestChar',
+                user_id INTEGER,
+                current_location_id INTEGER DEFAULT 1,
+                currency_balance INTEGER DEFAULT 0
+            )"""
+        ))
+        rows = [(character_id, user_id)] + list(extra_characters)
+        for cid, uid in rows:
+            db_session.execute(
+                text("INSERT INTO characters (id, name, user_id) VALUES (:cid, :name, :uid)"),
+                {"cid": cid, "name": f"Char {cid}", "uid": uid},
+            )
+        db_session.commit()
+
+        viewer = UserRead(
+            id=viewer_id if viewer_id is not None else (user_id or 1),
+            username="viewer",
+            role=role,
+            permissions=list(permissions),
+        )
+        app.dependency_overrides[get_optional_user] = lambda: viewer
+        return viewer
+
+    yield _setup
+    app.dependency_overrides.pop(get_optional_user, None)
+    with _test_engine.connect() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS characters"))
+        conn.commit()

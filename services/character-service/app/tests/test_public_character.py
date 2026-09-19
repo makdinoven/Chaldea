@@ -21,10 +21,18 @@ from unittest.mock import patch, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+import auth_http
 import database
 from database import Base
 import models
 from main import app, get_db
+
+
+# FEAT-171 §3.4 C3: стартовые характеристики в паспорте стали приватными —
+# их видят только владелец, админ/модератор с characters:read и NPC. Персонажи
+# в этом файле создаются с user_id=42, поэтому классы про «Оценку при
+# вступлении» смотрят на паспорт глазами владельца. Матрица зрителей — QA #15.
+_PASSPORT_OWNER = auth_http.UserRead(id=42, username="owner", role="user", permissions=[])
 
 
 # Every key GET /characters/list returned BEFORE FEAT-154. None may disappear.
@@ -312,6 +320,12 @@ class TestPassportStats:
     leak what they have *become*.
     """
 
+    @pytest.fixture(autouse=True)
+    def _as_owner(self, client):
+        """FEAT-171: блок «Оценка при вступлении» теперь виден только владельцу."""
+        app.dependency_overrides[auth_http.get_optional_user] = lambda: _PASSPORT_OWNER
+        yield
+
     def test_the_frozen_snapshot_is_what_is_returned(self, db_session, client, stub_user_service):
         char = _seed_character(db_session)
 
@@ -388,6 +402,12 @@ class TestPassportStatsWithoutSnapshot:
     passport reconstructs the subrace preset and flags it as a reconstruction,
     so the reader is not sold a certainty.
     """
+
+    @pytest.fixture(autouse=True)
+    def _as_owner(self, client):
+        """FEAT-171: реконструкция стартовых характеристик тоже приватна."""
+        app.dependency_overrides[auth_http.get_optional_user] = lambda: _PASSPORT_OWNER
+        yield
 
     def _preset_the_subrace(self, db_session, preset=None):
         subrace = db_session.query(models.Subrace).filter_by(id_subrace=4).one()

@@ -35,8 +35,9 @@ user-service/
 | PUT | `/users/{user_id}/update_character` | Установка текущего персонажа | Нет |
 | POST | `/users/user_characters/` | Создание связи user-character | Нет |
 | GET | `/users/all` | Все пользователи | Нет |
-| GET | `/users/admins` | Все админы | Нет |
-| GET | `/users/{user_id}` | Пользователь по ID | Нет |
+| GET | `/users/admins` | Все админы. **FEAT-171 (фикс по ревью #2):** отвечает `schemas.UserPublicRead` — без `email`. Раньше отдавал `UserRead` и одним анонимным запросом раскрывал адреса всех администраторов | Нет |
+| GET | `/users/{user_id}` | Карточка пользователя по ID. **FEAT-171 (фикс по ревью #2):** `email` — персональные данные и отдаётся только самому пользователю и админу/модератору с правом `users:read` (`schemas.UserRead`); всем остальным, включая гостя, уходит `schemas.UserPublicRead`, где ключа `email` **нет вовсе** (не null). Межсервисные вызывающие читают отсюда только `username`, поэтому внутренний двойник не нужен | Опционально (`get_optional_user`) |
+| GET | `/users/{user_id}/profile` | Профиль пользователя со стеной, статистикой постов и карточкой активного персонажа. **FEAT-171 (U1):** золото персонажа приватно — ключ `character.currency_balance` есть только у самого владельца профиля и у админа/модератора **с правом `characters:read`** (`schemas.UserProfileResponse`); все остальные, включая гостя и модератора с отозванным правом, получают `schemas.UserProfileStrangerResponse` с `CharacterShortPublic`, где этого ключа **нет вовсе** (не null). `/users/me` баланс сохраняет. **Фикс по ревью #4/#5:** правило приведено к той же формуле, что и `visibility.can_view_private` в четырёх сервисах фичи (роль **и** разрешение — одной роли мало), а наследование схем перевёрнуто: публичная `UserProfileStrangerResponse` теперь база, приватная `UserProfileResponse` её расширяет, поэтому новое приватное поле не может просочиться чужому зрителю по наследству. Та же инверсия сделана в паре `UserPublicRead` → `UserRead` | Опционально (`get_optional_user`) |
 | POST | `/users/internal/{user_id}/activity/increment` | Начислить очки активности. **FEAT-169:** маршрут переехал с `/users/{user_id}/activity/increment` (старый путь удалён, отдаёт 404) под закрытый префикс `/users/internal/` и требует заголовок `X-Internal-Token`. `points` теперь валидируется: `Field(1, ge=1, le=100)` — раньше принимались отрицательные значения и очки можно было списать. Единственный вызывающий — notification-service после сообщения в чат | `X-Internal-Token` |
 | GET | `/users/internal/{user_id}/diamonds` | Баланс алмазов. **FEAT-170:** закрыт `X-Internal-Token`. Вызывающих в репозитории нет — маршрут закрыт, но не удалён | `X-Internal-Token` |
 | POST | `/users/internal/{user_id}/diamonds/add` | Начислить алмазы (премиальная валюта, сумма не ограничена сверху). **FEAT-170:** закрыт `X-Internal-Token`. Единственный вызывающий — battle-pass-service (`crud.py` `_deliver_diamonds`) | `X-Internal-Token` |
@@ -84,7 +85,7 @@ user-service/
 ## Коммуникация с другими сервисами
 
 ### HTTP (исходящие)
-- `character-service:8005` -> `GET /characters/{id}/short_info` (в `/users/me`)
+- `character-service:8005` -> `GET /characters/internal/{id}/short_info` (+ `X-Internal-Token`, в `/users/me` и `/users/{id}/profile`). **FEAT-171:** публичный `short_info` больше не отдаёт `currency_balance`, а счётчик золота в шапке собирается именно из него — поэтому `_fetch_character_short` ходит во внутренний двойник. Вызов best-effort (ошибка → персонаж просто не подставится), но теперь пишет WARNING с URL двойника, чтобы потеря заголовка не выглядела как «золота нет»
 - `locations-service:8006` -> `GET /locations/{id}/details` (в `/users/me`)
 
 ### RabbitMQ (исходящие)
@@ -94,7 +95,7 @@ user-service/
 ## Известные проблемы
 
 1. **Захардкоженный SECRET_KEY** - критическая проблема безопасности
-2. **Эндпоинты без аутентификации** - `/update_character`, `/user_characters/`, `/all`, `/admins` доступны без токена
+2. **Эндпоинты без аутентификации** - `/update_character`, `/user_characters/`, `/all`, `/admins` доступны без токена (утечка e-mail через `/admins` и `/{user_id}` закрыта в FEAT-171, но сами маршруты по-прежнему анонимны)
 3. **Загрузка файлов без валидации** - нет проверки типа и размера файла, возможен path traversal
 4. **Блокирующий RabbitMQ** - `BlockingConnection` в async-контексте FastAPI
 5. **Неиспользуемые таблицы** - `users_avatar_preview` и `users_avatar_character_preview` создаются но не читаются

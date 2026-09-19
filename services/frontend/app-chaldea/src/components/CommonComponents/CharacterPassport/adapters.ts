@@ -229,7 +229,10 @@ export const fromCharacterPublic = (
 
     stats: startingStats,
     // `false` = reconstructed from the subrace preset (pre-FEAT-155 character).
-    statsIsSnapshot: startingStats ? character.starting_attributes_is_snapshot : null,
+    // FEAT-171: for a stranger both keys are absent — `startingStats` is then
+    // undefined and the stat block is skipped entirely, so the fallback below
+    // is never actually read.
+    statsIsSnapshot: startingStats ? (character.starting_attributes_is_snapshot ?? false) : null,
     derived: startingStats ? computeDerivedStats(startingStats) : undefined,
 
     starterKit: buildKit(grantedKit, extras),

@@ -27,8 +27,8 @@ character-attributes-service/app/
 | Метод | Путь | Описание |
 |-------|------|----------|
 | POST | `/attributes/` | Создать атрибуты для персонажа |
-| GET | `/attributes/{character_id}` | Получить все атрибуты |
-| GET | `/attributes/{character_id}/passive_experience` | Пассивный опыт |
+| GET | `/attributes/{character_id}` | Получить все атрибуты. **FEAT-171 (A1): приватно** — владелец, админ/модератор с `characters:read`, NPC |
+| GET | `/attributes/{character_id}/passive_experience` | Пассивный опыт. **FEAT-171 (A4): приватно** |
 | POST | `/attributes/{character_id}/upgrade` | Прокачать статы (тратит stat points) |
 | POST | `/attributes/{character_id}/apply_modifiers` | **internal** (FEAT-167): применить модификаторы (экипировка/баффы) |
 | POST | `/attributes/{character_id}/recover` | **internal** (FEAT-167): восстановить ресурсы (health/mana/energy/stamina) |
@@ -36,10 +36,12 @@ character-attributes-service/app/
 | PUT | `/attributes/{character_id}/passive_experience` | **internal** (FEAT-167): изменить пассивный опыт |
 | POST | `/attributes/{character_id}/consume_stamina` | **internal** (FEAT-167): потратить стамину (с блокировкой строки) |
 | POST | `/attributes/{character_id}/refund_stamina` | **internal** (FEAT-167): вернуть стамину (FEAT-128) |
-| GET | `/attributes/{character_id}/rest-status` | FEAT-164: состояние восстановления в покое и активная сытость |
+| GET | `/attributes/{character_id}/rest-status` | FEAT-164: состояние восстановления в покое и активная сытость. **FEAT-171 (A5): приватно** |
 | POST | `/attributes/internal/{character_id}/satiety` | FEAT-164, internal: применить сытость (вызывает inventory-service `/eat-food`). **FEAT-169: `X-Internal-Token`** |
 | POST | `/attributes/internal/settle-regen` | FEAT-164, internal: досчитать восстановление для списка персонажей (до 50 id). **FEAT-169: `X-Internal-Token`** |
 | POST | `/attributes/internal/{character_id}/reconcile-perks` | FEAT-143, internal: пересчёт активности перков. **FEAT-169: `X-Internal-Token`** |
+| GET | `/attributes/internal/{character_id}` | **FEAT-171 (A1i):** двойник `GET /attributes/{character_id}` для межсервисных вызовов (общий хелпер `_build_full_attributes`, тело идентично). `X-Internal-Token`, fail-closed. Вызывающие — battle-service, character-service, locations-service, skills-service |
+| GET | `/attributes/internal/{character_id}/passive_experience` | **FEAT-171 (A4i):** двойник `GET /attributes/{character_id}/passive_experience` (общий хелпер `_build_passive_experience`). `X-Internal-Token`. Вызывающий — character-service (`full_profile`) |
 
 ## Аутентификация изменяющих эндпоинтов (FEAT-167)
 
@@ -57,11 +59,13 @@ character-attributes-service/app/
 - Неверный или отсутствующий заголовок → `401 «Недействительный internal token»`
   (значение полученного заголовка не логируется и не возвращается).
 - Nginx вторым слоем отдаёт `403` на эти шесть путей извне.
-- **GET-эндпоинты не закрыты специально:** `GET /attributes/{id}` и
-  `GET /attributes/{id}/rest-status` доигрывают восстановление FEAT-164 и
-  читаются battle-service на каждой атаке, skills-service, character-service и
-  профилем игрока. Так же не тронуты `POST /{id}/upgrade` (JWT) и
-  `/attributes/admin/*` (RBAC).
+- **На игровых GET'ах нет `verify_internal_token`:** `GET /attributes/{id}` и
+  `GET /attributes/{id}/rest-status` доигрывают восстановление FEAT-164, и
+  соседние сервисы читают их двойники, а не эти пути. Не тронуты
+  `POST /{id}/upgrade` (JWT) и `/attributes/admin/*` (RBAC).
+- **Двойники закрыты `verify_internal_token`:** GET `/attributes/internal/{id}`
+  и GET `/attributes/internal/{id}/passive_experience` — чтобы соседние сервисы
+  не потеряли данные после того, как FEAT-171 Pass B закрыл игровые GET'ы.
 
 ### Дополнение (FEAT-169) — три `/attributes/internal/*`
 
@@ -104,12 +108,53 @@ inventory-service (крафт и сбор), skills-service (`skills_used` при
 `crud.send_attributes_request` (создание персонажа — **хард-фейл**, и создание
 NPC из админки) и `crud._sync_send_attributes_request` (спавн моба).
 
-**Не тронут** `GET /attributes/{character_id}/cumulative_stats` — это чтение,
-его использует профиль.
+`GET /attributes/{character_id}/cumulative_stats` — чтение профиля; FEAT-167
+его не трогал, **FEAT-171 (A3) закрыл его гейтом видимости** (там суммы
+заработанного и потраченного золота).
 
 Nginx вторым слоем: точные блоки `location = /attributes/cumulative_stats/increment`
 и `location = /attributes/` с `limit_except GET HEAD` в обоих конфигах. Именно
 точное совпадение — под префиксом `/attributes/` живут все игровые роуты.
+
+## Приватность чтений (FEAT-171, Pass B)
+
+Пять игровых GET'ов закрыты «жёстким гейтом» (стиль B из §3.2 фичи):
+
+| Путь | Что закрывает |
+|------|---------------|
+| `GET /attributes/{id}` | ресурсы, урон, уклонение, крит, 13 сопротивлений + 13 уязвимостей, активный и пассивный опыт |
+| `GET /attributes/{id}/perks` | дерево перков и прогресс по нему |
+| `GET /attributes/{id}/cumulative_stats` | счётчики, включая заработанное/потраченное золото |
+| `GET /attributes/{id}/passive_experience` | пассивный опыт |
+| `GET /attributes/{id}/rest-status` | состояние восстановления и сытости |
+
+Механика одна на все пять: `Depends(get_optional_user)` (JWT необязателен,
+невалидный токен даёт `None`, а не 401) + `visibility.require_private_access`
+из `app/visibility.py` — копии §3.1 фичи, побайтово совпадающей с
+character-service, inventory-service и (в async-варианте) skills-service.
+
+Порядок проверок важен: **сначала существование персонажа**, и только потом
+владение, иначе 403/404 работали бы как оракул.
+
+- персонажа нет → `404 «Персонаж не найден»`;
+- `characters.user_id IS NULL` (NPC/моб) → доступ **разрешён всем** (Q6: у NPC
+  нет приватного слоя, на этом держатся бестиарий и модалка NPC);
+- владелец → разрешено;
+- `role in ("admin", "moderator")` **и** `characters:read` в разрешениях →
+  разрешено. Отдельно проверено: админская синхронизация уровня в
+  character-service (`app/main.py`, ветка `if "level" in update_data`) читает
+  `/attributes/{id}/passive_experience`, **пробрасывая JWT администратора**, —
+  этот путь под гейтом проходит;
+- остальные (гость, чужой игрок) → `403 «Эти данные доступны только владельцу
+  персонажа»`.
+
+Межсервисные вызывающие сюда не ходят — у них двойники `/attributes/internal/*`
+(Pass A). Админские `/attributes/admin/*` не тронуты.
+
+**Известное, намеренно не чинится здесь (§3.4 D8):** `GET /attributes/{id}/perks`
+**пишет в БД** (`reconcile_perks` внутри GET). Гейт только сужает круг тех, кто
+может это запустить; превращение маршрута в read-only — отдельная задача из
+`docs/ISSUES.md`.
 
 ## Восстановление в покое и сытость (FEAT-164)
 
@@ -185,6 +230,7 @@ Nginx вторым слоем: точные блоки `location = /attributes/c
 - `character-service:8005` -> GET `/characters/{id}/full_profile` (stat points)
 - `character-service:8005` -> PUT `/characters/internal/{id}/deduct_points` (списание points, заголовок `X-Internal-Token`)
 - `character-service:8005` -> POST `/characters/internal/{id}/logs` (запись в журнал персонажа, заголовок `X-Internal-Token`)
+- `character-service:8005` -> GET `/characters/internal/{id}/full_profile` (**FEAT-171**, C1i: уровень и баланс золота при разборе условий перков — `perk_evaluator._fetch_character_level` / `_fetch_gold_balance`, и проверка доступных stat points в `POST /{id}/upgrade`). Заголовок `X-Internal-Token`; в `perk_evaluator` — из локального `_internal_token_headers()`. Ошибка в `perk_evaluator` проглатывается (WARNING, в тексте лога теперь назван URL двойника), поэтому тест обязан проверять сам факт отправки заголовка
 - `locations-service:8006` -> GET `/locations/quests/internal/check-completed` (проверка выполненного задания при разборе условий перков, `perk_evaluator._fetch_quest_completed`; FEAT-170: с `X-Internal-Token`). Заголовок строится **локальным** `perk_evaluator._internal_token_headers()` из `config.settings.INTERNAL_SERVICE_TOKEN` — импортировать хелпер из `main.py` нельзя, `main` подключает `perk_evaluator` лениво именно из-за цикла импорта. Ошибка вызова проглатывается (WARNING) и перк просто не открывается, поэтому тест обязан проверять сам факт отправки заголовка
 
 ### RabbitMQ

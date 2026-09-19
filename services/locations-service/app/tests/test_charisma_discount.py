@@ -58,6 +58,30 @@ def _result_empty():
 MOCK_USER = UserRead(id=10, username="testuser", role="user", permissions=[])
 
 
+@pytest.fixture()
+def shop_owner_client(client):
+    """FEAT-171 review fix: the shop listing only honours `character_id` for the
+    owner now, so the discount tests must view the shop *as the owner* of
+    character 1. Overrides both the viewer and the one statement the visibility
+    predicate runs (`SELECT user_id FROM characters`).
+    """
+    from database import get_db
+    from main import app, get_optional_user
+
+    session = MagicMock()
+    result = MagicMock()
+    result.fetchone.return_value = (MOCK_USER.id,)
+    session.execute = AsyncMock(return_value=result)
+
+    async def _db():
+        yield session
+
+    app.dependency_overrides[get_db] = _db
+    app.dependency_overrides[get_optional_user] = lambda: MOCK_USER
+    yield client
+    app.dependency_overrides.pop(get_optional_user, None)
+
+
 def _make_shop_item(
     item_id=1, npc_id=5, buy_price=1000, sell_price=500,
     stock=None, is_active=True, shop_item_id=10,
@@ -295,13 +319,13 @@ class TestGetNpcShopWithDiscount:
     @patch("main._fetch_charisma", new_callable=AsyncMock, return_value=50)
     @patch("crud.get_npc_shop_items_player", new_callable=AsyncMock)
     def test_shop_with_character_id_returns_discounted_price(
-        self, mock_shop_items, mock_fetch_charisma, client,
+        self, mock_shop_items, mock_fetch_charisma, shop_owner_client,
     ):
         """GET /npcs/{npc_id}/shop?character_id=X returns discounted_buy_price."""
         item = _make_shop_item(buy_price=1000, npc_id=5)
         mock_shop_items.return_value = [item]
 
-        response = client.get("/locations/npcs/5/shop?character_id=1")
+        response = shop_owner_client.get("/locations/npcs/5/shop?character_id=1")
 
         assert response.status_code == 200
         data = response.json()
@@ -314,7 +338,7 @@ class TestGetNpcShopWithDiscount:
     def test_shop_without_character_id_no_discounted_price(
         self, mock_shop_items, client,
     ):
-        """GET /npcs/{npc_id}/shop without character_id → discounted_buy_price is null."""
+        """GET /npcs/{npc_id}/shop without character_id → no discounted_buy_price key."""
         item = _make_shop_item(buy_price=1000, npc_id=5)
         mock_shop_items.return_value = [item]
 
@@ -323,20 +347,20 @@ class TestGetNpcShopWithDiscount:
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
-        # Without character_id, the raw items are returned
-        # discounted_buy_price should be null/None
-        assert data[0].get("discounted_buy_price") is None
+        # Without character_id the public window is served: the private key is
+        # ABSENT, not null (FEAT-171 review #2, residual 2).
+        assert "discounted_buy_price" not in data[0]
 
     @patch("main._fetch_charisma", new_callable=AsyncMock, return_value=250)
     @patch("crud.get_npc_shop_items_player", new_callable=AsyncMock)
     def test_shop_max_discount_applied(
-        self, mock_shop_items, mock_fetch_charisma, client,
+        self, mock_shop_items, mock_fetch_charisma, shop_owner_client,
     ):
         """GET /npcs/{npc_id}/shop?character_id=X with charisma=250 → 50% discount."""
         item = _make_shop_item(buy_price=1000, npc_id=5)
         mock_shop_items.return_value = [item]
 
-        response = client.get("/locations/npcs/5/shop?character_id=1")
+        response = shop_owner_client.get("/locations/npcs/5/shop?character_id=1")
 
         assert response.status_code == 200
         data = response.json()
@@ -345,13 +369,13 @@ class TestGetNpcShopWithDiscount:
     @patch("main._fetch_charisma", new_callable=AsyncMock, return_value=0)
     @patch("crud.get_npc_shop_items_player", new_callable=AsyncMock)
     def test_shop_zero_charisma_no_discount(
-        self, mock_shop_items, mock_fetch_charisma, client,
+        self, mock_shop_items, mock_fetch_charisma, shop_owner_client,
     ):
         """GET /npcs/{npc_id}/shop?character_id=X with charisma=0 → full price."""
         item = _make_shop_item(buy_price=1000, npc_id=5)
         mock_shop_items.return_value = [item]
 
-        response = client.get("/locations/npcs/5/shop?character_id=1")
+        response = shop_owner_client.get("/locations/npcs/5/shop?character_id=1")
 
         assert response.status_code == 200
         data = response.json()
@@ -457,13 +481,13 @@ class TestGracefulDegradation:
     @patch("main._fetch_charisma", new_callable=AsyncMock, return_value=None)
     @patch("crud.get_npc_shop_items_player", new_callable=AsyncMock)
     def test_shop_listing_graceful_degradation(
-        self, mock_shop_items, mock_fetch_charisma, client,
+        self, mock_shop_items, mock_fetch_charisma, shop_owner_client,
     ):
         """Shop listing with character_id when attributes-service fails → full price."""
         item = _make_shop_item(buy_price=1000, npc_id=5)
         mock_shop_items.return_value = [item]
 
-        response = client.get("/locations/npcs/5/shop?character_id=1")
+        response = shop_owner_client.get("/locations/npcs/5/shop?character_id=1")
 
         assert response.status_code == 200
         data = response.json()

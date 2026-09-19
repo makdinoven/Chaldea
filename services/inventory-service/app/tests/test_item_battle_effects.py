@@ -22,7 +22,20 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import text
 
+import auth_http
 import models
+
+# FEAT-171 I3: `GET /inventory/items/{id}` is now the thin public card; the fat
+# item template moved to the internal twin, which requires `X-Internal-Token`.
+_INTERNAL_TOKEN = "test-internal-token"
+_INTERNAL_HEADERS = {"X-Internal-Token": _INTERNAL_TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _pin_internal_token(monkeypatch):
+    """`verify_internal_token` reads a module-level constant — pin it."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", _INTERNAL_TOKEN)
+
 
 
 HEADERS = {"Authorization": "Bearer admin-token"}
@@ -66,7 +79,8 @@ def _delete(client, item_id):
 
 
 def _get(client, item_id):
-    return client.get(f"/inventory/items/{item_id}")
+    return client.get(f"/inventory/internal/items/{item_id}",
+                      headers=_INTERNAL_HEADERS)
 
 
 def _messages(resp):

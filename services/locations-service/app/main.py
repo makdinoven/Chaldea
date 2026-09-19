@@ -15,6 +15,7 @@ import models
 import httpx
 import schemas
 import crud
+import visibility
 from database import get_db
 from fastapi.middleware.cors import CORSMiddleware
 from auth_http import (
@@ -1299,8 +1300,12 @@ async def move_and_post(
 
     # 3. Проверяем, достаточно ли выносливости (stamina)
     async with httpx.AsyncClient(timeout=5.0) as client:
-        attr_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{movement.character_id}"
-        attr_resp = await client.get(attr_url)
+        # FEAT-171 A1i: чтение атрибутов уходит во внутренний двойник.
+        attr_url = (
+            f"{settings.ATTRIBUTES_SERVICE_URL}"
+            f"/attributes/internal/{movement.character_id}"
+        )
+        attr_resp = await client.get(attr_url, headers=_internal_token_headers())
         if attr_resp.status_code != 200:
             raise HTTPException(status_code=404, detail="Характеристики персонажа не найдены")
         attr_data = attr_resp.json()
@@ -1593,8 +1598,12 @@ async def quick_move(
 
     # 4. Проверяем выносливость
     async with httpx.AsyncClient(timeout=5.0) as client:
-        attr_url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{body.character_id}"
-        attr_resp = await client.get(attr_url)
+        # FEAT-171 A1i: чтение атрибутов уходит во внутренний двойник.
+        attr_url = (
+            f"{settings.ATTRIBUTES_SERVICE_URL}"
+            f"/attributes/internal/{body.character_id}"
+        )
+        attr_resp = await client.get(attr_url, headers=_internal_token_headers())
         if attr_resp.status_code != 200:
             raise HTTPException(status_code=404, detail="Атрибуты персонажа не найдены")
         attr_data = attr_resp.json()
@@ -2495,17 +2504,24 @@ async def get_npc_dialogue(
     npc_id: int,
     character_id: int = None,
     session: AsyncSession = Depends(get_db),
+    current_user: Optional[UserRead] = Depends(get_optional_user),
 ):
     """Get the active dialogue root node for an NPC.
 
     FEAT-145: when a character_id is supplied, opening the dialogue requires an
     `npc_dialogue` intent post on the NPC's location (checked, not consumed — one
-    post lets you talk to NPCs here until you leave)."""
+    post lets you talk to NPCs here until you leave).
+
+    FEAT-171 review fix: the gate check answers "has this character posted an
+    intent here?", so honouring someone else's `character_id` is a private read
+    — owner / admin only. Without `character_id` the dialogue tree itself stays
+    public."""
     node_data = await crud.get_active_dialogue_for_npc(session, npc_id)
     if not node_data:
         raise HTTPException(status_code=404, detail="У этого NPC нет активного диалога")
 
     if character_id is not None:
+        await visibility.require_private_access(session, character_id, current_user)
         npc_row = (await session.execute(
             text("SELECT current_location_id FROM characters WHERE id = :id"),
             {"id": npc_id},
@@ -2663,15 +2679,16 @@ async def _fetch_charisma(character_id: int) -> Optional[int]:
     """
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{character_id}"
-            resp = await client.get(url)
+            # FEAT-171 A1i: чтение атрибутов уходит во внутренний двойник.
+            url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/internal/{character_id}"
+            resp = await client.get(url, headers=_internal_token_headers())
             if resp.status_code == 200:
                 data = resp.json()
                 return data.get("charisma", 0)
             else:
                 logger.warning(
-                    "Не удалось получить атрибуты персонажа %s: статус %s",
-                    character_id, resp.status_code,
+                    "Не удалось получить атрибуты персонажа %s через %s: статус %s",
+                    character_id, url, resp.status_code,
                 )
                 return None
     except Exception as exc:
@@ -2689,15 +2706,44 @@ def _compute_charisma_discount(charisma: Optional[int]) -> float:
     return min(charisma * 0.2, 50.0)
 
 
-@router.get("/npcs/{npc_id}/shop", response_model=List[schemas.NpcShopItemRead])
+def _shop_item_fields(item) -> dict:
+    """Normalise one shop row (dict from `crud`, or an ORM/mock object) into the
+    plain field dict both shop views are built from."""
+    if isinstance(item, dict):
+        return {
+            key: item.get(key)
+            for key in schemas.NpcShopItemPublicRead.__fields__
+        }
+    return {
+        key: getattr(item, key, None)
+        for key in schemas.NpcShopItemPublicRead.__fields__
+    }
+
+
+@router.get("/npcs/{npc_id}/shop", response_model=None)
 async def get_npc_shop(
     npc_id: int,
     character_id: Optional[int] = None,
     session: AsyncSession = Depends(get_db),
+    current_user: Optional[UserRead] = Depends(get_optional_user),
 ):
     """Get NPC's shop items (active only, with item details).
-    If character_id is provided, returns discounted_buy_price based on charisma.
+
+    Guest / any viewer without `character_id`: the public shop window — base
+    `buy_price` / `sell_price` and the item card. The `discounted_buy_price`
+    key is **absent** (not `null`): the two views are two explicitly-built
+    schemas, `NpcShopItemPublicRead` and `NpcShopItemRead`.
+
+    With `character_id`: the personal price list. `discounted_buy_price` is
+    derived from that character's `charisma`, so it is a *private* number — the
+    FEAT-171 review inverted `20 → 19` back into `charisma = 30` as a guest.
+    The viewer must therefore pass the same gate as every other private read
+    (owner, or admin/moderator with `characters:read`; NPCs have no private
+    layer). 404 for a character that does not exist, 403 for a stranger.
     """
+    if character_id is not None:
+        await visibility.require_private_access(session, character_id, current_user)
+
     items = await crud.get_npc_shop_items_player(session, npc_id)
 
     if character_id is not None:
@@ -2705,30 +2751,17 @@ async def get_npc_shop(
         discount_pct = _compute_charisma_discount(charisma)
         result = []
         for item in items:
-            item_dict = dict(item) if isinstance(item, dict) else {
-                "id": item.id,
-                "npc_id": item.npc_id,
-                "item_id": item.item_id,
-                "buy_price": item.buy_price,
-                "sell_price": item.sell_price,
-                "stock": item.stock,
-                "is_active": item.is_active,
-                "item_name": getattr(item, "item_name", None),
-                "item_image": getattr(item, "item_image", None),
-                "item_rarity": getattr(item, "item_rarity", None),
-                "item_type": getattr(item, "item_type", None),
-                "created_at": getattr(item, "created_at", None),
-            }
+            fields = _shop_item_fields(item)
             if discount_pct > 0:
-                item_dict["discounted_buy_price"] = math.ceil(
-                    item_dict["buy_price"] * (1 - discount_pct / 100)
-                )
+                discounted = math.ceil(fields["buy_price"] * (1 - discount_pct / 100))
             else:
-                item_dict["discounted_buy_price"] = item_dict["buy_price"]
-            result.append(item_dict)
+                discounted = fields["buy_price"]
+            result.append(
+                schemas.NpcShopItemRead(**fields, discounted_buy_price=discounted)
+            )
         return result
 
-    return items
+    return [schemas.NpcShopItemPublicRead(**_shop_item_fields(item)) for item in items]
 
 
 @router.post("/npcs/{npc_id}/shop/buy", response_model=schemas.ShopTransactionResponse)
@@ -3029,8 +3062,15 @@ async def get_npc_quests(
     npc_id: int,
     character_id: int,
     session: AsyncSession = Depends(get_db),
+    current_user: Optional[UserRead] = Depends(get_optional_user),
 ):
-    """Get all quests from an NPC with player_status for a specific character."""
+    """Get all quests from an NPC with player_status for a specific character.
+
+    FEAT-171 review fix: `player_status` is that character's quest progression
+    — private. Owner / admin only (NPCs have no private layer); 404 for an
+    unknown character, 403 for a stranger.
+    """
+    await visibility.require_private_access(session, character_id, current_user)
     return await crud.get_available_quests_for_npc(session, npc_id, character_id)
 
 
@@ -3051,8 +3091,14 @@ async def accept_quest(
 async def get_active_quests(
     character_id: int,
     session: AsyncSession = Depends(get_db),
+    current_user: Optional[UserRead] = Depends(get_optional_user),
 ):
-    """Get player's active quests with progress."""
+    """Get player's active quests with progress.
+
+    FEAT-171 review fix: quest log + objective progress is private — owner /
+    admin only.
+    """
+    await visibility.require_private_access(session, character_id, current_user)
     return await crud.get_active_quests(session, character_id)
 
 
@@ -3791,10 +3837,17 @@ async def action_gate_status(
     character_id: int,
     location_id: int,
     session: AsyncSession = Depends(get_db),
+    current_user: Optional[UserRead] = Depends(get_optional_user),
 ):
-    """Public (FEAT-145 v2): open gates as {action_type: [target_ref, ...]} — the
-    client uses the per-target lists to show attack buttons only on named mobs,
-    make only named NPC cards clickable, etc."""
+    """Open gates as {action_type: [target_ref, ...]} — the client uses the
+    per-target lists to show attack buttons only on named mobs, make only named
+    NPC cards clickable, etc.
+
+    FEAT-171 review fix: this used to be anonymous ("Public (FEAT-145 v2)"), but
+    it describes what *one named character* may currently do — the intentions
+    they posted. Owner / admin only now; the location page always asks for its
+    own character."""
+    await visibility.require_private_access(session, character_id, current_user)
     return await crud.open_gates_detail(session, character_id, location_id)
 
 

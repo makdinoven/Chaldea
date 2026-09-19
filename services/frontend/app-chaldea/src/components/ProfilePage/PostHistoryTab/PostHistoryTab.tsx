@@ -94,7 +94,10 @@ const PostCard = ({ post }: PostCardProps) => {
 
         <div className="flex flex-wrap items-center gap-3 sm:gap-5 text-xs text-white/50">
           <span>{post.char_count} символов</span>
-          <span className="text-gold">+{post.xp_earned} XP</span>
+          {/* FEAT-171: absent for a stranger — the whole chip is dropped. */}
+          {typeof post.xp_earned === 'number' && (
+            <span className="text-gold">+{post.xp_earned} XP</span>
+          )}
         </div>
       </ProfileCard>
     </motion.div>

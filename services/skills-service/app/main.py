@@ -23,8 +23,10 @@ from auth_http import (
     get_current_user_via_http,
     require_permission,
     allow_jwt_or_service_token,
+    get_optional_user,
     verify_internal_token,
 )
+import visibility
 
 # Пример, если нужно
 CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8005/characters")
@@ -370,11 +372,40 @@ async def admin_remove_character_skill(
 # -----------------------------------------------------------
 # 6) (FEAT-125) Player: list character's skills (new flat shape)
 # -----------------------------------------------------------
+async def require_character_skills_access(
+    db: AsyncSession, character_id: int, viewer
+) -> None:
+    """Gate predicate for S1 `GET /skills/characters/{id}/skills` (FEAT-171 §3.4).
+
+    `viewer` is what `allow_jwt_or_service_token` yields: `None` means the caller
+    presented the shared service token (battle-service already does — see
+    `battle-service/app/skills_client.py`), and a service caller is always let
+    through; a real `UserRead` goes through the shared visibility predicate.
+
+    Wired into the route by FEAT-171 task 10 (Pass B).
+    """
+    if viewer is None:                      # service-to-service caller
+        return
+    if not await visibility.can_view_private(db, character_id, viewer):
+        raise HTTPException(
+            status_code=403, detail="Эти данные доступны только владельцу персонажа"
+        )
+
+
 @router.get("/characters/{character_id}/skills", response_model=List[schemas.CharacterSkillRead])
 async def list_skills_for_character(
     character_id: int,
     db: AsyncSession = Depends(get_db),
+    viewer=Depends(allow_jwt_or_service_token),
 ):
+    """Skills of a character — private per FEAT-171 §3.4 (S1, style B').
+
+    Service token ⇒ allowed (battle-service already sends it); a real user is
+    checked by `can_view_private`: owner, admin/moderator with `characters:read`
+    or an NPC (`user_id IS NULL`) pass, everyone else gets 403. A guest has no
+    token at all and is refused with 401 by the dependency itself.
+    """
+    await require_character_skills_access(db, character_id, viewer)
     rows = await crud.list_character_skills_for_character(db, character_id)
     return [crud.serialize_character_skill(cs) for cs in rows]
 
@@ -794,10 +825,15 @@ async def get_character_info(character_id: int) -> dict:
 
 
 async def get_active_experience(character_id: int) -> int:
-    """Get current active_experience from character-attributes-service."""
+    """Get current active_experience from character-attributes-service.
+
+    FEAT-171 §3.5 (Pass A): reads the internal twin A1i
+    `GET /attributes/internal/{id}` with `X-Internal-Token` — the public A1 is
+    owner/admin-only since Pass B and has no user token in this context.
+    """
     async with httpx.AsyncClient() as client:
-        url = f"{ATTRIBUTES_SERVICE_URL}/{character_id}"
-        resp = await client.get(url)
+        url = f"{ATTRIBUTES_SERVICE_URL}/internal/{character_id}"
+        resp = await client.get(url, headers=_internal_token_headers())
         if resp.status_code != 200:
             raise HTTPException(500, detail="Не удалось получить атрибуты")
         return resp.json().get("active_experience", 0)

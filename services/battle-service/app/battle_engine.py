@@ -22,11 +22,26 @@ INVENTORY_SERVICE_URL = os.getenv(
 import logging
 logger = logging.getLogger(__name__)
 
+
+def _internal_token_headers() -> dict:
+    """Заголовок для обращений во внутренние двойники соседних сервисов.
+
+    FEAT-171 §3.5: боевой движок ходит в `/attributes/internal/*` и
+    `/inventory/internal/*` — у боя нет пользователя в контексте (мобы и НПС
+    вообще не имеют владельца). Токен читается из окружения в момент вызова,
+    как и в `inventory_client._internal_token_headers`.
+    """
+    return {"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")}
+
+
 # ---------- helpers service calls -----------------------------------------
 async def fetch_full_attributes(character_id: int) -> Dict:
-    """GET /attributes/{character_id}"""
+    """GET /attributes/internal/{character_id} (FEAT-171 A1i)."""
     async with httpx.AsyncClient() as client:
-        response = await client.get(f"{ATTR_SERVICE_URL}/attributes/{character_id}")
+        response = await client.get(
+            f"{ATTR_SERVICE_URL}/attributes/internal/{character_id}",
+            headers=_internal_token_headers(),
+        )
         response.raise_for_status()
         return response.json()
 
@@ -41,16 +56,22 @@ async def fetch_weapons(character_id: int) -> Dict[str, Dict | None]:
     weapon_slots = ("main_weapon", "additional_weapons")
 
     async with httpx.AsyncClient() as client:
+        # FEAT-171 I2i: игровой маршрут /inventory/{id}/equipment уходит под
+        # гейт, бой читает внутренний двойник с X-Internal-Token.
         equip_resp = await client.get(
-            f"{INVENTORY_SERVICE_URL}/inventory/{character_id}/equipment"
+            f"{INVENTORY_SERVICE_URL}/inventory/internal/characters/{character_id}/equipment",
+            headers=_internal_token_headers(),
         )
         equip_resp.raise_for_status()
 
         for slot in equip_resp.json():
             slot_type = slot["slot_type"]
             if slot_type in weapon_slots and slot["item_id"]:
+                # FEAT-171 I3i: публичная карточка предмета стала тонкой,
+                # бою нужен полный шаблон — идём во внутренний двойник.
                 item_resp = await client.get(
-                    f"{INVENTORY_SERVICE_URL}/inventory/items/{slot['item_id']}"
+                    f"{INVENTORY_SERVICE_URL}/inventory/internal/items/{slot['item_id']}",
+                    headers=_internal_token_headers(),
                 )
                 item_resp.raise_for_status()
                 # effective_damage — единственный источник урона оружия (FEAT-167):

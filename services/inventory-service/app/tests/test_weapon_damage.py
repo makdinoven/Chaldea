@@ -241,6 +241,16 @@ class TestWeaponDamageNeverEntersTheAttribute:
 
 class TestEffectiveDamageOnEquipmentResponse:
 
+    @pytest.fixture(autouse=True)
+    def _owner(self, private_viewer):
+        """FEAT-171: `/inventory/{cid}/equipment` is owner-gated now.
+
+        These tests read the OWNER's own body, which must stay byte-identical
+        to the pre-gate payload — so they keep hitting the player route.
+        """
+        private_viewer(character_id=7, user_id=1,
+                       extra_characters=[(cid, 1) for cid in range(8, 15)])
+
     def _slots_by_type(self, response):
         assert response.status_code == 200, response.text
         return {slot["slot_type"]: slot for slot in response.json()}

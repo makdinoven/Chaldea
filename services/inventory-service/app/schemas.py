@@ -2095,3 +2095,42 @@ class ItemBulkResponse(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+# ---------------------------------------------------------------------------
+# FEAT-171 §3.3 D6 — THE canonical public item card
+# ---------------------------------------------------------------------------
+# `ItemBulkResponse` already was exactly the shape the user asked for (Q2:
+# название, описание, картинка, редкость — no numbers), so it is promoted to
+# the single public document of an item instead of growing a second parallel
+# model. Every public path builds it through `public_item_card()` below — a
+# second hand-written field list anywhere is a review FAIL (D5).
+PublicItemCard = ItemBulkResponse
+
+
+def public_item_card(row) -> PublicItemCard:
+    """Project an `Items` row onto the public card. The ONLY such projection."""
+    return PublicItemCard(
+        id=row.id,
+        name=row.name,
+        description=row.description,
+        image_url=row.image,
+        rarity=row.item_rarity,
+        type=row.item_type,
+    )
+
+
+class PublicEquipmentSlot(BaseModel):
+    """Публичный слот экипировки (FEAT-171 §3.4 I2p).
+
+    Видно, ЧТО надето, и только это: тип слота и публичная карточка предмета.
+    Ни `effective_damage`, ни `enhancement_*`, ни `socketed_gems`, ни
+    `current_durability`, ни `is_enabled`, ни `item_id`, ни `character_id`.
+    Ряды пояса (`fast_slot_*`) сюда не попадают — они отсекаются на уровне
+    запроса в `crud.get_public_equipment_slots` (FEAT-169 не регрессируем).
+    """
+    slot_type: str
+    item: Optional[PublicItemCard] = None
+
+    class Config:
+        orm_mode = True

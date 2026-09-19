@@ -28,7 +28,7 @@ inventory-service/app/
 | Метод | Путь | Описание |
 |-------|------|----------|
 | POST | `/inventory/` | Создать инвентарь + слоты экипировки для персонажа. **FEAT-167 (задача #18): только межсервисный вызов**, требует `X-Internal-Token` (fail-closed: пустой `INTERNAL_SERVICE_TOKEN` → 503 «Internal service token не настроен», неверный/отсутствующий заголовок → 401 «Недействительный internal token»). Единственный вызывающий — character-service `crud.send_inventory_request` (стартовый набор при создании персонажа). До FEAT-167 роут не имел ни одной зависимости: анонимный запрос через gateway доходил до обработчика (422 по схеме, а не 401) и позволял создавать инвентарь и слоты экипировки для произвольного `character_id`. Nginx вторым слоем — точный блок `location = /inventory/` с `limit_except GET HEAD`; остальные роуты `/inventory/` не затронуты |
-| GET | `/inventory/{id}/items` | Предметы в инвентаре |
+| GET | `/inventory/{id}/items` | Предметы в инвентаре. **FEAT-171 (I1): приватно** — `get_optional_user` + `require_private_access`: владелец, admin/moderator с `characters:read` и НПС (`user_id IS NULL`). Чужому/гостю → 403 «Эти данные доступны только владельцу персонажа», несуществующему персонажу → 404 «Персонаж не найден» (проверяется первой). Админский редактор персонажей проходит по ветке admin |
 | POST | `/inventory/{id}/items` | Админская выдача предмета (с учётом стаков). FEAT-167: JWT + разрешение `items:update` |
 | POST | `/inventory/internal/characters/{id}/items` | FEAT-167: та же выдача для межсервисных вызовов, только `X-Internal-Token` (fail-closed: пустой env → 503, неверный заголовок → 401) |
 | DELETE | `/inventory/{id}/items/{item_id}?quantity=N` | Убрать предмет |
@@ -36,7 +36,8 @@ inventory-service/app/
 ### Экипировка
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/inventory/{id}/equipment` | Слоты экипировки. FEAT-167: у каждого слота есть `effective_damage` — фактический урон оружия в этом слоте |
+| GET | `/inventory/{id}/equipment` | Слоты экипировки. FEAT-167: у каждого слота есть `effective_damage` — фактический урон оружия в этом слоте. **FEAT-171 (I2): приватно**, та же зависимость и те же коды, что у `/items`. Тело для владельца/админа прежнее, вместе с рядами `fast_slot_*`. Этим закрыт обход гейта быстрых слотов из FEAT-169 |
+| GET | `/inventory/{id}/equipment/public` | **FEAT-171 (I2p): публичная витрина** — `[{slot_type, item: PublicItemCard\|null}]`, доступна всем, включая гостей. Ряды пояса (`fast_slot_*`) отсекаются **на уровне запроса** (`slot_type NOT LIKE 'fast_slot_%'` в `crud.get_public_equipment_slots`), а не пост-фильтром. Ни `effective_damage`, ни `enhancement_*`, ни `socketed_gems`, ни `current_durability`, ни `is_enabled`, ни `item_id`, ни `character_id`. Несуществующий персонаж → 404 |
 | POST | `/inventory/{id}/equip` | Экипировать предмет (транзакция с модификаторами) |
 | POST | `/inventory/{id}/unequip` | Снять предмет (обратные модификаторы) |
 | POST | `/inventory/{id}/use_item` | Использовать расходник (еду — нельзя, 400 «Еду нужно съесть») |
@@ -48,11 +49,23 @@ inventory-service/app/
 |-------|------|----------|
 | GET | `/inventory/items?q=&item_types=&exclude_types=&resource_subcategory=&page=&page_size=` | Поиск предметов (пагинация); `resource_subcategory` — FEAT-165, неизвестное значение → 422 |
 | POST | `/inventory/items` | Создать предмет (включая `gathering_tool` с `tool_category` + 3 бонуса). FEAT-168: принимает вложенные `effects` / `damage_entries` |
-| GET | `/inventory/items/{id}` | Предмет по ID. FEAT-168: отдаёт `effects`, `damage_entries`, `consumable_action`, `coating_turns`, `coating_bonus_damage` (у предмета без боевого содержимого — пустые списки и NULL) |
+| GET | `/inventory/items/{id}` | Предмет по ID. **FEAT-171 (I3): отдаёт тонкую `PublicItemCard`** — `{id, name, description, image_url, rarity, type}`, остаётся анонимным. Жирный шаблон (все `*_modifier`, `price`, `effects`, `damage_entries`, `consumable_action`, `coating_*`) переехал на двойники: для сервисов — `GET /inventory/internal/items/{id}`, для админки — `GET /inventory/admin/items/{id}` |
+| GET | `/inventory/admin/items/{id}` | **FEAT-171 (ревью #1):** полная `Item` по JWT с правом `items:read` — для редактора предметов (`ItemsAdminPage/ItemForm`) и экрана рецептов. Тело идентично internal-двойнику и тому, что `GET /inventory/items/{id}` отдавал до FEAT-171. Нужен отдельно от internal-двойника, потому что nginx закрывает префикс `/inventory/internal/` снаружи и браузер туда не попадёт. Форма читает предмет отсюда и потом шлёт `PUT /inventory/items/{id}`: на тонком теле PUT записал бы обратно значения по умолчанию и затёр бы данные предмета |
 | PUT | `/inventory/items/{id}` | Обновить предмет (FEAT-165: настройки переработки, переставшие подходить к подкатегории предмета, удаляются в той же транзакции — и как у сырья, и как у результата); FEAT-168: `effects` / `damage_entries` заменяются целиком, но только если клиент их прислал) |
 | GET / PUT | `/inventory/admin/items/{id}/conversions` | FEAT-165: настройки переработки сырья (`items:read` / `items:update`), PUT заменяет весь набор |
 | DELETE | `/inventory/items/{id}` | Удалить предмет |
 | GET | `/inventory/{id}/items?item_type=gathering_tool&category=pickaxe` | Фильтр по типу + tool_category (FEAT-128, для модалки выбора инструмента) |
+| GET | `/inventory/items/bulk?ids=1,2,3` | Массовый резолв предметов (FEAT-154). **FEAT-171:** отдаёт `PublicItemCard`; поведение и тело не изменились |
+
+### Публичная карточка предмета (FEAT-171 §3.3)
+
+`ItemBulkResponse` повышена до **единственного публичного документа предмета** и получила алиас
+`PublicItemCard`: `{id, name, description, image_url, rarity, type}` — ни цены, ни модификаторов,
+ни заточки, ни вставок, ни прочности. Строится ровно одной проекцией
+`schemas.public_item_card(row)` (`services/inventory-service/app/schemas.py`); любой второй
+рукописный список полей — FAIL на ревью. Сейчас проекцию использует `GET /inventory/items/bulk`
+(модалка паспорта персонажа), `GET /inventory/{id}/equipment/public` и
+`GET /inventory/items/{id}` (Pass B, задача #8).
 
 ### Добыча ресурсов (FEAT-128)
 
@@ -69,6 +82,9 @@ inventory-service/app/
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/inventory/internal/characters/{cid}/fast_slots` | FEAT-169: пояс персонажа для межсервисных вызовов (battle-service снимает снапшот на старте боя). Ответ идентичен игровому маршруту; проверки владения нет намеренно — у мобов и НПС нет владельца |
+| GET | `/inventory/internal/characters/{cid}/items` | **FEAT-171 (I1i):** инвентарь персонажа для межсервисных вызовов (dungeon-service). Тело идентично `GET /inventory/{cid}/items`, включая фильтры `item_type` / `category`. Проверки владения нет намеренно |
+| GET | `/inventory/internal/characters/{cid}/equipment` | **FEAT-171 (I2i):** экипировка персонажа для межсервисных вызовов (battle-service: движок боя и расчёт прочности). Тело идентично `GET /inventory/{cid}/equipment` — вместе с `fast_slot_*` и `effective_damage`. Проверки владения нет намеренно — у мобов и НПС нет владельца |
+| GET | `/inventory/internal/items/{item_id}` | **FEAT-171 (I3i):** полная карточка предмета (жирная `Item` со всеми `*_modifier`, `effects[]`, `damage_entries[]`) для battle-service и dungeon-service. Тело идентично сегодняшнему `GET /inventory/items/{item_id}` |
 | POST | `/inventory/internal/characters/{cid}/revalidate-equipment` | Пересчёт допустимости надетого после выбора/сброса подкласса. Вызывает skills-service |
 | POST | `/inventory/internal/characters/{cid}/consume_item` | Списание 1 расходника в бою. Вызывает battle-service |
 | POST | `/inventory/internal/update-durability` | Прочность экипировки после боя. Вызывает battle-service |
@@ -76,6 +92,47 @@ inventory-service/app/
 | POST | `/inventory/internal/characters/{cid}/free_slots_check` | Возвращает `{free_slot_count, is_full}`. Вызывается locations-service на старте добычи (preflight) |
 | GET | `/inventory/internal/characters/{cid}/xp-multiplier?buff_type=` | FEAT-168: множитель опыта по активному баффу (`{character_id, buff_type, multiplier}`), с учётом зонтичного `character_xp_bonus`. Защищён `verify_internal_token` (401 без `X-Internal-Token`), 400 на неизвестный `buff_type`, 404 если персонажа нет. Вызывают character-service и locations-service перед записью опыта персонажа |
 | GET | `/inventory/internal/characters/{cid}/xp-multipliers?buff_types=a,b` | FEAT-168 #6: батч-вариант, `{character_id, multipliers: {тип: множитель}}`. Та же защита; 400 на пустой список, неизвестный тип или больше 8 типов |
+
+## Видимость приватных данных персонажа (FEAT-171, Pass A)
+
+`app/visibility.py` — копия общего предиката из FEAT-171 §3.1 (ещё три такие же живут в
+character-service, character-attributes-service и skills-service; согласованность держится
+параметризованным тестом-матрицей, а не общим пакетом):
+
+- `can_view_private(db, character_id, user)` — 404 «Персонаж не найден», если персонажа нет
+  (проверяется ПЕРВОЙ, чтобы 403 против 404 нельзя было использовать как оракул существования);
+  `user_id IS NULL` (НПС/моб) → `True`; владелец → `True`; admin/moderator с разрешением
+  `characters:read` → `True`; иначе `False`.
+- `require_private_access(db, character_id, user)` — жёсткая обёртка, 403 «Эти данные доступны
+  только владельцу персонажа».
+
+`auth_http.get_optional_user` (+ `OAUTH2_SCHEME_OPTIONAL`) возвращает `None` вместо 401 при
+отсутствующем или невалидном токене. Синхронная `def` — FastAPI уводит её в threadpool.
+
+**Pass B (задача #8) — что закрыто в inventory-service:**
+
+| Маршрут | Было | Стало |
+|---------|------|-------|
+| `GET /inventory/{id}/items` | анонимно, полный инвентарь | 403 чужому, тело владельца/админа не изменилось |
+| `GET /inventory/{id}/equipment` | анонимно, вместе с поясом и цифрами | 403 чужому, тело владельца/админа не изменилось |
+| `GET /inventory/{id}/equipment/public` | — | новый публичный маршрут без пояса и без цифр |
+| `GET /inventory/items/{id}` | жирная `Item` анонимно | тонкая `PublicItemCard`; жирная — на internal-двойнике и на `GET /inventory/admin/items/{id}` |
+| `GET /inventory/admin/items/{id}` | — | новый маршрут админки: жирная `Item` по праву `items:read` (ревью #1) |
+| `GET /inventory/{id}/equipment-rules` | анонимно, у несуществующего id — 200 | остаётся анонимным (справочные данные), но несуществующий персонаж → 404 |
+
+**`GET /inventory/{id}/equipment-rules` остаётся публичным намеренно** (FEAT-171 ревью #1,
+issue 6). Это справочные данные, а не данные персонажа: весь ответ выводится из класса и
+подкласса (`class_id`, `subclass_key`, списки разрешённых категорий брони и оружия), а класс с
+подклассом уже публичны — их отдают `GET /characters/{id}/public`, `/short_info` и
+`/characters/list`. Ни одного числа персонажа и ни одной его вещи в ответе нет, поэтому гейт был
+бы строже публичной анкеты и без пользы сломал бы страницу-витрину. Выровнена только дисциплина
+ошибок: несуществующий `character_id` теперь отвечает 404 «Персонаж не найден», как и остальные
+character-scoped маршруты фичи, а не 200 «ограничений нет».
+
+Не тронуты: `/inventory/items/bulk`, `/inventory/{id}/item-detail/{row}` (жирная карточка
+владельца), `/inventory/characters/{id}/fast_slots`, `/inventory/{id}/active-buffs`
+и весь каталог `/inventory/items` (открытость каталога — осознанное решение пользователя,
+FEAT-171 §3.4 D9).
 
 ## Таблицы БД
 
@@ -151,7 +208,7 @@ inventory-service/app/
 - **Двуручность:** виды категорий `two_handed` и `polearm` берутся только в основную руку, при надевании снимают предмет из доп. руки, пока надеты — доп. рука заблокирована. В `off_hand` такие токены запрещены (400).
 - **Надевание:** `POST /inventory/{id}/equip` принимает `slot_type` (только для оружия); без него сервер выбирает свободную разрешённую руку.
 - **Автоснятие** (`_revalidate_equipment`, пропускается во время боя) запускается: после сохранения правил (все игроки класса, фоном), после правки предмета с изменением типа/вида/класса брони (носящие его, фоном), из skills-service после выбора подкласса и после полного админского сброса дерева (`POST /inventory/internal/characters/{id}/revalidate-equipment`).
-- **Эндпоинты:** `GET/PUT/DELETE /inventory/admin/equipment-rules` (`items:read` / `items:update`), `GET /inventory/{id}/equipment-rules` — что может носить персонаж (для подсветки в инвентаре).
+- **Эндпоинты:** `GET/PUT/DELETE /inventory/admin/equipment-rules` (`items:read` / `items:update`), `GET /inventory/{id}/equipment-rules` — что может носить персонаж (для подсветки в инвентаре): анонимный маршрут, справочные данные по классу/подклассу; несуществующий персонаж → 404 (FEAT-171 ревью #1).
 
 ## Еда и сытость (FEAT-164)
 

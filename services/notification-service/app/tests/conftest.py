@@ -127,6 +127,7 @@ def client(db_session, test_user):
     - RabbitMQ consumers mocked
     """
     from auth_http import get_current_user_via_http
+    import chat_routes
     from main import app
 
     def override_get_db():
@@ -137,6 +138,9 @@ def client(db_session, test_user):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user_via_http] = override_auth
+    # FEAT-171 N1: история чата закрыта отдельной зависимостью (русское 401),
+    # её тоже нужно подменить, иначе аутентифицированный клиент получит 401.
+    app.dependency_overrides[chat_routes.require_chat_reader] = override_auth
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -147,6 +151,7 @@ def admin_client(db_session, admin_user):
     FastAPI TestClient authenticated as admin.
     """
     from auth_http import get_current_user_via_http
+    import chat_routes
     from main import app
 
     def override_get_db():
@@ -157,6 +162,9 @@ def admin_client(db_session, admin_user):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user_via_http] = override_auth
+    # FEAT-171 N1: история чата закрыта отдельной зависимостью (русское 401),
+    # её тоже нужно подменить, иначе аутентифицированный клиент получит 401.
+    app.dependency_overrides[chat_routes.require_chat_reader] = override_auth
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -167,6 +175,7 @@ def moderator_client(db_session, moderator_user):
     FastAPI TestClient authenticated as moderator (has chat:delete, chat:ban).
     """
     from auth_http import get_current_user_via_http
+    import chat_routes
     from main import app
 
     def override_get_db():
@@ -177,6 +186,9 @@ def moderator_client(db_session, moderator_user):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user_via_http] = override_auth
+    # FEAT-171 N1: история чата закрыта отдельной зависимостью (русское 401),
+    # её тоже нужно подменить, иначе аутентифицированный клиент получит 401.
+    app.dependency_overrides[chat_routes.require_chat_reader] = override_auth
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -232,8 +244,10 @@ class _TicketTestHelper:
 
     def _update_auth(self):
         from auth_http import get_current_user_via_http
+        import chat_routes
         current = self._current
         self._app.dependency_overrides[get_current_user_via_http] = lambda: current
+        self._app.dependency_overrides[chat_routes.require_chat_reader] = lambda: current
 
     def cleanup(self):
         self._app.dependency_overrides.clear()

@@ -464,6 +464,39 @@ def get_equipment_slots_with_damage(db: Session, character_id: int) -> list:
         result.append(data)
     return result
 
+# FEAT-171 §3.4 I2p: the belt lives in the same `equipment_slots` table, so the
+# public equipment view must never load those rows at all.
+FAST_SLOT_LIKE_PATTERN = 'fast_slot_%'
+
+
+def get_public_equipment_slots(db: Session, character_id: int) -> list:
+    """Public view of worn equipment (FEAT-171 §3.4 I2p).
+
+    Returns `[{slot_type, item: PublicItemCard | None}]` — nothing else.
+
+    The belt (`fast_slot_1..10`) is excluded **in the query**, not filtered out
+    afterwards: FEAT-169 closed `GET /inventory/characters/{id}/fast_slots` and
+    a post-filter here would be one refactor away from reopening it.
+    """
+    slots = (
+        db.query(models.EquipmentSlot)
+        .options(joinedload(models.EquipmentSlot.item))
+        .filter(
+            models.EquipmentSlot.character_id == character_id,
+            models.EquipmentSlot.slot_type.notlike(FAST_SLOT_LIKE_PATTERN),
+        )
+        .all()
+    )
+    return [
+        schemas.PublicEquipmentSlot(
+            slot_type=slot.slot_type,
+            # D5/D6: the single public projection of an item, never a second field list.
+            item=schemas.public_item_card(slot.item) if slot.item is not None else None,
+        )
+        for slot in slots
+    ]
+
+
 def is_item_compatible_with_slot(item_type: str, slot_type: str) -> bool:
     """
     Проверяет, совместим ли тип предмета с типом слота.

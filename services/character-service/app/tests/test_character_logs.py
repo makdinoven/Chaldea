@@ -7,7 +7,7 @@ Covers:
 (C) Get logs — returns paginated list ordered by created_at DESC
 (D) Get logs with event_type filter — returns only matching type
 (E) Get logs with limit/offset — pagination works correctly
-(F) Get logs for non-existent character — returns empty list (not 404)
+(F) Get logs for non-existent character — returns 404 (FEAT-171)
 (G) Post history endpoint — char_count strips HTML, xp_earned computed correctly
 """
 
@@ -77,13 +77,22 @@ def db_session(seed_fk_data):
         Base.metadata.drop_all(bind=database.engine)
 
 
+# FEAT-171 §3.4 C7/C8: /logs теперь только для владельца (403 чужому), а
+# xp_earned в истории постов виден лишь владельцу. Персонажи в этом файле
+# создаются с user_id=1, поэтому зрителем по умолчанию делаем их владельца —
+# так тесты продолжают проверять то, ради чего написаны (порядок, пагинация,
+# подсчёт опыта). Матрица «гость/чужой/владелец/админ/NPC» — задача QA #15.
+_OWNER_USER = auth_http.UserRead(id=1, username="owner", role="user", permissions=[])
+
+
 @pytest.fixture
 def client(db_session):
-    """FastAPI TestClient wired to the real SQLite test session (no auth needed — endpoints are public/internal)."""
+    """FastAPI TestClient wired to the real SQLite test session; зритель — владелец персонажа."""
     def override_get_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[auth_http.get_optional_user] = lambda: _OWNER_USER
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -253,15 +262,14 @@ def test_get_logs_pagination(client, db_session):
 
 
 # ---------------------------------------------------------------------------
-# (F) Get logs for non-existent character — returns empty list (not 404)
+# (F) Get logs for non-existent character — 404 (FEAT-171: существование
+#     персонажа не раскрывается, проверка идёт до ветки владельца)
 # ---------------------------------------------------------------------------
 
 def test_get_logs_nonexistent_character(client):
     response = client.get("/characters/99999/logs")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["total"] == 0
-    assert data["logs"] == []
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Персонаж не найден"
 
 
 # ---------------------------------------------------------------------------

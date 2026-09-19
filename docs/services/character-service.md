@@ -58,13 +58,21 @@ character-service/app/
 ### Управление персонажами
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/characters/{id}/full_profile` | Полный профиль с уровнем, атрибутами, титулом |
+| GET | `/characters/{id}/full_profile` | Полный профиль с уровнем, атрибутами, титулом. **FEAT-171 (C1, optional-auth):** владелец, админ/модератор с `characters:read` и NPC получают прежнее тело; любой другой зритель — `PublicProfileResponse` (`id`, `name`, `level`, `active_title`, `active_title_rarity`, `avatar`). Ключей `currency_balance`, `stat_points`, `level_progress`, `attributes` в его ответе **нет** (именно отсутствуют, а не null). Несуществующий персонаж → 404 |
 | GET | `/characters/{id}/profile` | Профиль с данными пользователя |
-| GET | `/characters/{id}/short_info` | Краткая инфо (имя, аватар, локация) |
+| GET | `/characters/{id}/short_info` | Краткая инфо (имя, аватар, локация). **FEAT-171 (C4, D7):** `currency_balance` убран **безусловно, для всех** — маршрут читают сервис-в-сервис, поэтому optional-auth тут не годится. Баланс отдаёт только двойник `/characters/internal/{id}/short_info` |
 | GET | `/characters/{id}/race_info` | Раса, подраса, класс, уровень |
 | GET | `/characters/list` | Список всех персонажей |
 | DELETE | `/characters/{id}` | Удалить персонажа |
 | PUT | `/characters/internal/{id}/deduct_points` | Списать stat points (internal, `X-Internal-Token`) |
+| GET | `/characters/internal/{id}/full_profile` | **FEAT-171 (C1i):** двойник `GET /characters/{id}/full_profile` для межсервисных вызовов. Тело общее с публичным маршрутом (общий хелпер `_build_full_profile`), но остаётся полным после того, как Pass B утончит публичный ответ. Требует `X-Internal-Token` (пустой env → 503, неверный заголовок → 401), nginx отдаёт 403 снаружи. Вызывающий — character-attributes-service (`perk_evaluator`, `/upgrade`) |
+| GET | `/characters/internal/{id}/short_info` | **FEAT-171 (C4i):** двойник `GET /characters/{id}/short_info`, **всегда с `currency_balance`** — именно он питает `/users/me` и счётчик золота в шапке, когда Pass B уберёт баланс из публичного тела. Та же защита `X-Internal-Token`. Вызывающие — user-service (`_fetch_character_short`) и locations-service |
+
+### Журнал и история постов (FEAT-095, приватность — FEAT-171)
+| Метод | Путь | Auth | Описание |
+|-------|------|------|----------|
+| GET | `/characters/{id}/logs` | владелец / админ-модератор с `characters:read` / NPC | Журнал событий персонажа. **FEAT-171 (C8, Q4a):** в описаниях и `metadata` лежат лут, золото и опыт, поэтому маршрут закрыт жёстко: чужой и гость → **403** «Эти данные доступны только владельцу персонажа», несуществующий персонаж → **404** «Персонаж не найден» (проверка существования идёт раньше проверки владения, чтобы 403 vs 404 не работал оракулом) |
+| GET | `/characters/{id}/post-history` | публично (optional-auth) | История отыгрышных постов. **FEAT-171 (C7, Q4b):** сами посты публичны, но `xp_earned` отдаётся только владельцу, админу/модератору и на NPC — у чужого этого ключа в элементах списка нет (`schemas.PublicPostHistoryItem`). Несуществующий персонаж → 404 |
 
 ### Локации
 | Метод | Путь | Описание |
@@ -88,7 +96,7 @@ character-service/app/
 | GET | `/characters/metadata` | публично | Все расы, подрасы с атрибутами |
 | GET | `/characters/races` | публично | Расы с подрасами. На каждой подрасе, помимо `stat_preset`/`image`: `distinctive_features`, `height_min`, `height_max`, `typical_origin_ids` (FEAT-154) |
 | GET | `/characters/classes` | публично | Список классов (`id_class`, `name`, `description`). Заменил фиктивный `INITIAL_CLASSES` на фронтенде |
-| GET | `/characters/{id}/public` | публично | Данные одного персонажа для «паспорта». Путь с суффиксом `/public`, чтобы не конфликтовать с `/list`, `/races`, `/classes`, `/metadata`, `/starter-kits` |
+| GET | `/characters/{id}/public` | публично (optional-auth) | Данные одного персонажа для «паспорта». Путь с суффиксом `/public`, чтобы не конфликтовать с `/list`, `/races`, `/classes`, `/metadata`, `/starter-kits`. **FEAT-171 (C3):** `granted_kit` и `granted_kit_is_snapshot` остаются публичными, а `starting_attributes` и `starting_attributes_is_snapshot` отдаются только владельцу, админу/модератору с `characters:read` и на NPC — у чужого этих ключей в JSON нет (`schemas.CharacterPublicStrangerResponse`) |
 
 ### Стартовые наборы (FEAT-154)
 | Метод | Путь | Auth | Описание |
@@ -273,7 +281,7 @@ character-service/app/
 ### HTTP (исходящие)
 - `inventory-service:8004` - POST `/inventory/` (создание инвентаря + слотов экипировки, стартовый набор — `crud.send_inventory_request`). **FEAT-167 задача #18: роут стал internal-only**, вызов обязан слать `X-Internal-Token` (хелпер `crud._internal_token_headers()`, читает `auth_http.INTERNAL_SERVICE_TOKEN` в момент вызова). Вызов log-and-continue, поэтому потеря заголовка была бы молчаливой — покрыт `tests/test_internal_headers.py`
 - `skills-service:8003` - POST `/skills/internal/assign_multiple` (назначение навыков; FEAT-169: публичный `/skills/assign_multiple` ушёл под `require_permission("skills:create")` для админского редактора НПС, сервисный вызов — на internal-двойника с заголовком `X-Internal-Token`), POST `/skills/` (legacy «Basic Attack», тоже закрыт internal-токеном)
-- `character-attributes-service:8002` - POST `/attributes/` (создание строки атрибутов: `crud.send_attributes_request` — одобрение заявки, **хард-фейл с откатом персонажа**, и создание NPC из админки; `crud._sync_send_attributes_request` — спавн моба), GET `/{id}`, GET `/{id}/passive_experience`. **FEAT-167 задача #17: `POST /attributes/` стал internal-only** — оба вызова шлют `X-Internal-Token` через `crud._internal_token_headers()`
+- `character-attributes-service:8002` - POST `/attributes/` (создание строки атрибутов: `crud.send_attributes_request` — одобрение заявки, **хард-фейл с откатом персонажа**, и создание NPC из админки; `crud._sync_send_attributes_request` — спавн моба), GET `/{id}`, GET `/{id}/passive_experience`. **FEAT-167 задача #17: `POST /attributes/` стал internal-only** — оба вызова шлют `X-Internal-Token` через `crud._internal_token_headers()`. **FEAT-171 (Pass A):** чтения из `full_profile` переехали на internal-двойники — GET `/attributes/internal/{id}` (A1i) и GET `/attributes/internal/{id}/passive_experience` (A4i), оба с `X-Internal-Token`
 - `user-service:8000` - POST `/users/user_characters/`, PUT `/users/{id}/update_character`, GET `/users/{id}`, GET `/users/me` (auth во всех защищённых эндпоинтах)
 - `locations-service:8006` — **новая зависимость, появилась в FEAT-154** (`LOCATIONS_SERVICE_URL`, дефолт `http://locations-service:8006`). Клиент — `app/locations_client.py`, таймаут 5 с, три чтения:
   - GET `/locations/starting-points/{id}` — проверка выбранной стартовой точки при подаче и при одобрении заявки

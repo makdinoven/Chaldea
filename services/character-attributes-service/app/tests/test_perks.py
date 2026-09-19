@@ -41,10 +41,21 @@ database.SessionLocal = _TestSessionLocal
 import models  # noqa: E402
 import schemas  # noqa: E402
 import crud  # noqa: E402
-from auth_http import get_admin_user, get_current_user_via_http, require_permission, UserRead  # noqa: E402
+from auth_http import (  # noqa: E402
+    get_admin_user,
+    get_current_user_via_http,
+    get_optional_user,
+    require_permission,
+    UserRead,
+)
 from perk_evaluator import compare, check_condition, evaluate_perks  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from main import app, get_db  # noqa: E402
+from tests.regen_shared_tables import (  # noqa: E402
+    add_character,
+    create_shared_tables,
+    drop_shared_tables,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +70,9 @@ _ADMIN_USER = UserRead(
     ],
 )
 _REGULAR_USER = UserRead(id=2, username="player", role="user", permissions=[])
+# FEAT-171: owner of the characters seeded by `_create_attributes`.
+_OWNER_ID = 7
+_OWNER_USER = UserRead(id=_OWNER_ID, username="owner", role="user", permissions=[])
 
 
 def _make_perk_payload(**overrides):
@@ -113,6 +127,9 @@ def _create_attributes(db, character_id=1, **overrides):
     db.add(attr)
     db.commit()
     db.refresh(attr)
+    # FEAT-171: the character must exist and be owned by `_OWNER_ID`, otherwise
+    # the gated reads answer 404 «Персонаж не найден».
+    add_character(db, character_id, user_id=_OWNER_ID)
     return attr
 
 
@@ -153,11 +170,15 @@ def _create_cumulative_stats(db, character_id=1, **overrides):
 @pytest.fixture()
 def db_session():
     database.Base.metadata.create_all(bind=_test_engine)
+    # FEAT-171: the perk gate reads `characters.user_id` — the table belongs to
+    # character-service, so the shared-DB harness provides it.
+    create_shared_tables(_test_engine)
     session = _TestSessionLocal()
     try:
         yield session
     finally:
         session.close()
+        drop_shared_tables(_test_engine)
         database.Base.metadata.drop_all(bind=_test_engine)
 
 
@@ -181,11 +202,16 @@ def admin_client(db_session):
 
 
 @pytest.fixture()
-def public_client(db_session):
-    """Client without auth overrides — only overrides get_db for public endpoints."""
+def owner_client(db_session):
+    """Client acting as the owner of the seeded characters.
+
+    FEAT-171: `GET /attributes/{id}/perks` is no longer public — the perk tree
+    is owner/admin-only, so the viewer has to be resolved.
+    """
     def override_get_db():
         yield db_session
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_optional_user] = lambda: _OWNER_USER
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -649,7 +675,7 @@ class TestEvaluatePerks:
 
 class TestPlayerPerksEndpoint:
 
-    def test_get_perks_returns_all_with_status(self, public_client, db_session):
+    def test_get_perks_returns_all_with_status(self, owner_client, db_session):
         """GET /attributes/{id}/perks returns all active perks with unlock status."""
         perk1 = _create_perk_in_db(db_session, name="Perk A")
         perk2 = _create_perk_in_db(db_session, name="Perk B")
@@ -661,7 +687,7 @@ class TestPlayerPerksEndpoint:
         db_session.add(cp)
         db_session.commit()
 
-        resp = public_client.get("/attributes/1/perks")
+        resp = owner_client.get("/attributes/1/perks")
         assert resp.status_code == 200
         data = resp.json()
         assert data["character_id"] == 1
@@ -673,7 +699,7 @@ class TestPlayerPerksEndpoint:
         assert perk_map[perk1.id]["is_unlocked"] is True
         assert perk_map[perk2.id]["is_unlocked"] is False
 
-    def test_get_perks_includes_progress(self, public_client, db_session):
+    def test_get_perks_includes_progress(self, owner_client, db_session):
         """GET /attributes/{id}/perks includes progress data for cumulative_stat conditions."""
         perk = _create_perk_in_db(
             db_session,
@@ -682,7 +708,7 @@ class TestPlayerPerksEndpoint:
         _create_attributes(db_session, character_id=1)
         _create_cumulative_stats(db_session, character_id=1, pvp_wins=25)
 
-        resp = public_client.get("/attributes/1/perks")
+        resp = owner_client.get("/attributes/1/perks")
         assert resp.status_code == 200
         data = resp.json()
         perks = data["perks"]
@@ -694,7 +720,7 @@ class TestPlayerPerksEndpoint:
         assert perk_data["progress"]["pvp_wins"]["current"] == 25
         assert perk_data["progress"]["pvp_wins"]["required"] == 50
 
-    def test_get_perks_attribute_progress(self, public_client, db_session):
+    def test_get_perks_attribute_progress(self, owner_client, db_session):
         """GET /attributes/{id}/perks includes progress for attribute type conditions."""
         perk = _create_perk_in_db(
             db_session,
@@ -702,17 +728,17 @@ class TestPlayerPerksEndpoint:
         )
         _create_attributes(db_session, character_id=1, strength=42)
 
-        resp = public_client.get("/attributes/1/perks")
+        resp = owner_client.get("/attributes/1/perks")
         assert resp.status_code == 200
         perks = resp.json()["perks"]
         assert len(perks) == 1
         assert perks[0]["progress"]["strength"]["current"] == 42
         assert perks[0]["progress"]["strength"]["required"] == 100
 
-    def test_get_perks_empty_when_no_perks(self, public_client, db_session):
+    def test_get_perks_empty_when_no_perks(self, owner_client, db_session):
         """GET /attributes/{id}/perks returns empty list when no perks exist."""
         _create_attributes(db_session, character_id=1)
-        resp = public_client.get("/attributes/1/perks")
+        resp = owner_client.get("/attributes/1/perks")
         assert resp.status_code == 200
         data = resp.json()
         assert data["perks"] == []

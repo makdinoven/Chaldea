@@ -17,10 +17,18 @@ def _internal_token_headers() -> dict:
     return {"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")}
 
 async def get_item(item_id: int) -> dict:
+    """Полный шаблон предмета (FEAT-171 I3i).
+
+    Публичный `/inventory/items/{id}` отдаёт тонкую карточку без цифр,
+    поэтому бой читает внутренний двойник с X-Internal-Token.
+    """
     if item_id <= 0:
         raise ValueError("item_id must be > 0")
     async with httpx.AsyncClient() as client:
-        r = await client.get(f"{BASE}/inventory/items/{item_id}")
+        r = await client.get(
+            f"{BASE}/inventory/internal/items/{item_id}",
+            headers=_internal_token_headers(),
+        )
         r.raise_for_status()
         return r.json()
 
@@ -53,9 +61,15 @@ async def get_equipment_durability(character_id: int) -> dict:
     Returns {slot_type: {item_id, current_durability, max_durability}}
     for durability-eligible equipment slots.
     Slots without items or without durability are omitted.
+
+    FEAT-171 I2i: игровой маршрут `/inventory/{id}/equipment` уходит под гейт,
+    поэтому прочность читается из внутреннего двойника с X-Internal-Token.
     """
     async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.get(f"{BASE}/inventory/{character_id}/equipment")
+        r = await client.get(
+            f"{BASE}/inventory/internal/characters/{character_id}/equipment",
+            headers=_internal_token_headers(),
+        )
         r.raise_for_status()
         slots = r.json()
 

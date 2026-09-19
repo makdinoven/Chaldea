@@ -317,26 +317,31 @@ class TestGetFastSlots:
         )
 
 
-class TestPublicGetsSendNothing:
-    """`get_item` and `get_equipment_durability` hit routes that stayed public
-    (§3.3 M3). Pinning them both ways: nobody should "helpfully" add a token to
-    a public GET, and nobody should strip the real headers elsewhere by
-    symmetry with these two."""
+class TestItemAndEquipmentGetsUseTheInternalTwins:
+    """FEAT-171 Pass A: `get_item` and `get_equipment_durability` used to hit
+    the public routes (`/inventory/items/{id}`, `/inventory/{cid}/equipment`).
+    Those are being thinned and gated, so both now read the internal twins
+    (I3i / I2i) with `X-Internal-Token`.
+
+    These two callers raise on failure, but `get_equipment_durability`'s
+    per-item lookup is swallowed — a missing header would silently zero every
+    durability tick. Hence the assertion is on the URL *and* the header, never
+    on "nothing raised"."""
 
     @pytest.mark.asyncio
-    async def test_get_item_sends_no_header(self, monkeypatch, token_env):
+    async def test_get_item_uses_internal_twin_with_token(
+        self, monkeypatch, token_env
+    ):
         calls = _patch_inventory_transport(monkeypatch, _Resp(200, {"id": 3}))
         await inventory_client.get_item(3)
 
         verb, url, kwargs = calls[0]
         assert verb == "GET"
-        assert url.endswith("/inventory/items/3"), url
-        assert "headers" not in kwargs or "X-Internal-Token" not in (
-            kwargs.get("headers") or {}
-        ), "get_item targets a public route — it must not leak the service token"
+        assert url.endswith("/inventory/internal/items/3"), url
+        assert kwargs["headers"]["X-Internal-Token"] == token_env
 
     @pytest.mark.asyncio
-    async def test_get_equipment_durability_sends_no_header(
+    async def test_get_equipment_durability_uses_internal_twin_with_token(
         self, monkeypatch, token_env
     ):
         calls = _patch_inventory_transport(monkeypatch, _Resp(200, []))
@@ -344,10 +349,8 @@ class TestPublicGetsSendNothing:
 
         verb, url, kwargs = calls[0]
         assert verb == "GET"
-        assert url.endswith("/inventory/11/equipment"), url
-        assert "headers" not in kwargs or "X-Internal-Token" not in (
-            kwargs.get("headers") or {}
-        )
+        assert url.endswith("/inventory/internal/characters/11/equipment"), url
+        assert kwargs["headers"]["X-Internal-Token"] == token_env
 
 
 class TestTokenIsReadAtCallTime:

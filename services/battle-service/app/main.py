@@ -39,6 +39,7 @@ from auth_http import (
     authenticate_websocket,
     verify_internal_token,
 )
+from battle_visibility import require_battle_log_access
 import ws_manager
 from mongo_client import get_mongo_db
 from database import get_db, AsyncSessionLocal
@@ -3541,7 +3542,20 @@ async def make_action(
 
 
 @router.get("/battles/{battle_id}/logs")
-async def list_turn_logs(battle_id: int, limit: int = 50):
+async def list_turn_logs(
+    battle_id: int,
+    limit: int = 50,
+    db_session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Turn log of a battle — participants, co-located spectators, admins.
+
+    FEAT-171 §5 #2: this route used to have no auth at all and leaked
+    `pve_rewards` (xp/gold) and `skill_use` to anonymous callers walking
+    sequential battle ids. See `battle_visibility` for the rule.
+    """
+    await require_battle_log_access(db_session, battle_id, current_user)
+
     db = get_mongo_db()
     cursor = (
         db.battle_logs
@@ -3558,7 +3572,15 @@ async def list_turn_logs(battle_id: int, limit: int = 50):
 
 @router.get("/battles/{battle_id}/logs/{turn_number}",
             response_model=LogResponse)
-async def logs_for_turn(battle_id: int, turn_number: int):
+async def logs_for_turn(
+    battle_id: int,
+    turn_number: int,
+    db_session: AsyncSession = Depends(get_db),
+    current_user: UserRead = Depends(get_current_user_via_http),
+):
+    """Single turn of the battle log — same gate as the full listing."""
+    await require_battle_log_access(db_session, battle_id, current_user)
+
     logs = await get_logs_for_turn(battle_id, turn_number)
     if not logs:
         return {"logs": []}              # возвращаем пустой список, не 404

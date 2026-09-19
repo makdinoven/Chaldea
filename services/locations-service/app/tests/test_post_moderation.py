@@ -524,7 +524,12 @@ def _downstream_ok(calls: list | None = None):
         if calls is not None:
             calls.append(url)
         if "/characters/" in url:
-            cid = url.split("/characters/")[1].split("/")[0]
+            # FEAT-171 C4i: короткая карточка читается из внутреннего двойника
+            # `/characters/internal/{cid}/short_info`.
+            tail = url.split("/characters/")[1]
+            if tail.startswith("internal/"):
+                tail = tail[len("internal/"):]
+            cid = tail.split("/")[0]
             return _http_response(200, {"name": f"Персонаж {cid}", "avatar": None})
         if "/users/" in url:
             uid = url.rstrip("/").split("/users/")[1]

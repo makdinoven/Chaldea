@@ -1040,7 +1040,13 @@ class NpcShopItemUpdate(BaseModel):
     stock: Optional[int] = None
     is_active: Optional[bool] = None
 
-class NpcShopItemRead(BaseModel):
+class NpcShopItemPublicRead(BaseModel):
+    """The public shop window: base prices and the item card, nothing personal.
+
+    FEAT-171: this is the BASE and `NpcShopItemRead` extends it, so a future
+    private field added to the personal price list cannot leak into the guest
+    view by default (same inheritance direction as the user-service schemas).
+    """
     id: int
     npc_id: int
     item_id: int
@@ -1053,10 +1059,14 @@ class NpcShopItemRead(BaseModel):
     item_rarity: Optional[str] = None
     item_type: Optional[str] = None
     created_at: Optional[datetime] = None
-    discounted_buy_price: Optional[int] = None
 
     class Config:
         orm_mode = True
+
+class NpcShopItemRead(NpcShopItemPublicRead):
+    """The personal price list — `discounted_buy_price` is derived from the
+    character's `charisma` and is therefore a private number (FEAT-171)."""
+    discounted_buy_price: Optional[int] = None
 
 class ShopBuyRequest(BaseModel):
     character_id: int

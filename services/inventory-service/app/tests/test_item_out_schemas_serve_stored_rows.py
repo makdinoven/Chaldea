@@ -124,7 +124,9 @@ def _insert_damage(db, item_id, **over):
 
 
 def _get_one(client, item_id):
-    return client.get(f"/inventory/items/{item_id}")
+    # FEAT-171 I3: the public `GET /inventory/items/{id}` is now the thin public
+    # card; the fat template these tests are about lives on the internal twin.
+    return client.get(f"/inventory/internal/items/{item_id}", headers=_INTERNAL_HEADERS)
 
 
 def _get_list(client):

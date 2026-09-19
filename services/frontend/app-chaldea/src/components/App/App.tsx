@@ -333,7 +333,12 @@ const App = () => {
               </ProtectedRoute>
             } />
             <Route path="messages" element={<MessengerPage />} />
-            <Route path="chat/history" element={<ChatHistoryPage />} />
+            {/* FEAT-171: chat history is authenticated-only (401 for guests) */}
+            <Route path="chat/history" element={
+              <ProtectedRoute>
+                <ChatHistoryPage />
+              </ProtectedRoute>
+            } />
             <Route path="players" element={<AllUsersPage />} />
             <Route path="players/online" element={<OnlineUsersPage />} />
             <Route path="profile" element={<ProfilePage />} />

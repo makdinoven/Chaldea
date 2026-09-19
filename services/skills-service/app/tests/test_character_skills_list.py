@@ -88,8 +88,8 @@ async def db_session(setup_db):
 
 @pytest_asyncio.fixture()
 async def client(setup_db):
-    """The list endpoint itself is unauthenticated; the auth overrides are for
-    the paired /resolved call."""
+    """FEAT-171: the list endpoint is owner/admin-only now — the overrides make
+    the viewer the owner of character 100 (and serve the paired /resolved call)."""
     async def _override():
         return _OWNER
     app.dependency_overrides[_main_get_db] = _override_get_db
@@ -253,9 +253,21 @@ class TestCharacterSkillsListBaseCosts:
 
     @pytest.mark.asyncio
     async def test_character_without_skills_returns_empty_list(self, client, db_session):
+        # FEAT-171: the character has to exist — the gate answers 404 first.
+        await db_session.execute(
+            text("INSERT INTO characters (id, user_id) VALUES (999999, 5)")
+        )
+        await db_session.commit()
         resp = await client.get("/skills/characters/999999/skills")
         assert resp.status_code == 200
         assert resp.json() == []
+
+    @pytest.mark.asyncio
+    async def test_unknown_character_is_404_not_403(self, client, db_session):
+        """FEAT-171: never reveal whether an id exists."""
+        resp = await client.get("/skills/characters/424242/skills")
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Персонаж не найден"
 
     @pytest.mark.asyncio
     async def test_non_integer_character_id_is_rejected(self, client, db_session):

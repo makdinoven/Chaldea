@@ -10,7 +10,22 @@ photo-service writes it; inventory-service only hands it out:
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
+import pytest
+
+import auth_http
 import models
+
+# FEAT-171 I3: `GET /inventory/items/{id}` is now the thin public card; the fat
+# item template moved to the internal twin, which requires `X-Internal-Token`.
+_INTERNAL_TOKEN = "test-internal-token"
+_INTERNAL_HEADERS = {"X-Internal-Token": _INTERNAL_TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _pin_internal_token(monkeypatch):
+    """`verify_internal_token` reads a module-level constant — pin it."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", _INTERNAL_TOKEN)
+
 
 
 FULL = "https://s3/items/item_full_image_1.webp"
@@ -42,17 +57,17 @@ class TestItemFullImage:
 
     def test_get_item_returns_full_image(self, client, db_session):
         _seed_item(db_session)
-        body = client.get("/inventory/items/1").json()
+        body = client.get("/inventory/internal/items/1", headers=_INTERNAL_HEADERS).json()
         assert body["image"] == ICON
         assert body["full_image"] == FULL
 
     def test_item_without_original_returns_null(self, client, db_session):
         _seed_item(db_session, full_image=None)
-        assert client.get("/inventory/items/1").json()["full_image"] is None
+        assert client.get("/inventory/internal/items/1", headers=_INTERNAL_HEADERS).json()["full_image"] is None
 
     def test_put_does_not_overwrite_full_image(self, client, db_session):
         _seed_item(db_session)
-        body = client.get("/inventory/items/1").json()
+        body = client.get("/inventory/internal/items/1", headers=_INTERNAL_HEADERS).json()
         body["full_image"] = "https://evil/other.webp"
         body["name"] = "Меч 2"
 

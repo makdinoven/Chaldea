@@ -27,7 +27,13 @@ from httpx import ASGITransport
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
-from auth_http import get_admin_user, get_current_user_via_http, require_permission, UserRead
+from auth_http import (
+    get_admin_user,
+    get_current_user_via_http,
+    allow_jwt_or_service_token,
+    require_permission,
+    UserRead,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +155,9 @@ async def player_client(setup_db):
     app.dependency_overrides[_original_get_db] = _override_get_db
     app.dependency_overrides[get_current_user_via_http] = _override_player
     app.dependency_overrides[get_admin_user] = _override_admin
+    # FEAT-171: `GET /skills/characters/{id}/skills` is owner/admin-only; the
+    # player owns character 100 (seeded by `seeded_tree`).
+    app.dependency_overrides[allow_jwt_or_service_token] = _override_player
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client

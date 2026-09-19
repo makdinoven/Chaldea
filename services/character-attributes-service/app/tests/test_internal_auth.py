@@ -20,9 +20,12 @@ the fail-closed case where `INTERNAL_SERVICE_TOKEN` is empty — that must answe
 stored row must be untouched, so a guard that returns 401 *after* writing would
 still fail here.
 
-Also pinned: the GET endpoints stay open. FEAT-164 put passive-regen catch-up
-inside `GET /attributes/{id}` and `/rest-status`, and battle-service reads them
-on every attack — gating them would break battles, skills XP and the profile.
+Also pinned: the GET endpoints stay off the *internal* token. FEAT-164 put
+passive-regen catch-up inside `GET /attributes/{id}` and `/rest-status`, and
+sibling services read them on every attack — putting the internal token on the
+player-facing paths would break battles, skills XP and the profile. Since
+FEAT-171 those reads are private, but gated by **ownership** (403 for a
+stranger), while the sibling services read the `/attributes/internal/` twins.
 """
 
 import os
@@ -66,9 +69,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 from main import app, get_db  # noqa: E402
 
 from tests.regen_shared_tables import (  # noqa: E402
+    add_character,
     create_shared_tables,
     drop_shared_tables,
 )
+from auth_http import UserRead, get_optional_user  # noqa: E402
 
 # conftest.py sets INTERNAL_SERVICE_TOKEN before auth_http is imported.
 TOKEN = "test-internal-token"
@@ -76,6 +81,9 @@ GOOD_HEADERS = {"X-Internal-Token": TOKEN}
 WRONG_HEADERS = {"X-Internal-Token": "not-the-token"}
 
 CHARACTER_ID = 77
+# FEAT-171: the player-facing reads are owner/admin-only now.
+OWNER_ID = 7
+OWNER = UserRead(id=OWNER_ID, username="owner", role="user", permissions=[])
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +132,13 @@ def client(db_session):
 
 
 @pytest.fixture()
+def owner_client(client):
+    """`client`, but the viewer is the owner of `CHARACTER_ID` (FEAT-171)."""
+    app.dependency_overrides[get_optional_user] = lambda: OWNER
+    yield client
+
+
+@pytest.fixture()
 def attrs(db_session):
     """A seeded attributes row with real column names."""
     row = models.CharacterAttributes(
@@ -138,6 +153,8 @@ def attrs(db_session):
     db_session.add(row)
     db_session.commit()
     db_session.refresh(row)
+    # FEAT-171: the gated reads resolve the owner from `characters.user_id`.
+    add_character(db_session, CHARACTER_ID, user_id=OWNER_ID)
     return row
 
 
@@ -314,26 +331,45 @@ class TestGatedRoutesAcceptTheInternalToken:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4. The GETs must stay open (FEAT-164 regen lives in them)
+# 4. The GETs must stay free of the INTERNAL token (FEAT-164 regen lives in
+#    them). Since FEAT-171 they are gated by ownership instead — a player path,
+#    not a service path.
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class TestReadsStayOpen:
+class TestReadsStayOffTheInternalToken:
 
-    def test_get_attributes_needs_no_token(self, client, attrs):
-        response = client.get(f"/attributes/{CHARACTER_ID}")
+    def test_get_attributes_needs_no_internal_token(self, owner_client, attrs):
+        response = owner_client.get(f"/attributes/{CHARACTER_ID}")
         assert response.status_code == 200, response.text
         assert response.json()["character_id"] == CHARACTER_ID
 
-    def test_get_rest_status_needs_no_token(self, client, attrs):
-        response = client.get(f"/attributes/{CHARACTER_ID}/rest-status")
+    def test_get_rest_status_needs_no_internal_token(self, owner_client, attrs):
+        response = owner_client.get(f"/attributes/{CHARACTER_ID}/rest-status")
         assert response.status_code == 200, response.text
 
-    def test_get_passive_experience_needs_no_token(self, client, attrs):
-        """character-service reads this one, and the nginx second layer only
-        blocks the *mutating* methods on this path (`limit_except GET HEAD`)."""
-        response = client.get(f"/attributes/{CHARACTER_ID}/passive_experience")
+    def test_get_passive_experience_needs_no_internal_token(self, owner_client, attrs):
+        """Sibling services read the A4i twin; the player-facing path stays on
+        the JWT, and the nginx second layer only blocks the *mutating* methods
+        here (`limit_except GET HEAD`)."""
+        response = owner_client.get(f"/attributes/{CHARACTER_ID}/passive_experience")
         assert response.status_code == 200, response.text
+
+    def test_a_stranger_is_refused_not_asked_for_the_internal_token(self, client, attrs):
+        """FEAT-171: the player-facing reads are gated by ownership, not by the
+        internal token — a viewer without access gets 403, never 401/503."""
+        for path in (
+            f"/attributes/{CHARACTER_ID}",
+            f"/attributes/{CHARACTER_ID}/rest-status",
+            f"/attributes/{CHARACTER_ID}/passive_experience",
+            f"/attributes/{CHARACTER_ID}/cumulative_stats",
+            f"/attributes/{CHARACTER_ID}/perks",
+        ):
+            response = client.get(path)
+            assert response.status_code == 403, f"{path}: {response.text}"
+            assert response.json()["detail"] == (
+                "Эти данные доступны только владельцу персонажа"
+            )
 
     def test_the_gate_is_on_exactly_the_six_routes(self):
         """A sweep: `verify_internal_token` must guard the six mutating routes
@@ -353,6 +389,15 @@ class TestReadsStayOpen:
             if "verify_internal_token" in names:
                 for method in route.methods:
                     if method in ("GET", "HEAD"):
+                        # FEAT-171 §3.2 style C: the `/attributes/internal/`
+                        # read twins (A1i, A4i) are *supposed* to be gated —
+                        # they exist so sibling services keep their data once
+                        # the player-facing GETs are closed in Pass B. The
+                        # FEAT-164 invariant below still holds for every
+                        # player-facing GET.
+                        if route.path.startswith("/attributes/internal/"):
+                            gated.add((method, route.path))
+                            continue
                         pytest.fail(
                             f"{method} {route.path} is gated by the internal "
                             "token — FEAT-164 regen catch-up runs in the GETs"
@@ -366,6 +411,9 @@ class TestReadsStayOpen:
             ("PUT", "/attributes/{character_id}/passive_experience"),
             ("POST", "/attributes/{character_id}/consume_stamina"),
             ("POST", "/attributes/{character_id}/refund_stamina"),
+            # FEAT-171 §3.4 A1i / A4i — the internal read twins.
+            ("GET", "/attributes/internal/{character_id}"),
+            ("GET", "/attributes/internal/{character_id}/passive_experience"),
         }
         assert expected <= gated, f"no longer gated: {sorted(expected - gated)}"
 
@@ -473,10 +521,11 @@ class TestCumulativeIncrementIsInternalOnly:
                            headers={"X-Internal-Token": TOKEN.upper()}
                            ).status_code == 401
 
-    def test_the_cumulative_get_stays_open(self, client, attrs):
-        """`GET /attributes/{id}/cumulative_stats` is a read used by the profile
-        — the gate must not have spilled onto it."""
-        response = client.get(f"/attributes/{CHARACTER_ID}/cumulative_stats")
+    def test_the_cumulative_get_stays_off_the_internal_token(self, owner_client, attrs):
+        """`GET /attributes/{id}/cumulative_stats` is a read the owner's profile
+        makes — the *internal* gate must not have spilled onto it (FEAT-171
+        closes it to strangers with a 403 instead)."""
+        response = owner_client.get(f"/attributes/{CHARACTER_ID}/cumulative_stats")
         assert response.status_code == 200, response.text
 
 

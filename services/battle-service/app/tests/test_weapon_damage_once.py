@@ -136,7 +136,7 @@ def _equipment_payload(
     main_item_id=101, main_effective=10.0,
     additional_item_id=202, additional_effective=4.0,
 ):
-    """A `GET /inventory/{cid}/equipment` response in the shape inventory-service
+    """A `GET /inventory/internal/characters/{cid}/equipment` response in the shape inventory-service
     returns it after FEAT-167 (real field names, `effective_damage` per slot)."""
     return [
         {
@@ -170,7 +170,7 @@ def _patch_inventory(equipment, items):
             resp.json.return_value = equipment
             return resp
         for item_id, template in items.items():
-            if f"/inventory/items/{item_id}" in url:
+            if f"/inventory/internal/items/{item_id}" in url:
                 resp.json.return_value = template
                 return resp
         raise ValueError(f"Unexpected URL: {url}")

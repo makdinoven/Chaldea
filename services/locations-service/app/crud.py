@@ -6840,19 +6840,25 @@ async def _fetch_character_brief_map(
 ) -> Dict[int, Dict[str, Optional[str]]]:
     """Batch-fetch `{id: {name, avatar}}` from character-service.
 
-    Calls `/{cid}/short_info` for each id (the service has no explicit batch
-    endpoint — see analyst notes 2.2). Failures are non-fatal: we return an
-    empty entry for that id so the surface still renders.
+    Calls `/characters/internal/{cid}/short_info` for each id (the service has
+    no explicit batch endpoint — see analyst notes 2.2). Failures are
+    non-fatal: we return an empty entry for that id so the surface still
+    renders.
+
+    FEAT-171 C4i: публичный `short_info` теряет баланс и может стать тоньше,
+    поэтому сервис-к-сервису читает внутренний двойник с X-Internal-Token.
     """
     if not character_ids:
         return {}
     out: Dict[int, Dict[str, Optional[str]]] = {}
     async with httpx.AsyncClient(timeout=5.0) as client:
         for cid in set(character_ids):
+            url = (
+                f"{settings.CHARACTER_SERVICE_URL}"
+                f"/characters/internal/{cid}/short_info"
+            )
             try:
-                resp = await client.get(
-                    f"{settings.CHARACTER_SERVICE_URL}/characters/{cid}/short_info"
-                )
+                resp = await client.get(url, headers=_internal_token_headers())
                 if resp.status_code == 200:
                     data = resp.json() or {}
                     out[int(cid)] = {
@@ -6863,7 +6869,8 @@ async def _fetch_character_brief_map(
                     out[int(cid)] = {"name": "", "avatar": None}
             except Exception as exc:
                 logger.warning(
-                    "short_info lookup failed for character %s: %s", cid, exc,
+                    "short_info lookup failed for character %s via %s: %s",
+                    cid, url, exc,
                 )
                 out[int(cid)] = {"name": "", "avatar": None}
     return out
@@ -7344,13 +7351,16 @@ async def _consume_stamina_via_attributes(
 
 
 async def _read_current_stamina(character_id: int) -> Optional[int]:
-    """Cross-service GET to attributes-service /attributes/{cid}.
+    """Cross-service GET to attributes-service /attributes/internal/{cid}.
+
+    FEAT-171 A1i: игровой маршрут уходит под гейт владельца, поэтому читаем
+    внутренний двойник с X-Internal-Token.
     Returns current_stamina (int) on success, None on failure.
     """
-    url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/{character_id}"
+    url = f"{settings.ATTRIBUTES_SERVICE_URL}/attributes/internal/{character_id}"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url)
+            resp = await client.get(url, headers=_internal_token_headers())
         if resp.status_code != 200:
             return None
         data = resp.json() or {}
@@ -7360,7 +7370,8 @@ async def _read_current_stamina(character_id: int) -> Optional[int]:
         return int(val)
     except Exception as exc:
         logger.warning(
-            "attributes lookup failed for char %s: %s", character_id, exc,
+            "attributes lookup failed for char %s via %s: %s",
+            character_id, url, exc,
         )
         return None
 

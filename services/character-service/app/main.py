@@ -22,10 +22,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from auth_http import (
     get_admin_user,
     get_current_user_via_http,
+    get_optional_user,
     require_permission,
     verify_internal_token,
     OAUTH2_SCHEME,
+    UserRead,
 )
+from visibility import can_view_private, require_private_access
 from sqlalchemy import text
 import logging
 
@@ -1908,8 +1911,13 @@ def deduct_points(
 
 # character-service/main.py
 
-@router.get("/{character_id}/full_profile", response_model=schemas.FullProfileResponse)
-async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
+async def _build_full_profile(character_id: int, db: Session) -> schemas.FullProfileResponse:
+    """Body of `GET /characters/{id}/full_profile`.
+
+    FEAT-171 §3.5 (Pass A): extracted so the public route and the internal twin
+    `GET /characters/internal/{id}/full_profile` share one implementation — no
+    logic fork, no second field list to drift.
+    """
     # Получаем персонажа
     character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if not character:
@@ -1920,9 +1928,10 @@ async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
     try:
         async with httpx.AsyncClient() as client:
             # Исправлен URL с добавлением '/attributes/'
-            attributes_url = f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}/passive_experience"
+            # FEAT-171 §3.5: internal twin A4i + X-Internal-Token.
+            attributes_url = f"{settings.ATTRIBUTES_SERVICE_URL}internal/{character_id}/passive_experience"
             logger.info(f"Отправка запроса на получение passive_experience персонажа по URL: {attributes_url}")
-            response = await client.get(attributes_url)
+            response = await client.get(attributes_url, headers=crud._internal_token_headers())
             if response.status_code != 200:
                 logger.error(f"Не удалось получить passive_experience персонажа ID {character_id}: {response.status_code} - {response.text}")
                 raise HTTPException(status_code=404, detail="Passive experience not found in attributes-service")
@@ -1970,9 +1979,10 @@ async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
     # Получаем атрибуты персонажа из attributes-service
     try:
         async with httpx.AsyncClient() as client:
-            attributes_url = f"{settings.ATTRIBUTES_SERVICE_URL}{character_id}"
+            # FEAT-171 §3.5: internal twin A1i + X-Internal-Token.
+            attributes_url = f"{settings.ATTRIBUTES_SERVICE_URL}internal/{character_id}"
             logger.info(f"Отправка запроса на получение атрибутов персонажа по URL: {attributes_url}")
-            response = await client.get(attributes_url)
+            response = await client.get(attributes_url, headers=crud._internal_token_headers())
             if response.status_code != 200:
                 logger.error(f"Не удалось получить атрибуты персонажа ID {character_id}: {response.status_code} - {response.text}")
                 raise HTTPException(status_code=404, detail="Attributes not found")
@@ -2050,6 +2060,53 @@ async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
         active_title_rarity=active_title_rarity,
         avatar=character.avatar
     )
+
+
+@router.get("/internal/{character_id}/full_profile", response_model=schemas.FullProfileResponse)
+async def internal_get_full_profile(
+    character_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Полный профиль персонажа (internal, service-to-service).
+
+    FEAT-171 §3.4 C1i: тело идентично публичному /characters/{id}/full_profile
+    на момент Pass A. Живёт под префиксом /characters/internal/, который nginx
+    отдаёт 403 снаружи, плюс проверка X-Internal-Token в самом сервисе.
+    """
+    return await _build_full_profile(character_id, db)
+
+
+@router.get(
+    "/{character_id}/full_profile",
+    response_model=None,
+    responses={
+        200: {
+            "description": (
+                "Владелец, админ/модератор с characters:read и NPC получают "
+                "FullProfileResponse; любой другой зритель — PublicProfileResponse "
+                "(без currency_balance, stat_points, level_progress и attributes)."
+            )
+        }
+    },
+)
+async def get_full_profile(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[UserRead] = Depends(get_optional_user),
+):
+    """FEAT-171 §3.4 C1 (стиль A): один путь — две формы ответа.
+
+    response_model=None + явная сборка модели: приватные ключи ОТСУТСТВУЮТ в
+    JSON, а не приходят как null (§3.2 D4).
+    """
+    # 404 раньше любой другой логики — существование персонажа не раскрываем.
+    allowed = can_view_private(db, character_id, current_user)
+    full = await _build_full_profile(character_id, db)
+    if allowed:
+        return full
+    return schemas.public_profile(character_id, full)
+
 
 @router.get("/{character_id}/race_info", response_model=schemas.CharacterBaseInfoResponse)
 def get_basic_info(character_id: int, db: Session = Depends(get_db)):
@@ -2208,8 +2265,14 @@ async def get_character_profile(character_id: int, db: Session = Depends(get_db)
 
     return profile
 
-@router.get("/{character_id}/short_info")
-def get_short_info(character_id: int, db: Session = Depends(get_db)):
+def _build_short_info(character_id: int, db: Session) -> dict:
+    """Body of `GET /characters/{id}/short_info`.
+
+    FEAT-171 §3.5 (Pass A): extracted so the public route and the internal twin
+    `GET /characters/internal/{id}/short_info` share one implementation. The
+    twin is the one that keeps `currency_balance` once Pass B drops it from the
+    public body (§3.4 D7) — in Pass A both still return it.
+    """
     ch = db.query(models.Character).filter(models.Character.id == character_id).first()
     if not ch:
         raise HTTPException(status_code=404, detail="Character not found")
@@ -2240,6 +2303,35 @@ def get_short_info(character_id: int, db: Session = Depends(get_db)):
         "travel_cooldown_until": ch.travel_cooldown_until.isoformat() if ch.travel_cooldown_until else None,
         "currency_balance": ch.currency_balance,
     }
+
+
+@router.get("/internal/{character_id}/short_info")
+def internal_get_short_info(
+    character_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Краткая карточка персонажа (internal, service-to-service).
+
+    FEAT-171 §3.4 C4i: всегда содержит `currency_balance` — именно этот маршрут
+    питает /users/me и счётчик золота в шапке. Живёт под префиксом
+    /characters/internal/ (nginx отдаёт 403 снаружи) + X-Internal-Token.
+    """
+    return _build_short_info(character_id, db)
+
+
+@router.get("/{character_id}/short_info")
+def get_short_info(character_id: int, db: Session = Depends(get_db)):
+    """Краткая карточка персонажа — публичная, БЕЗ золота (FEAT-171 §3.4 D7).
+
+    `currency_balance` убран безусловно, в том числе для владельца: маршрут
+    читают сервис-в-сервис (user-service, locations-service), и optional-auth
+    здесь тихо обеднил бы /users/me. Золото живёт во внутреннем двойнике C4i.
+    """
+    body = _build_short_info(character_id, db)
+    body.pop("currency_balance", None)
+    return body
+
 
 @router.get("/list")
 def list_characters(
@@ -2335,8 +2427,25 @@ def get_all_classes(db: Session = Depends(get_db)):
 # Путь именно /{character_id}/public, а не голый /{character_id}: так он не
 # конфликтует со статическими сегментами /list, /races, /metadata, /classes,
 # /starter-kits (§3.1).
-@router.get("/{character_id}/public", response_model=schemas.CharacterPublicResponse)
-def get_character_public(character_id: int, db: Session = Depends(get_db)):
+@router.get(
+    "/{character_id}/public",
+    response_model=None,
+    responses={
+        200: {
+            "description": (
+                "Владелец, админ/модератор с characters:read и NPC получают "
+                "CharacterPublicResponse; чужой зритель — "
+                "CharacterPublicStrangerResponse (без starting_attributes и "
+                "starting_attributes_is_snapshot)."
+            )
+        }
+    },
+)
+def get_character_public(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[UserRead] = Depends(get_optional_user),
+):
     """
     Публичный паспорт персонажа: данные анкеты, подраса и выданный стартовый набор.
 
@@ -2347,6 +2456,10 @@ def get_character_public(character_id: int, db: Session = Depends(get_db)):
     (FEAT-155). Эндпоинт НЕ ходит в character-attributes-service и не отдаёт
     текущие статы персонажа: паспорт это запись о вступлении, а актуальный билд
     игрока не должен утекать через публичную анкету.
+
+    FEAT-171 §3.4 C3 (стиль A): чужому не отдаются и стартовые характеристики —
+    ключей starting_attributes / starting_attributes_is_snapshot в его ответе
+    просто нет. granted_kit остаётся публичным.
     """
     try:
         data = crud.get_character_public(db, character_id)
@@ -2366,7 +2479,9 @@ def get_character_public(character_id: int, db: Session = Depends(get_db)):
         except Exception as e:
             logger.warning(f"Не удалось получить username для user_id {data['user_id']}: {e}")
 
-    return data
+    if can_view_private(db, character_id, current_user):
+        return schemas.CharacterPublicResponse(**data)
+    return schemas.CharacterPublicStrangerResponse(**data)
 
 
 # ============================================================
@@ -3817,10 +3932,14 @@ def get_character_logs_endpoint(
     offset: int = Query(0, ge=0),
     event_type: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: Optional[UserRead] = Depends(get_optional_user),
 ):
+    """Журнал событий персонажа — только владелец, админ/модератор и NPC.
+
+    FEAT-171 §3.4 C8 (стиль B, решение Q4a): в описаниях и metadata лежат лут,
+    золото и опыт, поэтому 403 для чужого и 404 для несуществующего персонажа.
     """
-    Public endpoint (no auth) — returns paginated character logs.
-    """
+    require_private_access(db, character_id, current_user)
     logs, total = crud.get_character_logs(db, character_id, limit=limit, offset=offset, event_type=event_type)
     return schemas.CharacterLogsListResponse(
         logs=[
@@ -3838,18 +3957,37 @@ def get_character_logs_endpoint(
     )
 
 
-@router.get("/{character_id}/post-history", response_model=schemas.PostHistoryResponse)
+@router.get(
+    "/{character_id}/post-history",
+    response_model=None,
+    responses={
+        200: {
+            "description": (
+                "Владелец, админ/модератор с characters:read и NPC получают "
+                "PostHistoryResponse с xp_earned; чужой зритель — "
+                "PublicPostHistoryResponse без этого поля."
+            )
+        }
+    },
+)
 def get_character_post_history_endpoint(
     character_id: int,
     db: Session = Depends(get_db),
+    current_user: Optional[UserRead] = Depends(get_optional_user),
 ):
+    """История постов персонажа — публичная, но без начисленного опыта.
+
+    FEAT-171 §3.4 C7 (стиль A, решение Q4b): у чужого зрителя ключа `xp_earned`
+    в постах просто нет.
     """
-    Public endpoint (no auth) — returns post history for the character.
-    Queries the shared 'posts' table with location names.
-    """
+    allowed = can_view_private(db, character_id, current_user)
     posts = crud.get_character_post_history(db, character_id)
-    return schemas.PostHistoryResponse(
-        posts=[schemas.PostHistoryItem(**p) for p in posts],
+    if allowed:
+        return schemas.PostHistoryResponse(
+            posts=[schemas.PostHistoryItem(**p) for p in posts],
+        )
+    return schemas.PublicPostHistoryResponse(
+        posts=[schemas.PublicPostHistoryItem(**p) for p in posts],
     )
 
 

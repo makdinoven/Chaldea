@@ -23,7 +23,11 @@ export interface PostHistoryItem {
   location_name: string;
   content: string;
   char_count: number;
-  xp_earned: number;
+  /**
+   * FEAT-171: absent from the JSON when the viewer is not the character's
+   * owner (or an admin) — post history itself stays public, the XP does not.
+   */
+  xp_earned?: number;
   created_at: string;
 }
 

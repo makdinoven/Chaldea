@@ -50,7 +50,17 @@ database.SessionLocal = _TestSessionLocal
 
 import models  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from auth_http import UserRead, get_optional_user  # noqa: E402
 from main import app, get_db  # noqa: E402
+from tests.regen_shared_tables import (  # noqa: E402
+    add_character,
+    create_shared_tables,
+    drop_shared_tables,
+)
+
+# FEAT-171: the GET is owner/admin-only now; these tests act as the owner.
+OWNER_ID = 7
+_OWNER = UserRead(id=OWNER_ID, username="owner", role="user", permissions=[])
 
 # FEAT-167 #17: POST /attributes/cumulative_stats/increment is internal-only.
 # conftest sets INTERNAL_SERVICE_TOKEN to this value before auth_http is imported.
@@ -73,9 +83,16 @@ def _internal_token_is_pinned(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _setup_tables():
-    """Create all tables before each test and drop them after."""
+    """Create all tables before each test and drop them after.
+
+    FEAT-171: the shared ``characters`` table comes along, because
+    ``GET /attributes/{id}/cumulative_stats`` is now gated by
+    ``visibility.require_private_access``, which reads ``characters.user_id``.
+    """
     models.Base.metadata.create_all(bind=_test_engine)
+    create_shared_tables(_test_engine)
     yield
+    drop_shared_tables(_test_engine)
     models.Base.metadata.drop_all(bind=_test_engine)
 
 
@@ -97,6 +114,8 @@ def client(db_session):
         yield db_session
 
     app.dependency_overrides[get_db] = _override_get_db
+    # FEAT-171: the viewer is the owner of the seeded characters.
+    app.dependency_overrides[get_optional_user] = lambda: _OWNER
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -123,8 +142,9 @@ def _seed_cumulative_row(db_session, character_id=1, **overrides):
 class TestGetCumulativeStats:
     """Tests for the GET endpoint."""
 
-    def test_returns_zeros_when_no_row_exists(self, client):
+    def test_returns_zeros_when_no_row_exists(self, client, db_session):
         """When no cumulative stats row exists, return all zeros."""
+        add_character(db_session, 999, user_id=OWNER_ID)
         resp = client.get("/attributes/999/cumulative_stats")
         assert resp.status_code == 200
         data = resp.json()
@@ -139,6 +159,7 @@ class TestGetCumulativeStats:
 
     def test_returns_existing_data(self, client, db_session):
         """When a row exists, return its actual values."""
+        add_character(db_session, 1, user_id=OWNER_ID)
         _seed_cumulative_row(
             db_session,
             character_id=1,

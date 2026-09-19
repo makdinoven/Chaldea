@@ -1,6 +1,7 @@
 import os
 import asyncio
 import threading
+from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, APIRouter
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -17,8 +18,10 @@ from auth_http import (
     get_current_user_via_http,
     require_permission,
     verify_internal_token,
+    get_optional_user,
     UserRead,
 )
+import visibility
 from sqlalchemy import text
 from datetime import datetime
 import regen
@@ -104,13 +107,49 @@ def create_character_attributes(
 # -----------------------------
 # 2. Получение passive_experience
 # -----------------------------
-@router.get("/{character_id}/passive_experience", response_model=schemas.PassiveExperienceResponse)
-def get_passive_experience_endpoint(character_id: int, db: Session = Depends(get_db)):
+def _build_passive_experience(character_id: int, db: Session) -> dict:
+    """Body of `GET /attributes/{id}/passive_experience`.
+
+    FEAT-171 §3.5 (Pass A): extracted so the public route and the internal twin
+    `GET /attributes/internal/{id}/passive_experience` share one implementation.
+    """
     logger.info(f"Получение passive_experience для персонажа ID {character_id}")
     passive_experience = crud.get_passive_experience(db, character_id)
     if passive_experience is None:
         raise HTTPException(status_code=404, detail="Passive experience not found")
     return {"passive_experience": passive_experience}
+
+
+@router.get(
+    "/internal/{character_id}/passive_experience",
+    response_model=schemas.PassiveExperienceResponse,
+)
+def internal_get_passive_experience(
+    character_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Пассивный опыт персонажа (internal, service-to-service).
+
+    FEAT-171 §3.4 A4i: тело идентично публичному маршруту. Единственный
+    вызывающий — character-service (`full_profile`). Префикс
+    /attributes/internal/ nginx отдаёт 403 снаружи, плюс X-Internal-Token.
+    """
+    return _build_passive_experience(character_id, db)
+
+
+@router.get("/{character_id}/passive_experience", response_model=schemas.PassiveExperienceResponse)
+def get_passive_experience_endpoint(
+    character_id: int,
+    db: Session = Depends(get_db),
+    viewer: Optional[UserRead] = Depends(get_optional_user),
+):
+    """Пассивный опыт персонажа — приватно (FEAT-171 §3.4 A4, style B).
+
+    Сервисные вызывающие ходят в двойник `/attributes/internal/{id}/passive_experience`.
+    """
+    visibility.require_private_access(db, character_id, viewer)
+    return _build_passive_experience(character_id, db)
 
 # =============================================================
 # 14. Admin Perks CRUD (MUST be above /{character_id}/ routes!)
@@ -330,11 +369,20 @@ def admin_revoke_perk(
 # 13. Player Perks: GET (public)
 # -----------------------------
 @router.get("/{character_id}/perks")
-def get_character_perks(character_id: int, db: Session = Depends(get_db)):
+def get_character_perks(
+    character_id: int,
+    db: Session = Depends(get_db),
+    viewer: Optional[UserRead] = Depends(get_optional_user),
+):
     """
     Returns all active perks merged with character unlock status and progress data.
-    Public endpoint (no auth required — matches existing pattern for /attributes/{id}).
+    Private (FEAT-171 §3.4 A2, style B): владелец, админ/модератор с
+    `characters:read` и NPC; остальным 403.
+
+    NB (FEAT-171 D8): этот GET ПИШЕТ в БД (`reconcile_perks` ниже) — известная
+    проблема из ISSUES.md, гейт лишь сужает круг вызывающих. Чинится отдельно.
     """
+    visibility.require_private_access(db, character_id, viewer)
     # Self-heal on view (FEAT-143 dynamic perks): reconcile so stale unlocks whose
     # conditions no longer hold are deactivated and newly-met ones activated
     # before we render the list. Non-fatal.
@@ -354,8 +402,12 @@ def get_character_perks(character_id: int, db: Session = Depends(get_db)):
 # -----------------------------
 # 3. Получение всех атрибутов
 # -----------------------------
-@router.get("/{character_id}", response_model=schemas.CharacterAttributesResponse)
-def get_full_attributes(character_id: int, db: Session = Depends(get_db)):
+def _build_full_attributes(character_id: int, db: Session):
+    """Body of `GET /attributes/{id}`.
+
+    FEAT-171 §3.5 (Pass A): extracted so the public route and the internal twin
+    `GET /attributes/internal/{id}` share one implementation.
+    """
     # FEAT-164: lock → settle passive regen / satiety expiry → commit → return.
     try:
         attr = regen.settle_character(db, character_id)
@@ -365,6 +417,35 @@ def get_full_attributes(character_id: int, db: Session = Depends(get_db)):
     if not attr:
         raise HTTPException(status_code=404, detail="Attributes not found")
     return attr
+
+
+@router.get("/internal/{character_id}", response_model=schemas.CharacterAttributesResponse)
+def internal_get_full_attributes(
+    character_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Атрибуты персонажа (internal, service-to-service).
+
+    FEAT-171 §3.4 A1i: тело идентично публичному /attributes/{id}. Вызывающие —
+    battle-service, character-service, locations-service, skills-service.
+    Префикс /attributes/internal/ nginx отдаёт 403 снаружи, плюс X-Internal-Token.
+    """
+    return _build_full_attributes(character_id, db)
+
+
+@router.get("/{character_id}", response_model=schemas.CharacterAttributesResponse)
+def get_full_attributes(
+    character_id: int,
+    db: Session = Depends(get_db),
+    viewer: Optional[UserRead] = Depends(get_optional_user),
+):
+    """Атрибуты персонажа — приватно (FEAT-171 §3.4 A1, style B).
+
+    Сервисные вызывающие ходят в двойник `GET /attributes/internal/{id}`.
+    """
+    visibility.require_private_access(db, character_id, viewer)
+    return _build_full_attributes(character_id, db)
 
 
 # -----------------------------
@@ -386,7 +467,13 @@ def _build_satiety_info(satiety, now: datetime) -> schemas.SatietyInfo:
 
 
 @router.get("/{character_id}/rest-status", response_model=schemas.RestStatusResponse)
-def get_rest_status(character_id: int, db: Session = Depends(get_db)):
+def get_rest_status(
+    character_id: int,
+    db: Session = Depends(get_db),
+    viewer: Optional[UserRead] = Depends(get_optional_user),
+):
+    """Состояние восстановления и сытости — приватно (FEAT-171 §3.4 A5, style B)."""
+    visibility.require_private_access(db, character_id, viewer)
     now = datetime.utcnow()
     try:
         attr = regen.settle_character(db, character_id, now)
@@ -559,8 +646,9 @@ async def upgrade_attributes(
     # --- Логика прокачки из вашего примера (запрос в character-service, списание stat_points, и т.д.) ---
     try:
         async with httpx.AsyncClient() as client:
-            full_profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/full_profile"
-            resp = await client.get(full_profile_url)
+            # FEAT-171 §3.5: internal twin C1i + X-Internal-Token.
+            full_profile_url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/full_profile"
+            resp = await client.get(full_profile_url, headers=_internal_token_headers())
             if resp.status_code != 200:
                 raise HTTPException(status_code=404, detail="Character not found")
             char_data = resp.json()
@@ -1338,11 +1426,18 @@ def admin_recalculate_all(
 # 11. Cumulative Stats: GET
 # -----------------------------
 @router.get("/{character_id}/cumulative_stats", response_model=schemas.CumulativeStatsResponse)
-def get_cumulative_stats(character_id: int, db: Session = Depends(get_db)):
+def get_cumulative_stats(
+    character_id: int,
+    db: Session = Depends(get_db),
+    viewer: Optional[UserRead] = Depends(get_optional_user),
+):
     """
     Returns all cumulative stat counters for a character.
     If no row exists, returns all zeros without creating a row.
+
+    Private (FEAT-171 §3.4 A3, style B): содержит заработанное/потраченное золото.
     """
+    visibility.require_private_access(db, character_id, viewer)
     row = crud.get_cumulative_stats(db, character_id)
     if row is None:
         # Return default zeros without persisting

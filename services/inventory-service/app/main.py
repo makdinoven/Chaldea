@@ -18,7 +18,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from rabbitmq_consumer import start_consumer
 from sqlalchemy import text
-from auth_http import get_current_user_via_http, get_admin_user, require_permission, verify_internal_token
+from auth_http import (
+    get_current_user_via_http,
+    get_admin_user,
+    get_optional_user,
+    require_permission,
+    verify_internal_token,
+)
+from visibility import require_private_access
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -241,7 +248,7 @@ def _parse_bulk_ids(raw: str) -> List[int]:
 
 
 # Registered BEFORE "/items/{item_id}" so "bulk" is not parsed as an item id.
-@router.get("/items/bulk", response_model=List[schemas.ItemBulkResponse])
+@router.get("/items/bulk", response_model=List[schemas.PublicItemCard])
 def get_items_bulk(
     ids: str = Query(..., description="Идентификаторы предметов через запятую, максимум 100"),
     db: Session = Depends(get_db),
@@ -257,25 +264,69 @@ def get_items_bulk(
         .order_by(models.Items.id.asc())
         .all()
     )
-    return [
-        schemas.ItemBulkResponse(
-            id=row.id,
-            name=row.name,
-            description=row.description,
-            image_url=row.image,
-            rarity=row.item_rarity,
-            type=row.item_type,
-        )
-        for row in rows
-    ]
+    # FEAT-171 §3.3 D6: the mapping lives in exactly one place now.
+    return [schemas.public_item_card(row) for row in rows]
 
 
-@router.get("/items/{item_id}", response_model=schemas.Item)
-def get_item(item_id: int, db: Session = Depends(get_db)):
+def _get_item_core(db: Session, item_id: int) -> models.Items:
+    """Shared body of `GET /inventory/items/{id}` and its internal twin."""
     db_item = db.query(models.Items).get(item_id)
     if not db_item:
         raise HTTPException(status_code=404, detail="Предмет не найден")
     return db_item
+
+
+@router.get("/internal/items/{item_id}", response_model=schemas.Item)
+def get_item_internal(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """Полная карточка предмета для межсервисных вызовов (FEAT-171 §3.4 I3i).
+
+    Только service-to-service: требует заголовок `X-Internal-Token`.
+    Тело идентично `GET /inventory/items/{item_id}` на сегодня — battle-service
+    и dungeon-service считают отсюда модификаторы, урон и эффекты.
+    """
+    return _get_item_core(db, item_id)
+
+
+@router.get("/items/{item_id}", response_model=schemas.PublicItemCard)
+def get_item(item_id: int, db: Session = Depends(get_db)):
+    """Публичная карточка предмета (FEAT-171 §3.4 I3).
+
+    Только название, описание, картинка, редкость и тип — без цены,
+    характеристик, эффектов, заточки, вставок и прочности. Жирный шаблон
+    предмета живёт на двойнике `GET /inventory/internal/items/{item_id}`.
+    """
+    return schemas.public_item_card(_get_item_core(db, item_id))
+
+
+@router.get("/admin/items/{item_id}", response_model=schemas.Item)
+def get_item_admin(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_permission("items:read")),
+):
+    """Полная карточка предмета для админки (FEAT-171 review #1, issue 1).
+
+    Третье — и последнее — представление одного предмета:
+
+    * `GET /inventory/items/{id}` — публичная тонкая карточка (§3.4 I3);
+    * `GET /inventory/internal/items/{id}` — жирный шаблон для сервисов, nginx
+      закрывает префикс `/inventory/internal/` снаружи, поэтому браузеру он
+      недоступен;
+    * этот маршрут — тот же жирный шаблон, но по JWT с правом `items:read`,
+      то есть ровно для редактора предметов и экрана рецептов.
+
+    Тело идентично тому, что `GET /inventory/items/{id}` отдавал до FEAT-171:
+    `response_model=schemas.Item` со всеми модификаторами, ценой, `effects`,
+    `damage_entries` и `xp_buffs`. Форма редактирования читает предмет отсюда,
+    а затем шлёт `PUT /inventory/items/{id}` — если урезать это тело, PUT
+    запишет обратно значения по умолчанию и затрёт данные предмета.
+    """
+    return _get_item_core(db, item_id)
+
 
 @router.put("/items/{item_id}", response_model=schemas.Item)
 def update_item(item_id: int, item_in: schemas.ItemCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user = Depends(require_permission("items:update"))):
@@ -358,20 +409,57 @@ def admin_put_item_conversions(
 
 # --- Character inventory ---
 
+@router.get(
+    "/internal/characters/{character_id}/items",
+    response_model=List[schemas.CharacterInventory],
+)
+def get_character_inventory_internal(
+    character_id: int,
+    item_type: Optional[str] = Query(None, description="Фильтр по типу предмета (например 'gathering_tool')"),
+    category: Optional[str] = Query(None, description="Фильтр по категории инструмента: pickaxe|sickle|axe (только при item_type=gathering_tool)"),
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """Инвентарь персонажа для межсервисных вызовов (FEAT-171 §3.4 I1i).
+
+    Только service-to-service: требует заголовок `X-Internal-Token`.
+    Тело идентично `GET /inventory/{character_id}/items` на сегодня.
+    Проверки владения тут нет намеренно — dungeon-service читает инвентарь
+    любого участника сессии.
+    """
+    return _get_character_inventory_core(db, character_id, item_type, category)
+
+
 @router.get("/{character_id}/items", response_model=List[schemas.CharacterInventory])
 def get_character_inventory(
     character_id: int,
     item_type: Optional[str] = Query(None, description="Фильтр по типу предмета (например 'gathering_tool')"),
     category: Optional[str] = Query(None, description="Фильтр по категории инструмента: pickaxe|sickle|axe (только при item_type=gathering_tool)"),
     db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
 ):
     """
     Получить все предметы в инвентаре персонажа.
+
+    FEAT-171 §3.4 I1 — приватно: только владелец, админ/модератор с
+    `characters:read` и НПС (у которых нет владельца). Чужому — 403,
+    несуществующему персонажу — 404 (существование не раскрываем).
 
     Дополнительные фильтры:
     - item_type — например 'gathering_tool' оставит только инструменты сбора.
     - category — фильтрация по категории инструмента (только если item_type='gathering_tool').
     """
+    require_private_access(db, character_id, current_user)
+    return _get_character_inventory_core(db, character_id, item_type, category)
+
+
+def _get_character_inventory_core(
+    db: Session,
+    character_id: int,
+    item_type: Optional[str],
+    category: Optional[str],
+):
+    """Shared body of `GET /inventory/{id}/items` and its internal twin."""
     # Validate category early — only allowed when item_type == 'gathering_tool'.
     if category is not None:
         allowed_categories = {"pickaxe", "sickle", "axe"}
@@ -746,7 +834,24 @@ def delete_equipment_rule(
 
 @router.get("/{character_id}/equipment-rules", response_model=schemas.CharacterEquipmentRules)
 def get_character_equipment_rules(character_id: int, db: Session = Depends(get_db)):
-    """What this character may wear, for greying out items in the inventory."""
+    """What this character may wear, for greying out items in the inventory.
+
+    FEAT-171 review #1, issue 6 — **остаётся публичным намеренно.** Это
+    справочные данные, а не данные персонажа: ответ полностью выводится из
+    класса и подкласса (`class_id`, `subclass_key` и списки разрешённых
+    категорий брони и оружия), а класс с подклассом уже публичны — их отдают
+    `GET /characters/{id}/public`, `/short_info` и `/characters/list`. Ни одного
+    числа персонажа, ни одной его вещи здесь нет, поэтому гейт из §3.2 был бы
+    строже публичной анкеты и без всякой пользы сломал бы страницу-витрину.
+
+    Что здесь всё-таки чинится — дисциплина ошибок: раньше несуществующий id
+    отвечал 200 с «ограничений нет», теперь, как и на остальных
+    character-scoped маршрутах фичи, это 404 «Персонаж не найден».
+    """
+    if not db.execute(
+        text("SELECT 1 FROM characters WHERE id = :cid"), {"cid": character_id}
+    ).fetchone():
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
     return equipment_rules.rules_for_character(db, character_id).to_response()
 
 
@@ -770,8 +875,60 @@ async def revalidate_equipment_internal(
     return {"character_id": character_id, "removed_slots": removed}
 
 
+@router.get(
+    "/internal/characters/{character_id}/equipment",
+    response_model=List[schemas.EquipmentSlot],
+)
+def get_equipment_slots_internal(
+    character_id: int,
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """Экипировка персонажа для межсервисных вызовов (FEAT-171 §3.4 I2i).
+
+    Только service-to-service: требует заголовок `X-Internal-Token`.
+    Тело идентично `GET /inventory/{character_id}/equipment` на сегодня —
+    вместе с `fast_slot_*` и `effective_damage`, которые нужны боевому движку.
+    Проверки владения тут нет намеренно — battle-service читает экипировку
+    мобов и НПС, у которых нет владельца (`user_id IS NULL`).
+    """
+    return crud.get_equipment_slots_with_damage(db, character_id)
+
+
+# Registered BEFORE "/{character_id}/equipment" for readability; the paths have a
+# different number of segments, so the order is not load-bearing.
+@router.get(
+    "/{character_id}/equipment/public",
+    response_model=List[schemas.PublicEquipmentSlot],
+)
+def get_equipment_slots_public(character_id: int, db: Session = Depends(get_db)):
+    """Публичная экипировка персонажа (FEAT-171 §3.4 I2p).
+
+    Видно, что на персонаже надето, и можно прочитать название и описание
+    предмета — но не его цифры. Ряды пояса (`fast_slot_*`) отсекаются на
+    уровне запроса: гейт быстрых слотов из FEAT-169 через этот маршрут
+    обойти нельзя.
+    """
+    if not db.execute(
+        text("SELECT 1 FROM characters WHERE id = :cid"), {"cid": character_id}
+    ).fetchone():
+        raise HTTPException(status_code=404, detail="Персонаж не найден")
+    return crud.get_public_equipment_slots(db, character_id)
+
+
 @router.get("/{character_id}/equipment", response_model=List[schemas.EquipmentSlot])
-def get_equipment_slots(character_id: int, db: Session = Depends(get_db)):
+def get_equipment_slots(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
+    """Полная экипировка персонажа — приватно (FEAT-171 §3.4 I2).
+
+    Только владелец, админ/модератор с `characters:read` и НПС. Тело для них
+    прежнее, вместе с рядами `fast_slot_*`. Публичная витрина —
+    `GET /inventory/{character_id}/equipment/public`.
+    """
+    require_private_access(db, character_id, current_user)
     # FEAT-167: each slot carries `effective_damage` — the single source of the
     # weapon's damage for the battle engine and for the profile.
     return crud.get_equipment_slots_with_damage(db, character_id)

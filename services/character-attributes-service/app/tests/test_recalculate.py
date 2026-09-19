@@ -49,9 +49,19 @@ from constants import (  # noqa: E402
     HEALTH_MULTIPLIER, MANA_MULTIPLIER, ENERGY_MULTIPLIER, STAMINA_MULTIPLIER,
     STAT_BONUS_PER_POINT, ENDURANCE_RES_EFFECTS_MULTIPLIER,
 )
-from auth_http import get_admin_user, get_current_user_via_http, UserRead  # noqa: E402
+from auth_http import (  # noqa: E402
+    get_admin_user,
+    get_current_user_via_http,
+    get_optional_user,
+    UserRead,
+)
 from fastapi.testclient import TestClient  # noqa: E402
 from main import app, get_db  # noqa: E402
+from tests.regen_shared_tables import (  # noqa: E402
+    add_character,
+    create_shared_tables,
+    drop_shared_tables,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +105,8 @@ def _create_attributes(db, character_id=1, **overrides):
     db.add(attr)
     db.commit()
     db.refresh(attr)
+    # FEAT-171: the gated reads need the character to exist.
+    add_character(db, character_id)
     return attr
 
 
@@ -105,11 +117,15 @@ def _create_attributes(db, character_id=1, **overrides):
 @pytest.fixture()
 def db_session():
     database.Base.metadata.create_all(bind=_test_engine)
+    # FEAT-171: `GET /attributes/{id}` reads `characters.user_id` to decide
+    # visibility; the table belongs to character-service.
+    create_shared_tables(_test_engine)
     session = _TestSessionLocal()
     try:
         yield session
     finally:
         session.close()
+        drop_shared_tables(_test_engine)
         database.Base.metadata.drop_all(bind=_test_engine)
 
 
@@ -124,6 +140,8 @@ def admin_client(db_session):
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_admin_user] = override_admin
     app.dependency_overrides[get_current_user_via_http] = override_admin
+    # FEAT-171: the admin also passes the visibility gate on the player reads.
+    app.dependency_overrides[get_optional_user] = override_admin
     yield TestClient(app)
     app.dependency_overrides.clear()
 

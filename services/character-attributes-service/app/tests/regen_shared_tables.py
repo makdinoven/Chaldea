@@ -136,10 +136,26 @@ def drop_shared_tables(engine) -> None:
             conn.execute(text(f"DROP TABLE IF EXISTS {name}"))
 
 
-def add_character(db, character_id: int, is_npc: bool = False) -> None:
+def add_character(
+    db, character_id: int, is_npc: bool = False, user_id: Optional[int] = None
+) -> None:
+    """Insert a row into the shared ``characters`` table.
+
+    ``user_id`` defaults to NULL, which FEAT-171's ``visibility.can_view_private``
+    reads as "NPC/mob — no private layer", i.e. publicly readable. Pass an owner
+    id to exercise the player path.
+    """
     db.execute(
-        text("INSERT INTO characters (id, name, is_npc) VALUES (:id, :n, :npc)"),
-        {"id": character_id, "n": f"char{character_id}", "npc": 1 if is_npc else 0},
+        text(
+            "INSERT INTO characters (id, name, is_npc, user_id) "
+            "VALUES (:id, :n, :npc, :uid)"
+        ),
+        {
+            "id": character_id,
+            "n": f"char{character_id}",
+            "npc": 1 if is_npc else 0,
+            "uid": user_id,
+        },
     )
     db.commit()
 

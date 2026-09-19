@@ -11,6 +11,7 @@ from typing import Optional
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from auth_http import get_current_user_via_http, require_permission, UserRead, OAUTH2_SCHEME, AUTH_SERVICE_URL
@@ -88,6 +89,24 @@ def _get_optional_user(token: Optional[str] = Depends(OAUTH2_SCHEME)) -> Optiona
         return get_current_user_via_http(token)
     except HTTPException:
         return None
+
+
+# Та же схема, но отсутствие заголовка не является ошибкой самой схемы —
+# сообщение об ошибке мы формулируем сами, по-русски (CLAUDE.md).
+_OAUTH2_SCHEME_OPTIONAL = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
+
+
+def require_chat_reader(
+    token: Optional[str] = Depends(_OAUTH2_SCHEME_OPTIONAL),
+) -> UserRead:
+    """Читать историю чата можно только после входа (FEAT-171 §3.4 N1)."""
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Войдите в аккаунт, чтобы читать чат",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return get_current_user_via_http(token)
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +199,13 @@ def get_messages(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: UserRead = Depends(require_chat_reader),
 ):
+    """История канала чата — только для вошедших (FEAT-171 §3.4 N1).
+
+    Гость получает 401 «Войдите в аккаунт, чтобы читать чат»; тело ответа для
+    авторизованного пользователя не изменилось.
+    """
     result = chat_crud.get_messages(db, channel.value, page, page_size)
     return result
 

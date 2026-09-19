@@ -165,7 +165,7 @@ def _mock_weapon(effective_damage=10, primary_damage_type="physical"):
 
 
 def _mock_item(damage_modifier=10, primary_damage_type="physical"):
-    """Raw item template as inventory-service returns it from /inventory/items/{id}
+    """Raw item template as inventory-service returns it from /inventory/internal/items/{id}
     (no `effective_damage` — that field lives on the equipment slot)."""
     return {
         "damage_modifier": damage_modifier,
@@ -229,9 +229,9 @@ class TestFetchWeapons:
         )
 
         mock_responses = {
-            "/inventory/42/equipment": equipment,
-            "/inventory/items/101": main_item,
-            "/inventory/items/202": additional_item,
+            "/inventory/internal/characters/42/equipment": equipment,
+            "/inventory/internal/items/101": main_item,
+            "/inventory/internal/items/202": additional_item,
         }
 
         async def mock_get(url, **kwargs):
@@ -267,7 +267,7 @@ class TestFetchWeapons:
 
         async def mock_get(url, **kwargs):
             resp = MagicMock()
-            for path, data in {"/inventory/42/equipment": equipment}.items():
+            for path, data in {"/inventory/internal/characters/42/equipment": equipment}.items():
                 if path in url:
                     resp.json.return_value = data
                     resp.raise_for_status = MagicMock()
@@ -298,8 +298,8 @@ class TestFetchWeapons:
         )
 
         mock_responses = {
-            "/inventory/42/equipment": equipment,
-            "/inventory/items/101": main_item,
+            "/inventory/internal/characters/42/equipment": equipment,
+            "/inventory/internal/items/101": main_item,
         }
 
         async def mock_get(url, **kwargs):
@@ -346,9 +346,9 @@ class TestFetchMainWeaponCompat:
         additional_item = _mock_item(damage_modifier=5, primary_damage_type="fire")
 
         mock_responses = {
-            "/inventory/99/equipment": equipment,
-            "/inventory/items/101": main_item,
-            "/inventory/items/202": additional_item,
+            "/inventory/internal/characters/99/equipment": equipment,
+            "/inventory/internal/items/101": main_item,
+            "/inventory/internal/items/202": additional_item,
         }
 
         async def mock_get(url, **kwargs):

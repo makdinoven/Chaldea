@@ -158,13 +158,16 @@ async def spawn_dungeon_mobs(mob_template_ids: List[int], location_id: int) -> L
 
 async def get_character_attributes(character_id: int) -> dict:
     """
-    GET /attributes/{character_id}
+    GET /attributes/internal/{character_id} (FEAT-171 A1i)
     Returns full character attributes (HP, mana, energy, stamina, stats, etc.)
+
+    Игровой маршрут `/attributes/{id}` уходит под гейт владельца, а у
+    подземелья нет пользователя в контексте — читаем внутренний двойник.
     """
-    url = f"{settings.CHAR_ATTRS_SERVICE_URL}/attributes/{character_id}"
+    url = f"{settings.CHAR_ATTRS_SERVICE_URL}/attributes/internal/{character_id}"
     try:
         async with _client() as client:
-            resp = await client.get(url)
+            resp = await client.get(url, headers=_internal_token_headers())
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:
@@ -281,13 +284,19 @@ async def add_item_to_character(character_id: int, item_id: int, quantity: int) 
 
 async def get_character_items(character_id: int) -> list:
     """
-    GET /inventory/{character_id}/items
+    GET /inventory/internal/characters/{character_id}/items (FEAT-171 I1i)
     Returns list of items in the character's inventory.
+
+    Игровой маршрут `/inventory/{id}/items` уходит под гейт владельца, а у
+    подземелья нет пользователя в контексте — читаем внутренний двойник.
     """
-    url = f"{settings.INVENTORY_SERVICE_URL}/inventory/{character_id}/items"
+    url = (
+        f"{settings.INVENTORY_SERVICE_URL}"
+        f"/inventory/internal/characters/{character_id}/items"
+    )
     try:
         async with _client() as client:
-            resp = await client.get(url)
+            resp = await client.get(url, headers=_internal_token_headers())
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:
@@ -300,13 +309,16 @@ async def get_character_items(character_id: int) -> list:
 
 async def get_item_info(item_id: int) -> dict:
     """
-    GET /inventory/items/{item_id}
+    GET /inventory/internal/items/{item_id} (FEAT-171 I3i)
     Returns item catalog info (name, type, rarity, stats, etc.)
+
+    Публичная карточка предмета стала тонкой (без цифр), а подземелью нужен
+    полный шаблон — читаем внутренний двойник с X-Internal-Token.
     """
-    url = f"{settings.INVENTORY_SERVICE_URL}/inventory/items/{item_id}"
+    url = f"{settings.INVENTORY_SERVICE_URL}/inventory/internal/items/{item_id}"
     try:
         async with _client() as client:
-            resp = await client.get(url)
+            resp = await client.get(url, headers=_internal_token_headers())
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:

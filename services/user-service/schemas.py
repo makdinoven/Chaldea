@@ -47,9 +47,16 @@ class UserCharacterCreate(BaseModel):
     user_id: int
     character_id: int
 
-class UserRead(BaseModel):
+class UserPublicRead(BaseModel):
+    """Карточка пользователя без персональных данных (FEAT-171 §5 #2).
+
+    `GET /users/{id}` и `GET /users/admins` отдавали анонимному вызывающему
+    `email` реального человека. Публичная схема — база, приватная (`UserRead`)
+    лишь добавляет к ней поля: новое поле, добавленное в приватную схему,
+    не может «просочиться» в публичную по наследству.
+    """
+
     id: int
-    email: str
     username: str
     role: str
     avatar: str | None
@@ -58,12 +65,24 @@ class UserRead(BaseModel):
     class Config:
         orm_mode = True
 
+
+class UserRead(UserPublicRead):
+    """Та же карточка плюс e-mail. Только владелец и админ/модератор."""
+
+    email: str
+
 class LocationShort(BaseModel):
     id: int
     name: str
     image_url: Optional[str] = ""
 
-class CharacterShort(BaseModel):
+class CharacterShortPublic(BaseModel):
+    """Карточка персонажа без золота (FEAT-171 §3.4 U1).
+
+    Полная `CharacterShort` наследуется отсюда и лишь добавляет
+    `currency_balance`, так что второго списка полей не существует.
+    """
+
     id: int
     name: str
     avatar: str
@@ -75,6 +94,9 @@ class CharacterShort(BaseModel):
     race_name: Optional[str] = None
     class_name: Optional[str] = None
     subrace_name: Optional[str] = None
+
+
+class CharacterShort(CharacterShortPublic):
     currency_balance: Optional[int] = None
 
 class ClearCurrentCharacterRequest(BaseModel):
@@ -152,12 +174,23 @@ class FriendRequestResponse(BaseModel):
     created_at: datetime
 
 
-class UserProfileResponse(BaseModel):
+class UserProfileStrangerResponse(BaseModel):
+    """Профиль пользователя без золота персонажа (FEAT-171 §3.4 U1).
+
+    Отдаётся всем, кроме самого владельца профиля и админа/модератора с
+    правом `characters:read`: ключа `currency_balance` внутри `character`
+    в таком ответе просто нет.
+
+    FEAT-171 §5 #4: публичная схема — база, приватная её расширяет. Раньше
+    наследование шло наоборот, и любое новое приватное поле автоматически
+    попадало бы в ответ чужому зрителю.
+    """
+
     id: int
     username: str
     avatar: Optional[str] = None
     registered_at: Optional[datetime] = None
-    character: Optional[CharacterShort] = None
+    character: Optional[CharacterShortPublic] = None
     post_stats: PostStatsResponse
     is_friend: Optional[bool] = None
     friendship_status: Optional[str] = None
@@ -174,6 +207,16 @@ class UserProfileResponse(BaseModel):
     chat_background: Optional[str] = None
     last_active_at: Optional[datetime] = None
     activity_points: int = 0
+
+
+class UserProfileResponse(UserProfileStrangerResponse):
+    """Тот же профиль, но карточка персонажа с золотом.
+
+    Отдаётся владельцу профиля и админу/модератору с правом
+    `characters:read`.
+    """
+
+    character: Optional[CharacterShort] = None
 
 
 class UserStatsResponse(BaseModel):

@@ -131,9 +131,18 @@ async def character_skills(character_id: int) -> list[dict]:
 # 4. Inventory item lookup (unchanged)
 # -----------------------------------------------------------
 async def get_item(item_id: int) -> dict:
+    """Полный шаблон предмета (FEAT-171 I3i).
+
+    Публичный `/inventory/items/{id}` отдаёт тонкую карточку без цифр, поэтому
+    читаем внутренний двойник с X-Internal-Token (заголовок другой, чем у
+    вызовов в skills-service выше: там токен идёт в позиции Bearer).
+    """
     if not item_id or item_id <= 0:
         raise ValueError("item_id must be > 0")
     async with httpx.AsyncClient() as client:
-        r = await client.get(f"{settings.INVENTORY_URL}/inventory/items/{item_id}")
+        r = await client.get(
+            f"{settings.INVENTORY_URL}/inventory/internal/items/{item_id}",
+            headers={"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")},
+        )
         r.raise_for_status()
         return r.json()

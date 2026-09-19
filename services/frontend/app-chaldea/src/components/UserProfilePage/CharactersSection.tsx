@@ -52,14 +52,20 @@ interface CharactersSectionProps {
   profileUserId: number;
 }
 
-const CharacterCard = ({ char }: { char: UserCharacterItem }) => {
+interface CharacterCardProps {
+  char: UserCharacterItem;
+  /**
+   * `true` only when this card is the viewer's OWN active character — the only
+   * case where `/profile` actually shows this character.
+   */
+  isOwnActive: boolean;
+}
+
+const CharacterCard = ({ char, isOwnActive }: CharacterCardProps) => {
   const ringColor = getRingColor(char.id_race);
 
-  return (
-    <Link
-      to="/profile"
-      className="flex flex-col items-center gap-2 group"
-    >
+  const content = (
+    <>
       {/* Avatar container with badges */}
       <div className="relative">
         {/* Class badge — top-right */}
@@ -126,8 +132,22 @@ const CharacterCard = ({ char }: { char: UserCharacterItem }) => {
             : 'Нет данных'}
         </span>
       </div>
-    </Link>
+    </>
   );
+
+  // TODO(FEAT-172): link to /character/:id once the public profile page exists.
+  // Until then only the viewer's own active character has a page to open —
+  // every other card stays non-interactive instead of silently opening
+  // the viewer's own profile.
+  if (isOwnActive) {
+    return (
+      <Link to="/profile" className="flex flex-col items-center gap-2 group">
+        {content}
+      </Link>
+    );
+  }
+
+  return <div className="flex flex-col items-center gap-2">{content}</div>;
 };
 
 const CharactersSection = ({ profileUserId }: CharactersSectionProps) => {
@@ -135,6 +155,7 @@ const CharactersSection = ({ profileUserId }: CharactersSectionProps) => {
   const characters = useAppSelector(selectUserCharacters);
   const loading = useAppSelector(selectCharactersLoading);
   const profile = useAppSelector(selectUserProfile);
+  const ownCharacterId = useAppSelector((state) => state.user.character?.id ?? null);
 
   const postColor = profile?.post_color ?? '';
   const containerStyle = useMemo(() => {
@@ -171,7 +192,11 @@ const CharactersSection = ({ profileUserId }: CharactersSectionProps) => {
     <div className={postColor ? 'rounded-card p-5' : 'gray-bg p-5'} style={containerStyle}>
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
         {characters.map((char) => (
-          <CharacterCard key={char.id} char={char} />
+          <CharacterCard
+            key={char.id}
+            char={char}
+            isOwnActive={ownCharacterId != null && char.id === ownCharacterId}
+          />
         ))}
       </div>
     </div>

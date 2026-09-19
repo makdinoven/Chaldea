@@ -169,18 +169,24 @@ class TestTheHelperItself:
     def test_builds_the_header_from_settings(self, token):
         assert perk_evaluator._internal_token_headers() == {"X-Internal-Token": TOKEN}
 
-    def test_the_public_reads_stay_header_free(self, monkeypatch, token):
-        """`_fetch_character_level` / `_fetch_gold_balance` target the public
-        `/characters/{id}/full_profile` — nobody may leak the service secret
-        onto a public route "for symmetry"."""
+    def test_the_character_reads_use_the_internal_twin(self, monkeypatch, token):
+        """FEAT-171 §3.5 (Pass A) reverses the FEAT-170 expectation here.
+
+        `_fetch_character_level` / `_fetch_gold_balance` used to read the public
+        `/characters/{id}/full_profile` anonymously. Pass B thins that body for
+        strangers (gold and level_progress leave it), so both now read the
+        internal twin `/characters/internal/{id}/full_profile` and must carry
+        `X-Internal-Token` — a forgotten header degrades perks silently.
+        """
         calls = _patch_httpx_get(monkeypatch, _Resp(200, {"level": 4, "currency_balance": 9}))
 
         assert perk_evaluator._fetch_character_level(11) == 4
         assert perk_evaluator._fetch_gold_balance(11) == 9
 
+        assert len(calls) == 2
         for url, kwargs in calls:
-            assert "/internal/" not in url, url
-            assert "X-Internal-Token" not in (kwargs.get("headers") or {}), url
+            assert url.endswith("/characters/internal/11/full_profile"), url
+            assert kwargs["headers"]["X-Internal-Token"] == TOKEN, url
 
 
 class TestNoImportCycle:

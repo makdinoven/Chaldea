@@ -346,6 +346,40 @@ D7 намеренно **не** проверяет владельца: строк
 | PUT | `/locations/admin/moderation/gate-requests/{id}/review` | Одобрить / отклонить заявку (`moderation:review`, FEAT-159) |
 | POST | `/locations/npcs/{npc_id}/dialogue/{node_id}/choose` | Выбор реплики в диалоге НПС. FEAT-169: добавлен `Depends(get_current_user_via_http)` — **только JWT, проверки владения намеренно нет**: в теле (`DialogueChooseRequest = {option_id}`) вообще нет `character_id`, а обработчик только ходит по дереву диалога и ничего не выдаёт (квест берётся отдельным `POST /locations/quests/{id}/accept`). Добавлять `character_id` ради проверки владения — ломать контракт и править фронт без выигрыша в защите |
 
+### Персональные чтения по `character_id` (FEAT-171, фикс по ревью)
+
+`visibility.py` — асинхронный близнец того же предиката, что в character-service,
+character-attributes-service, inventory-service и skills-service:
+`can_view_private(db, character_id, user)` = владелец, либо admin/moderator с
+`characters:read`, либо NPC/моб (`user_id IS NULL` — приватного слоя нет). Нет персонажа
+— 404 «Персонаж не найден», чужой — 403 «Эти данные доступны только владельцу персонажа».
+Зритель берётся из `get_optional_user` (JWT необязателен), поэтому фронтенду менять
+ничего не пришлось: axios и так шлёт Bearer на каждый запрос.
+
+**Почему это понадобилось именно здесь.** После FEAT-171 locations-service ходит в
+`GET /attributes/internal/{id}` с `X-Internal-Token` — то есть он **доверенный прокси** к
+приватным атрибутам. Любой его открытый маршрут, который считает ответ из чужих цифр,
+обходит гейт соседнего сервиса. Живьём это показал ревью: гость звал
+`GET /locations/npcs/{npc}/shop?character_id=X`, получал `buy_price` 20 → `discounted_buy_price` 19
+и разворачивал это обратно в `charisma = 30`.
+
+| Метод | Путь | Контракт |
+|-------|------|----------|
+| GET | `/locations/npcs/{npc_id}/shop` | **Без `character_id`** — публичная витрина: состав лавки, базовые `buy_price` / `sell_price`, карточка предмета, поля `discounted_buy_price` в ответе нет (гость видит именно это). **С `character_id`** — персональный прайс: гейт владельца **до** обращения к атрибутам, только после него считается скидка от харизмы |
+| GET | `/locations/npcs/{npc_id}/quests` | `player_status` — это прогресс конкретного персонажа. Гейт владельца |
+| GET | `/locations/quests/active` | Журнал заданий и прогресс целей. Гейт владельца |
+| GET | `/locations/action-gate/status` | Открытые гейты персонажа на локации (какие посты-намерения он уже написал). Раньше маршрут был помечен «Public (FEAT-145 v2)» — теперь гейт владельца |
+| GET | `/locations/npcs/{npc_id}/dialogue` | Без `character_id` дерево диалога публично. С `character_id` проверка гейта отвечает «есть ли у этого персонажа пост-намерение» — гейт владельца |
+
+Внутренних вызывающих у этих пяти маршрутов нет: battle-service, dungeon-service,
+inventory-service и character-attributes-service ходят исключительно в `/locations/*/internal/*`
+двойники, поэтому «научить вызывающих раньше, чем закрывать» здесь не потребовалось.
+
+Тесты: `app/tests/test_feat171_shop_gate.py` — матрица гость / чужой / владелец / админ /
+модератор без разрешения / несуществующий персонаж / NPC, плюс отдельная проверка, что
+в ответе гостю нет ни `discounted_buy_price`, ни самого числа, и что `_fetch_charisma`
+за анонима вообще не зовётся.
+
 ### Добыча ресурсов (FEAT-128)
 
 #### Player-facing
@@ -377,7 +411,7 @@ D7 намеренно **не** проверяет владельца: строк
 | GET | `/locations/quests/internal/completed-count` | FEAT-170. Количество завершённых квестов персонажа. Вызывающих нет ни в одном сервисе, ни на фронтенде — маршрут **закрыт, но не удалён** (§3.9: удаление не даёт выигрыша в безопасности после закрытия токеном) |
 | POST | `/locations/quests/internal/auto-progress` | FEAT-170. Продвигает подходящие цели квестов по игровому событию; завершение цели выплачивает награду. Вызывающие: battle-service (на каждого побеждённого врага) и inventory-service (событие `collect`). Оба глотают ошибку на WARNING |
 | POST | `/locations/internal/gathering-status` | FEAT-170. Кто из переданных персонажей сейчас собирает ресурсы. Вызывающий — battle-service (три места: два старта группового боя и `_drop_busy`). Ошибку глотает в пустое множество, то есть без заголовка сборщиков затягивало бы в бой |
-| GET | `/locations/internal/action-gate` | FEAT-170. Открыт ли у персонажа гейт на действие. Вызывающих нет — игровой двойник `GET /locations/action-gate/status` закрыт JWT. **Закрыт, но не удалён** (§3.9) |
+| GET | `/locations/internal/action-gate` | FEAT-170. Открыт ли у персонажа гейт на действие. Вызывающих нет — игровой двойник `GET /locations/action-gate/status` закрыт гейтом владельца (FEAT-171, фикс по ревью). **Закрыт, но не удалён** (§3.9) |
 | POST | `/locations/internal/action-gate/consume` | FEAT-170. Сжигает один подходящий открытый гейт перед действием. **Вызывающие падают ЗАКРЫТО:** боевой и PvP-гейт battle-service (`main.py:905`, `:1245`) и вход в подземелье dungeon-service (`http_clients.py:84`) при любой ошибке возвращают `False`, то есть отказывают игроку в атаке, PvP и входе в подземелье. Все три шлют заголовок (волна 1 FEAT-170) — проверено перед закрытием маршрута |
 
 ### Регистрация персонажа: стартовые точки и происхождение (FEAT-154)
@@ -473,8 +507,8 @@ Country -> Region -> District -> Location
 - `character-service:8005` -> DELETE `/locations/admin/drafts/by_character/{character_id}` (FEAT-156, эндпоинт D7). Шаг 4.5 внутри `delete_character` (`character-service/app/main.py:1209-1221`), под `require_permission("locations:delete")` с проброшенным Bearer-токеном вызывающего. Вызов graceful: `try/except` + `logger.warning`, недоступность locations-service **не отменяет** удаление персонажа
 
 ### HTTP (исходящие)
-- `character-service:8005` -> GET `/characters/{id}/profile`, GET `/characters/by_location`, PUT `/characters/internal/{id}/update_location` (+ `X-Internal-Token`), POST `/characters/internal/{id}/set_travel_cooldown` (+ `X-Internal-Token`), GET `/characters/{id}/short_info` (для имени/аватара активных gatherers в client/details)
-- `character-attributes-service:8002` -> GET `/attributes/{id}`, POST `/attributes/{id}/consume_stamina` (+ `X-Internal-Token`), POST `/attributes/{id}/refund_stamina` (+ `X-Internal-Token`, FEAT-128: 50% возврат при cancel/battle-interrupt), PUT `/attributes/{id}/passive_experience` (+ `X-Internal-Token`, опыт за пост), POST `/attributes/cumulative_stats/increment` (+ `X-Internal-Token`, FEAT-167 задача #17 — посты, перемещение, лавка NPC, квесты; все семь мест идут через один хелпер `main._track_cumulative_stats`, он же и ставит заголовок)
+- `character-service:8005` -> GET `/characters/{id}/profile`, GET `/characters/by_location`, PUT `/characters/internal/{id}/update_location` (+ `X-Internal-Token`), POST `/characters/internal/{id}/set_travel_cooldown` (+ `X-Internal-Token`), GET `/characters/internal/{id}/short_info` (+ `X-Internal-Token`, для имени/аватара активных gatherers в client/details и в очереди модерации постов; **FEAT-171:** публичный `short_info` теряет `currency_balance` и может стать тоньше, поэтому сервис-к-сервису читает внутренний двойник; ошибка глотается в WARNING — лог называет URL двойника)
+- `character-attributes-service:8002` -> GET `/attributes/internal/{id}` (+ `X-Internal-Token`, **FEAT-171:** игровой `/attributes/{id}` уходит под гейт владельца; четыре вызывающих — `main` перемещение/быстрое перемещение/`_fetch_charisma` и `crud._read_current_stamina`), POST `/attributes/{id}/consume_stamina` (+ `X-Internal-Token`), POST `/attributes/{id}/refund_stamina` (+ `X-Internal-Token`, FEAT-128: 50% возврат при cancel/battle-interrupt), PUT `/attributes/{id}/passive_experience` (+ `X-Internal-Token`, опыт за пост), POST `/attributes/cumulative_stats/increment` (+ `X-Internal-Token`, FEAT-167 задача #17 — посты, перемещение, лавка NPC, квесты; все семь мест идут через один хелпер `main._track_cumulative_stats`, он же и ставит заголовок)
 - `inventory-service:8004` -> POST `/inventory/internal/characters/{cid}/items` (+ `X-Internal-Token`, FEAT-167: лут локации, покупка у NPC, награда за квест — раньше был открытый `/inventory/{cid}/items` с проброшенным токеном игрока), POST `/inventory/internal/characters/{cid}/free_slots_check` (+ `X-Internal-Token` с FEAT-169; preflight на старте — падает **закрыто**: без заголовка игроку сказали бы «сумка полна»), POST `/inventory/internal/characters/{cid}/gathering/award` (+ `X-Internal-Token` с FEAT-169; атомарный award на finalize: ресурс + XP + ранг + прочность инструмента — вызов best-effort, потеря заголовка молча съела бы награду), GET `/inventory/characters/{cid}/gathering-skills` (ранговые бонусы для расчёта effective_*), GET `/inventory/internal/characters/{cid}/xp-multiplier` (+ `X-Internal-Token`, FEAT-168 #6: книга опыта за отыгрыш и за задания)
 - `party-service:8014` -> POST `/party/internal/xp-bonus` (+ `X-Internal-Token` с FEAT-169; отрядный бонус за пост, `crud.award_post_xp_and_log`), GET `/party/internal/active-members` (+ `X-Internal-Token` с FEAT-169; `crud._party_active_member_ids` — состав отряда на локации). Оба вызова best-effort и логируются на WARNING: без заголовка отрядные механики отказали бы молча
 - `battle-service:8010` -> POST `/battles/internal/party/leave-on-move` (+ `X-Internal-Token` с FEAT-170; три места: обычное перемещение, быстрое перемещение и `POST /locations/internal/character-left-location`). Предбоевой отряд привязан к локации, уход из неё выводит персонажа из отряда (уход лидера распускает отряд). Все три вызова best-effort (два `except: pass`, третий пишет WARNING и ставит `party_pruned=False`) — потеря заголовка молча оставила бы «призрака» в отряде

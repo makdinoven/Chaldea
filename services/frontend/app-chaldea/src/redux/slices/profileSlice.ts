@@ -114,20 +114,29 @@ export interface FastSlotData {
   image: string | null;
 }
 
+/**
+ * `GET /characters/{id}/full_profile`.
+ *
+ * FEAT-171: the private half of this document (`stat_points`,
+ * `currency_balance`, `level_progress`, `attributes`) is **absent from the JSON**
+ * when the viewer is not the owner / an admin. ProfilePage only ever loads the
+ * viewer's own character, so in practice these are always present here — the
+ * optional markers exist so no render site can assume them.
+ */
 export interface CharacterProfile {
   name: string;
   level: number;
-  stat_points: number;
-  currency_balance: number;
+  stat_points?: number;
+  currency_balance?: number;
   avatar: string | null;
   active_title: string | null;
   active_title_rarity: string | null;
-  level_progress: {
+  level_progress?: {
     current_exp_in_level: number;
     exp_to_next_level: number;
     progress_fraction: number;
   };
-  attributes: {
+  attributes?: {
     current_health: number;
     max_health: number;
     current_mana: number;

@@ -60,14 +60,16 @@ def _fetch_character_level(character_id: int) -> int | None:
     import httpx
 
     try:
-        url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/full_profile"
-        resp = httpx.get(url, timeout=5.0)
+        # FEAT-171 §3.5: internal twin C1i + X-Internal-Token.
+        url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/full_profile"
+        resp = httpx.get(url, headers=_internal_token_headers(), timeout=5.0)
         if resp.status_code == 200:
             data = resp.json()
             return data.get("level")
     except Exception as e:
         logger.warning(
-            f"Не удалось получить уровень персонажа {character_id} из character-service: {e}"
+            f"Не удалось получить уровень персонажа {character_id} из character-service "
+            f"({settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/full_profile): {e}"
         )
     return None
 
@@ -78,13 +80,18 @@ def _fetch_gold_balance(character_id: int) -> int | None:
     import httpx
 
     try:
-        url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/full_profile"
-        resp = httpx.get(url, timeout=5.0)
+        # FEAT-171 §3.5: internal twin C1i + X-Internal-Token (the twin is the
+        # one that keeps `currency_balance` once Pass B thins the public body).
+        url = f"{settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/full_profile"
+        resp = httpx.get(url, headers=_internal_token_headers(), timeout=5.0)
         if resp.status_code == 200:
             data = resp.json()
             return data.get("currency_balance")
     except Exception as e:
-        logger.warning(f"Failed to fetch gold balance for character {character_id}: {e}")
+        logger.warning(
+            f"Failed to fetch gold balance for character {character_id} "
+            f"({settings.CHARACTER_SERVICE_URL}/characters/internal/{character_id}/full_profile): {e}"
+        )
     return None
 
 

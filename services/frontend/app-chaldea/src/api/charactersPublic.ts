@@ -80,15 +80,21 @@ export interface CharacterPublic {
    * character-attributes-service at all, so there is nothing current to read.
    *
    * `null` → the passport simply renders without the stat block.
+   *
+   * FEAT-171: the key is **absent from the JSON** altogether for a stranger
+   * (only the owner and admin/moderator see it), so the passport of someone
+   * else's character renders without the stat block — same branch as `null`.
    */
-  starting_attributes: Record<string, number> | null;
+  starting_attributes?: Record<string, number> | null;
   /**
    * `true` = frozen record written at approval.
    * `false` = reconstructed from the subrace preset for a character created
    * before FEAT-155 — the passport marks it as a reconstruction rather than
    * passing it off as the original.
+   *
+   * FEAT-171: absent together with `starting_attributes` for a stranger.
    */
-  starting_attributes_is_snapshot: boolean;
+  starting_attributes_is_snapshot?: boolean;
 }
 
 /**

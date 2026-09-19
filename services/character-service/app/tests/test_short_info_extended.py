@@ -7,7 +7,8 @@ Covers:
 (c) Edge cases: character with race but no subrace
 (d) Character not found returns 404
 (e) Security: non-integer character ID does not crash
-(f) FEAT-148: currency_balance is exposed with the character's value
+(f) FEAT-148 + FEAT-171: currency_balance ушёл из публичного short_info и
+    отдаётся только внутренним двойником /characters/internal/{id}/short_info
 """
 
 import sys
@@ -17,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
+import auth_http
 import database
 from database import Base
 from main import app, get_db
@@ -49,6 +51,17 @@ def db_session():
     finally:
         session.close()
         Base.metadata.drop_all(bind=database.engine)
+
+
+@pytest.fixture
+def internal_token():
+    """Пин токена для internal-двойника — не зависим от окружения (FEAT-171)."""
+    original = auth_http.INTERNAL_SERVICE_TOKEN
+    auth_http.INTERNAL_SERVICE_TOKEN = "test-internal-token"
+    try:
+        yield "test-internal-token"
+    finally:
+        auth_http.INTERNAL_SERVICE_TOKEN = original
 
 
 @pytest.fixture
@@ -245,9 +258,14 @@ class TestShortInfoEdgeCases:
 # ===========================================================================
 
 class TestShortInfoCurrencyBalance:
-    """FEAT-148: short_info must include the character's currency_balance."""
+    """FEAT-148 + FEAT-171 §3.4 D7.
 
-    def test_currency_balance_returned_with_character_value(self, client, db_session):
+    Золото уехало из публичного short_info во внутренний двойник: публичный
+    маршрут читают анонимно (профиль игрока, карточка NPC), а баланс нужен
+    только /users/me, который ходит по /characters/internal/.
+    """
+
+    def test_public_short_info_has_no_gold(self, client, db_session):
         race, cls, subrace = _seed_reference_data(db_session)
         char = _create_character(
             db_session, race=race, cls=cls, subrace=subrace,
@@ -256,22 +274,40 @@ class TestShortInfoCurrencyBalance:
 
         resp = client.get(f"/characters/{char.id}/short_info")
         assert resp.status_code == 200
+        # Именно отсутствие ключа, а не null.
+        assert "currency_balance" not in resp.json()
+
+    def test_internal_twin_returns_the_character_value(self, client, db_session, internal_token):
+        race, cls, subrace = _seed_reference_data(db_session)
+        char = _create_character(
+            db_session, race=race, cls=cls, subrace=subrace,
+            currency_balance=1500,
+        )
+
+        resp = client.get(
+            f"/characters/internal/{char.id}/short_info",
+            headers={"X-Internal-Token": internal_token},
+        )
+        assert resp.status_code == 200
         data = resp.json()
 
         assert "currency_balance" in data
         assert data["currency_balance"] == 1500
 
-    def test_currency_balance_defaults_to_zero(self, client, db_session):
+    def test_internal_twin_currency_balance_defaults_to_zero(self, client, db_session, internal_token):
         """Character created without explicit gold — model default is 0."""
         race, cls, subrace = _seed_reference_data(db_session)
         char = _create_character(db_session, race=race, cls=cls, subrace=subrace)
 
-        resp = client.get(f"/characters/{char.id}/short_info")
+        resp = client.get(
+            f"/characters/internal/{char.id}/short_info",
+            headers={"X-Internal-Token": internal_token},
+        )
         assert resp.status_code == 200
         assert resp.json()["currency_balance"] == 0
 
-    def test_currency_balance_additive_existing_keys_untouched(self, client, db_session):
-        """Adding currency_balance must not remove any previously exposed key."""
+    def test_public_keys_are_untouched_apart_from_gold(self, client, db_session):
+        """Уход currency_balance не должен унести с собой ни одного другого ключа."""
         race, cls, subrace = _seed_reference_data(db_session)
         char = _create_character(
             db_session, race=race, cls=cls, subrace=subrace,
@@ -286,7 +322,6 @@ class TestShortInfoCurrencyBalance:
             "id", "name", "avatar", "level", "current_location_id",
             "id_race", "id_class", "id_subrace",
             "race_name", "class_name", "subrace_name",
-            "currency_balance",
         ]
         for key in expected_keys:
             assert key in data, f"Missing field: {key}"
