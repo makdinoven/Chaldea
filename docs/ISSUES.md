@@ -437,7 +437,7 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 **Побочные эффекты, которые надо учесть:** `skills-service/app/tests/test_character_skill_reset.py:128` вычитает наивное время из разобранного ответа — при появлении смещения упадёт с `TypeError`. `locations-service/app/main.py:1194,1457` уже терпимы к обеим формам, ломать межсервисные вызовы Stage 2 не должен.
 **Возможное решение:** общий Pydantic-базовый класс с `json_encoders={datetime: lambda v: v.replace(tzinfo=timezone.utc).isoformat()}` + отдельный проход по 22 ручным местам; выкатывать сервис за сервисом.
 
-### Долг: оставшиеся internal-префиксы (battles, dungeons, battle-pass, locations, users/diamonds) защищены только nginx
+### ~~Долг: оставшиеся internal-префиксы (battles, dungeons, battle-pass, locations, users/diamonds) защищены только nginx~~ DONE (FEAT-170, 2026-09-19)
 **Сервисы:** battle-service, dungeon-service, battle-pass-service, locations-service, user-service, autobattle-service
 **Обнаружено:** FEAT-162 (DevSecOps, аудит internal-префиксов 2026-09-14). **Сужено после FEAT-169** — большая часть исходного перечня закрыта, актуальный остаток см. в конце записи.
 **Описание:** после FEAT-162 все internal-префиксы закрыты в обоих nginx-конфигах (`return 403`), но второй слой — проверка `X-Internal-Token` через `Depends(verify_internal_token)` — стоял на момент обнаружения лишь на 6 эндпоинтах из ~33 (к 2026-09-14 — на 16: все 14 под `/characters/internal/` и 2 под `/locations/internal/`): `character-service` (`/characters/internal/{id}/update_location`, `/characters/internal/{id}/set_travel_cooldown`, `/characters/internal/{id}/deduct_points`, `POST /characters/internal/{id}/logs`) и `locations-service` (`/locations/internal/cancel-gathering`, `/locations/internal/character-left-location`). Остальные (`/attributes/internal/{id}/reconcile-perks`, `/locations/internal/gathering-status`, `/locations/internal/action-gate*`, `/locations/quests/internal/*`, `/users/internal/*`, `/inventory/internal/*`, `/battles/internal/*`, `/dungeons/internal/*`, `/party/internal/*`, `/battle-pass/internal/track-event`, `/autobattle/internal/register`) не проверяют ничего: любой контейнер в compose-сети (или скомпрометированный сервис) может их дёргать. Проверено вживую: до правки nginx `POST /attributes/internal/1/reconcile-perks` через gateway без каких-либо заголовков возвращал `200`.
@@ -481,7 +481,7 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 **Актуализировано (FEAT-169, 2026-09-19).** Исходная формулировка «большинство internal-эндпоинтов» устарела — большинство как раз закрыто. Закрыты и из этой записи вычеркнуты: все 14 под `/characters/internal/` (FEAT-162), весь `/attributes/internal/`, весь `/inventory/internal/`, весь `/party/internal/` (включая `active-members`), `/skills/internal/`, `POST /users/internal/{uid}/activity/increment`, `POST /locations/quests/internal/progress/update`, а также `POST /characters/{id}/add_rewards` (тот самый «не под префиксом, держится на точечном правиле nginx» из абзаца выше — теперь под `verify_internal_token`).
 
-**Остаётся открытым ровно это:**
+**Оставалось открытым ровно это (закрыто FEAT-170, см. итог в конце записи):**
 
 | Маршрут | Файл | Вызывающие (и шлют ли заголовок) |
 |---|---|---|
@@ -514,6 +514,39 @@ battle-pass (`crud.py:580`, `:594`), dungeon туда не ходит; у обо
 выше: в `locations-service/app/main.py` `verify_internal_token` объявлен на `:3743`, **ниже** шести
 закрываемых маршрутов (`:3150`–`:3698`) — декоратор выполняется на импорте, так что гейт «на месте»
 уронит сервис с `NameError` на старте.
+
+**Исправлено (FEAT-170, 2026-09-19).** Долг закрыт полностью. На **все 17** оставшихся маршрутов
+навешен `Depends(verify_internal_token)` (контракт FEAT-162/167: пустой токен → 503
+`Internal service token не настроен`, отсутствующий или чужой → 401 `Недействительный internal token`),
+и **все 18** точек вызова шлют `X-Internal-Token`. Порядок работ был обратный интуитивному и
+обязательный: **сначала заголовки у вызывающих, потом гейты на маршрутах** — иначе описанная выше
+ловушка с `dungeon-service/app/http_clients.py:377` уронила бы опрос боя в подземельях. Обе ловушки
+из этой записи сняты: в `locations-service/app/main.py` блок `INTERNAL_SERVICE_TOKEN` +
+`_internal_token_headers` + `verify_internal_token` **поднят в начало модуля** (с «хлебной крошкой» на
+старом месте, чтобы не вернули обратно), имена остались атрибутами `main.*` ради существующих
+тестов; в `character-attributes-service/app/perk_evaluator.py` заголовок собирается локально из
+`config.settings`, а не импортом из `main` (это цикл). `verify_internal_token` появился в
+`auth_http.py` четырёх сервисов: battle, dungeon, battle-pass, autobattle.
+
+Проверено на закрытии независимыми свипами по всему `services/`: **маршрутов с сегментом `internal`
+в пути — 57, закрыты 57, открытых 0**; **исходящих вызовов на internal-маршруты — 93, с
+`headers=` — 93**. Живьём изнутри compose-сети: без заголовка и с чужим — 401, с верным — штатное
+поведение маршрута.
+
+Маршруты без вызывающих (`diamonds/spend`, `GET diamonds`, оба `/dungeons/internal/*`,
+`GET /locations/internal/action-gate`, `completed-count`) **закрыты, но не удалены** — удаление не даёт
+выигрыша в безопасности поверх токена, а `battle-callback` сам документирован как резерв к опросу.
+
+Отдельно: старые свипы «вызов обязан слать заголовок» были построены на **списках-исключениях** и
+поэтому зеленели не по делу — исключённая цель молча выпадала из проверки ровно в тот момент, когда
+её закрывали. Они **инвертированы**: теперь под правило попадает любой URL с сегментом `internal`,
+без исключений, плюс порог «проверено не меньше N вызовов», чтобы рефактор URL не опустошил свип
+незаметно. Аллоу-лист `_KNOWN_UNGATED_TARGETS` в inventory-service удалён вместе с веткой пропуска,
+и добавлены тесты, которые падают при попытке вернуть любой такой список.
+
+**Не закрыто этой задачей и живёт отдельными записями:** анонимное чтение чужих данных (инвентарь,
+экипировка, характеристики, история чата) — нужно продуктовое решение о публичности;
+`GET /attributes/{id}/perks`, который пишет в БД на чтение; регистрации автобоя в памяти процесса.
 
 ### ~~Баг: отвязка персонажа не очищает `users.current_character` — UPDATE по несуществующей колонке~~ DONE (2026-09-14)
 **Сервис:** character-service
