@@ -48,6 +48,7 @@ import database  # noqa: E402
 database.engine = _test_engine
 database.SessionLocal = _TestSessionLocal
 
+import auth_http  # noqa: E402
 import models  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from main import app, get_db  # noqa: E402
@@ -112,8 +113,19 @@ def _seed_attributes(db_session, character_id, current_stamina, max_stamina):
 
 
 # FEAT-167: the mutating /attributes/ endpoints require the internal token.
-# conftest sets INTERNAL_SERVICE_TOKEN to this value before auth_http is imported.
-INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+INTERNAL_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": INTERNAL_TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _token_is_configured(monkeypatch):
+    """`auth_http` resolves the secret into a module-level constant at import
+    time, so the constant is what must be pinned — `monkeypatch.setenv` alone
+    would have no effect (the trap documented in FEAT-167 §2.0). conftest only
+    `setdefault`s the env var, so inside a service container the real token wins
+    and every request below would answer 401 without this fixture."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", INTERNAL_TOKEN)
+
 
 class TestRefundStaminaHappyPath:
     def test_refund_basic_increment(self, client, db_session):

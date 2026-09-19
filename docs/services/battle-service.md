@@ -282,6 +282,33 @@ battle-service/app/
 | party:8014 | POST `/party/internal/xp-bonus` | Отрядный бонус опыта за бой. **FEAT-169:** обязателен `X-Internal-Token`; ошибка глотается в WARNING |
 | party:8014 | GET `/party/internal/active-members` | Состав отряда в локации (групповой PvE/PvP). **FEAT-169:** весь префикс `/party/internal/` закрыт токеном, заголовок обязателен на всех трёх вызовах (`main.py`) |
 | character-attributes:8002 | POST `/attributes/cumulative_stats/increment` | Кумулятивная статистика по итогам боя (`_track_cumulative_stats`). **FEAT-167 задача #17: роут стал internal-only** — обязателен `X-Internal-Token` (`main._internal_token_headers()`, читает env в момент вызова). Вызов fire-and-forget: ошибка логируется и глотается, поэтому потеря заголовка молча остановила бы учёт побед, убийств и разблокировку перков — покрыто тестами в `tests/test_cumulative_stats.py` |
+| autobattle:8011 | POST `/autobattle/internal/register` | Постановка моба/НПС под управление ИИ при создании PvE-боя (`main.py:801`). **FEAT-170 (волна 1):** вызов отправляет `X-Internal-Token` (`main._internal_token_headers()`). Ошибка глотается в WARNING — без заголовка мобы просто перестали бы ходить, поэтому заголовок проверяется тестом на самом вызове |
+| locations:8006 | POST `/locations/quests/internal/auto-progress` | Продвижение целей заданий за побеждённых врагов (`main.py:727`). **FEAT-170 (волна 1):** обязателен `X-Internal-Token`; ошибка глотается в WARNING |
+| locations:8006 | POST `/locations/internal/action-gate/consume` | Трата лимита действия: PvE-атака (`_consume_combat_gate`) и PvP (`_consume_pvp_gate`). **FEAT-170 (волна 1):** обязателен `X-Internal-Token`. Обработка ошибки fail-closed — при сбое возвращается `False` и атака/PvP запрещаются, то есть потеря заголовка видна игроку сразу |
+| locations:8006 | POST `/locations/internal/gathering-status` | Кто из соотрядцев занят сбором — 3 вызова (`main.py:1029`, `:1197`, `_filter_available`). **FEAT-170 (волна 1):** обязателен `X-Internal-Token`; ошибка глотается, и без заголовка сборщиков молча затягивало бы в бой |
+
+### FEAT-170: internal-токен
+
+`app/auth_http.py` получил канонический `verify_internal_token` (`INTERNAL_SERVICE_TOKEN`
+читается из env на импорте; пусто → 503 «Internal service token не настроен», нет или
+чужой заголовок → 401 «Недействительный internal token»). Модуль листовой, поэтому цикла
+импорта с `main.py` нет.
+
+**Волна 1.** Все 7 исходящих вызовов battle-service во внутренние маршруты соседей теперь
+передают `headers=_internal_token_headers()` (`main.py:65`, читает env в момент вызова).
+
+**Волна 2 (задача T12).** Весь префикс `/battles/internal/` закрыт токеном —
+`dependencies=[Depends(verify_internal_token)]` на трёх маршрутах:
+
+| Маршрут | Почему это важно |
+|---------|------------------|
+| `GET /battles/internal/{id}/state` | Полное состояние боя: HP/мана/кулдауны каждого участника, пояс (`fast_slots`) и награды. Вызывают autobattle-service (`clients.py:27`) и опрос из dungeon-service (`http_clients.py:377`) |
+| `POST /battles/internal/{id}/action` | `_make_action_core(..., skip_ownership=True)` — ход **за любого участника любого боя**. Обход проверки владения сделан намеренно (мобами ходит ИИ), именно поэтому маршрут не должен быть доступен без токена. Вызывает autobattle-service (`clients.py:38`) |
+| `POST /battles/internal/party/leave-on-move` | Удаление персонажа из формирующегося отряда при смене локации (лидер ⇒ роспуск). Вызывает locations-service (3 точки) |
+
+Публичные двойники **не затронуты**: `GET /battles/{id}/state` и `POST /battles/{id}/action`
+по-прежнему закрыты JWT и проверкой владения — именно ими пользуется браузер. nginx
+(`location /battles/internal/ { return 403; }`) остаётся внешним слоем, токен — внутренним.
 
 ## FEAT-125: перк-система (контракт с skills-service)
 

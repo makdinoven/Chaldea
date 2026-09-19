@@ -38,10 +38,16 @@ user-service/
 | GET | `/users/admins` | Все админы | Нет |
 | GET | `/users/{user_id}` | Пользователь по ID | Нет |
 | POST | `/users/internal/{user_id}/activity/increment` | Начислить очки активности. **FEAT-169:** маршрут переехал с `/users/{user_id}/activity/increment` (старый путь удалён, отдаёт 404) под закрытый префикс `/users/internal/` и требует заголовок `X-Internal-Token`. `points` теперь валидируется: `Field(1, ge=1, le=100)` — раньше принимались отрицательные значения и очки можно было списать. Единственный вызывающий — notification-service после сообщения в чат | `X-Internal-Token` |
+| GET | `/users/internal/{user_id}/diamonds` | Баланс алмазов. **FEAT-170:** закрыт `X-Internal-Token`. Вызывающих в репозитории нет — маршрут закрыт, но не удалён | `X-Internal-Token` |
+| POST | `/users/internal/{user_id}/diamonds/add` | Начислить алмазы (премиальная валюта, сумма не ограничена сверху). **FEAT-170:** закрыт `X-Internal-Token`. Единственный вызывающий — battle-pass-service (`crud.py` `_deliver_diamonds`) | `X-Internal-Token` |
+| POST | `/users/internal/{user_id}/diamonds/spend` | Списать алмазы. **FEAT-170:** закрыт `X-Internal-Token`. Вызывающих в репозитории нет — маршрут закрыт, но не удалён | `X-Internal-Token` |
+| POST | `/users/internal/{user_id}/cosmetics/unlock` | Разблокировать косметику (рамка / фон чата). **FEAT-170:** закрыт `X-Internal-Token`. Единственный вызывающий — battle-pass-service (`crud.py` `_deliver_cosmetic`) | `X-Internal-Token` |
 
-### Internal-токен (FEAT-169)
+### Internal-токен (FEAT-169, расширен в FEAT-170)
 
-`auth.verify_internal_token` — fail-closed проверка заголовка `X-Internal-Token` против переменной окружения `INTERNAL_SERVICE_TOKEN`. Поведение то же, что в character-service / character-attributes-service / inventory-service: пустая/неустановленная переменная → **503** «Internal service token не настроен», отсутствующий или чужой заголовок → **401** «Недействительный internal token». Константа `auth.INTERNAL_SERVICE_TOKEN` читается на импорте — тесты подменяют именно её (`monkeypatch.setattr(auth, "INTERNAL_SERVICE_TOKEN", ...)`), а не только env. Остальные маршруты `/users/internal/*` (алмазы, косметика) пока держатся только на nginx — см. `docs/ISSUES.md`.
+`auth.verify_internal_token` — fail-closed проверка заголовка `X-Internal-Token` против переменной окружения `INTERNAL_SERVICE_TOKEN`. Поведение то же, что в character-service / character-attributes-service / inventory-service: пустая/неустановленная переменная → **503** «Internal service token не настроен», отсутствующий или чужой заголовок → **401** «Недействительный internal token». Константа `auth.INTERNAL_SERVICE_TOKEN` читается на импорте — тесты подменяют именно её (`monkeypatch.setattr(auth, "INTERNAL_SERVICE_TOKEN", ...)`), а не только env.
+
+**FEAT-170:** закрыты оставшиеся четыре маршрута префикса — `GET /users/internal/{uid}/diamonds`, `POST .../diamonds/add`, `POST .../diamonds/spend`, `POST .../cosmetics/unlock`. Проверка навешивается через `dependencies=[Depends(verify_internal_token)]` в декораторе, чтобы не менять сигнатуру обработчика и тело ответа. Теперь **ни один** маршрут под `/users/internal/` не отвечает без токена; nginx (`return 403`) остаётся внешним слоем.
 
 ## Таблицы БД
 

@@ -453,3 +453,67 @@ class TestRouteTableKeepsTheGates:
             )
             return
         raise AssertionError("маршрут пояса игрока пропал из таблицы роутов")
+
+
+# ---------------------------------------------------------------------------
+# FEAT-170 §3.12 e — the route sweep that survives us
+# ---------------------------------------------------------------------------
+# The class above sweeps `/inventory/internal/` with a flat look at
+# `route.dependant.dependencies`. This one is deliberately stricter on both
+# axes, because both weaknesses have bitten before:
+#
+#   * it matches **any** path containing `/internal/`, not just this service's
+#     own prefix — a route mounted under a new router would slip past a
+#     prefix-specific filter;
+#   * it flattens sub-dependencies, so a guard reached through a wrapper
+#     dependency still counts and a guard that was *replaced* by an unrelated
+#     wrapper does not;
+#   * it carries a `>= N` floor, so a refactor that empties the route table
+#     cannot turn the sweep into a silent no-op.
+
+
+class TestEveryInternalRouteIsGated:
+
+    #: `/inventory/internal/` routes present when FEAT-170 shipped.
+    MIN_INTERNAL_ROUTES = 9
+
+    @staticmethod
+    def _flat_deps(dependant, seen=None):
+        """Every dependency function reachable from a route, recursively."""
+        names = set()
+        stack = list(dependant.dependencies)
+        while stack:
+            dep = stack.pop()
+            call = getattr(dep, "call", None)
+            if call is not None:
+                names.add(getattr(call, "__name__", type(call).__name__))
+            stack.extend(getattr(dep, "dependencies", []))
+        return names
+
+    def _internal_routes(self):
+        import main
+        from fastapi.routing import APIRoute
+
+        return [r for r in main.app.routes
+                if isinstance(r, APIRoute) and "/internal/" in r.path]
+
+    def test_every_internal_route_carries_verify_internal_token(self):
+        offenders = []
+        for route in self._internal_routes():
+            if "verify_internal_token" not in self._flat_deps(route.dependant):
+                offenders.append(
+                    f"{'/'.join(sorted(route.methods))} {route.path}")
+        assert not offenders, (
+            "маршрут под /internal/ без verify_internal_token (его можно "
+            "вызвать без токена изнутри сети контейнеров): "
+            + "; ".join(offenders)
+        )
+
+    def test_the_sweep_actually_found_the_internal_routes(self):
+        found = self._internal_routes()
+        assert len(found) >= self.MIN_INTERNAL_ROUTES, (
+            f"свип нашёл только {len(found)} внутренних маршрутов "
+            f"(ожидалось >= {self.MIN_INTERNAL_ROUTES}) — таблицу роутов "
+            "отрефакторили, и проверка стала пустой: "
+            + "; ".join(sorted(r.path for r in found))
+        )

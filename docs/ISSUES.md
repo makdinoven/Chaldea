@@ -337,6 +337,14 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 ## MEDIUM
 
+### Долг: регистрации автобоя живут в памяти процесса и теряются на каждом деплое
+**Сервис:** autobattle-service
+**Файл:** `services/autobattle-service/app/main.py:119-126` (`ALLOWED`, `PID_BATTLE`, `SPEED`, `OWNER`)
+**Обнаружено:** FEAT-170 (Architect §3.14, зафиксировано Backend Dev в задаче #4, 2026-09-19). Предсуществующее, фичей не внесено.
+**Приоритет:** MEDIUM
+**Описание:** список участников под управлением ИИ хранится в обычных словарях процесса, а не в Redis. Любой рестарт контейнера (а CI-деплой делает `down` + `up --build` по всему стеку) стирает их: моб или автоведомый персонаж в уже идущем бою просто перестаёт ходить, пока его не зарегистрируют заново. Ошибки при этом нет — бой «зависает» на чужом ходу до таймаута. Побочный эффект для проверок: «ходит ли моб после деплоя» — слабый сигнал, живую проверку автобоя надо делать на **свежесозданном** бою.
+**Возможное решение:** перенести регистрации в Redis (там уже лежит состояние боя), либо восстанавливать их при старте по активным боям с участниками-НПС.
+
 ### Долг: оценка перков тянет весь `/full_profile` ради одного поля и транзитивно дёргает inventory-service
 **Сервис:** character-attributes-service
 **Файл:** `services/character-attributes-service/app/perk_evaluator.py:63` (`_fetch_gold_balance`)
@@ -456,6 +464,22 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 **Что тут самое весомое:** четыре маршрута `/users/internal/*diamonds*|cosmetics` — это **мутация валюты**; их стоит брать первыми. Механизм для этого уже готов: FEAT-169 добавил `verify_internal_token` в `user-service/auth.py` и `INTERNAL_SERVICE_TOKEN` во все compose-файлы, так что остаётся только навесить зависимость и обновить вызывающих.
 
 **⚠️ Ловушка, на которую напорется следующий заход:** `GET /battles/internal/{id}/state` опрашивают **двое**, и застрахован только один. autobattle-service заголовок уже шлёт, а **dungeon-service (`app/http_clients.py:377`) — нет**: если гейтить `/battles/internal/*`, не тронув его, опрос боя в подземелье отвалится, и, судя по остальным его вызовам, молча. Первым шагом любой такой задачи должен быть заголовок в dungeon-service, а не зависимость в battle-service.
+
+**Уточнено (Codebase Analyst, FEAT-170, 2026-09-19):** перечень выше пересобран заново AST-обходом
+всех декораторов маршрутов и оказался неточным — правильная версия в
+`features/FEAT-170-close-remaining-internal-prefixes.md` §2.1–2.2. Коротко: **маршрутов 17, а не 16**
+(в таблице отсутствуют `GET /locations/quests/internal/completed-count` и read-only
+`GET /locations/internal/action-gate`), **номера строк сдвинуты на 3–9** после FEAT-168/169, и
+**вызывающие указаны неверно почти в каждой строке**: `track-event` зовут не «battle, locations,
+inventory», а только locations (`main.py:1355`, `:1619`); `action-gate/consume` — не «inventory,
+character-service», а battle (`main.py:902`, `:1239`) и dungeon (`http_clients.py:81`);
+`gathering-status` — battle ×3 (`:1025`, `:1192`, `:3731`); `diamonds/add` и `cosmetics/unlock` — только
+battle-pass (`crud.py:580`, `:594`), dungeon туда не ходит; у обоих `/dungeons/internal/*` вызывающих
+**нет вообще** (как и у `diamonds/spend`, `GET diamonds`, `GET action-gate`, `completed-count`).
+Всего точек вызова 18 в 6 сервисах, 15 из 18 проглатывают ошибку. Вторая ловушка помимо описанной
+выше: в `locations-service/app/main.py` `verify_internal_token` объявлен на `:3743`, **ниже** шести
+закрываемых маршрутов (`:3150`–`:3698`) — декоратор выполняется на импорте, так что гейт «на месте»
+уронит сервис с `NameError` на старте.
 
 ### ~~Баг: отвязка персонажа не очищает `users.current_character` — UPDATE по несуществующей колонке~~ DONE (2026-09-14)
 **Сервис:** character-service
@@ -670,14 +694,6 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 **Обнаружено:** FEAT-164 (QA, 2026-09-17).
 **Описание:** оба теста помечены `skipif(dialect == 'sqlite')` с пояснением «the test runs in CI» / «Verified on MySQL CI». Но движок в файле жёстко задан как SQLite, а в CI (`.github/workflows/ci.yml`) MySQL нет — условие пропуска истинно всегда, и тесты не выполняются ни локально, ни в CI. Гарантию сериализации `with_for_update()` в `refund_stamina` на деле ничего не проверяет, а текст причины вводит в заблуждение.
 **Что сделать:** либо поднять MySQL-сервис в CI и гонять эти тесты на нём, либо переписать причину пропуска честно (и/или проверять наличие `FOR UPDATE` в сгенерированном SQL).
-
-### Хрупкость теста: 16 тестов char-attrs падают при запуске внутри любого контейнера сервиса
-**Сервис:** character-attributes-service
-**Файлы:** `services/character-attributes-service/app/tests/conftest.py:30` (`os.environ.setdefault("INTERNAL_SERVICE_TOKEN", "test-internal-token")`), `tests/test_passive_experience.py:110`, `tests/test_refund_stamina.py`, `tests/test_regen.py` (класс `TestEndpointWiring`)
-**Обнаружено:** Reviewer, FEAT-169 (2026-09-20). Предсуществующее, наследие FEAT-167.
-**Приоритет:** LOW (продукт не страдает), но ловушка для агентов
-**Описание:** conftest задаёт токен через `setdefault`, то есть **не перезаписывает** уже существующую переменную окружения, а три файла тестов зашивают литерал `"test-internal-token"` в заголовок запроса. Внутри любого контейнера сервиса `INTERNAL_SERVICE_TOKEN` уже задан (compose), значения расходятся, и 16 тестов FEAT-167 падают с `assert 401 == 200`. На CI переменной нет — там зелено, поэтому расхождение незаметно. Обходной путь: `docker compose exec -e INTERNAL_SERVICE_TOKEN=test-internal-token …`.
-**Что сделать:** брать токен из `conftest.INTERNAL_HEADERS` (он уже есть, `conftest.py:33`) вместо литерала — либо заменить `setdefault` на безусловную установку.
 
 ### Долг: dungeon-service не печатает итоговую строку pytest
 **Сервис:** dungeon-service (`services/dungeon-service/app/tests/`)
@@ -1084,8 +1100,8 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 | CRITICAL | 1 |
 | HIGH | 10 |
 | MEDIUM | 22 |
-| LOW | 33 |
-| **Итого** | **66** |
+| LOW | 36 |
+| **Итого** | **69** |
 
 _Пересчитано 2026-09-14 (FEAT-163): таблица разошлась с содержимым файла — считаются только
 незакрытые записи (`###`-заголовки без зачёркивания) в секциях CRITICAL/HIGH/MEDIUM/LOW._

@@ -183,54 +183,138 @@ class TestPublicRouteSendsNothing:
         assert await clients.get_character_owner(5) is None
 
 
-def _statement_window(source: str, idx: int) -> str:
-    """The source of the call that starts at `idx`, and nothing after it.
+class TestEveryInternalCallSiteSendsHeaders:
+    """FEAT-170 T15(iii) — the **inverted** sweep.
 
-    A fixed forward window bleeds into the *next* function, so a call that lost
-    its header would still "see" the neighbour's `_internal_token_headers()` and
-    the sweep would pass. Cutting at the first blank line keeps the window to
-    one statement/`try` block — verified by deleting a header and watching the
-    sweep go red.
+    This class replaces the FEAT-169 `GATED = ("/battles/internal/",)`
+    allowlist, which only ever looked at one prefix and therefore waved through
+    a call to any *other* service's internal route. The rule now has no
+    exemption list: any call in autobattle-service whose **resolved** URL
+    contains `/internal/` must pass `headers=`. Variable URLs (`url = f"..."`
+    a line above the call) are resolved with the AST helper from
+    `inventory-service/app/tests/test_outgoing_internal_headers.py`.
     """
-    window = source[idx: idx + 900]
-    end = window.find(chr(10) * 2)
-    return window if end == -1 else window[:end]
 
+    FILES = ("main.py", "clients.py", "strategy.py", "tasks.py")
 
-class TestSourceSweep:
-    """Every call in autobattle-service that targets a `/battles/internal/`
-    path must pass `internal_token_headers()`. Adding a new one without the
-    header fails here."""
+    #: Floor so that a URL refactor cannot silently empty the sweep — the two
+    #: `clients.py` calls (`/battles/internal/{id}/state` and `/action`) that
+    #: drive every mob turn and every auto-played player turn.
+    MIN_CHECKED = 2
 
-    GATED = ("/battles/internal/",)
-    FILES = ("clients.py", "main.py", "strategy.py", "tasks.py")
+    def _resolve(self, source, tree):
+        """{(start, end) of a function: {variable: assigned source}}."""
+        import ast
 
-    def test_all_gated_calls_carry_the_header(self):
-        offenders = []
+        env = {}
+
+        class _V(ast.NodeVisitor):
+            def _scope(self, node):
+                local = {}
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Assign) and len(sub.targets) == 1 \
+                            and isinstance(sub.targets[0], ast.Name):
+                        local[sub.targets[0].id] = \
+                            ast.get_source_segment(source, sub.value) or ""
+                env[(node.lineno, node.end_lineno)] = local
+                self.generic_visit(node)
+
+            visit_FunctionDef = _scope
+            visit_AsyncFunctionDef = _scope
+
+        _V().visit(tree)
+        return env
+
+    def _url_of(self, source, tree, env, node):
+        import ast
+
+        raw = ast.get_source_segment(source, node.args[0]) if node.args else ""
+        raw = raw or ""
+        if "/" in raw:
+            return raw
+        # a URL-building helper — inline its return
+        if node.args and isinstance(node.args[0], ast.Call) \
+                and isinstance(node.args[0].func, ast.Name):
+            builder = node.args[0].func.id
+            for sub in ast.walk(tree):
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                        and sub.name == builder:
+                    for inner in ast.walk(sub):
+                        if isinstance(inner, ast.Return) and inner.value is not None:
+                            return ast.get_source_segment(source, inner.value) or raw
+        # a bare name — look it up in the innermost enclosing function
+        scopes = [(end - start, local) for (start, end), local in env.items()
+                  if start <= node.lineno <= end]
+        scopes.sort(key=lambda pair: pair[0])
+        for _, local in scopes:
+            if raw in local:
+                return local[raw]
+        return raw
+
+    def _sweep(self):
+        import ast
+
+        offenders, checked = [], []
         for filename in self.FILES:
             path = os.path.join(APP_DIR, filename)
             if not os.path.exists(path):
                 continue
-            with open(path, encoding="utf-8") as fh:
-                source = fh.read()
-            lines = source.split("\n")
-            for gated in self.GATED:
-                idx = 0
-                while True:
-                    idx = source.find(gated, idx)
-                    if idx == -1:
-                        break
-                    line_no = source.count("\n", 0, idx)
-                    # Only real URL construction counts — docstrings, comments
-                    # and log messages name these paths too.
-                    if 'f"' in lines[line_no]:
-                        window = _statement_window(source, idx)
-                        if (
-                            "internal_token_headers()" not in window
-                            and "X-Internal-Token" not in window
-                        ):
-                            offenders.append(f"{filename}:{line_no + 1} -> {gated}")
-                    idx += len(gated)
-        assert not offenders, (
-            "gated call(s) without the internal header: " + "; ".join(offenders)
+            source = open(path, encoding="utf-8").read()
+            tree = ast.parse(source)
+            env = self._resolve(source, tree)
+
+            # `@app.post("/internal/register")` is a route *declaration*, not
+            # an outgoing call — skip every decorator expression.
+            decorators = set()
+            for owner in ast.walk(tree):
+                if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    decorators.update(id(d) for d in owner.decorator_list)
+
+            for node in ast.walk(tree):
+                if id(node) in decorators:
+                    continue
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)):
+                    continue
+                if node.func.attr not in ("get", "post", "put", "patch", "delete"):
+                    continue
+                url = self._url_of(source, tree, env, node)
+                if "/internal/" not in url:
+                    continue
+                base = ast.get_source_segment(source, node.func.value)
+                where = f"{filename}:{node.lineno} {base}.{node.func.attr}"
+                checked.append(where)
+                if "headers" not in {kw.arg for kw in node.keywords}:
+                    offenders.append(f"{where}({url[:70]}) без headers=")
+        return checked, offenders
+
+    def test_no_internal_call_is_missing_headers(self):
+        checked, offenders = self._sweep()
+
+        assert len(checked) >= self.MIN_CHECKED, (
+            "свип перестал находить внутренние вызовы — URL отрефакторили, "
+            f"и проверка стала пустой (найдено {len(checked)}, "
+            f"ожидалось >= {self.MIN_CHECKED}): {checked}"
         )
+        assert not offenders, (
+            "межсервисный вызов на /internal/ без X-Internal-Token — боевой "
+            "сервис ответит 401 и автобой встанет молча: " + "; ".join(offenders)
+        )
+
+    def test_the_sweep_has_no_allowlist(self):
+        """FEAT-170: the `GATED` allowlist is gone and must not come back —
+        with one, a new internal target passes silently."""
+        attrs = {name for name in dir(self) if not name.startswith("test_")}
+        forbidden = {"GATED", "KNOWN_UNGATED_TARGETS", "_KNOWN_UNGATED_TARGETS",
+                     "EXEMPT", "SKIP", "ALLOWLIST"}
+        assert not (attrs & forbidden), (
+            "an exemption list crept back into the inverted sweep: "
+            f"{sorted(attrs & forbidden)}"
+        )
+
+    def test_the_known_internal_call_sites_are_still_there(self):
+        """Guard for the sweep itself: if the URLs are refactored out of
+        recognition the sweep silently matches nothing."""
+        source = open(os.path.join(APP_DIR, "clients.py"), encoding="utf-8").read()
+        assert "/battles/internal/{battle_id}/state" in source
+        assert "/battles/internal/{battle_id}/action" in source

@@ -14,8 +14,21 @@ Covers:
 
 import pytest
 
+import auth
 from crud import create_user
 from schemas import UserCreate
+
+
+# FEAT-170: маршруты алмазов закрыты `verify_internal_token` — все вызовы ниже
+# обязаны нести X-Internal-Token. `auth` резолвит токен в модульную константу на
+# импорте, поэтому monkeypatch именно её, а не только переменную окружения.
+INTERNAL_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": INTERNAL_TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _internal_token_configured(monkeypatch):
+    monkeypatch.setattr(auth, "INTERNAL_SERVICE_TOKEN", INTERNAL_TOKEN)
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +52,7 @@ class TestGetDiamonds:
     def test_get_diamonds_default_zero(self, client, db_session):
         """New user should have 0 diamonds."""
         user = _make_user(db_session)
-        resp = client.get(f"/users/internal/{user.id}/diamonds")
+        resp = client.get(f"/users/internal/{user.id}/diamonds", headers=INTERNAL_HEADERS)
         assert resp.status_code == 200
         data = resp.json()
         assert data["user_id"] == user.id
@@ -47,7 +60,7 @@ class TestGetDiamonds:
 
     def test_get_diamonds_nonexistent_user(self, client, db_session):
         """Requesting diamonds for a nonexistent user returns 404."""
-        resp = client.get(f"/users/internal/{NONEXISTENT_USER_ID}/diamonds")
+        resp = client.get(f"/users/internal/{NONEXISTENT_USER_ID}/diamonds", headers=INTERNAL_HEADERS)
         assert resp.status_code == 404
 
 
@@ -63,6 +76,7 @@ class TestAddDiamonds:
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/add",
             json={"amount": 100, "reason": "test reward"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -75,10 +89,12 @@ class TestAddDiamonds:
         client.post(
             f"/users/internal/{user.id}/diamonds/add",
             json={"amount": 50, "reason": "first"},
+            headers=INTERNAL_HEADERS,
         )
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/add",
             json={"amount": 30, "reason": "second"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         assert resp.json()["diamonds"] == 80
@@ -89,6 +105,7 @@ class TestAddDiamonds:
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/add",
             json={"amount": 0, "reason": "invalid"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 400
 
@@ -98,6 +115,7 @@ class TestAddDiamonds:
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/add",
             json={"amount": -10, "reason": "invalid"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 400
 
@@ -106,6 +124,7 @@ class TestAddDiamonds:
         resp = client.post(
             f"/users/internal/{NONEXISTENT_USER_ID}/diamonds/add",
             json={"amount": 100, "reason": "test"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 404
 
@@ -123,11 +142,13 @@ class TestSpendDiamonds:
         client.post(
             f"/users/internal/{user.id}/diamonds/add",
             json={"amount": 200, "reason": "seed"},
+            headers=INTERNAL_HEADERS,
         )
         # Then spend
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/spend",
             json={"amount": 50, "reason": "purchase"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -140,10 +161,12 @@ class TestSpendDiamonds:
         client.post(
             f"/users/internal/{user.id}/diamonds/add",
             json={"amount": 75, "reason": "seed"},
+            headers=INTERNAL_HEADERS,
         )
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/spend",
             json={"amount": 75, "reason": "all-in"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         assert resp.json()["diamonds"] == 0
@@ -155,6 +178,7 @@ class TestSpendDiamonds:
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/spend",
             json={"amount": 10, "reason": "overdraft"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 400
 
@@ -164,14 +188,17 @@ class TestSpendDiamonds:
         client.post(
             f"/users/internal/{user.id}/diamonds/add",
             json={"amount": 100, "reason": "seed"},
+            headers=INTERNAL_HEADERS,
         )
         client.post(
             f"/users/internal/{user.id}/diamonds/spend",
             json={"amount": 80, "reason": "first spend"},
+            headers=INTERNAL_HEADERS,
         )
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/spend",
             json={"amount": 30, "reason": "too much"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 400
 
@@ -181,6 +208,7 @@ class TestSpendDiamonds:
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/spend",
             json={"amount": 0, "reason": "invalid"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 400
 
@@ -190,6 +218,7 @@ class TestSpendDiamonds:
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/spend",
             json={"amount": -5, "reason": "invalid"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 400
 
@@ -198,6 +227,7 @@ class TestSpendDiamonds:
         resp = client.post(
             f"/users/internal/{NONEXISTENT_USER_ID}/diamonds/spend",
             json={"amount": 10, "reason": "test"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 404
 
@@ -216,6 +246,7 @@ class TestDiamondSequentialOperations:
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/add",
             json={"amount": 100, "reason": "step1"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.json()["diamonds"] == 100
 
@@ -223,6 +254,7 @@ class TestDiamondSequentialOperations:
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/spend",
             json={"amount": 30, "reason": "step2"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.json()["diamonds"] == 70
 
@@ -230,6 +262,7 @@ class TestDiamondSequentialOperations:
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/add",
             json={"amount": 50, "reason": "step3"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.json()["diamonds"] == 120
 
@@ -237,11 +270,12 @@ class TestDiamondSequentialOperations:
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/spend",
             json={"amount": 120, "reason": "step4"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.json()["diamonds"] == 0
 
         # Verify via GET
-        resp = client.get(f"/users/internal/{user.id}/diamonds")
+        resp = client.get(f"/users/internal/{user.id}/diamonds", headers=INTERNAL_HEADERS)
         assert resp.json()["diamonds"] == 0
 
     def test_multiple_adds_then_single_spend(self, client, db_session):
@@ -252,16 +286,18 @@ class TestDiamondSequentialOperations:
             client.post(
                 f"/users/internal/{user.id}/diamonds/add",
                 json={"amount": 10, "reason": f"add-{i}"},
+                headers=INTERNAL_HEADERS,
             )
 
         # Balance should be 100
-        resp = client.get(f"/users/internal/{user.id}/diamonds")
+        resp = client.get(f"/users/internal/{user.id}/diamonds", headers=INTERNAL_HEADERS)
         assert resp.json()["diamonds"] == 100
 
         # Spend 100
         resp = client.post(
             f"/users/internal/{user.id}/diamonds/spend",
             json={"amount": 100, "reason": "bulk spend"},
+            headers=INTERNAL_HEADERS,
         )
         assert resp.status_code == 200
         assert resp.json()["diamonds"] == 0

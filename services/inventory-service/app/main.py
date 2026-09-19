@@ -457,7 +457,7 @@ def _add_item_to_inventory_core(character_id: int, item_data: schemas.InventoryI
             "event_type": "collect",
             "increment": item_data.quantity,
             "target_id": item_data.item_id,
-        }, timeout=5.0)
+        }, headers=_internal_token_headers(), timeout=5.0)
     except Exception as e:
         logger.warning(f"Quest auto-progress (collect) error for char {character_id}: {e}")
 

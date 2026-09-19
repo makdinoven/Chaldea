@@ -191,12 +191,18 @@ class TestBPTrackingPayload:
     @patch("crud.get_favorite_user_ids", new_callable=AsyncMock, return_value=[])
     @patch("crud.create_post", new_callable=AsyncMock)
     def test_move_sends_bp_tracking_call(
-        self, mock_create_post, mock_fav_ids, mock_count_locs, mock_auto_progress, mock_client_cls, client
+        self, mock_create_post, mock_fav_ids, mock_count_locs, mock_auto_progress,
+        mock_client_cls, client, monkeypatch,
     ):
         """POST /{id}/move_and_post should fire POST to BP track-event."""
         from database import get_db
         from main import app
         import config
+        import main
+
+        # FEAT-170: `_internal_token_headers` reads this module constant, so
+        # pin it — `setenv` alone has no effect after import.
+        monkeypatch.setattr(main, "INTERNAL_SERVICE_TOKEN", "test-internal-token")
 
         mock_create_post.return_value = _mock_post_result()
 
@@ -210,7 +216,11 @@ class TestBPTrackingPayload:
 
         async def tracking_post(url, **kwargs):
             if "track-event" in url:
-                bp_calls.append({"url": url, "json": kwargs.get("json")})
+                bp_calls.append({
+                    "url": url,
+                    "json": kwargs.get("json"),
+                    "headers": kwargs.get("headers"),
+                })
             return await original_post(url, **kwargs)
 
         real_client.post = AsyncMock(side_effect=tracking_post)
@@ -243,6 +253,20 @@ class TestBPTrackingPayload:
         # Verify the URL is correct
         assert "track-event" in bp_calls[0]["url"]
         assert "battle-pass/internal/track-event" in bp_calls[0]["url"]
+
+        # FEAT-170: the route is token-gated now. The call is fire-and-forget
+        # (`except Exception: pass`), so a missing header is a 401 that nobody
+        # sees — the move still returns 200 and only the battle-pass credit
+        # quietly disappears. Asserting the URL alone would not notice.
+        headers = bp_calls[0]["headers"] or {}
+        assert headers.get("X-Internal-Token") == main.INTERNAL_SERVICE_TOKEN, (
+            "move_and_post dropped X-Internal-Token on track-event — "
+            "battle-pass progress for location visits would silently stop"
+        )
+        assert headers["X-Internal-Token"], (
+            "the internal token is empty in this run, so the assertion above "
+            "would pass even with the header gone"
+        )
 
 
 # ===========================================================================

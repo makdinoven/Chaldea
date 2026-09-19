@@ -22,6 +22,8 @@ from config import settings
 
 TOKEN = "test-internal-token"
 
+APP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
 
 @pytest.fixture()
 def token(monkeypatch):
@@ -176,6 +178,68 @@ async def test_party_active_members_sends_the_token(monkeypatch, token):
 
 
 @pytest.mark.asyncio
+async def test_consume_dungeon_gate_sends_the_token(monkeypatch, token):
+    """FEAT-170 T2 — `POST /locations/internal/action-gate/consume`
+    (`http_clients.py:81`). This caller swallows failures and returns `False`,
+    i.e. "entry refused": a missing header would lock every player out of every
+    dungeon with no error in sight, so the header VALUE is what is asserted."""
+    calls = _patch_client(monkeypatch, _Resp(200, {"consumed": True}))
+
+    assert await http_clients.consume_dungeon_gate(11, 77, 5) is True
+
+    assert len(calls) == 1
+    url, kwargs = calls[0]
+    assert url.endswith("/locations/internal/action-gate/consume"), url
+    assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+        "dungeon-service dropped X-Internal-Token on action-gate/consume — "
+        "locations-service answers 401, the caller swallows it and dungeon "
+        "entry is silently refused"
+    )
+    assert kwargs["json"] == {
+        "character_id": 11, "location_id": 77,
+        "action_type": "dungeon", "target_ref": 5,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_battle_state_sends_the_token(monkeypatch, token):
+    """FEAT-170 T2 — `GET /battles/internal/{id}/state`
+    (`http_clients.py:377`), the loudest call site in the feature: it
+    re-raises as 502/503, so a missing header aborts a dungeon run in progress.
+    One client function serves both call paths (`gameplay.py` polling loop and
+    `main.py`)."""
+    state = {"battle_id": 9, "status": "finished"}
+    calls = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return _Resp(200, state)
+
+    monkeypatch.setattr(http_clients.httpx, "AsyncClient", _Client)
+
+    assert await http_clients.get_battle_state(9) == state
+
+    assert len(calls) == 1
+    url, kwargs = calls[0]
+    assert url.endswith("/battles/internal/9/state"), url
+    assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+        "dungeon-service dropped X-Internal-Token on the battle-state poll — "
+        "battle-service answers 401, get_battle_state raises 502 and the "
+        "running dungeon aborts"
+    )
+
+
+@pytest.mark.asyncio
 async def test_token_is_read_at_call_time(monkeypatch):
     """Pinned via `settings`, which `_internal_token_headers` reads on every
     call — two values must produce two different headers."""
@@ -188,60 +252,139 @@ async def test_token_is_read_at_call_time(monkeypatch):
         ["first", "second"]
 
 
-def _statement_window(source: str, idx: int) -> str:
-    """The source of the call that starts at `idx`, and nothing after it.
+class TestEveryInternalCallSiteSendsHeaders:
+    """FEAT-170 T15(iii) — the **inverted** sweep.
 
-    A fixed forward window bleeds into the *next* function, so a call that lost
-    its header would still "see" the neighbour's `_internal_token_headers()` and
-    the sweep would pass. Cutting at the first blank line keeps the window to
-    one statement/`try` block — verified by deleting a header and watching the
-    sweep go red.
+    This class replaces the FEAT-167/169 `GATED` allowlist, which named the
+    prefixes known to be closed and therefore waved through any *new* internal
+    target nobody had thought to add to the list. The rule now has no exemption
+    list at all: any call in dungeon-service whose **resolved** URL contains
+    `/internal/` must pass `headers=`. Variable URLs (`url = f"..."` a line or
+    two above the call) are resolved with the AST helper from
+    `inventory-service/app/tests/test_outgoing_internal_headers.py`.
+
+    Scanned beyond `main.py`: `http_clients.py` is where every outgoing call
+    actually lives, and `crud.py` / `gameplay.py` are the two modules most
+    likely to grow one.
     """
-    window = source[idx: idx + 900]
-    end = window.find(chr(10) * 2)
-    return window if end == -1 else window[:end]
 
+    FILES = ("main.py", "crud.py", "http_clients.py", "gameplay.py")
 
-class TestSourceSweep:
-    """Every call in dungeon-service that targets a gated path must pass the
-    header helper."""
+    #: Floor so that a URL refactor cannot silently empty the sweep. All six
+    #: live in `http_clients.py` as of FEAT-170: party active-members,
+    #: locations action-gate/consume, characters spawn-dungeon-mobs, inventory
+    #: item grant, battles state poll, characters deduct-gold.
+    MIN_CHECKED = 6
 
-    GATED = (
-        "/consume_stamina",
-        "/recover",
-        "/inventory/internal/characters/",
-        # FEAT-169: обе ручки закрыты verify_internal_token на стороне
-        # character-service и party-service
-        "/add_rewards",
-        "/party/internal/active-members",
-        # FEAT-162: /characters/internal/* (spawn-dungeon-mobs, deduct-gold)
-        "/characters/internal/",
-    )
+    def _resolve(self, source, tree):
+        """{(start, end) of a function: {variable: assigned source}}."""
+        import ast
 
-    def test_all_gated_calls_carry_the_header(self):
-        app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        path = os.path.join(app_dir, "http_clients.py")
-        with open(path, encoding="utf-8") as fh:
-            source = fh.read()
+        env = {}
 
-        lines = source.split("\n")
-        offenders = []
-        for gated in self.GATED:
-            idx = 0
-            while True:
-                idx = source.find(gated, idx)
-                if idx == -1:
-                    break
-                line_no = source.count("\n", 0, idx)
-                # Only real URL construction counts; docstrings, comments and
-                # log messages mention these paths too.
-                if 'f"' in lines[line_no]:
-                    window = _statement_window(source, idx)
-                    if "_internal_token_headers()" not in window:
-                        offenders.append(f"http_clients.py:{line_no + 1} -> {gated}")
-                idx += len(gated)
+        class _V(ast.NodeVisitor):
+            def _scope(self, node):
+                local = {}
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Assign) and len(sub.targets) == 1 \
+                            and isinstance(sub.targets[0], ast.Name):
+                        local[sub.targets[0].id] = \
+                            ast.get_source_segment(source, sub.value) or ""
+                env[(node.lineno, node.end_lineno)] = local
+                self.generic_visit(node)
+
+            visit_FunctionDef = _scope
+            visit_AsyncFunctionDef = _scope
+
+        _V().visit(tree)
+        return env
+
+    def _url_of(self, source, tree, env, node):
+        import ast
+
+        raw = ast.get_source_segment(source, node.args[0]) if node.args else ""
+        raw = raw or ""
+        if "/" in raw:
+            return raw
+        # a URL-building helper — inline its return
+        if node.args and isinstance(node.args[0], ast.Call) \
+                and isinstance(node.args[0].func, ast.Name):
+            builder = node.args[0].func.id
+            for sub in ast.walk(tree):
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                        and sub.name == builder:
+                    for inner in ast.walk(sub):
+                        if isinstance(inner, ast.Return) and inner.value is not None:
+                            return ast.get_source_segment(source, inner.value) or raw
+        # a bare name — look it up in the innermost enclosing function
+        scopes = [(end - start, local) for (start, end), local in env.items()
+                  if start <= node.lineno <= end]
+        scopes.sort(key=lambda pair: pair[0])
+        for _, local in scopes:
+            if raw in local:
+                return local[raw]
+        return raw
+
+    def _sweep(self):
+        import ast
+
+        offenders, checked = [], []
+        for filename in self.FILES:
+            path = os.path.join(APP_DIR, filename)
+            if not os.path.exists(path):
+                continue
+            source = open(path, encoding="utf-8").read()
+            tree = ast.parse(source)
+            env = self._resolve(source, tree)
+
+            # `@app.post("/dungeons/internal/…")` is a route *declaration*, not
+            # an outgoing call — skip every decorator expression.
+            decorators = set()
+            for owner in ast.walk(tree):
+                if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    decorators.update(id(d) for d in owner.decorator_list)
+
+            for node in ast.walk(tree):
+                if id(node) in decorators:
+                    continue
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)):
+                    continue
+                if node.func.attr not in ("get", "post", "put", "patch", "delete"):
+                    continue
+                url = self._url_of(source, tree, env, node)
+                if "/internal/" not in url:
+                    continue
+                base = ast.get_source_segment(source, node.func.value)
+                where = f"{filename}:{node.lineno} {base}.{node.func.attr}"
+                checked.append(where)
+                if "headers" not in {kw.arg for kw in node.keywords}:
+                    offenders.append(f"{where}({url[:70]}) без headers=")
+        return checked, offenders
+
+    def test_no_internal_call_is_missing_headers(self):
+        checked, offenders = self._sweep()
+
+        assert len(checked) >= self.MIN_CHECKED, (
+            "свип перестал находить внутренние вызовы — URL отрефакторили, "
+            f"и проверка стала пустой (найдено {len(checked)}, "
+            f"ожидалось >= {self.MIN_CHECKED}): {checked}"
+        )
         assert not offenders, (
-            "gated call(s) without the internal header: " + "; ".join(offenders)
+            "межсервисный вызов на /internal/ без X-Internal-Token — целевой "
+            "маршрут ответит 401, а вызывающий это проглотит (или, в случае "
+            "опроса состояния боя, оборвёт подземелье): " + "; ".join(offenders)
+        )
+
+    def test_the_sweep_has_no_allowlist(self):
+        """FEAT-170: the `GATED` allowlist is gone and must not come back —
+        with one, a new internal target passes silently."""
+        attrs = {name for name in dir(self) if not name.startswith("test_")}
+        forbidden = {"GATED", "KNOWN_UNGATED_TARGETS", "_KNOWN_UNGATED_TARGETS",
+                     "EXEMPT", "SKIP", "ALLOWLIST"}
+        assert not (attrs & forbidden), (
+            "an exemption list crept back into the inverted sweep: "
+            f"{sorted(attrs & forbidden)}"
         )
 
     def test_the_grant_function_targets_the_internal_route(self):

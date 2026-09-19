@@ -49,6 +49,16 @@ from main import (  # noqa: E402
 )
 from config import settings  # noqa: E402
 
+# FEAT-170: /autobattle/internal/register now requires the shared
+# X-Internal-Token header. `verify_internal_token` compares against the
+# module-level constant captured at import time, so set the attribute (not only
+# the env var) and send the header.
+import auth_http  # noqa: E402
+
+INTERNAL_TOKEN = "test-internal-token"
+auth_http.INTERNAL_SERVICE_TOKEN = INTERNAL_TOKEN
+INTERNAL_HEADERS = {"X-Internal-Token": INTERNAL_TOKEN}
+
 # Clear startup handlers to prevent Redis connection
 app.router.on_startup.clear()
 
@@ -566,6 +576,7 @@ class TestDefaultSpeedOnRegister:
             response = client.post(
                 "/internal/register",
                 json={"participant_id": 50, "battle_id": 0},
+                headers=INTERNAL_HEADERS,
             )
         assert response.status_code == 200
         # Internal register is for mobs — no SPEED entry

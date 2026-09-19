@@ -10,8 +10,20 @@ from sqlalchemy.orm import Session
 
 import models
 import crud
+from config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _internal_token_headers() -> dict:
+    """Headers for outgoing internal service-to-service calls (FEAT-170 §3.6).
+
+    Local copy on purpose: `main.py` imports this module lazily to avoid an
+    import cycle, so `main._internal_token_headers` must not be imported here.
+    `config` is a leaf module (pydantic only), so reading the token from
+    `settings` at call time is cycle-free. Never logged.
+    """
+    return {"X-Internal-Token": settings.INTERNAL_SERVICE_TOKEN}
 
 
 def compare(current_value, operator: str, target_value) -> bool:
@@ -83,7 +95,12 @@ def _fetch_quest_completed(character_id: int, quest_id: int) -> bool:
 
     try:
         url = f"{settings.LOCATIONS_SERVICE_URL}/locations/quests/internal/check-completed"
-        resp = httpx.get(url, params={"character_id": character_id, "quest_id": quest_id}, timeout=5.0)
+        resp = httpx.get(
+            url,
+            params={"character_id": character_id, "quest_id": quest_id},
+            headers=_internal_token_headers(),
+            timeout=5.0,
+        )
         if resp.status_code == 200:
             return resp.json().get("completed", False)
     except Exception as e:

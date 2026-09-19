@@ -210,6 +210,7 @@ inventory-service/app/
 - `character-attributes-service:8002` -> POST `/attributes/cumulative_stats/increment` (накопительные характеристики для перков)
 - `character-attributes-service:8002` -> POST `/attributes/internal/{id}/reconcile-perks` (после equip/unequip, sync и async варианты; FEAT-169: с `X-Internal-Token`)
 - `character-service:8005` -> POST `/characters/internal/evaluate-titles` (после equip/unequip)
+- `locations-service:8006` -> POST `/locations/quests/internal/auto-progress` (событие `collect` при добавлении предметов в инвентарь, `main.py`; FEAT-170: с `X-Internal-Token` из `_internal_token_headers()`, env читается в момент вызова). Ошибка проглатывается (WARNING) — забытый заголовок остановит прогресс заданий молча
 
 ### ⚠️ Правило: никаких блокирующих HTTP-вызовов в `async def` (ревью #5 FEAT-168)
 

@@ -519,6 +519,393 @@ class TestPartyActiveMembers:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# FEAT-170 (QA task #15) — battle-service's seven NEW outgoing call sites
+# ═══════════════════════════════════════════════════════════════════════════
+# All seven were headerless before FEAT-170 and **all seven swallow their
+# error**, so "nothing was raised" proves exactly nothing:
+#
+#   main.py:807   POST /autobattle/internal/register          -> mobs stop acting
+#   main.py:725   POST /locations/quests/internal/auto-progress -> quests stall
+#   main.py:911   POST /locations/internal/action-gate/consume  -> attack refused
+#   main.py:1251  POST /locations/internal/action-gate/consume  -> PvP refused
+#   main.py:1035  POST /locations/internal/gathering-status     -> gatherers dragged in
+#   main.py:1203  POST /locations/internal/gathering-status     -> same
+#   main.py:3755  POST /locations/internal/gathering-status     -> same
+#
+# Every assertion below therefore reads the header VALUE off the **real**
+# production function with only the HTTP transport patched.
+
+
+def _npc_db(npc_ids=(), levels=None, mob_rows=None):
+    """An AsyncSession double that answers battle-service's raw `text()` probes.
+
+    `npc_ids` are the character ids that come back as NPC/mob; `levels` maps a
+    character id to its level; `mob_rows` maps a character id to
+    `(mob_template_id, tier)`.
+    """
+    levels = levels or {}
+    mob_rows = mob_rows or {}
+
+    async def _execute(query, params=None):
+        q = str(query)
+        cid = (params or {}).get("cid")
+        result = MagicMock()
+        if "active_mobs" in q:
+            result.fetchone = MagicMock(return_value=mob_rows.get(cid))
+        elif "is_npc, level" in q:
+            result.fetchone = MagicMock(
+                return_value=(cid in npc_ids, levels.get(cid, 0))
+            )
+        elif "is_npc" in q:
+            result.fetchone = MagicMock(return_value=(cid in npc_ids,))
+        else:
+            result.fetchone = MagicMock(return_value=None)
+        return result
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=_execute)
+    return db
+
+
+class TestAutobattleRegister:
+    """`POST /autobattle/internal/register` (`main.py:807`) — gated by FEAT-170
+    task #11.
+
+    The single most likely silent breakage in the whole feature: the call is
+    wrapped in a `logger.warning` **inside** a `logger.error` **inside** a bare
+    `except Exception`. A dropped header means mobs simply never take a turn,
+    with nothing in the response to show for it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_sends_the_internal_token(self, monkeypatch, token_env):
+        calls = _patch_main_transport(monkeypatch)
+        _stub_assemble_battle(monkeypatch)
+
+        db = _npc_db(npc_ids={20})
+        await main._assemble_battle(db, [10, 20], [0, 1], "pve", 7)
+
+        regs = _only(calls, "/internal/register")
+        assert len(regs) == 1, (
+            "регистрация моба в autobattle не ушла — без неё моб не ходит"
+        )
+        verb, url, kwargs = regs[0]
+        assert verb == "POST"
+        assert url.endswith("/internal/register"), url
+        assert url.startswith(main.settings.AUTOBATTLE_SERVICE_URL), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "battle-service dropped X-Internal-Token on /autobattle/internal/"
+            "register — autobattle answers 401, the mob never takes a turn and "
+            "the only trace is a WARNING line"
+        )
+        assert kwargs["json"] == {"participant_id": 2, "battle_id": 77}
+
+    @pytest.mark.asyncio
+    async def test_only_npc_participants_are_registered(self, monkeypatch, token_env):
+        """Sanity for the assertion above: the player must not be registered,
+        so a call count of 1 really is the mob's."""
+        calls = _patch_main_transport(monkeypatch)
+        _stub_assemble_battle(monkeypatch)
+
+        await main._assemble_battle(_npc_db(npc_ids=set()), [10, 20], [0, 1], "pve", 7)
+
+        assert not _only(calls, "/internal/register")
+
+    @pytest.mark.asyncio
+    async def test_dropping_the_header_would_be_caught(self, monkeypatch, token_env):
+        """Negative control (precedent: inventory-service
+        `test_outgoing_internal_headers.py::test_dropping_the_header_would_be_caught`).
+
+        If a future edit removed `headers=_internal_token_headers()` the call
+        still happens and still "succeeds" — the header is the ONLY observable
+        difference, which is why every assertion above reads its value.
+        """
+        calls = _patch_main_transport(monkeypatch)
+        _stub_assemble_battle(monkeypatch)
+        monkeypatch.setattr(main, "_internal_token_headers", dict)
+
+        await main._assemble_battle(_npc_db(npc_ids={20}), [10, 20], [0, 1], "pve", 7)
+
+        regs = _only(calls, "/internal/register")
+        assert len(regs) == 1, (
+            "вызов по-прежнему происходит — проверка по количеству вызовов "
+            "ничего не заметила бы"
+        )
+        assert "X-Internal-Token" not in (regs[0][2].get("headers") or {}), (
+            "заголовок — единственное наблюдаемое отличие, поэтому именно его "
+            "проверяют тесты выше"
+        )
+
+
+def _stub_assemble_battle(monkeypatch):
+    """Neutralise everything in `_assemble_battle` except the autobattle POST."""
+    battle = MagicMock()
+    battle.id = 77
+    p1, p2 = MagicMock(), MagicMock()
+    p1.id, p1.character_id, p1.team = 1, 10, 0
+    p2.id, p2.character_id, p2.team = 2, 20, 1
+
+    monkeypatch.setattr(main, "create_battle", AsyncMock(return_value=(battle, [p1, p2])))
+
+    async def _info(character_id, pid):
+        return {
+            "participant_id": pid, "character_id": character_id,
+            "name": "X", "avatar": "/x.png",
+            "attributes": {
+                "current_health": 100, "current_mana": 10,
+                "current_energy": 10, "current_stamina": 10,
+                "max_health": 100, "max_mana": 10,
+                "max_energy": 10, "max_stamina": 10,
+            },
+            "skills": [], "fast_slots": [],
+        }
+
+    monkeypatch.setattr(main, "build_participant_info", AsyncMock(side_effect=_info))
+    monkeypatch.setattr(main, "init_battle_state", AsyncMock())
+    monkeypatch.setattr(main, "save_snapshot", AsyncMock())
+    monkeypatch.setattr(main, "cache_snapshot", AsyncMock())
+    rds = AsyncMock()
+    rds.zadd = AsyncMock()
+    monkeypatch.setattr(main, "get_redis_client", AsyncMock(return_value=rds))
+
+
+class TestQuestAutoProgress:
+    """`POST /locations/quests/internal/auto-progress` (`main.py:725`, URL built
+    at `:702`) — gated by FEAT-170 task #8. Swallowed with a `logger.warning`:
+    a dropped header means quest objectives silently stop ticking after a kill.
+    """
+
+    STATE = {
+        "participants": {
+            "1": {"character_id": 10, "team": 0, "hp": 100, "max_hp": 100},
+            "2": {"character_id": 20, "team": 1, "hp": 0, "max_hp": 100},
+        }
+    }
+
+    @pytest.mark.asyncio
+    async def test_every_quest_event_carries_the_internal_token(
+        self, monkeypatch, token_env
+    ):
+        calls = _patch_main_transport(monkeypatch)
+        db = _npc_db(npc_ids={20}, levels={20: 25}, mob_rows={20: (5, "normal")})
+
+        await main._track_cumulative_stats(self.STATE, 0, "pve", 4, db)
+
+        quests = _only(calls, "/locations/quests/internal/auto-progress")
+        assert quests, "квестовый auto-progress не ушёл после победы над мобом"
+        for verb, url, kwargs in quests:
+            assert verb == "POST"
+            assert url.startswith(main.settings.LOCATIONS_SERVICE_URL), url
+            assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+                "battle-service dropped X-Internal-Token on quest auto-progress "
+                "— locations-service answers 401 and quest objectives stop "
+                "ticking with only a WARNING"
+            )
+        assert {c[2]["json"]["event_type"] for c in quests} == {
+            "defeat_any", "kill_mob", "kill_mob_any",
+        }
+
+    @pytest.mark.asyncio
+    async def test_token_is_read_at_call_time(self, monkeypatch):
+        """The helper must read `os.environ` per call, not capture at import —
+        a container that received the variable late would send an empty header
+        forever."""
+        calls = _patch_main_transport(monkeypatch)
+        db = _npc_db(npc_ids={20}, levels={20: 25}, mob_rows={20: (5, "normal")})
+
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "first")
+        await main._track_cumulative_stats(self.STATE, 0, "pve", 4, db)
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "second")
+        await main._track_cumulative_stats(self.STATE, 0, "pve", 4, db)
+
+        seen = {c[2]["headers"]["X-Internal-Token"]
+                for c in _only(calls, "/quests/internal/auto-progress")}
+        assert seen == {"first", "second"}
+
+
+class TestActionGateConsume:
+    """`POST /locations/internal/action-gate/consume` — the two battle-service
+    call sites (`main.py:911` combat, `:1251` PvP), gated by FEAT-170 task #8.
+
+    These two fail **closed**: the helper returns `False` on any error, and the
+    caller turns that into `403 Нужен боевой пост…`. A dropped header does not
+    degrade quietly here — it refuses every attack and every PvP fight.
+    """
+
+    @pytest.mark.asyncio
+    async def test_combat_gate_sends_the_internal_token(self, monkeypatch, token_env):
+        calls = _patch_main_transport(monkeypatch, post_payload={"consumed": True})
+
+        ok = await main._consume_combat_gate(10, 7, 20)
+
+        assert ok is True
+        assert len(calls) == 1
+        verb, url, kwargs = calls[0]
+        assert verb == "POST"
+        assert url == (
+            f"{main.settings.LOCATIONS_SERVICE_URL}"
+            "/locations/internal/action-gate/consume"
+        ), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "battle-service dropped X-Internal-Token on the combat action-gate "
+            "— the consume 401s, the helper returns False and every attack is "
+            "refused with 403"
+        )
+        assert kwargs["json"] == {
+            "character_id": 10, "location_id": 7,
+            "action_type": "combat", "target_ref": 20,
+        }
+
+    @pytest.mark.asyncio
+    async def test_pvp_gate_sends_the_internal_token(self, monkeypatch, token_env):
+        calls = _patch_main_transport(monkeypatch, post_payload={"consumed": True})
+
+        ok = await main._consume_pvp_gate(10, 7, 20)
+
+        assert ok is True
+        assert len(calls) == 1
+        verb, url, kwargs = calls[0]
+        assert verb == "POST"
+        assert url.endswith("/locations/internal/action-gate/consume"), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "battle-service dropped X-Internal-Token on the PvP action-gate — "
+            "every forced PvP request would be refused with 403"
+        )
+        assert kwargs["json"]["action_type"] == "pvp"
+
+    @pytest.mark.asyncio
+    async def test_a_401_fails_closed_rather_than_letting_the_attack_through(
+        self, monkeypatch, token_env
+    ):
+        """Documents the blast radius of a missed header: refusal, not a free
+        attack. (Fail-closed is the correct behaviour — this pins it.)"""
+        class _Client:
+            def __init__(self, *a, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, **kwargs):
+                return _Resp(401, {"detail": "Недействительный internal token"})
+
+        monkeypatch.setattr(main.httpx, "AsyncClient", _Client)
+        assert await main._consume_combat_gate(10, 7, 20) is False
+
+
+class TestGatheringStatus:
+    """`POST /locations/internal/gathering-status` — all three battle-service
+    call sites, gated by FEAT-170 task #8. Swallowed: on error the "busy" set
+    comes back empty, so squadmates who are peacefully gathering get dragged
+    into a fight. Nothing is logged that a player would ever see.
+    """
+
+    ROSTER = {"party_id": 4, "member_character_ids": [10, 11]}
+
+    @pytest.mark.asyncio
+    async def test_filter_available_sends_the_internal_token(
+        self, monkeypatch, token_env
+    ):
+        """`main.py:3755` — `_filter_available`, a plain function."""
+        calls = _patch_main_transport(
+            monkeypatch, post_payload={"gathering_character_ids": [11]}
+        )
+        monkeypatch.setattr(main, "get_active_battle_for_character",
+                            AsyncMock(return_value=None))
+
+        available = await main._filter_available(AsyncMock(), [10, 11])
+
+        assert available == [10], "the gatherer must be excluded"
+        assert len(calls) == 1
+        verb, url, kwargs = calls[0]
+        assert verb == "POST"
+        assert url.endswith("/locations/internal/gathering-status"), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "battle-service dropped X-Internal-Token on gathering-status — the "
+            "busy set comes back empty and gatherers are pulled into fights"
+        )
+        assert kwargs["json"] == {"character_ids": [10, 11]}
+
+    @pytest.mark.asyncio
+    async def test_party_mob_attack_sends_the_internal_token(
+        self, monkeypatch, token_env
+    ):
+        """`main.py:1035` — inside the `/party/mob-attack` endpoint body. The
+        handler is called directly (real function, patched transport); it aborts
+        later at the action-gate, which is fine: the gathering-status call has
+        already been made and recorded by then."""
+        from fastapi import HTTPException
+
+        calls = _patch_main_transport(
+            monkeypatch,
+            get_payload=self.ROSTER,
+            post_payload={"gathering_character_ids": []},
+        )
+        monkeypatch.setattr(main, "_get_character_info", AsyncMock(
+            return_value={"user_id": 1, "current_location_id": 7}))
+        monkeypatch.setattr(main, "get_active_battle_for_character",
+                            AsyncMock(return_value=None))
+
+        req = main.PartyMobAttack(leader_character_id=10, mob_character_id=20)
+        user = main.UserRead(id=1, username="p", role="user", permissions=[])
+        db = _npc_db(npc_ids={20})
+
+        async def _loc_row(query, params=None):
+            result = MagicMock()
+            result.fetchone = MagicMock(return_value=(7, True))
+            return result
+
+        db.execute = AsyncMock(side_effect=_loc_row)
+
+        with pytest.raises(HTTPException):
+            # `post_payload` makes the action-gate answer `consumed: False`
+            await main.party_mob_attack(req, db, user)
+
+        gathering = _only(calls, "/locations/internal/gathering-status")
+        assert len(gathering) == 1, "проверка сбора не ушла из /party/mob-attack"
+        assert gathering[0][2]["headers"]["X-Internal-Token"] == TOKEN, (
+            "/party/mob-attack dropped X-Internal-Token on gathering-status"
+        )
+
+    @pytest.mark.asyncio
+    async def test_party_pack_attack_sends_the_internal_token(
+        self, monkeypatch, token_env
+    ):
+        """`main.py:1203` — inside the `/party/pack-attack` endpoint body."""
+        from fastapi import HTTPException
+
+        calls = _patch_main_transport(
+            monkeypatch,
+            get_payload=self.ROSTER,
+            post_payload={"gathering_character_ids": []},
+        )
+        monkeypatch.setattr(main, "_get_character_info", AsyncMock(
+            return_value={"user_id": 1, "current_location_id": 7}))
+        monkeypatch.setattr(main, "_get_pack_roster", AsyncMock(return_value={
+            "location_id": 7,
+            "member_character_ids": [20, 21],
+            "lead_character_id": 20,
+        }))
+        monkeypatch.setattr(main, "get_active_battle_for_character",
+                            AsyncMock(return_value=None))
+
+        req = main.PartyPackAttack(leader_character_id=10, active_pack_id=3)
+        user = main.UserRead(id=1, username="p", role="user", permissions=[])
+
+        with pytest.raises(HTTPException):
+            await main.party_pack_attack(req, AsyncMock(), user)
+
+        gathering = _only(calls, "/locations/internal/gathering-status")
+        assert len(gathering) == 1, "проверка сбора не ушла из /party/pack-attack"
+        assert gathering[0][2]["headers"]["X-Internal-Token"] == TOKEN, (
+            "/party/pack-attack dropped X-Internal-Token on gathering-status"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Source sweep
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -540,14 +927,15 @@ def _statement_window(source: str, idx: int) -> str:
 class TestSourceSweep:
     """Every call in battle-service that targets a FEAT-162/167/169-gated path
     must pass a token header. Adding a new one without it fails here — this is
-    what covers `main.py:990` and `:1171`, which live inside endpoint bodies."""
+    what covers `main.py:990` and `:1171`, which live inside endpoint bodies.
+
+    Kept alongside the **inverted** AST sweep below: this one also catches
+    `/add_rewards`, which has no `internal` segment in its path but is gated
+    all the same.
+    """
 
     GATED = (
         "/add_rewards",
-        "/party/internal/",
-        "/inventory/internal/",
-        "/characters/internal/",
-        "/attributes/internal/",
     )
 
     FILES = ("main.py", "inventory_client.py")
@@ -587,4 +975,218 @@ class TestSourceSweep:
         assert "/inventory/internal/characters/{character_id}/fast_slots" in source
         assert "{BASE}/inventory/characters/" not in source, (
             "inventory_client targets the JWT-gated player belt route again"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEAT-170 (QA task #15 iv) — INVERTED source sweep
+# ═══════════════════════════════════════════════════════════════════════════
+# The sweep above is allowlist-based: a call to a target nobody thought to list
+# passes silently. That is exactly how the seven FEAT-170 call sites stayed
+# headerless through two previous features. The rule here has no allowlist and
+# no exemption list:
+#
+#     ANY httpx/client/requests get|post|put|patch|delete whose RESOLVED url
+#     contains "/internal/" MUST pass `headers=`.
+#
+# "Resolved" matters: most battle-service call sites build the URL into a local
+# variable one line above the call (`quest_url = f"..."`), so a literal-only
+# scan would see nothing at all. The AST resolver is copied from
+# `inventory-service/app/tests/test_outgoing_internal_headers.py`
+# (`TestEveryInternalCallSiteSendsHeaders._resolve` / `._url_of`).
+#
+# Note `main.py:~4140` (`/locations/internal/cancel-gathering`) builds the
+# header inline as a dict rather than through the helper — it does pass
+# `headers=`, so it is legitimately green here.
+
+#: Every module in `services/battle-service/app/` that makes outgoing HTTP
+#: calls. Widened past `main.py` per §3.12(d): a client module is exactly where
+#: a headerless call would hide.
+SWEPT_FILES = tuple(
+    name for name in (
+        "main.py",
+        "crud.py",
+        "inventory_client.py",
+        "character_client.py",
+        "skills_client.py",
+    )
+    if os.path.exists(os.path.join(APP_DIR, name))
+)
+
+
+class TestEveryInternalCallSiteSendsHeaders:
+    """No allowlist. Any resolved `/internal/` URL must carry `headers=`."""
+
+    def _resolve(self, source, tree):
+        """{(func start, func end): {variable: assigned source}} for `x = expr`."""
+        import ast
+
+        env = {}
+
+        class _V(ast.NodeVisitor):
+            def _scope(self, node):
+                local = {}
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Assign) and len(sub.targets) == 1 \
+                            and isinstance(sub.targets[0], ast.Name):
+                        local[sub.targets[0].id] = \
+                            ast.get_source_segment(source, sub.value) or ""
+                env[(node.lineno, node.end_lineno)] = local
+                self.generic_visit(node)
+
+            visit_FunctionDef = _scope
+            visit_AsyncFunctionDef = _scope
+
+        _V().visit(tree)
+        return env
+
+    def _url_of(self, source, env, node):
+        import ast
+
+        arg = node.args[0] if node.args else None
+        if arg is None:
+            for kw in node.keywords:
+                if kw.arg == "url":
+                    arg = kw.value
+                    break
+        raw = (ast.get_source_segment(source, arg) if arg is not None else "") or ""
+        if "/" in raw:
+            return raw
+        # a URL-building helper — `_some_url(cid)`: inline its return
+        if arg is not None and isinstance(arg, ast.Call) \
+                and isinstance(arg.func, ast.Name):
+            builder = arg.func.id
+            for sub in ast.walk(self._tree):
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                        and sub.name == builder:
+                    for inner in ast.walk(sub):
+                        if isinstance(inner, ast.Return) and inner.value is not None:
+                            return ast.get_source_segment(
+                                self._source, inner.value) or raw
+        # a bare name — look it up in the innermost enclosing function
+        scopes = [(end - start, local) for (start, end), local in env.items()
+                  if start <= node.lineno <= end]
+        scopes.sort(key=lambda pair: pair[0])
+        for _, local in scopes:
+            if raw in local:
+                return local[raw]
+        return raw
+
+    def _scan_source(self, filename, source):
+        """The whole rule, for one module's source. No allowlist anywhere."""
+        import ast
+
+        offenders, checked = [], 0
+        tree = ast.parse(source)
+        self._source, self._tree = source, tree
+        env = self._resolve(source, tree)
+
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr not in ("get", "post", "put", "patch", "delete"):
+                continue
+            base = ast.get_source_segment(source, node.func.value)
+            if base not in ("httpx", "client", "requests"):
+                continue
+            url = self._url_of(source, env, node)
+            if "/internal/" not in url:
+                continue
+            checked += 1
+            if "headers" not in {kw.arg for kw in node.keywords}:
+                offenders.append(
+                    f"{filename}:{node.lineno} "
+                    f"{base}.{node.func.attr}({url[:70]}) без headers="
+                )
+        return checked, offenders
+
+    def _sweep(self):
+        offenders, checked = [], 0
+        for filename in SWEPT_FILES:
+            with open(os.path.join(APP_DIR, filename), encoding="utf-8") as fh:
+                source = fh.read()
+            found, bad = self._scan_source(filename, source)
+            checked += found
+            offenders.extend(bad)
+        return checked, offenders
+
+    def test_no_internal_call_is_missing_headers(self):
+        checked, offenders = self._sweep()
+
+        # Floor: 7 FEAT-170 sites + add_rewards' neighbours already covered by
+        # FEAT-162/167/169 (party active-members ×3, xp-bonus, mob-reward-data,
+        # unlink, cancel-gathering, the inventory_client trio, …). A refactor
+        # that drops below this emptied the sweep rather than fixing anything.
+        assert checked >= 14, (
+            "свип перестал находить внутренние вызовы — URL отрефакторили, "
+            f"и проверка стала пустой (найдено {checked})"
+        )
+        assert not offenders, (
+            "межсервисный вызов на /internal/ без X-Internal-Token — целевой "
+            "маршрут ответит 401, а вызывающий это проглотит: "
+            + "; ".join(offenders)
+        )
+
+    def test_the_seven_feat170_targets_are_still_there(self):
+        """Guard for the sweep itself: if a URL is refactored out of
+        recognition the sweep silently matches nothing."""
+        source = open(os.path.join(APP_DIR, "main.py"), encoding="utf-8").read()
+        for needle in (
+            "/internal/register",
+            "/locations/quests/internal/auto-progress",
+            "/locations/internal/action-gate/consume",
+            "/locations/internal/gathering-status",
+        ):
+            assert needle in source, f"{needle} исчез из battle-service"
+        assert source.count("/locations/internal/gathering-status") >= 3
+        assert source.count("/locations/internal/action-gate/consume") >= 2
+
+    def test_the_sweep_really_catches_a_headerless_call(self):
+        """Negative control for the sweep itself.
+
+        A sweep that matches nothing is indistinguishable from a sweep that
+        passes. This feeds `_scan_source` a synthetic module holding one
+        headered and one headerless internal call and demands it flag exactly
+        the second — including the variable-URL form the real call sites use.
+        """
+        synthetic = (
+            "import httpx\n"
+            "\n"
+            "async def good(client):\n"
+            "    url = f'{BASE}/locations/internal/gathering-status'\n"
+            "    await client.post(url, json={}, headers=_internal_token_headers())\n"
+            "\n"
+            "async def bad(client):\n"
+            "    url = f'{BASE}/locations/internal/action-gate/consume'\n"
+            "    await client.post(url, json={})\n"
+        )
+        checked, offenders = self._scan_source("synthetic.py", synthetic)
+
+        assert checked == 2, f"resolver missed a variable URL (checked={checked})"
+        assert len(offenders) == 1, offenders
+        assert "action-gate/consume" in offenders[0]
+        assert "без headers=" in offenders[0]
+
+    def test_the_sweep_has_no_exemption_list(self):
+        """FEAT-170 §3.12(d): no allowlist may creep back in. The FEAT-169
+        markers (a tuple of "known ungated targets", a `GATED` prefix tuple used
+        to *skip* internal URLs) are what made the old sweeps toothless, so the
+        rule is checked for the absence of any `continue` that depends on the
+        URL's identity rather than on it being internal."""
+        import ast
+        import inspect
+        import textwrap
+
+        body = textwrap.dedent(inspect.getsource(self._scan_source))
+        # Build the forbidden name in pieces so this assertion does not trip
+        # over its own source when the file is scanned.
+        forbidden = "_KNOWN_" + "UNGATED_TARGETS"
+        assert forbidden not in body
+        # The only `continue`s allowed are the four structural filters.
+        continues = sum(1 for n in ast.walk(ast.parse(body))
+                        if isinstance(n, ast.Continue))
+        assert continues == 4, (
+            "в свип добавили ещё одну ветку пропуска — именно так семь вызовов "
+            f"FEAT-170 и прожили две фичи без заголовка (найдено {continues})"
         )

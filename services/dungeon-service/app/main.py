@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from database import get_db, async_session
-from auth_http import get_admin_user, get_current_user_via_http, UserRead, authenticate_websocket
+from auth_http import (
+    get_admin_user,
+    get_current_user_via_http,
+    UserRead,
+    authenticate_websocket,
+    verify_internal_token,
+)
 from models import Dungeon, DungeonSession, DungeonSessionMember
 import crud
 import gameplay
@@ -727,11 +733,15 @@ async def get_my_active_session(
 #  Internal: Character Session Check
 # ===========================
 
-@app.get("/dungeons/internal/character-session/{character_id}")
+@app.get(
+    "/dungeons/internal/character-session/{character_id}",
+    dependencies=[Depends(verify_internal_token)],
+)
 async def check_character_session(character_id: int):
     """
     Internal endpoint: check if a character is currently in a dungeon session.
-    Blocked by Nginx for external access.
+    Requires the shared `X-Internal-Token` header (FEAT-170); Nginx `403` on the
+    `/dungeons/internal/` prefix stays as the outer layer.
     """
     active = await session_state.get_character_active_session(character_id)
     if active is not None:
@@ -743,7 +753,10 @@ async def check_character_session(character_id: int):
 #  Internal: Battle Callback
 # ===========================
 
-@app.post("/dungeons/internal/battle-callback")
+@app.post(
+    "/dungeons/internal/battle-callback",
+    dependencies=[Depends(verify_internal_token)],
+)
 async def battle_callback(
     data: BattleCallbackRequest,
     db: AsyncSession = Depends(get_db),
@@ -751,7 +764,8 @@ async def battle_callback(
     """
     Internal endpoint: called when a dungeon battle ends (backup to polling).
     Processes battle results — marks room cleared, updates casualties, etc.
-    Blocked by Nginx for external access.
+    Requires the shared `X-Internal-Token` header (FEAT-170); Nginx `403` on the
+    `/dungeons/internal/` prefix stays as the outer layer.
     """
     session_id = data.session_id
     battle_id = data.battle_id

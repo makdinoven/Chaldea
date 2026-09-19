@@ -171,6 +171,84 @@ class TestDeliverGoldXp:
             await crud._deliver_gold_xp(7, xp=1, gold=1)
 
 
+class TestDeliverDiamonds:
+    """FEAT-170 T3 — `POST /users/internal/{uid}/diamonds/add` (`crud.py:580`).
+
+    Premium currency. `_deliver_diamonds` re-raises, and `claim_reward` delivers
+    **before** writing the `BpUserReward` marker, so a 401 fails the claim
+    without burning the reward — but the player sees a 500. The header is what
+    keeps that from happening.
+    """
+
+    @pytest.mark.asyncio
+    async def test_sends_the_internal_token(self, monkeypatch, token_env):
+        calls = _patch_client(monkeypatch)
+
+        await crud._deliver_diamonds(7, 150)
+
+        assert len(calls) == 1, "the diamond reward never reached user-service"
+        url, kwargs = calls[0]
+        assert url.endswith("/users/internal/7/diamonds/add"), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "battle-pass dropped X-Internal-Token on diamonds/add — "
+            "user-service answers 401 and the claim 500s"
+        )
+        assert kwargs["json"] == {"amount": 150, "reason": "battle_pass_reward"}
+
+    @pytest.mark.asyncio
+    async def test_token_is_read_at_call_time(self, monkeypatch):
+        calls = _patch_client(monkeypatch)
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "first")
+        await crud._deliver_diamonds(7, 1)
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "second")
+        await crud._deliver_diamonds(7, 1)
+        assert [c[1]["headers"]["X-Internal-Token"] for c in calls] == \
+            ["first", "second"]
+
+    @pytest.mark.asyncio
+    async def test_401_propagates(self, monkeypatch, token_env):
+        _patch_client(monkeypatch, response=_FailResp())
+        with pytest.raises(Exception):
+            await crud._deliver_diamonds(7, 10)
+
+
+class TestDeliverCosmetic:
+    """FEAT-170 T3 — `POST /users/internal/{uid}/cosmetics/unlock`
+    (`crud.py:594`). Purchasable goods; also re-raises."""
+
+    @pytest.mark.asyncio
+    async def test_sends_the_internal_token(self, monkeypatch, token_env):
+        calls = _patch_client(monkeypatch)
+
+        await crud._deliver_cosmetic(7, "frame", "gold-frame")
+
+        assert len(calls) == 1, "the cosmetic reward never reached user-service"
+        url, kwargs = calls[0]
+        assert url.endswith("/users/internal/7/cosmetics/unlock"), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "battle-pass dropped X-Internal-Token on cosmetics/unlock — "
+            "user-service answers 401 and the claim 500s"
+        )
+        assert kwargs["json"] == {
+            "cosmetic_type": "frame",
+            "cosmetic_slug": "gold-frame",
+            "source": "battlepass",
+        }
+
+    @pytest.mark.asyncio
+    async def test_missing_token_still_sends_the_key(self, monkeypatch):
+        monkeypatch.delenv("INTERNAL_SERVICE_TOKEN", raising=False)
+        calls = _patch_client(monkeypatch)
+        await crud._deliver_cosmetic(7, "frame", "gold-frame")
+        assert calls[0][1]["headers"]["X-Internal-Token"] == ""
+
+    @pytest.mark.asyncio
+    async def test_401_propagates(self, monkeypatch, token_env):
+        _patch_client(monkeypatch, response=_FailResp())
+        with pytest.raises(Exception):
+            await crud._deliver_cosmetic(7, "frame", "gold-frame")
+
+
 class TestEveryInventoryGrantCarriesTheHeader:
     """Source sweep: any call in battle-pass-service that grants an item must
     target the internal route and pass `_internal_token_headers()`."""
@@ -195,56 +273,149 @@ class TestEveryInventoryGrantCarriesTheHeader:
         assert not offenders, "; ".join(offenders)
 
 
-def _statement_window(source: str, idx: int) -> str:
-    """The source of the call that starts at `idx`, and nothing after it.
-
-    A fixed forward window bleeds into the *next* function, so a call that lost
-    its header would still "see" the neighbour's `_internal_token_headers()` and
-    the sweep would pass. Cutting at the first blank line keeps the window to
-    one statement/`try` block — verified by deleting a header and watching the
-    sweep go red.
-    """
-    window = source[idx: idx + 900]
-    end = window.find(chr(10) * 2)
-    return window if end == -1 else window[:end]
-
-
 class TestEveryGatedCallCarriesTheHeader:
-    """FEAT-169 source sweep over `crud.py`.
+    """FEAT-170 T15 — inverted source sweep over every module in `app/`.
 
-    Paths deliberately **not** listed: `/users/internal/{uid}/diamonds/add` and
-    `/users/internal/{uid}/cosmetics/unlock` (`crud.py:580`, `:594`). Those
-    user-service routes are explicitly out of FEAT-169's scope (§3.10 item 3 —
-    they still rely on nginx alone) and today send no header. When that sweep
-    happens, add them here and the assertions will hold the callers honest.
+    This used to be an allowlist of gated path prefixes, carrying a to-do that
+    asked the next feature to append its own targets to it — i.e. a new internal
+    target nobody remembered to list passed silently, which is exactly the
+    failure mode the sweep exists to catch. The rule is inverted now: *any*
+    `httpx`/`client`/`requests` call whose **resolved** URL contains
+    `/internal/` must pass `headers=`. There is no exemption list, and none may
+    be reintroduced.
+
+    URLs are resolved through simple `url = f"..."` assignments above the call,
+    because that is how every call site in `crud.py` is written. Resolver copied
+    from `inventory-service/app/tests/test_outgoing_internal_headers.py`.
     """
 
-    GATED = (
-        "/add_rewards",
-        "/inventory/internal/characters/",
-    )
+    #: every module in `app/` — not just `crud.py`. A new outgoing call added
+    #: to `main.py` (or anywhere else) is covered the day it is written.
+    _SCANNED = ("crud.py", "main.py", "auth_http.py", "config.py",
+                "database.py", "models.py", "schemas.py")
+    _CLIENT_BASES = ("httpx", "client", "requests")
+    _METHODS = ("get", "post", "put", "patch", "delete")
 
-    def test_source_sweep(self):
+    def _resolve(self, source, tree):
+        """{(start, end): {variable: assigned source}} per function scope."""
+        import ast
+
+        env = {}
+
+        class _V(ast.NodeVisitor):
+            def _scope(self, node):
+                local = {}
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Assign) and len(sub.targets) == 1 \
+                            and isinstance(sub.targets[0], ast.Name):
+                        local[sub.targets[0].id] = \
+                            ast.get_source_segment(source, sub.value) or ""
+                env[(node.lineno, node.end_lineno)] = local
+                self.generic_visit(node)
+
+            visit_FunctionDef = _scope
+            visit_AsyncFunctionDef = _scope
+
+        _V().visit(tree)
+        return env
+
+    def _url_of(self, source, env, node):
+        import ast
+
+        raw = ast.get_source_segment(source, node.args[0]) if node.args else ""
+        raw = raw or ""
+        if "/" in raw:
+            return raw
+        # a URL-building helper — inline its `return`
+        if node.args and isinstance(node.args[0], ast.Call) \
+                and isinstance(node.args[0].func, ast.Name):
+            builder = node.args[0].func.id
+            for sub in ast.walk(self._tree):
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                        and sub.name == builder:
+                    for inner in ast.walk(sub):
+                        if isinstance(inner, ast.Return) and inner.value is not None:
+                            return ast.get_source_segment(self._source, inner.value) or raw
+        # a bare name — look it up in the innermost enclosing function
+        scopes = [(end - start, local) for (start, end), local in env.items()
+                  if start <= node.lineno <= end]
+        scopes.sort(key=lambda pair: pair[0])
+        for _, local in scopes:
+            if raw in local:
+                return local[raw]
+        return raw
+
+    def _walk_calls(self):
+        """Yield (module, lineno, base, method, url, has_headers) per HTTP call."""
+        import ast
+
         app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        with open(os.path.join(app_dir, "crud.py"), encoding="utf-8") as fh:
-            source = fh.read()
+        for module in self._SCANNED:
+            path = os.path.join(app_dir, module)
+            if not os.path.exists(path):
+                continue
+            with open(path, encoding="utf-8") as fh:
+                source = fh.read()
+            tree = ast.parse(source)
+            self._source, self._tree = source, tree
+            env = self._resolve(source, tree)
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)):
+                    continue
+                if node.func.attr not in self._METHODS:
+                    continue
+                base = ast.get_source_segment(source, node.func.value)
+                if base not in self._CLIENT_BASES:
+                    continue
+                url = self._url_of(source, env, node)
+                yield (module, node.lineno, base, node.func.attr, url,
+                       "headers" in {kw.arg for kw in node.keywords})
 
-        lines = source.split("\n")
+    def test_no_internal_call_is_missing_headers(self):
         offenders = []
-        for gated in self.GATED:
-            idx = 0
-            while True:
-                idx = source.find(gated, idx)
-                if idx == -1:
-                    break
-                line_no = source.count("\n", 0, idx)
-                # Only real URL construction counts — docstrings and comments
-                # name these paths too.
-                if 'f"' in lines[line_no]:
-                    window = _statement_window(source, idx)
-                    if "_internal_token_headers()" not in window:
-                        offenders.append(f"crud.py:{line_no + 1} -> {gated}")
-                idx += len(gated)
-        assert not offenders, (
-            "gated call(s) without the internal header: " + "; ".join(offenders)
+        checked = 0
+        for module, lineno, base, method, url, has_headers in self._walk_calls():
+            if "/internal/" not in url:
+                continue
+            checked += 1
+            if not has_headers:
+                offenders.append(
+                    f"{module}:{lineno} {base}.{method}({url[:70]}) без headers="
+                )
+
+        assert checked >= 3, (
+            "свип перестал находить внутренние вызовы — URL отрефакторили, "
+            f"и проверка стала пустой (найдено {checked})"
         )
+        assert not offenders, (
+            "межсервисный вызов на /internal/ без X-Internal-Token — целевой "
+            "маршрут ответит 401, а награда боевого пропуска не дойдёт: "
+            + "; ".join(offenders)
+        )
+
+    def test_add_rewards_also_carries_the_header(self):
+        """`POST /characters/{cid}/add_rewards` is gated (FEAT-169) but has no
+        `internal` segment in its path, so the inverted rule above cannot see
+        it. Pinned separately rather than as an allowlist entry — an allowlist
+        decides what is *checked*, this decides what must be *true*."""
+        offenders = []
+        checked = 0
+        for module, lineno, base, method, url, has_headers in self._walk_calls():
+            if "/add_rewards" not in url:
+                continue
+            checked += 1
+            if not has_headers:
+                offenders.append(f"{module}:{lineno} {base}.{method}({url[:70]})")
+        assert checked >= 1, "вызов add_rewards исчез — свип пуст"
+        assert not offenders, (
+            "начисление золота/опыта без X-Internal-Token: " + "; ".join(offenders)
+        )
+
+    def test_every_outgoing_call_was_seen(self):
+        """Guard for the sweep itself: if the client calls are refactored out of
+        recognition (a session object, a wrapper) the two tests above match
+        nothing and stay green. battle-pass makes 5 HTTP calls today — four
+        reward deliveries in `crud.py` and the `/users/me` auth call."""
+        seen = list(self._walk_calls())
+        assert len(seen) >= 5, seen

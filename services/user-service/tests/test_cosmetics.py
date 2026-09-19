@@ -19,6 +19,20 @@ from database import Base, get_db
 from main import app
 from auth import get_current_user
 import models
+import auth
+
+
+# FEAT-170: POST /users/internal/{uid}/cosmetics/unlock закрыт
+# `verify_internal_token` — вызовы обязаны нести X-Internal-Token. Токен
+# резолвится в модульную константу `auth.INTERNAL_SERVICE_TOKEN` на импорте,
+# поэтому monkeypatch именно её, а не только переменную окружения.
+INTERNAL_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": INTERNAL_TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _internal_token_configured(monkeypatch):
+    monkeypatch.setattr(auth, "INTERNAL_SERVICE_TOKEN", INTERNAL_TOKEN)
 
 
 # ---------------------------------------------------------------------------
@@ -655,7 +669,7 @@ class TestInternalUnlock:
         app.dependency_overrides[get_db] = override_get_db
         client = TestClient(app)
 
-        resp = client.post(f"/users/internal/{user.id}/cosmetics/unlock", json={
+        resp = client.post(f"/users/internal/{user.id}/cosmetics/unlock", headers=INTERNAL_HEADERS, json={
             "cosmetic_type": "frame",
             "cosmetic_slug": "fire-pulse",
             "source": "battlepass",
@@ -684,7 +698,7 @@ class TestInternalUnlock:
         app.dependency_overrides[get_db] = override_get_db
         client = TestClient(app)
 
-        resp = client.post(f"/users/internal/{user.id}/cosmetics/unlock", json={
+        resp = client.post(f"/users/internal/{user.id}/cosmetics/unlock", headers=INTERNAL_HEADERS, json={
             "cosmetic_type": "background",
             "cosmetic_slug": "night-sky",
             "source": "battlepass",
@@ -706,13 +720,13 @@ class TestInternalUnlock:
         client = TestClient(app)
 
         # First unlock
-        client.post(f"/users/internal/{user.id}/cosmetics/unlock", json={
+        client.post(f"/users/internal/{user.id}/cosmetics/unlock", headers=INTERNAL_HEADERS, json={
             "cosmetic_type": "frame",
             "cosmetic_slug": "fire-pulse",
             "source": "battlepass",
         })
         # Second unlock
-        resp = client.post(f"/users/internal/{user.id}/cosmetics/unlock", json={
+        resp = client.post(f"/users/internal/{user.id}/cosmetics/unlock", headers=INTERNAL_HEADERS, json={
             "cosmetic_type": "frame",
             "cosmetic_slug": "fire-pulse",
             "source": "battlepass",
@@ -732,7 +746,7 @@ class TestInternalUnlock:
         app.dependency_overrides[get_db] = override_get_db
         client = TestClient(app)
 
-        resp = client.post(f"/users/internal/{user.id}/cosmetics/unlock", json={
+        resp = client.post(f"/users/internal/{user.id}/cosmetics/unlock", headers=INTERNAL_HEADERS, json={
             "cosmetic_type": "frame",
             "cosmetic_slug": "nonexistent",
             "source": "battlepass",
@@ -750,7 +764,7 @@ class TestInternalUnlock:
         app.dependency_overrides[get_db] = override_get_db
         client = TestClient(app)
 
-        resp = client.post("/users/internal/999999/cosmetics/unlock", json={
+        resp = client.post("/users/internal/999999/cosmetics/unlock", headers=INTERNAL_HEADERS, json={
             "cosmetic_type": "frame",
             "cosmetic_slug": "fire-pulse",
             "source": "battlepass",
@@ -860,7 +874,7 @@ class TestSchemaValidation:
         app.dependency_overrides[get_db] = override_get_db
         client = TestClient(app)
 
-        resp = client.post(f"/users/internal/{user.id}/cosmetics/unlock", json={
+        resp = client.post(f"/users/internal/{user.id}/cosmetics/unlock", headers=INTERNAL_HEADERS, json={
             "cosmetic_type": "hat",
             "cosmetic_slug": "x",
             "source": "battlepass",

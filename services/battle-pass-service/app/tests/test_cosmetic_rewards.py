@@ -345,9 +345,12 @@ class TestDeliverCosmeticReward:
         mock_deliver.assert_called_once_with(TEST_USER.id, "background", "fire_gradient")
 
     @patch("crud.httpx.AsyncClient")
-    async def test_deliver_cosmetic_sends_correct_payload(self, mock_client_cls):
+    async def test_deliver_cosmetic_sends_correct_payload(self, mock_client_cls,
+                                                          monkeypatch):
         """_deliver_cosmetic POSTs to user-service with correct JSON body."""
         import crud
+
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "test-internal-token")
 
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
@@ -366,6 +369,9 @@ class TestDeliverCosmeticReward:
         json_body = call_args[1]["json"]
 
         assert "/users/internal/1/cosmetics/unlock" in url
+        # FEAT-170: the route is gated — without the header user-service answers
+        # 401 and `_deliver_cosmetic` re-raises, 500ing the player's claim.
+        assert call_args[1]["headers"]["X-Internal-Token"] == "test-internal-token"
         assert json_body["cosmetic_type"] == "frame"
         assert json_body["cosmetic_slug"] == "golden_glow"
         assert json_body["source"] == "battlepass"

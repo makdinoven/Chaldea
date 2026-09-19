@@ -570,11 +570,13 @@ class TestTheThreeRoutesAreOnTheGatedList:
         from fastapi.routing import APIRoute
 
         offenders = []
+        checked = 0
         for route in app.routes:
             if not isinstance(route, APIRoute):
                 continue
             if "/internal/" not in route.path:
                 continue
+            checked += 1
             names = {
                 getattr(dep.call, "__name__", type(dep.call).__name__)
                 for dep in route.dependant.dependencies
@@ -582,6 +584,13 @@ class TestTheThreeRoutesAreOnTheGatedList:
             if "verify_internal_token" not in names:
                 offenders.append(f"{sorted(route.methods)} {route.path}")
 
+        # FEAT-170: without a floor the sweep passes silently once a prefix
+        # rename makes it match nothing at all. Three routes live under
+        # `/attributes/internal/` today (settle-regen, satiety, reconcile-perks).
+        assert checked >= 3, (
+            "the sweep stopped finding internal routes — the paths were "
+            f"refactored and the check is now empty (found {checked})"
+        )
         assert not offenders, (
             "internal routes without verify_internal_token: " + "; ".join(offenders)
         )

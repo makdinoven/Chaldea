@@ -10,7 +10,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from auth_http import get_current_user_via_http, UserRead
+from auth_http import get_current_user_via_http, UserRead, verify_internal_token
 from clients import get_battle_state, get_character_owner, post_battle_action
 from config import settings
 from strategy import Strategy
@@ -133,11 +133,13 @@ async def register(p: RegisterPayload, user: UserRead = Depends(get_current_user
             asyncio.create_task(handle_turn(bid, p.participant_id))
     return {"ok": True, "allowed": list(ALLOWED)}
 
-@app.post("/internal/register")
+@app.post("/internal/register", dependencies=[Depends(verify_internal_token)])
 async def internal_register(p: RegisterPayload):
     """
-    Internal endpoint (no auth) — called by battle-service to register mob AI
-    when a PvE battle is created. Not exposed via Nginx.
+    Internal endpoint — called by battle-service to register mob AI when a PvE
+    battle is created. Requires `X-Internal-Token` (FEAT-170); it has no
+    ownership check, unlike the public `/register` twin above, which is why it
+    must never be reachable without the shared token. Not exposed via Nginx.
     """
     ALLOWED.add(p.participant_id)
     if p.battle_id:

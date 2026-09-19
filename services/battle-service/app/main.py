@@ -32,7 +32,13 @@ from schemas import (
 )
 from models import BattleType, BattleHistory, BattleResult, PvpInvitation, PvpInvitationStatus, BattleStatus, BattleJoinRequest, JoinRequestStatus, BattleParticipant, BattleParty, BattlePartyMember, BattlePartyStatus, PartyMemberStatus
 from rabbitmq_publisher import publish_notification
-from auth_http import get_current_user_via_http, UserRead, require_permission, authenticate_websocket
+from auth_http import (
+    get_current_user_via_http,
+    UserRead,
+    require_permission,
+    authenticate_websocket,
+    verify_internal_token,
+)
 import ws_manager
 from mongo_client import get_mongo_db
 from database import get_db, AsyncSessionLocal
@@ -723,7 +729,9 @@ async def _track_cumulative_stats(
                 for evt in events:
                     try:
                         async with httpx.AsyncClient(timeout=5.0) as client:
-                            await client.post(quest_url, json=evt)
+                            await client.post(
+                                quest_url, json=evt, headers=_internal_token_headers()
+                            )
                     except Exception as e:
                         logger.warning(f"[QUEST] Auto-progress error for char {char_id}: {e}")
 
@@ -798,6 +806,7 @@ async def _assemble_battle(db, player_ids, teams, battle_type, location_id):
                         reg_resp = await client.post(
                             f"{settings.AUTOBATTLE_SERVICE_URL}/internal/register",
                             json={"participant_id": p.id, "battle_id": battle_obj.id},
+                            headers=_internal_token_headers(),
                         )
                         if reg_resp.status_code != 200:
                             logger.warning(
@@ -906,6 +915,7 @@ async def _consume_combat_gate(character_id: int, location_id: int, mob_characte
                     "action_type": "combat",
                     "target_ref": mob_character_id,
                 },
+                headers=_internal_token_headers(),
             )
             if resp.status_code == 200:
                 return bool(resp.json().get("consumed"))
@@ -1024,6 +1034,7 @@ async def party_mob_attack(
             gresp = await client.post(
                 f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/gathering-status",
                 json={"character_ids": members},
+                headers=_internal_token_headers(),
             )
             if gresp.status_code == 200:
                 gathering = set(gresp.json().get("gathering_character_ids", []))
@@ -1191,6 +1202,7 @@ async def party_pack_attack(
             gresp = await client.post(
                 f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/gathering-status",
                 json={"character_ids": members},
+                headers=_internal_token_headers(),
             )
             if gresp.status_code == 200:
                 gathering = set(gresp.json().get("gathering_character_ids", []))
@@ -1241,6 +1253,7 @@ async def _consume_pvp_gate(character_id: int, location_id: int, victim_characte
                     "character_id": character_id, "location_id": location_id,
                     "action_type": "pvp", "target_ref": victim_character_id,
                 },
+                headers=_internal_token_headers(),
             )
             if resp.status_code == 200:
                 return bool(resp.json().get("consumed"))
@@ -1372,11 +1385,16 @@ async def admin_reject_pvp_request(
 
 
 # -----------------------------------------------------------
-# Internal endpoints (no auth, for service-to-service calls)
+# Internal endpoints (service-to-service only)
 # -----------------------------------------------------------
-@router.get("/internal/{battle_id}/state")
+# FEAT-170: gated by the shared `X-Internal-Token` header instead of a JWT.
+# nginx blocks `/battles/internal/` from outside; this is the inner layer.
+# The browser uses the public twins `GET /battles/{id}/state` and
+# `POST /battles/{id}/action`, which stay JWT-gated and unchanged.
+@router.get("/internal/{battle_id}/state", dependencies=[Depends(verify_internal_token)])
 async def get_state_internal(battle_id: int):
-    """Internal endpoint for autobattle-service — no JWT required."""
+    """Internal endpoint for autobattle-service and dungeon-service —
+    requires `X-Internal-Token`, not a JWT."""
     state = await load_state(battle_id)
     if not state:
         raise HTTPException(404, "State not found")
@@ -1429,13 +1447,19 @@ async def get_state_internal(battle_id: int):
     return {"snapshot": snapshot, "runtime": runtime}
 
 
-@router.post("/internal/{battle_id}/action", response_model=ActionResponse)
+@router.post(
+    "/internal/{battle_id}/action",
+    response_model=ActionResponse,
+    dependencies=[Depends(verify_internal_token)],
+)
 async def make_action_internal(
     battle_id: int,
     request: ActionRequest,
     db_session: AsyncSession = Depends(get_db),
 ):
-    """Internal endpoint for autobattle-service — no JWT required."""
+    """Internal endpoint for autobattle-service — requires `X-Internal-Token`.
+    Keeps `skip_ownership=True` by design: that is exactly why the route must
+    never be reachable without the shared token."""
     return await _make_action_core(battle_id, request, db_session, skip_ownership=True)
 
 
@@ -3730,6 +3754,7 @@ async def _filter_available(db, character_ids: list) -> list:
                 gresp = await client.post(
                     f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/gathering-status",
                     json={"character_ids": character_ids},
+                    headers=_internal_token_headers(),
                 )
                 if gresp.status_code == 200:
                     gathering = set(gresp.json().get("gathering_character_ids", []))
@@ -6365,10 +6390,11 @@ async def incoming_party_invites(
     return IncomingPartyInvitesResponse(invites=invites)
 
 
-@router.post("/internal/party/leave-on-move")
+@router.post("/internal/party/leave-on-move", dependencies=[Depends(verify_internal_token)])
 async def party_leave_on_move(character_id: int = Query(...), db: AsyncSession = Depends(get_db)):
-    """Internal: called when a character changes location — remove them from any
-    forming party (disbanding it if they were the leader). Best-effort, no auth."""
+    """Internal: called by locations-service when a character changes location —
+    remove them from any forming party (disbanding it if they were the leader).
+    Best-effort for the caller; requires `X-Internal-Token` (FEAT-170)."""
     res = await db.execute(
         select(BattleParty)
         .join(BattlePartyMember, BattlePartyMember.party_id == BattleParty.id)

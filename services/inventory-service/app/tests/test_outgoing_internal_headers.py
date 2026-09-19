@@ -488,35 +488,67 @@ class TestReconcilePerksHeader:
 
 # ---------------------------------------------------------------------------
 # FEAT-169 — source sweep: no internal call may lose its header
+# FEAT-170 — the sweep is now INVERTED: there is no allowlist any more
 # ---------------------------------------------------------------------------
-# The per-call tests above pin the three call sites that exist today. This
-# sweep covers the ones nobody has written yet: any `post` in main.py whose URL
+# The per-call tests above pin the call sites that exist today. This sweep
+# covers the ones nobody has written yet: any call in this service whose URL
 # points at another service's `/internal/` route must pass `headers=`.
+#
+# Until FEAT-170 this class carried `_KNOWN_UNGATED_TARGETS`, an allowlist that
+# exempted `POST /locations/quests/internal/auto-progress` because that route
+# was still open. FEAT-170 gated it, so the allowlist was **deleted**, not
+# extended — an allowlist-based sweep passes for the wrong reason the moment a
+# target is gated, and this one carried an explicit FEAT-170 to-do marker
+# saying exactly that. The rule now has no exceptions: *any* resolved URL
+# containing `/internal/` must pass `headers=`.
 
 
 class TestEveryInternalCallSiteSendsHeaders:
-    """Any call in main.py aimed at another service's `/internal/` route must
-    pass `headers=`. Variable URLs (`url = f"..."` one line above the call) are
-    resolved, because that is how most of the call sites are written."""
+    """Any call in this service aimed at another service's `/internal/` route
+    must pass `headers=`. Variable URLs (`url = f"..."` one line above the
+    call) are resolved, because that is how most of the call sites are written.
 
-    #: `POST /locations/quests/internal/auto-progress` is explicitly out of
-    #: FEAT-169 scope (§3.10.3 — the remaining nginx-only internal prefixes).
-    #: It is listed here so the sweep stays green today and turns red the
-    #: moment that route is gated without this caller being updated.
-    _KNOWN_UNGATED_TARGETS = ("/locations/quests/internal/auto-progress",)
+    Scanned files: every module of `app/` that can make an outgoing call
+    (FEAT-170 §3.12 d — `main.py` alone is no longer enough).
+    """
+
+    #: no allowlist — see the module comment above (FEAT-170).
+    SCANNED_FILES = ("main.py", "crud.py", "auth_http.py")
+
+    def _segment(self, node):
+        """`ast.get_source_segment` without its per-call `splitlines()`.
+
+        The stdlib helper re-splits the whole module for every node, which is
+        quadratic over these four-thousand-line files. Offsets are UTF-8
+        **byte** offsets (the sources are full of Cyrillic strings), so the
+        slicing is done on encoded lines.
+        """
+        if getattr(node, "lineno", None) is None:
+            return ""
+        lines = self._blines
+        start, end = node.lineno - 1, node.end_lineno - 1
+        if start == end:
+            return lines[start][node.col_offset:node.end_col_offset].decode(
+                "utf-8", "replace")
+        parts = [lines[start][node.col_offset:]]
+        parts.extend(lines[start + 1:end])
+        parts.append(lines[end][:node.end_col_offset])
+        return b"\n".join(parts).decode("utf-8", "replace")
 
     def _resolve(self, source, tree):
         """{function name: {variable: assigned source}} for simple `x = expr`."""
         import ast
 
         env = {}
+        segment = self._segment
 
         class _V(ast.NodeVisitor):
             def _scope(self, node):
                 local = {}
                 for sub in ast.walk(node):
-                    if isinstance(sub, ast.Assign) and len(sub.targets) == 1                             and isinstance(sub.targets[0], ast.Name):
-                        local[sub.targets[0].id] =                             ast.get_source_segment(source, sub.value) or ""
+                    if isinstance(sub, ast.Assign) and len(sub.targets) == 1 \
+                            and isinstance(sub.targets[0], ast.Name):
+                        local[sub.targets[0].id] = segment(sub.value)
                 env[(node.lineno, node.end_lineno)] = local
                 self.generic_visit(node)
 
@@ -529,7 +561,7 @@ class TestEveryInternalCallSiteSendsHeaders:
     def _url_of(self, source, env, node):
         import ast
 
-        raw = ast.get_source_segment(source, node.args[0]) if node.args else ""
+        raw = self._segment(node.args[0]) if node.args else ""
         raw = raw or ""
         if "/" in raw:
             return raw
@@ -542,7 +574,7 @@ class TestEveryInternalCallSiteSendsHeaders:
                         and sub.name == builder:
                     for inner in ast.walk(sub):
                         if isinstance(inner, ast.Return) and inner.value is not None:
-                            return ast.get_source_segment(self._source, inner.value) or raw
+                            return self._segment(inner.value) or raw
         # a bare name — look it up in the innermost enclosing function
         scopes = [(end - start, local) for (start, end), local in env.items()
                   if start <= node.lineno <= end]
@@ -552,36 +584,52 @@ class TestEveryInternalCallSiteSendsHeaders:
                 return local[raw]
         return raw
 
-    def test_no_internal_call_is_missing_headers(self):
+    def _sweep(self):
+        """Return `(checked, offenders)` over every scanned file."""
         import ast
-
-        source = open(os.path.join(_APP_DIR, "main.py"), encoding="utf-8").read()
-        tree = ast.parse(source)
-        self._source, self._tree = source, tree
-        env = self._resolve(source, tree)
 
         offenders = []
         checked = 0
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+        for filename in self.SCANNED_FILES:
+            path = os.path.join(_APP_DIR, filename)
+            if not os.path.exists(path):
                 continue
-            if node.func.attr not in ("post", "put", "patch", "delete", "get"):
-                continue
-            base = ast.get_source_segment(source, node.func.value)
-            if base not in ("httpx", "client", "requests"):
-                continue
-            url = self._url_of(source, env, node)
-            if "internal" not in url:
-                continue
-            if any(known in url for known in self._KNOWN_UNGATED_TARGETS):
-                continue
-            checked += 1
-            if "headers" not in {kw.arg for kw in node.keywords}:
-                offenders.append(
-                    f"main.py:{node.lineno} {base}.{node.func.attr}({url[:70]}) без headers="
-                )
+            source = open(path, encoding="utf-8").read()
+            tree = ast.parse(source)
+            self._source, self._tree = source, tree
+            self._blines = [line.encode("utf-8") for line in source.splitlines()]
+            env = self._resolve(source, tree)
 
-        assert checked >= 4, (
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)):
+                    continue
+                if node.func.attr not in ("post", "put", "patch", "delete", "get"):
+                    continue
+                base = self._segment(node.func.value)
+                if base not in ("httpx", "client", "requests"):
+                    continue
+                url = self._url_of(source, env, node)
+                # `internal/` rather than `/internal/`: several URLs are built
+                # as f"{SERVICE_URL}internal/…" because the setting already
+                # ends with a slash (main.py:852, :3491).
+                if "internal/" not in url:
+                    continue
+                checked += 1
+                if "headers" not in {kw.arg for kw in node.keywords}:
+                    offenders.append(
+                        f"{filename}:{node.lineno} {base}.{node.func.attr}"
+                        f"({url[:70]}) без headers="
+                    )
+        return checked, offenders
+
+    def test_no_internal_call_is_missing_headers(self):
+        checked, offenders = self._sweep()
+
+        # Floor raised from 4 to 5 by FEAT-170: the allowlist that hid
+        # `/locations/quests/internal/auto-progress` is gone, so that call site
+        # is now inspected like every other one.
+        assert checked >= 5, (
             "свип перестал находить внутренние вызовы — URL отрефакторили, "
             f"и проверка стала пустой (найдено {checked})"
         )
@@ -591,10 +639,156 @@ class TestEveryInternalCallSiteSendsHeaders:
             + "; ".join(offenders)
         )
 
+    def test_the_sweep_has_no_allowlist(self):
+        """FEAT-170: pin the inversion itself.
+
+        An allowlist here would make the sweep pass for the wrong reason — the
+        exempted target is exactly the one most likely to be freshly gated. If
+        someone reintroduces one, this fails and points them at the rule.
+        """
+        assert not hasattr(self, "_KNOWN_UNGATED_TARGETS"), (
+            "the FEAT-170 inversion was undone — an internal target was "
+            "allowlisted out of the sweep again"
+        )
+        attrs = {name for name, value in vars(type(self)).items()
+                 if isinstance(value, (tuple, list, set, frozenset))
+                 and any(word in name.upper()
+                         for word in ("UNGATED", "ALLOW", "EXEMPT", "SKIP"))}
+        assert not attrs, f"allowlist reintroduced into the sweep: {attrs}"
+
+    def test_the_quest_auto_progress_call_is_inside_the_sweep(self):
+        """The formerly-allowlisted call site must now actually be inspected —
+        otherwise deleting the allowlist changed nothing."""
+        import ast
+
+        source = open(os.path.join(_APP_DIR, "main.py"), encoding="utf-8").read()
+        tree = ast.parse(source)
+        self._source, self._tree = source, tree
+        self._blines = [line.encode("utf-8") for line in source.splitlines()]
+        env = self._resolve(source, tree)
+
+        seen = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr not in ("post", "put", "patch", "delete", "get"):
+                continue
+            if self._segment(node.func.value) not in (
+                    "httpx", "client", "requests"):
+                continue
+            url = self._url_of(source, env, node)
+            if "/locations/quests/internal/auto-progress" in url:
+                seen.append(node.lineno)
+        assert seen, (
+            "the quest auto-progress call site vanished from main.py — the "
+            "sweep can no longer prove it carries X-Internal-Token"
+        )
+
     def test_the_known_internal_call_sites_are_still_there(self):
         """Guard for the sweep itself: if the URLs are refactored out of
         recognition the sweep silently matches nothing."""
         source = open(os.path.join(_APP_DIR, "main.py"), encoding="utf-8").read()
         assert "internal/{character_id}/satiety" in source
         assert "internal/{character_id}/reconcile-perks" in source
-        assert source.count("_internal_token_headers()") >= 5
+        assert "/locations/quests/internal/auto-progress" in source
+        assert source.count("_internal_token_headers()") >= 6
+
+
+# ---------------------------------------------------------------------------
+# FEAT-170 — `POST /locations/quests/internal/auto-progress` is gated now
+# ---------------------------------------------------------------------------
+# `_add_item_to_inventory_core` (main.py) fires quest auto-progress after every
+# collect/grant. The call is wrapped in `except Exception: logger.warning(...)`,
+# so a missing header produces a 401 that **nothing** observes: the item still
+# lands in the bag, the request still returns 200, and the player's "collect N
+# ore" objective simply never moves. The header value is therefore asserted on
+# the real function — "nothing raised" would pass even with the header gone,
+# which is what `test_quest_auto_progress_without_the_header_is_invisible`
+# below demonstrates.
+
+
+class TestQuestAutoProgressCallCarriesTheToken:
+
+    @staticmethod
+    def _fake_db(max_stack_size=10):
+        from unittest.mock import MagicMock
+
+        item_row = MagicMock()
+        item_row.max_stack_size = max_stack_size
+
+        query = MagicMock()
+        query.filter.return_value.first.return_value = item_row
+        query.filter.return_value.all.return_value = []
+
+        db = MagicMock()
+        db.query.return_value = query
+        return db
+
+    def _run(self, monkeypatch, quantity=3):
+        """Call the real `_add_item_to_inventory_core`, recording every POST."""
+        calls = []
+        monkeypatch.setattr(
+            main.httpx, "post",
+            lambda url, **kw: (calls.append((url, kw)), _Resp())[1])
+
+        main._add_item_to_inventory_core(
+            character_id=31,
+            item_data=main.schemas.InventoryItem(item_id=77, quantity=quantity),
+            db=self._fake_db(),
+        )
+        return calls
+
+    def test_collect_sends_the_token(self, monkeypatch, token_env):
+        calls = self._run(monkeypatch)
+
+        progress = [c for c in calls if "auto-progress" in c[0]]
+        assert progress, "the collect event never reached locations-service"
+        url, kwargs = progress[0]
+        assert url.endswith("/locations/quests/internal/auto-progress"), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "inventory-service dropped X-Internal-Token on quest "
+            "auto-progress — the caller only logs a WARNING, so collect "
+            "objectives would silently stop advancing"
+        )
+        assert kwargs["json"] == {
+            "character_id": 31,
+            "event_type": "collect",
+            "increment": 3,
+            "target_id": 77,
+        }
+
+    def test_the_token_is_read_at_call_time(self, monkeypatch):
+        """`main._internal_token_headers` reads env per call, so a rotated
+        secret must reach the next call without a restart."""
+        calls = []
+        monkeypatch.setattr(
+            main.httpx, "post",
+            lambda url, **kw: (calls.append((url, kw)), _Resp())[1])
+
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "first")
+        main._add_item_to_inventory_core(
+            31, main.schemas.InventoryItem(item_id=77, quantity=1), self._fake_db())
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "second")
+        main._add_item_to_inventory_core(
+            31, main.schemas.InventoryItem(item_id=77, quantity=1), self._fake_db())
+
+        sent = [kw["headers"]["X-Internal-Token"]
+                for url, kw in calls if "auto-progress" in url]
+        assert sent == ["first", "second"]
+
+    def test_quest_auto_progress_without_the_header_is_invisible(
+            self, monkeypatch, token_env):
+        """Negative control — proves the assertion above actually bites.
+
+        With the header helper neutered the call still happens, still carries
+        the right URL and the right body, and still raises nothing. Only the
+        header differs, so only a header assertion can catch a regression here.
+        """
+        monkeypatch.setattr(main, "_internal_token_headers", dict)
+        calls = self._run(monkeypatch)
+
+        progress = [c for c in calls if "auto-progress" in c[0]]
+        assert len(progress) == 1, (
+            "the call still happens — a call-count assertion sees nothing")
+        assert "X-Internal-Token" not in progress[0][1].get("headers", {})

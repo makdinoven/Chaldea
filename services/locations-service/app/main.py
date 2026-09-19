@@ -29,6 +29,47 @@ logger = logging.getLogger(__name__)
 OAUTH2_SCHEME_OPTIONAL = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
 
+# --------------------------------------------------------------------
+# Internal service-to-service auth (FEAT-162; hoisted here by FEAT-170 §3.5)
+# --------------------------------------------------------------------
+# This block must stay ABOVE every route that uses
+# `Depends(verify_internal_token)`: a dependency inside a route decorator is
+# resolved at import time, so a definition further down the module would raise
+# NameError at container start. Keeping it in `main.py` (rather than a separate
+# module) also keeps `main.INTERNAL_SERVICE_TOKEN` monkeypatchable, which the
+# existing tests rely on.
+
+INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
+
+
+def _internal_token_headers() -> dict:
+    """Headers for outgoing internal service-to-service calls (FEAT-162 §3.4).
+
+    Reads the module-level constant so tests can override it the same way they
+    already do for `verify_internal_token`.
+    """
+    return {"X-Internal-Token": INTERNAL_SERVICE_TOKEN}
+
+
+def verify_internal_token(
+    x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
+) -> None:
+    """Reject the request unless `X-Internal-Token` matches
+    `INTERNAL_SERVICE_TOKEN` from env. Empty env -> always reject (we never
+    want a missing config to silently disable auth on an internal endpoint).
+    """
+    if not INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="Internal service token не настроен",
+        )
+    if not x_internal_token or x_internal_token != INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=401,
+            detail="Недействительный internal token",
+        )
+
+
 async def _track_cumulative_stats(character_id: int, increments: dict, set_max: dict = None):
     """
     Fire-and-forget: increment cumulative stats for perk tracking.
@@ -1358,7 +1399,8 @@ async def move_and_post(
                         "event_type": "location_visit",
                         "character_id": movement.character_id,
                         "metadata": {"location_id": destination_location_id}
-                    }
+                    },
+                    headers=_internal_token_headers(),
                 )
         except Exception:
             pass  # fire-and-forget, must not block movement
@@ -1371,6 +1413,7 @@ async def move_and_post(
                 await client.post(
                     f"{settings.BATTLE_SERVICE_URL}/battles/internal/party/leave-on-move",
                     params={"character_id": movement.character_id},
+                    headers=_internal_token_headers(),
                 )
         except Exception:
             pass  # fire-and-forget, must not block movement
@@ -1587,6 +1630,7 @@ async def quick_move(
             await client.post(
                 f"{settings.BATTLE_SERVICE_URL}/battles/internal/party/leave-on-move",
                 params={"character_id": body.character_id},
+                headers=_internal_token_headers(),
             )
     except Exception:
         pass  # fire-and-forget, must not block movement
@@ -1623,6 +1667,7 @@ async def quick_move(
                         "character_id": body.character_id,
                         "metadata": {"location_id": destination_location_id},
                     },
+                    headers=_internal_token_headers(),
                 )
         except Exception:
             pass
@@ -3147,15 +3192,20 @@ async def abandon_quest(
 # --------------------------------------------------------------------
 # Internal: quest completion check (for perk evaluator)
 # --------------------------------------------------------------------
-@router.get("/quests/internal/check-completed")
+@router.get(
+    "/quests/internal/check-completed",
+    dependencies=[Depends(verify_internal_token)],
+)
 async def check_quest_completed_internal(
     character_id: int,
     quest_id: int,
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Internal endpoint (service-to-service, no auth).
+    Internal endpoint (service-to-service, FEAT-170: `X-Internal-Token`).
     Returns whether a character has completed a specific quest.
+
+    Caller: character-attributes-service `perk_evaluator._fetch_quest_completed`.
     """
     result = await session.execute(
         text(
@@ -3169,14 +3219,19 @@ async def check_quest_completed_internal(
     return {"completed": row is not None}
 
 
-@router.get("/quests/internal/completed-count")
+@router.get(
+    "/quests/internal/completed-count",
+    dependencies=[Depends(verify_internal_token)],
+)
 async def get_completed_quest_count_internal(
     character_id: int,
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Internal endpoint (service-to-service, no auth).
+    Internal endpoint (service-to-service, FEAT-170: `X-Internal-Token`).
     Returns the count of completed quests for a character.
+
+    No caller today — gated, not deleted (FEAT-170 §3.9).
     """
     result = await session.execute(
         text(
@@ -3192,14 +3247,20 @@ async def get_completed_quest_count_internal(
 # --------------------------------------------------------------------
 # Internal: auto-progress quest objectives (service-to-service)
 # --------------------------------------------------------------------
-@router.post("/quests/internal/auto-progress")
+@router.post(
+    "/quests/internal/auto-progress",
+    dependencies=[Depends(verify_internal_token)],
+)
 async def auto_progress_quests_internal(
     body: schemas.QuestAutoProgressRequest,
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Internal endpoint (no auth). Called by other services when game events happen.
-    Automatically finds and updates matching quest objectives for the character.
+    Internal endpoint (FEAT-170: `X-Internal-Token`). Called by other services
+    when game events happen. Automatically finds and updates matching quest
+    objectives for the character; completing an objective pays the reward.
+
+    Callers: battle-service (per defeated enemy), inventory-service (collect).
     """
     updated = await crud.auto_progress_quests(
         session,
@@ -3671,18 +3732,26 @@ async def start_gathering_route(
     return schemas.StartGatheringResponse(**payload)
 
 
-@router.post("/internal/gathering-status", response_model=schemas.GatheringStatusResponse)
+@router.post(
+    "/internal/gathering-status",
+    response_model=schemas.GatheringStatusResponse,
+    dependencies=[Depends(verify_internal_token)],
+)
 async def gathering_status_internal(
     body: schemas.GatheringStatusRequest,
     session: AsyncSession = Depends(get_db),
 ):
-    """Internal (service-to-service): which of the given characters are actively
-    gathering — battle-service keeps them out of a group mob fight (FEAT-144 Ф3)."""
+    """Internal (service-to-service, FEAT-170: `X-Internal-Token`): which of the
+    given characters are actively gathering — battle-service keeps them out of a
+    group mob fight (FEAT-144 Ф3)."""
     busy = await crud.active_gatherers_among(session, body.character_ids)
     return schemas.GatheringStatusResponse(gathering_character_ids=busy)
 
 
-@router.get("/internal/action-gate")
+@router.get(
+    "/internal/action-gate",
+    dependencies=[Depends(verify_internal_token)],
+)
 async def check_action_gate_internal(
     character_id: int,
     location_id: int,
@@ -3690,17 +3759,27 @@ async def check_action_gate_internal(
     target_ref: int = None,
     session: AsyncSession = Depends(get_db),
 ):
-    """Internal (FEAT-145): does the character hold an open gate for this action?"""
+    """Internal (FEAT-145; FEAT-170: `X-Internal-Token`): does the character hold
+    an open gate for this action? No caller today — the player-facing twin is
+    `GET /locations/action-gate/status`. Gated, not deleted (FEAT-170 §3.9)."""
     ok = await crud.check_action_gate(session, character_id, location_id, action_type, target_ref)
     return {"open": ok}
 
 
-@router.post("/internal/action-gate/consume")
+@router.post(
+    "/internal/action-gate/consume",
+    dependencies=[Depends(verify_internal_token)],
+)
 async def consume_action_gate_internal(
     body: schemas.ActionGateConsume,
     session: AsyncSession = Depends(get_db),
 ):
-    """Internal (FEAT-145): consume one matching open gate before the action fires."""
+    """Internal (FEAT-145; FEAT-170: `X-Internal-Token`): consume one matching
+    open gate before the action fires.
+
+    Callers fail CLOSED — battle-service combat/pvp gates and dungeon entry all
+    return False when this call errors, so a caller without the header refuses
+    attacks, PvP and dungeon entry. All three send the header (FEAT-170 W1)."""
     consumed = await crud.consume_action_gate(
         session, body.character_id, body.location_id, body.action_type, body.target_ref,
     )
@@ -3728,35 +3807,12 @@ async def action_gate_status(
 # X-Internal-Token request header. Idempotent — second call with no active
 # session returns `cancelled: false`.
 
-INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
-
-
-def _internal_token_headers() -> dict:
-    """Headers for outgoing internal service-to-service calls (FEAT-162 §3.4).
-
-    Reads the module-level constant so tests can override it the same way they
-    already do for `verify_internal_token`.
-    """
-    return {"X-Internal-Token": INTERNAL_SERVICE_TOKEN}
-
-
-def verify_internal_token(
-    x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
-) -> None:
-    """Reject the request unless `X-Internal-Token` matches
-    `INTERNAL_SERVICE_TOKEN` from env. Empty env -> always reject (we never
-    want a missing config to silently disable auth on an internal endpoint).
-    """
-    if not INTERNAL_SERVICE_TOKEN:
-        raise HTTPException(
-            status_code=503,
-            detail="Internal service token не настроен",
-        )
-    if not x_internal_token or x_internal_token != INTERNAL_SERVICE_TOKEN:
-        raise HTTPException(
-            status_code=401,
-            detail="Недействительный internal token",
-        )
+# FEAT-170 §3.5: `INTERNAL_SERVICE_TOKEN`, `_internal_token_headers` and
+# `verify_internal_token` used to be defined right here. They were hoisted to
+# the top of this module because `Depends(verify_internal_token)` inside a
+# route decorator is evaluated at import time, and several internal routes live
+# above this point — defining the guard here made them un-gateable (NameError
+# at container start). Do not move the block back down.
 
 
 @router.post(
@@ -3893,6 +3949,7 @@ async def character_left_location_route(
             resp = await client.post(
                 f"{settings.BATTLE_SERVICE_URL}/battles/internal/party/leave-on-move",
                 params={"character_id": body.character_id},
+                headers=_internal_token_headers(),
             )
         party_pruned = resp.status_code < 400
         if not party_pruned:

@@ -579,7 +579,12 @@ class TestMobAIAutoRegistration:
         app.dependency_overrides[get_db] = _fake_get_db
 
         try:
-            with TestClient(app) as client:
+            # FEAT-170: pin a known token so the header assertion below has a
+            # concrete value to compare against (the helper reads env at call
+            # time, so this is the right knob for an OUTGOING call).
+            with TestClient(app) as client, \
+                    patch.dict(os.environ,
+                               {"INTERNAL_SERVICE_TOKEN": "test-internal-token"}):
                 response = client.post(
                     "/battles/",
                     json={
@@ -603,6 +608,19 @@ class TestMobAIAutoRegistration:
                     f"Expected 1 autobattle registration call, got {len(register_calls)}. "
                     f"All post calls: {post_calls}"
                 )
+
+                # FEAT-170: /autobattle/internal/register is token-gated now.
+                # The call site swallows every error (a WARNING inside an
+                # ERROR inside a bare `except`), so the header value is the
+                # only observable difference between "the mob will act" and
+                # "the mob silently never acts". Assert it, not the count.
+                reg_kwargs = register_calls[0].kwargs
+                assert reg_kwargs["headers"]["X-Internal-Token"] == \
+                    "test-internal-token", (
+                        "battle-service dropped X-Internal-Token on "
+                        "/autobattle/internal/register — autobattle answers "
+                        "401 and the mob never takes a turn"
+                    )
         finally:
             app.dependency_overrides.pop(get_db, None)
 

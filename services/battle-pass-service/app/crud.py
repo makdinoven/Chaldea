@@ -581,7 +581,9 @@ async def _deliver_diamonds(user_id: int, amount: int):
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                url, json={"amount": amount, "reason": "battle_pass_reward"}
+                url,
+                json={"amount": amount, "reason": "battle_pass_reward"},
+                headers=_internal_token_headers(),
             )
             resp.raise_for_status()
     except Exception as e:
@@ -601,6 +603,7 @@ async def _deliver_cosmetic(user_id: int, cosmetic_type: str, cosmetic_slug: str
                     "cosmetic_slug": cosmetic_slug,
                     "source": "battlepass",
                 },
+                headers=_internal_token_headers(),
             )
             resp.raise_for_status()
     except Exception as e:

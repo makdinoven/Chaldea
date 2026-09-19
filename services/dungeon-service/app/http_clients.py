@@ -81,10 +81,14 @@ async def consume_dungeon_gate(character_id: int, location_id: int, dungeon_id: 
     url = f"{settings.LOCATIONS_SERVICE_URL}/locations/internal/action-gate/consume"
     try:
         async with _client() as client:
-            resp = await client.post(url, json={
-                "character_id": character_id, "location_id": location_id,
-                "action_type": "dungeon", "target_ref": dungeon_id,
-            })
+            resp = await client.post(
+                url,
+                json={
+                    "character_id": character_id, "location_id": location_id,
+                    "action_type": "dungeon", "target_ref": dungeon_id,
+                },
+                headers=_internal_token_headers(),
+            )
             if resp.status_code == 200:
                 return bool(resp.json().get("consumed"))
     except httpx.RequestError as e:
@@ -377,7 +381,7 @@ async def get_battle_state(battle_id: int) -> Optional[dict]:
     url = f"{settings.BATTLE_SERVICE_URL}/battles/internal/{battle_id}/state"
     try:
         async with _client() as client:
-            resp = await client.get(url)
+            resp = await client.get(url, headers=_internal_token_headers())
             if resp.status_code == 404:
                 # Battle finished, Redis state expired
                 return None

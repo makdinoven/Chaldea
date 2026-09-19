@@ -185,6 +185,7 @@ Nginx вторым слоем: точные блоки `location = /attributes/c
 - `character-service:8005` -> GET `/characters/{id}/full_profile` (stat points)
 - `character-service:8005` -> PUT `/characters/internal/{id}/deduct_points` (списание points, заголовок `X-Internal-Token`)
 - `character-service:8005` -> POST `/characters/internal/{id}/logs` (запись в журнал персонажа, заголовок `X-Internal-Token`)
+- `locations-service:8006` -> GET `/locations/quests/internal/check-completed` (проверка выполненного задания при разборе условий перков, `perk_evaluator._fetch_quest_completed`; FEAT-170: с `X-Internal-Token`). Заголовок строится **локальным** `perk_evaluator._internal_token_headers()` из `config.settings.INTERNAL_SERVICE_TOKEN` — импортировать хелпер из `main.py` нельзя, `main` подключает `perk_evaluator` лениво именно из-за цикла импорта. Ошибка вызова проглатывается (WARNING) и перк просто не открывается, поэтому тест обязан проверять сам факт отправки заголовка
 
 ### RabbitMQ
 Полностью закомментирован.

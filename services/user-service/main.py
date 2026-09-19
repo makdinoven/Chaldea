@@ -1693,25 +1693,42 @@ class DiamondResponse(BaseModel):
     diamonds: int
 
 
-@router.get("/internal/{user_id}/diamonds", response_model=DiamondResponse)
+@router.get(
+    "/internal/{user_id}/diamonds",
+    response_model=DiamondResponse,
+    dependencies=[Depends(verify_internal_token)],
+)
 def get_user_diamonds(
     user_id: int,
     db: Session = Depends(get_db),
 ):
-    """Получить баланс алмазов пользователя. Внутренний эндпоинт (service-to-service)."""
+    """Получить баланс алмазов пользователя. Внутренний эндпоинт (service-to-service).
+
+    FEAT-170: требует заголовок X-Internal-Token (nginx остаётся вторым слоем).
+    Вызывающих в репозитории нет — маршрут закрыт, но не удалён (§3.9).
+    """
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     return DiamondResponse(user_id=user.id, diamonds=user.diamonds or 0)
 
 
-@router.post("/internal/{user_id}/diamonds/add", response_model=DiamondResponse)
+@router.post(
+    "/internal/{user_id}/diamonds/add",
+    response_model=DiamondResponse,
+    dependencies=[Depends(verify_internal_token)],
+)
 def add_user_diamonds(
     user_id: int,
     body: DiamondOperationRequest,
     db: Session = Depends(get_db),
 ):
-    """Начислить алмазы пользователю. Внутренний эндпоинт (service-to-service)."""
+    """Начислить алмазы пользователю. Внутренний эндпоинт (service-to-service).
+
+    FEAT-170: премиальная валюта, начисление не ограничено сверху — маршрут
+    требует заголовок X-Internal-Token. Единственный вызывающий —
+    battle-pass-service (`crud.py` `_deliver_diamonds`).
+    """
     if body.amount <= 0:
         raise HTTPException(status_code=400, detail="Сумма должна быть положительной")
 
@@ -1726,13 +1743,21 @@ def add_user_diamonds(
     return DiamondResponse(user_id=user.id, diamonds=user.diamonds)
 
 
-@router.post("/internal/{user_id}/diamonds/spend", response_model=DiamondResponse)
+@router.post(
+    "/internal/{user_id}/diamonds/spend",
+    response_model=DiamondResponse,
+    dependencies=[Depends(verify_internal_token)],
+)
 def spend_user_diamonds(
     user_id: int,
     body: DiamondOperationRequest,
     db: Session = Depends(get_db),
 ):
-    """Списать алмазы у пользователя. Внутренний эндпоинт (service-to-service)."""
+    """Списать алмазы у пользователя. Внутренний эндпоинт (service-to-service).
+
+    FEAT-170: требует заголовок X-Internal-Token. Вызывающих в репозитории нет —
+    маршрут закрыт, но не удалён (§3.9).
+    """
     if body.amount <= 0:
         raise HTTPException(status_code=400, detail="Сумма должна быть положительной")
 
@@ -2150,13 +2175,22 @@ def admin_grant_cosmetic(
 
 # ==================== COSMETICS — INTERNAL (service-to-service) ====================
 
-@router.post("/internal/{user_id}/cosmetics/unlock", response_model=schemas.CosmeticUnlockResponse)
+@router.post(
+    "/internal/{user_id}/cosmetics/unlock",
+    response_model=schemas.CosmeticUnlockResponse,
+    dependencies=[Depends(verify_internal_token)],
+)
 def internal_unlock_cosmetic(
     user_id: int,
     data: schemas.CosmeticUnlockRequest,
     db: Session = Depends(get_db),
 ):
-    """Разблокировать косметику для пользователя. Внутренний эндпоинт (service-to-service)."""
+    """Разблокировать косметику для пользователя. Внутренний эндпоинт (service-to-service).
+
+    FEAT-170: покупаемые предметы (рамки, фоны чата) — маршрут требует заголовок
+    X-Internal-Token. Единственный вызывающий — battle-pass-service
+    (`crud.py` `_deliver_cosmetic`).
+    """
     # Check user exists
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:

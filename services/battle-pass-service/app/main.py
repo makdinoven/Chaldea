@@ -7,7 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 
 from database import get_db
-from auth_http import get_current_user_via_http, require_permission, UserRead
+from auth_http import (
+    get_current_user_via_http,
+    require_permission,
+    UserRead,
+    verify_internal_token,
+)
 import crud
 import schemas
 
@@ -292,12 +297,19 @@ async def activate_premium(
 # Internal: POST /battle-pass/internal/track-event
 # ---------------------------------------------------------------------------
 
-@app.post("/battle-pass/internal/track-event")
+@app.post(
+    "/battle-pass/internal/track-event",
+    dependencies=[Depends(verify_internal_token)],
+)
 async def track_event(
     body: schemas.TrackEventRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Internal endpoint for other services to report trackable events."""
+    """Internal endpoint for other services to report trackable events.
+
+    Requires the shared `X-Internal-Token` header (FEAT-170); Nginx `403` on the
+    `/battle-pass/internal/` prefix stays as the outer layer.
+    """
     if body.event_type == "location_visit":
         location_id = (body.metadata or {}).get("location_id")
         if location_id is not None:

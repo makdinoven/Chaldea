@@ -115,11 +115,29 @@ char_mock.get_character_profile = AsyncMock(return_value={
 # Now import main safely
 from main import app  # noqa: E402
 
+# FEAT-170: /battles/internal/* now requires the shared X-Internal-Token header.
+# `verify_internal_token` compares against the module-level constant captured at
+# import time, so the constant is what must be pinned (a `setenv` alone has no
+# effect) — done by the autouse fixture below rather than by a bare assignment
+# here, which would leak this module's token into every other test module in the
+# same process and never restore it.
+import auth_http  # noqa: E402
+
+INTERNAL_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": INTERNAL_TOKEN}
+
 # Clear startup handlers to avoid connection attempts
 app.router.on_startup.clear()
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _token_is_configured(monkeypatch):
+    """Pin the guard's module-level constant for this module only; monkeypatch
+    restores it afterwards so no other test module inherits the value."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", INTERNAL_TOKEN)
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +230,7 @@ class TestInternalStateRewards:
         mock_load_snap.return_value = {"participants": MOCK_SNAPSHOT}
 
         with TestClient(app) as client:
-            response = client.get("/battles/internal/1/state")
+            response = client.get("/battles/internal/1/state", headers=INTERNAL_HEADERS)
 
         assert response.status_code == 200
         data = response.json()
@@ -233,7 +251,7 @@ class TestInternalStateRewards:
         mock_load_snap.return_value = {"participants": MOCK_SNAPSHOT}
 
         with TestClient(app) as client:
-            response = client.get("/battles/internal/1/state")
+            response = client.get("/battles/internal/1/state", headers=INTERNAL_HEADERS)
 
         assert response.status_code == 200
         data = response.json()
@@ -246,7 +264,7 @@ class TestInternalStateRewards:
         mock_load.return_value = None
 
         with TestClient(app) as client:
-            response = client.get("/battles/internal/999/state")
+            response = client.get("/battles/internal/999/state", headers=INTERNAL_HEADERS)
 
         assert response.status_code == 404
 
