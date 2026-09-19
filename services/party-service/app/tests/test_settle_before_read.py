@@ -52,10 +52,17 @@ def _ok():
 
 
 def test_settle_runs_before_select_and_its_result_is_read(monkeypatch):
+    # FEAT-169: settle-regen is gated by `verify_internal_token` on the
+    # attributes side, so the call must carry X-Internal-Token.
+    monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "test-internal-token")
     calls = []
 
-    def fake_post(url, json=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None):
         calls.append((url, json, timeout))
+        assert (headers or {}).get("X-Internal-Token") == "test-internal-token", (
+            "settle-regen went out without X-Internal-Token — it would 401 and "
+            "party member resources would silently go stale"
+        )
         # the attributes service persists regen into the shared table
         with _engine.begin() as conn:
             conn.execute(text("UPDATE character_attributes SET current_health = current_health + 30"))
@@ -74,8 +81,11 @@ def test_settle_runs_before_select_and_its_result_is_read(monkeypatch):
 
 def test_ids_deduplicated_and_chunked(monkeypatch):
     sent = []
-    monkeypatch.setattr(crud.httpx, "post",
-                        lambda url, json=None, timeout=None: sent.append(json["character_ids"]) or _ok())
+    monkeypatch.setattr(
+        crud.httpx, "post",
+        lambda url, json=None, headers=None, timeout=None:
+            sent.append(json["character_ids"]) or _ok(),
+    )
     ids = list(range(1, 121)) + [5, 7]
     crud.settle_regen(ids)
     assert [len(c) for c in sent] == [50, 50, 20]

@@ -18,6 +18,20 @@ from sqlalchemy import text
 import equipment_rules
 import models
 from auth_http import UserRead, get_current_user_via_http
+import auth_http
+
+
+# FEAT-169: the /inventory/internal/* routes now require `X-Internal-Token`.
+_TOKEN = "test-internal-token"
+_INTERNAL_HEADERS = {"X-Internal-Token": _TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _internal_token(monkeypatch):
+    """`verify_internal_token` reads a module-level constant — pin it."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", _TOKEN)
+
+
 
 
 CHAR = 1
@@ -386,13 +400,13 @@ class TestRevalidation:
 
         _rule(world, subclass_key="warrior_guardian", armor=[], main=["kind:mace"])
         _choose_subclass(world)
-        resp = player.post(f"/inventory/internal/characters/{CHAR}/revalidate-equipment")
+        resp = player.post(f"/inventory/internal/characters/{CHAR}/revalidate-equipment", headers=_INTERNAL_HEADERS)
         assert resp.status_code == 200
         assert resp.json()["removed_slots"] == ["main_weapon"]
         assert _slot(world, "main_weapon").item_id is None
 
     def test_nothing_to_remove(self, player, world):
-        resp = player.post(f"/inventory/internal/characters/{CHAR}/revalidate-equipment")
+        resp = player.post(f"/inventory/internal/characters/{CHAR}/revalidate-equipment", headers=_INTERNAL_HEADERS)
         assert resp.json()["removed_slots"] == []
 
     def test_skipped_in_battle(self, player, world):
@@ -402,7 +416,7 @@ class TestRevalidation:
         world.execute(text("INSERT INTO battles (id, status) VALUES (1, 'in_progress')"))
         world.execute(text(f"INSERT INTO battle_participants (id, battle_id, character_id) VALUES (1, 1, {CHAR})"))
         world.commit()
-        resp = player.post(f"/inventory/internal/characters/{CHAR}/revalidate-equipment")
+        resp = player.post(f"/inventory/internal/characters/{CHAR}/revalidate-equipment", headers=_INTERNAL_HEADERS)
         assert resp.json()["removed_slots"] == []
         assert _slot(world, "body").item_id == plate.id
 

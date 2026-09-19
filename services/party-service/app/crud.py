@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 import models
 from config import settings
+from internal_auth import internal_token_headers
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,10 @@ def settle_regen(character_ids: list) -> None:
         chunk = ids[start:start + SETTLE_REGEN_MAX_IDS]
         try:
             resp = httpx.post(
-                url, json={"character_ids": chunk}, timeout=SETTLE_REGEN_TIMEOUT_SECONDS,
+                url,
+                json={"character_ids": chunk},
+                headers=internal_token_headers(),
+                timeout=SETTLE_REGEN_TIMEOUT_SECONDS,
             )
             if resp.status_code != 200:
                 logger.warning(

@@ -272,7 +272,7 @@ character-service/app/
 
 ### HTTP (исходящие)
 - `inventory-service:8004` - POST `/inventory/` (создание инвентаря + слотов экипировки, стартовый набор — `crud.send_inventory_request`). **FEAT-167 задача #18: роут стал internal-only**, вызов обязан слать `X-Internal-Token` (хелпер `crud._internal_token_headers()`, читает `auth_http.INTERNAL_SERVICE_TOKEN` в момент вызова). Вызов log-and-continue, поэтому потеря заголовка была бы молчаливой — покрыт `tests/test_internal_headers.py`
-- `skills-service:8003` - POST `/assign_multiple` (назначение навыков)
+- `skills-service:8003` - POST `/skills/internal/assign_multiple` (назначение навыков; FEAT-169: публичный `/skills/assign_multiple` ушёл под `require_permission("skills:create")` для админского редактора НПС, сервисный вызов — на internal-двойника с заголовком `X-Internal-Token`), POST `/skills/` (legacy «Basic Attack», тоже закрыт internal-токеном)
 - `character-attributes-service:8002` - POST `/attributes/` (создание строки атрибутов: `crud.send_attributes_request` — одобрение заявки, **хард-фейл с откатом персонажа**, и создание NPC из админки; `crud._sync_send_attributes_request` — спавн моба), GET `/{id}`, GET `/{id}/passive_experience`. **FEAT-167 задача #17: `POST /attributes/` стал internal-only** — оба вызова шлют `X-Internal-Token` через `crud._internal_token_headers()`
 - `user-service:8000` - POST `/users/user_characters/`, PUT `/users/{id}/update_character`, GET `/users/{id}`, GET `/users/me` (auth во всех защищённых эндпоинтах)
 - `locations-service:8006` — **новая зависимость, появилась в FEAT-154** (`LOCATIONS_SERVICE_URL`, дефолт `http://locations-service:8006`). Клиент — `app/locations_client.py`, таймаут 5 с, три чтения:
@@ -290,6 +290,7 @@ character-service/app/
 - Таблица `mob_template_skills` после Alembic `016_repoint_mob_template_skills` хранит `skill_id` (FK → `skills.id`, ON DELETE CASCADE) вместо `skill_rank_id`. UNIQUE переимённован на `(mob_template_id, skill_id)`.
 - Бэкфилл колонки делает skills-service `003_perk_system`, character-service 016 только дропает старое и промоутит NOT NULL (+ 30-секундный short-poll, чтобы выдержать Compose race).
 - `crud.send_skills_presets_request` теперь шлёт в skills-service `{character_id, skills:[{skill_id}]}` без `rank_number`.
+- FEAT-169: `send_skills_presets_request` и `send_skills_request` шлют `X-Internal-Token` через `crud._internal_token_headers()`; оба вызывающих проглатывают ошибку, поэтому потеря заголовка была бы молчаливой (персонаж создался бы без навыков).
 - `schemas.MobSkillResponse.skill_id`, `MobSkillsUpdate.skill_ids`, `BestiarySkillEntry.skill_id`.
 
 ## Известные проблемы
@@ -298,7 +299,7 @@ character-service/app/
 2. **Опыт не сохраняется** - `check_and_update_level()` уменьшает passive_experience локально, но не сохраняет в attributes-service
 3. **Неиспользуемый код** - `send_equipment_slots_request()` ссылается на несуществующий `EQUIPMENT_SERVICE_URL` (в `config.py` его нет; тест маскирует это, подставляя атрибут в `settings`)
 4. **`presets.py` — мёртвый код.** Реальный источник статов подрасы — колонка `subraces.stat_preset`
-5. **Аутентификация частичная.** Заявки, админские и модераторские эндпоинты защищены (`get_current_user_via_http`, `require_permission`). Все публично маршрутизируемые незащищённые write-эндпоинты закрыты в FEAT-162: `update_location`, `set_travel_cooldown`, `deduct_points` и `POST .../logs` перенесены под `/characters/internal/` (nginx 403) + `verify_internal_token`. Остальные роуты `/characters/internal/*` и точечно заблокированный `POST /characters/{id}/add_rewards` держатся пока только на nginx — см. долг в `docs/ISSUES.md`
+5. **Аутентификация частичная.** Заявки, админские и модераторские эндпоинты защищены (`get_current_user_via_http`, `require_permission`). Все публично маршрутизируемые незащищённые write-эндпоинты закрыты в FEAT-162: `update_location`, `set_travel_cooldown`, `deduct_points` и `POST .../logs` перенесены под `/characters/internal/` (nginx 403) + `verify_internal_token`. FEAT-169 закрыл последнюю дыру этого класса: `POST /characters/{cid}/add_rewards` теперь тоже требует `Depends(verify_internal_token)` (пустой `INTERNAL_SERVICE_TOKEN` → 503, чужой/отсутствующий заголовок → 401), nginx остался вторым слоем. Вызывающие — battle-service, battle-pass-service, dungeon-service — шлют `X-Internal-Token`
 6. **`character_requests.name` — `String(20)`, `characters.name` — `String(255)`.** Заявка на присвоение NPC с длинным именем не проходит round-trip
 7. **Одобрение неатомарно** - 13 шагов по пяти сервисам под одним коммитом; дублирующие публикации в RabbitMQ оставляют узкую гонку двойной выдачи
 

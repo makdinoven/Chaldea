@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from fastapi import BackgroundTasks, FastAPI, Depends, HTTPException, status, APIRouter, Query
 from fastapi.security import OAuth2PasswordBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import models
 import schemas
 from crud import (
@@ -14,7 +14,7 @@ from crud import (
     create_background, update_background, delete_background, grant_cosmetic_to_user,
 )
 from auth import *
-from auth import SECRET_KEY, ALGORITHM
+from auth import SECRET_KEY, ALGORITHM, verify_internal_token
 from database import SessionLocal, engine, get_db
 from jose import JWTError, jwt
 import os
@@ -1648,18 +1648,27 @@ async def get_user_profile(
 # ==================== ACTIVITY POINTS ====================
 
 class ActivityIncrementRequest(BaseModel):
-    points: int = 1
+    # FEAT-169 §3.1: раньше значение не валидировалось — отрицательное число
+    # списывало очки активности. Pydantic v1 синтаксис.
+    points: int = Field(1, ge=1, le=100)
 
 class ActivityIncrementResponse(BaseModel):
     activity_points: int
 
-@router.post("/{user_id}/activity/increment", response_model=ActivityIncrementResponse)
+@router.post("/internal/{user_id}/activity/increment", response_model=ActivityIncrementResponse)
 def increment_activity_points(
     user_id: int,
     body: ActivityIncrementRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
-    """Increment activity points for a user. Internal service-to-service call, no auth required."""
+    """Increment activity points for a user.
+
+    FEAT-169 §3.2: маршрут переехал с `/users/{uid}/activity/increment` под
+    закрытый префикс `/users/internal/` (nginx отдаёт 403 снаружи) и требует
+    заголовок X-Internal-Token. Единственный вызывающий —
+    notification-service после отправки сообщения в чат.
+    """
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")

@@ -1138,9 +1138,10 @@ class TestFinalizeAwardCall:
             async def __aexit__(self, *exc):
                 return False
 
-            async def post(self, url, json=None):
+            async def post(self, url, json=None, headers=None):
                 captured["url"] = url
                 captured["json"] = json
+                captured["headers"] = headers
                 return _MockResponse()
 
         with patch("crud.httpx.AsyncClient", return_value=_MockClient()):
@@ -1162,6 +1163,9 @@ class TestFinalizeAwardCall:
         assert captured["json"]["xp_to_add"] == 4
         assert captured["json"]["tool_inventory_item_id"] == 9023
         assert captured["json"]["tool_durability_to_consume"] == 4
+        # FEAT-169: the award route is gated — a dropped header would 401 and
+        # the gathering reward would be lost silently.
+        assert "X-Internal-Token" in (captured["headers"] or {})
 
     def test_no_tool_durability_to_consume_is_zero(self):
         import asyncio
@@ -1190,7 +1194,7 @@ class TestFinalizeAwardCall:
             async def __aexit__(self, *exc):
                 return False
 
-            async def post(self, url, json=None):
+            async def post(self, url, json=None, headers=None):
                 captured["json"] = json
                 return _MockResponse()
 
@@ -1223,7 +1227,7 @@ class TestFinalizeAwardCall:
             async def __aexit__(self, *exc):
                 return False
 
-            async def post(self, url, json=None):
+            async def post(self, url, json=None, headers=None):
                 return _MockResponse()
 
         with patch("crud.httpx.AsyncClient", return_value=_MockClient()):
@@ -1246,7 +1250,7 @@ class TestFinalizeAwardCall:
             async def __aexit__(self, *exc):
                 return False
 
-            async def post(self, url, json=None):
+            async def post(self, url, json=None, headers=None):
                 raise RuntimeError("boom")
 
         with patch("crud.httpx.AsyncClient", return_value=_MockClient()):

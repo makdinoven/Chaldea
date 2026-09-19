@@ -291,6 +291,7 @@ async def award_post_xp_and_log(
                             "location_id": location_id,
                             "participant_character_ids": [character_id],
                         },
+                        headers=_internal_token_headers(),
                     )
                 except Exception as e:
                     logger.warning(f"party xp-bonus (post) failed for {character_id}: {e}")
@@ -6382,7 +6383,9 @@ async def _award_via_inventory(
     )
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(
+                url, json=payload, headers=_internal_token_headers(),
+            )
         if resp.status_code != 200:
             logger.warning(
                 "gathering award returned status %s for char %s: %s",
@@ -7118,6 +7121,7 @@ async def _party_active_member_ids(character_id: int, location_id: int) -> set:
             resp = await client.get(
                 f"{settings.PARTY_SERVICE_URL}/party/internal/active-members",
                 params={"character_id": character_id, "location_id": location_id},
+                headers=_internal_token_headers(),
             )
             if resp.status_code == 200:
                 return set(resp.json().get("member_character_ids", []))
@@ -7375,7 +7379,9 @@ async def _check_inventory_has_free_slot(character_id: int) -> bool:
     )
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(url, json={})
+            resp = await client.post(
+                url, json={}, headers=_internal_token_headers(),
+            )
         if resp.status_code != 200:
             logger.warning(
                 "free_slots_check returned %s for char %s: %s",

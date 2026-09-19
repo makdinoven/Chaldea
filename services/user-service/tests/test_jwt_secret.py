@@ -16,6 +16,44 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
+# Shared assertion: the fail-fast message must be readable, not a bare KeyError
+# ---------------------------------------------------------------------------
+# FEAT-169 QA #17: the point of replacing ``os.environ[...]`` was the operator
+# experience — a crash-looping container whose log says *what* is wrong. A
+# RuntimeError carrying only "JWT_SECRET_KEY" would be no better than the
+# KeyError it replaced, so the explicit Russian sentence is part of the
+# contract, not decoration.
+
+def _assert_explicit_russian_message(exc: BaseException) -> None:
+    message = str(exc)
+    assert "JWT_SECRET_KEY" in message
+    assert "не задан или пуст" in message, (
+        f"the fail-fast message lost its explanation: {message!r}"
+    )
+    assert "user-service" in message
+    # The remedy must be in the log too — this is what an operator acts on.
+    assert ".env" in message and "openssl rand -hex 32" in message, (
+        f"the fail-fast message no longer says how to fix it: {message!r}"
+    )
+
+
+def test_the_guard_is_a_truthiness_check_not_a_presence_check():
+    """A regression guard on the *mechanism*: ``os.environ["JWT_SECRET_KEY"]``
+    would accept an empty string, which is exactly what docker compose produces
+    for an unset variable (``JWT_SECRET_KEY=``)."""
+    import inspect
+
+    import auth
+
+    source = inspect.getsource(auth)
+    assert 'os.environ["JWT_SECRET_KEY"]' not in source, (
+        "auth.py is back to a presence check — an empty secret would sail "
+        "through and user-service would sign tokens with \"\""
+    )
+    assert "if not SECRET_KEY" in source
+
+
+# ---------------------------------------------------------------------------
 # Test 1: SECRET_KEY is populated from the JWT_SECRET_KEY env var
 # ---------------------------------------------------------------------------
 
@@ -48,16 +86,43 @@ def test_secret_key_reflects_custom_env_value():
 # ---------------------------------------------------------------------------
 
 def test_missing_env_var_raises_error():
-    """If JWT_SECRET_KEY is not set, importing auth must raise KeyError."""
+    """If JWT_SECRET_KEY is not set, importing auth must raise RuntimeError.
+
+    FEAT-169: раньше это был голый ``KeyError`` без объяснения.
+    """
     env_without_key = {k: v for k, v in os.environ.items() if k != "JWT_SECRET_KEY"}
     with patch.dict(os.environ, env_without_key, clear=True):
         # Remove cached module so it re-evaluates the module-level line
         saved = sys.modules.pop("auth", None)
         try:
-            with pytest.raises(KeyError):
+            with pytest.raises(RuntimeError) as exc:
                 importlib.import_module("auth")
+            assert "JWT_SECRET_KEY" in str(exc.value)
+            _assert_explicit_russian_message(exc.value)
         finally:
             # Restore the module so other tests are not affected
+            if saved is not None:
+                sys.modules["auth"] = saved
+            else:
+                sys.modules.pop("auth", None)
+
+
+def test_empty_env_var_raises_error():
+    """Пустая строка — не «ключ задан».
+
+    FEAT-169: в docker compose незаданная переменная разворачивается в
+    ``JWT_SECRET_KEY=`` (пустая строка), то есть ключ в окружении ПРИСУТСТВУЕТ.
+    Проверка на наличие (``os.environ[...]``) такую конфигурацию пропускала, и
+    сервис поднимался бы, подписывая токены пустым секретом.
+    """
+    with patch.dict(os.environ, {"JWT_SECRET_KEY": ""}):
+        saved = sys.modules.pop("auth", None)
+        try:
+            with pytest.raises(RuntimeError) as exc:
+                importlib.import_module("auth")
+            assert "JWT_SECRET_KEY" in str(exc.value)
+            _assert_explicit_russian_message(exc.value)
+        finally:
             if saved is not None:
                 sys.modules["auth"] = saved
             else:

@@ -1961,6 +1961,7 @@ async def get_full_profile(character_id: int, db: Session = Depends(get_db)):
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"{settings.ATTRIBUTES_SERVICE_URL}internal/{character_id}/reconcile-perks",
+                    headers=crud._internal_token_headers(),
                     timeout=5.0,
                 )
         except Exception as e:
@@ -3500,10 +3501,15 @@ def add_rewards(
     character_id: int,
     data: schemas.AddRewardsRequest,
     db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
     """
-    Internal endpoint (no auth) — adds XP and gold to a character.
-    Called by battle-service after PvE victory.
+    Internal endpoint — adds XP and gold to a character.
+
+    FEAT-169 §3.1: вызывают только контейнеры (battle-service после победы в
+    PvE, battle-pass-service и dungeon-service при выдаче наград), с фронтенда
+    маршрут не дёргается. Обязателен заголовок X-Internal-Token; nginx с его
+    правилом `return 403` остаётся вторым слоем, а не единственным.
     """
     # FEAT-168 #6: книга опыта запрашивается до любой работы с БД — сессия не
     # должна ждать соседний сервис с открытой транзакцией (инцидент 2026-09-04).

@@ -18,7 +18,13 @@ import schemas
 import crud
 import subclasses as subclass_registry
 from rabbitmq_consumer import start_consumer
-from auth_http import get_admin_user, get_current_user_via_http, require_permission, allow_jwt_or_service_token
+from auth_http import (
+    get_admin_user,
+    get_current_user_via_http,
+    require_permission,
+    allow_jwt_or_service_token,
+    verify_internal_token,
+)
 
 # Пример, если нужно
 CHARACTER_SERVICE_URL = os.getenv("CHARACTER_SERVICE_URL", "http://character-service:8005/characters")
@@ -75,9 +81,16 @@ async def startup_event():
 @router.post("/", response_model=dict)
 async def legacy_create_skills_for_new_character(
     data: schemas.LegacySkillRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_internal_token),
 ):
-    """Создаёт базовый навык 'Basic Attack' и привязывает его к персонажу на уровне 0."""
+    """Создаёт базовый навык 'Basic Attack' и привязывает его к персонажу на уровне 0.
+
+    FEAT-169 §3.1: единственный вызывающий — character-service
+    (`crud.send_skills_request`), с фронтенда маршрут не дёргается. Закрыт
+    internal-токеном: `character_id` берётся из тела запроса, поэтому открытый
+    маршрут позволял бы навесить навык любому персонажу.
+    """
     char_id = data.character_id
 
     skill = await crud.get_skill(db, 1)
@@ -564,13 +577,13 @@ async def reset_character_skill_endpoint(
     return crud.serialize_character_skill(updated)
 
 
-@router.post("/assign_multiple", response_model=dict)
-async def assign_multiple_skills(
-    data: schemas.MultipleSkillsAssignRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    (FEAT-125) Назначает указанные навыки персонажу на уровне 0.
+async def _assign_multiple_core(
+    db: AsyncSession, data: schemas.MultipleSkillsAssignRequest
+) -> dict:
+    """(FEAT-125) Назначает указанные навыки персонажу на уровне 0.
+
+    Общее тело для двух маршрутов (FEAT-169 §3.2): internal-двойника для
+    character-service и публичного пути под RBAC для админского редактора НПС.
     """
     char_id = data.character_id
     assigned = []
@@ -586,6 +599,37 @@ async def assign_multiple_skills(
         cs = await crud.create_character_skill(db, character_id=char_id, skill_id=skill_id, level=0)
         assigned.append({"character_skill_id": cs.id, "skill_id": skill_id, "level": 0})
     return {"assigned": assigned}
+
+
+@router.post("/internal/assign_multiple", response_model=dict)
+async def assign_multiple_skills_internal(
+    data: schemas.MultipleSkillsAssignRequest,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_internal_token),
+):
+    """Internal-двойник массового назначения навыков (FEAT-169 §3.2).
+
+    Вызывающий — character-service (`crud.send_skills_presets_request`,
+    шаг выдачи пресетов при одобрении заявки на персонажа).
+    """
+    return await _assign_multiple_core(db, data)
+
+
+@router.post("/assign_multiple", response_model=dict)
+async def assign_multiple_skills(
+    data: schemas.MultipleSkillsAssignRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_permission("skills:create")),
+):
+    """Публичный путь массового назначения навыков — только для админки.
+
+    FEAT-169 §3.1: единственный браузерный вызывающий — админский редактор НПС
+    (`NpcStatsEditor.tsx`), который раздаёт навыки чужому (NPC) персонажу,
+    поэтому проверка владения здесь невозможна. Разрешение `skills:create` уже
+    используется соседним `POST /skills/admin/character_skills/` — новой строки
+    в `permissions` не требуется.
+    """
+    return await _assign_multiple_core(db, data)
 
 
 # ====================================================================
@@ -731,7 +775,8 @@ async def revalidate_character_equipment(character_id: int) -> None:
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
-                f"{INVENTORY_SERVICE_URL}/inventory/internal/characters/{character_id}/revalidate-equipment"
+                f"{INVENTORY_SERVICE_URL}/inventory/internal/characters/{character_id}/revalidate-equipment",
+                headers=_internal_token_headers(),
             )
             resp.raise_for_status()
     except httpx.HTTPError as e:

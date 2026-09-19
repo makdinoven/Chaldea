@@ -380,6 +380,127 @@ class TestReadPathsDoNotPayForTheLookup:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# FEAT-169 #15 — the level-up perk reconcile must carry X-Internal-Token
+# ═══════════════════════════════════════════════════════════════════════════
+# `POST /attributes/internal/{id}/reconcile-perks` is gated now. The call site
+# is `main.get_full_profile` (`main.py:1963`), inside a `try/except` that only
+# logs a warning: if the header were dropped, attributes-service would answer
+# 401, character-service would log and carry on, and perks would simply stop
+# updating on level-up — with every test that merely checks "full_profile still
+# answers" still green. So the assertion is on the captured request itself.
+#
+# This drives the REAL handler through the real `main.httpx`; nothing about the
+# call is re-implemented.
+
+
+class TestReconcilePerksAfterLevelUp:
+
+    @staticmethod
+    def _capturing_client(monkeypatch, passive_experience=1000):
+        calls = []
+
+        class _Resp:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {"passive_experience": passive_experience}
+
+        class _Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, **kwargs):
+                calls.append(("GET", url, kwargs))
+                return _Resp()
+
+            async def post(self, url, **kwargs):
+                calls.append(("POST", url, kwargs))
+                return _Resp()
+
+        import main as main_module
+        monkeypatch.setattr(main_module.httpx, "AsyncClient", _Client)
+        return calls
+
+    @staticmethod
+    def _force_level_up(monkeypatch, character):
+        """`full_profile` reconciles perks only when the level actually rose."""
+        import crud as crud_module
+
+        def _bump(db, character_id, xp):
+            character.level += 1
+            return character
+
+        monkeypatch.setattr(crud_module, "check_and_update_level", _bump)
+
+    def _reconcile_calls(self, calls):
+        return [
+            (url, kwargs) for method, url, kwargs in calls
+            if method == "POST" and "reconcile-perks" in url
+        ]
+
+    def test_the_call_goes_out_with_the_internal_token(
+        self, monkeypatch, client, db_session,
+    ):
+        char = _create_character(db_session, 1, level=3)
+        calls = self._capturing_client(monkeypatch)
+        self._force_level_up(monkeypatch, char)
+        monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", "test-internal-token")
+
+        client.get("/characters/1/full_profile")
+
+        reconcile = self._reconcile_calls(calls)
+        assert len(reconcile) == 1, (
+            "the level-up perk reconcile never reached attributes-service"
+        )
+        url, kwargs = reconcile[0]
+        assert url.endswith("internal/1/reconcile-perks"), url
+        assert kwargs["headers"]["X-Internal-Token"] == "test-internal-token", (
+            "character-service dropped X-Internal-Token on reconcile-perks — "
+            "attributes-service would answer 401 and the warning would be the "
+            "only trace"
+        )
+
+    def test_the_token_is_read_at_call_time(self, monkeypatch, client, db_session):
+        """A value frozen at import would keep sending a stale secret after a
+        rotation, and every one of those calls would be swallowed."""
+        char = _create_character(db_session, 1, level=3)
+        calls = self._capturing_client(monkeypatch)
+        self._force_level_up(monkeypatch, char)
+
+        monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", "first")
+        client.get("/characters/1/full_profile")
+        monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", "second")
+        client.get("/characters/1/full_profile")
+
+        sent = [kw["headers"]["X-Internal-Token"]
+                for _url, kw in self._reconcile_calls(calls)]
+        assert sent == ["first", "second"], sent
+
+    def test_no_level_up_means_no_reconcile_call(
+        self, monkeypatch, client, db_session,
+    ):
+        """The hot read path stays free of the extra request."""
+        char = _create_character(db_session, 1, level=3)
+        calls = self._capturing_client(monkeypatch)
+
+        import crud as crud_module
+        monkeypatch.setattr(
+            crud_module, "check_and_update_level", lambda db, cid, xp: char,
+        )
+
+        client.get("/characters/1/full_profile")
+
+        assert self._reconcile_calls(calls) == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 4 — crud award functions never look anything up
 # ═══════════════════════════════════════════════════════════════════════════
 

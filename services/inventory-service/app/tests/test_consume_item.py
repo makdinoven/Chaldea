@@ -11,6 +11,20 @@ Covers:
 
 import pytest
 from models import Items, CharacterInventory
+import auth_http
+
+
+# FEAT-169: the /inventory/internal/* routes now require `X-Internal-Token`.
+_TOKEN = "test-internal-token"
+_INTERNAL_HEADERS = {"X-Internal-Token": _TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _internal_token(monkeypatch):
+    """`verify_internal_token` reads a module-level constant — pin it."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", _TOKEN)
+
+
 
 
 def _create_consumable(db_session, **overrides):
@@ -56,6 +70,7 @@ def test_consume_item_success(client, db_session):
 
     response = client.post(
         f"/inventory/internal/characters/1/consume_item",
+        headers=_INTERNAL_HEADERS,
         json={"item_id": item.id},
     )
 
@@ -72,6 +87,7 @@ def test_consume_item_decrements_multiple_times(client, db_session):
 
     resp1 = client.post(
         "/inventory/internal/characters/1/consume_item",
+        headers=_INTERNAL_HEADERS,
         json={"item_id": item.id},
     )
     assert resp1.status_code == 200
@@ -79,6 +95,7 @@ def test_consume_item_decrements_multiple_times(client, db_session):
 
     resp2 = client.post(
         "/inventory/internal/characters/1/consume_item",
+        headers=_INTERNAL_HEADERS,
         json={"item_id": item.id},
     )
     assert resp2.status_code == 200
@@ -95,6 +112,7 @@ def test_consume_item_deletes_row_at_zero(client, db_session):
 
     response = client.post(
         "/inventory/internal/characters/1/consume_item",
+        headers=_INTERNAL_HEADERS,
         json={"item_id": item.id},
     )
 
@@ -124,6 +142,7 @@ def test_consume_item_quantity_zero_returns_200(client, db_session):
 
     response = client.post(
         "/inventory/internal/characters/1/consume_item",
+        headers=_INTERNAL_HEADERS,
         json={"item_id": item.id},
     )
 
@@ -139,6 +158,7 @@ def test_consume_item_not_in_inventory_returns_200(client, db_session):
 
     response = client.post(
         "/inventory/internal/characters/1/consume_item",
+        headers=_INTERNAL_HEADERS,
         json={"item_id": item.id},
     )
 
@@ -152,6 +172,7 @@ def test_consume_item_nonexistent_item_id_returns_200(client, db_session):
     """Consuming a nonexistent item_id returns 200 (best-effort)."""
     response = client.post(
         "/inventory/internal/characters/1/consume_item",
+        headers=_INTERNAL_HEADERS,
         json={"item_id": 99999},
     )
 
@@ -168,6 +189,7 @@ def test_consume_item_wrong_character_returns_200(client, db_session):
 
     response = client.post(
         "/inventory/internal/characters/1/consume_item",
+        headers=_INTERNAL_HEADERS,
         json={"item_id": item.id},
     )
 
@@ -186,6 +208,7 @@ def test_consume_item_after_deletion_returns_200(client, db_session):
     # First call: success, row deleted
     resp1 = client.post(
         "/inventory/internal/characters/1/consume_item",
+        headers=_INTERNAL_HEADERS,
         json={"item_id": item.id},
     )
     assert resp1.status_code == 200
@@ -193,6 +216,7 @@ def test_consume_item_after_deletion_returns_200(client, db_session):
     # Second call: best-effort, returns 200 with remaining=0
     resp2 = client.post(
         "/inventory/internal/characters/1/consume_item",
+        headers=_INTERNAL_HEADERS,
         json={"item_id": item.id},
     )
     assert resp2.status_code == 200
@@ -206,6 +230,7 @@ def test_consume_item_sql_injection_in_body(client, db_session):
     """SQL injection attempts in item_id should not cause 500."""
     response = client.post(
         "/inventory/internal/characters/1/consume_item",
+        headers=_INTERNAL_HEADERS,
         json={"item_id": "1; DROP TABLE character_inventory; --"},
     )
     # Pydantic validation should reject non-integer, returning 422

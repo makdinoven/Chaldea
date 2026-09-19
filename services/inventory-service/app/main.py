@@ -754,8 +754,15 @@ def get_character_equipment_rules(character_id: int, db: Session = Depends(get_d
     "/internal/characters/{character_id}/revalidate-equipment",
     response_model=schemas.RevalidateEquipmentResponse,
 )
-async def revalidate_equipment_internal(character_id: int, db: Session = Depends(get_db)):
-    """Called by skills-service when a subclass is chosen or reset."""
+async def revalidate_equipment_internal(
+    character_id: int,
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """Called by skills-service when a subclass is chosen or reset.
+
+    Только service-to-service: требует заголовок `X-Internal-Token` (FEAT-169).
+    """
     try:
         removed = await _revalidate_equipment(db, character_id)
     except httpx.HTTPError as e:
@@ -852,7 +859,11 @@ def _reconcile_perks(character_id: int):
     activate or deactivate (FEAT-143). Non-fatal.
     """
     try:
-        resp = httpx.post(_reconcile_perks_url(character_id), timeout=FIRE_AND_FORGET_TIMEOUT)
+        resp = httpx.post(
+            _reconcile_perks_url(character_id),
+            timeout=FIRE_AND_FORGET_TIMEOUT,
+            headers=_internal_token_headers(),
+        )
         if resp.status_code != 200:
             logger.warning(f"Perk reconcile failed for char {character_id}: {resp.text}")
     except Exception as e:
@@ -863,7 +874,10 @@ async def _reconcile_perks_async(character_id: int):
     """Same call, awaited — for `async def` handlers (see the note above)."""
     try:
         async with httpx.AsyncClient(timeout=FIRE_AND_FORGET_TIMEOUT) as client:
-            resp = await client.post(_reconcile_perks_url(character_id))
+            resp = await client.post(
+                _reconcile_perks_url(character_id),
+                headers=_internal_token_headers(),
+            )
         if resp.status_code != 200:
             logger.warning(f"Perk reconcile failed for char {character_id}: {resp.text}")
     except Exception as e:
@@ -1249,20 +1263,15 @@ def delete_item(item_id: int, db: Session = Depends(get_db), current_user = Depe
     db.delete(db_item)
     db.commit()
 
-@router.get(
-    "/characters/{character_id}/fast_slots",
-    response_model=List[schemas.FastSlot]
-)
-def get_fast_slots(
-    character_id: int,
-    db: Session = Depends(get_db),
-):
+def _get_fast_slots_core(db: Session, character_id: int) -> List[schemas.FastSlot]:
     """
     Возвращает список включённых fast_slot_* для этого персонажа.
     Для каждого слота отдаёт:
       - slot_type: fast_slot_1…fast_slot_10
       - item_id   : id надетого consumable
       - quantity  : сколько штук этого item_id осталось в инвентаре
+
+    Общее тело для игрового и внутреннего маршрутов (FEAT-169 §3.2).
     """
     # 1) Берём все enabled fast-слоты
     slots = db.query(models.EquipmentSlot).filter(
@@ -1314,6 +1323,43 @@ def get_fast_slots(
         ))
 
     return result
+
+
+@router.get(
+    "/internal/characters/{character_id}/fast_slots",
+    response_model=List[schemas.FastSlot]
+)
+def get_fast_slots_internal(
+    character_id: int,
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """Пояс персонажа для межсервисных вызовов (FEAT-169 §3.2).
+
+    Только service-to-service: требует заголовок `X-Internal-Token`.
+    Проверки владения тут нет намеренно — battle-service читает пояс мобов и
+    НПС, у которых нет владельца (`user_id IS NULL`).
+    """
+    return _get_fast_slots_core(db, character_id)
+
+
+@router.get(
+    "/characters/{character_id}/fast_slots",
+    response_model=List[schemas.FastSlot]
+)
+def get_fast_slots(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
+):
+    """Пояс своего персонажа для игрока (FEAT-169 §3.2).
+
+    Требует JWT и владение персонажем: состав пояса — это разведданные перед
+    боем, читать чужой пояс нельзя.
+    """
+    verify_character_ownership(db, character_id, current_user.id)
+    return _get_fast_slots_core(db, character_id)
+
 
 @router.delete("/{character_id}/all")
 def delete_all_inventory(
@@ -1647,12 +1693,13 @@ def consume_item_internal(
     character_id: int,
     req: schemas.ConsumeItemRequest,
     db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
 ):
     """
     Списывает 1 единицу предмета из инвентаря персонажа и очищает
     быстрый слот, если предмет закончился.
     Используется battle-service при применении расходника в бою.
-    Без авторизации — только для межсервисных вызовов.
+    Только для межсервисных вызовов: требует `X-Internal-Token` (FEAT-169).
     """
     # FEAT-164: food is never usable in battle (defence in depth)
     food_item = db.query(models.Items.is_food).filter(models.Items.id == req.item_id).first()
@@ -1714,9 +1761,8 @@ def consume_item_internal(
 # Internal: free-slots check (FEAT-128)
 # ---------------------------------------------------------------------------
 # Used by locations-service at gather-start to confirm the inventory can
-# accept new items. Without auth — same pattern as other internal endpoints
-# in this service (e.g. consume_item / update-durability above). External
-# access is blocked at the api-gateway.
+# accept new items. Service-to-service only: `X-Internal-Token` (FEAT-169),
+# with the api-gateway as the second layer.
 
 @router.post(
     "/internal/characters/{character_id}/free_slots_check",
@@ -1725,11 +1771,12 @@ def consume_item_internal(
 def free_slots_check_internal(
     character_id: int,
     db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
 ):
     """
     Возвращает количество свободных слотов и флаг is_full для указанного
     персонажа. Используется locations-service перед стартом добычи.
-    Без авторизации — только для межсервисных вызовов.
+    Только для межсервисных вызовов: требует `X-Internal-Token`.
     """
     free, is_full = crud.get_inventory_free_slots(db, character_id)
     return {"free_slot_count": free, "is_full": is_full}
@@ -1743,9 +1790,8 @@ def free_slots_check_internal(
 #   - decrements the tool durability (if any)
 #   - awards XP and runs the rank-up loop on character_gathering_skills
 # All under one DB transaction with row locks. Locations-service calls this
-# from its lazy-finalize path (3.5.2). Without auth — same convention as
-# other /internal/ endpoints in this service; external traffic is blocked
-# by Nginx.
+# from its lazy-finalize path (3.5.2). Service-to-service only: requires
+# `X-Internal-Token` (FEAT-169); Nginx is the second layer.
 
 @router.post(
     "/internal/characters/{character_id}/gathering/award",
@@ -1755,10 +1801,12 @@ def gathering_award_internal(
     character_id: int,
     req: schemas.GatheringAwardRequest,
     db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
 ):
     """
     Внутренний эндпоинт: одна транзакция на все эффекты завершённой добычи —
     инвентарь, прочность инструмента, опыт и rank-up.
+    Требует заголовок `X-Internal-Token`.
     """
     return crud.award_gathering(db, character_id, req)
 
@@ -3442,7 +3490,12 @@ def eat_food(
 
         url = f"{settings.ATTRIBUTES_SERVICE_URL}internal/{character_id}/satiety"
         try:
-            resp = httpx.post(url, json=payload, timeout=SATIETY_HTTP_TIMEOUT)
+            resp = httpx.post(
+                url,
+                json=payload,
+                timeout=SATIETY_HTTP_TIMEOUT,
+                headers=_internal_token_headers(),
+            )
         except httpx.HTTPError as e:
             logger.error(f"eat-food: сервис атрибутов недоступен (персонаж {character_id}): {e}")
             raise HTTPException(status_code=502, detail=SATIETY_UNAVAILABLE_MESSAGE)
@@ -3722,10 +3775,12 @@ def get_item_detail(
 async def update_durability_internal(
     req: schemas.UpdateDurabilityRequest,
     db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
 ):
     """
     Обновить прочность экипировки после боя (internal, service-to-service).
     Если прочность падает до 0 — снять модификаторы через apply_modifiers.
+    Требует заголовок `X-Internal-Token` (FEAT-169).
     """
     updated = 0
     mods_removed_for = []

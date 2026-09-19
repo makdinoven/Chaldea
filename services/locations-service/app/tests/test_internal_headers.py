@@ -73,6 +73,10 @@ def _patch_client(monkeypatch, response=None):
             calls.append(("PUT", url, kwargs))
             return resp
 
+        async def get(self, url, **kwargs):
+            calls.append(("GET", url, kwargs))
+            return resp
+
     monkeypatch.setattr(crud.httpx, "AsyncClient", _Client)
     return calls
 
@@ -283,4 +287,87 @@ class TestCumulativeStatsHeader:
         assert len(direct) == 1, (
             f"more than one cumulative-stats URL in main.py (lines {direct}) — "
             "each needs its own X-Internal-Token"
+        )
+
+
+# ---------------------------------------------------------------------------
+# FEAT-169 — four more locations-service calls into newly gated routes
+# ---------------------------------------------------------------------------
+# `POST /party/internal/xp-bonus`, `GET /party/internal/active-members`,
+# `POST /inventory/internal/.../gathering/award` and `.../free_slots_check` are
+# all gated now. Three of the four are best-effort (WARNING + continue) and the
+# fourth fails *closed*, so a dropped header would not raise anywhere: squad
+# bonuses, squad rosters and gathering rewards would simply stop, and the player
+# would be told their bag is full. Asserted on the real `crud` functions.
+#
+# NOTE for review: `GET /party/internal/active-members` had **no** caller row in
+# the design's §3.4 matrix at all — this locations caller (`crud.py:7119`) and
+# the battle/dungeon ones were found only during implementation.
+
+
+class TestPartyCallsCarryTheToken:
+
+    @pytest.mark.asyncio
+    async def test_post_xp_bonus_sends_the_token(self, monkeypatch, token):
+        calls = _patch_client(monkeypatch)
+        await crud.award_post_xp_and_log(
+            character_id=31, post_id=1, location_id=2,
+            location_name="Цитадель", char_count=400, xp=4,
+        )
+
+        bonus = [c for c in calls if "xp-bonus" in c[1]]
+        assert bonus, "the party bonus for the post never reached party-service"
+        _, url, kwargs = bonus[0]
+        assert url.endswith("/party/internal/xp-bonus"), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "the post party-bonus call dropped X-Internal-Token — it is "
+            "fire-and-forget, so the bonus would vanish without any error"
+        )
+
+    @pytest.mark.asyncio
+    async def test_active_members_sends_the_token(self, monkeypatch, token):
+        calls = _patch_client(monkeypatch)
+        await crud._party_active_member_ids(31, 2)
+
+        assert calls, "the squad roster lookup never reached party-service"
+        method, url, kwargs = calls[0]
+        assert method == "GET"
+        assert url.endswith("/party/internal/active-members"), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "active-members dropped X-Internal-Token — the lookup swallows "
+            "errors and returns an empty set, so co-located squadmates would "
+            "silently disappear from party activities"
+        )
+        assert kwargs["params"] == {"character_id": 31, "location_id": 2}
+
+
+class TestInventoryGatheringCallsCarryTheToken:
+
+    @pytest.mark.asyncio
+    async def test_gathering_award_sends_the_token(self, monkeypatch, token):
+        calls = _patch_client(monkeypatch)
+        await crud._award_via_inventory(
+            character_id=31, skill_slug="mining", result_item_id=7,
+            granted_quantity=2, tool_inventory_item_id=None,
+        )
+
+        method, url, kwargs = calls[0]
+        assert method == "POST"
+        assert url.endswith("/gathering/award"), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "gathering/award dropped X-Internal-Token — the caller only logs a "
+            "WARNING, so the gathered resource and its XP would be lost silently"
+        )
+
+    @pytest.mark.asyncio
+    async def test_free_slots_check_sends_the_token(self, monkeypatch, token):
+        calls = _patch_client(monkeypatch)
+        await crud._check_inventory_has_free_slot(31)
+
+        method, url, kwargs = calls[0]
+        assert method == "POST"
+        assert url.endswith("/free_slots_check"), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "free_slots_check dropped X-Internal-Token — this one fails closed, "
+            "so every player would be told their bag is full"
         )

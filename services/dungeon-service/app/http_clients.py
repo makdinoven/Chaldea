@@ -64,7 +64,9 @@ async def get_party_active_members(character_id: int, location_id: int) -> dict:
     try:
         async with _client() as client:
             resp = await client.get(
-                url, params={"character_id": character_id, "location_id": location_id},
+                url,
+                params={"character_id": character_id, "location_id": location_id},
+                headers=_internal_token_headers(),
             )
             if resp.status_code == 200:
                 return resp.json()
@@ -405,7 +407,7 @@ async def add_gold(character_id: int, gold: int) -> dict:
     payload = {"xp": 0, "gold": gold}
     try:
         async with _client() as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, json=payload, headers=_internal_token_headers())
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:

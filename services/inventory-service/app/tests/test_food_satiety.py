@@ -25,6 +25,20 @@ from sqlalchemy import text
 
 import models
 from auth_http import UserRead, get_current_user_via_http
+import auth_http
+
+
+# FEAT-169: the /inventory/internal/* routes now require `X-Internal-Token`.
+_TOKEN = "test-internal-token"
+_INTERNAL_HEADERS = {"X-Internal-Token": _TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _internal_token(monkeypatch):
+    """`verify_internal_token` reads a module-level constant — pin it."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", _TOKEN)
+
+
 
 CID = 1
 OTHER_CID = 2
@@ -327,6 +341,7 @@ class TestFoodRejectedElsewhere:
     def test_internal_consume_item_rejects_food(self, env):
         resp = env["client"].post(
             f"/inventory/internal/characters/{CID}/consume_item", json={"item_id": FOOD_ID},
+            headers=_INTERNAL_HEADERS,
         )
         assert resp.status_code == 400
         assert resp.json()["detail"] == "Еду нельзя использовать в бою"
@@ -335,6 +350,54 @@ class TestFoodRejectedElsewhere:
     def test_internal_consume_item_still_works_for_potions(self, env):
         resp = env["client"].post(
             f"/inventory/internal/characters/{CID}/consume_item", json={"item_id": PLAIN_ID},
+            headers=_INTERNAL_HEADERS,
         )
         assert resp.status_code == 200, resp.text
         assert _qty(env["db"], env["plain_row"]) == 1
+
+
+# ===========================================================================
+# FEAT-169 #12 — the satiety call carries X-Internal-Token
+# ===========================================================================
+# `POST /attributes/internal/{cid}/satiety` is gated now. This caller does
+# surface a failure to the player (502 «сервис атрибутов недоступен»), but a
+# 502 says nothing about a missing header, so the header VALUE is asserted on
+# the real route — with `main.httpx.post` patched, not a re-implementation.
+
+
+class TestSatietyCallSendsTheInternalToken:
+
+    def _headers_of(self, post):
+        assert post.call_count == 1, post.call_args_list
+        return post.call_args.kwargs.get("headers") or {}
+
+    def test_the_header_is_sent(self, env, monkeypatch):
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "satiety-token")
+        with patch("main.httpx.post", return_value=_resp(201, SATIETY_OK)) as post:
+            assert _eat(env).status_code == 200
+
+        assert self._headers_of(post)["X-Internal-Token"] == "satiety-token", (
+            "inventory-service dropped X-Internal-Token on the satiety call — "
+            "eating food would 401 inside character-attributes-service"
+        )
+
+    def test_the_token_is_read_at_call_time(self, env, monkeypatch):
+        """The helper must not freeze the value at import time."""
+        seen = []
+        for value in ("first", "second"):
+            monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", value)
+            with patch("main.httpx.post", return_value=_resp(201, SATIETY_OK)) as post:
+                assert _eat(env).status_code == 200
+            seen.append(self._headers_of(post)["X-Internal-Token"])
+        assert seen == ["first", "second"]
+
+    def test_dropping_the_header_would_be_caught(self, env, monkeypatch):
+        """Negative control: the call still happens without the header, so a
+        'no exception raised' / call-count assertion would not notice."""
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "satiety-token")
+        monkeypatch.setattr("main._internal_token_headers", dict)
+        with patch("main.httpx.post", return_value=_resp(201, SATIETY_OK)) as post:
+            assert _eat(env).status_code == 200
+
+        assert post.call_count == 1
+        assert "X-Internal-Token" not in self._headers_of(post)

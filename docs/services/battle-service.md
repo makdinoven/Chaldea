@@ -275,7 +275,12 @@ battle-service/app/
 | skills:8003 | GET `/skills/characters/{id}/skills` | Навыки персонажа |
 | inventory:8004 | GET `/inventory/{id}/equipment` | Экипировка |
 | inventory:8004 | GET `/inventory/items/{id}` | Данные предмета |
-| inventory:8004 | GET `/inventory/{id}/fast_slots` | Быстрые слоты |
+| inventory:8004 | GET `/inventory/internal/characters/{id}/fast_slots` | Быстрые слоты (пояс) — снимок на старте боя. **FEAT-169:** игровой путь `/inventory/characters/{id}/fast_slots` закрыт JWT + проверкой владения, поэтому бой ходит во внутренний двойник с `X-Internal-Token`. Проверка владения для internal-двойника не применяется — у мобов и НПС нет владельца. Заголовок даёт `inventory_client._internal_token_headers()` (модуль-локальный: импорт из `main` был бы циклическим) |
+| inventory:8004 | POST `/inventory/internal/characters/{id}/consume_item` | Трата предмета пояса в бою. **FEAT-169:** обязателен `X-Internal-Token`; ошибка возвращается игроку |
+| inventory:8004 | POST `/inventory/internal/update-durability` | Запись прочности после боя. **FEAT-169:** обязателен `X-Internal-Token`; вызов best-effort — без заголовка прочность молча перестала бы сохраняться |
+| character:8005 | POST `/characters/{id}/add_rewards` | Опыт и золото победителям PvE. **FEAT-169:** роут стал internal-only, обязателен `X-Internal-Token` (`main._internal_token_headers()`); ошибка только логируется |
+| party:8014 | POST `/party/internal/xp-bonus` | Отрядный бонус опыта за бой. **FEAT-169:** обязателен `X-Internal-Token`; ошибка глотается в WARNING |
+| party:8014 | GET `/party/internal/active-members` | Состав отряда в локации (групповой PvE/PvP). **FEAT-169:** весь префикс `/party/internal/` закрыт токеном, заголовок обязателен на всех трёх вызовах (`main.py`) |
 | character-attributes:8002 | POST `/attributes/cumulative_stats/increment` | Кумулятивная статистика по итогам боя (`_track_cumulative_stats`). **FEAT-167 задача #17: роут стал internal-only** — обязателен `X-Internal-Token` (`main._internal_token_headers()`, читает env в момент вызова). Вызов fire-and-forget: ошибка логируется и глотается, поэтому потеря заголовка молча остановила бы учёт побед, убийств и разблокировку перков — покрыто тестами в `tests/test_cumulative_stats.py` |
 
 ## FEAT-125: перк-система (контракт с skills-service)

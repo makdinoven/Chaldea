@@ -2491,8 +2491,16 @@ async def choose_dialogue_option(
     node_id: int,
     body: schemas.DialogueChooseRequest,
     session: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user_via_http),
 ):
-    """Player selects a dialogue option. Returns the next node or conversation end."""
+    """Player selects a dialogue option. Returns the next node or conversation end.
+
+    FEAT-169: authentication only, **deliberately no ownership check** — the
+    request body carries no `character_id` and this handler is pure dialogue-tree
+    navigation; it grants nothing (quests are accepted through the separate
+    `POST /quests/{id}/accept`). Requiring a character id here would be a
+    breaking contract change for no extra protection.
+    """
     # Verify the option belongs to this node
     node = await crud.get_dialogue_node(session, node_id)
     if not node:
@@ -3130,21 +3138,10 @@ async def abandon_quest(
     return {"detail": "Квест отменён"}
 
 
-@router.post("/quests/progress/update")
-async def update_quest_progress(
-    body: schemas.QuestProgressUpdateRequest,
-    session: AsyncSession = Depends(get_db),
-):
-    """
-    Update objective progress. Called by game systems when player kills mob,
-    collects item, etc.
-    """
-    result = await crud.update_quest_progress(
-        session, body.character_id, body.quest_id, body.objective_id, body.increment
-    )
-    if not result:
-        raise HTTPException(status_code=404, detail="Прогресс квеста не найден")
-    return result
+# NOTE (FEAT-169): `POST /quests/progress/update` moved to
+# `POST /quests/internal/progress/update` and is now gated by
+# `verify_internal_token`. The handler lives next to that dependency further
+# down this file (the dependency is defined below this point).
 
 
 # --------------------------------------------------------------------
@@ -3760,6 +3757,28 @@ def verify_internal_token(
             status_code=401,
             detail="Недействительный internal token",
         )
+
+
+@router.post(
+    "/quests/internal/progress/update",
+    dependencies=[Depends(verify_internal_token)],
+)
+async def update_quest_progress(
+    body: schemas.QuestProgressUpdateRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    """Update objective progress (FEAT-169: internal only, `X-Internal-Token`).
+
+    Called by game systems when the player kills a mob, collects an item, etc.
+    Declared here, below `verify_internal_token`, because the dependency must
+    already exist when the decorator runs.
+    """
+    result = await crud.update_quest_progress(
+        session, body.character_id, body.quest_id, body.objective_id, body.increment
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Прогресс квеста не найден")
+    return result
 
 
 @router.post(

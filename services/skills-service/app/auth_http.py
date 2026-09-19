@@ -1,6 +1,6 @@
 import os
 import requests
-from fastapi import HTTPException, status, Depends
+from fastapi import HTTPException, status, Depends, Header
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import List, Optional
@@ -68,6 +68,38 @@ def allow_jwt_or_service_token(token: str = Depends(OAUTH2_SCHEME)) -> Optional[
     if INTERNAL_SERVICE_TOKEN and token == INTERNAL_SERVICE_TOKEN:
         return None
     return get_current_user_via_http(token)
+
+
+# ============================================================
+# Internal service-to-service authentication (FEAT-169 §3.3 M5)
+# ============================================================
+# Standard header-based check, identical to character-service
+# (`app/auth_http.py`), character-attributes-service and inventory-service.
+# Deliberately NOT built on top of `allow_jwt_or_service_token` above: that one
+# compares the same secret in the *Bearer* position, and accepting one secret in
+# two header positions widens the attack surface instead of narrowing it.
+# Fail-closed: an unset/empty env var rejects every request with 503, so a
+# missing config can never silently disable auth on an internal endpoint.
+# The constant is resolved at import time — tests monkeypatch
+# `auth_http.INTERNAL_SERVICE_TOKEN`, not only the env var.
+
+
+def verify_internal_token(
+    x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
+) -> None:
+    """Reject the request unless `X-Internal-Token` matches
+    `INTERNAL_SERVICE_TOKEN` from env. Empty env -> always reject.
+    """
+    if not INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Internal service token не настроен",
+        )
+    if not x_internal_token or x_internal_token != INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Недействительный internal token",
+        )
 
 
 def get_admin_user(user: UserRead = Depends(get_current_user_via_http)) -> UserRead:

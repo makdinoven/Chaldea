@@ -92,8 +92,16 @@ autobattle-service/app/
 ## Коммуникация
 
 ### HTTP (исходящие)
-- `battle-service:8010` -> GET `/battles/{id}/state` (состояние боя)
-- `battle-service:8010` -> POST `/battles/{id}/action` (отправка действия)
+- `battle-service:8010` -> GET `/battles/internal/{id}/state` (состояние боя)
+- `battle-service:8010` -> POST `/battles/internal/{id}/action` (отправка действия)
+
+**FEAT-169 (на упреждение):** оба вызова отправляют `X-Internal-Token`
+(`clients.internal_token_headers()`, читает `INTERNAL_SERVICE_TOKEN` из окружения
+в момент вызова). Сами маршруты `/battles/internal/*` пока токен **не проверяют** —
+заголовок сегодня инертен. Смысл: когда этот префикс будут закрывать, автобой
+не умрёт молча (оба вызова best-effort по своей природе — ошибка гасит автоход).
+Если переменной нет в окружении, уходит пустое значение — поведение ровно такое же,
+как сегодня без заголовка. Переменную в оба compose-файла добавляет DevSecOps.
 
 ### Redis Pub/Sub (входящие)
 - `battle:*:your_turn` -> триггер автохода

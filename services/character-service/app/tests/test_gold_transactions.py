@@ -35,6 +35,11 @@ from fastapi.testclient import TestClient
 from auth_http import get_admin_user, get_current_user_via_http, OAUTH2_SCHEME, UserRead, require_permission
 from main import app, get_db
 import crud
+import auth_http
+
+# FEAT-169: POST /characters/{cid}/add_rewards закрыт internal-токеном.
+auth_http.INTERNAL_SERVICE_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +204,7 @@ class TestAddRewardsGoldTransaction:
         _create_character(session, character_id=1, currency_balance=100)
         _insert_character_attributes(session, character_id=1, passive_experience=0)
 
-        response = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 50})
+        response = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 50}, headers=INTERNAL_HEADERS)
         assert response.status_code == 200
 
         # Verify transaction was created
@@ -219,7 +224,7 @@ class TestAddRewardsGoldTransaction:
         _create_character(session, character_id=1, currency_balance=100)
         _insert_character_attributes(session, character_id=1, passive_experience=0)
 
-        response = client.post("/characters/1/add_rewards", json={"xp": 50, "gold": 0})
+        response = client.post("/characters/1/add_rewards", json={"xp": 50, "gold": 0}, headers=INTERNAL_HEADERS)
         assert response.status_code == 200
 
         count = _count_gold_transactions(session, character_id=1)
@@ -231,8 +236,8 @@ class TestAddRewardsGoldTransaction:
         _create_character(session, character_id=1, currency_balance=0)
         _insert_character_attributes(session, character_id=1, passive_experience=0)
 
-        client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 10})
-        client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 20})
+        client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 10}, headers=INTERNAL_HEADERS)
+        client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 20}, headers=INTERNAL_HEADERS)
 
         count = _count_gold_transactions(session, character_id=1, transaction_type="battle_reward")
         assert count == 2
@@ -414,7 +419,7 @@ class TestTransactionFailureIsolation:
         _insert_character_attributes(session, character_id=1, passive_experience=0)
 
         with patch("crud.GoldTransaction", side_effect=Exception("DB write failed")):
-            response = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 50})
+            response = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 50}, headers=INTERNAL_HEADERS)
 
         assert response.status_code == 200
         data = response.json()

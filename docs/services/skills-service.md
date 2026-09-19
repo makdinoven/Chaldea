@@ -81,7 +81,10 @@ skills-service/app/
 | DELETE | `/skills/admin/character_skills/by_character/{cid}` | Bulk delete |
 
 ### Прочее
-- `POST /skills/assign_multiple` — body `{character_id, skills:[{skill_id}]}` (без `rank_number`).
+- `POST /skills/assign_multiple` — body `{character_id, skills:[{skill_id}]}` (без `rank_number`). **FEAT-169:** маршрут разложен на два, тело общее (`_assign_multiple_core`):
+  - `POST /skills/internal/assign_multiple` — `Depends(verify_internal_token)`, для character-service (выдача пресетов при одобрении заявки). Пустой `INTERNAL_SERVICE_TOKEN` → 503, чужой/отсутствующий заголовок `X-Internal-Token` → 401.
+  - `POST /skills/assign_multiple` — `require_permission("skills:create")`, для админского редактора НПС (`NpcStatsEditor.tsx`): он раздаёт навыки чужому персонажу, поэтому проверка владения здесь невозможна. Разрешение уже существует (то же, что у `POST /skills/admin/character_skills/`) — новой строки в `permissions` не заводили.
+- `POST /skills/` (legacy «Basic Attack») — **FEAT-169:** `Depends(verify_internal_token)`. `character_id` приходит в теле, поэтому открытый маршрут позволял навесить навык любому персонажу. Единственный вызывающий — character-service `crud.send_skills_request`.
 - Class-tree эндпоинты (FEAT-056/057) без изменений; `purchase_skill` теперь вставляет CharacterSkill(skill_id, level=0); 409 "Навык уже есть" если уже куплен.
 - Удалены: `/skills/admin/skill_ranks/*`, `/skills/admin/damages/*`, `/skills/admin/effects/*`, `/skills/skill_ranks/{id}`, `/skills/character_skills/upgrade` (старая форма), `/skills/admin/skills/{id}/full_tree`, `/skills/skills/{id}/full_tree`.
 
@@ -134,7 +137,7 @@ physical, catting, crushing, piercing, magic, fire, ice, watering, electricity, 
 ### HTTP (исходящие)
 - `character-attributes-service:8002` -> GET `/attributes/{id}` (баланс активного опыта), PUT `/attributes/{id}/active_experience` (списание за покупку/прокачку навыка; FEAT-167: обязателен заголовок `X-Internal-Token`, хелпер `main._internal_token_headers()` читает `INTERNAL_SERVICE_TOKEN` из env в момент вызова), POST `/attributes/cumulative_stats/increment` (счётчик `skills_used` при улучшении навыка; FEAT-167 задача #17: тот же заголовок. Вызов fire-and-forget, поэтому потеря заголовка была бы молчаливой — покрыт тестом `tests/test_internal_headers.py`)
 - `character-service:8005` -> GET `/characters/{id}/race_info`
-- `inventory-service:8004` -> POST `/inventory/internal/characters/{id}/revalidate-equipment`
+- `inventory-service:8004` -> POST `/inventory/internal/characters/{id}/revalidate-equipment` (FEAT-169: обязателен заголовок `X-Internal-Token`, хелпер `main._internal_token_headers()`; вызов только логирует ошибку, поэтому потеря заголовка была бы молчаливой)
 
 ### RabbitMQ
 Полностью закомментирован.

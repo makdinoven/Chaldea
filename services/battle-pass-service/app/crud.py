@@ -534,13 +534,18 @@ BATTLE_PASS_XP_SOURCE = "character_xp_pass_bonus"
 
 
 async def _deliver_gold_xp(character_id: int, xp: int = 0, gold: int = 0):
-    """POST to character-service /characters/{char_id}/add_rewards."""
+    """POST to character-service /characters/{char_id}/add_rewards.
+
+    FEAT-169: маршрут закрыт `verify_internal_token` — без заголовка
+    начисление молча пропадает (ошибка тут только логируется выше по стеку).
+    """
     url = f"{settings.CHARACTER_SERVICE_URL}/characters/{character_id}/add_rewards"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 url,
                 json={"xp": xp, "gold": gold, "xp_source": BATTLE_PASS_XP_SOURCE},
+                headers=_internal_token_headers(),
             )
             resp.raise_for_status()
     except Exception as e:

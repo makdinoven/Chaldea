@@ -40,6 +40,18 @@ _RATE_LIMIT_SECONDS = 2.0
 
 
 # ---------------------------------------------------------------------------
+# Outgoing internal service-to-service auth (FEAT-169 M6)
+# ---------------------------------------------------------------------------
+def internal_token_headers() -> dict:
+    """Headers for outgoing calls into another service's `/internal/` routes.
+
+    The token is read from env at call time (not import time) so tests can set
+    it without reloading the module.
+    """
+    return {"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")}
+
+
+# ---------------------------------------------------------------------------
 # Helper: fetch user avatar/avatar_frame from user-service
 # ---------------------------------------------------------------------------
 
@@ -133,15 +145,27 @@ def send_message(
         "data": json.loads(response.json()),
     })
 
-    # 9. Increment activity points (fire-and-forget, don't block on failure)
+    # 9. Increment activity points (fire-and-forget, don't block on failure).
+    # FEAT-169: the route moved under /users/internal/ and is gated by
+    # X-Internal-Token. It stays best-effort, but a failure is now logged —
+    # a silently dropped header would otherwise stop activity points forever.
     try:
-        requests.post(
-            f"{AUTH_SERVICE_URL}/users/{current_user.id}/activity/increment",
+        resp = requests.post(
+            f"{AUTH_SERVICE_URL}/users/internal/{current_user.id}/activity/increment",
             json={"points": 1},
+            headers=internal_token_headers(),
             timeout=3,
         )
-    except Exception:
-        pass  # Non-critical, don't fail the message send
+        if resp.status_code != 200:
+            logger.warning(
+                "Начисление очков активности пользователю %s вернуло %s: %s",
+                current_user.id, resp.status_code, resp.text[:200],
+            )
+    except Exception as exc:  # Non-critical, don't fail the message send
+        logger.warning(
+            "Не удалось начислить очки активности пользователю %s: %s",
+            current_user.id, exc,
+        )
 
     return response
 

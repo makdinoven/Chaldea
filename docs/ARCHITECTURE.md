@@ -205,6 +205,40 @@ Push to main
 - **Dev** (`docker-compose.yml`): Vite dev server, hot reload, exposed ports, dev tools (Adminer, MongoExpress, RedisInsight)
 - **Prod** (`docker-compose.yml` + `docker-compose.prod.yml`): static frontend build in Nginx, HTTPS (Let's Encrypt), no volume mounts, no exposed service ports, no dev tools
 
+### Секреты и fail-fast
+
+Два секрета обязательны и **ни у одного больше нет публичного значения по умолчанию** (FEAT-169).
+Оба генерируются одинаково: `openssl rand -hex 32`. Заглушки и комментарии — в `.env.example`;
+реальные значения живут только в `.env`, который в `.gitignore`.
+
+**`JWT_SECRET_KEY` — обязателен везде, включая локальную разработку.**
+В `docker-compose.yml` он объявлен как `${JWT_SECRET_KEY}` без fallback'а. Если ключа нет в `.env`,
+Compose подставит **пустую строку** (не «отсутствие переменной»), поэтому `user-service/auth.py`
+проверяет значение на непустоту и падает с `RuntimeError` — пустой секрет считается таким же
+отсутствующим, как и незаданный. Практический вывод: **после `git pull` добавьте `JWT_SECRET_KEY`
+в локальный `.env` до следующего `docker compose up`**, иначе user-service уйдёт в crash-loop, а
+вместе с ним перестанет работать всё, что проверяет JWT (остальные сервисы валидируют токен
+через `GET /users/me`). Причина в `docker logs user-service` — одной строкой.
+Форму `${JWT_SECRET_KEY:?err}` здесь намеренно **не** используем: она роняет `config`/`ps`/`down`
+для всего стека, что хуже по эргономике, чем один контейнер с внятной ошибкой в логе.
+
+**`INTERNAL_SERVICE_TOKEN` — общий секрет для вызовов сервис-сервис** (заголовок `X-Internal-Token`,
+проверка `verify_internal_token`: пусто → 503, неверный → 401). Потребителей 13.
+- **dev:** в `docker-compose.yml` сохранён fallback, свежий клон поднимается из коробки.
+- **prod:** в `docker-compose.prod.yml` у каждого потребителя стоит строгая форма
+  `${INTERNAL_SERVICE_TOKEN:?...}`. **Это роняет весь стек, а не один контейнер:** без переменной
+  не отработают ни `up`, ни `config`, ни `ps`, ни `down`. Так и задумано — прод не должен
+  подниматься на публично известном значении, — но помнить об этом нужно, потому что при пустом
+  `.env` на VPS не получится даже остановить стек штатной командой.
+
+**Пре-флайт перед пушем в `main`** (деплой на прод автоматический):
+```
+docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
+  | grep -E "JWT_SECRET_KEY|INTERNAL_SERVICE_TOKEN"
+```
+Оба должны резолвиться в реальные значения; строк `your-secret-key` и `dev-internal-token-change-me`
+в выводе быть не должно ни одной.
+
 ### Prod Server
 
 - Domain: `fallofgods.top`
@@ -214,7 +248,7 @@ Push to main
 ## Authentication
 
 - **JWT tokens** (HS256) с access (20h) и refresh (7d) токенами
-- Секретный ключ **захардкожен** (`"your-secret-key"` в auth.py)
+- Секретный ключ — **только из окружения** (`JWT_SECRET_KEY`), значения по умолчанию нет; без него user-service не стартует (см. «Секреты и fail-fast» выше). Прежняя запись про захардкоженный `"your-secret-key"` устарела: ключ ротирован на проде 2026-09-19, публичный fallback убран из compose в FEAT-169
 - Токены хранятся в `localStorage` на фронтенде
 - Аутентификация реализована **только в user-service** и **notification-service** (через HTTP-вызов к user-service)
 - Большинство эндпоинтов других сервисов **не защищены** аутентификацией

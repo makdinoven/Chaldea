@@ -55,6 +55,29 @@ TicketModel.__table__.c.status.type = String(20)
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def mock_activity_increment():
+    """Stub the only outgoing `requests.post` in the service.
+
+    `chat_routes.send_message` step 9 fires a best-effort POST to
+    user-service's `/users/internal/{uid}/activity/increment` with `timeout=3`.
+    It was never mocked, so every chat test really tried to reach the
+    `user-service` host. That is the documented cause of the flaky
+    `TestRateLimiting` (docs/ISSUES.md): the rate-limit window is 2 s, but a
+    slow DNS failure made each send take ~4 s, so the window had already
+    expired by the time the second message arrived and the expected 429 came
+    back as 201.
+
+    Autouse, so no chat test depends on network timing. Tests that care about
+    the call itself request this fixture and inspect the mock; tests that want
+    a failure set `.return_value.status_code` or `.side_effect`.
+    """
+    with patch("chat_routes.requests.post") as mock_post:
+        mock_post.return_value = MagicMock(status_code=200, text="")
+        mock_post.return_value.json.return_value = {"activity_points": 1}
+        yield mock_post
+
+
 @pytest.fixture()
 def db_session():
     """Yield a clean DB session; tables are created/dropped per test."""

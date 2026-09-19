@@ -37,6 +37,11 @@ user-service/
 | GET | `/users/all` | Все пользователи | Нет |
 | GET | `/users/admins` | Все админы | Нет |
 | GET | `/users/{user_id}` | Пользователь по ID | Нет |
+| POST | `/users/internal/{user_id}/activity/increment` | Начислить очки активности. **FEAT-169:** маршрут переехал с `/users/{user_id}/activity/increment` (старый путь удалён, отдаёт 404) под закрытый префикс `/users/internal/` и требует заголовок `X-Internal-Token`. `points` теперь валидируется: `Field(1, ge=1, le=100)` — раньше принимались отрицательные значения и очки можно было списать. Единственный вызывающий — notification-service после сообщения в чат | `X-Internal-Token` |
+
+### Internal-токен (FEAT-169)
+
+`auth.verify_internal_token` — fail-closed проверка заголовка `X-Internal-Token` против переменной окружения `INTERNAL_SERVICE_TOKEN`. Поведение то же, что в character-service / character-attributes-service / inventory-service: пустая/неустановленная переменная → **503** «Internal service token не настроен», отсутствующий или чужой заголовок → **401** «Недействительный internal token». Константа `auth.INTERNAL_SERVICE_TOKEN` читается на импорте — тесты подменяют именно её (`monkeypatch.setattr(auth, "INTERNAL_SERVICE_TOKEN", ...)`), а не только env. Остальные маршруты `/users/internal/*` (алмазы, косметика) пока держатся только на nginx — см. `docs/ISSUES.md`.
 
 ## Таблицы БД
 
@@ -62,7 +67,7 @@ user-service/
 ## Аутентификация (JWT)
 
 - **Алгоритм:** HS256
-- **Secret key:** `"your-secret-key"` (ЗАХАРДКОЖЕН)
+- **Secret key:** только из переменной окружения `JWT_SECRET_KEY` (`auth.py`). **FEAT-169:** fail-fast на импорте — если переменная не задана **или пуста**, сервис падает с понятным `RuntimeError` и не поднимается. Проверяется именно «правдивость», а не наличие ключа: в compose незаданная переменная разворачивается в пустую строку, и старый `os.environ["JWT_SECRET_KEY"]` пропустил бы пустой секрет. Публичный fallback `your-secret-key` из compose убран; сгенерировать значение: `openssl rand -hex 32`
 - **Access token TTL:** 20 часов
 - **Refresh token TTL:** 7 дней
 - **Payload:** `{sub: email, role: string, current_character: int, type: "access"|"refresh", exp: timestamp}`

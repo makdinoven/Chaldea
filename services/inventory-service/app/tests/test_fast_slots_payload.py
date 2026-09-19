@@ -17,7 +17,22 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import auth_http
 import models
+
+
+# FEAT-169: the belt is read by battle-service through the internal twin
+# `GET /inventory/internal/characters/{cid}/fast_slots` (X-Internal-Token).
+# The payload-shape tests below speak that route, because it is the one the
+# battle engine actually consumes.
+_TOKEN = "test-internal-token"
+_INTERNAL_HEADERS = {"X-Internal-Token": _TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _internal_token(monkeypatch):
+    """`verify_internal_token` reads a module-level constant — pin it."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", _TOKEN)
 
 
 # Keys battle-service reads off each slot object.
@@ -78,7 +93,10 @@ def _equip_fast_slot(db_session, character_id, item_id, quantity=3,
 
 
 def _fast_slots(client, character_id=1):
-    resp = client.get(f"/inventory/characters/{character_id}/fast_slots")
+    resp = client.get(
+        f"/inventory/internal/characters/{character_id}/fast_slots",
+        headers=_INTERNAL_HEADERS,
+    )
     assert resp.status_code == 200, resp.text
     return resp.json()
 
@@ -245,13 +263,8 @@ class TestFastSlotPayloadShape:
 
 class TestFastSlotsAuth:
 
-    @pytest.mark.xfail(
-        reason="ISSUES: GET /inventory/characters/{cid}/fast_slots не требует "
-               "авторизации (main.py:1186-1193) — предсуществующая дыра, §3.3.3 "
-               "фичи утверждает обратное. Тест станет зелёным, когда её закроют.",
-        strict=False,
-    )
     def test_fast_slots_requires_auth(self, client, db_session):
+        """FEAT-169: игровой маршрут пояса требует JWT (дыра закрыта)."""
         item_id = _create_item_via_admin(client, name="Чужое зелье")
         _equip_fast_slot(db_session, 2, item_id)
 

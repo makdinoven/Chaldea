@@ -37,8 +37,9 @@ character-attributes-service/app/
 | POST | `/attributes/{character_id}/consume_stamina` | **internal** (FEAT-167): потратить стамину (с блокировкой строки) |
 | POST | `/attributes/{character_id}/refund_stamina` | **internal** (FEAT-167): вернуть стамину (FEAT-128) |
 | GET | `/attributes/{character_id}/rest-status` | FEAT-164: состояние восстановления в покое и активная сытость |
-| POST | `/attributes/internal/{character_id}/satiety` | FEAT-164, internal: применить сытость (вызывает inventory-service `/eat-food`) |
-| POST | `/attributes/internal/settle-regen` | FEAT-164, internal: досчитать восстановление для списка персонажей (до 50 id) |
+| POST | `/attributes/internal/{character_id}/satiety` | FEAT-164, internal: применить сытость (вызывает inventory-service `/eat-food`). **FEAT-169: `X-Internal-Token`** |
+| POST | `/attributes/internal/settle-regen` | FEAT-164, internal: досчитать восстановление для списка персонажей (до 50 id). **FEAT-169: `X-Internal-Token`** |
+| POST | `/attributes/internal/{character_id}/reconcile-perks` | FEAT-143, internal: пересчёт активности перков. **FEAT-169: `X-Internal-Token`** |
 
 ## Аутентификация изменяющих эндпоинтов (FEAT-167)
 
@@ -59,8 +60,23 @@ character-attributes-service/app/
 - **GET-эндпоинты не закрыты специально:** `GET /attributes/{id}` и
   `GET /attributes/{id}/rest-status` доигрывают восстановление FEAT-164 и
   читаются battle-service на каждой атаке, skills-service, character-service и
-  профилем игрока. Так же не тронуты `POST /{id}/upgrade` (JWT),
-  `/attributes/admin/*` (RBAC) и `/attributes/internal/*` (пока только nginx).
+  профилем игрока. Так же не тронуты `POST /{id}/upgrade` (JWT) и
+  `/attributes/admin/*` (RBAC).
+
+### Дополнение (FEAT-169) — три `/attributes/internal/*`
+
+`POST /internal/settle-regen`, `POST /internal/{id}/satiety` и
+`POST /internal/{id}/reconcile-perks` держались только на правиле nginx.
+Теперь на каждом висит тот же `verify_internal_token` с той же fail-closed
+семантикой (пустой токен → 503, чужой/отсутствующий → 401, русский `detail`).
+
+Вызывающие (все посылают заголовок): party-service `crud.settle_regen`
+(settle-regen), inventory-service (`/eat-food` → satiety; equip/unequip →
+reconcile-perks, sync и async), character-service (reconcile-perks).
+
+**Внутрипроцессные вызовы `reconcile_perks` не затронуты** — это прямые
+вызовы Python-функции из `GET /{id}/perks`, из апгрейда и из `regen.py`,
+они не проходят через HTTP-зависимость.
 
 Вызывающие (все посылают заголовок): inventory-service (apply_modifiers,
 recover), locations-service (consume/refund stamina, passive_experience),

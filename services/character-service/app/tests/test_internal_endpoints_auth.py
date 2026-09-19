@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 import auth_http
 import database
@@ -414,3 +415,185 @@ class TestDeductPoints:
         assert resp.status_code == 404
         db_session.expire_all()
         assert db_session.query(models.Character).filter_by(id=character.id).first().stat_points == 10
+
+
+# ===========================================================================
+# 5. FEAT-169 §3.1 group 2 — POST /characters/{id}/add_rewards
+# ===========================================================================
+# This one did NOT move under `/characters/internal/`: its path is unchanged
+# and its three callers (battle-service `main.py:425`, battle-pass-service
+# `crud.py:538`, dungeon-service `http_clients.py:404`) keep using it. What
+# changed is that it stopped being protected by nothing but an nginx regex on
+# the `add_rewards` path — its own docstring used to say "Internal endpoint
+# (no auth)".
+#
+# It grants **gold and XP**, so every rejected call is also checked against the
+# database: currency_balance, passive_experience and the gold-transaction
+# ledger must all be exactly where they were.
+
+
+class TestAddRewardsIsInternalOnly:
+
+    BODY = {"xp": 500, "gold": 999}
+
+    @pytest.fixture(autouse=True)
+    def _attributes_table(self, db_session):
+        """`add_rewards_to_character` writes XP straight into the shared
+        `character_attributes` table (owned by character-attributes-service),
+        so the test harness has to provide it."""
+        db_session.execute(text("DROP TABLE IF EXISTS character_attributes"))
+        db_session.execute(text(
+            "CREATE TABLE character_attributes ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, character_id INTEGER NOT NULL,"
+            " passive_experience INTEGER DEFAULT 0, active_experience INTEGER DEFAULT 0)"
+        ))
+        db_session.commit()
+        yield
+        db_session.execute(text("DROP TABLE IF EXISTS character_attributes"))
+        db_session.commit()
+
+    @pytest.fixture()
+    def rewardable(self, db_session, character):
+        db_session.execute(
+            text("INSERT INTO character_attributes (character_id, passive_experience,"
+                 " active_experience) VALUES (:cid, 0, 0)"),
+            {"cid": character.id},
+        )
+        db_session.commit()
+        return character
+
+    def _path(self, character_id):
+        return f"/characters/{character_id}/add_rewards"
+
+    def _ledger(self, db_session, character_id):
+        db_session.expire_all()
+        char = db_session.query(models.Character).filter_by(id=character_id).first()
+        xp = db_session.execute(
+            text("SELECT passive_experience FROM character_attributes"
+                 " WHERE character_id = :cid"),
+            {"cid": character_id},
+        ).scalar()
+        transactions = db_session.query(models.GoldTransaction).filter_by(
+            character_id=character_id,
+        ).count()
+        return char.currency_balance, xp, transactions
+
+    # -- rejected ----------------------------------------------------------
+
+    def test_missing_header_grants_nothing(
+        self, client, db_session, rewardable, internal_token,
+    ):
+        before = self._ledger(db_session, rewardable.id)
+
+        resp = client.post(self._path(rewardable.id), json=self.BODY)
+
+        assert resp.status_code == 401, resp.text
+        assert resp.json()["detail"] == "Недействительный internal token"
+        assert self._ledger(db_session, rewardable.id) == before, (
+            "add_rewards handed out gold/XP despite rejecting the request"
+        )
+
+    def test_wrong_token_grants_nothing(
+        self, client, db_session, rewardable, internal_token,
+    ):
+        before = self._ledger(db_session, rewardable.id)
+
+        resp = client.post(self._path(rewardable.id), json=self.BODY, headers=WRONG)
+
+        assert resp.status_code == 401
+        assert self._ledger(db_session, rewardable.id) == before
+
+    def test_empty_header_value_grants_nothing(
+        self, client, db_session, rewardable, internal_token,
+    ):
+        before = self._ledger(db_session, rewardable.id)
+        resp = client.post(
+            self._path(rewardable.id), json=self.BODY,
+            headers={"X-Internal-Token": ""},
+        )
+        assert resp.status_code == 401
+        assert self._ledger(db_session, rewardable.id) == before
+
+    def test_player_jwt_does_not_open_it(
+        self, client, db_session, rewardable, internal_token,
+    ):
+        """There is no frontend caller (§2.3: admin XP/gold grants go through
+        separate RBAC routes), so a player token must not be an alternative
+        key."""
+        before = self._ledger(db_session, rewardable.id)
+        resp = client.post(
+            self._path(rewardable.id), json=self.BODY,
+            headers={"Authorization": "Bearer player-jwt"},
+        )
+        assert resp.status_code == 401
+        assert self._ledger(db_session, rewardable.id) == before
+
+    def test_auth_runs_before_body_validation(
+        self, client, rewardable, internal_token,
+    ):
+        """A 422 would mean the request reached the handler."""
+        resp = client.post(self._path(rewardable.id), json={"nonsense": True})
+        assert resp.status_code == 401, resp.text
+
+    def test_unset_env_fails_closed_with_503(
+        self, client, db_session, character, token_unset,
+    ):
+        before_balance = character.currency_balance
+        for headers in (None, GOOD, WRONG, {"X-Internal-Token": ""}):
+            resp = client.post(self._path(character.id), json=self.BODY,
+                               headers=headers)
+            assert resp.status_code == 503, (
+                f"add_rewards did not fail closed with headers={headers}"
+            )
+            assert resp.json()["detail"] == "Internal service token не настроен"
+        db_session.expire_all()
+        fresh = db_session.query(models.Character).filter_by(id=character.id).first()
+        assert fresh.currency_balance == before_balance
+
+    # -- accepted ----------------------------------------------------------
+
+    def test_valid_token_still_grants_gold_and_xp(
+        self, client, db_session, rewardable, internal_token,
+    ):
+        """battle / battle-pass / dungeon must keep working."""
+        resp = client.post(self._path(rewardable.id),
+                           json={"xp": 40, "gold": 25}, headers=GOOD)
+
+        assert resp.status_code == 200, resp.text
+        payload = resp.json()
+        assert payload["ok"] is True
+        assert payload["new_balance"] == 25
+        assert payload["new_xp"] == 40
+        assert self._ledger(db_session, rewardable.id) == (25, 40, 1)
+
+    def test_header_name_is_case_insensitive_but_value_is_not(
+        self, client, rewardable, internal_token,
+    ):
+        assert client.post(
+            self._path(rewardable.id), json={"xp": 1, "gold": 1},
+            headers={"x-internal-token": TOKEN},
+        ).status_code not in (401, 503)
+        assert client.post(
+            self._path(rewardable.id), json={"xp": 1, "gold": 1},
+            headers={"X-Internal-Token": TOKEN.upper()},
+        ).status_code == 401
+
+    def test_the_route_is_on_the_gated_route_table(self):
+        """A sweep so nobody can quietly drop the dependency again — the nginx
+        rule is the second layer, never the only one."""
+        from fastapi.routing import APIRoute
+
+        for route in app.routes:
+            if not isinstance(route, APIRoute):
+                continue
+            if route.path != "/characters/{character_id}/add_rewards":
+                continue
+            names = {
+                getattr(dep.call, "__name__", type(dep.call).__name__)
+                for dep in route.dependant.dependencies
+            }
+            assert "verify_internal_token" in names, (
+                "add_rewards lost its internal-token dependency"
+            )
+            return
+        pytest.fail("route /characters/{character_id}/add_rewards not found")

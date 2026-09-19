@@ -80,6 +80,7 @@ notification-service/app/
 - `user-service:8000` -> GET `/users/me` (валидация токена)
 - `user-service:8000` -> GET `/users/all` (рассылка всем)
 - `user-service:8000` -> GET `/users/admins` (рассылка админам)
+- `user-service:8000` -> POST `/users/internal/{uid}/activity/increment` (+ `X-Internal-Token`) — очки активности за сообщение в чат, `chat_routes.send_message` шаг 9. FEAT-169: маршрут переехал с открытого `/users/{uid}/activity/increment` под закрытый префикс `/users/internal/` и требует internal-токен. У notification-service раньше не было ни переменной `INTERNAL_SERVICE_TOKEN`, ни хелпера заголовка — добавлен локальный `chat_routes.internal_token_headers()` (читает env **на момент вызова**), переменная заведена в обоих compose-файлах. Вызов остаётся best-effort (отправка сообщения не падает), но `except: pass` заменён на `logger.warning` — иначе потеря заголовка навсегда и молча остановила бы начисление очков
 
 ### RabbitMQ (входящие)
 - Queue `user_registration` <- user-service

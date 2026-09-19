@@ -424,6 +424,7 @@ async def _distribute_pve_rewards(
                 resp = await client.post(
                     f"{char_service}/characters/{winner_id}/add_rewards",
                     json={"xp": total_xp, "gold": total_gold},
+                    headers=_internal_token_headers(),
                 )
                 if resp.status_code == 200:
                     logger.info(f"Награды добавлены для персонажа {winner_id}: xp={total_xp}, gold={total_gold}")
@@ -447,6 +448,7 @@ async def _distribute_pve_rewards(
                             "location_id": battle_state.get("location_id"),
                             "participant_character_ids": winner_char_ids,
                         },
+                        headers=_internal_token_headers(),
                     )
             except Exception as e:
                 logger.warning(f"party xp-bonus (combat) failed for {winner_id}: {e}")
@@ -987,6 +989,7 @@ async def party_mob_attack(
             resp = await client.get(
                 f"{settings.PARTY_SERVICE_URL}/party/internal/active-members",
                 params={"character_id": req.leader_character_id, "location_id": loc},
+                headers=_internal_token_headers(),
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -1167,6 +1170,7 @@ async def party_pack_attack(
             resp = await client.get(
                 f"{settings.PARTY_SERVICE_URL}/party/internal/active-members",
                 params={"character_id": req.leader_character_id, "location_id": loc},
+                headers=_internal_token_headers(),
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -3708,6 +3712,7 @@ async def _party_active_members_data(character_id: int, location_id: int) -> dic
             resp = await client.get(
                 f"{settings.PARTY_SERVICE_URL}/party/internal/active-members",
                 params={"character_id": character_id, "location_id": location_id},
+                headers=_internal_token_headers(),
             )
             if resp.status_code == 200:
                 return resp.json()

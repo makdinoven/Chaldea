@@ -1,5 +1,4 @@
 import logging
-import os
 from typing import List, Optional
 
 import httpx
@@ -13,6 +12,7 @@ import schemas
 from config import settings
 from database import get_db, engine
 from auth_http import get_current_user_via_http, UserRead
+from internal_auth import internal_token_headers, verify_internal_token
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("party-service")
@@ -47,10 +47,10 @@ def _require_owned(db: Session, character_id: int, current_user: UserRead) -> di
 def _internal_token_headers() -> dict:
     """Headers for outgoing internal service-to-service calls (FEAT-167 §3.2.5).
 
-    The token is read from env at call time (not import time) so tests can set
-    it without reloading the module.
+    Kept as a thin alias so the service has a single source of truth in
+    `internal_auth` (FEAT-169 M1) — `crud.py` uses the same helper.
     """
-    return {"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")}
+    return internal_token_headers()
 
 
 def _charge_active_xp(character_id: int, amount: int) -> None:
@@ -126,9 +126,14 @@ def create_party(
     return crud.build_party_out(db, party)
 
 
-@router.post("/internal/xp-bonus", response_model=schemas.XpBonusResult)
+@router.post(
+    "/internal/xp-bonus",
+    response_model=schemas.XpBonusResult,
+    dependencies=[Depends(verify_internal_token)],
+)
 def xp_bonus(req: schemas.XpBonusRequest, db: Session = Depends(get_db)):
-    """Internal (service-to-service): distribute the party XP bonus for an
+    """Internal (service-to-service, `X-Internal-Token` required): distribute
+    the party XP bonus for an
     XP-earning event (FEAT-144 §5).
 
     - self-bonus +N% to the actor (any source), but only when at least one
@@ -173,9 +178,14 @@ def xp_bonus(req: schemas.XpBonusRequest, db: Session = Depends(get_db)):
     return result
 
 
-@router.get("/internal/active-members", response_model=schemas.ActiveMembersResult)
+@router.get(
+    "/internal/active-members",
+    response_model=schemas.ActiveMembersResult,
+    dependencies=[Depends(verify_internal_token)],
+)
 def active_members(character_id: int, location_id: int, db: Session = Depends(get_db)):
-    """Internal: accepted squadmates of `character_id` that are co-located at
+    """Internal (`X-Internal-Token` required): accepted squadmates of
+    `character_id` that are co-located at
     `location_id` (green) — the roster for a party activity (FEAT-144 Ф3).
     Includes the queried character when they are on that location."""
     membership = crud.get_accepted_membership(db, character_id)

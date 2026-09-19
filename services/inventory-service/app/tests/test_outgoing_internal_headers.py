@@ -399,3 +399,202 @@ class TestNoBlockingHttpOnTheEventLoop:
         assert posted[0]["url"].endswith("/characters/internal/evaluate-titles")
         assert posted[0]["json"] == {"character_id": 7}
         assert posted[0]["headers"]["X-Internal-Token"] == TOKEN
+
+
+# ---------------------------------------------------------------------------
+# FEAT-169 #13/#14 — the perk-reconcile calls
+# ---------------------------------------------------------------------------
+# `POST /attributes/internal/{cid}/reconcile-perks` is internal-only now.
+# Both callers here are warn-and-continue: a dropped header would not raise
+# anywhere, perks would simply stop re-evaluating after equip/unequip, and the
+# player would just quietly lose (or keep) a perk. So the header VALUE is
+# asserted on the real client functions, never a re-implementation.
+
+
+class TestReconcilePerksHeader:
+
+    def test_sync_reconcile_sends_the_token(self, monkeypatch, token_env):
+        calls = []
+
+        def _post(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Resp()
+
+        monkeypatch.setattr(main.httpx, "post", _post)
+        main._reconcile_perks(11)
+
+        url, kwargs = calls[0]
+        assert url.endswith("/attributes/internal/11/reconcile-perks"), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+            "inventory-service dropped X-Internal-Token on reconcile-perks — "
+            "perks would silently stop re-evaluating after equip/unequip"
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_reconcile_sends_the_token(self, monkeypatch, token_env):
+        calls = _patch_client(monkeypatch)
+        await main._reconcile_perks_async(12)
+
+        url, kwargs = calls[0]
+        assert url.endswith("/attributes/internal/12/reconcile-perks"), url
+        assert kwargs["headers"]["X-Internal-Token"] == TOKEN
+
+    def test_sync_token_is_read_at_call_time(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            main.httpx, "post",
+            lambda url, **kw: (calls.append((url, kw)), _Resp())[1])
+
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "first")
+        main._reconcile_perks(1)
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "second")
+        main._reconcile_perks(1)
+
+        assert [c[1]["headers"]["X-Internal-Token"] for c in calls] == \
+            ["first", "second"]
+
+    @pytest.mark.asyncio
+    async def test_async_token_is_read_at_call_time(self, monkeypatch):
+        calls = _patch_client(monkeypatch)
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "first")
+        await main._reconcile_perks_async(1)
+        monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "second")
+        await main._reconcile_perks_async(1)
+
+        assert [c[1]["headers"]["X-Internal-Token"] for c in calls] == \
+            ["first", "second"]
+
+    def test_dropping_the_header_would_be_caught(self, monkeypatch, token_env):
+        """Negative control for every assertion in this file.
+
+        If a future edit removed `headers=_internal_token_headers()` from the
+        call, the observable difference is the header — not the call count.
+        This test proves the assertions above are actually sensitive to it.
+        """
+        calls = []
+        monkeypatch.setattr(
+            main.httpx, "post",
+            lambda url, **kw: (calls.append((url, kw)), _Resp())[1])
+        monkeypatch.setattr(main, "_internal_token_headers", dict)
+
+        main._reconcile_perks(1)
+
+        assert len(calls) == 1, "the call still happens — a count assertion sees nothing"
+        assert "X-Internal-Token" not in calls[0][1].get("headers", {}), (
+            "the header is the only observable difference, so it is what the "
+            "positive tests must assert"
+        )
+
+
+# ---------------------------------------------------------------------------
+# FEAT-169 — source sweep: no internal call may lose its header
+# ---------------------------------------------------------------------------
+# The per-call tests above pin the three call sites that exist today. This
+# sweep covers the ones nobody has written yet: any `post` in main.py whose URL
+# points at another service's `/internal/` route must pass `headers=`.
+
+
+class TestEveryInternalCallSiteSendsHeaders:
+    """Any call in main.py aimed at another service's `/internal/` route must
+    pass `headers=`. Variable URLs (`url = f"..."` one line above the call) are
+    resolved, because that is how most of the call sites are written."""
+
+    #: `POST /locations/quests/internal/auto-progress` is explicitly out of
+    #: FEAT-169 scope (§3.10.3 — the remaining nginx-only internal prefixes).
+    #: It is listed here so the sweep stays green today and turns red the
+    #: moment that route is gated without this caller being updated.
+    _KNOWN_UNGATED_TARGETS = ("/locations/quests/internal/auto-progress",)
+
+    def _resolve(self, source, tree):
+        """{function name: {variable: assigned source}} for simple `x = expr`."""
+        import ast
+
+        env = {}
+
+        class _V(ast.NodeVisitor):
+            def _scope(self, node):
+                local = {}
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Assign) and len(sub.targets) == 1                             and isinstance(sub.targets[0], ast.Name):
+                        local[sub.targets[0].id] =                             ast.get_source_segment(source, sub.value) or ""
+                env[(node.lineno, node.end_lineno)] = local
+                self.generic_visit(node)
+
+            visit_FunctionDef = _scope
+            visit_AsyncFunctionDef = _scope
+
+        _V().visit(tree)
+        return env
+
+    def _url_of(self, source, env, node):
+        import ast
+
+        raw = ast.get_source_segment(source, node.args[0]) if node.args else ""
+        raw = raw or ""
+        if "/" in raw:
+            return raw
+        # a URL-building helper — `_reconcile_perks_url(cid)`: inline its return
+        if node.args and isinstance(node.args[0], ast.Call) \
+                and isinstance(node.args[0].func, ast.Name):
+            builder = node.args[0].func.id
+            for sub in ast.walk(self._tree):
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                        and sub.name == builder:
+                    for inner in ast.walk(sub):
+                        if isinstance(inner, ast.Return) and inner.value is not None:
+                            return ast.get_source_segment(self._source, inner.value) or raw
+        # a bare name — look it up in the innermost enclosing function
+        scopes = [(end - start, local) for (start, end), local in env.items()
+                  if start <= node.lineno <= end]
+        scopes.sort(key=lambda pair: pair[0])
+        for _, local in scopes:
+            if raw in local:
+                return local[raw]
+        return raw
+
+    def test_no_internal_call_is_missing_headers(self):
+        import ast
+
+        source = open(os.path.join(_APP_DIR, "main.py"), encoding="utf-8").read()
+        tree = ast.parse(source)
+        self._source, self._tree = source, tree
+        env = self._resolve(source, tree)
+
+        offenders = []
+        checked = 0
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr not in ("post", "put", "patch", "delete", "get"):
+                continue
+            base = ast.get_source_segment(source, node.func.value)
+            if base not in ("httpx", "client", "requests"):
+                continue
+            url = self._url_of(source, env, node)
+            if "internal" not in url:
+                continue
+            if any(known in url for known in self._KNOWN_UNGATED_TARGETS):
+                continue
+            checked += 1
+            if "headers" not in {kw.arg for kw in node.keywords}:
+                offenders.append(
+                    f"main.py:{node.lineno} {base}.{node.func.attr}({url[:70]}) без headers="
+                )
+
+        assert checked >= 4, (
+            "свип перестал находить внутренние вызовы — URL отрефакторили, "
+            f"и проверка стала пустой (найдено {checked})"
+        )
+        assert not offenders, (
+            "межсервисный вызов на /internal/ без X-Internal-Token — целевой "
+            "маршрут ответит 401, а вызывающий это проглотит: "
+            + "; ".join(offenders)
+        )
+
+    def test_the_known_internal_call_sites_are_still_there(self):
+        """Guard for the sweep itself: if the URLs are refactored out of
+        recognition the sweep silently matches nothing."""
+        source = open(os.path.join(_APP_DIR, "main.py"), encoding="utf-8").read()
+        assert "internal/{character_id}/satiety" in source
+        assert "internal/{character_id}/reconcile-perks" in source
+        assert source.count("_internal_token_headers()") >= 5

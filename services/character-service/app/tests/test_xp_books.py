@@ -53,6 +53,8 @@ import crud
 import auth_http
 
 auth_http.INTERNAL_SERVICE_TOKEN = "test-internal-token"
+# FEAT-169: POST /characters/{cid}/add_rewards закрыт internal-токеном.
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
 
 BATTLE = "character_xp_battle_bonus"
 POST = "character_xp_post_bonus"
@@ -291,7 +293,7 @@ class TestAddRewardsXpBook:
         _insert_attributes(session, 1, passive=100)
         mock_get.return_value = _multiplier_response(1.5)
 
-        resp = client.post("/characters/1/add_rewards", json={"xp": 200, "gold": 0})
+        resp = client.post("/characters/1/add_rewards", json={"xp": 200, "gold": 0}, headers=INTERNAL_HEADERS)
 
         assert resp.status_code == 200
         assert resp.json()["new_xp"] == 400          # 100 + int(200 * 1.5)
@@ -310,7 +312,7 @@ class TestAddRewardsXpBook:
         _insert_attributes(session, 1)
         mock_get.return_value = _multiplier_response(1.0)
 
-        client.post("/characters/1/add_rewards", json={"xp": 10, "gold": 0})
+        client.post("/characters/1/add_rewards", json={"xp": 10, "gold": 0}, headers=INTERNAL_HEADERS)
 
         assert _buff_types_sent(mock_get) == [BATTLE]
 
@@ -324,7 +326,7 @@ class TestAddRewardsXpBook:
 
         resp = client.post(
             "/characters/1/add_rewards",
-            json={"xp": 50, "gold": 0, "xp_source": PASS},
+            json={"xp": 50, "gold": 0, "xp_source": PASS}, headers=INTERNAL_HEADERS
         )
 
         assert resp.status_code == 200
@@ -342,7 +344,7 @@ class TestAddRewardsXpBook:
 
         resp = client.post(
             "/characters/1/add_rewards",
-            json={"xp": 10, "gold": 0, "xp_source": source},
+            json={"xp": 10, "gold": 0, "xp_source": source}, headers=INTERNAL_HEADERS
         )
 
         assert resp.status_code == 200
@@ -355,7 +357,7 @@ class TestAddRewardsXpBook:
         _insert_attributes(session, 1)
         mock_get.return_value = _multiplier_response(3.0)
 
-        resp = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 50})
+        resp = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 50}, headers=INTERNAL_HEADERS)
 
         assert resp.json()["new_balance"] == 150
 
@@ -366,7 +368,7 @@ class TestAddRewardsXpBook:
         _insert_attributes(session, 1, passive=0)
         mock_get.return_value = _multiplier_response(1.35)
 
-        resp = client.post("/characters/1/add_rewards", json={"xp": 7, "gold": 0})
+        resp = client.post("/characters/1/add_rewards", json={"xp": 7, "gold": 0}, headers=INTERNAL_HEADERS)
 
         # 7 * 1.35 = 9.45 → 9
         assert resp.json()["new_xp"] == 9
@@ -381,7 +383,7 @@ class TestAddRewardsXpBook:
         _insert_attributes(session, 1, passive=40)
 
         with caplog.at_level(logging.WARNING):
-            resp = client.post("/characters/1/add_rewards", json={"xp": 60, "gold": 0})
+            resp = client.post("/characters/1/add_rewards", json={"xp": 60, "gold": 0}, headers=INTERNAL_HEADERS)
 
         assert resp.status_code == 200
         assert resp.json()["new_xp"] == 100
@@ -394,7 +396,7 @@ class TestAddRewardsXpBook:
         _create_character(session, 1)
         _insert_attributes(session, 1, passive=0)
 
-        resp = client.post("/characters/1/add_rewards", json={"xp": 25, "gold": 0})
+        resp = client.post("/characters/1/add_rewards", json={"xp": 25, "gold": 0}, headers=INTERNAL_HEADERS)
 
         assert resp.status_code == 200
         assert resp.json()["new_xp"] == 25
@@ -405,7 +407,7 @@ class TestAddRewardsXpBook:
         _create_character(session, 1, currency_balance=10)
         _insert_attributes(session, 1, passive=5)
 
-        resp = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 5})
+        resp = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 5}, headers=INTERNAL_HEADERS)
 
         assert resp.status_code == 200
         mock_get.assert_not_called()
@@ -420,7 +422,7 @@ class TestAddRewardsXpBook:
         mock_get.return_value = _multiplier_response(2.0)
 
         with patch("crud.check_and_update_level") as mock_level:
-            client.post("/characters/1/add_rewards", json={"xp": 100, "gold": 0})
+            client.post("/characters/1/add_rewards", json={"xp": 100, "gold": 0}, headers=INTERNAL_HEADERS)
 
         mock_level.assert_called_once_with(session, 1, 200)
 
@@ -433,7 +435,7 @@ class TestAddRewardsXpSourceValidation:
 
         resp = client.post(
             "/characters/1/add_rewards",
-            json={"xp": 10, "gold": 0, "xp_source": "character_xp_hacker_bonus"},
+            json={"xp": 10, "gold": 0, "xp_source": "character_xp_hacker_bonus"}, headers=INTERNAL_HEADERS
         )
 
         assert resp.status_code == 422
@@ -447,7 +449,7 @@ class TestAddRewardsXpSourceValidation:
 
         resp = client.post(
             "/characters/1/add_rewards",
-            json={"xp": 10, "gold": 0, "xp_source": "xp_bonus"},
+            json={"xp": 10, "gold": 0, "xp_source": "xp_bonus"}, headers=INTERNAL_HEADERS
         )
 
         assert resp.status_code == 422
@@ -460,7 +462,7 @@ class TestAddRewardsXpSourceValidation:
 
         resp = client.post(
             "/characters/1/add_rewards",
-            json={"xp": 10, "gold": 0, "xp_source": "character_xp_bonus"},
+            json={"xp": 10, "gold": 0, "xp_source": "character_xp_bonus"}, headers=INTERNAL_HEADERS
         )
 
         assert resp.status_code == 422
@@ -477,7 +479,7 @@ class TestAddRewardsXpSourceValidation:
 
         resp = client.post(
             "/characters/1/add_rewards",
-            json={"xp": 10, "gold": 0, "xp_source": payload},
+            json={"xp": 10, "gold": 0, "xp_source": payload}, headers=INTERNAL_HEADERS
         )
 
         assert resp.status_code == 422
@@ -491,7 +493,7 @@ class TestAddRewardsXpSourceValidation:
 
         resp = client.post(
             "/characters/1/add_rewards",
-            json={"xp": 10, "gold": 0, "xp_source": {"a": 1}},
+            json={"xp": 10, "gold": 0, "xp_source": {"a": 1}}, headers=INTERNAL_HEADERS
         )
 
         assert resp.status_code == 422
@@ -643,7 +645,7 @@ class TestMultiplierIsResolvedBeforeAnyDbWork:
             return _multiplier_response(1.5)
 
         mock_get.side_effect = assert_no_transaction
-        resp = client.post("/characters/1/add_rewards", json={"xp": 100, "gold": 0})
+        resp = client.post("/characters/1/add_rewards", json={"xp": 100, "gold": 0}, headers=INTERNAL_HEADERS)
 
         assert resp.status_code == 200
         assert seen["in_transaction"] is False, "lookup ran inside a transaction"
@@ -655,7 +657,7 @@ class TestMultiplierIsResolvedBeforeAnyDbWork:
         _create_character(session, 1, currency_balance=0)
         _insert_attributes(session, 1)
 
-        client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 10})
+        client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 10}, headers=INTERNAL_HEADERS)
 
         mock_get.assert_not_called()
 

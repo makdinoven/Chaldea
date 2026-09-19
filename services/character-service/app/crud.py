@@ -1153,7 +1153,12 @@ async def send_skills_request(character_id: int):
     try:
         async with httpx.AsyncClient() as client:
             logger.info(f"Отправка запроса на создание навыков для персонажа {character_id}")
-            response = await client.post(f"{settings.SKILLS_SERVICE_URL}", json={"character_id": character_id})
+            # FEAT-169 #17: legacy POST /skills/ теперь закрыт internal-токеном.
+            response = await client.post(
+                f"{settings.SKILLS_SERVICE_URL}",
+                json={"character_id": character_id},
+                headers=_internal_token_headers(),
+            )
 
             logger.info(f"Статус-код ответа от сервиса навыков: {response.status_code}")
             logger.info(f"Тело ответа от сервиса навыков: {response.text}")
@@ -1544,9 +1549,12 @@ async def send_skills_presets_request(character_id: int, skill_ids: list[int]):
 
     try:
         async with httpx.AsyncClient() as client:
+            # FEAT-169 #16: публичный /skills/assign_multiple ушёл под RBAC
+            # (админский редактор НПС), сервисный вызов — на internal-двойника.
             response = await client.post(
-                f"{settings.SKILLS_SERVICE_URL}assign_multiple",
-                json=request_body
+                f"{settings.SKILLS_SERVICE_URL}internal/assign_multiple",
+                json=request_body,
+                headers=_internal_token_headers(),
             )
             if response.status_code == 200:
                 return response.json()  # Возвращаем ответ от сервиса

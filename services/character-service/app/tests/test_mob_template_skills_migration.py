@@ -72,9 +72,10 @@ class TestSendSkillsPresetsRequestBody:
                 return self_inner
             async def __aexit__(self_inner, *a):
                 return False
-            async def post(self_inner, url, json=None):
+            async def post(self_inner, url, json=None, headers=None):
                 captured["url"] = url
                 captured["json"] = json
+                captured["headers"] = headers
                 return _Resp()
 
         with patch("crud.httpx.AsyncClient", _AsyncClientStub):

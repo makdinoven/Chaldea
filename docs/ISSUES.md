@@ -108,7 +108,7 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 ## CRITICAL
 
-### 27. JWT-секрет — публично известный fallback `your-secret-key` (вероятно, и на prod)
+### ~~27. JWT-секрет — публично известный fallback `your-secret-key`~~ DONE (2026-09-19, ротация на проде)
 **Сервис:** user-service (docker/env)
 **Файлы:** `docker-compose.yml:227` (`JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key}`), `.env` (ключ отсутствует), prod `.env` на VPS (fallofgods.top)
 **Обнаружено:** FEAT-150 (Codebase Analyst, 2026-07-17). По решению пользователя — исправляется отдельной задачей, не в рамках FEAT-150.
@@ -118,6 +118,9 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 2. Добавить `JWT_SECRET_KEY` в `.env.example` с маскированным значением-заглушкой.
 3. Рассмотреть удаление fallback-значения из `docker-compose.yml` (fail-fast без секрета) — как минимум для prod-конфигурации.
 **Цена:** смена секрета инвалидирует все выданные токены → однократный принудительный re-logout всех пользователей (после FEAT-150 достаточно одного повторного входа; refresh-токены со старой подписью тоже перестанут работать). Скоординировать с деплоем.
+**Сделано (2026-09-19):** на проде в `.env` прописан случайный секрет (64 hex), user-service пересоздан (`up -d --force-recreate`). Проверено: в контейнере секрет не дефолтный, а токен, подделанный старым `your-secret-key` с ролью admin, получает 401; вход и админка работают. Осталось (мелочь, отдельно): заглушка `JWT_SECRET_KEY` в `.env.example` и удаление публичного fallback из `docker-compose.yml`, чтобы сервис падал без секрета, а не поднимался с известным.
+**Уточнено (Codebase Analyst, FEAT-169, 2026-09-19):** пункт 2 («заглушка в `.env.example`») **уже выполнен** — `.env.example:21` содержит `JWT_SECRET_KEY=change-me-jwt-secret-at-least-32-chars`. Остаётся только пункт 3. Заодно: сервис уже фейлится сам — `user-service/auth.py:13` читает `os.environ["JWT_SECRET_KEY"]` на импорте (KeyError), так что удаления fallback из `docker-compose.yml:248` достаточно; в `docker-compose.prod.yml` переменной нет вовсе, prod наследует ту же строку из базового файла. Локальный `.env` **не содержит** ни `JWT_SECRET_KEY`, ни `INTERNAL_SERVICE_TOKEN` — снятие fallback'ов сломает локальную разработку, пока оба ключа не добавят в `.env`.
+**Закрыто полностью (FEAT-169, задачи #1/#9):** пункт 3 выполнен — в `docker-compose.yml` осталось `JWT_SECRET_KEY: ${JWT_SECRET_KEY}` без значения по умолчанию, литерал `your-secret-key` больше не встречается в репозитории ни разу (prod-файл user-service не переопределяет и наследует ту же строку). Заодно закрыта дыра, которой не было в исходной записи: `os.environ["JWT_SECRET_KEY"]` падал с голым `KeyError`, но **пустую строку пропускал** — теперь `user-service/auth.py` явно проверяет на непустоту и падает с `RuntimeError`, потому что compose без ключа в `.env` подставляет именно пустую строку, а не отсутствие переменной. Локальный `.env` (в gitignore) оба ключа получил; требование записано в `.env.example` и `docs/ARCHITECTURE.md`.
 
 ---
 
@@ -131,24 +134,27 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 ~~Найдено Reviewer'ом в FEAT-167: `POST /attributes/` и `POST /inventory/` не имели ни одной зависимости, и nginx их не резал — снаружи можно было создавать строки атрибутов и инвентаря для произвольных `character_id`.~~
 **Исправлено в том же пуше:** оба под `Depends(verify_internal_token)`; единственный вызывающий, character-service, шлёт заголовок из всех трёх мест (`crud.send_attributes_request`, `crud.send_inventory_request`, `crud._sync_send_attributes_request` — спавн моба). Проверено вживую: анонимно оба → 401, все три клиентские функции в живом контейнере → 200 с созданием строк. **Остаётся открытым** более широкий долг ниже — «большинство внутренних эндпоинтов защищены только nginx».
 
-### Уязвимость: `GET /inventory/characters/{id}/fast_slots` отдаётся без авторизации
+### ~~Уязвимость: `GET /inventory/characters/{id}/fast_slots` отдаётся без авторизации~~ DONE (FEAT-169, задачи #3/#14)
 **Сервис:** inventory-service
-**Файл:** `services/inventory-service/app/main.py:1186-1193` (`get_fast_slots` — единственная зависимость `Depends(get_db)`)
+**Файл:** `services/inventory-service/app/main.py:1252-1259` (`get_fast_slots` — единственная зависимость `Depends(get_db)`; в записи ниже был устаревший диапазон 1186-1193, поправлено Analyst'ом в FEAT-169)
 **Обнаружено:** FEAT-168 (QA, 2026-09-19) — предсуществующий долг, фичей не внесён.
 **Приоритет:** HIGH
 **Описание:** маршрут лежит под публичным префиксом `/inventory/` (nginx его не режет) и не проверяет ни JWT, ни владение персонажем: любой анонимный запрос отдаёт содержимое пояса произвольного `character_id`. После FEAT-168 ответ стал заметно богаче — к составу пояса добавились боевая настройка предмета (`consumable_action`, `coating_turns`, `coating_bonus_damage`) и полные строки `item_effects` / `item_damage_entries`, то есть разведка снаряжения противника перед боем стала точнее. Записи в БД маршрут не меняет, поэтому это утечка, а не порча данных. Архитектурная секция фичи (§3.3.3) утверждает «Auth unchanged (`get_current_user_via_http` + ownership check)» — в коде этой проверки нет ни до, ни после FEAT-168.
 **Тест:** `services/inventory-service/app/tests/test_fast_slots_payload.py::TestFastSlotsAuth::test_fast_slots_requires_auth` — помечен `xfail` (non-strict), станет зелёным сам, когда проверку добавят.
 **Возможное решение:** повесить `Depends(get_current_user_via_http)` + `verify_character_ownership`; учесть, что battle-service ходит сюда сервер-сервер (`battle-service/app/inventory_client.py:118`) — ему понадобится либо `X-Internal-Token`, либо отдельный internal-маршрут.
+**Исправлено (FEAT-169):** маршрут разложен на два по образцу FEAT-167. Игровой путь остался прежним и получил `Depends(get_current_user_via_http)` + существующий `verify_character_ownership` (анонимно → 401, чужой персонаж → 403, свой → 200). Для battle-service добавлен близнец `GET /inventory/internal/characters/{id}/fast_slots` под `verify_internal_token` — проверки владения на нём нет намеренно, у мобов и NPC `user_id IS NULL`. Тело общее (`_get_fast_slots_core`), ответ байт в байт прежний. `battle-service/app/inventory_client.py:118` переведён на internal-путь и шлёт заголовок. `xfail` с `TestFastSlotsAuth::test_fast_slots_requires_auth` снят — тест зелёный сам по себе; анонимные вызовы в `test_equip_locking.py`, `test_npc_equipment.py`, `test_item_out_schemas_serve_stored_rows.py` переведены на internal-маршрут.
 
-### Долг: оставшиеся `/internal/*` маршруты char-attrs и inventory защищены только nginx
+### ~~Долг: оставшиеся `/internal/*` маршруты char-attrs и inventory защищены только nginx~~ DONE (FEAT-169, задачи #3/#4)
 **Сервисы:** character-attributes-service, inventory-service
 **Файлы:** `character-attributes-service/app/main.py` (`POST /attributes/internal/settle-regen`, `/internal/{id}/satiety`, `/internal/{id}/reconcile-perks`), `inventory-service/app/main.py` (`POST /inventory/internal/characters/{id}/revalidate-equipment`, `/internal/characters/{id}/consume_item`, `/internal/characters/{id}/free_slots_check`, `/internal/characters/{id}/gathering/award`, `/internal/update-durability`)
 **Обнаружено:** FEAT-167 (Architect §3.8.2 / Reviewer, 2026-09-18) — перечень сверен по таблице роутов после задач #17/#18.
 **Приоритет:** HIGH
 **Описание:** восемь маршрутов принимают запрос без единой проверки в самом сервисе; единственный слой — `location /…/internal/ { return 403; }` в nginx. Любая ошибка в ingress или доступ внутрь compose-сети открывает выдачу ресурсов сбора, списание предметов, снятие прочности и досчёт восстановления. Оба сервиса **уже имеют** `verify_internal_token` в `app/auth_http.py` (добавлен FEAT-167), так что правка построчная — но требует синхронно обновить вызывающих (в частности `party-service` → `/attributes/internal/settle-regen`, у которого токен появился только в FEAT-167).
 **Возможное решение:** повесить `Depends(verify_internal_token)` на все восемь и добавить заголовок вызывающим; отдельной задачей, вместе с общей записью «большинство внутренних эндпоинтов защищены только nginx» ниже.
+**Уточнено (Codebase Analyst, FEAT-169, 2026-09-19):** перечень сверен — ровно восемь, ни один не вызывается с фронтенда, так что internal-двойники (как в FEAT-167 для выдачи предметов) не нужны. Два более новых internal-маршрута inventory-service (`GET /internal/characters/{id}/xp-multiplier` `main.py:1773` и `…/xp-multipliers` `:1807`, оба FEAT-168) **уже** под `verify_internal_token`. Вызывающие и их готовность: satiety ← `inventory/main.py:3443` (хелпер есть), reconcile-perks ← `inventory/main.py:844-870` + `character-service/main.py:1963` (хелперы есть), revalidate-equipment ← `skills/main.py:734` (есть), free_slots_check ← `locations/crud.py:7374` (есть), gathering/award ← `locations/crud.py:6381` (есть), settle-regen ← `party/crud.py:22` (хелпер лежит в `party/main.py:53` — из `crud.py` не импортируется, циклический импорт), consume_item ← `battle/inventory_client.py:23` и update-durability ← `:83` (**в этом модуле хелпера нет вообще**). Шесть из восьми вызывающих проглатывают ошибку с WARNING — забытый заголовок даст тихую деградацию, а не отказ.
+**Исправлено (FEAT-169):** на все восемь повешен `Depends(verify_internal_token)` (пусто → 503, чужой/отсутствующий заголовок → 401, русский `detail`). Все вызывающие обновлены синхронно: satiety и reconcile-perks — `inventory/main.py`, reconcile-perks — `character-service/main.py`, revalidate-equipment — `skills/main.py`, free_slots_check и gathering/award — `locations/crud.py`, settle-regen — `party/crud.py` через новый leaf-модуль `party-service/app/internal_auth.py` (хелпер лежал в `main.py`, из `crud.py` его было не импортировать — цикл), consume_item и update-durability — `battle-service/app/inventory_client.py`, куда добавлен локальный `_internal_token_headers()` (импорт из `main` дал бы цикл). Ровно из-за тихой деградации QA проверяет **сам заголовок на реальной клиентской функции** (`call.kwargs["headers"]["X-Internal-Token"]`), а не «ничего не упало»; закрыты и два пробела в покрытии — у `update-durability` и `reconcile-perks` не было ни одного HTTP-теста.
 
-### Долг: `INTERNAL_SERVICE_TOKEN` имеет публично известный fallback `dev-internal-token-change-me`
+### ~~Долг: `INTERNAL_SERVICE_TOKEN` имеет публично известный fallback `dev-internal-token-change-me`~~ DONE (FEAT-169, задача #1)
 **Сервисы:** character-service, character-attributes-service, locations-service, battle-service, inventory-service, skills-service, dungeon-service, party-service, battle-pass-service, celery-worker (все, кому токен задан в compose — после FEAT-167 это 10 сервисов)
 **Файлы:** `docker-compose.yml`, `docker-compose.prod.yml` (объявление `${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}` у каждого из 10 сервисов), `.env.example:28`
 **Обнаружено:** FEAT-162 (Reviewer, 2026-09-14). Долг **пред­существующий** — дефолт был прописан ещё до FEAT-162 для четырёх сервисов; фича лишь распространила ту же строку на ещё два и сделала её несущей.
@@ -157,6 +163,67 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 **Возможное решение:** сгенерировать криптостойкое значение (`openssl rand -hex 32`), прописать `INTERNAL_SERVICE_TOKEN` в prod `.env`, добавить в `.env.example` маскированную заглушку и рассмотреть удаление fallback-значения из `docker-compose.prod.yml` (fail-closed: без токена сервис отдаёт 503 — механизм уже реализован).
 **Дополнено (Codebase Analyst, FEAT-167):** токен вообще не проброшен **party-service** и **battle-pass-service** — ни в `docker-compose.yml`, ни в `docker-compose.prod.yml`. Оба вызывают эндпоинты, которые FEAT-167 закрывает (party → `active_experience`/`passive_experience`, battle-pass → `POST /inventory/{id}/items`), и оба проглатывают ошибку с warning'ом. Без правки compose тихо пропадут опыт отряда и предметные награды боевого пропуска. FEAT-167 добавил переменную обоим (проверено на смёрженном prod-конфиге); после этого каждый новый сервис-вызывающий обязан получать её сразу.
 **Дополнено (Reviewer, FEAT-167, 2026-09-18):** после FEAT-167 токен стал единственным прикладным слоем ещё для ~12 маршрутов (шесть изменяющих `/attributes/{id}/…`, новый `POST /inventory/internal/characters/{id}/items` и остальные `/internal/`-пути). **Настоящее значение обязательно задать в prod `.env` в том же пуше, что и FEAT-167** — иначе прод поедет с публично известной строкой.
+**Исправлено (FEAT-169, задача #1):** в `docker-compose.prod.yml` у **каждого** потребителя стоит строгая форма `${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}` — 7 строк переписаны с fallback'а и 6 добавлены. Шесть добавленных важнее семи переписанных: char-attrs, inventory и locations получали переменную **только** из базового файла, то есть при правке одних лишь объявленных в prod сервисов они уехали бы в прод на публичном `dev-internal-token-change-me`; ещё три (user-service, notification-service, autobattle-service) стали потребителями впервые и добавлены в **оба** файла. В `docker-compose.yml` (dev) fallback сохранён осознанно — свежий клон должен подниматься из коробки; потребителей в dev стало 13.
+**Приёмка была эмпирической, а не «по рассуждению»:** посервисный diff окружения до/после на смёрженном конфиге (`docker compose -f docker-compose.yml -f docker-compose.prod.yml config`) дал ровно три добавленных ключа и ни одной потери — то есть блок `environment:` в prod-файле действительно **мержится** с базовым, а не заменяет его (проверено, потому что рядом в том же файле используется `!reset []` именно из-за merge-семантики). С секретами в `.env` — ноль вхождений `dev-internal-token-change-me`; без них prod-конфиг падает с `required variable INTERNAL_SERVICE_TOKEN is missing a value`, а dev поднимается с fallback'ом.
+**Побочный эффект, который надо знать деплоящему:** строгая форма `:?` роняет `config`/`ps`/`down`/`up` для **всего** стека, а не один контейнер. См. `docs/ARCHITECTURE.md`, раздел «Секреты и fail-fast».
+**Комментарий в `.env.example` тоже исправлен:** он описывал только сценарий FEAT-125 (battle-service → skills-service `GET /skills/{id}/resolved`), хотя потребителей уже 13.
+
+### ~~Уязвимость: `POST /skills/assign_multiple` и `POST /skills/` открыты через gateway без авторизации~~ DONE (FEAT-169, задачи #2/#7)
+**Сервис:** skills-service
+**Файлы:** `services/skills-service/app/main.py:567` (`assign_multiple_skills`), `services/skills-service/app/main.py:75` (`legacy_create_skills_for_new_character`)
+**Обнаружено:** FEAT-169 (Codebase Analyst, 2026-09-19), систематический прогон таблиц роутов против обоих nginx-конфигов. Предсуществующий долг.
+**Приоритет:** HIGH
+**Описание:** у обоих обработчиков единственная зависимость — `Depends(get_db)`, `character_id` берётся **из тела запроса**, а nginx проксирует `/skills/` целиком (`nginx.conf:264`, `nginx.prod.conf` — тот же блок) без каких-либо правил. Анонимный запрос может назначить любому персонажу любой набор навыков по их id (`assign_multiple`) или создать/привязать базовый навык (`POST /skills/`). Ровно тот же класс, что закрытая в FEAT-167 дыра с выдачей предметов, только про навыки.
+**Возможное решение:** развести как в FEAT-167 — internal-маршрут под `Depends(verify_internal_token)` для вызова из character-service при создании персонажа, и/или `get_current_user_via_http` + проверка владения; вторым слоем добавить правило в оба nginx-конфига.
+**Исправлено (FEAT-169):** решение принято по вызывающим каждого маршрута, а не одним правилом на оба. У `assign_multiple` вызывающих двое — character-service при одобрении заявки и **админский** редактор НПС (`NpcStatsEditor.tsx:249`), который назначает навыки чужому персонажу, поэтому проверка владения его бы сломала: маршрут разложен на internal-близнец `POST /skills/internal/assign_multiple` (`verify_internal_token`, на него переведён `character-service/app/crud.py:1547`) и публичный путь под `require_permission("skills:create")` — разрешение уже существует у соседнего `POST /skills/admin/character_skills/`, новой строки в `permissions` и миграции не понадобилось. Legacy `POST /skills/` в проде не вызывается ни разу (только тесты), закрыт `verify_internal_token`. В `skills-service/app/auth_http.py` добавлен **стандартный** `verify_internal_token`; существующий `allow_jwt_or_service_token` намеренно не расширяли — он сверяет токен как Bearer, и смешение сделало бы один секрет валидным в двух позициях заголовка.
+**Вторым слоем (задача #2):** `/skills/` был единственным семейством вообще без правила deny. В оба nginx-конфига добавлены `location /skills/internal/ { return 403; }` и `location = /skills/ { limit_except GET HEAD { deny all; } }` (точное совпадение — подпути не задеты). Проверено вживую на обоих конфигах: `nginx -t` зелёный; `POST /skills/` → 403, `GET`/`HEAD /skills/` → 200, `/skills/internal/...` → 403, при этом `/skills/1`, `/skills/1/resolved`, `/skills/assign_multiple`, `/skills/admin/...` и `DELETE /skills/character_skills/...` проходят как раньше.
+
+### ~~Уязвимость: `POST /users/{user_id}/activity/increment` открыт через gateway без авторизации~~ DONE (FEAT-169, задачи #9/#11)
+**Сервис:** user-service
+**Файл:** `services/user-service/main.py:1656` (`increment_activity_points`)
+**Обнаружено:** FEAT-169 (Codebase Analyst, 2026-09-19).
+**Приоритет:** MEDIUM
+**Описание:** в докстроке написано «Internal service-to-service call, no auth required», но маршрут лежит **не** под `/users/internal/`, поэтому правило `location /users/internal/ { return 403; }` (`nginx.conf:118`, `nginx.prod.conf:141`) его не ловит. Любой анонимный POST накручивает `activity_points` произвольному пользователю на произвольную величину. Один в один сценарий `POST /attributes/cumulative_stats/increment`, закрытый в FEAT-167.
+**Возможное решение:** перенести под `/users/internal/` и повесить `verify_internal_token` (в user-service его ещё нет — добавить по образцу `character-service/app/auth_http.py:78-95`), синхронно обновить вызывающих.
+**Исправлено (FEAT-169):** маршрут перенесён на `POST /users/internal/{user_id}/activity/increment` под `verify_internal_token` (механизм добавлен в `user-service/auth.py` — в сервисе его не было вовсе); старый путь удалён, а не оставлен алиасом, и теперь отдаёт 404. Новый путь попадает под существующее правило nginx `location /users/internal/ { return 403; }` — проверено вживую на обоих конфигах. Единственный вызывающий, `notification-service/app/chat_routes.py:138`, переведён на новый путь и шлёт заголовок; заодно `except: pass` заменён на `logger.warning`, иначе будущая поломка была бы полностью немой. Пока маршрут трогали, добавлена валидация `points: int = Field(1, ge=1, le=100)` — раньше принимались и отрицательные значения. user-service и notification-service получили `INTERNAL_SERVICE_TOKEN` в обоих compose-файлах.
+
+### ~~Уязвимость: открытые изменяющие маршруты locations-service (прогресс квестов и выбор в диалоге)~~ DONE (FEAT-169, задача #8)
+**Сервис:** locations-service
+**Файлы:** `services/locations-service/app/main.py:3133` (`update_quest_progress`), `services/locations-service/app/main.py:2488` (`choose_dialogue_option`)
+**Обнаружено:** FEAT-169 (Codebase Analyst, 2026-09-19).
+**Приоритет:** MEDIUM
+**Описание:** обе ручки берут `character_id` из тела и не проверяют ничего. `/quests/progress/update` двигает объектив квеста произвольного персонажа на произвольный инкремент (завершение квеста платит награду); выбор узла диалога у NPC может выдавать квесты. nginx режет только `/locations/internal/` и `/locations/quests/internal/`, эти два пути — нет.
+**Возможное решение:** `update_quest_progress` — очевидный internal-маршрут (перенести под `/locations/quests/internal/` + `verify_internal_token`, механизм в сервисе уже есть — `main.py:3750`); диалог — игровой маршрут, ему нужен JWT + проверка владения персонажем.
+**Исправлено (FEAT-169):** `update_quest_progress` перенесён на `POST /locations/quests/internal/progress/update` под `verify_internal_token`; старый путь удалён (вызывающих у него не было вообще — ни сервиса, ни фронтенда, ни теста), новый попадает под существующее правило nginx `location /locations/quests/internal/ { return 403; }` — проверено вживую. Нюанс реализации: объявлять маршрут пришлось **ниже** определения `verify_internal_token`, декоратор выполняется на импорте и иначе даёт `NameError`.
+**Диалог закрыт только JWT, проверки владения намеренно нет** — вопреки строке «Возможное решение» выше. В теле запроса (`DialogueChooseRequest = {option_id}`) `character_id` отсутствует как поле, а обработчик только ходит по дереву диалога и ничего не выдаёт (квест берётся отдельной ручкой `POST /locations/quests/{id}/accept`). Добавлять `character_id` ради проверки — ломать контракт и править фронтенд без выигрыша в защите; аутентификация и так убирает анонимный доступ.
+
+### Долг: неаутентифицированные чтения чужих данных (инвентарь, атрибуты, профиль, чат)
+**Сервисы:** inventory-service, character-attributes-service, character-service, user-service, notification-service
+**Файлы:** `inventory/app/main.py:361` (`GET /inventory/{id}/items`), `:766` (`GET /inventory/{id}/equipment`), `character-attributes-service/app/main.py:357` (`GET /attributes/{id}`), `:332` (`GET /attributes/{id}/perks`), `character-service/app/main.py:1911` (`GET /characters/{id}/full_profile`), `user-service/main.py:702` (`GET /users/all`), `notification-service/app/chat_routes.py:153` (`GET /notifications/chat/messages`)
+**Обнаружено:** FEAT-169 (Codebase Analyst, 2026-09-19) — тот же класс, что дыра с `fast_slots`.
+**Приоритет:** LOW–MEDIUM
+**Описание:** всё это отдаётся анонимно через gateway. Инвентарь и экипировка чужого персонажа — прямая разведка перед боем; `GET /notifications/chat/messages` отдаёт историю любого канала без токена (при том что `DELETE` на том же роутере — `require_permission("chat:delete")`); Данные эти чтения не портят, поэтому не HIGH. `GET /attributes/{id}/perks` из списка **выделен в отдельную запись ниже** — он не просто читает, а пишет в БД, и это баг независимо от продуктового решения о публичности чтений.
+**Статус:** остаётся открытым после FEAT-169 — сознательно. Нужно **продуктовое** решение, что должно остаться публичным: часть страниц открыта гостям, и «закрыть всё» здесь сломает гостевой фронтенд.
+**Возможное решение:** одним заходом повесить `get_current_user_via_http` на чтения, которые не нужны публично, и разобраться, какие из них реально используются гостевым фронтендом (часть страниц открыта без входа — проверить перед правкой).
+
+### Баг: `GET /attributes/{id}/perks` пишет в БД на чтение и транзитивно дёргает два сервиса — анонимно
+**Сервис:** character-attributes-service
+**Файлы:** `services/character-attributes-service/app/main.py:332` (обработчик), `:339-345` (самолечение — синхронный вызов `reconcile_perks` прямо внутри GET)
+**Обнаружено:** FEAT-169 (Codebase Analyst, 2026-09-19); выделено в отдельную запись Reviewer'ом FEAT-169 по §3.10.2 — раньше было пунктом внутри записи про анонимные чтения выше.
+**Приоритет:** MEDIUM
+**Описание:** обработчик объявлен как чтение, но на каждый вызов запускает `reconcile_perks` «на всякий случай» — то есть **GET пишет в БД**. Это плохо само по себе (нарушение семантики метода: любой прокси, префетч браузера или краулер меняет данные), но здесь хуже: оценка перков тянет весь `/full_profile` (см. отдельную запись выше) и транзитивно ходит в character-service и inventory-service. Маршрут при этом **не требует авторизации** и проксируется gateway'ем, так что один анонимный GET в цикле превращается в усилитель нагрузки на три сервиса и поток записей в БД.
+**Почему это отдельная запись, а не часть долга про анонимные чтения:** там открыт **продуктовый** вопрос (какие чтения должны остаться публичными для гостей), и пока он не решён, вся запись стоит. Здесь вопроса нет: запись на GET — баг при любом ответе на продуктовый вопрос. Чинится независимо и раньше.
+**Возможное решение:** убрать самолечение из GET — перенести `reconcile_perks` на события, которые реально меняют перки (уровень, смена подкласса, изменение снаряжения; все три уже дёргают `/attributes/internal/{id}/reconcile-perks`, закрытый в FEAT-169), а чтение оставить чтением. Если самолечение всё же нужно как страховка — делать его фоновой задачей с дедупликацией, а не синхронно на каждый запрос.
+
+### ~~Долг: autobattle-service ходит в `/battles/internal/*` без токена и не имеет `INTERNAL_SERVICE_TOKEN`~~ DONE (FEAT-169, задачи #1/#13)
+**Сервисы:** autobattle-service, battle-service
+**Файлы:** `services/autobattle-service/app/clients.py:15` (`GET /battles/internal/{id}/state`), `:23` (`POST /battles/internal/{id}/action`); `docker-compose.yml` / `docker-compose.prod.yml` (переменной у autobattle нет ни там, ни там)
+**Обнаружено:** FEAT-169 (Codebase Analyst, 2026-09-19).
+**Приоритет:** MEDIUM (блокер для будущей работы, не дыра сама по себе)
+**Описание:** оба маршрута battle-service (`app/main.py:1373`, `:1428`) держатся только на nginx `return 403`. Когда до них дойдёт общий сweep по internal-маршрутам, autobattle-service **молча перестанет ходить**: у него нет ни хелпера заголовка, ни переменной окружения. Это тот же блокер, что в FEAT-162 находили у inventory-service и dungeon-service.
+**Возможное решение:** добавить `INTERNAL_SERVICE_TOKEN` autobattle-service в оба compose-файла и хелпер в `clients.py` **до** того, как на `/battles/internal/*` повесят проверку.
+**Исправлено (FEAT-169), на упреждение:** `INTERNAL_SERVICE_TOKEN` добавлен autobattle-service в **оба** compose-файла (в prod — строгая форма `:?`), в `app/clients.py` появился `internal_token_headers()`, и оба вызова (`get_battle_state`, `post_battle_action`) его шлют. Сегодня заголовок инертен — `/battles/internal/*` ещё не проверяет ничего, — но когда до этих маршрутов дойдёт общий свип, автобой не умрёт молча. Это самый дешёвый способ снять блокер: слать заголовок в ручку, которая его пока не смотрит, безвредно.
+**⚠️ Но блокер снят НЕ полностью:** у `GET /battles/internal/{id}/state` есть второй вызывающий без заголовка — **dungeon-service** (`app/http_clients.py:377`), он опрашивает состояние боя в подземелье. Autobattle застрахован, dungeon — нет. Перед тем как гейтить `/battles/internal/*`, надо обновить и его; подробности — в записи про оставшиеся internal-префиксы ниже.
 
 ### ~~Баг: ZSET `battle:deadlines` никто не читает — таймаут хода не срабатывает сам по себе~~ DONE (FEAT-163)
 ~~**Сервис:** battle-service~~
@@ -178,13 +245,14 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 - `services/frontend/app-chaldea/src/components/pages/LocationPage/LocationPage.tsx:59-90` — UI-таймер читает `character.travel_cooldown_until`, который никогда не приходит
 **Описание:** `MeResponse.character` типизирован как `CharacterShort`, в котором нет поля `travel_cooldown_until`. Pydantic отфильтровывает поле из ответа `/users/me`, хотя main.py его подставляет (и frontend-тип `userSlice.ts` его ожидает). В результате блок «Перемещение будет доступно через N мин M сек» на странице локации никогда не показывается, кулдаун виден только как ошибка при попытке перемещения. Баг существовал до FEAT-152 (обнаружен Reviewer при live-проверке FEAT-152, 2026-07-17). Фикс: добавить `travel_cooldown_until: Optional[datetime/str] = None` в `CharacterShort`.
 **Приоритет:** HIGH (нерабочая пользовательская функция)
-### Хрупкость теста: rate limiting в notification-service зависит от скорости отказа внешнего вызова
+### Долг: инкремент очков активности блокирует горячий путь отправки сообщения в чат
 **Сервис:** notification-service
-**Файлы:** `services/notification-service/app/chat_routes.py` (`send_message`, шаг 9), `services/notification-service/app/tests/test_chat.py::TestRateLimiting`
-**Описание:** `send_message` в конце делает незамоканный `requests.post` на `{AUTH_SERVICE_URL}/users/{id}/activity/increment` с `timeout=3`. Тест `test_rate_limit_second_message_within_2_seconds` шлёт два сообщения подряд и ждёт 429 во втором, но окно лимита — всего 2 секунды. Пока хост `user-service` не резолвится мгновенно, каждый запрос занимает ~4 с, окно истекает, и тест падает с `assert 201 == 429`.
-**Когда проявляется:** на CI (ubuntu-latest) DNS отдаёт NXDOMAIN мгновенно — тест зелёный. В изолированном контейнере без docker-сети резолв медленный — тест красный. Проверено: с `AUTH_SERVICE_URL=http://127.0.0.1:1` оба теста класса проходят за 0.35 с.
-**Что сделать:** замокать `requests.post` в тесте (как уже замоканы `_fetch_user_profile_data` и `broadcast_to_channel`), либо вынести инкремент активности в `BackgroundTasks`. Сейчас пользовательский запрос на отправку сообщения синхронно ждёт до 3 секунд на не-критичном fire-and-forget вызове.
-**Приоритет:** LOW для теста, MEDIUM для самого блокирующего вызова в горячем пути чата.
+**Файл:** `services/notification-service/app/chat_routes.py` (`send_message`, шаг 9)
+**Описание:** пользовательский запрос на отправку сообщения синхронно ждёт до 3 секунд (`timeout=3`) на не-критичном fire-and-forget вызове `POST {AUTH_SERVICE_URL}/users/internal/{id}/activity/increment`. Вызов best-effort (ошибка логируется как WARNING и не ломает отправку), но он всё равно стоит в горячем пути.
+**Что сделать:** вынести инкремент активности в `BackgroundTasks`.
+**Приоритет:** MEDIUM
+
+**~~Хрупкость теста: rate limiting зависел от скорости отказа внешнего вызова~~ — DONE (FEAT-169 #17, 2026-09-20).** `TestRateLimiting` падал (`assert 201 == 429`) там, где хост `user-service` резолвился медленно: незамоканный `requests.post` занимал ~4 с на отправку и выносил тест за 2-секундное окно лимита. Исправлено autouse-фикстурой `mock_activity_increment` в `services/notification-service/app/tests/conftest.py` — теперь ни один чат-тест не ходит в сеть. Проверено: без обходного `AUTH_SERVICE_URL=http://127.0.0.1:1` полный `test_chat.py` проходит за 1.14 с (раньше — секунды на каждую отправку), два подряд прогона всей сюиты зелёные.
 
 ### Долг: list_characters держит сессию БД через N последовательных HTTP-вызовов
 **Сервис:** character-service
@@ -327,9 +395,9 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 **Побочные эффекты, которые надо учесть:** `skills-service/app/tests/test_character_skill_reset.py:128` вычитает наивное время из разобранного ответа — при появлении смещения упадёт с `TypeError`. `locations-service/app/main.py:1194,1457` уже терпимы к обеим формам, ломать межсервисные вызовы Stage 2 не должен.
 **Возможное решение:** общий Pydantic-базовый класс с `json_encoders={datetime: lambda v: v.replace(tzinfo=timezone.utc).isoformat()}` + отдельный проход по 22 ручным местам; выкатывать сервис за сервисом.
 
-### Долг: большинство внутренних эндпоинтов защищены только nginx, без `X-Internal-Token`
-**Сервисы:** все, у кого есть `/internal/`-маршруты
-**Обнаружено:** FEAT-162 (DevSecOps, аудит internal-префиксов 2026-09-14).
+### Долг: оставшиеся internal-префиксы (battles, dungeons, battle-pass, locations, users/diamonds) защищены только nginx
+**Сервисы:** battle-service, dungeon-service, battle-pass-service, locations-service, user-service, autobattle-service
+**Обнаружено:** FEAT-162 (DevSecOps, аудит internal-префиксов 2026-09-14). **Сужено после FEAT-169** — большая часть исходного перечня закрыта, актуальный остаток см. в конце записи.
 **Описание:** после FEAT-162 все internal-префиксы закрыты в обоих nginx-конфигах (`return 403`), но второй слой — проверка `X-Internal-Token` через `Depends(verify_internal_token)` — стоял на момент обнаружения лишь на 6 эндпоинтах из ~33 (к 2026-09-14 — на 16: все 14 под `/characters/internal/` и 2 под `/locations/internal/`): `character-service` (`/characters/internal/{id}/update_location`, `/characters/internal/{id}/set_travel_cooldown`, `/characters/internal/{id}/deduct_points`, `POST /characters/internal/{id}/logs`) и `locations-service` (`/locations/internal/cancel-gathering`, `/locations/internal/character-left-location`). Остальные (`/attributes/internal/{id}/reconcile-perks`, `/locations/internal/gathering-status`, `/locations/internal/action-gate*`, `/locations/quests/internal/*`, `/users/internal/*`, `/inventory/internal/*`, `/battles/internal/*`, `/dungeons/internal/*`, `/party/internal/*`, `/battle-pass/internal/track-event`, `/autobattle/internal/register`) не проверяют ничего: любой контейнер в compose-сети (или скомпрометированный сервис) может их дёргать. Проверено вживую: до правки nginx `POST /attributes/internal/1/reconcile-perks` через gateway без каких-либо заголовков возвращал `200`.
 **Почему не критично:** снаружи всё закрыто gateway'ем (`403`), порты сервисов в prod наружу не открыты — эксплуатация требует доступа внутрь compose-сети.
 **Возможное решение:** добавить `Depends(verify_internal_token)` на оставшиеся internal-эндпоинты, вынеся хелпер в общий модуль; выкатывать сервис за сервисом, синхронно с `INTERNAL_SERVICE_TOKEN` у вызывающих.
@@ -368,6 +436,26 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 **Сопутствующий пробел в тестах:** `battle-service/app/tests/test_pvp_death_duel.py::test_loser_character_unlinked` не вызывает `_finalize_battle`, а переписывает httpx-вызов у себя в теле — поэтому он **не поймал бы** отсутствие заголовка у настоящего вызывающего. Тест стоит переписать на реальный прогон функции (задача для QA).
 
 **Дополнено (FEAT-162, задача 14, 2026-09-14):** полный аудит всех 99 роутов `character-service/app/main.py` (см. §3.4) не нашёл больше ни одного *публично маршрутизируемого* незащищённого write-эндпоинта. Отдельно стоит `POST /characters/{character_id}/add_rewards` — он **не** под префиксом `/internal/`, его закрывает точечное правило nginx (`location ~ ^/characters/\d+/add_rewards$ { return 403; }` в обоих конфигах), но `verify_internal_token` на нём нет, то есть он держится ровно на одном слое и относится к этому же долгу.
+
+**Актуализировано (FEAT-169, 2026-09-19).** Исходная формулировка «большинство internal-эндпоинтов» устарела — большинство как раз закрыто. Закрыты и из этой записи вычеркнуты: все 14 под `/characters/internal/` (FEAT-162), весь `/attributes/internal/`, весь `/inventory/internal/`, весь `/party/internal/` (включая `active-members`), `/skills/internal/`, `POST /users/internal/{uid}/activity/increment`, `POST /locations/quests/internal/progress/update`, а также `POST /characters/{id}/add_rewards` (тот самый «не под префиксом, держится на точечном правиле nginx» из абзаца выше — теперь под `verify_internal_token`).
+
+**Остаётся открытым ровно это:**
+
+| Маршрут | Файл | Вызывающие (и шлют ли заголовок) |
+|---|---|---|
+| `GET /battles/internal/{id}/state` | `battle-service/app/main.py:1373` | autobattle `clients.py:15` — **шлёт** (FEAT-169, на упреждение); dungeon `http_clients.py:377` — **не шлёт** |
+| `POST /battles/internal/{id}/action` | `battle-service/app/main.py:1428` | autobattle `clients.py:23` — **шлёт** |
+| `POST /battles/internal/party/leave-on-move` | `battle-service/app/main.py:6363` | locations-service |
+| `GET /dungeons/internal/character-session/{cid}`, `POST /dungeons/internal/battle-callback` | `dungeon-service/app/main.py:730`, `:746` | battle-service |
+| `POST /battle-pass/internal/track-event` | `battle-pass-service/app/main.py:295` | battle, locations, inventory |
+| `GET /locations/internal/gathering-status`, `GET/POST /locations/internal/action-gate`, `/action-gate/consume` | `locations-service/app/main.py:3677`, `:3688`, `:3701` | inventory, character-service |
+| `GET /locations/quests/internal/check-completed`, `/completed-count`, `POST /auto-progress` | `locations-service/app/main.py:3153`, `:3175`, `:3198` | battle-service, inventory-service (`auto-progress` — живой, активно используется) |
+| `GET/POST /users/internal/{uid}/diamonds`, `/diamonds/add`, `/diamonds/spend`, `/cosmetics/unlock` | `user-service/main.py:1687`, `:1699`, `:1720`, `:2144` | battle-pass, dungeon |
+| `POST /autobattle/internal/register` | autobattle-service | battle-service |
+
+**Что тут самое весомое:** четыре маршрута `/users/internal/*diamonds*|cosmetics` — это **мутация валюты**; их стоит брать первыми. Механизм для этого уже готов: FEAT-169 добавил `verify_internal_token` в `user-service/auth.py` и `INTERNAL_SERVICE_TOKEN` во все compose-файлы, так что остаётся только навесить зависимость и обновить вызывающих.
+
+**⚠️ Ловушка, на которую напорется следующий заход:** `GET /battles/internal/{id}/state` опрашивают **двое**, и застрахован только один. autobattle-service заголовок уже шлёт, а **dungeon-service (`app/http_clients.py:377`) — нет**: если гейтить `/battles/internal/*`, не тронув его, опрос боя в подземелье отвалится, и, судя по остальным его вызовам, молча. Первым шагом любой такой задачи должен быть заголовок в dungeon-service, а не зависимость в battle-service.
 
 ### ~~Баг: отвязка персонажа не очищает `users.current_character` — UPDATE по несуществующей колонке~~ DONE (2026-09-14)
 **Сервис:** character-service
@@ -582,6 +670,37 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 **Обнаружено:** FEAT-164 (QA, 2026-09-17).
 **Описание:** оба теста помечены `skipif(dialect == 'sqlite')` с пояснением «the test runs in CI» / «Verified on MySQL CI». Но движок в файле жёстко задан как SQLite, а в CI (`.github/workflows/ci.yml`) MySQL нет — условие пропуска истинно всегда, и тесты не выполняются ни локально, ни в CI. Гарантию сериализации `with_for_update()` в `refund_stamina` на деле ничего не проверяет, а текст причины вводит в заблуждение.
 **Что сделать:** либо поднять MySQL-сервис в CI и гонять эти тесты на нём, либо переписать причину пропуска честно (и/или проверять наличие `FOR UPDATE` в сгенерированном SQL).
+
+### Хрупкость теста: 16 тестов char-attrs падают при запуске внутри любого контейнера сервиса
+**Сервис:** character-attributes-service
+**Файлы:** `services/character-attributes-service/app/tests/conftest.py:30` (`os.environ.setdefault("INTERNAL_SERVICE_TOKEN", "test-internal-token")`), `tests/test_passive_experience.py:110`, `tests/test_refund_stamina.py`, `tests/test_regen.py` (класс `TestEndpointWiring`)
+**Обнаружено:** Reviewer, FEAT-169 (2026-09-20). Предсуществующее, наследие FEAT-167.
+**Приоритет:** LOW (продукт не страдает), но ловушка для агентов
+**Описание:** conftest задаёт токен через `setdefault`, то есть **не перезаписывает** уже существующую переменную окружения, а три файла тестов зашивают литерал `"test-internal-token"` в заголовок запроса. Внутри любого контейнера сервиса `INTERNAL_SERVICE_TOKEN` уже задан (compose), значения расходятся, и 16 тестов FEAT-167 падают с `assert 401 == 200`. На CI переменной нет — там зелено, поэтому расхождение незаметно. Обходной путь: `docker compose exec -e INTERNAL_SERVICE_TOKEN=test-internal-token …`.
+**Что сделать:** брать токен из `conftest.INTERNAL_HEADERS` (он уже есть, `conftest.py:33`) вместо литерала — либо заменить `setdefault` на безусловную установку.
+
+### Долг: dungeon-service не печатает итоговую строку pytest
+**Сервис:** dungeon-service (`services/dungeon-service/app/tests/`)
+**Обнаружено:** Reviewer, FEAT-169 (2026-09-20).
+**Приоритет:** LOW
+**Описание:** прогон `pytest tests/ -q` выводит только точки прогресса, без строки `N passed` — терминальный репортёр чем-то подавлен. Результат можно оценить только по коду возврата, из-за чего в логах фичи прогон фиксируется как «exit 0 (135)» вместо числа тестов, а скрипты, ищущие `passed`/`failed`, считают сюиту пустой.
+**Что сделать:** найти подавление в `conftest.py` / `pytest.ini` сервиса и вернуть обычный вывод.
+
+### Долг: шаблон свипа по исходникам с фиксированным окном может не заметить потерянный заголовок
+**Сервисы:** party-service, locations-service, character-service, battle-pass-service, skills-service
+**Файлы:** `party-service/app/tests/test_internal_headers.py:149` (±400), `locations-service/app/tests/test_internal_headers.py:175` (−200/+700), `character-service/app/tests/test_internal_headers.py:308`, `:342`, `battle-pass-service/app/tests/test_internal_headers.py:189`, `skills-service/app/tests/test_internal_headers.py:208`
+**Обнаружено:** QA и Reviewer, FEAT-169 (2026-09-20). Наследие шаблона FEAT-167.
+**Приоритет:** LOW
+**Описание:** свип ищет `_internal_token_headers()` в окне фиксированной длины вокруг URL-литерала. Окно перетекает в соседнюю функцию и видит её хелпер, поэтому потерянный заголовок может остаться незамеченным. FEAT-169 исправил окно в новых свипах (обрезка по первой пустой строке), но перечисленные выше остались со старым шаблоном.
+**Почему сейчас не горит:** мутационная проверка Reviewer'а (26 вызовов, FEAT-169) показала, что каждый вызов дополнительно закрыт поведенческим тестом на значение заголовка — ни один не держится на свипе одном.
+**Что сделать:** перевести все свипы на разбор по скобкам, как в `inventory-service/app/tests/test_outgoing_internal_headers.py:137`.
+
+### Долг: в локальной БД нет ни одного предмета-еды — сценарий eat-food нельзя проверить живьём
+**Сервисы:** inventory-service, character-attributes-service (тестовые данные)
+**Обнаружено:** Reviewer, FEAT-169 (2026-09-20).
+**Приоритет:** LOW
+**Описание:** `SELECT * FROM items WHERE is_food=1` возвращает пустой набор, поэтому маршрут `POST /inventory/{id}/eat-food` и вся механика сытости (FEAT-164/168) не проверяются кликом в локальной среде — только юнит-тестами и прямым вызовом внутреннего маршрута сытости.
+**Что сделать:** добавить пару предметов-еды в сид или в инструкцию по локальной подготовке данных.
 
 ### Хрупкость теста: `test_approve_join_request` в battle-service падает, если перед ним выполнен `test_finalize_extraction.py`
 **Сервис:** battle-service (`services/battle-service/app/tests/test_join_requests.py::TestAdminJoinRequests::test_approve_join_request`, `tests/_feat163_harness.py::patch_main`)

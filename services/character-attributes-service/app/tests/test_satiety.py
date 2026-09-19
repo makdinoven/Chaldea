@@ -52,6 +52,17 @@ from tests.regen_shared_tables import (  # noqa: E402
 CID = 11
 SATIETY_URL = f"/attributes/internal/{CID}/satiety"
 
+# FEAT-169: `satiety` and `settle-regen` are gated by `verify_internal_token`.
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
+
+
+@pytest.fixture(autouse=True)
+def _pin_internal_token(monkeypatch):
+    """The check reads a module-level constant captured at import — pin it."""
+    import auth_http
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN",
+                        INTERNAL_HEADERS["X-Internal-Token"])
+
 
 @pytest.fixture(autouse=True)
 def _setup_tables():
@@ -131,7 +142,7 @@ class TestApplySatiety:
     def test_success_applies_modifiers_recovery_and_row(self, client, db):
         seed(db, strength=10)
         before = datetime.utcnow() - timedelta(seconds=2)
-        resp = client.post(SATIETY_URL, json=payload())
+        resp = client.post(SATIETY_URL, json=payload(), headers=INTERNAL_HEADERS)
         assert resp.status_code == 201, resp.text
         body = resp.json()
         assert body["stats_changed"] is True
@@ -164,7 +175,7 @@ class TestApplySatiety:
     )
     def test_regen_bonus_percent_by_rarity(self, client, db, rarity, percent):
         seed(db)
-        resp = client.post(SATIETY_URL, json=payload(rarity=rarity, modifiers={}))
+        resp = client.post(SATIETY_URL, json=payload(rarity=rarity, modifiers={}), headers=INTERNAL_HEADERS)
         assert resp.status_code == 201
         assert resp.json()["satiety"]["regen_bonus_percent"] == percent
 
@@ -172,6 +183,7 @@ class TestApplySatiety:
         seed(db, current_mana=70)
         resp = client.post(
             SATIETY_URL,
+            headers=INTERNAL_HEADERS,
             json=payload(modifiers={}, recovery={"health_recovery": 500, "mana_recovery": 500}),
         )
         assert resp.status_code == 201
@@ -182,8 +194,8 @@ class TestApplySatiety:
 
     def test_second_eat_rejected_without_double_bonus(self, client, db):
         seed(db, strength=10)
-        assert client.post(SATIETY_URL, json=payload()).status_code == 201
-        resp = client.post(SATIETY_URL, json=payload(rarity="legendary"))
+        assert client.post(SATIETY_URL, json=payload(), headers=INTERNAL_HEADERS).status_code == 201
+        resp = client.post(SATIETY_URL, json=payload(rarity="legendary"), headers=INTERNAL_HEADERS)
         assert resp.status_code == 409
         assert resp.json()["detail"] == "Вы уже наелись"
         attr = reload(db)
@@ -194,11 +206,11 @@ class TestApplySatiety:
 
     def test_eat_again_after_expiry_replaces_bonus(self, client, db):
         seed(db, strength=10)
-        assert client.post(SATIETY_URL, json=payload(modifiers={"strength": 2})).status_code == 201
+        assert client.post(SATIETY_URL, json=payload(modifiers={"strength": 2}), headers=INTERNAL_HEADERS).status_code == 201
         row = regen.get_satiety(db, CID)
         row.expires_at = now_s() - timedelta(seconds=1)
         db.commit()
-        resp = client.post(SATIETY_URL, json=payload(rarity="epic", modifiers={"strength": 3}))
+        resp = client.post(SATIETY_URL, json=payload(rarity="epic", modifiers={"strength": 3}), headers=INTERNAL_HEADERS)
         assert resp.status_code == 201, resp.text
         assert reload(db).strength == 13  # 10 - 2 + 3
         assert regen.get_satiety(db, CID).rarity == "epic"
@@ -206,49 +218,49 @@ class TestApplySatiety:
     @pytest.mark.parametrize("rarity", ["mythical", "divine", "demonic", "garbage", ""])
     def test_rarity_above_legendary_rejected(self, client, db, rarity):
         seed(db)
-        resp = client.post(SATIETY_URL, json=payload(rarity=rarity))
+        resp = client.post(SATIETY_URL, json=payload(rarity=rarity), headers=INTERNAL_HEADERS)
         assert resp.status_code == 400
         assert resp.json()["detail"] == "Недопустимая редкость еды"
         assert regen.get_satiety(db, CID) is None
 
     def test_unknown_modifier_rejected(self, client, db):
         seed(db)
-        resp = client.post(SATIETY_URL, json=payload(modifiers={"strength": 1, "current_health": 999}))
+        resp = client.post(SATIETY_URL, json=payload(modifiers={"strength": 1, "current_health": 999}), headers=INTERNAL_HEADERS)
         assert resp.status_code == 400
         assert "current_health" in resp.json()["detail"]
         assert reload(db).strength == 0
 
     def test_sql_injection_modifier_key_rejected(self, client, db):
         seed(db)
-        resp = client.post(SATIETY_URL, json=payload(modifiers={"strength; DROP TABLE character_attributes; --": 1}))
+        resp = client.post(SATIETY_URL, json=payload(modifiers={"strength; DROP TABLE character_attributes; --": 1}), headers=INTERNAL_HEADERS)
         assert resp.status_code == 400
         assert reload(db).current_health == 50
 
     def test_negative_recovery_rejected(self, client, db):
         seed(db)
-        resp = client.post(SATIETY_URL, json=payload(recovery={"health_recovery": -10}))
+        resp = client.post(SATIETY_URL, json=payload(recovery={"health_recovery": -10}), headers=INTERNAL_HEADERS)
         assert resp.status_code == 400
         assert reload(db).current_health == 50
         assert regen.get_satiety(db, CID) is None
 
     def test_long_name_rejected(self, client, db):
         seed(db)
-        resp = client.post(SATIETY_URL, json=payload(source_item_name="x" * 201))
+        resp = client.post(SATIETY_URL, json=payload(source_item_name="x" * 201), headers=INTERNAL_HEADERS)
         assert resp.status_code == 422
 
     def test_non_numeric_modifier_rejected(self, client, db):
         seed(db)
-        resp = client.post(SATIETY_URL, json=payload(modifiers={"strength": "a lot"}))
+        resp = client.post(SATIETY_URL, json=payload(modifiers={"strength": "a lot"}), headers=INTERNAL_HEADERS)
         assert resp.status_code == 422
 
     def test_missing_attributes_404(self, client):
-        resp = client.post("/attributes/internal/99999/satiety", json=payload())
+        resp = client.post("/attributes/internal/99999/satiety", json=payload(), headers=INTERNAL_HEADERS)
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Атрибуты персонажа не найдены"
 
     def test_settles_regen_before_applying(self, client, db):
         seed(db, current_health=0, regen_anchor_at=now_s() - timedelta(hours=2))
-        resp = client.post(SATIETY_URL, json=payload(modifiers={}, recovery={}))
+        resp = client.post(SATIETY_URL, json=payload(modifiers={}, recovery={}), headers=INTERNAL_HEADERS)
         assert resp.status_code == 201
         attr = reload(db)
         assert attr.current_health == 10
@@ -277,7 +289,7 @@ class TestRestStatus:
 
     def test_with_satiety_rate_and_info(self, client, db):
         seed(db)
-        client.post(SATIETY_URL, json=payload(rarity="legendary", modifiers={"strength": 2}))
+        client.post(SATIETY_URL, json=payload(rarity="legendary", modifiers={"strength": 2}), headers=INTERNAL_HEADERS)
         body = client.get(f"/attributes/{CID}/rest-status").json()
         assert body["regen_percent_per_hour"] == pytest.approx(15.0)
         sat = body["satiety"]
@@ -291,7 +303,7 @@ class TestRestStatus:
 
     def test_expired_satiety_not_reported_and_removed(self, client, db):
         seed(db, strength=10)
-        client.post(SATIETY_URL, json=payload(modifiers={"strength": 2}))
+        client.post(SATIETY_URL, json=payload(modifiers={"strength": 2}), headers=INTERNAL_HEADERS)
         row = regen.get_satiety(db, CID)
         row.expires_at = now_s() - timedelta(minutes=1)
         db.commit()
@@ -348,7 +360,7 @@ class TestRestStatus:
 
     def test_satiety_rate_shown_while_busy(self, client, db):
         seed(db)
-        client.post(SATIETY_URL, json=payload(rarity="epic", modifiers={}))
+        client.post(SATIETY_URL, json=payload(rarity="epic", modifiers={}), headers=INTERNAL_HEADERS)
         add_battle(db, CID, status="in_progress", created_at=now_s(), joined_at=now_s())
         body = client.get(f"/attributes/{CID}/rest-status").json()
         assert body["is_resting"] is False
@@ -388,7 +400,7 @@ class TestSettleRegenBulk:
     def test_settled_and_missing(self, client, db):
         seed(db, character_id=1, current_health=0, regen_anchor_at=now_s() - timedelta(hours=2))
         seed(db, character_id=2)
-        resp = client.post("/attributes/internal/settle-regen", json={"character_ids": [1, 2, 3]})
+        resp = client.post("/attributes/internal/settle-regen", json={"character_ids": [1, 2, 3]}, headers=INTERNAL_HEADERS)
         assert resp.status_code == 200
         assert resp.json() == {"settled": [1, 2], "missing": [3]}
         assert reload(db, 1).current_health == 10
@@ -397,11 +409,11 @@ class TestSettleRegenBulk:
         "ids", [[], [1, 1], list(range(1, 52)), ["x"]],
     )
     def test_validation(self, client, ids):
-        resp = client.post("/attributes/internal/settle-regen", json={"character_ids": ids})
+        resp = client.post("/attributes/internal/settle-regen", json={"character_ids": ids}, headers=INTERNAL_HEADERS)
         assert resp.status_code == 422
 
     def test_fifty_ids_allowed(self, client):
-        resp = client.post("/attributes/internal/settle-regen", json={"character_ids": list(range(1, 51))})
+        resp = client.post("/attributes/internal/settle-regen", json={"character_ids": list(range(1, 51))}, headers=INTERNAL_HEADERS)
         assert resp.status_code == 200
         assert len(resp.json()["missing"]) == 50
 

@@ -25,6 +25,20 @@ from sqlalchemy import text
 
 import models
 from auth_http import get_current_user_via_http, OAUTH2_SCHEME, UserRead
+import auth_http
+
+
+# FEAT-169: the /inventory/internal/* routes now require `X-Internal-Token`.
+_TOKEN = "test-internal-token"
+_INTERNAL_HEADERS = {"X-Internal-Token": _TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _internal_token(monkeypatch):
+    """`verify_internal_token` reads a module-level constant — pin it."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", _TOKEN)
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +551,7 @@ class TestGatheringSkillsRead:
         }
         award_resp = authed_user_client.post(
             "/inventory/internal/characters/1/gathering/award", json=award_body,
+            headers=_INTERNAL_HEADERS,
         )
         assert award_resp.status_code == 200, award_resp.text
         award_data = award_resp.json()
@@ -608,6 +623,7 @@ class TestGatheringAwardInternal:
     def _do_award(self, client, body, character_id=1):
         return client.post(
             f"/inventory/internal/characters/{character_id}/gathering/award",
+            headers=_INTERNAL_HEADERS,
             json=body,
         )
 
@@ -963,6 +979,7 @@ class TestGatheringAwardInternal:
         with patch("crud._add_items_with_capacity", side_effect=RuntimeError("boom")):
             resp = non_raising.post(
                 "/inventory/internal/characters/1/gathering/award", json=body,
+                headers=_INTERNAL_HEADERS,
             )
         # depending on FastAPI settings this may be 500 — but the key is no
         # state mutation persists.
@@ -1044,7 +1061,7 @@ class TestFreeSlotsCheck:
     def test_empty_inventory(self, client, db_session):
         """No inventory rows → free_slot_count=DEFAULT_MAX, is_full=False."""
         from crud import DEFAULT_INVENTORY_MAX_SLOTS
-        resp = client.post("/inventory/internal/characters/1/free_slots_check")
+        resp = client.post("/inventory/internal/characters/1/free_slots_check", headers=_INTERNAL_HEADERS)
         assert resp.status_code == 200
         d = resp.json()
         assert d["free_slot_count"] == DEFAULT_INVENTORY_MAX_SLOTS
@@ -1063,7 +1080,7 @@ class TestFreeSlotsCheck:
             db_session.add(models.CharacterInventory(character_id=1, item_id=900, quantity=1))
         db_session.commit()
 
-        resp = client.post("/inventory/internal/characters/1/free_slots_check")
+        resp = client.post("/inventory/internal/characters/1/free_slots_check", headers=_INTERNAL_HEADERS)
         assert resp.status_code == 200
         d = resp.json()
         assert d["free_slot_count"] == DEFAULT_INVENTORY_MAX_SLOTS - 7
@@ -1082,7 +1099,7 @@ class TestFreeSlotsCheck:
             db_session.add(models.CharacterInventory(character_id=1, item_id=900, quantity=1))
         db_session.commit()
 
-        resp = client.post("/inventory/internal/characters/1/free_slots_check")
+        resp = client.post("/inventory/internal/characters/1/free_slots_check", headers=_INTERNAL_HEADERS)
         assert resp.status_code == 200
         d = resp.json()
         assert d["free_slot_count"] == 0
@@ -1255,6 +1272,7 @@ class TestGatheringSecurity:
         }
         resp = client.post(
             "/inventory/internal/characters/1/gathering/award", json=body,
+            headers=_INTERNAL_HEADERS,
         )
         # Must be 422 (validation), never 500 (crash)
         assert resp.status_code == 422
@@ -1335,6 +1353,7 @@ class TestForagingSkill:
 
         resp = client.post(
             "/inventory/internal/characters/1/gathering/award",
+            headers=_INTERNAL_HEADERS,
             json=LOCATIONS_FORAGING_PAYLOAD,
         )
 
@@ -1359,7 +1378,7 @@ class TestForagingSkill:
         self._setup(db_session)
         body = dict(LOCATIONS_FORAGING_PAYLOAD, result_quantity=10, xp_to_add=10)
 
-        resp = client.post("/inventory/internal/characters/1/gathering/award", json=body)
+        resp = client.post("/inventory/internal/characters/1/gathering/award", json=body, headers=_INTERNAL_HEADERS)
 
         assert resp.status_code == 200, resp.text
         assert resp.json()["rank_up"] is True
@@ -1375,7 +1394,7 @@ class TestForagingSkill:
     def test_near_miss_slugs_rejected(self, client, db_session, slug):
         self._setup(db_session)
         body = dict(LOCATIONS_FORAGING_PAYLOAD, skill_slug=slug)
-        resp = client.post("/inventory/internal/characters/1/gathering/award", json=body)
+        resp = client.post("/inventory/internal/characters/1/gathering/award", json=body, headers=_INTERNAL_HEADERS)
         assert resp.status_code == 422
         assert _progress(db_session, FORAGING_SKILL_ID) is None
 

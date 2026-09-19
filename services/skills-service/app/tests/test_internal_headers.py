@@ -11,6 +11,7 @@ Asserted on the real `main.deduct_active_experience`.
 
 import inspect
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -101,6 +102,81 @@ async def test_insufficient_xp_still_maps_to_400(monkeypatch, token_env):
         await main.deduct_active_experience(42, 25)
     assert excinfo.value.status_code == 400
     assert excinfo.value.detail == "Недостаточно опыта"
+
+
+# ---------------------------------------------------------------------------
+# FEAT-169 #11 — the revalidate-equipment call
+# ---------------------------------------------------------------------------
+# `POST /inventory/internal/characters/{cid}/revalidate-equipment` is gated now.
+# skills-service calls it after a subclass change to strip items the new
+# subclass may not wear. The caller swallows every httpx error with an
+# `logger.error` (§3.4 #11), so a dropped header would NOT raise anything: the
+# player would simply keep wearing forbidden gear and nobody would notice.
+# Asserted on the real `main.revalidate_character_equipment`.
+
+
+class _PostResp:
+    def __init__(self, status_code=200):
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPError(f"HTTP {self.status_code}")
+
+
+def _patch_post_client(monkeypatch, response=None):
+    calls = []
+    resp = response or _PostResp()
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return resp
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", _Client)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_revalidate_equipment_sends_the_token(monkeypatch, token_env):
+    calls = _patch_post_client(monkeypatch)
+
+    await main.revalidate_character_equipment(100)
+
+    assert len(calls) == 1
+    url, kwargs = calls[0]
+    assert url.endswith("/inventory/internal/characters/100/revalidate-equipment"), url
+    assert kwargs["headers"]["X-Internal-Token"] == TOKEN, (
+        "skills-service dropped X-Internal-Token on revalidate-equipment — the "
+        "call only logs its errors, so forbidden gear would silently stay on"
+    )
+
+
+@pytest.mark.asyncio
+async def test_revalidate_equipment_reads_the_token_at_call_time(monkeypatch):
+    calls = _patch_post_client(monkeypatch)
+    monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "first")
+    await main.revalidate_character_equipment(1)
+    monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "second")
+    await main.revalidate_character_equipment(1)
+    assert [c[1]["headers"]["X-Internal-Token"] for c in calls] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_revalidate_does_not_raise(monkeypatch, token_env):
+    """Contract guard: the subclass change is already committed, so a 401 from
+    the gate must stay a logged error and never bubble up to the player."""
+    _patch_post_client(monkeypatch, response=_PostResp(status_code=401))
+    await main.revalidate_character_equipment(100)  # must not raise
 
 
 def test_the_helper_reads_the_env_not_a_constant():

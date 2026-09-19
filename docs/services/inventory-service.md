@@ -41,7 +41,7 @@ inventory-service/app/
 | POST | `/inventory/{id}/unequip` | Снять предмет (обратные модификаторы) |
 | POST | `/inventory/{id}/use_item` | Использовать расходник (еду — нельзя, 400 «Еду нужно съесть») |
 | POST | `/inventory/{id}/eat-food` | FEAT-164: съесть еду `{inventory_item_id}` → сытость на 24 ч (JWT + владелец) |
-| GET | `/inventory/{id}/fast_slots` | Быстрые слоты |
+| GET | `/inventory/characters/{id}/fast_slots` | Быстрые слоты (пояс). **FEAT-169: JWT + владение** — читать чужой пояс нельзя (401 без токена, 404 «Персонаж не найден», 403 «Вы можете управлять только своими персонажами»). Для сервисов есть internal-двойник (см. ниже) |
 
 ### Каталог предметов
 | Метод | Путь | Описание |
@@ -61,9 +61,17 @@ inventory-service/app/
 |-------|------|----------|
 | GET | `/inventory/characters/{character_id}/gathering-skills` | Навыки добычи из БД (Горное дело/Травничество/Лесорубство/Собирательство), lazy-create rows на первом запросе. Видимо read-only на чужих профилях |
 
-#### Internal (no JWT, защищено Nginx + INTERNAL_SERVICE_TOKEN на API-gateway)
+#### Internal (FEAT-169: `verify_internal_token` в самом сервисе, Nginx — второй слой)
+Все `/inventory/internal/*` требуют заголовок `X-Internal-Token`. Fail-closed: пустой
+`INTERNAL_SERVICE_TOKEN` → 503 «Internal service token не настроен», отсутствующий/неверный
+заголовок → 401 «Недействительный internal token».
+
 | Метод | Путь | Описание |
 |-------|------|----------|
+| GET | `/inventory/internal/characters/{cid}/fast_slots` | FEAT-169: пояс персонажа для межсервисных вызовов (battle-service снимает снапшот на старте боя). Ответ идентичен игровому маршруту; проверки владения нет намеренно — у мобов и НПС нет владельца |
+| POST | `/inventory/internal/characters/{cid}/revalidate-equipment` | Пересчёт допустимости надетого после выбора/сброса подкласса. Вызывает skills-service |
+| POST | `/inventory/internal/characters/{cid}/consume_item` | Списание 1 расходника в бою. Вызывает battle-service |
+| POST | `/inventory/internal/update-durability` | Прочность экипировки после боя. Вызывает battle-service |
 | POST | `/inventory/internal/characters/{cid}/gathering/award` | Атомарная транзакция: SELECT FOR UPDATE на character_inventory + tool + character_gathering_skills, добавление ресурса (с обработкой full-inventory), декремент durability, добавление XP, rank-up loop. Вызывается locations-service на finalize |
 | POST | `/inventory/internal/characters/{cid}/free_slots_check` | Возвращает `{free_slot_count, is_full}`. Вызывается locations-service на старте добычи (preflight) |
 | GET | `/inventory/internal/characters/{cid}/xp-multiplier?buff_type=` | FEAT-168: множитель опыта по активному баффу (`{character_id, buff_type, multiplier}`), с учётом зонтичного `character_xp_bonus`. Защищён `verify_internal_token` (401 без `X-Internal-Token`), 400 на неизвестный `buff_type`, 404 если персонажа нет. Вызывают character-service и locations-service перед записью опыта персонажа |
@@ -191,16 +199,16 @@ inventory-service/app/
 - Пересчёт (`recalc_fast_slots`) при каждом equip/unequip
 - При уменьшении доступных слотов: лишние предметы возвращаются в инвентарь
 
-`GET /inventory/characters/{cid}/fast_slots` (FEAT-168, additive): вместе со `slot_type / item_id / quantity / name / image` слот теперь отдаёт `health/mana/energy/stamina_recovery`, `consumable_action`, `coating_turns`, `coating_bonus_damage`, `effects[]` и `damage_entries[]`. battle-service снимает с этого ответа снапшот в состояние боя на старте, поэтому у боёв, начатых до деплоя, новых ключей нет — читать только через `.get(..., default)`.
+`GET /inventory/internal/characters/{cid}/fast_slots` (FEAT-169; игровой близнец — `GET /inventory/characters/{cid}/fast_slots`) (FEAT-168, additive): вместе со `slot_type / item_id / quantity / name / image` слот теперь отдаёт `health/mana/energy/stamina_recovery`, `consumable_action`, `coating_turns`, `coating_bonus_damage`, `effects[]` и `damage_entries[]`. battle-service снимает с этого ответа снапшот в состояние боя на старте, поэтому у боёв, начатых до деплоя, новых ключей нет — читать только через `.get(..., default)`.
 
 ## Коммуникация
 
 ### HTTP (исходящие)
 - `character-attributes-service:8002` -> POST `/attributes/{id}/apply_modifiers` (при equip/unequip, заточке и вставке/извлечении у надетого предмета)
 - `character-attributes-service:8002` -> POST `/attributes/{id}/recover` (при use_item)
-- `character-attributes-service:8002` -> POST `/attributes/internal/{id}/satiety` (при eat-food, sync httpx, timeout 5 с)
+- `character-attributes-service:8002` -> POST `/attributes/internal/{id}/satiety` (при eat-food, sync httpx, timeout 5 с; FEAT-169: с `X-Internal-Token`)
 - `character-attributes-service:8002` -> POST `/attributes/cumulative_stats/increment` (накопительные характеристики для перков)
-- `character-attributes-service:8002` -> POST `/attributes/internal/{id}/reconcile-perks` (после equip/unequip)
+- `character-attributes-service:8002` -> POST `/attributes/internal/{id}/reconcile-perks` (после equip/unequip, sync и async варианты; FEAT-169: с `X-Internal-Token`)
 - `character-service:8005` -> POST `/characters/internal/evaluate-titles` (после equip/unequip)
 
 ### ⚠️ Правило: никаких блокирующих HTTP-вызовов в `async def` (ревью #5 FEAT-168)

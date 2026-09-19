@@ -16,7 +16,8 @@ that every read path answers 200 with the stored values unchanged.
 
 Read paths covered: `GET /inventory/items/{id}`, `GET /inventory/items` (the
 list), `GET /inventory/{cid}/item-detail/{inv_id}` and
-`GET /inventory/characters/{cid}/fast_slots`.
+`GET /inventory/internal/characters/{cid}/fast_slots` (FEAT-169: the belt
+is read by battle-service through the internal twin).
 """
 
 from unittest.mock import MagicMock, patch
@@ -24,7 +25,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import text
 
+import auth_http
 import models
+
+
+# FEAT-169: the internal belt route requires `X-Internal-Token`.
+_TOKEN = "test-internal-token"
+_INTERNAL_HEADERS = {"X-Internal-Token": _TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def _internal_token(monkeypatch):
+    """`verify_internal_token` reads a module-level constant — pin it."""
+    monkeypatch.setattr(auth_http, "INTERNAL_SERVICE_TOKEN", _TOKEN)
 
 
 HEADERS = {"Authorization": "Bearer admin-token"}
@@ -365,7 +378,8 @@ class TestOtherReadPathsSurviveBadRows:
         _insert_damage(db_session, item_id, aoe_shape="circle", damage_type="kinetic")
         self._give_and_belt(client, db_session, item_id)
 
-        resp = client.get("/inventory/characters/7/fast_slots")
+        resp = client.get("/inventory/internal/characters/7/fast_slots",
+                          headers=_INTERNAL_HEADERS)
         assert resp.status_code == 200, resp.text
         slot, = [s for s in resp.json() if s["item_id"] == item_id]
         assert slot["effects"][0]["target_side"] == "everyone"

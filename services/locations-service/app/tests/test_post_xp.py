@@ -258,6 +258,9 @@ class TestAwardPostXpAndLog:
                     "location_id": 100,
                     "participant_character_ids": [1],
                 },
+                # FEAT-169: /party/internal/xp-bonus is gated — without the
+                # header the post XP bonus would 401 and vanish silently.
+                headers=crud._internal_token_headers(),
             )
 
     @pytest.mark.asyncio

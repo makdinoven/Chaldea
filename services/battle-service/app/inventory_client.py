@@ -1,8 +1,20 @@
 # inventory_client.py
+import os
+
 import httpx
 from config import settings
 
 BASE = settings.INVENTORY_URL.rstrip("/")
+
+
+def _internal_token_headers() -> dict:
+    """Заголовок для обращений в /inventory/internal/* (FEAT-169 §3.3 M3).
+
+    Модуль-локальный хелпер: `main.py` импортирует `inventory_client`, поэтому
+    импортировать хелпер оттуда нельзя — будет циклический импорт. Токен
+    читается из окружения в момент вызова, как и во всех остальных сервисах.
+    """
+    return {"X-Internal-Token": os.environ.get("INTERNAL_SERVICE_TOKEN", "")}
 
 async def get_item(item_id: int) -> dict:
     if item_id <= 0:
@@ -22,6 +34,7 @@ async def consume_item(character_id: int, item_id: int) -> dict:
         r = await client.post(
             f"{BASE}/inventory/internal/characters/{character_id}/consume_item",
             json={"item_id": item_id},
+            headers=_internal_token_headers(),
         )
         if r.status_code != 200:
             try:
@@ -82,6 +95,7 @@ async def update_durability(character_id: int, entries: list[dict]) -> dict:
         r = await client.post(
             f"{BASE}/inventory/internal/update-durability",
             json={"character_id": character_id, "entries": entries},
+            headers=_internal_token_headers(),
         )
         r.raise_for_status()
         return r.json()
@@ -113,9 +127,17 @@ async def get_fast_slots(character_id: int) -> list[dict]:
     без боевых эффектов и сработает как раньше.
 
     Результат снапшотится в состояние боя (Redis, TTL 48 ч) на старте боя.
+
+    FEAT-169: игровой маршрут `/inventory/characters/{id}/fast_slots` закрыт
+    JWT и проверкой владения, поэтому бой ходит во внутренний двойник
+    `/inventory/internal/characters/{id}/fast_slots` с X-Internal-Token
+    (у мобов и НПС владельца нет, проверка владения для них невозможна).
     """
     async with httpx.AsyncClient() as client:
-        r = await client.get(f"{BASE}/inventory/characters/{character_id}/fast_slots")
+        r = await client.get(
+            f"{BASE}/inventory/internal/characters/{character_id}/fast_slots",
+            headers=_internal_token_headers(),
+        )
         r.raise_for_status()
         slots = r.json()
 

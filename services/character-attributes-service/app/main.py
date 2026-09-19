@@ -436,8 +436,15 @@ def get_rest_status(character_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/internal/settle-regen", response_model=schemas.SettleRegenResponse)
-def settle_regen_bulk(payload: schemas.SettleRegenRequest, db: Session = Depends(get_db)):
-    """Internal: settle regen for several characters, one short transaction each."""
+def settle_regen_bulk(
+    payload: schemas.SettleRegenRequest,
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
+    """Internal: settle regen for several characters, one short transaction each.
+
+    Только service-to-service: требует заголовок `X-Internal-Token` (FEAT-169).
+    """
     settled, missing = [], []
     for character_id in payload.character_ids:
         try:
@@ -461,9 +468,13 @@ def apply_satiety(
     character_id: int,
     payload: schemas.SatietyApplyRequest,
     db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
 ):
     """Internal: eat food — settle, reject if satiated, apply modifiers and
-    instant recovery, create the satiety row. One transaction."""
+    instant recovery, create the satiety row. One transaction.
+
+    Только service-to-service: требует заголовок `X-Internal-Token` (FEAT-169).
+    """
     if payload.rarity not in SATIETY_REGEN_BONUS_BY_RARITY:
         raise HTTPException(status_code=400, detail="Недопустимая редкость еды")
     unknown = [k for k in payload.modifiers if k not in crud.VALID_FLAT_BONUS_KEYS]
@@ -1417,10 +1428,18 @@ def increment_cumulative_stats(
 
 
 @router.post("/internal/{character_id}/reconcile-perks")
-def reconcile_perks_endpoint(character_id: int, db: Session = Depends(get_db)):
+def reconcile_perks_endpoint(
+    character_id: int,
+    db: Session = Depends(get_db),
+    _internal=Depends(verify_internal_token),
+):
     """Internal (service-to-service): re-evaluate all perks for a character —
     activate those whose conditions now hold, deactivate those that no longer
-    do (FEAT-143 dynamic perks). Called on gear change, level-up, etc."""
+    do (FEAT-143 dynamic perks). Called on gear change, level-up, etc.
+
+    Требует заголовок `X-Internal-Token` (FEAT-169). Внутрипроцессные вызовы
+    `reconcile_perks` (GET /{cid}/perks, апгрейд, regen.py) не затронуты.
+    """
     try:
         # FEAT-164: settle passive regen / satiety expiry first.
         regen.settle_character(db, character_id)

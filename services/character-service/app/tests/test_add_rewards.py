@@ -210,7 +210,7 @@ class TestAddRewards:
         _create_character(session, character_id=1, currency_balance=100)
         _insert_character_attributes(session, character_id=1, passive_experience=0)
 
-        response = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 50})
+        response = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 50}, headers=INTERNAL_HEADERS)
 
         assert response.status_code == 200
         data = response.json()
@@ -223,7 +223,7 @@ class TestAddRewards:
         _create_character(session, character_id=1, currency_balance=0)
         _insert_character_attributes(session, character_id=1, passive_experience=100)
 
-        response = client.post("/characters/1/add_rewards", json={"xp": 50, "gold": 0})
+        response = client.post("/characters/1/add_rewards", json={"xp": 50, "gold": 0}, headers=INTERNAL_HEADERS)
 
         assert response.status_code == 200
         data = response.json()
@@ -236,7 +236,7 @@ class TestAddRewards:
         _create_character(session, character_id=1, currency_balance=200)
         _insert_character_attributes(session, character_id=1, passive_experience=500)
 
-        response = client.post("/characters/1/add_rewards", json={"xp": 100, "gold": 30})
+        response = client.post("/characters/1/add_rewards", json={"xp": 100, "gold": 30}, headers=INTERNAL_HEADERS)
 
         assert response.status_code == 200
         data = response.json()
@@ -251,7 +251,7 @@ class TestAddRewards:
         _create_character(session, character_id=1, currency_balance=0)
         _insert_character_attributes(session, character_id=1, passive_experience=900)
 
-        response = client.post("/characters/1/add_rewards", json={"xp": 200, "gold": 0})
+        response = client.post("/characters/1/add_rewards", json={"xp": 200, "gold": 0}, headers=INTERNAL_HEADERS)
 
         assert response.status_code == 200
         # check_and_update_level should have been called with new_xp=1100
@@ -261,7 +261,7 @@ class TestAddRewards:
         """Returns 404 for non-existent character."""
         client, session = client_with_db
 
-        response = client.post("/characters/9999/add_rewards", json={"xp": 10, "gold": 5})
+        response = client.post("/characters/9999/add_rewards", json={"xp": 10, "gold": 5}, headers=INTERNAL_HEADERS)
 
         assert response.status_code == 404
 
@@ -270,7 +270,7 @@ class TestAddRewards:
         client, session = client_with_db
         _create_character(session, character_id=1)
 
-        response = client.post("/characters/1/add_rewards", json={"xp": -10, "gold": 5})
+        response = client.post("/characters/1/add_rewards", json={"xp": -10, "gold": 5}, headers=INTERNAL_HEADERS)
 
         assert response.status_code == 422  # Pydantic validation error
 
@@ -279,7 +279,7 @@ class TestAddRewards:
         client, session = client_with_db
         _create_character(session, character_id=1)
 
-        response = client.post("/characters/1/add_rewards", json={"xp": 5, "gold": -10})
+        response = client.post("/characters/1/add_rewards", json={"xp": 5, "gold": -10}, headers=INTERNAL_HEADERS)
 
         assert response.status_code == 422
 
@@ -289,7 +289,7 @@ class TestAddRewards:
         _create_character(session, character_id=1, currency_balance=50)
         _insert_character_attributes(session, character_id=1, passive_experience=200)
 
-        response = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 0})
+        response = client.post("/characters/1/add_rewards", json={"xp": 0, "gold": 0}, headers=INTERNAL_HEADERS)
 
         assert response.status_code == 200
         data = response.json()

@@ -12,9 +12,16 @@ from sqlalchemy.pool import StaticPool
 
 import models
 import crud
+import internal_auth
 import main
 from auth_http import UserRead, get_current_user_via_http
 from database import get_db
+
+# FEAT-169: the `/party/internal/` prefix is gated by `verify_internal_token`,
+# which reads a module-level constant captured at import — pin the attribute,
+# not just the env var.
+INTERNAL_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": INTERNAL_TOKEN}
 
 _engine = create_engine(
     "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
@@ -37,6 +44,7 @@ def _reg(char_id, user_id, loc=1, name="Char"):
 @pytest.fixture(autouse=True)
 def _setup(monkeypatch):
     models.Base.metadata.create_all(bind=_engine)
+    monkeypatch.setattr(internal_auth, "INTERNAL_SERVICE_TOKEN", INTERNAL_TOKEN)
     monkeypatch.setattr(crud, "get_character_info", lambda db, cid: CHARS.get(cid))
     monkeypatch.setattr(
         crud, "get_characters_map",
@@ -191,10 +199,14 @@ def test_leader_leave_transfers_leadership():
 # ---------------------------------------------------------------------------
 
 def _xp(character_id, base_xp, source, location_id, participants):
-    return _client(character_id).post("/party/internal/xp-bonus", json={
-        "character_id": character_id, "base_xp": base_xp, "source": source,
-        "location_id": location_id, "participant_character_ids": participants,
-    })
+    return _client(character_id).post(
+        "/party/internal/xp-bonus",
+        json={
+            "character_id": character_id, "base_xp": base_xp, "source": source,
+            "location_id": location_id, "participant_character_ids": participants,
+        },
+        headers=INTERNAL_HEADERS,
+    )
 
 
 def test_xp_bonus_combat_self_and_trickle():
@@ -237,7 +249,8 @@ def test_active_members_co_located_only():
     _reg(1, 10, loc=1); _reg(2, 20, loc=1); _reg(3, 30, loc=2)  # char3 elsewhere
     _make_party(1, [2, 3])
     d = _client(1).get("/party/internal/active-members",
-                       params={"character_id": 1, "location_id": 1}).json()
+                       params={"character_id": 1, "location_id": 1},
+                       headers=INTERNAL_HEADERS).json()
     assert d["party_id"] is not None and d["leader_character_id"] == 1
     assert set(d["member_character_ids"]) == {1, 2}  # leader + co-located char2
 
@@ -245,7 +258,8 @@ def test_active_members_co_located_only():
 def test_active_members_no_party():
     _reg(1, 10, loc=1)
     d = _client(1).get("/party/internal/active-members",
-                       params={"character_id": 1, "location_id": 1}).json()
+                       params={"character_id": 1, "location_id": 1},
+                       headers=INTERNAL_HEADERS).json()
     assert d["party_id"] is None and d["member_character_ids"] == []
 
 

@@ -33,7 +33,12 @@ from fastapi.testclient import TestClient
 
 import crud
 import models
+import auth_http
 from main import app, get_db
+
+# FEAT-169: POST /characters/{cid}/add_rewards закрыт internal-токеном.
+auth_http.INTERNAL_SERVICE_TOKEN = "test-internal-token"
+INTERNAL_HEADERS = {"X-Internal-Token": "test-internal-token"}
 
 
 CHARACTER_ID = 1
@@ -186,7 +191,7 @@ class TestAddRewardsOnARealSession:
 
         resp = client_with_db.post(
             f"/characters/{CHARACTER_ID}/add_rewards",
-            json={"xp": 100, "gold": 50},
+            json={"xp": 100, "gold": 50}, headers=INTERNAL_HEADERS
         )
 
         assert resp.status_code == 200, resp.text
@@ -205,7 +210,7 @@ class TestAddRewardsOnARealSession:
         mock_get.return_value = _multiplier_response(1.35)
 
         resp = client_with_db.post(
-            f"/characters/{CHARACTER_ID}/add_rewards", json={"xp": 100, "gold": 0})
+            f"/characters/{CHARACTER_ID}/add_rewards", json={"xp": 100, "gold": 0}, headers=INTERNAL_HEADERS)
 
         assert resp.status_code == 200, resp.text
         assert _read_attributes(db_session)[0] == START_XP + 135
@@ -216,7 +221,7 @@ class TestAddRewardsOnARealSession:
     def test_default_source_is_battle(self, mock_get, client_with_db, db_session):
         mock_get.return_value = _multiplier_response(1.0)
         client_with_db.post(f"/characters/{CHARACTER_ID}/add_rewards",
-                            json={"xp": 10, "gold": 0})
+                            json={"xp": 10, "gold": 0}, headers=INTERNAL_HEADERS)
         assert _buff_types_sent(mock_get) == [BATTLE]
 
     @patch("crud.httpx.get")
@@ -226,7 +231,7 @@ class TestAddRewardsOnARealSession:
 
         resp = client_with_db.post(
             f"/characters/{CHARACTER_ID}/add_rewards",
-            json={"xp": 100, "gold": 0, "xp_source": PASS},
+            json={"xp": 100, "gold": 0, "xp_source": PASS}, headers=INTERNAL_HEADERS
         )
 
         assert resp.status_code == 200, resp.text
@@ -240,7 +245,7 @@ class TestAddRewardsOnARealSession:
         mock_get.side_effect = RuntimeError("inventory-service недоступен")
 
         resp = client_with_db.post(
-            f"/characters/{CHARACTER_ID}/add_rewards", json={"xp": 100, "gold": 50})
+            f"/characters/{CHARACTER_ID}/add_rewards", json={"xp": 100, "gold": 50}, headers=INTERNAL_HEADERS)
 
         assert resp.status_code == 200, resp.text
         assert _read_attributes(db_session)[0] == START_XP + 100
@@ -249,7 +254,7 @@ class TestAddRewardsOnARealSession:
     @patch("crud.httpx.get")
     def test_zero_xp_never_asks_inventory(self, mock_get, client_with_db, db_session):
         client_with_db.post(f"/characters/{CHARACTER_ID}/add_rewards",
-                            json={"xp": 0, "gold": 50})
+                            json={"xp": 0, "gold": 50}, headers=INTERNAL_HEADERS)
         mock_get.assert_not_called()
         assert _read_attributes(db_session)[0] == START_XP
         assert _read_gold(db_session) == START_GOLD + 50
@@ -258,7 +263,7 @@ class TestAddRewardsOnARealSession:
     def test_unknown_character_changes_nothing(self, mock_get, client_with_db, db_session):
         mock_get.return_value = _multiplier_response(1.35)
         resp = client_with_db.post("/characters/9999/add_rewards",
-                                   json={"xp": 100, "gold": 50})
+                                   json={"xp": 100, "gold": 50}, headers=INTERNAL_HEADERS)
         assert resp.status_code == 404
         assert _read_attributes(db_session)[0] == START_XP
         assert _read_gold(db_session) == START_GOLD
@@ -268,7 +273,7 @@ class TestAddRewardsOnARealSession:
             self, mock_get, client_with_db, db_session):
         resp = client_with_db.post(
             f"/characters/{CHARACTER_ID}/add_rewards",
-            json={"xp": 100, "gold": 50, "xp_source": "xp_bonus"},
+            json={"xp": 100, "gold": 50, "xp_source": "xp_bonus"}, headers=INTERNAL_HEADERS
         )
         assert resp.status_code == 422
         assert "Недопустимый источник опыта" in str(resp.json()["detail"])

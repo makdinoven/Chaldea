@@ -2,15 +2,26 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Header
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from crud import get_user_by_email
 from schemas import UserRead, UserCreate, Login
 from database import get_db
 
-# Секретный ключ и алгоритм шифрования
-SECRET_KEY = os.environ["JWT_SECRET_KEY"]
+# Секретный ключ и алгоритм шифрования.
+#
+# FEAT-169: fail-fast на импорте. Проверяется именно «правдивость», а не
+# наличие ключа: в compose незаданная переменная разворачивается в ПУСТУЮ
+# строку (`JWT_SECRET_KEY=` + предупреждение), поэтому `os.environ[...]`
+# спокойно пропустил бы пустой секрет и сервис поднялся бы с подписью на "".
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "JWT_SECRET_KEY не задан или пуст — user-service не запускается с "
+        "пустым JWT-секретом. Задайте JWT_SECRET_KEY в .env "
+        "(сгенерировать: openssl rand -hex 32)."
+    )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1200
 REFRESH_TOKEN_EXPIRE_DAYS = 7  # Срок жизни рефреш-токена
@@ -73,3 +84,36 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
 
     return user
 
+
+
+# ============================================================
+# Internal service-to-service authentication (FEAT-169 §3.3 M4)
+# ============================================================
+# user-service is the auth service itself and has no `auth_http.py`, so the
+# fail-closed check lives here. Behaviour is identical to the copies in
+# character-service / character-attributes-service / inventory-service:
+# the caller must present `X-Internal-Token` matching the INTERNAL_SERVICE_TOKEN
+# env var. Fail-closed: an unset/empty env var rejects every request with 503,
+# so a missing config can never silently disable auth on an internal endpoint.
+# The constant is resolved at import time — tests monkeypatch
+# `auth.INTERNAL_SERVICE_TOKEN`, not only the env var.
+
+INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
+
+
+def verify_internal_token(
+    x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
+) -> None:
+    """Reject the request unless `X-Internal-Token` matches
+    `INTERNAL_SERVICE_TOKEN` from env. Empty env -> always reject.
+    """
+    if not INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Internal service token не настроен",
+        )
+    if not x_internal_token or x_internal_token != INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Недействительный internal token",
+        )

@@ -94,11 +94,16 @@ services:
     ports: !reset []
 
   # --- Backend services: no --reload, no volume mounts, no exposed ports ---
+  # FEAT-169: INTERNAL_SERVICE_TOKEN объявлен в prod-файле для КАЖДОГО
+  # потребителя (в т.ч. тех, кто в базовом файле получает его с dev-fallback'ом),
+  # иначе сервис уехал бы в прод с публичным dev-internal-token-change-me.
   user-service:
     <<: *restart
     command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
+    environment:
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
 
   photo-service:
     <<: *restart
@@ -111,6 +116,8 @@ services:
     command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8002 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
+    environment:
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
 
   skills-service:
     <<: *restart
@@ -124,7 +131,7 @@ services:
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
       INVENTORY_SERVICE_URL: http://inventory-service:8004
 
   inventory-service:
@@ -132,6 +139,8 @@ services:
     command: sh -c "cd /app && PYTHONPATH=/app alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8004 --proxy-headers --forwarded-allow-ips='*' --app-dir /app"
     volumes: !reset []
     ports: !reset []
+    environment:
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
 
   character-service:
     <<: *restart
@@ -144,7 +153,7 @@ services:
       MAX_CHARACTERS_PER_USER: ${MAX_CHARACTERS_PER_USER:-0}
       # FEAT-162: общий токен для internal service-to-service эндпоинтов
       # (/characters/internal/...). Значение — только из окружения.
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
     depends_on:
       mysql:
         condition: service_healthy
@@ -165,6 +174,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       BATTLEPASS_SERVICE_URL: http://battle-pass-service:8012
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
 
   battle-pass-service:
     <<: *restart
@@ -180,7 +190,7 @@ services:
       CHARACTER_SERVICE_URL: http://character-service:8005
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       USER_SERVICE_URL: http://user-service:8000
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
 
   notification-service:
     <<: *restart
@@ -195,6 +205,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
       AUTH_SERVICE_URL: http://user-service:8000
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
 
   battle-service:
     <<: *restart
@@ -219,7 +230,7 @@ services:
       BATTLE_TIMEOUT_SWEEP_INTERVAL_SECONDS: 60
       BATTLE_TIMEOUT_RECONCILE_EVERY: 60
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
       # FEAT-125 cutover: enable on first deploy, then remove
       # BATTLE_RESET_ON_BOOT: "1"
 
@@ -234,6 +245,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       MONGODB_URL: mongodb://mongo:27017/${DB_DATABASE}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://fallofgods.top}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
 
   dungeon-service:
     <<: *restart
@@ -252,7 +264,7 @@ services:
       CHAR_ATTRS_SERVICE_URL: http://character-attributes-service:8002
       INVENTORY_SERVICE_URL: http://inventory-service:8004
       USER_SERVICE_URL: http://user-service:8000
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
 
   party-service:
     <<: *restart
@@ -268,7 +280,7 @@ services:
       CHARACTER_SERVICE_URL: http://character-service:8005
       ATTRIBUTES_SERVICE_URL: http://character-attributes-service:8002/attributes/
       USER_SERVICE_URL: http://user-service:8000
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
 
   # --- Celery: no watchfiles wrapper ---
   celery-worker:
@@ -282,7 +294,7 @@ services:
       MONGO_URI: mongodb://mongo:27017
       BATTLE_SERVICE_URL: http://battle-service:8010
       SKILLS_SERVICE_URL: http://skills-service:8003
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-dev-internal-token-change-me}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required in production}
 
   celery-beat:
     <<: *restart
