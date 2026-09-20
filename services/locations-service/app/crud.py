@@ -3087,10 +3087,19 @@ async def get_world_graph(session: AsyncSession) -> dict:
 # -------------------------------
 #   GAME RULES
 # -------------------------------
-async def get_all_rules(session: AsyncSession) -> List[GameRule]:
-    """Возвращает все правила, отсортированные по sort_order ASC, id ASC."""
+async def get_all_rules(
+    session: AsyncSession, section: Optional[str] = None
+) -> List[GameRule]:
+    """Возвращает правила, отсортированные по sort_order ASC, id ASC.
+
+    Без `section` возвращает ВСЕ правила — так же, как до FEAT-173
+    (обратная совместимость при выкатке: старый бандл не шлёт параметр).
+    """
+    query = select(GameRule)
+    if section is not None:
+        query = query.where(GameRule.section == section)
     result = await session.execute(
-        select(GameRule).order_by(GameRule.sort_order.asc(), GameRule.id.asc())
+        query.order_by(GameRule.sort_order.asc(), GameRule.id.asc())
     )
     return result.scalars().all()
 
@@ -3105,8 +3114,11 @@ async def get_rule_by_id(session: AsyncSession, rule_id: int) -> Optional[GameRu
 
 async def create_rule(session: AsyncSession, data: GameRuleCreate) -> GameRule:
     """Создаёт новое правило."""
+    # Модель собирается по полям: незаявленное поле молча теряется
+    # (так уже теряется image_url — его пишет photo-service отдельно).
     new_rule = GameRule(
         title=data.title,
+        section=data.section,
         content=data.content,
         sort_order=data.sort_order,
     )

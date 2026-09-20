@@ -295,6 +295,13 @@ class GameRule(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     title = Column(String(255), nullable=False)
+    # Which of the three guide sections this rule belongs to (FEAT-173).
+    # server_default so the DB itself backfills any writer that forgets the field.
+    section = Column(
+        Enum('site', 'roleplay', 'technobook', name='game_rule_section'),
+        nullable=False,
+        server_default='site',
+    )
     image_url = Column(String(512), nullable=True)
     content = Column(Text, nullable=True)
     sort_order = Column(Integer, nullable=False, default=0)

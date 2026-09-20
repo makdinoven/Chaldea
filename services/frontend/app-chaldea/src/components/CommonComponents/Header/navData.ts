@@ -35,7 +35,6 @@ export const navItems: NavItem[] = [
         title: 'НОВОСТИ',
         links: [
           { label: 'Обновления', path: '/news/updates' },
-          { label: 'Технобук', path: '/news/technobook' },
           { label: 'Анонсы', path: '/news/announcements' },
           { label: 'Ивенты', path: '/news/events' },
         ],
@@ -68,8 +67,8 @@ export const navItems: NavItem[] = [
     ],
   },
   {
-    label: 'ПРАВИЛА',
-    path: '/rules',
+    label: 'РУКОВОДСТВО',
+    path: '/guide',
   },
   {
     label: 'СОБЫТИЯ',

@@ -24,7 +24,8 @@ import BattlePage from "../pages/BattlePage/BattlePage";
 import ProfilePage from "../ProfilePage/ProfilePage";
 import AdminCharactersPage from "../Admin/CharactersPage/AdminCharactersPage";
 import AdminCharacterDetailPage from "../Admin/CharactersPage/AdminCharacterDetailPage";
-import RulesPage from "../RulesPage/RulesPage";
+import GuidePage from "../GuidePage/GuidePage";
+import GuideSectionPage from "../GuidePage/GuideSectionPage";
 import RulesAdminPage from "../Admin/RulesAdminPage/RulesAdminPage";
 import RbacAdminPage from "../Admin/RbacAdminPage/RbacAdminPage";
 import AdminRacesPage from "../Admin/AdminRaces/AdminRacesPage";
@@ -193,7 +194,10 @@ const App = () => {
                 <AdminCharacterDetailPage />
               </ProtectedRoute>
             } />
-            <Route path="rules" element={<RulesPage />} />
+            <Route path="guide" element={<GuidePage />} />
+            <Route path="guide/:section" element={<GuideSectionPage />} />
+            {/* Старый адрес остаётся рабочим ради закладок */}
+            <Route path="rules" element={<Navigate to="/guide" replace />} />
             <Route path="admin/rules" element={
               <ProtectedRoute requiredPermission="rules:read">
                 <RulesAdminPage />

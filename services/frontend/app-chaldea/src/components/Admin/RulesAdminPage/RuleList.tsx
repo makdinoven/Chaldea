@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
 import { fetchRules, deleteRule } from "../../../api/rules";
 import type { GameRule } from "../../../api/rules";
+import { GUIDE_SECTIONS, isGuideSection } from "../../../constants/guideSections";
+import type { GuideSection } from "../../../constants/guideSections";
 import toast from "react-hot-toast";
 import { motion } from "motion/react";
+
+/* ── Helpers ── */
+
+const sectionLabel = (slug: string): string =>
+  GUIDE_SECTIONS.find((s) => s.slug === slug)?.label ?? slug;
 
 /* ── Props ── */
 
@@ -14,6 +21,11 @@ interface RuleListProps {
 const RuleList = ({ onEdit, onCreate }: RuleListProps) => {
   const [rules, setRules] = useState<GameRule[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<GameRule | null>(null);
+  const [sectionFilter, setSectionFilter] = useState<GuideSection | "">("");
+
+  const visibleRules = sectionFilter
+    ? rules.filter((r) => r.section === sectionFilter)
+    : rules;
 
   useEffect(() => {
     fetchRules()
@@ -43,16 +55,40 @@ const RuleList = ({ onEdit, onCreate }: RuleListProps) => {
         Правила
       </h1>
 
-      {/* Create button */}
-      <div className="flex items-center justify-end">
-        <button className="btn-blue !text-base !px-6 !py-2" onClick={onCreate}>
+      {/* Section filter + create button */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <select
+          value={sectionFilter}
+          onChange={(e) =>
+            setSectionFilter(isGuideSection(e.target.value) ? e.target.value : "")
+          }
+          className="input-underline w-full sm:max-w-[200px]"
+        >
+          <option value="" className="bg-site-dark text-white">
+            Все разделы
+          </option>
+          {GUIDE_SECTIONS.map((s) => (
+            <option
+              key={s.slug}
+              value={s.slug}
+              className="bg-site-dark text-white"
+            >
+              {s.label}
+            </option>
+          ))}
+        </select>
+
+        <button
+          className="btn-blue !text-base !px-6 !py-2 whitespace-nowrap"
+          onClick={onCreate}
+        >
           Создать правило
         </button>
       </div>
 
       {/* Table */}
-      <div className="gray-bg overflow-hidden">
-        <table className="w-full">
+      <div className="gray-bg overflow-x-auto">
+        <table className="w-full min-w-[640px]">
           <thead>
             <tr className="border-b border-white/10">
               <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">
@@ -63,6 +99,9 @@ const RuleList = ({ onEdit, onCreate }: RuleListProps) => {
               </th>
               <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">
                 Название
+              </th>
+              <th className="text-left text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">
+                Раздел
               </th>
               <th className="text-right text-xs font-medium uppercase tracking-[0.06em] text-white/50 px-4 py-3">
                 Действия
@@ -77,7 +116,7 @@ const RuleList = ({ onEdit, onCreate }: RuleListProps) => {
               visible: { transition: { staggerChildren: 0.03 } },
             }}
           >
-            {rules.map((rule) => (
+            {visibleRules.map((rule) => (
               <motion.tr
                 key={rule.id}
                 variants={{
@@ -103,6 +142,9 @@ const RuleList = ({ onEdit, onCreate }: RuleListProps) => {
                   )}
                 </td>
                 <td className="px-4 py-3 text-sm text-white">{rule.title}</td>
+                <td className="px-4 py-3 text-sm text-white/70 whitespace-nowrap">
+                  {sectionLabel(rule.section)}
+                </td>
                 <td className="px-4 py-3">
                   <div className="flex flex-col items-end gap-1.5">
                     <button
@@ -124,9 +166,11 @@ const RuleList = ({ onEdit, onCreate }: RuleListProps) => {
           </motion.tbody>
         </table>
 
-        {rules.length === 0 && (
+        {visibleRules.length === 0 && (
           <p className="text-center text-white/50 text-sm py-8">
-            Правила пока не добавлены
+            {sectionFilter
+              ? "Нет правил в этом разделе"
+              : "Правила пока не добавлены"}
           </p>
         )}
       </div>

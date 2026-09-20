@@ -1930,9 +1930,15 @@ rules_router = APIRouter(prefix="/rules")
 
 
 @rules_router.get("/list", response_model=List[schemas.GameRuleRead])
-async def get_rules_list(session: AsyncSession = Depends(get_db)):
-    """Возвращает все правила игры (публичный)."""
-    return await crud.get_all_rules(session)
+async def get_rules_list(
+    section: Optional[schemas.RuleSection] = None,
+    session: AsyncSession = Depends(get_db),
+):
+    """Возвращает правила игры (публичный).
+
+    Без `section` — все правила в прежнем порядке (обратная совместимость).
+    """
+    return await crud.get_all_rules(session, section)
 
 
 @rules_router.get("/{rule_id}", response_model=schemas.GameRuleRead)

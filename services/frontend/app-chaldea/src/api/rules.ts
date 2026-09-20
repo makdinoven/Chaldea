@@ -1,4 +1,5 @@
 import axios from "axios";
+import type { GuideSection } from "../constants/guideSections";
 
 const rulesClient = axios.create({
   baseURL: "/rules",
@@ -30,6 +31,7 @@ rulesClient.interceptors.response.use(
 export interface GameRule {
   id: number;
   title: string;
+  section: GuideSection;
   image_url: string | null;
   content: string | null;
   sort_order: number;
@@ -39,12 +41,14 @@ export interface GameRule {
 
 export interface GameRuleCreate {
   title: string;
+  section?: GuideSection;
   content?: string | null;
   sort_order?: number;
 }
 
 export interface GameRuleUpdate {
   title?: string | null;
+  section?: GuideSection;
   content?: string | null;
   sort_order?: number | null;
 }
@@ -56,8 +60,8 @@ export interface GameRuleReorderItem {
 
 // ── API functions ──
 
-export const fetchRules = async (): Promise<GameRule[]> => {
-  const { data } = await rulesClient.get("/list");
+export const fetchRules = async (section?: GuideSection): Promise<GameRule[]> => {
+  const { data } = await rulesClient.get("/list", section ? { params: { section } } : undefined);
   return data;
 };
 

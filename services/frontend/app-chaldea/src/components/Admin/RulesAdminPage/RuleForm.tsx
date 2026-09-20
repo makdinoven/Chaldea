@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { createRule, updateRule, uploadRuleImage } from "../../../api/rules";
 import type { GameRule } from "../../../api/rules";
+import { GUIDE_SECTIONS } from "../../../constants/guideSections";
+import type { GuideSection } from "../../../constants/guideSections";
 import WysiwygEditor from "../../CommonComponents/WysiwygEditor/WysiwygEditor";
 import toast from "react-hot-toast";
 
@@ -16,6 +18,7 @@ const RuleForm = ({ rule, onSuccess, onCancel }: RuleFormProps) => {
   const editMode = Boolean(rule);
 
   const [title, setTitle] = useState(rule?.title ?? "");
+  const [section, setSection] = useState<GuideSection>(rule?.section ?? "site");
   const [sortOrder, setSortOrder] = useState(rule?.sort_order ?? 0);
   const [content, setContent] = useState(rule?.content ?? "");
   const [imgFile, setImgFile] = useState<File | undefined>();
@@ -35,12 +38,14 @@ const RuleForm = ({ rule, onSuccess, onCancel }: RuleFormProps) => {
       if (editMode && rule) {
         savedRule = await updateRule(rule.id, {
           title,
+          section,
           content,
           sort_order: sortOrder,
         });
       } else {
         savedRule = await createRule({
           title,
+          section,
           content,
           sort_order: sortOrder,
         });
@@ -79,6 +84,28 @@ const RuleForm = ({ rule, onSuccess, onCancel }: RuleFormProps) => {
             required
             className="input-underline"
           />
+        </label>
+
+        {/* Section */}
+        <label className="flex flex-col gap-1">
+          <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+            Раздел
+          </span>
+          <select
+            value={section}
+            onChange={(e) => setSection(e.target.value as GuideSection)}
+            className="input-underline w-full"
+          >
+            {GUIDE_SECTIONS.map((s) => (
+              <option
+                key={s.slug}
+                value={s.slug}
+                className="bg-site-dark text-white"
+              >
+                {s.label}
+              </option>
+            ))}
+          </select>
         </label>
 
         {/* Sort order */}

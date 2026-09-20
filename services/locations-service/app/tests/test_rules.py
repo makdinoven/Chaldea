@@ -36,11 +36,13 @@ ADMIN_USER_RESPONSE = {"id": 1, "username": "admin", "role": "admin", "permissio
 REGULAR_USER_RESPONSE = {"id": 2, "username": "user", "role": "user", "permissions": []}
 
 
-def _make_rule(rule_id=1, title="Test Rule", content="<p>Content</p>", sort_order=0, image_url=None):
+def _make_rule(rule_id=1, title="Test Rule", content="<p>Content</p>", sort_order=0, image_url=None,
+               section="site"):
     """Create a mock GameRule ORM object."""
     rule = MagicMock()
     rule.id = rule_id
     rule.title = title
+    rule.section = section
     rule.content = content
     rule.sort_order = sort_order
     rule.image_url = image_url

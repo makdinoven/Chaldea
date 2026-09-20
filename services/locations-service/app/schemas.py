@@ -756,19 +756,26 @@ class NpcPostCreate(BaseModel):
 # -------------------------------
 #   GAME RULE SCHEMAS
 # -------------------------------
+# FEAT-173: the three guide sections. Same vocabulary as the DB ENUM and the URL slug.
+RuleSection = Literal["site", "roleplay", "technobook"]
+
+
 class GameRuleCreate(BaseModel):
     title: str
+    section: RuleSection = "site"
     content: Optional[str] = None
     sort_order: int = 0
 
 class GameRuleUpdate(BaseModel):
     title: Optional[str] = None
+    section: Optional[RuleSection] = None
     content: Optional[str] = None
     sort_order: Optional[int] = None
 
 class GameRuleRead(BaseModel):
     id: int
     title: str
+    section: RuleSection
     image_url: Optional[str] = None
     content: Optional[str] = None
     sort_order: int

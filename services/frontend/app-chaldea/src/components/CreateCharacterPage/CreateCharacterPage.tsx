@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { AnimatePresence, motion } from 'motion/react';
-import useNavigateTo from '../../hooks/useNavigateTo';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import { fetchRaces } from '../../redux/slices/racesSlice';
 import { fetchOriginsThunk, selectOrigins } from '../../redux/slices/originsSlice';
@@ -69,7 +68,6 @@ const BLANK_PERSONA: PersonaForm = {
 };
 
 export default function CreateCharacterPage() {
-  const navigateTo = useNavigateTo();
   const [prologueSeen, setPrologueSeen] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -373,7 +371,9 @@ export default function CreateCharacterPage() {
           исследование Халдеи. Прежде чем отправить заявку на проверку, рекомендуем
           ознакомиться с{' '}
           <a
-            onClick={() => navigateTo('/rules')}
+            href="/guide"
+            target="_blank"
+            rel="noopener noreferrer"
             className="underline cursor-pointer hover:text-site-blue transition-colors"
           >
             правилами

@@ -33,7 +33,7 @@ export default function HomePage() {
       titleLink: '/guide',
       img: button2img,
       links: [
-        { name: 'Обучение', link: '/learning' },
+        { name: 'Обучение', link: '/guide/technobook' },
         { name: 'Консультант', link: '/consultant' },
         { name: 'Архив', link: '/archive' },
       ],
