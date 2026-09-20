@@ -6,6 +6,8 @@ import { motion } from 'motion/react';
 import toast from 'react-hot-toast';
 import { ScrollText } from 'lucide-react';
 import { fetchPostHistory, PostHistoryItem } from '../../../api/characterLogs';
+// Post bodies are player-written HTML — never render them raw.
+import sanitizePostHtml from '../../../utils/sanitizePostHtml';
 import { EMPTY_DATE_PLACEHOLDER, parseServerDate } from '../../../utils/serverDate';
 import PanelShell, { PANEL_DESKTOP_HEIGHT_CLASS } from '../PanelShell';
 import EmptyState from '../shared/EmptyState';
@@ -76,7 +78,7 @@ const PostCard = ({ post }: PostCardProps) => {
 
         <div className="text-white/85 text-sm leading-relaxed mb-2.5 break-words overflow-hidden">
           {expanded || !isLong ? (
-            <div dangerouslySetInnerHTML={{ __html: post.content }} />
+            <div dangerouslySetInnerHTML={{ __html: sanitizePostHtml(post.content) }} />
           ) : (
             <p>{plainText.slice(0, PREVIEW_LENGTH)}...</p>
           )}

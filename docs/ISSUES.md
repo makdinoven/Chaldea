@@ -126,6 +126,13 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 ## HIGH
 
+### ~~Уязвимость: посты на стене профиля рендерятся вообще без санитайзера~~ DONE (2026-09-20)
+~~**Сервис:** frontend~~
+~~**Файлы:** `UserProfilePage/WallSection.tsx:173`, `ProfilePage/PostHistoryTab/PostHistoryTab.tsx:79`~~
+~~**Обнаружено:** Codebase Analyst, FEAT-174 (2026-09-20), при сверке путей рендера HTML.~~
+~~**Описание:** обе точки делали `dangerouslySetInnerHTML={{ __html: post.content }}` напрямую, без `DOMPurify` вообще — хранимый XSS в контенте, который пишет любой игрок, а читают все посетители профиля. Эти два экрана не попали в зачистку 2026-09-14.~~
+**Исправлено 2026-09-20** (отдельным коммитом, не в составе FEAT-174): оба места прогнаны через общий `sanitizePostHtml` — уровень доверия тот же, что у `PostCard`. Проверено, что других точек вывода без очистки не осталось: `ArchiveArticlePage` использует `sanitizeContent`, `PostCard` — `sanitizePostHtml`, `RuleOverlay` — `DOMPurify.sanitize` (админский контент, политика сознательно свободнее). `tsc --noEmit` и `npm run build` зелёные.
+
 ### ~~Утечка ПДн: `GET /users/{id}` анонимно отдавал e-mail живого человека~~ DONE (FEAT-171, задача #25)
 ~~**Сервис:** user-service~~
 ~~**Файлы:** `services/user-service/main.py:2254` (`get_user_by_id`, ни одной зависимости), `:748` (`GET /users/admins`), `schemas.py:50` (`UserRead` с полем `email`)~~

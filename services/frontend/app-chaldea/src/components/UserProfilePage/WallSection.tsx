@@ -4,6 +4,8 @@ import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
 import { User, Trash2, Edit3 } from 'react-feather';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
+// Wall posts are player-written HTML — never render them raw.
+import sanitizePostHtml from '../../utils/sanitizePostHtml';
 import {
   selectWallPosts,
   selectPostsLoading,
@@ -170,7 +172,7 @@ const PostCard = ({
       ) : (
         <div
           className="prose-rules text-white/80 text-sm break-words"
-          dangerouslySetInnerHTML={{ __html: post.content }}
+          dangerouslySetInnerHTML={{ __html: sanitizePostHtml(post.content) }}
         />
       )}
     </div>
