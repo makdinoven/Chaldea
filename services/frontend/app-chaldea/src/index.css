@@ -679,6 +679,14 @@
     margin: 0.75rem auto;
     border-radius: 8px;
   }
+  /* Guide screenshots are captured at ~1150px, which reads as a wall of UI in
+     the article. Halve them and keep them centred; `min()` still lets a narrow
+     screen shrink them further. The class is emitted only by the guide
+     importer, so Archive articles and player posts are untouched. */
+  .prose-rules img.guide-shot {
+    max-width: min(100%, 560px);
+    margin-inline: auto;
+  }
 
   /* Resizable image block node */
   .prose-rules figure[data-type="resizable-image"],
