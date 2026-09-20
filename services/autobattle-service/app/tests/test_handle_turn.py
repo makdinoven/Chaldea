@@ -113,6 +113,16 @@ def _cleanup():
 # Tests: Retry logic
 # ═══════════════════════════════════════════════════════════════════════════
 
+
+def _stub_strategy():
+    """Стратегия-заглушка: раньше тесты патчили общий объект `main.strategy`,
+    теперь у каждого участника свой, и патчится фабрика `main.strategy_for`."""
+    stub = MagicMock()
+    stub.select_actions.return_value = ({"skill_id": 1}, None)
+    stub.select_target.return_value = None
+    return stub
+
+
 class TestHandleTurnRetry:
     """Tests for retry logic in handle_turn."""
 
@@ -120,7 +130,7 @@ class TestHandleTurnRetry:
         _cleanup()
 
     @pytest.mark.asyncio
-    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
+    @patch("main.strategy_for", return_value=_stub_strategy())
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
@@ -150,7 +160,7 @@ class TestHandleTurnRetry:
         mock_sleep.assert_called_with(2)
 
     @pytest.mark.asyncio
-    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
+    @patch("main.strategy_for", return_value=_stub_strategy())
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
@@ -176,7 +186,7 @@ class TestHandleTurnRetry:
         assert mock_sleep.call_count == MAX_RETRIES
 
     @pytest.mark.asyncio
-    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
+    @patch("main.strategy_for", return_value=_stub_strategy())
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
@@ -203,7 +213,7 @@ class TestHandleTurnRetry:
         assert mock_state.call_count == 2
 
     @pytest.mark.asyncio
-    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
+    @patch("main.strategy_for", return_value=_stub_strategy())
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
@@ -290,7 +300,7 @@ class TestCleanupOnBattleFinish:
         assert (2, 30) in HISTORY  # untouched
 
     @pytest.mark.asyncio
-    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
+    @patch("main.strategy_for", return_value=_stub_strategy())
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.post_battle_action", new_callable=AsyncMock)
     @patch("main.get_battle_state", new_callable=AsyncMock)
@@ -324,7 +334,7 @@ class TestCleanupOnBattleFinish:
         assert (1, 10) not in HISTORY
 
     @pytest.mark.asyncio
-    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
+    @patch("main.strategy_for", return_value=_stub_strategy())
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.post_battle_action", new_callable=AsyncMock)
     @patch("main.get_battle_state", new_callable=AsyncMock)

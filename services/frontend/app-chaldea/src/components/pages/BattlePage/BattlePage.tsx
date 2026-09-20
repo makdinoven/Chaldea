@@ -7,7 +7,11 @@ import axios from "axios";
 import toast from "react-hot-toast";
 import { useBodyBackground } from "../../../hooks/useBodyBackground";
 import { useAppSelector } from "../../../redux/store";
-import { BASE_URL_AUTOBATTLES, BASE_URL_BATTLES } from "../../../api/api";
+import {
+  BASE_URL_AUTOBATTLES,
+  BASE_URL_BATTLES,
+  postAutobattleMode,
+} from "../../../api/api";
 import battleBg from "/battle-img-3.png";
 import BattlePageBar from "./BattlePageBar/BattlePageBar";
 import { SKILLS_KEYS } from "../../../helpers/commonConstants";
@@ -663,10 +667,9 @@ const BattlePage = () => {
   };
 
   const handleSetAutobattleMode = async () => {
+    if (myData?.participant_id == null) return;
     try {
-      await axios.post(`${BASE_URL_AUTOBATTLES}/mode`, {
-        mode: autobattleMode,
-      });
+      await postAutobattleMode(myData.participant_id, autobattleMode);
     } catch {
       // silently handled — autobattle is optional
     }

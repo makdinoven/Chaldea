@@ -40,6 +40,36 @@ export const getLatestRoleplayPosts = async (
   return data;
 };
 
+/**
+ * Режим автобоя конкретного участника. `participant_id` обязателен: до
+ * 2026-09-20 сервис держал один режим на всех, и переключение одним игроком
+ * меняло поведение у каждого, кто в этот момент воевал на автобое.
+ */
+export const postAutobattleMode = async (
+  participantId: number,
+  mode: string,
+): Promise<{ ok: boolean; participant_id: number; mode: string }> => {
+  const { data } = await axios.post(`${BASE_URL_AUTOBATTLES}/mode`, {
+    participant_id: participantId,
+    mode,
+  });
+  return data;
+};
+
+/** Оценка хода, сделанного автобоем: поднимает или опускает вес этих навыков. */
+export const postAutobattleFeedback = async (
+  participantId: number,
+  skillIds: number[],
+  liked: boolean,
+): Promise<{ ok: boolean }> => {
+  const { data } = await axios.post(`${BASE_URL_AUTOBATTLES}/feedback`, {
+    participant_id: participantId,
+    skill_ids: skillIds,
+    liked,
+  });
+  return data;
+};
+
 export const postAutobattleSpeed = async (
   participantId: number,
   speed: "fast" | "slow",

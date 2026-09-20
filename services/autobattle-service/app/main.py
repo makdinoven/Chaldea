@@ -27,7 +27,19 @@ app.add_middleware(
     allow_origins=cors_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-strategy = Strategy()
+# Одна стратегия НА УЧАСТНИКА. Раньше объект был один на весь сервис, поэтому
+# смена режима одним игроком меняла режим всем, кто в этот момент в автобою, а
+# накопленные оценки ходов были общими. Ключ — participant_id, как и у
+# остальных реестров ниже.
+STRATEGIES: dict[int, Strategy] = {}
+
+
+def strategy_for(pid: int) -> Strategy:
+    """Стратегия участника; создаётся при первом обращении."""
+    st = STRATEGIES.get(pid)
+    if st is None:
+        st = STRATEGIES[pid] = Strategy()
+    return st
 
 # ─────────────────────────  in-memory хранилища  ──────────────────
 REDIS: aioredis.Redis                                       # клиент Redis
@@ -42,7 +54,14 @@ HISTORY:    dict[Tuple[int, int], Deque[Dict[str, Any]]] = \
 
 # ────────────────────────────  pydantic  ─────────────────────────
 class ModePayload(BaseModel):
+    participant_id: int       # чей режим меняем — стратегия своя у каждого
     mode: str                 # attack / defense / balance
+
+
+class FeedbackPayload(BaseModel):
+    participant_id: int
+    skill_ids: list[int]
+    liked: bool
 
 class SpeedPayload(BaseModel):
     participant_id: int
@@ -58,7 +77,7 @@ async def startup() -> None:
     global REDIS         # pylint: disable=global-statement
     REDIS = await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
     asyncio.create_task(redis_reader())
-    log.info("auto-battle запущен, режим %s", strategy.mode)
+    log.info("auto-battle запущен")
 
 async def redis_reader() -> None:
     """
@@ -81,23 +100,56 @@ async def redis_reader() -> None:
         if pid in ALLOWED:
             asyncio.create_task(handle_turn(bid, pid))
 
+def _require_owner(pid: int, user: UserRead) -> None:
+    """Участником распоряжается тот, кто включил ему автобой.
+
+    Тот же приём, что в /unregister: реестр владельцев заполняется при
+    регистрации. Незарегистрированный участник — ошибка: настраивать нечего,
+    и это отсекает попытку накрутить чужую стратегию заранее.
+    """
+    owner = OWNER.get(pid)
+    if owner is None:
+        raise HTTPException(404, "Автобой для этого участника не включён")
+    if owner != user.id:
+        raise HTTPException(403, "Вы не можете управлять чужим персонажем")
+
+
 # ─────────────────────────────  REST  ────────────────────────────
 @app.get("/health")
 async def health() -> Dict[str, Any]:
     return {
         "status": "ok",
-        "mode":   strategy.mode,
+        "strategies": len(STRATEGIES),
         "allowed": list(ALLOWED),
         "redis": await REDIS.ping(),
     }
 
 @app.post("/mode")
-def set_mode(p: ModePayload, _user: UserRead = Depends(get_current_user_via_http)):
+def set_mode(p: ModePayload, user: UserRead = Depends(get_current_user_via_http)):
+    """Режим автобоя конкретного участника.
+
+    Раньше режим был один на весь сервис: игрок переключал «в атаку», и вместе
+    с ним переключались все, кто в этот момент воевал на автобое.
+    """
+    _require_owner(p.participant_id, user)
     try:
-        strategy.set_mode(p.mode)
+        strategy_for(p.participant_id).set_mode(p.mode)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"ok": True, "mode": strategy.mode}
+    return {"ok": True, "participant_id": p.participant_id, "mode": p.mode}
+
+
+@app.post("/feedback")
+def set_feedback(p: FeedbackPayload, user: UserRead = Depends(get_current_user_via_http)):
+    """Оценка сделанного автобоем хода: «понравилось» поднимает вес этих
+    навыков в последующем выборе, «нет» — опускает.
+
+    Метод у стратегии существовал с самого начала, но эндпоинта к нему не было,
+    и кнопки в интерфейсе просто закрывали подсказку.
+    """
+    _require_owner(p.participant_id, user)
+    strategy_for(p.participant_id).feedback(p.skill_ids, p.liked)
+    return {"ok": True}
 
 @app.post("/register")
 async def register(p: RegisterPayload, user: UserRead = Depends(get_current_user_via_http)):
@@ -164,6 +216,7 @@ def unregister(participant_id: int = Body(..., embed=True), user: UserRead = Dep
     ALLOWED.discard(participant_id)
     OWNER.pop(participant_id, None)
     SPEED.pop(participant_id, None)
+    STRATEGIES.pop(participant_id, None)
     log.info("unregister pid=%s by user=%s — ALLOWED now=%s",
              participant_id, user.id, list(ALLOWED))
     return {"ok": True, "allowed": list(ALLOWED)}
@@ -309,8 +362,9 @@ async def handle_turn(bid: int, pid: int) -> None:
             ctx["features"] = feats                # передаём стратегии
 
             # ---------- стратегия ----------
-            skills, item_id = strategy.select_actions(ctx)
-            target_id = strategy.select_target(ctx)
+            _strategy = strategy_for(pid)
+            skills, item_id = _strategy.select_actions(ctx)
+            target_id = _strategy.select_target(ctx)
             log.info("battle=%s pid=%s strategy chose: skills=%s item=%s target=%s",
                      bid, pid, skills, item_id, target_id)
 

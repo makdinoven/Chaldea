@@ -144,6 +144,16 @@ USER_2 = {"id": 2, "username": "player2", "role": "user", "permissions": []}
 # 1. POST /speed with valid auth — speed is set correctly
 # ═══════════════════════════════════════════════════════════════════════════
 
+
+def _stub_strategy():
+    """Стратегия-заглушка: раньше тесты патчили общий объект `main.strategy`,
+    теперь у каждого участника свой, и патчится фабрика `main.strategy_for`."""
+    stub = MagicMock()
+    stub.select_actions.return_value = ({"skill_id": 1}, None)
+    stub.select_target.return_value = None
+    return stub
+
+
 class TestSetSpeedValid:
     """Tests for POST /speed with valid authentication and input."""
 
@@ -420,7 +430,7 @@ class TestSlowModeDelay:
         _cleanup()
 
     @pytest.mark.asyncio
-    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
+    @patch("main.strategy_for", return_value=_stub_strategy())
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
@@ -443,7 +453,7 @@ class TestSlowModeDelay:
         mock_sleep.assert_any_call(settings.AUTOBATTLE_SLOW_DELAY)
 
     @pytest.mark.asyncio
-    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
+    @patch("main.strategy_for", return_value=_stub_strategy())
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
@@ -478,7 +488,7 @@ class TestFastModeNoDelay:
         _cleanup()
 
     @pytest.mark.asyncio
-    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
+    @patch("main.strategy_for", return_value=_stub_strategy())
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
@@ -502,7 +512,7 @@ class TestFastModeNoDelay:
             assert call.args[0] != settings.AUTOBATTLE_SLOW_DELAY
 
     @pytest.mark.asyncio
-    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
+    @patch("main.strategy_for", return_value=_stub_strategy())
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.asyncio.sleep", new_callable=AsyncMock)
     @patch("main.post_battle_action", new_callable=AsyncMock)
@@ -630,7 +640,7 @@ class TestCleanupBattleSpeed:
         assert 20 not in ALLOWED
 
     @pytest.mark.asyncio
-    @patch("main.strategy.select_actions", return_value=({"skill_id": 1}, None))
+    @patch("main.strategy_for", return_value=_stub_strategy())
     @patch("main.build_features", return_value={"hp_ratio": 0.5, "mana_ratio": 0.4})
     @patch("main.post_battle_action", new_callable=AsyncMock)
     @patch("main.get_battle_state", new_callable=AsyncMock)

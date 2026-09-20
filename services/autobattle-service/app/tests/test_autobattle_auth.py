@@ -40,6 +40,7 @@ clients_mock.post_battle_action = AsyncMock(return_value={})
 clients_mock.get_character_owner = AsyncMock(return_value=None)
 sys.modules["clients"] = clients_mock
 
+import main
 from main import app, ALLOWED, OWNER, PID_BATTLE  # noqa: E402
 
 # Clear startup handlers to prevent Redis connection
@@ -339,17 +340,23 @@ class TestSetModeAuth:
             )
         assert response.status_code not in (401, 403)
 
-    @patch("main.strategy.set_mode", side_effect=ValueError("unknown mode invalid_mode_xyz"))
+    @patch("main.strategy_for")
     @patch("auth_http.requests.get")
-    def test_invalid_mode_returns_400(self, mock_auth, mock_set_mode):
+    def test_invalid_mode_returns_400(self, mock_auth, mock_strategy_for):
         """Invalid mode value returns 400."""
+        mock_strategy_for.return_value.set_mode.side_effect = ValueError(
+            "unknown mode invalid_mode_xyz"
+        )
+        # Режим настраивается только зарегистрированному участнику: незнакомый
+        # pid отсекается раньше проверки самого режима (404).
+        main.OWNER[10] = 1
         mock_auth.return_value = _mock_response(
             200, {"id": 1, "username": "admin", "role": "admin", "permissions": []}
         )
         with TestClient(app) as client:
             response = client.post(
                 "/mode",
-                json={"mode": "invalid_mode_xyz"},
+                json={"participant_id": 10, "mode": "invalid_mode_xyz"},
                 headers={"Authorization": "Bearer fake-token"},
             )
         # Strategy.set_mode raises ValueError for invalid mode -> 400

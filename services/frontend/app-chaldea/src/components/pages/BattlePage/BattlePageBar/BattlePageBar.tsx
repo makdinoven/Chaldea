@@ -9,7 +9,11 @@ import {
 } from "../../../../helpers/commonConstants";
 import axios from "axios";
 import toast from "react-hot-toast";
-import { BASE_URL_BATTLES, postAutobattleSpeed } from "../../../../api/api";
+import {
+  BASE_URL_BATTLES,
+  postAutobattleFeedback,
+  postAutobattleSpeed,
+} from "../../../../api/api";
 import { formatServerDateTime } from "../../../../utils/serverDate";
 import { DAMAGE_TYPES } from "../../../AdminSkillsPage/skillConstants";
 import { describeEffect, pluralizeTurn, type EffectLike } from "../battleEffects";
@@ -1119,17 +1123,48 @@ const BattlePageBar = ({
                       ];
 
                     if (currentParticipantId === myData.participant_id) {
+                      // Навыки, которые автобой применил в этом ходе, — именно
+                      // их вес и двигает оценка.
+                      const usedSkillIds = log.events
+                        .filter(
+                          (e) =>
+                            e.event === "skill_use" &&
+                            e.who === myData.participant_id &&
+                            e.skill_id != null,
+                        )
+                        .map((e) => Number(e.skill_id));
+
+                      const rate = (liked: boolean) => {
+                        setIsTurnLikeTextShown(false);
+                        if (
+                          myData.participant_id == null ||
+                          usedSkillIds.length === 0
+                        ) {
+                          return;
+                        }
+                        void postAutobattleFeedback(
+                          myData.participant_id,
+                          usedSkillIds,
+                          liked,
+                        ).catch((err) => {
+                          toast.error(
+                            err?.response?.data?.detail ||
+                              "Не удалось сохранить оценку хода",
+                          );
+                        });
+                      };
+
                       return (
                         <div className="text-sm">
                           Понравился ли вам ход?{" "}
                           <span
-                            onClick={() => setIsTurnLikeTextShown(false)}
+                            onClick={() => rate(true)}
                             className="cursor-pointer font-medium text-site-blue underline decoration-[1.5px]"
                           >
                             Да
                           </span>{" "}
                           <span
-                            onClick={() => setIsTurnLikeTextShown(false)}
+                            onClick={() => rate(false)}
                             className="cursor-pointer font-medium text-site-red underline decoration-[1.5px]"
                           >
                             Нет

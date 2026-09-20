@@ -2465,14 +2465,11 @@ async def _make_action_core(
                     "skill_type": _bt,
                 })
 
-    # --- First cycle (FEAT-143): one skill type per turn until the turn comes
-    # back to the initiator. Unlock the moment the initiator starts their 2nd turn.
-    _first_actor = battle_state.get("first_actor")
-    if request.participant_id == _first_actor:
-        if battle_state.get("initiator_acted_once"):
-            battle_state["first_cycle"] = False  # 2nd initiator turn → full kit
-        else:
-            battle_state["initiator_acted_once"] = True  # 1st initiator turn
+    # --- First cycle (FEAT-143): one skill type per turn until every fighter has
+    # had one turn. The flag is cleared when the turn order wraps — see the turn
+    # advance below. Tying the unlock to the initiator's 2nd turn used to strand
+    # the whole battle in first-cycle mode whenever the initiator died first:
+    # dead slots are skipped, so that 2nd turn never came.
     if battle_state.get("first_cycle", False):
         # Only ONE of attack/defense/support this turn (items are not restricted).
         # The frontend enforces this too; this is the safety net for malformed /
@@ -3479,6 +3476,13 @@ async def _make_action_core(
         if battle_state["participants"][str(cand)]["hp"] > 0:
             next_actor_participant_id = cand
             break
+
+    # The turn order wrapped ⇒ everyone still standing has acted once ⇒ the
+    # first cycle is over. Works even when the initiator is already dead.
+    if battle_state.get("first_cycle", False):
+        next_index = turn_order.index(next_actor_participant_id)
+        if next_index <= current_index:
+            battle_state["first_cycle"] = False
 
     battle_state["turn_number"] = new_turn_number
     battle_state["next_actor"] = next_actor_participant_id
