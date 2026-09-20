@@ -536,6 +536,11 @@ class ItemBase(BaseModel):
     description: Optional[str] = None
 
     socket_count: int = 0
+    # Сколько дополнительных быстрых слотов даёт надетый предмет (база — 4, потолок — 10;
+    # см. crud.recalc_fast_slots). Колонка и расчёт существовали давно, а в схеме поля не
+    # было: админка отправляла «Бонус быстрых слотов», Pydantic его молча отбрасывал, и ни
+    # один пояс не мог дать ни одного слота.
+    fast_slot_bonus: int = 0
     whetstone_level: Optional[int] = None
     identify_level: Optional[int] = None
     # FEAT-165
