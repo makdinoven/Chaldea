@@ -177,22 +177,27 @@ async def fetch_character_class_id(db: AsyncSession, character_id: int) -> int:
 
 
 def _filter_effects_by_chance(
-    effects: list, luck_bonus: float, defender_endurance: float = 0
+    effects: list, luck_bonus: float, defender_res_effects: float = 0
 ) -> list:
-    """Filter effects by their chance field, applying luck bonus and
-    defender's endurance reduction.
+    """Filter effects by their chance field, applying the attacker's luck
+    bonus and the defender's effect resistance.
 
-    Each effect has a 'chance' field (0..100). Attacker's luck adds
-    +0.1% per point to the proc probability. Defender's endurance
-    subtracts 0.2% per point from the proc probability of effects
-    landing on the defender (self-effects should not pass endurance).
+    Each effect has a 'chance' field (0..100). Attacker's luck adds +0.1%
+    per point to the proc probability. The defender subtracts their
+    `res_effects` — the very stat the profile shows under «Сопр. эффектам»,
+    already a percentage (endurance ×0.2 + luck ×0.1, plus equipment and
+    perk modifiers). Self-effects are not resisted.
+
+    This used to read the defender's raw `endurance` and multiply by 0.2
+    here, which quietly meant equipment with `res_effects_modifier` did
+    nothing in combat and the number on the profile was decorative.
     Returns only effects that passed the roll.
     """
-    endurance_penalty = (defender_endurance or 0) * 0.2
+    resist_penalty = defender_res_effects or 0
     passed = []
     for eff in effects:
         base_chance = eff.get("chance", 100)
-        actual_chance = base_chance + luck_bonus - endurance_penalty
+        actual_chance = base_chance + luck_bonus - resist_penalty
         if actual_chance < 0:
             actual_chance = 0
         if roll_chance(actual_chance):
@@ -2574,7 +2579,7 @@ async def _make_action_core(
         enemy_effects = _filter_effects_by_chance(
             enemy_effects,
             attacker_luck_bonus,
-            base_defender_attributes.get("endurance", 0),
+            base_defender_attributes.get("res_effects", 0),
         )
         if enemy_effects:
             apply_new_effects(
@@ -2622,7 +2627,7 @@ async def _make_action_core(
                 _epd = participants_map[str(_enemy_pid)]
                 _eff = _filter_effects_by_chance(
                     all_enemies_effects, attacker_luck_bonus,
-                    (await attrs(_epd["character_id"])).get("endurance", 0),
+                    (await attrs(_epd["character_id"])).get("res_effects", 0),
                 )
                 if not _eff:
                     continue
@@ -2660,7 +2665,7 @@ async def _make_action_core(
         enemy_effects = _filter_effects_by_chance(
             enemy_effects,
             attacker_luck_bonus,
-            base_defender_attributes.get("endurance", 0),
+            base_defender_attributes.get("res_effects", 0),
         )
         if enemy_effects:
             apply_new_effects(
@@ -2707,7 +2712,7 @@ async def _make_action_core(
                 _epd = participants_map[str(_enemy_pid)]
                 _eff = _filter_effects_by_chance(
                     all_enemies_effects, attacker_luck_bonus,
-                    (await attrs(_epd["character_id"])).get("endurance", 0),
+                    (await attrs(_epd["character_id"])).get("res_effects", 0),
                 )
                 if not _eff:
                     continue
@@ -2813,11 +2818,11 @@ async def _make_action_core(
                         return list(alive_allies)
                     return [request.participant_id]
 
-                async def _endurance_of(pid: int) -> float:
+                async def _res_effects_of(pid: int) -> float:
                     _pd = participants_map.get(str(pid))
                     if not _pd:
                         return 0
-                    return (await attrs(_pd["character_id"])).get("endurance", 0)
+                    return (await attrs(_pd["character_id"])).get("res_effects", 0)
 
                 # Яд на оружие: его enemy-строки — это то, что получает цель ПРИ
                 # ПОПАДАНИИ, а не сейчас. Они уезжают в weapon_coating.
@@ -2842,7 +2847,7 @@ async def _make_action_core(
                         _passed = _filter_effects_by_chance(
                             [row],
                             attacker_luck_bonus,
-                            (await _endurance_of(_tpid)) if is_enemy_side else 0,
+                            (await _res_effects_of(_tpid)) if is_enemy_side else 0,
                         )
                         if not _passed:
                             continue
@@ -3081,7 +3086,7 @@ async def _make_action_core(
         attack_enemy_effects = _filter_effects_by_chance(
             attack_enemy_effects,
             attacker_luck_bonus,
-            base_defender_attributes.get("endurance", 0),
+            base_defender_attributes.get("res_effects", 0),
         )
         if attack_enemy_effects:
             apply_new_effects(
@@ -3131,7 +3136,7 @@ async def _make_action_core(
                 _epd = participants_map[str(_enemy_pid)]
                 _eff = _filter_effects_by_chance(
                     attack_all_enemies_effects, attacker_luck_bonus,
-                    (await attrs(_epd["character_id"])).get("endurance", 0),
+                    (await attrs(_epd["character_id"])).get("res_effects", 0),
                 )
                 if not _eff:
                     continue
@@ -3269,7 +3274,7 @@ async def _make_action_core(
                 _rows = _filter_effects_by_chance(
                     [dict(r) for r in _coating_effects if isinstance(r, dict)],
                     attacker_luck_bonus,
-                    (await attrs(_tpd["character_id"])).get("endurance", 0),
+                    (await attrs(_tpd["character_id"])).get("res_effects", 0),
                 )
                 if not _rows:
                     continue
