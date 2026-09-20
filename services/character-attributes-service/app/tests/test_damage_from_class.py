@@ -1,13 +1,20 @@
 """
-Tests for FEAT-113: NPC damage computed from class main stat.
+`damage` is a pure bonus field — the class's main attribute is NOT seeded here.
 
-Verifies that:
-- compute_derived_stats sets damage based on class_id -> main attribute mapping
-- Warrior (class_id=1) -> strength, Rogue (class_id=2) -> agility,
-  Mage (class_id=3) -> intelligence
-- None / unknown class_id -> damage = 0
-- Integration: recalculate_attributes and create_character_attributes
-  query characters.id_class and pass it to compute_derived_stats
+FEAT-113 made `compute_derived_stats` set `damage` to the value of the class's
+main attribute. But the damage formula adds that attribute itself:
+`base = base_stat + damage + weapon` in
+`battle-service/app/battle_engine.py::compute_damage_with_rolls`, and the same
+shape on the profile in `.../StatsTab/damage.ts`. A warrior's point of strength
+therefore bought two points of damage — for every class, once a recalculation
+had run.
+
+Design decision (2026-09-20): one strength = one damage. The attribute is
+counted once, by the formula, and `compute_derived_stats` leaves `damage` at 0
+so the column carries only what equipment, sharpening and perks put there.
+
+These tests pin that down from both directions: the unit call and the two
+integration paths that used to pass `class_id` in for this purpose.
 """
 
 import sys
@@ -125,75 +132,44 @@ def db_session():
 
 
 # ===========================================================================
-# 1. Unit tests: compute_derived_stats damage from class_id
+# 1. Unit: compute_derived_stats never seeds damage
 # ===========================================================================
 
-class TestComputeDerivedStatsDamage:
-    """Unit tests for the damage computation inside compute_derived_stats."""
+class TestComputeDerivedStatsLeavesDamageAlone:
+    """`damage` must come out 0 whatever the class and whatever the stats."""
 
-    def test_warrior_damage_equals_strength(self, db_session):
-        """class_id=1 (warrior): damage = strength."""
-        attr = _make_attr(db_session, strength=50, agility=20, intelligence=30)
-        crud.compute_derived_stats(attr, class_id=1)
-        assert attr.damage == 50
-
-    def test_rogue_damage_equals_agility(self, db_session):
-        """class_id=2 (rogue): damage = agility."""
-        attr = _make_attr(db_session, strength=20, agility=45, intelligence=30)
-        crud.compute_derived_stats(attr, class_id=2)
-        assert attr.damage == 45
-
-    def test_mage_damage_equals_intelligence(self, db_session):
-        """class_id=3 (mage): damage = intelligence."""
-        attr = _make_attr(db_session, strength=20, agility=30, intelligence=60)
-        crud.compute_derived_stats(attr, class_id=3)
-        assert attr.damage == 60
-
-    def test_none_class_id_damage_is_zero(self, db_session):
-        """class_id=None: damage = 0."""
-        attr = _make_attr(db_session, strength=50, agility=50, intelligence=50)
-        crud.compute_derived_stats(attr, class_id=None)
+    @pytest.mark.parametrize("class_id", [1, 2, 3, 99, None])
+    def test_damage_is_zero_for_every_class(self, db_session, class_id):
+        attr = _make_attr(
+            db_session,
+            character_id=(class_id or 0) + 1,
+            strength=50, agility=45, intelligence=60,
+        )
+        crud.compute_derived_stats(attr, class_id=class_id)
         assert attr.damage == 0
 
-    def test_unknown_class_id_damage_is_zero(self, db_session):
-        """class_id=99 (not in mapping): damage = 0."""
-        attr = _make_attr(db_session, strength=50, agility=50, intelligence=50)
-        crud.compute_derived_stats(attr, class_id=99)
-        assert attr.damage == 0
-
-    def test_zero_stats_damage_zero_regardless_of_class(self, db_session):
-        """All base stats 0: damage = 0 for any valid class."""
-        for class_id in (1, 2, 3):
-            attr = _make_attr(
-                db_session,
-                character_id=class_id + 100,  # unique per iteration
-                strength=0, agility=0, intelligence=0,
-            )
-            crud.compute_derived_stats(attr, class_id=class_id)
-            assert attr.damage == 0, f"Expected damage=0 for class_id={class_id} with zero stats"
-
-    def test_high_stats_damage_matches_exact_value(self, db_session):
-        """High stat values: damage equals the exact stat value."""
-        attr = _make_attr(db_session, strength=9999)
-        crud.compute_derived_stats(attr, class_id=1)
-        assert attr.damage == 9999
-
-        attr2 = _make_attr(db_session, character_id=2, agility=12345)
-        crud.compute_derived_stats(attr2, class_id=2)
-        assert attr2.damage == 12345
-
-        attr3 = _make_attr(db_session, character_id=3, intelligence=7777)
-        crud.compute_derived_stats(attr3, class_id=3)
-        assert attr3.damage == 7777
-
-    def test_default_call_without_class_id_damage_zero(self, db_session):
-        """Calling compute_derived_stats without class_id kwarg gives damage=0."""
+    def test_damage_is_zero_without_the_class_id_kwarg(self, db_session):
         attr = _make_attr(db_session, strength=50)
         crud.compute_derived_stats(attr)
         assert attr.damage == 0
 
+    def test_an_existing_bonus_is_cleared_not_doubled(self, db_session):
+        """Recalculation rebuilds derived stats from base — equipment bonuses
+        are re-applied afterwards by apply_modifiers, never accumulated here."""
+        attr = _make_attr(db_session, strength=50)
+        attr.damage = 17          # as if equipment had added it
+        crud.compute_derived_stats(attr, class_id=1)
+        assert attr.damage == 0
+
+    def test_the_other_derived_stats_still_follow_the_attributes(self, db_session):
+        """Guard against 'fixing' damage by gutting compute_derived_stats."""
+        attr = _make_attr(db_session, strength=50, agility=20, intelligence=30)
+        crud.compute_derived_stats(attr, class_id=1)
+        assert attr.res_physical == pytest.approx(5.0)    # strength * 0.1
+        assert attr.res_magic == pytest.approx(3.0)       # intelligence * 0.1
+
     def test_class_main_attribute_mapping_matches_expected(self):
-        """CLASS_MAIN_ATTRIBUTE has exactly the expected entries."""
+        """The mapping still exists — the damage formula reads it."""
         assert CLASS_MAIN_ATTRIBUTE == {
             1: "strength",
             2: "agility",
@@ -202,121 +178,57 @@ class TestComputeDerivedStatsDamage:
 
 
 # ===========================================================================
-# 2. Integration tests: recalculate_attributes and create_character_attributes
+# 2. Integration: the two paths that used to seed damage from the class
 # ===========================================================================
 
-class TestRecalculateAttributesDamage:
-    """Integration: recalculate_attributes queries characters.id_class."""
+class TestRecalculateAttributesLeavesDamageAlone:
+    """`recalculate_attributes` reads characters.id_class — and must not use it
+    to seed damage."""
 
-    def test_warrior_recalculate_damage_equals_strength(self, db_session):
-        """recalculate_attributes for a warrior sets damage = strength."""
-        _make_character(db_session, character_id=1, id_class=1)
-        _make_attr(db_session, character_id=1, strength=42, agility=10, intelligence=10)
-
-        result = crud.recalculate_attributes(db_session, character_id=1)
-        assert result is not None
-        assert result.damage == 42
-
-    def test_mage_recalculate_damage_equals_intelligence(self, db_session):
-        """recalculate_attributes for a mage sets damage = intelligence."""
-        _make_character(db_session, character_id=1, id_class=3)
-        _make_attr(db_session, character_id=1, strength=10, agility=10, intelligence=55)
-
-        result = crud.recalculate_attributes(db_session, character_id=1)
-        assert result is not None
-        assert result.damage == 55
-
-    def test_rogue_recalculate_damage_equals_agility(self, db_session):
-        """recalculate_attributes for a rogue sets damage = agility."""
-        _make_character(db_session, character_id=1, id_class=2)
-        _make_attr(db_session, character_id=1, strength=10, agility=38, intelligence=10)
-
-        result = crud.recalculate_attributes(db_session, character_id=1)
-        assert result is not None
-        assert result.damage == 38
-
-    def test_no_character_row_damage_zero(self, db_session):
-        """If characters row is missing, damage defaults to 0."""
-        # No _make_character call -- orphaned attributes
-        _make_attr(db_session, character_id=999, strength=50)
-
-        result = crud.recalculate_attributes(db_session, character_id=999)
+    @pytest.mark.parametrize("id_class, stats", [
+        (1, {"strength": 42}),
+        (2, {"agility": 55}),
+        (3, {"intelligence": 38}),
+    ])
+    def test_damage_is_zero_after_recalculation(self, db_session, id_class, stats):
+        _make_character(db_session, character_id=1, id_class=id_class)
+        _make_attr(db_session, character_id=1, **stats)
+        result = crud.recalculate_attributes(db_session, 1)
         assert result is not None
         assert result.damage == 0
 
-    def test_damage_updates_when_stat_changes(self, db_session):
-        """Damage changes when base stat changes and recalculate is called."""
+    def test_no_character_row_damage_zero(self, db_session):
+        _make_attr(db_session, character_id=7, strength=50)
+        result = crud.recalculate_attributes(db_session, 7)
+        assert result is not None
+        assert result.damage == 0
+
+    def test_raising_the_main_stat_does_not_raise_damage(self, db_session):
         _make_character(db_session, character_id=1, id_class=1)
-        _make_attr(db_session, character_id=1, strength=20)
+        attr = _make_attr(db_session, character_id=1, strength=20)
+        crud.recalculate_attributes(db_session, 1)
 
-        result = crud.recalculate_attributes(db_session, character_id=1)
-        assert result.damage == 20
-
-        # Simulate stat change
-        result.strength = 80
+        attr.strength = 80
         db_session.commit()
+        result = crud.recalculate_attributes(db_session, 1)
+        assert result.strength == 80
+        assert result.damage == 0
 
-        result2 = crud.recalculate_attributes(db_session, character_id=1)
-        assert result2.damage == 80
 
+class TestCreateCharacterAttributesLeavesDamageAlone:
+    """Creation queries the class too — same rule applies."""
 
-class TestCreateCharacterAttributesDamage:
-    """Integration: create_character_attributes queries characters.id_class."""
-
-    def test_mage_create_damage_equals_intelligence(self, db_session):
-        """create_character_attributes for a mage sets damage = intelligence."""
-        _make_character(db_session, character_id=10, id_class=3)
-
-        attr_data = schemas.CharacterAttributesCreate(
-            character_id=10,
-            strength=5,
-            agility=5,
-            intelligence=40,
-            endurance=10,
-            health=10,
-            mana=7,
-            energy=5,
-            stamina=10,
-            charisma=1,
-            luck=1,
-        )
-        result = crud.create_character_attributes(db_session, attr_data)
-        assert result.damage == 40
-
-    def test_warrior_create_damage_equals_strength(self, db_session):
-        """create_character_attributes for a warrior sets damage = strength."""
-        _make_character(db_session, character_id=11, id_class=1)
-
-        attr_data = schemas.CharacterAttributesCreate(
-            character_id=11,
-            strength=33,
-            agility=5,
-            intelligence=5,
-            endurance=10,
-            health=10,
-            mana=7,
-            energy=5,
-            stamina=10,
-            charisma=1,
-            luck=1,
-        )
-        result = crud.create_character_attributes(db_session, attr_data)
-        assert result.damage == 33
+    @pytest.mark.parametrize("id_class, stats", [
+        (1, {"strength": 40}),
+        (3, {"intelligence": 33}),
+    ])
+    def test_damage_is_zero_on_create(self, db_session, id_class, stats):
+        _make_character(db_session, character_id=5, id_class=id_class)
+        payload = schemas.CharacterAttributesCreate(character_id=5, **stats)
+        result = crud.create_character_attributes(db_session, payload)
+        assert result.damage == 0
 
     def test_no_character_row_create_damage_zero(self, db_session):
-        """create_character_attributes with no characters row -> damage = 0."""
-        attr_data = schemas.CharacterAttributesCreate(
-            character_id=999,
-            strength=50,
-            agility=50,
-            intelligence=50,
-            endurance=10,
-            health=10,
-            mana=7,
-            energy=5,
-            stamina=10,
-            charisma=1,
-            luck=1,
-        )
-        result = crud.create_character_attributes(db_session, attr_data)
+        payload = schemas.CharacterAttributesCreate(character_id=9, strength=40)
+        result = crud.create_character_attributes(db_session, payload)
         assert result.damage == 0

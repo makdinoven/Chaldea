@@ -19,11 +19,11 @@ def compute_derived_stats(attr, class_id=None):
     """
     Compute all derived stats on a CharacterAttributes ORM object
     from its base (upgradeable) stats. Sets resource maximums,
-    combat stats, resistances, and damage in-place.
+    combat stats and resistances in-place, and clears the `damage`
+    bonus field.
 
-    :param class_id: Optional character class id. When provided,
-        damage is set to the value of the class's main attribute
-        (see CLASS_MAIN_ATTRIBUTE). When None or unknown, damage is 0.
+    :param class_id: kept for call-site compatibility; the class's main
+        attribute is applied by the damage formula itself, not here.
     """
     b = STAT_BONUS_PER_POINT
 
@@ -57,12 +57,15 @@ def compute_derived_stats(attr, class_id=None):
         attr.endurance * ENDURANCE_RES_EFFECTS_MULTIPLIER + attr.luck * b, 2
     )
 
-    # Damage from class main attribute
-    if class_id and class_id in CLASS_MAIN_ATTRIBUTE:
-        main_stat_name = CLASS_MAIN_ATTRIBUTE[class_id]
-        attr.damage = getattr(attr, main_stat_name, 0)
-    else:
-        attr.damage = 0
+    # `damage` is a PURE BONUS field: equipment, sharpening and perks only.
+    #
+    # It used to be seeded with the class's main attribute, but the damage
+    # formula adds that attribute itself — `base = base_stat + damage + weapon`
+    # (battle-service/app/battle_engine.py) and the same shape on the profile
+    # (frontend .../StatsTab/damage.ts). A warrior's point of strength therefore
+    # bought two points of damage. One strength = one damage, so the attribute
+    # is counted once, on the formula's side, and nothing seeds it here.
+    attr.damage = 0
 
 
 # Функция для создания атрибутов персонажа
