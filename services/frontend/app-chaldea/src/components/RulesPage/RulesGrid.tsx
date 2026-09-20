@@ -1,12 +1,12 @@
 import { motion } from 'motion/react';
+import { Link } from 'react-router-dom';
 import { GameRule } from '../../api/rules';
 
 interface RulesGridProps {
   rules: GameRule[];
-  onSelect: (rule: GameRule) => void;
 }
 
-const RulesGrid = ({ rules, onSelect }: RulesGridProps) => (
+const RulesGrid = ({ rules }: RulesGridProps) => (
   <motion.div
     className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
     initial="hidden"
@@ -24,9 +24,9 @@ const RulesGrid = ({ rules, onSelect }: RulesGridProps) => (
           visible: { opacity: 1, y: 0 },
         }}
       >
-        <button
-          onClick={() => onSelect(rule)}
-          className="w-full text-left image-card rounded-card shadow-card hover:shadow-hover
+        <Link
+          to={`/guide/${rule.section}/${rule.id}`}
+          className="block image-card rounded-card shadow-card hover:shadow-hover
                      transition-shadow duration-200 cursor-pointer
                      aspect-[16/9] relative overflow-hidden group"
           style={{
@@ -44,7 +44,7 @@ const RulesGrid = ({ rules, onSelect }: RulesGridProps) => (
               {rule.title}
             </h3>
           </div>
-        </button>
+        </Link>
       </motion.div>
     ))}
   </motion.div>

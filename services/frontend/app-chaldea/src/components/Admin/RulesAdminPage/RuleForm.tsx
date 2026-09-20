@@ -147,7 +147,7 @@ const RuleForm = ({ rule, onSuccess, onCancel }: RuleFormProps) => {
         <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
           Содержание
         </span>
-        <WysiwygEditor content={content} onChange={setContent} />
+        <WysiwygEditor content={content} onChange={setContent} enableArchiveLinks />
       </div>
 
       {/* Buttons */}

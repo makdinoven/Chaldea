@@ -3,7 +3,6 @@ import { Link, Navigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { fetchRules, GameRule } from '../../api/rules';
 import RulesGrid from '../RulesPage/RulesGrid';
-import RuleOverlay from '../RulesPage/RuleOverlay';
 import { GUIDE_SECTIONS, GuideSection, isGuideSection } from '../../constants/guideSections';
 
 interface GuideSectionContentProps {
@@ -14,7 +13,6 @@ const GuideSectionContent = ({ section }: GuideSectionContentProps) => {
   const [rules, setRules] = useState<GameRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedRule, setSelectedRule] = useState<GameRule | null>(null);
 
   const meta = GUIDE_SECTIONS.find((item) => item.slug === section);
   const title = meta ? meta.label : 'Руководство';
@@ -24,7 +22,6 @@ const GuideSectionContent = ({ section }: GuideSectionContentProps) => {
       try {
         setLoading(true);
         setError(null);
-        setSelectedRule(null);
         const data = await fetchRules(section);
         setRules(data);
       } catch (err) {
@@ -56,11 +53,9 @@ const GuideSectionContent = ({ section }: GuideSectionContentProps) => {
         rules.length === 0 ? (
           <p className="text-white/60 text-base">В этом разделе пока нет материалов</p>
         ) : (
-          <RulesGrid rules={rules} onSelect={setSelectedRule} />
+          <RulesGrid rules={rules} />
         )
       )}
-
-      <RuleOverlay rule={selectedRule} onClose={() => setSelectedRule(null)} />
     </div>
   );
 };

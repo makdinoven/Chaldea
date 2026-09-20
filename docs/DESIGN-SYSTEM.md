@@ -916,6 +916,36 @@ hand-rolled `animate-spin` spinners, and loose page-level `h3.gold-text` tab hea
 
 ---
 
+## 19. Guide Article Page (FEAT-174)
+
+`GuidePage/GuideRulePage.tsx` — the full-page rule article (`/guide/:section/:id`).
+
+Its panel is **not** `PanelShell`. It reproduces the same design-system token combination inline:
+
+```
+gold-outline relative rounded-card bg-site-bg backdrop-blur-[10px] shadow-card
+```
+
+**Why `PanelShell` (`ProfilePage/PanelShell.tsx`, §18) is deliberately not imported, moved or
+re-exported — do not "fix" this:**
+
+- **It does not fit.** `PanelShell`'s header band is a one-line "icon + small uppercase title" row.
+  The article page needs a **cover band**: a wide `image_url` banner with a large title over it
+  (and, when there is no image, a plain title band in the same idiom — never an empty banner).
+  Bending `PanelShell` into that means adding a banner prop to a component shared by 20 files
+  under `ProfilePage/`.
+- **Relocating it to `CommonComponents/` is churn on ~20 imports** plus a §18 rewrite, all of it
+  unrelated to the guide feature — a minimal-diff violation.
+- What is reused is the **token combination, not the component**. Every class above is already
+  defined (`gold-outline` in `index.css`, `rounded-card` / `bg-site-bg` / `shadow-card` in
+  `tailwind.config.js`). Nothing is invented and `index.css` is untouched.
+
+Also note: the article page does **not** take `PANEL_DESKTOP_HEIGHT_CLASS`, an inner
+`overflow-y-auto` or `gold-scrollbar-wide`. An article scrolls with the page — the inner scroll box
+is exactly what the old rule modal was disliked for.
+
+---
+
 ## 15. For AI Agents
 
 When creating or modifying frontend components:

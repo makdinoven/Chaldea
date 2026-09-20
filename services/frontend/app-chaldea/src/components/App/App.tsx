@@ -26,6 +26,7 @@ import AdminCharactersPage from "../Admin/CharactersPage/AdminCharactersPage";
 import AdminCharacterDetailPage from "../Admin/CharactersPage/AdminCharacterDetailPage";
 import GuidePage from "../GuidePage/GuidePage";
 import GuideSectionPage from "../GuidePage/GuideSectionPage";
+import GuideRulePage from "../GuidePage/GuideRulePage";
 import RulesAdminPage from "../Admin/RulesAdminPage/RulesAdminPage";
 import RbacAdminPage from "../Admin/RbacAdminPage/RbacAdminPage";
 import AdminRacesPage from "../Admin/AdminRaces/AdminRacesPage";
@@ -196,6 +197,7 @@ const App = () => {
             } />
             <Route path="guide" element={<GuidePage />} />
             <Route path="guide/:section" element={<GuideSectionPage />} />
+            <Route path="guide/:section/:id" element={<GuideRulePage />} />
             {/* Старый адрес остаётся рабочим ради закладок */}
             <Route path="rules" element={<Navigate to="/guide" replace />} />
             <Route path="admin/rules" element={
