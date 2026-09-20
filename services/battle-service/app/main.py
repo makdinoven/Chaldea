@@ -2922,7 +2922,7 @@ async def _make_action_core(
                             )
                             _item_ctx[pid] = {
                                 "attrs": _tattrs,
-                                "resists": build_percent_resist_buffs(_mods),
+                                "resists": build_percent_resist_buffs(_mods, _tattrs),
                                 "dodged": roll_dodge(_tattrs.get("dodge", 0)),
                             }
                         return _item_ctx[pid]
@@ -3161,11 +3161,13 @@ async def _make_action_core(
         defender_buff_modifiers = aggregate_modifiers(
             battle_state.get("active_effects", {}).get(str(defender_pid), [])
         )
-        defender_percent_resists = build_percent_resist_buffs(defender_buff_modifiers)
         # Re-apply flat modifiers on defender too in case attack_enemy_effects
         # included flat stat debuffs that affect damage formula.
         defender_attributes = apply_flat_modifiers(
             base_defender_attributes, defender_buff_modifiers
+        )
+        defender_percent_resists = build_percent_resist_buffs(
+            defender_buff_modifiers, defender_attributes
         )
 
         # Per-target combat context (attrs / resists / dodge) for this attack.
@@ -3190,7 +3192,7 @@ async def _make_action_core(
                 _tattrs = apply_flat_modifiers(await attrs(_pd["character_id"]), _mods)
                 _atk_ctx[pid] = {
                     "attrs": _tattrs,
-                    "resists": build_percent_resist_buffs(_mods),
+                    "resists": build_percent_resist_buffs(_mods, _tattrs),
                     "dodged": roll_dodge(_tattrs.get("dodge", 0)),
                 }
             return _atk_ctx[pid]

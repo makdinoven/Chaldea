@@ -358,16 +358,46 @@ def build_percent_damage_buffs(mods: Dict[str, float]) -> Dict[str, float]:
     return out
 
 
-def build_percent_resist_buffs(mods: Dict[str, float]) -> Dict[str, float]:
-    """
-    Из aggregated modifiers достаёт только percent_resist*.
+# Типы урона, у которых есть парная колонка сопротивления `res_<тип>`
+# в character-attributes-service. Тип, которого здесь нет, режется только баффами.
+RESISTED_DAMAGE_TYPES = (
+    "physical", "catting", "crushing", "piercing",
+    "magic", "fire", "ice", "watering", "electricity", "wind",
+    "sainting", "damning",
+)
+
+
+def build_percent_resist_buffs(
+    mods: Dict[str, float], attributes: Dict[str, float] | None = None
+) -> Dict[str, float]:
+    """Сопротивления защищающегося: боевые плюс, если переданы, постоянные.
+
+    `mods` — временные `percent_resist*` от навыков и предметов.
+    `attributes` — атрибуты бойца; из них берутся колонки `res_<тип>`, то есть
+    сила, интеллект и модификаторы снаряжения.
+
+    Раньше функция знала только про баффы, и колонки `res_*` не читались в
+    battle-service ни разу: сила и интеллект не давали защиты, а броня с
+    сопротивлениями была украшением. Складываем оба источника в один процент —
+    отрицательная сумма по-прежнему означает уязвимость, ровно как у Armorbreak
+    и Freeze.
+
+    Имя оставлено прежним намеренно: несколько наборов тестов подменяют модуль
+    `buffs` моком и настраивают функции поимённо, поэтому новое экспортируемое
+    имя в `main` осталось бы неинициализированным моком.
     """
     out: Dict[str, float] = {}
+    if attributes:
+        for dmg_type in RESISTED_DAMAGE_TYPES:
+            value = float(attributes.get(f"res_{dmg_type}") or 0.0)
+            if value:
+                out[dmg_type] = value
     for k, v in mods.items():
         if k == "percent_resist":
-            out["all"] = v
+            out["all"] = out.get("all", 0.0) + v
         elif k.startswith("percent_resist_"):
-            out[k[len("percent_resist_"):]] = v
+            key = k[len("percent_resist_"):]
+            out[key] = out.get(key, 0.0) + v
     return out
 
 
