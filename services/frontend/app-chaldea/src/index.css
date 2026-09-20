@@ -640,6 +640,46 @@
     color: rgba(255, 255, 255, 0.75);
     font-style: italic;
   }
+  /* Tables. The WYSIWYG and the guide importer both emit plain <table>, which
+     had no styling at all: cells ran together ("Основные характеристики+1").
+     `display: block` + `overflow-x: auto` lets a wide table scroll on its own
+     instead of pushing the article past the viewport on a 360px screen. */
+  .prose-rules table {
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+    font-size: 0.95rem;
+  }
+  .prose-rules th,
+  .prose-rules td {
+    padding: 0.5rem 0.875rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    text-align: left;
+    vertical-align: top;
+  }
+  .prose-rules th {
+    color: rgba(240, 217, 92, 0.9);
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom-color: rgba(240, 217, 92, 0.35);
+  }
+  .prose-rules tbody tr:last-child td { border-bottom: none; }
+  .prose-rules tbody tr:hover { background: rgba(255, 255, 255, 0.04); }
+
+  /* Plain images pasted into the body (guide screenshots) — the resizable
+     figure node below covers only the editor's own block. */
+  .prose-rules > p > img,
+  .prose-rules > img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 0.75rem auto;
+    border-radius: 8px;
+  }
+
   /* Resizable image block node */
   .prose-rules figure[data-type="resizable-image"],
   .prose-rules .resizable-image-wrapper {
