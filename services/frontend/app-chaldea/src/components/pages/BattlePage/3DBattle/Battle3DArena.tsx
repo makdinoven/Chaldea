@@ -1,5 +1,5 @@
 import { Canvas } from "@react-three/fiber";
-import { PerspectiveCamera } from "@react-three/drei";
+import { PerspectiveCamera, OrbitControls } from "@react-three/drei";
 import { Vector3 } from "three";
 import BattleCardMesh from "./BattleCardMesh";
 import type { CharacterData } from "../battleTypes";
@@ -27,9 +27,16 @@ const Battle3DArena = ({
 
   return (
     <Canvas
-      style={{ width: '100%', height: '100%' }}
-      gl={{ antialias: true, alpha: false }}
+      style={{ width: '100%', height: '100%', display: 'block' }}
+      gl={{ antialias: true, alpha: false, logarithmicDepthBuffer: true }}
       camera={{ position: [0, 2, 8], fov: 60, near: 0.1, far: 1000 }}
+      onCreated={(state) => {
+        console.log("[Canvas] Created successfully", {
+          canvas: state.gl.domElement,
+          size: state.size,
+          camera: state.camera.position,
+        });
+      }}
     >
       <PerspectiveCamera
         makeDefault
@@ -111,8 +118,8 @@ const Battle3DArena = ({
         );
       })}
 
-      {/* Отключаем OrbitControls для фиксированной камеры */}
-      {/* <OrbitControls enableZoom={false} enablePan={false} enableRotate={false} /> */}
+      {/* OrbitControls для отладки (можно удалить после) */}
+      <OrbitControls enableZoom={true} enablePan={true} enableRotate={true} />
     </Canvas>
   );
 };
