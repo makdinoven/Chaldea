@@ -206,33 +206,15 @@ const Battle3DPage = () => {
     [isSpectateMode, character]
   );
 
-  // Инициализация боя
+  // Wait for WebSocket to connect and receive initial state
   useEffect(() => {
-    const initBattle = async () => {
-      try {
-        setLoading(true);
-        const response = await axios.get(
-          `${BASE_URL_BATTLES}/battles/${battleId}?include_state=true`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-
-        const { snapshot, state: runtimeState } = response.data;
-        processState(snapshot, runtimeState);
-
-        // Логирование инициализации
-        addBattleLog("Бой начался", "system");
-
-        setLoading(false);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Ошибка загрузки боя");
-        setLoading(false);
-      }
-    };
-
-    if (battleId) {
-      initBattle();
+    if (wsConnected && wsState && "runtime" in wsState) {
+      setLoading(false);
+      addBattleLog("Бой начался", "system");
+    } else if (battleId && !wsConnected) {
+      setLoading(true);
     }
-  }, [battleId, token, processState]);
+  }, [wsConnected, wsState, battleId]);
 
   // Обновление состояния при изменении WebSocket
   useEffect(() => {
