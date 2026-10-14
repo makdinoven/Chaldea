@@ -192,9 +192,12 @@ const CardWithTexture = (props: BattleCardMeshProps) => {
 
   useEffect(() => {
     if (!props.character.avatar) {
+      console.log("[CardWithTexture] No avatar URL for:", props.character.name);
       setTexture(null);
       return;
     }
+
+    console.log("[CardWithTexture] Loading avatar:", props.character.name, "URL:", props.character.avatar);
 
     const loader = new TextureLoader();
     let isMounted = true;
@@ -203,6 +206,7 @@ const CardWithTexture = (props: BattleCardMeshProps) => {
       props.character.avatar,
       (tex) => {
         if (isMounted) {
+          console.log("[CardWithTexture] Loaded texture for:", props.character.name);
           tex.encoding = 3000; // sRGBEncoding for proper colors
           setTexture(tex);
         }
@@ -210,7 +214,7 @@ const CardWithTexture = (props: BattleCardMeshProps) => {
       undefined,
       (error) => {
         if (isMounted) {
-          console.warn(`Failed to load avatar texture: ${props.character.avatar}`, error);
+          console.warn(`[CardWithTexture] Failed to load avatar: ${props.character.avatar}`, error);
           setTexture(null);
         }
       }
