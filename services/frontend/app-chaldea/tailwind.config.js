@@ -87,10 +87,41 @@ export default {
           from: { transform: 'rotate(0deg)' },
           to: { transform: 'rotate(360deg)' },
         },
+        // "Pass turn" seal in the 3D battle HUD
+        'seal-glow': {
+          '0%, 100%': { boxShadow: '0 0 14px rgba(240,217,92,0.35)' },
+          '50%': { boxShadow: '0 0 30px rgba(240,217,92,0.75)' },
+        },
+        // Damage / heal numbers in the 3D battle arena: slam in, settle, rise and fade
+        'damage-pop': {
+          '0%': { transform: 'translate(-50%, 0) scale(2.4) rotate(-10deg)', opacity: '0' },
+          '10%': { transform: 'translate(-50%, 0) scale(0.88) rotate(-4deg)', opacity: '1' },
+          '18%': { transform: 'translate(-50%, 0) scale(1.08) rotate(-4deg)', opacity: '1' },
+          '26%': { transform: 'translate(-50%, 0) scale(1) rotate(-4deg)', opacity: '1' },
+          '70%': { transform: 'translate(-50%, -28px) scale(1) rotate(-4deg)', opacity: '1' },
+          '100%': { transform: 'translate(-50%, -64px) scale(0.92) rotate(-4deg)', opacity: '0' },
+        },
+        // Blade slash across a struck card
+        'slash': {
+          '0%': { transform: 'rotate(-32deg) scaleX(0)', opacity: '1' },
+          '35%': { transform: 'rotate(-32deg) scaleX(1)', opacity: '1' },
+          '100%': { transform: 'rotate(-32deg) scaleX(1)', opacity: '0' },
+        },
+        'float-up': {
+          '0%': { transform: 'translate(-50%, 0) scale(0.6)', opacity: '0' },
+          '15%': { transform: 'translate(-50%, -10px) scale(1.15)', opacity: '1' },
+          '70%': { opacity: '1' },
+          '100%': { transform: 'translate(-50%, -60px) scale(1)', opacity: '0' },
+        },
       },
       animation: {
         'fade-in': 'fade-in 0.2s ease-out',
         'spin-slow': 'spin-slow 2s linear infinite',
+        'float-up': 'float-up 1.3s ease-out forwards',
+        'damage-pop': 'damage-pop 2.3s cubic-bezier(0.2,0.8,0.3,1) forwards',
+        'slash': 'slash 1.2s ease-out forwards',
+        'seal-glow': 'seal-glow 1.8s ease-in-out infinite',
+        'spin-rune': 'spin-slow 40s linear infinite',
       },
     },
   },

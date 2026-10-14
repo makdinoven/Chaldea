@@ -1,6 +1,6 @@
 import CharacterSide from "./CharacterSide/CharacterSide";
 import Loader from "../../CommonComponents/Loader/Loader";
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import axios from "axios";
 
@@ -22,8 +22,16 @@ import type { BattleRewards } from "../../../api/mobs";
 import { fetchBattleSpectateState } from "../../../api/battles";
 import { checkActiveSession } from "../../../api/dungeons";
 import useBattleWebSocket from "../../../hooks/useBattleWebSocket";
-import { evaluateControl, type EffectLike } from "./battleEffects";
+import { describeEffect, evaluateControl, type EffectLike } from "./battleEffects";
 import { parseServerDate } from "../../../utils/serverDate";
+import { isWebGLAvailable } from "./Arena3D/webgl";
+import type { ArenaAim, ArenaFighter } from "./Arena3D/arenaTypes";
+import ArenaHud from "./Arena3D/hud/ArenaHud";
+import { toSameOriginMedia } from "./Arena3D/sameOriginMedia";
+import { fetchLocationDetails } from "../../../api/mapEditor";
+
+// three.js is heavy; only the 3D view pulls it in.
+const ArenaScene = lazy(() => import("./Arena3D/ArenaScene"));
 
 // --- Types ---
 
@@ -137,6 +145,11 @@ const BattlePage = () => {
 
   // Detect spectate mode from URL
   const isSpectateMode = location.pathname.endsWith("/spectate");
+  const is3DRoute = location.pathname.includes("/battle3d/");
+  const webglAvailable = is3DRoute && isWebGLAvailable();
+  const is3D = is3DRoute && webglAvailable;
+  const battlePath = (mode: "battle" | "battle3d") =>
+    `/location/${locationId}/${mode}/${battleId}${isSpectateMode ? "/spectate" : ""}`;
 
   const [battleResult, setBattleResult] = useState<BattleResultState | null>(
     null,
@@ -339,7 +352,8 @@ const BattlePage = () => {
   // mob) used to flash by, so you couldn't follow the flow. We space applied
   // states by a minimum gap: bursts are shown one turn at a time, while the very
   // first load and idle updates apply immediately.
-  const MIN_TURN_GAP_MS = 1100;
+  // The 3D arena plays slower strike/impact/number animations; give each turn room.
+  const MIN_TURN_GAP_MS = is3D ? 2600 : 1100;
   const pendingStatesRef = useRef<
     Array<{ snapshot: ParticipantSnapshot[]; runtime: RuntimeState }>
   >([]);
@@ -356,7 +370,7 @@ const BattlePage = () => {
     if (pendingStatesRef.current.length > 0) {
       drainTimerRef.current = setTimeout(drainStates, MIN_TURN_GAP_MS);
     }
-  }, [processState]);
+  }, [processState, MIN_TURN_GAP_MS]);
 
   const enqueueState = useCallback(
     (snapshot: ParticipantSnapshot[], runtime: RuntimeState) => {
@@ -383,7 +397,7 @@ const BattlePage = () => {
         );
       }
     },
-    [processState, drainStates],
+    [processState, drainStates, MIN_TURN_GAP_MS],
   );
 
   // Clear any pending drain timer on unmount.
@@ -682,6 +696,101 @@ const BattlePage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autobattleMode, isAutoBattleOn]);
 
+  // Same selection rules as the 2D columns below, expressed as view data for the 3D arena.
+  const arenaFighters = useMemo<ArenaFighter[]>(() => {
+    if (!is3D || !runtimeData) return [];
+    const effectiveAlly = selectedAllyId ?? myData.participant_id;
+    const toFighter = (c: CharacterData, side: ArenaFighter["side"]): ArenaFighter | null => {
+      const pid = c.participant_id;
+      const live = pid != null ? runtimeData.participants[pid] : undefined;
+      if (pid == null || !live) return null;
+      const isDead = live.hp <= 0;
+      const isTarget = side === "enemy" && !isSpectateMode && selectedTargetId === pid;
+      const isAllyTarget = side === "ally" && needsAllyTarget && effectiveAlly === pid;
+      return {
+        participantId: pid,
+        name: c.name ?? "",
+        avatar: c.avatar ?? null,
+        side,
+        hp: live.hp,
+        maxHp: c.attributes?.max_health ?? 0,
+        mana: live.mana,
+        maxMana: c.attributes?.max_mana ?? 0,
+        energy: live.energy,
+        maxEnergy: c.attributes?.max_energy ?? 0,
+        effects: (runtimeData.active_effects?.[pid] ?? []).map((e, i) => ({
+          key: `${e.name ?? ""}|${e.attribute ?? ""}|${i}`,
+          ...describeEffect(e),
+          duration: e.duration ?? 0,
+        })),
+        isActing: runtimeData.current_actor === pid,
+        isDead,
+        isSelf: !isSpectateMode && pid === myData.participant_id,
+        selection: isTarget ? "target" : isAllyTarget ? "ally" : null,
+        selectable:
+          !isDead &&
+          !isSpectateMode &&
+          (side === "enemy" || needsAllyTarget),
+      };
+    };
+    return [
+      ...myTeamData.map((c) => toFighter(c, "ally")),
+      ...enemyTeamData.map((c) => toFighter(c, "enemy")),
+    ].filter((f): f is ArenaFighter => f !== null);
+  }, [
+    is3D,
+    runtimeData,
+    myTeamData,
+    enemyTeamData,
+    myData.participant_id,
+    selectedTargetId,
+    selectedAllyId,
+    needsAllyTarget,
+    isSpectateMode,
+  ]);
+
+  // Arcs from the viewer to whoever the queued skills will hit (3D only, own turn only).
+  const arenaAims = useMemo<ArenaAim[]>(() => {
+    const me = myData.participant_id;
+    if (!is3D || isSpectateMode || !isMyTurn || me == null) return [];
+    const aims: ArenaAim[] = [];
+    if (turnData[SKILLS_KEYS.attack] && selectedTargetId != null) {
+      aims.push({ from: me, to: selectedTargetId, kind: "attack" });
+    }
+    const ally = selectedAllyId ?? me;
+    if (needsAllyTarget && ally !== me) aims.push({ from: me, to: ally, kind: "ally" });
+    return aims;
+  }, [is3D, isSpectateMode, isMyTurn, myData.participant_id, turnData, selectedTargetId, selectedAllyId, needsAllyTarget]);
+
+  // currentTurn.endsAt is "ms left when the state arrived"; pin it to an absolute time.
+  const turnDeadline = useMemo(
+    () => (currentTurn ? Date.now() + currentTurn.endsAt : null),
+    [currentTurn],
+  );
+
+  // The location's art is painted into the 3D board (served same-origin via the gateway).
+  const [boardArtUrl, setBoardArtUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!is3D || !locationId) return;
+    let cancelled = false;
+    fetchLocationDetails(Number(locationId))
+      .then((loc) => {
+        if (!cancelled) setBoardArtUrl(toSameOriginMedia(loc.image_url));
+      })
+      .catch(() => {
+        if (!cancelled) toast.error("Не удалось загрузить оформление арены");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [is3D, locationId]);
+
+  const handleArenaSelect = useCallback((fighter: ArenaFighter) => {
+    if (!fighter.selectable) return;
+    if (fighter.side === "enemy") setSelectedTargetId(fighter.participantId);
+    else setSelectedAllyId(fighter.participantId);
+  }, []);
+
   if (loading) return <Loader />;
 
   if (error) {
@@ -696,94 +805,252 @@ const BattlePage = () => {
     );
   }
 
-  return (
-    snapshotData &&
-    runtimeData && (
-      <div className="-mx-10 relative">
-        {/* 2D/3D Toggle Button */}
-        <div className="absolute top-4 right-6 z-50 flex gap-2">
-          <button
-            disabled
-            className="px-4 py-2 rounded-lg bg-gray-700/50 text-white text-sm font-semibold"
-          >
-            2D версия
-          </button>
-          <button
-            onClick={() => navigate(`/location/${locationId}/battle3d/${battleId}`)}
-            className="px-4 py-2 rounded-lg bg-gold/30 hover:bg-gold/50 text-white text-sm font-semibold transition-all"
-          >
-            3D версия
-          </button>
+  if (!snapshotData || !runtimeData) return null;
+
+  const centerPanel = (
+    <>
+      {!isSpectateMode && currentTurn && (
+        <BattlePageBar
+          battleId={battleId}
+          myData={myData}
+          opponentData={opponentData}
+          turnData={turnData}
+          setTurnData={setTurnData}
+          turn={currentTurn}
+          setTurn={handleSendTurn}
+          isAutoBattleOn={isAutoBattleOn}
+          setAutobattleMode={setAutobattleMode}
+          autobattleMode={autobattleMode}
+          toggleAutobattle={toggleAutoBattle}
+          snapshotData={snapshotData}
+          runtimeData={runtimeData}
+          isPaused={isPaused}
+          controlFullSkip={myControl.fullSkip}
+        />
+      )}
+      {isSpectateMode && currentTurn && (
+        <div className="flex flex-col items-center gap-4 px-2 sm:px-4">
+          <div className="text-center">
+            <p className="text-white text-sm sm:text-base">
+              Ход: <span className="gold-text text-sm sm:text-base font-medium">{currentTurn.currentCharacterParticipant.characterName}</span>
+            </p>
+            <p className="text-white/60 text-xs sm:text-sm mt-1">
+              Ход {currentTurn.turn_number}
+            </p>
+          </div>
         </div>
+      )}
+    </>
+  );
 
-        {/* WebSocket reconnection indicator */}
-        {wsReconnecting && (
-          <div className="flex items-center justify-center gap-2 mb-3 px-5 py-3 rounded-card shadow-card bg-gold-dark/90 text-white text-sm sm:text-base font-medium">
-            <span className="inline-block w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-            Переподключение...
+  const modals = (
+    <>
+      {/* Battle result modal — standard win/lose (participant mode only) */}
+      {!isSpectateMode && battleResult && !showRewardsModal && (
+        <Modal>
+          <div className="flex flex-col items-center gap-[30px]">
+            <h2
+              className={
+                battleResult.isLose
+                  ? "uppercase text-site-red text-3xl sm:text-[40px]"
+                  : "gold-text text-3xl sm:text-[40px]"
+              }
+            >
+              {battleResult.isLose ? "Поражение" : "Вы выиграли"}
+            </h2>
+            <p className="text-xl sm:text-2xl text-white">
+              Победитель: <span className="gold-text text-xl sm:text-2xl">{battleResult.winner}</span>
+            </p>
+            <BlueGradientButton
+              onClick={() => navigateAfterBattle()}
+              text={"Вернуться на страницу локации"}
+            />
           </div>
+        </Modal>
+      )}
+
+      {/* Spectate mode: show battle finished banner */}
+      {isSpectateMode &&
+        Object.values(runtimeData.participants).some((p) => p.hp <= 0) && (
+          <Modal>
+            <div className="flex flex-col items-center gap-6 p-4 sm:p-6">
+              <h2 className="gold-text text-2xl sm:text-4xl font-medium uppercase">
+                Бой завершён
+              </h2>
+              <BlueGradientButton
+                onClick={() => navigateAfterBattle()}
+                text="Вернуться на страницу локации"
+              />
+            </div>
+          </Modal>
         )}
 
-        {/* Polling fallback indicator */}
-        {fallbackToPolling && !wsConnected && (
-          <div className="flex items-center justify-center gap-2 mb-3 px-5 py-3 rounded-card shadow-card bg-site-bg/90 text-white/80 text-sm sm:text-base border border-white/10">
-            Используется резервное соединение
-          </div>
+      {/* PvE rewards modal — shown on mob defeat with rewards (participant mode only) */}
+      {!isSpectateMode && pveRewards && (
+        <BattleRewardsModal
+          rewards={pveRewards}
+          visible={showRewardsModal}
+          onClose={() => {
+            setShowRewardsModal(false);
+            navigateAfterBattle();
+          }}
+        />
+      )}
+    </>
+  );
+
+  const modeToggle = (
+    <div className="flex gap-1.5">
+      {(["battle", "battle3d"] as const).map((mode) => {
+        const active = (mode === "battle3d") === is3DRoute;
+        return (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => !active && navigate(battlePath(mode))}
+            className={`chip-outline rounded-full px-3 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-medium ${
+              active ? "chip-outline-active cursor-default" : ""
+            }`}
+          >
+            {mode === "battle" ? "2D" : "3D"}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const notices = (
+    <>
+      {/* WebSocket reconnection indicator */}
+      {wsReconnecting && (
+        <div className="flex items-center justify-center gap-2 mb-3 px-5 py-3 rounded-card shadow-card bg-gold-dark/90 text-white text-sm sm:text-base font-medium">
+          <span className="inline-block w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+          Переподключение...
+        </div>
+      )}
+
+      {/* Polling fallback indicator */}
+      {fallbackToPolling && !wsConnected && (
+        <div className="flex items-center justify-center gap-2 mb-3 px-5 py-3 rounded-card shadow-card bg-site-bg/90 text-white/80 text-sm sm:text-base border border-white/10">
+          Используется резервное соединение
+        </div>
+      )}
+
+      {/* Spectate mode banner */}
+      {isSpectateMode && !is3D && (
+        <div className="gold-outline relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center">
+          <p className="gold-text text-lg sm:text-xl font-medium uppercase relative z-10">
+            Режим наблюдения
+          </p>
+        </div>
+      )}
+
+      {/* Pause banner */}
+      {isPaused && (
+        <div className="relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center bg-site-bg border border-gold-dark/50">
+          {/* FEAT-163 T13: the reason is dynamic — an admin freeze types its
+              own text, a join-request pause sends its own string. Rendered as
+              plain text only; never dangerouslySetInnerHTML. */}
+          <p className="text-gold text-sm sm:text-base font-medium">
+            Бой приостановлен
+          </p>
+          <p className="text-gold/80 text-xs sm:text-sm mt-1 break-words">
+            {runtimeData.paused_reason?.trim() ||
+              "Рассматриваются заявки на присоединение"}
+          </p>
+        </div>
+      )}
+
+      {/* First-cycle banner — only one skill type per turn until the round
+          comes back to the initiator */}
+      {runtimeData.first_cycle && isMyTurn && !myControl.fullSkip && (
+        <div className="relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center bg-site-bg border border-gold-dark/50">
+          <p className="text-gold text-sm sm:text-base font-medium">
+            Первый круг — можно использовать только один тип навыка за ход
+          </p>
+        </div>
+      )}
+
+      {/* Control banner — the viewer is stunned / restricted this turn */}
+      {(myControl.fullSkip || myControl.blocked.length > 0) && (
+        <div className="relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center bg-site-bg border border-site-red/50">
+          <p className="text-site-red text-sm sm:text-base font-medium">
+            {myControl.fullSkip
+              ? `${myControl.fullSkip === "Poison" ? "Паралич" : "Оглушение"} — ваш ход будет пропущен`
+              : `Заблокировано: ${myControl.blocked
+                  .map(
+                    (t) =>
+                      ({ attack: "Атака", defense: "Защита", support: "Поддержка" }[
+                        t
+                      ] ?? t),
+                  )
+                  .join(", ")}`}
+          </p>
+        </div>
+      )}
+    </>
+  );
+
+  return (
+      <div className="-mx-10 relative">
+        {!is3D && (
+          <div className="mb-2 flex justify-end px-4 sm:mb-3 sm:px-6">{modeToggle}</div>
         )}
 
-        {/* Spectate mode banner */}
-        {isSpectateMode && (
-          <div className="gold-outline relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center">
-            <p className="gold-text text-lg sm:text-xl font-medium uppercase relative z-10">
-              Режим наблюдения
+        {is3DRoute && !webglAvailable && (
+          <div className="relative rounded-card mb-4 px-4 py-3 text-center bg-site-bg border border-site-red/50">
+            <p className="text-site-red text-sm sm:text-base">
+              Ваш браузер не поддерживает 3D (WebGL) — бой показан в обычном режиме
             </p>
           </div>
         )}
 
-        {/* Pause banner */}
-        {isPaused && (
-          <div className="relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center bg-site-bg border border-gold-dark/50">
-            {/* FEAT-163 T13: the reason is dynamic — an admin freeze types its
-                own text, a join-request pause sends its own string. Rendered as
-                plain text only; never dangerouslySetInnerHTML. */}
-            <p className="text-gold text-sm sm:text-base font-medium">
-              Бой приостановлен
-            </p>
-            <p className="text-gold/80 text-xs sm:text-sm mt-1 break-words">
-              {runtimeData.paused_reason?.trim() ||
-                "Рассматриваются заявки на присоединение"}
-            </p>
-          </div>
-        )}
+        {!is3D && notices}
 
-        {/* First-cycle banner — only one skill type per turn until the round
-            comes back to the initiator */}
-        {runtimeData.first_cycle && isMyTurn && !myControl.fullSkip && (
-          <div className="relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center bg-site-bg border border-gold-dark/50">
-            <p className="text-gold text-sm sm:text-base font-medium">
-              Первый круг — можно использовать только один тип навыка за ход
-            </p>
-          </div>
-        )}
-
-        {/* Control banner — the viewer is stunned / restricted this turn */}
-        {(myControl.fullSkip || myControl.blocked.length > 0) && (
-          <div className="relative rounded-card mb-4 px-4 py-3 sm:px-6 sm:py-4 text-center bg-site-bg border border-site-red/50">
-            <p className="text-site-red text-sm sm:text-base font-medium">
-              {myControl.fullSkip
-                ? `${myControl.fullSkip === "Poison" ? "Паралич" : "Оглушение"} — ваш ход будет пропущен`
-                : `Заблокировано: ${myControl.blocked
-                    .map(
-                      (t) =>
-                        ({ attack: "Атака", defense: "Защита", support: "Поддержка" }[
-                          t
-                        ] ?? t),
-                    )
-                    .join(", ")}`}
-            </p>
-          </div>
-        )}
-
+        {is3D ? (
+          currentTurn && (
+            <ArenaHud
+              isSpectate={isSpectateMode}
+              modeToggle={modeToggle}
+              notices={notices}
+              renderArena={(critRollAt) => (
+                <Suspense
+                  fallback={
+                    <div className="flex h-full items-center justify-center text-white/60 text-sm">
+                      Загрузка арены...
+                    </div>
+                  }
+                >
+                  <ArenaScene
+                    fighters={arenaFighters}
+                    onSelect={handleArenaSelect}
+                    aims={arenaAims}
+                    turnDeadline={turnDeadline}
+                    turnPaused={isPaused}
+                    boardArtUrl={boardArtUrl}
+                    critRollAt={critRollAt}
+                    turnNumber={runtimeData.turn_number}
+                  />
+                </Suspense>
+              )}
+              battleId={battleId}
+              myData={myData}
+              opponentData={opponentData}
+              turnData={turnData}
+              setTurnData={setTurnData}
+              turn={currentTurn}
+              setTurn={handleSendTurn}
+              isAutoBattleOn={isAutoBattleOn}
+              setAutobattleMode={setAutobattleMode}
+              autobattleMode={autobattleMode}
+              toggleAutobattle={toggleAutoBattle}
+              snapshotData={snapshotData}
+              runtimeData={runtimeData}
+              isPaused={isPaused}
+              controlFullSkip={myControl.fullSkip}
+            />
+          )
+        ) : (
         <div className="grid grid-cols-[minmax(0,1fr)_240px_minmax(0,1fr)] sm:grid-cols-[minmax(0,1fr)_300px_minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_380px_minmax(0,1fr)] gap-2 sm:gap-4 text-white">
           {/* Viewer's team (own card first). When a support/ally skill is queued,
               tap a teammate (self included) to choose who it buffs/heals. */}
@@ -828,37 +1095,7 @@ const BattlePage = () => {
             })}
           </div>
 
-          {!isSpectateMode && currentTurn && (
-            <BattlePageBar
-              battleId={battleId}
-              myData={myData}
-              opponentData={opponentData}
-              turnData={turnData}
-              setTurnData={setTurnData}
-              turn={currentTurn}
-              setTurn={handleSendTurn}
-              isAutoBattleOn={isAutoBattleOn}
-              setAutobattleMode={setAutobattleMode}
-              autobattleMode={autobattleMode}
-              toggleAutobattle={toggleAutoBattle}
-              snapshotData={snapshotData}
-              runtimeData={runtimeData}
-              isPaused={isPaused}
-              controlFullSkip={myControl.fullSkip}
-            />
-          )}
-          {isSpectateMode && currentTurn && (
-            <div className="flex flex-col items-center gap-4 px-2 sm:px-4">
-              <div className="text-center">
-                <p className="text-white text-sm sm:text-base">
-                  Ход: <span className="gold-text text-sm sm:text-base font-medium">{currentTurn.currentCharacterParticipant.characterName}</span>
-                </p>
-                <p className="text-white/60 text-xs sm:text-sm mt-1">
-                  Ход {currentTurn.turn_number}
-                </p>
-              </div>
-            </div>
-          )}
+          {centerPanel}
 
           {/* Enemy team — tap a card to make it the attack target */}
           <div className="flex flex-col gap-4 sm:gap-6">
@@ -897,67 +1134,10 @@ const BattlePage = () => {
             })}
           </div>
 
-          {/* Battle result modal — standard win/lose (participant mode only) */}
-          {!isSpectateMode && battleResult && !showRewardsModal && (
-            <Modal>
-              <div className="flex flex-col items-center gap-[30px]">
-                <h2
-                  className={
-                    battleResult.isLose
-                      ? "uppercase text-site-red text-3xl sm:text-[40px]"
-                      : "gold-text text-3xl sm:text-[40px]"
-                  }
-                >
-                  {battleResult.isLose ? "Поражение" : "Вы выиграли"}
-                </h2>
-                <p className="text-xl sm:text-2xl text-white">
-                  Победитель: <span className="gold-text text-xl sm:text-2xl">{battleResult.winner}</span>
-                </p>
-                <BlueGradientButton
-                  onClick={() => navigateAfterBattle()}
-                  text={"Вернуться на страницу локации"}
-                />
-              </div>
-            </Modal>
-          )}
-
-          {/* Spectate mode: show battle finished banner */}
-          {isSpectateMode && snapshotData && runtimeData && (() => {
-            // Check if any participant has 0 HP
-            const deadParticipant = Object.entries(runtimeData.participants).find(
-              ([, p]) => p.hp <= 0,
-            );
-            if (!deadParticipant) return null;
-
-            return (
-              <Modal>
-                <div className="flex flex-col items-center gap-6 p-4 sm:p-6">
-                  <h2 className="gold-text text-2xl sm:text-4xl font-medium uppercase">
-                    Бой завершён
-                  </h2>
-                  <BlueGradientButton
-                    onClick={() => navigateAfterBattle()}
-                    text="Вернуться на страницу локации"
-                  />
-                </div>
-              </Modal>
-            );
-          })()}
-
-          {/* PvE rewards modal — shown on mob defeat with rewards (participant mode only) */}
-          {!isSpectateMode && pveRewards && (
-            <BattleRewardsModal
-              rewards={pveRewards}
-              visible={showRewardsModal}
-              onClose={() => {
-                setShowRewardsModal(false);
-                navigateAfterBattle();
-              }}
-            />
-          )}
         </div>
+        )}
+        {modals}
       </div>
-    )
   );
 };
 

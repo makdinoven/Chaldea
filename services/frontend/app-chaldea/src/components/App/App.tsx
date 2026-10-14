@@ -358,6 +358,14 @@ const App = () => {
               path="location/:locationId/battle/:battleId/spectate"
               element={<BattlePage />}
             />
+            <Route
+              path="location/:locationId/battle3d/:battleId"
+              element={<BattlePage />}
+            />
+            <Route
+              path="location/:locationId/battle3d/:battleId/spectate"
+              element={<BattlePage />}
+            />
           </Route>
         </Routes>
       </Router>
