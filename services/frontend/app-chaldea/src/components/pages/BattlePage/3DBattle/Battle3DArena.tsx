@@ -27,8 +27,9 @@ const Battle3DArena = ({
 
   return (
     <Canvas
-      className="h-full w-full bg-gradient-to-b from-slate-900 to-slate-800"
-      gl={{ antialias: true }}
+      style={{ width: '100%', height: '100%' }}
+      gl={{ antialias: true, alpha: false }}
+      camera={{ position: [0, 2, 8], fov: 60, near: 0.1, far: 1000 }}
     >
       <PerspectiveCamera
         makeDefault

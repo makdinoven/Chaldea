@@ -144,6 +144,11 @@ const Battle3DPage = () => {
       setRuntimeData(runtime);
       setError(null);
 
+      console.log("[3DBattle] Processing state with snapshot:", {
+        participantCount: snapshot.length,
+        avatarData: snapshot.map(p => ({ name: p.name, avatar: p.avatar, char_id: p.character_id }))
+      });
+
       const teamOf = (pid: number) => runtime.participants[pid]?.team;
       const build = (p: ParticipantSnapshot): CharacterData => ({
         character_id: p.character_id,
@@ -330,7 +335,24 @@ const Battle3DPage = () => {
   if (!snapshotData || !runtimeData) return <div className="text-white text-center py-20">Ожидание данных боя...</div>;
 
   return (
-    <div className="relative w-screen h-screen bg-black overflow-hidden">
+    <div className="fixed inset-0 w-screen h-screen bg-black overflow-hidden">
+      {/* 3D ARENA - заполняет весь экран */}
+      {snapshotData && runtimeData && (
+        <div className="absolute inset-0">
+          <Battle3DArena
+            myTeamData={myTeamData}
+            enemyTeamData={enemyTeamData}
+            currentActorId={runtimeData.current_actor}
+            selectedTargetId={selectedTargetId}
+            onCardClick={(participantId, isEnemy) => {
+              if (isEnemy) {
+                setSelectedTargetId(participantId);
+              }
+            }}
+          />
+        </div>
+      )}
+
       {/* Переключатель 2D/3D (сверху по центру) */}
       <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 flex gap-2">
         <button
@@ -347,55 +369,46 @@ const Battle3DPage = () => {
         </button>
       </div>
 
-      {/* 3D ARENA */}
-      {snapshotData && runtimeData && (
-        <Battle3DArena
-          myTeamData={myTeamData}
-          enemyTeamData={enemyTeamData}
-          currentActorId={runtimeData.current_actor}
-          selectedTargetId={selectedTargetId}
-          onCardClick={(participantId, isEnemy) => {
-            if (isEnemy) {
-              setSelectedTargetId(participantId);
-            }
-          }}
-        />
-      )}
-
       {/* BATTLE LOG (левый угол) */}
-      <BattleLog logs={battleLogs} />
+      <div className="absolute top-0 left-0 z-40 pointer-events-auto">
+        <BattleLog logs={battleLogs} />
+      </div>
 
       {/* TURN INFO (правый угол) */}
       {currentTurn && (
-        <TurnInfo
-          currentCharacterName={currentTurn.currentCharacterParticipant.characterName}
-          turnNumber={currentTurn.turn_number}
-          totalTurns={runtimeData?.total_turns || 0}
-          timeLeft={currentTurn.endsAt - Date.now() / 1000}
-          isMyTurn={isMyTurn}
-          isAutoBattle={isAutoBattleOn}
-          onToggleAutoBattle={toggleAutoBattle}
-          onMakeTurn={() => {
-            if (turnData[SKILLS_KEYS.attack]) {
-              handleSendTurn(turnData[SKILLS_KEYS.attack]);
-            }
-          }}
-          energy={myData.resources?.[2]?.energy?.current || 0}
-          maxEnergy={myData.resources?.[2]?.energy?.max || 100}
-          isPaused={isPaused}
-        />
+        <div className="absolute top-0 right-0 z-40 pointer-events-auto">
+          <TurnInfo
+            currentCharacterName={currentTurn.currentCharacterParticipant.characterName}
+            turnNumber={currentTurn.turn_number}
+            totalTurns={runtimeData?.total_turns || 0}
+            timeLeft={currentTurn.endsAt - Date.now() / 1000}
+            isMyTurn={isMyTurn}
+            isAutoBattle={isAutoBattleOn}
+            onToggleAutoBattle={toggleAutoBattle}
+            onMakeTurn={() => {
+              if (turnData[SKILLS_KEYS.attack]) {
+                handleSendTurn(turnData[SKILLS_KEYS.attack]);
+              }
+            }}
+            energy={myData.resources?.[2]?.energy?.current || 0}
+            maxEnergy={myData.resources?.[2]?.energy?.max || 100}
+            isPaused={isPaused}
+          />
+        </div>
       )}
 
       {/* SKILL BAR (внизу) */}
-      <BattleSkillBar
-        selectedSkills={turnData}
-        onSkillSelect={(type) => {
-          addBattleLog(`Выбран ${type}`, "system");
-        }}
-        isMyTurn={isMyTurn}
-        controlFullSkip={myControl.fullSkip}
-        blockedSkills={myControl.blocked}
-      />
+      <div className="absolute bottom-0 left-0 right-0 z-40 pointer-events-auto">
+        <BattleSkillBar
+          selectedSkills={turnData}
+          onSkillSelect={(type) => {
+            addBattleLog(`Выбран ${type}`, "system");
+          }}
+          isMyTurn={isMyTurn}
+          controlFullSkip={myControl.fullSkip}
+          blockedSkills={myControl.blocked}
+        />
+      </div>
 
       {/* Модали */}
       {!isSpectateMode && battleResult && !showRewardsModal && (

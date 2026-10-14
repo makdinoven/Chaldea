@@ -24,14 +24,14 @@ const CardMeshContent = ({
   avatarTexture,
 }: BattleCardMeshProps & { avatarTexture: Texture | null }) => {
   const groupRef = useRef<Group>(null);
-  const [glowIntensity, setGlowIntensity] = useState(0);
+  const glowIntensityRef = useRef(0);
 
   // Анимация свечения при ходе
   useEffect(() => {
     if (isActing) {
-      setGlowIntensity(1);
+      glowIntensityRef.current = 1;
     } else {
-      setGlowIntensity(0);
+      glowIntensityRef.current = 0;
     }
   }, [isActing]);
 
@@ -42,9 +42,17 @@ const CardMeshContent = ({
     const targetX = isActing ? position.x * 1.3 : position.x;
     groupRef.current.position.x += (targetX - groupRef.current.position.x) * 0.1;
 
-    // Пульсирующее свечение
-    if (isActing && glowIntensity < 1) {
-      setGlowIntensity((prev) => Math.min(prev + 0.05, 1));
+    // Pulsating glow — use material ref directly instead of state
+    if (groupRef.current.children[0]) {
+      const baseMesh = groupRef.current.children[0] as any;
+      if (baseMesh.material) {
+        if (isActing && glowIntensityRef.current < 1) {
+          glowIntensityRef.current = Math.min(glowIntensityRef.current + 0.05, 1);
+        } else if (!isActing) {
+          glowIntensityRef.current = 0;
+        }
+        baseMesh.material.emissiveIntensity = glowIntensityRef.current;
+      }
     }
   });
 
@@ -71,7 +79,10 @@ const CardMeshContent = ({
         <meshStandardMaterial
           map={avatarTexture}
           color="#ffffff"
-          toneMapped={false}
+          emissive="#000000"
+          emissiveIntensity={0}
+          metalness={0}
+          roughness={1}
         />
       </mesh>
 
@@ -133,13 +144,13 @@ const CardMeshFallback = ({
   isSelected,
 }: BattleCardMeshProps) => {
   const groupRef = useRef<Group>(null);
-  const [glowIntensity, setGlowIntensity] = useState(0);
+  const glowIntensityRef = useRef(0);
 
   useEffect(() => {
     if (isActing) {
-      setGlowIntensity(1);
+      glowIntensityRef.current = 1;
     } else {
-      setGlowIntensity(0);
+      glowIntensityRef.current = 0;
     }
   }, [isActing]);
 
@@ -147,8 +158,17 @@ const CardMeshFallback = ({
     if (!groupRef.current) return;
     const targetX = isActing ? position.x * 1.3 : position.x;
     groupRef.current.position.x += (targetX - groupRef.current.position.x) * 0.1;
-    if (isActing && glowIntensity < 1) {
-      setGlowIntensity((prev) => Math.min(prev + 0.05, 1));
+
+    if (groupRef.current.children[0]) {
+      const baseMesh = groupRef.current.children[0] as any;
+      if (baseMesh.material) {
+        if (isActing && glowIntensityRef.current < 1) {
+          glowIntensityRef.current = Math.min(glowIntensityRef.current + 0.05, 1);
+        } else if (!isActing) {
+          glowIntensityRef.current = 0;
+        }
+        baseMesh.material.emissiveIntensity = glowIntensityRef.current;
+      }
     }
   });
 
@@ -206,12 +226,16 @@ const CardWithTexture = (props: BattleCardMeshProps) => {
       props.character.avatar,
       (tex) => {
         if (isMounted) {
-          console.log("[CardWithTexture] Loaded texture for:", props.character.name);
-          tex.encoding = 3000; // sRGBEncoding for proper colors
+          console.log("[CardWithTexture] Loaded texture for:", props.character.name, "size:", tex.image?.width, "x", tex.image?.height);
+          tex.colorSpace = "srgb"; // sRGB color space for proper colors
+          tex.magFilter = 9729; // THREE.LinearFilter
+          tex.minFilter = 9987; // THREE.LinearMipmapLinearFilter
           setTexture(tex);
         }
       },
-      undefined,
+      (progress) => {
+        console.log("[CardWithTexture] Loading progress for", props.character.name, ":", Math.round((progress.loaded / progress.total) * 100) + "%");
+      },
       (error) => {
         if (isMounted) {
           console.warn(`[CardWithTexture] Failed to load avatar: ${props.character.avatar}`, error);
