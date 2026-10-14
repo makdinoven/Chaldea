@@ -709,7 +709,7 @@ const BattlePage = () => {
             2D версия
           </button>
           <button
-            onClick={() => navigate(`/battle3d/${locationId}/${battleId}`)}
+            onClick={() => navigate(`/location/${locationId}/battle3d/${battleId}`)}
             className="px-4 py-2 rounded-lg bg-gold/30 hover:bg-gold/50 text-white text-sm font-semibold transition-all"
           >
             3D версия
