@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, Suspense } from "react";
 import { useFrame } from "@react-three/fiber";
-import { Vector3, Group, TextureLoader } from "three";
+import { Vector3, Group, TextureLoader, LinearFilter, LinearMipmapLinearFilter } from "three";
 import type { CharacterData } from "../battleTypes";
 import type { Texture } from "three";
 
@@ -25,6 +25,7 @@ const CardMeshContent = ({
 }: BattleCardMeshProps & { avatarTexture: Texture | null }) => {
   const groupRef = useRef<Group>(null);
   const glowIntensityRef = useRef(0);
+  const materialRef = useRef<any>(null);
 
   // Анимация свечения при ходе
   useEffect(() => {
@@ -42,17 +43,14 @@ const CardMeshContent = ({
     const targetX = isActing ? position.x * 1.3 : position.x;
     groupRef.current.position.x += (targetX - groupRef.current.position.x) * 0.1;
 
-    // Pulsating glow — use material ref directly instead of state
-    if (groupRef.current.children[0]) {
-      const baseMesh = groupRef.current.children[0] as any;
-      if (baseMesh.material) {
-        if (isActing && glowIntensityRef.current < 1) {
-          glowIntensityRef.current = Math.min(glowIntensityRef.current + 0.05, 1);
-        } else if (!isActing) {
-          glowIntensityRef.current = 0;
-        }
-        baseMesh.material.emissiveIntensity = glowIntensityRef.current;
+    // Pulsating glow — update material directly
+    if (materialRef.current) {
+      if (isActing && glowIntensityRef.current < 1) {
+        glowIntensityRef.current = Math.min(glowIntensityRef.current + 0.05, 1);
+      } else if (!isActing) {
+        glowIntensityRef.current = 0;
       }
+      materialRef.current.emissiveIntensity = glowIntensityRef.current;
     }
   });
 
@@ -65,11 +63,12 @@ const CardMeshContent = ({
       <mesh position={[0, 0, 0]} scale={[2, 2.8, 0.1]}>
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial
+          ref={materialRef}
           color={isAlly ? "#1a5f7a" : "#8b2e2e"}
           metalness={0.3}
           roughness={0.4}
           emissive={isActing ? "#4db8ff" : "#000000"}
-          emissiveIntensity={glowIntensity}
+          emissiveIntensity={0}
         />
       </mesh>
 
@@ -145,6 +144,7 @@ const CardMeshFallback = ({
 }: BattleCardMeshProps) => {
   const groupRef = useRef<Group>(null);
   const glowIntensityRef = useRef(0);
+  const materialRef = useRef<any>(null);
 
   useEffect(() => {
     if (isActing) {
@@ -159,16 +159,13 @@ const CardMeshFallback = ({
     const targetX = isActing ? position.x * 1.3 : position.x;
     groupRef.current.position.x += (targetX - groupRef.current.position.x) * 0.1;
 
-    if (groupRef.current.children[0]) {
-      const baseMesh = groupRef.current.children[0] as any;
-      if (baseMesh.material) {
-        if (isActing && glowIntensityRef.current < 1) {
-          glowIntensityRef.current = Math.min(glowIntensityRef.current + 0.05, 1);
-        } else if (!isActing) {
-          glowIntensityRef.current = 0;
-        }
-        baseMesh.material.emissiveIntensity = glowIntensityRef.current;
+    if (materialRef.current) {
+      if (isActing && glowIntensityRef.current < 1) {
+        glowIntensityRef.current = Math.min(glowIntensityRef.current + 0.05, 1);
+      } else if (!isActing) {
+        glowIntensityRef.current = 0;
       }
+      materialRef.current.emissiveIntensity = glowIntensityRef.current;
     }
   });
 
@@ -177,11 +174,12 @@ const CardMeshFallback = ({
       <mesh position={[0, 0, 0]} scale={[2, 2.8, 0.1]}>
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial
+          ref={materialRef}
           color={isAlly ? "#1a5f7a" : "#8b2e2e"}
           metalness={0.3}
           roughness={0.4}
           emissive={isActing ? "#4db8ff" : "#000000"}
-          emissiveIntensity={glowIntensity}
+          emissiveIntensity={0}
         />
       </mesh>
 
@@ -228,8 +226,8 @@ const CardWithTexture = (props: BattleCardMeshProps) => {
         if (isMounted) {
           console.log("[CardWithTexture] Loaded texture for:", props.character.name, "size:", tex.image?.width, "x", tex.image?.height);
           tex.colorSpace = "srgb"; // sRGB color space for proper colors
-          tex.magFilter = 9729; // THREE.LinearFilter
-          tex.minFilter = 9987; // THREE.LinearMipmapLinearFilter
+          tex.magFilter = LinearFilter;
+          tex.minFilter = LinearMipmapLinearFilter;
           setTexture(tex);
         }
       },
