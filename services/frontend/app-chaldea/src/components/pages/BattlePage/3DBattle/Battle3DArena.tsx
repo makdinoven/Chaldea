@@ -40,39 +40,43 @@ const Battle3DArena = ({
     >
       <PerspectiveCamera
         makeDefault
-        position={[0, 2, 8]}
-        fov={60}
+        position={[0, 5, 10]}
+        fov={50}
         near={0.1}
         far={1000}
+        lookAt={[0, 0, 0]}
       />
 
-      {/* Lighting */}
-      <ambientLight intensity={0.6} />
-      <directionalLight position={[5, 10, 5]} intensity={1} castShadow />
-      <pointLight position={[-5, 5, -5]} intensity={0.4} />
+      {/* Lighting - улучшенное освещение */}
+      <ambientLight intensity={0.8} color="#ffffff" />
+      <directionalLight
+        position={[10, 15, 10]}
+        intensity={1.5}
+        castShadow
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+      />
+      <pointLight position={[-10, 8, -10]} intensity={0.6} color="#4db8ff" />
+      <pointLight position={[10, 8, 10]} intensity={0.6} color="#ff6b6b" />
 
-      {/* Arena floor (простой квад с текстурой) */}
+      {/* Arena floor - основной */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
-        <planeGeometry args={[20, 20]} />
+        <planeGeometry args={[30, 30]} />
         <meshStandardMaterial
-          color="#2a2a3e"
-          roughness={0.7}
-          metalness={0.1}
+          color="#3a3a4e"
+          roughness={0.6}
+          metalness={0.2}
         />
       </mesh>
 
-      {/* Вспомогательный пол (видимость) */}
-      <mesh
-        rotation={[-Math.PI / 2, 0, 0]}
-        position={[0, 0.01, 0]}
-        scale={1.02}
-      >
-        <planeGeometry args={[20, 20]} />
+      {/* Декоративный пол - паттерн */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+        <planeGeometry args={[30, 30]} />
         <meshStandardMaterial
-          color="#1a1a2e"
-          roughness={0.9}
+          color="#2a2a3e"
+          roughness={0.8}
           transparent
-          opacity={0.3}
+          opacity={0.5}
         />
       </mesh>
 
