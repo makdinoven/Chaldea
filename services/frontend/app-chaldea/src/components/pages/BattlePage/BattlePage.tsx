@@ -699,7 +699,23 @@ const BattlePage = () => {
   return (
     snapshotData &&
     runtimeData && (
-      <div className="-mx-10">
+      <div className="-mx-10 relative">
+        {/* 2D/3D Toggle Button */}
+        <div className="absolute top-4 right-6 z-50 flex gap-2">
+          <button
+            disabled
+            className="px-4 py-2 rounded-lg bg-gray-700/50 text-white text-sm font-semibold"
+          >
+            2D версия
+          </button>
+          <button
+            onClick={() => navigate(`/battle3d/${locationId}/${battleId}`)}
+            className="px-4 py-2 rounded-lg bg-gold/30 hover:bg-gold/50 text-white text-sm font-semibold transition-all"
+          >
+            3D версия
+          </button>
+        </div>
+
         {/* WebSocket reconnection indicator */}
         {wsReconnecting && (
           <div className="flex items-center justify-center gap-2 mb-3 px-5 py-3 rounded-card shadow-card bg-gold-dark/90 text-white text-sm sm:text-base font-medium">
