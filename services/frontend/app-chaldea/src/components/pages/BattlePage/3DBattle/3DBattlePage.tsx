@@ -40,6 +40,7 @@ interface BattleLogEntry {
 }
 
 const Battle3DPage = () => {
+  console.log("[3DBattle] Component mounted");
   useBodyBackground(battleBg);
   const navigate = useNavigate();
   const location = useLocation();
@@ -47,6 +48,7 @@ const Battle3DPage = () => {
     locationId: string;
     battleId: string;
   }>();
+  console.log("[3DBattle] Params:", { locationId, battleId });
   const character = useAppSelector((state) => state.user.character);
 
   const isSpectateMode = location.pathname.endsWith("/spectate");
