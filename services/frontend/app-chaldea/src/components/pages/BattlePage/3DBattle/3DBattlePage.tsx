@@ -238,7 +238,7 @@ const Battle3DPage = () => {
         }
       }
     }
-  }, [wsState, snapshotData, processState, currentTurn]);
+  }, [wsState, snapshotData]);
 
   // Проверка завершения боя
   useEffect(() => {
