@@ -210,7 +210,8 @@ const Battle3DPage = () => {
 
   // Wait for WebSocket to connect and receive initial state
   useEffect(() => {
-    if (wsConnected && wsState && "runtime" in wsState) {
+    if (wsConnected && wsState && "runtime" in wsState && "snapshot" in wsState) {
+      processState(wsState.snapshot as ParticipantSnapshot[], wsState.runtime as RuntimeState);
       setLoading(false);
       addBattleLog("Бой начался", "system");
     } else if (battleId && !wsConnected) {
