@@ -318,8 +318,13 @@ const Battle3DPage = () => {
     }
   };
 
+  useEffect(() => {
+    console.log("[3DBattle] loading:", loading, "wsConnected:", wsConnected, "snapshotData:", !!snapshotData, "runtimeData:", !!runtimeData);
+  }, [loading, wsConnected, snapshotData, runtimeData]);
+
   if (loading) return <div className="text-white text-center py-20">Загрузка боя...</div>;
   if (error) return <div className="text-red-400 text-center py-20">Ошибка: {error}</div>;
+  if (!snapshotData || !runtimeData) return <div className="text-white text-center py-20">Ожидание данных боя...</div>;
 
   return (
     <div className="relative w-screen h-screen bg-black overflow-hidden">
