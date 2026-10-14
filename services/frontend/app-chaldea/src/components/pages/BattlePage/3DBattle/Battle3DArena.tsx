@@ -19,6 +19,12 @@ const Battle3DArena = ({
   selectedTargetId,
   onCardClick,
 }: Battle3DArenaProps) => {
+  console.log("[Battle3DArena] Rendering with:", {
+    myTeam: myTeamData.length,
+    enemyTeam: enemyTeamData.length,
+    currentActor: currentActorId,
+  });
+
   return (
     <Canvas
       className="h-full w-full bg-gradient-to-b from-slate-900 to-slate-800"
