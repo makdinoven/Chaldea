@@ -21,6 +21,7 @@ import AdminPage from "../Admin/AdminPage";
 import StarterKitsPage from "../Admin/StarterKitsPage/StarterKitsPage";
 import EquipmentRulesAdminPage from "../Admin/EquipmentRulesAdminPage/EquipmentRulesAdminPage";
 import BattlePage from "../pages/BattlePage/BattlePage";
+import Battle3DPage from "../pages/BattlePage/3DBattle/3DBattlePage";
 import ProfilePage from "../ProfilePage/ProfilePage";
 import AdminCharactersPage from "../Admin/CharactersPage/AdminCharactersPage";
 import AdminCharacterDetailPage from "../Admin/CharactersPage/AdminCharacterDetailPage";
@@ -357,6 +358,14 @@ const App = () => {
             <Route
               path="location/:locationId/battle/:battleId/spectate"
               element={<BattlePage />}
+            />
+            <Route
+              path="location/:locationId/battle3d/:battleId"
+              element={<Battle3DPage />}
+            />
+            <Route
+              path="location/:locationId/battle3d/:battleId/spectate"
+              element={<Battle3DPage />}
             />
           </Route>
         </Routes>

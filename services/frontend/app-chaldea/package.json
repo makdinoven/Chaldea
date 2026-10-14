@@ -37,7 +37,10 @@
     "react-hot-toast": "^2.4.1",
     "react-redux": "^9.2.0",
     "react-router-dom": "^6.30.3",
-    "reactflow": "^11.11.4"
+    "reactflow": "^11.11.4",
+    "three": "^0.160.0",
+    "@react-three/fiber": "^8.13.0",
+    "@react-three/drei": "^9.99.0"
   },
   "devDependencies": {
     "@types/dompurify": "^3.2.0",
