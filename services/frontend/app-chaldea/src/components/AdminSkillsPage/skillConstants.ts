@@ -36,6 +36,7 @@ export interface ComplexEffectEntry {
   chance: number;
   duration: number;
   magnitude: number;
+  secondary_magnitude?: number | null;
   attribute_key?: string;
 }
 
@@ -101,6 +102,11 @@ export interface ComplexEffectOption {
   attributeKeyOptions: SelectOption[] | null;
   fixedDuration: number | null;
   allowedSides: string[] | null;
+  /**
+   * When set, the effect has a second numeric value stored in `secondary_magnitude`,
+   * and the editors show an extra input with this label.
+   */
+  secondaryMagnitudeLabel?: string;
 }
 
 export interface StatModifierOption {
@@ -264,11 +270,13 @@ export const COMPLEX_EFFECTS: ComplexEffectOption[] = [
   {
     value: "Burn",
     label: "Возгорание",
-    description: "Периодический урон HP + снижение уклонения",
+    description:
+      "Мощность — урон HP за ход; «Снижение уклонения» — на сколько процентных пунктов падает уклонение цели, пока эффект активен",
     hasAttributeKey: false,
     attributeKeyOptions: null,
     fixedDuration: null,
     allowedSides: null,
+    secondaryMagnitudeLabel: "Снижение уклонения (%)",
   },
   {
     value: "Freeze",
@@ -334,6 +342,13 @@ export const COMPLEX_EFFECTS: ComplexEffectOption[] = [
     allowedSides: null,
   },
 ];
+
+/**
+ * Complex effects that are NOT offered for new skill/perk effect rows
+ * (poisons now live on items). Existing skill rows that already carry one
+ * still render and stay editable.
+ */
+export const SKILL_HIDDEN_COMPLEX_EFFECTS: readonly string[] = ["Poison"];
 
 /**
  * У нас только проценты для уязвимостей => используем структуру, похожую на buffDebuff,

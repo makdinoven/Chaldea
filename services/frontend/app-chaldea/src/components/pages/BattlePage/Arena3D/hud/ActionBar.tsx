@@ -82,6 +82,7 @@ const ActionBar = ({ bar, turnData, onPassTurn, layout, ...auto }: ActionBarProp
       type={type}
       value={turnData[type] ?? null}
       locked={bar.isSlotLocked(type)}
+      chained={bar.isSlotChained(type)}
       onOpen={() => bar.setPickerType(type)}
       onClear={() => bar.clearSlot(type)}
     />

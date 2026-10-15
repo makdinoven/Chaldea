@@ -137,20 +137,6 @@ const FastSlotDropTarget = ({ slot, slotIndex }: FastSlotDropTargetProps) => {
           />
         )}
       </button>
-      {/* Quantity badge — bottom-right per mock */}
-      {slot.quantity > 1 && (
-        <span
-          className="
-            absolute -bottom-1 -right-1 z-10 min-w-[18px] h-[18px]
-            flex items-center justify-center
-            text-[10px] font-medium text-white
-            bg-site-bg rounded-full
-            border border-white/30 px-1
-          "
-        >
-          {slot.quantity}
-        </span>
-      )}
     </div>
   );
 };

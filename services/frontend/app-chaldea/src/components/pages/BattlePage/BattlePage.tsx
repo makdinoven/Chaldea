@@ -22,10 +22,11 @@ import type { BattleRewards } from "../../../api/mobs";
 import { fetchBattleSpectateState } from "../../../api/battles";
 import { checkActiveSession } from "../../../api/dungeons";
 import useBattleWebSocket from "../../../hooks/useBattleWebSocket";
-import { describeEffect, evaluateControl, type EffectLike } from "./battleEffects";
+import { describeEffect, evaluateControl, periodicDamageKind, type EffectLike } from "./battleEffects";
 import { parseServerDate } from "../../../utils/serverDate";
 import { isWebGLAvailable } from "./Arena3D/webgl";
-import type { ArenaAim, ArenaFighter } from "./Arena3D/arenaTypes";
+import type { ArenaAim, ArenaFighter, BlockedSkill, FighterControl } from "./Arena3D/arenaTypes";
+import { auraKindOf, effectIconOf } from "./Arena3D/arenaTypes";
 import ArenaHud from "./Arena3D/hud/ArenaHud";
 import { toSameOriginMedia } from "./Arena3D/sameOriginMedia";
 import { fetchLocationDetails } from "../../../api/mapEditor";
@@ -132,6 +133,27 @@ interface ActionResponseData {
 }
 
 // --- Component ---
+
+/**
+ * Keys that survive other effects expiring: name + attribute + caster + which copy
+ * of that same effect it is. A list index would shift when an earlier effect runs
+ * out, and every rune after it would look newly applied.
+ */
+const withStableKeys = (effects: EffectLike[]) => {
+  const seen = new Map<string, number>();
+  return effects.map((e) => {
+    const base = `${e.name ?? ""}|${e.attribute ?? ""}|${e.owner_id ?? ""}`;
+    const copy = seen.get(base) ?? 0;
+    seen.set(base, copy + 1);
+    return { e, key: `${base}|${copy}` };
+  });
+};
+
+/** evaluateControl's loose strings → the arena's typed control state. */
+const toFighterControl = ({ fullSkip, blocked }: ReturnType<typeof evaluateControl>): FighterControl => ({
+  skip: fullSkip === "Stun" || fullSkip === "Poison" ? fullSkip : null,
+  blocked: blocked.filter((t): t is BlockedSkill => t === "attack" || t === "defense" || t === "support"),
+});
 
 const BattlePage = () => {
   useBodyBackground(battleBg);
@@ -281,7 +303,9 @@ const BattlePage = () => {
       // "me", so anchor the left side on the lowest team number.
       const mySnapshot = isSpectateMode
         ? undefined
-        : snapshot.find((p) => p.character_id === character.id);
+        : snapshot.find((p) => p.character_id === character?.id);
+      // The battle state can arrive before the profile has loaded the character;
+      // it is replayed once the character is known (see the effect below).
       if (!isSpectateMode && !mySnapshot) return;
 
       const viewerTeam = mySnapshot
@@ -346,6 +370,14 @@ const BattlePage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [isSpectateMode, character],
   );
+
+  // The first battle state may have been processed before the profile knew the
+  // viewer's character (then nothing could be split into teams). Replay the state
+  // we already hold as soon as the character arrives, instead of a blank page.
+  useEffect(() => {
+    if (character && snapshotData && runtimeData) processState(snapshotData, runtimeData);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [character?.id]);
 
   // --- Turn pacing (FEAT-143) ---
   // Rapid successive state updates (esp. when passing the turn to an autobattle
@@ -718,11 +750,15 @@ const BattlePage = () => {
         maxMana: c.attributes?.max_mana ?? 0,
         energy: live.energy,
         maxEnergy: c.attributes?.max_energy ?? 0,
-        effects: (runtimeData.active_effects?.[pid] ?? []).map((e, i) => ({
-          key: `${e.name ?? ""}|${e.attribute ?? ""}|${i}`,
+        effects: withStableKeys(runtimeData.active_effects?.[pid] ?? []).map(({ e, key }) => ({
+          key,
           ...describeEffect(e),
           duration: e.duration ?? 0,
+          dot: periodicDamageKind(e.name, e.attribute),
+          aura: auraKindOf(e.name),
+          icon: effectIconOf(e),
         })),
+        control: toFighterControl(evaluateControl(runtimeData.active_effects?.[pid])),
         isActing: runtimeData.current_actor === pid,
         isDead,
         isSelf: !isSpectateMode && pid === myData.participant_id,
@@ -826,6 +862,7 @@ const BattlePage = () => {
           runtimeData={runtimeData}
           isPaused={isPaused}
           controlFullSkip={myControl.fullSkip}
+          controlBlocked={myControl.blocked}
         />
       )}
       {isSpectateMode && currentTurn && (
@@ -1013,7 +1050,7 @@ const BattlePage = () => {
               isSpectate={isSpectateMode}
               modeToggle={modeToggle}
               notices={notices}
-              renderArena={(critRollAt) => (
+              renderArena={(outcome) => (
                 <Suspense
                   fallback={
                     <div className="flex h-full items-center justify-center text-white/60 text-sm">
@@ -1028,7 +1065,7 @@ const BattlePage = () => {
                     turnDeadline={turnDeadline}
                     turnPaused={isPaused}
                     boardArtUrl={boardArtUrl}
-                    critRollAt={critRollAt}
+                    outcome={outcome}
                     turnNumber={runtimeData.turn_number}
                   />
                 </Suspense>
@@ -1048,6 +1085,7 @@ const BattlePage = () => {
               runtimeData={runtimeData}
               isPaused={isPaused}
               controlFullSkip={myControl.fullSkip}
+          controlBlocked={myControl.blocked}
             />
           )
         ) : (

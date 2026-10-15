@@ -94,15 +94,31 @@ const parseTypeAfterPrefix = (name: string, fallback: string): string => {
 /** Reset a row to sane defaults for its new kind. */
 const applyKind = (row: ItemEffect, kind: EffectKind): ItemEffect => {
   if (kind === "stat")
-    return { ...row, effect_name: STAT_MODIFIER_NAME, attribute_key: STAT_MODIFIERS[0].key };
+    return {
+      ...row,
+      effect_name: STAT_MODIFIER_NAME,
+      attribute_key: STAT_MODIFIERS[0].key,
+      secondary_magnitude: null,
+    };
   if (kind === "buff")
-    return { ...row, effect_name: composeBuffName("fire"), attribute_key: null };
+    return {
+      ...row,
+      effect_name: composeBuffName("fire"),
+      attribute_key: null,
+      secondary_magnitude: null,
+    };
   if (kind === "resist")
-    return { ...row, effect_name: composeResistName("all"), attribute_key: null };
+    return {
+      ...row,
+      effect_name: composeResistName("all"),
+      attribute_key: null,
+      secondary_magnitude: null,
+    };
   const first = COMPLEX_EFFECTS[0];
   return {
     ...row,
     effect_name: first.value,
+    secondary_magnitude: first.secondaryMagnitudeLabel ? row.secondary_magnitude ?? null : null,
     duration: first.fixedDuration ?? row.duration ?? 1,
     attribute_key:
       first.hasAttributeKey && first.attributeKeyOptions
@@ -504,6 +520,9 @@ const ItemEffectSections = ({
                             effect_name: def.value,
                             duration: def.fixedDuration ?? row.duration ?? 1,
                             magnitude: def.value === "Stun" ? 0 : row.magnitude ?? 0,
+                            secondary_magnitude: def.secondaryMagnitudeLabel
+                              ? row.secondary_magnitude ?? null
+                              : null,
                             attribute_key:
                               def.hasAttributeKey && def.attributeKeyOptions
                                 ? def.attributeKeyOptions[0].value
@@ -545,6 +564,16 @@ const ItemEffectSections = ({
                   value={row.magnitude ?? 0}
                   onChange={(magnitude) => patchEffect(index, { magnitude })}
                 />
+                {complexDef?.secondaryMagnitudeLabel && (
+                  <NumberField
+                    label={`${complexDef.secondaryMagnitudeLabel}:`}
+                    min={0}
+                    value={row.secondary_magnitude ?? 0}
+                    onChange={(secondary_magnitude) =>
+                      patchEffect(index, { secondary_magnitude })
+                    }
+                  />
+                )}
                 <NumberField
                   label="Длит.(ходы):"
                   min={0}

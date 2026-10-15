@@ -3,11 +3,14 @@ import { useBattleBar, type BattlePageBarProps } from "../../BattlePageBar/useBa
 import TurnBanner from "./TurnBanner";
 import ActionBar, { AutobattleControls } from "./ActionBar";
 import Chronicle from "./Chronicle";
+import SkillHand from "./SkillHand";
+import type { BlockedSkill, TurnOutcome } from "../arenaTypes";
+import { periodicDamageKind } from "../../battleEffects";
 
 interface ArenaHudProps extends BattlePageBarProps {
   isSpectate: boolean;
-  /** Renders the 3D scene; gets the moment of the latest critical hit for the dice. */
-  renderArena: (critRollAt: number | null) => ReactNode;
+  /** Renders the 3D scene; gets the newest turn's log outcome. */
+  renderArena: (outcome: TurnOutcome | null) => ReactNode;
   modeToggle: ReactNode;
   /** Pause / first-cycle / control / connection banners, shown under the turn banner. */
   notices: ReactNode;
@@ -38,29 +41,76 @@ const shadowSpill = (direction: "to top" | "to bottom"): CSSProperties => ({
 });
 
 /**
- * performance.now() of the last critical hit, read from the live turn's log. The turn
- * that is already on screen when the page opens never counts, so old crits don't replay.
+ * What each new turn's log says beyond HP — direct hits, damage-over-time ticks, crits
+ * and evasions. The turn that is already on screen when the page opens never counts,
+ * so old blows don't replay. Logs arrive after the turn index moves on, so they are
+ * matched by the turn they were fetched for.
  */
-const useCriticalHitMoment = (bar: ReturnType<typeof useBattleBar>) => {
-  const [at, setAt] = useState<number | null>(null);
+const isBlockedSkill = (value: unknown): value is BlockedSkill =>
+  value === "attack" || value === "defense" || value === "support";
+
+const useTurnOutcome = (bar: ReturnType<typeof useBattleBar>) => {
+  const [outcome, setOutcome] = useState<TurnOutcome | null>(null);
   const lastSeenTurn = useRef<number | null>(null);
-  const { turnLogs, activeTurnIndex, totalTurns } = bar;
+  const { turnLogs, turnLogsTurn, totalTurns } = bar;
 
   useEffect(() => {
-    if (!turnLogs || activeTurnIndex !== totalTurns - 1) return;
+    if (!turnLogs || turnLogsTurn === null || turnLogsTurn !== totalTurns) return;
     if (lastSeenTurn.current === null) {
-      lastSeenTurn.current = activeTurnIndex;
+      lastSeenTurn.current = turnLogsTurn;
       return;
     }
-    if (activeTurnIndex <= lastSeenTurn.current) return;
-    lastSeenTurn.current = activeTurnIndex;
-    const crit = turnLogs.logs.some((log) =>
-      log.events.some((e) => e.event === "damage" && e.critical && !e.dodged && !e.hit_chance_failed),
-    );
-    if (crit) setAt(performance.now());
-  }, [turnLogs, activeTurnIndex, totalTurns]);
+    if (turnLogsTurn <= lastSeenTurn.current) return;
+    lastSeenTurn.current = turnLogsTurn;
 
-  return at;
+    const crits: number[] = [];
+    const hits: number[] = [];
+    const hitTypes: TurnOutcome["hitTypes"] = {};
+    const ticks: TurnOutcome["ticks"] = [];
+    const evasions: TurnOutcome["evasions"] = [];
+    const controls: TurnOutcome["controls"] = [];
+    turnLogs.logs.forEach((log) =>
+      log.events.forEach((e) => {
+        if (e.event === "effect_tick" && e.target !== undefined) {
+          const kind = periodicDamageKind(e.effect, typeof e.attribute === "string" ? e.attribute : null);
+          const amount = Math.round(Number(e.amount ?? 0));
+          if (amount > 0) ticks.push({ target: e.target, kind: kind ?? "drain", amount });
+          return;
+        }
+        if (e.event === "control_skip" && e.who !== undefined) {
+          controls.push({ who: e.who, kind: "skip", control: e.control === "Poison" ? "Poison" : "Stun" });
+          return;
+        }
+        if (e.event === "control_block" && e.who !== undefined && isBlockedSkill(e.skill_type)) {
+          controls.push({ who: e.who, kind: "block", skill: e.skill_type });
+          return;
+        }
+        if (e.event !== "damage" || e.target === undefined) return;
+        if (e.dodged || e.hit_chance_failed) {
+          if (e.source !== undefined && e.source !== e.target) {
+            evasions.push({
+              source: e.source,
+              target: e.target,
+              kind: e.dodged ? "dodge" : "miss",
+              damageType: e.damage_type,
+            });
+          }
+          return;
+        }
+        if (Number(e.final ?? 0) > 0) {
+          hits.push(e.target);
+          if (e.damage_type && !(e.target in hitTypes)) hitTypes[e.target] = e.damage_type;
+        } else if (e.source !== undefined && e.source !== e.target) {
+          // Landed, but resistances ate every point: HP doesn't move, so say it.
+          evasions.push({ source: e.source, target: e.target, kind: "absorb", damageType: e.damage_type });
+        }
+        if (e.critical) crits.push(e.target);
+      }),
+    );
+    setOutcome({ turn: turnLogsTurn, at: performance.now(), hits, hitTypes, ticks, crits, evasions, controls });
+  }, [turnLogs, turnLogsTurn, totalTurns]);
+
+  return outcome;
 };
 
 // The full-bleed arena is exactly 100vw wide, which includes the scrollbar — clip
@@ -80,7 +130,8 @@ const ArenaHud = ({ isSpectate, renderArena, modeToggle, notices, ...barProps }:
   useClipHorizontalOverflow();
   const bar = useBattleBar(barProps);
   const [chronicleOpen, setChronicleOpen] = useState(false);
-  const critRollAt = useCriticalHitMoment(bar);
+  const outcome = useTurnOutcome(bar);
+  const picker = bar.pickerProps();
   const { turn, runtimeData, isPaused } = barProps;
 
   const status = isPaused
@@ -106,12 +157,12 @@ const ArenaHud = ({ isSpectate, renderArena, modeToggle, notices, ...barProps }:
 
   return (
     <div className="relative ml-[calc(50%-50vw)] w-screen text-white">
-      <div className="relative h-[56vh] min-h-[380px] lg:h-[calc(100vh-190px)] lg:min-h-[560px]">
+      <div className="relative h-[62vh] min-h-[400px] lg:h-[calc(100vh-190px)] lg:min-h-[560px]">
         {/* The table of fates sits in a pool of darkness that thins out into the page. */}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_72%_78%_at_50%_42%,rgba(4,4,7,0.94)_0%,rgba(4,4,7,0.8)_50%,transparent_85%)] " />
         {/* Shadow spilling up past the arena, behind the site header */}
         <div className="pointer-events-none absolute inset-x-0 bottom-full h-48" style={shadowSpill("to top")} />
-        <div className="absolute inset-0">{renderArena(critRollAt)}</div>
+        <div className="absolute inset-0">{renderArena(outcome)}</div>
         {/* Both ends of the table sink into shadow instead of turning see-through */}
         <div
           className="pointer-events-none absolute inset-x-0 top-0 h-16"
@@ -194,7 +245,8 @@ const ArenaHud = ({ isSpectate, renderArena, modeToggle, notices, ...barProps }:
         </div>
       )}
 
-      {bar.renderPicker()}
+      {/* In 3D the chooser is a hand of cards dealt over the table */}
+      {picker && <SkillHand {...picker} resources={bar.myResources} />}
     </div>
   );
 };

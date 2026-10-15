@@ -7,7 +7,8 @@
 //   2. Бафф / Дебафф       — effect_name = "Buff: <type>" / "Debuff: <type>"
 //   3. Резисты             — effect_name = "Resist: <type>" / "Vulnerability: <type>"
 //   4. Стат-модификаторы   — effect_name = "StatModifier", attribute_key = <stat>
-//   5. Сложн. эффекты      — freeform complex effects (Bleeding, Poison, ...)
+//   5. Сложн. эффекты      — freeform complex effects (Bleeding, Burn, ...);
+//                            Poison is not offered for new rows (poisons are items now)
 //
 // All effect composition logic mirrors the deleted utils/preparePayload.jsx from commit 4d50ce6^.
 import { useMemo } from 'react';
@@ -16,6 +17,7 @@ import {
   WEAPON_SLOTS,
   STAT_MODIFIERS,
   COMPLEX_EFFECTS,
+  SKILL_HIDDEN_COMPLEX_EFFECTS,
 } from './skillConstants';
 import type { DamageEntry, EffectEntry } from '../SkillTreeView/types';
 
@@ -676,7 +678,12 @@ const ComplexEffectsSection = ({
   confirmDelete: boolean;
 }) => {
   const handleAdd = async () => {
-    const first = COMPLEX_EFFECTS[0];
+    const first =
+      COMPLEX_EFFECTS.find(
+        (ef) =>
+          !SKILL_HIDDEN_COMPLEX_EFFECTS.includes(ef.value) &&
+          (!ef.allowedSides || ef.allowedSides.includes('enemy'))
+      ) ?? COMPLEX_EFFECTS[0];
     try {
       await onAdd({
         target_side: 'enemy',
@@ -685,6 +692,7 @@ const ComplexEffectsSection = ({
         chance: 100,
         duration: first.fixedDuration ?? 1,
         magnitude: 0,
+        secondary_magnitude: null,
         attribute_key:
           first.hasAttributeKey && first.attributeKeyOptions
             ? first.attributeKeyOptions[0].value
@@ -717,8 +725,13 @@ const ComplexEffectsSection = ({
       )}
       {rows.map((row, idx) => {
         const side = row.target_side === 'self' ? 'self' : 'enemy';
+        // Hidden effects (Poison) are offered only to a row that already has one,
+        // so legacy rows keep rendering and stay editable.
         const availableEffects = COMPLEX_EFFECTS.filter(
-          (ef) => !ef.allowedSides || ef.allowedSides.includes(side)
+          (ef) =>
+            (!ef.allowedSides || ef.allowedSides.includes(side)) &&
+            (!SKILL_HIDDEN_COMPLEX_EFFECTS.includes(ef.value) ||
+              ef.value === row.effect_name)
         );
         const def =
           COMPLEX_EFFECTS.find((ef) => ef.value === row.effect_name) ??
@@ -726,6 +739,7 @@ const ComplexEffectsSection = ({
         const isFixedDuration = def && def.fixedDuration !== null;
         const showAttributeKey =
           def && def.hasAttributeKey && def.attributeKeyOptions;
+        const secondaryLabel = def?.secondaryMagnitudeLabel;
 
         const patch = (p: Partial<EffectEntry>) => onUpdate({ ...row, ...p }).catch(() => {});
 
@@ -739,6 +753,7 @@ const ComplexEffectsSection = ({
           } else {
             p.attribute_key = null;
           }
+          if (!newDef.secondaryMagnitudeLabel) p.secondary_magnitude = null;
           if (newDef.value === 'Stun') p.magnitude = 0;
           patch(p);
         };
@@ -800,6 +815,25 @@ const ComplexEffectsSection = ({
                   className={inputClass}
                 />
               </div>
+              {secondaryLabel && (
+                <div className={fieldClass}>
+                  <label className={labelClass}>{secondaryLabel}:</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={row.secondary_magnitude ?? ''}
+                    placeholder="0"
+                    onChange={(e) =>
+                      patch({
+                        secondary_magnitude:
+                          e.target.value === '' ? null : Number(e.target.value),
+                      })
+                    }
+                    className={inputClass}
+                  />
+                </div>
+              )}
               {showAttributeKey && def?.attributeKeyOptions && (
                 <div className={fieldClass}>
                   <label className={labelClass}>

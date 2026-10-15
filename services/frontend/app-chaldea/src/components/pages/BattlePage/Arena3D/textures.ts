@@ -887,3 +887,96 @@ export const createRuneCircleTexture = () => {
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 };
+
+/**
+ * Rime on the board: a pale patch thinning toward its edge, shot through with
+ * branching crystal needles. White on transparent — tinted by the material.
+ */
+export const createFrostTexture = () => {
+  const rand = mulberry32(37);
+  const size = 512;
+  const c = size / 2;
+  const { canvas, ctx } = makeCanvas(size);
+  const base = ctx.createRadialGradient(c, c, 0, c, c, c);
+  base.addColorStop(0, "rgba(255,255,255,0.55)");
+  base.addColorStop(0.55, "rgba(255,255,255,0.3)");
+  base.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, size, size);
+
+  // A needle that forks a couple of times, thinner and fainter as it goes.
+  const needle = (x: number, y: number, angle: number, length: number, width: number, depth: number) => {
+    const x2 = x + Math.cos(angle) * length;
+    const y2 = y + Math.sin(angle) * length;
+    ctx.strokeStyle = `rgba(255,255,255,${0.25 + width * 0.2})`;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    if (depth <= 0) return;
+    for (let i = 0; i < 2; i++) {
+      const at = 0.35 + rand() * 0.5;
+      needle(
+        x + (x2 - x) * at,
+        y + (y2 - y) * at,
+        angle + (rand() > 0.5 ? 1 : -1) * (0.5 + rand() * 0.5),
+        length * (0.35 + rand() * 0.25),
+        width * 0.6,
+        depth - 1,
+      );
+    }
+  };
+  ctx.lineCap = "round";
+  for (let i = 0; i < 46; i++) {
+    const r = Math.sqrt(rand()) * c * 0.85;
+    const a = rand() * Math.PI * 2;
+    // Needles grow outward from the patch's heart, as frost spreads.
+    needle(c + Math.cos(a) * r, c + Math.sin(a) * r, a + (rand() - 0.5) * 0.8, 20 + rand() * 46, 1.6 + rand() * 1.2, 2);
+  }
+  return toTexture(canvas, false);
+};
+
+// The blob a puddle spreads into, drawn white at `shrink` of its size about the centre.
+const drawPuddleBlob = (ctx: CanvasRenderingContext2D, c: number, shrink: number) => {
+  const rand = mulberry32(53);
+  ctx.save();
+  ctx.translate(c, c);
+  ctx.scale(shrink, shrink);
+  ctx.translate(-c, -c);
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * Math.PI * 2 + rand() * 0.6;
+    const r = c * (0.18 + rand() * 0.22);
+    const off = c * (0.2 + rand() * 0.25);
+    ctx.beginPath();
+    ctx.ellipse(c + Math.cos(a) * off, c + Math.sin(a) * off, r, r * (0.6 + rand() * 0.4), a, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.arc(c, c, c * 0.42, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+};
+
+/** A puddle's outline: an irregular blob with a soft rim, white on transparent. */
+export const createPuddleTexture = () => {
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.filter = "blur(6px)";
+  ctx.fillStyle = "rgba(255,255,255,1)";
+  drawPuddleBlob(ctx, size / 2, 1);
+  return toTexture(canvas, false);
+};
+
+/** Just the puddle's edge, where the water's meniscus catches the light. */
+export const createPuddleRimTexture = () => {
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.filter = "blur(3px)";
+  ctx.fillStyle = "rgba(255,255,255,1)";
+  drawPuddleBlob(ctx, size / 2, 1);
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.filter = "blur(5px)";
+  drawPuddleBlob(ctx, size / 2, 0.9);
+  return toTexture(canvas, false);
+};

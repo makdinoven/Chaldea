@@ -57,14 +57,14 @@ const TYPE_TITLES: Record<string, string> = {
   item: "Предметы",
 };
 
-const skillId = (s: BattleSkill): number =>
+export const skillId = (s: BattleSkill): number =>
   Number(s.skill_id ?? s.id ?? s.skill?.id ?? 0);
-const skillName = (s: BattleSkill): string =>
+export const skillName = (s: BattleSkill): string =>
   s.skill_name ?? s.skill?.name ?? `Навык #${skillId(s)}`;
-const skillImage = (s: BattleSkill): string | null =>
+export const skillImage = (s: BattleSkill): string | null =>
   s.skill_image ?? s.skill?.skill_image ?? null;
 
-interface SkillPickerProps {
+export interface SkillPickerProps {
   type: "attack" | "defense" | "support" | "item";
   skills: BattleSkill[];
   items: BattleItem[];
@@ -94,44 +94,9 @@ const SkillPicker = ({
 }: SkillPickerProps) => {
   const isItems = type === "item";
   // skill_id -> resolved (cost / level_requirement / damage / effects)
-  const [resolvedById, setResolvedById] = useState<Record<number, ResolvedSkill>>({});
-  const [loading, setLoading] = useState(!isItems);
+  const { resolvedById, loading } = useResolvedSkills(skills, characterId, !isItems);
   // Skill whose full card is open (nested), plus its perks payload.
-  const [cardSkill, setCardSkill] = useState<BattleSkill | null>(null);
-  const [cardPerks, setCardPerks] = useState<SkillWithPerks | null>(null);
-  const [cardLoading, setCardLoading] = useState(false);
-
-  // Load resolved data for every skill of this type (cost + level for sorting).
-  useEffect(() => {
-    if (isItems || skills.length === 0) {
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    Promise.all(
-      skills.map((s) =>
-        axios
-          .get<ResolvedSkill>(`/skills/${skillId(s)}/resolved`, {
-            params: { character_id: characterId },
-          })
-          .then((r) => r.data)
-          .catch(() => null),
-      ),
-    )
-      .then((results) => {
-        if (cancelled) return;
-        const map: Record<number, ResolvedSkill> = {};
-        results.forEach((r) => {
-          if (r) map[r.skill_id] = r;
-        });
-        setResolvedById(map);
-      })
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [skills, characterId, isItems]);
+  const { cardSkill, cardPerks, cardLoading, openCard, closeCard } = useSkillCard();
 
   // Sort skills by level requirement (1-5-10-…-50), then name.
   const sortedSkills = useMemo(() => {
@@ -142,17 +107,6 @@ const SkillPicker = ({
       return skillName(a).localeCompare(skillName(b));
     });
   }, [skills, resolvedById]);
-
-  const openCard = (s: BattleSkill) => {
-    setCardSkill(s);
-    setCardPerks(null);
-    setCardLoading(true);
-    axios
-      .get<SkillWithPerks>(`/skills/${skillId(s)}`)
-      .then((r) => setCardPerks(r.data))
-      .catch(() => toast.error("Не удалось загрузить карточку навыка"))
-      .finally(() => setCardLoading(false));
-  };
 
   const recoveryText = (it: BattleItem): string => {
     const parts: string[] = [];
@@ -245,9 +199,6 @@ const SkillPicker = ({
                           <div className="min-w-0 flex-1">
                             <p className="text-white text-sm font-medium truncate">
                               {it.name ?? `Предмет #${it.item_id}`}
-                              {it.quantity ? (
-                                <span className="text-white/40"> ×{it.quantity}</span>
-                              ) : null}
                             </p>
                             {rec && (
                               <p className="text-emerald-300/80 text-xs mt-0.5 break-words">
@@ -353,46 +304,121 @@ const SkillPicker = ({
 
       {/* Nested skill card modal */}
       {cardSkill && (
-        <div
-          className="modal-overlay"
-          onClick={(e) => {
-            e.stopPropagation();
-            setCardSkill(null);
-          }}
-        >
-          <div
-            className="modal-content gold-outline w-full max-w-md mx-4 max-h-[85vh] overflow-y-auto gold-scrollbar"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex justify-end mb-1">
-              <button
-                type="button"
-                onClick={() => setCardSkill(null)}
-                className="text-white/40 hover:text-white transition-colors"
-                aria-label="Закрыть"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            {cardLoading && !resolvedById[skillId(cardSkill)] ? (
-              <div className="flex justify-center py-6">
-                <div className="w-6 h-6 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-              </div>
-            ) : resolvedById[skillId(cardSkill)] ? (
-              <ResolvedSkillCard
-                resolved={resolvedById[skillId(cardSkill)]}
-                skill={cardPerks}
-              />
-            ) : (
-              <p className="text-white/50 text-center py-4">
-                Характеристики навыка недоступны
-              </p>
-            )}
-          </div>
-        </div>
+        <SkillCardModal
+          resolved={resolvedById[skillId(cardSkill)] ?? null}
+          perks={cardPerks}
+          loading={cardLoading}
+          onClose={closeCard}
+        />
       )}
     </div>
   );
+};
+
+/** Resolved stats (cost, level, damage, effects) for each of the viewer's skills. */
+export const useResolvedSkills = (skills: BattleSkill[], characterId: number, enabled: boolean) => {
+  const [resolvedById, setResolvedById] = useState<Record<number, ResolvedSkill>>({});
+  const [loading, setLoading] = useState(enabled);
+
+  useEffect(() => {
+    if (!enabled || skills.length === 0) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    Promise.all(
+      skills.map((s) =>
+        axios
+          .get<ResolvedSkill>(`/skills/${skillId(s)}/resolved`, {
+            params: { character_id: characterId },
+          })
+          .then((r) => r.data)
+          .catch(() => null),
+      ),
+    )
+      .then((results) => {
+        if (cancelled) return;
+        const map: Record<number, ResolvedSkill> = {};
+        results.forEach((r) => {
+          if (r) map[r.skill_id] = r;
+        });
+        if (results.some((r) => r === null)) {
+          toast.error("Не удалось загрузить часть навыков");
+        }
+        setResolvedById(map);
+      })
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [skills, characterId, enabled]);
+
+  return { resolvedById, loading };
+};
+
+/** The full skill card (the one from the profile), over everything else. */
+export const SkillCardModal = ({
+  resolved,
+  perks,
+  loading,
+  onClose,
+}: {
+  resolved: ResolvedSkill | null;
+  perks: SkillWithPerks | null;
+  loading: boolean;
+  onClose: () => void;
+}) => (
+  <div
+    className="modal-overlay"
+    onClick={(e) => {
+      e.stopPropagation();
+      onClose();
+    }}
+  >
+    <div
+      className="modal-content gold-outline w-full max-w-md mx-4 max-h-[85vh] overflow-y-auto gold-scrollbar"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex justify-end mb-1">
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-white/40 hover:text-white transition-colors"
+          aria-label="Закрыть"
+        >
+          <X size={20} />
+        </button>
+      </div>
+      {loading && !resolved ? (
+        <div className="flex justify-center py-6">
+          <div className="w-6 h-6 border-2 border-gold border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : resolved ? (
+        <ResolvedSkillCard resolved={resolved} skill={perks} />
+      ) : (
+        <p className="text-white/50 text-center py-4">Характеристики навыка недоступны</p>
+      )}
+    </div>
+  </div>
+);
+
+/** Loads a skill's perks for the full card. */
+export const useSkillCard = () => {
+  const [cardSkill, setCardSkill] = useState<BattleSkill | null>(null);
+  const [cardPerks, setCardPerks] = useState<SkillWithPerks | null>(null);
+  const [cardLoading, setCardLoading] = useState(false);
+  const openCard = (s: BattleSkill) => {
+    setCardSkill(s);
+    setCardPerks(null);
+    setCardLoading(true);
+    axios
+      .get<SkillWithPerks>(`/skills/${skillId(s)}`)
+      .then((r) => setCardPerks(r.data))
+      .catch(() => toast.error("Не удалось загрузить карточку навыка"))
+      .finally(() => setCardLoading(false));
+  };
+  return { cardSkill, cardPerks, cardLoading, openCard, closeCard: () => setCardSkill(null) };
 };
 
 const SkillIcon = ({ image }: { image: string | null }) =>

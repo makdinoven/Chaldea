@@ -1,5 +1,5 @@
 // EffectEditor — admin editor for a single effect entry (FEAT-125, Tailwind)
-import { COMPLEX_EFFECTS } from './skillConstants';
+import { COMPLEX_EFFECTS, SKILL_HIDDEN_COMPLEX_EFFECTS } from './skillConstants';
 import type { EffectEntry } from '../SkillTreeView/types';
 
 interface EffectEditorProps {
@@ -9,6 +9,16 @@ interface EffectEditorProps {
 }
 
 const EffectEditor = ({ effect, onChange, onDelete }: EffectEditorProps) => {
+  // Poison is not offered for skills anymore (poisons are items); keep it only
+  // for a row that already has it.
+  const availableEffects = COMPLEX_EFFECTS.filter(
+    (cf) =>
+      !SKILL_HIDDEN_COMPLEX_EFFECTS.includes(cf.value) || cf.value === effect.effect_name
+  );
+  const secondaryLabel = COMPLEX_EFFECTS.find(
+    (cf) => cf.value === effect.effect_name
+  )?.secondaryMagnitudeLabel;
+
   const handleField = <K extends keyof EffectEntry>(field: K, value: EffectEntry[K]) => {
     onChange({ ...effect, [field]: value });
   };
@@ -64,7 +74,7 @@ const EffectEditor = ({ effect, onChange, onDelete }: EffectEditorProps) => {
           className="gray-bg rounded-sm px-2 py-1 text-white text-sm"
         >
           <option value="">(не выбрано)</option>
-          {COMPLEX_EFFECTS.map((cf) => (
+          {availableEffects.map((cf) => (
             <option key={cf.value} value={cf.value}>
               {cf.label}
             </option>
@@ -92,6 +102,26 @@ const EffectEditor = ({ effect, onChange, onDelete }: EffectEditorProps) => {
           className="gray-bg rounded-sm px-2 py-1 text-white text-sm"
         />
       </div>
+
+      {secondaryLabel && (
+        <div className="flex flex-col gap-1">
+          <label className="text-white/60 text-[11px]">{secondaryLabel}:</label>
+          <input
+            type="number"
+            min={0}
+            step="any"
+            value={effect.secondary_magnitude ?? ''}
+            placeholder="0"
+            onChange={(e) =>
+              handleField(
+                'secondary_magnitude',
+                e.target.value === '' ? null : Number(e.target.value)
+              )
+            }
+            className="gray-bg rounded-sm px-2 py-1 text-white text-sm"
+          />
+        </div>
+      )}
 
       <div className="flex flex-col gap-1">
         <label className="text-white/60 text-[11px]">Описание:</label>

@@ -18,6 +18,7 @@ import type { WeaponCoating } from "../../../../utils/itemEffects";
 import SkillPicker, {
   type BattleSkill,
   type BattleItem,
+  type SkillPickerProps,
 } from "../SkillPicker/SkillPicker";
 
 // Shared state and log formatting for the battle control panel. The 2D bar and
@@ -101,6 +102,14 @@ export interface TurnDataState {
   [key: string]: SkillSlot | null;
 }
 
+// Resource names for `resource_tick` lines in the chronicle.
+const RESOURCE_TICK_LABELS: Record<string, string> = {
+  hp: "HP",
+  mana: "маны",
+  energy: "энергии",
+  stamina: "выносливости",
+};
+
 // TODO: type battle events properly when backend contract is formalized
 export interface BattleEvent {
   event: string;
@@ -170,6 +179,8 @@ export interface BattlePageBarProps {
   opponentData: CharacterData | null;
   isPaused?: boolean;
   controlFullSkip?: string | null;
+  /** Skill types Knockdown / Windburn take from the viewer's next turn. */
+  controlBlocked?: string[];
 }
 // --- Constants ---
 
@@ -250,10 +261,13 @@ export const useBattleBar = ({
   opponentData,
   isPaused = false,
   controlFullSkip = null,
+  controlBlocked = [],
 }: BattlePageBarProps) => {
   const [isTurnLikeTextShown, setIsTurnLikeTextShown] = useState(true);
   const [isAllTurnsOpen, setIsAllTurnsOpen] = useState(false);
   const [turnLogs, setTurnLogs] = useState<TurnLogsResponse | null>(null);
+  // Turn number the loaded logs belong to — they arrive after the turn index moves on.
+  const [turnLogsTurn, setTurnLogsTurn] = useState<number | null>(null);
   const isOpponentTurn = turn.isOpponentTurn || isPaused;
   // The viewer is stunned/paralysed this turn — lock the skill slots; the turn
   // can still be submitted (it just passes) so relabel the button.
@@ -388,6 +402,7 @@ export const useBattleBar = ({
         `${BASE_URL_BATTLES}/battles/battles/${Number(battleId)}/logs/${turnNumber}`,
       );
       setTurnLogs(data);
+      setTurnLogsTurn(turnNumber);
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } } };
       const msg =
@@ -476,8 +491,8 @@ export const useBattleBar = ({
       // Stamina was applied by the engine but never shown (ISSUES #6).
       if (rec.stamina) parts.push(`+${rec.stamina} выносливости`);
       // The detailed outcome (effects, cleanse, damage) arrives as its own
-      // events, so this line stays about the item itself: recovery and stock.
-      const left = event.quantity_left;
+      // events, so this line stays about the item itself. No stock count: a
+      // belt slot holds one item and is spent whole.
       return (
         <span className="flex flex-wrap items-center gap-1">
           {getName(event.who)}
@@ -485,11 +500,6 @@ export const useBattleBar = ({
           <span className="text-site-blue">{itemName(event)}</span>
           {parts.length > 0 && (
             <span className="text-green-400/80">({parts.join(", ")})</span>
-          )}
-          {typeof left === "number" && (
-            <span className="text-white/35 text-[11px]">
-              {left > 0 ? `осталось ${left}` : "последний"}
-            </span>
           )}
         </span>
       );
@@ -644,8 +654,12 @@ export const useBattleBar = ({
     }
 
     if (event.event === "effect_tick") {
-      // Periodic damage from a lingering effect (bleeding / burn / poison).
-      const label = describeEffect({ name: event.effect }).label;
+      // Periodic damage from a lingering effect (bleeding / burn / poison, or an
+      // "HP −" stat modifier with a duration — its attribute names the label).
+      const label = describeEffect({
+        name: event.effect,
+        attribute: typeof event.attribute === "string" ? event.attribute : undefined,
+      }).label;
       const amount = Math.round(Number(event.amount ?? 0));
       return (
         <span className="flex flex-wrap items-center gap-1">
@@ -704,6 +718,23 @@ export const useBattleBar = ({
       );
     }
 
+    if (event.event === "resource_tick") {
+      // One dose of a resource-over-time effect (HP / mana / energy ± per turn).
+      const amount = Math.round(Number(event.amount ?? 0));
+      const resource = RESOURCE_TICK_LABELS[String(event.attribute ?? "")] ?? "";
+      if (!amount) return null;
+      return (
+        <span className="flex flex-wrap items-center gap-1">
+          {getName(event.target)}
+          <span className="text-white/60">эффект</span>
+          <span className={`font-medium ${amount > 0 ? "text-emerald-400" : "text-site-red"}`}>
+            {amount > 0 ? "+" : "−"}
+            {Math.abs(amount)} {resource}
+          </span>
+        </span>
+      );
+    }
+
     if (event.event === "resource_spend") {
       // Stamina is not shown in battle (FEAT-143). Muted, de-emphasized line.
       const parts: string[] = [];
@@ -733,7 +764,8 @@ export const useBattleBar = ({
       </span>
     );
   };
-  const renderPicker = (): ReactNode => {
+  /** Everything the skill / item chooser needs — the 2D modal and the 3D hand alike. */
+  const pickerProps = (): SkillPickerProps | null => {
     if (!pickerType || isOpponentTurn) return null;
           const allSkills = (myData.skills as BattleSkill[] | undefined) ?? [];
           const allItems = (myData.items as BattleItem[] | undefined) ?? [];
@@ -761,36 +793,41 @@ export const useBattleBar = ({
           const selectedId = isItem
             ? ((current as { item_id?: number } | null)?.item_id ?? null)
             : ((current as { id?: number } | null)?.id ?? null);
-          return (
-            <SkillPicker
-              type={pickerType}
-              skills={typeSkills}
-              items={allItems}
-              cooldowns={cooldowns}
-              characterId={myData.character_id ?? 0}
-              weaponCoating={
-                pid != null ? runtimeData.participants[pid]?.weapon_coating ?? null : null
-              }
-              selectedId={selectedId}
-              onSelectSkill={(skill) =>
-                setTurnData((prev) => ({
-                  ...prev,
-                  [slotKey]: skill as unknown as SkillSlot,
-                }))
-              }
-              onSelectItem={(item) =>
-                setTurnData((prev) => ({
-                  ...prev,
-                  [SKILLS_KEYS.item]: item as unknown as SkillSlot,
-                }))
-              }
-              onClear={() =>
-                setTurnData((prev) => ({ ...prev, [slotKey]: null }))
-              }
-              onClose={() => setPickerType(null)}
-            />
-          );
+          return {
+            type: pickerType,
+            skills: typeSkills,
+            items: allItems,
+            cooldowns,
+            characterId: myData.character_id ?? 0,
+            weaponCoating:
+              pid != null ? runtimeData.participants[pid]?.weapon_coating ?? null : null,
+            selectedId,
+            onSelectSkill: (skill) =>
+              setTurnData((prev) => ({
+                ...prev,
+                [slotKey]: skill as unknown as SkillSlot,
+              })),
+            onSelectItem: (item) =>
+              setTurnData((prev) => ({
+                ...prev,
+                [SKILLS_KEYS.item]: item as unknown as SkillSlot,
+              })),
+            onClear: () => setTurnData((prev) => ({ ...prev, [slotKey]: null })),
+            onClose: () => setPickerType(null),
+          };
   };
+
+  const renderPicker = (): ReactNode => {
+    const props = pickerProps();
+    return props ? <SkillPicker {...props} /> : null;
+  };
+
+  // The viewer's bars right now — the 3D hand greys out what they cannot afford.
+  const myResources = (() => {
+    const live =
+      myData.participant_id != null ? runtimeData.participants[myData.participant_id] : undefined;
+    return { mana: live?.mana ?? 0, energy: live?.energy ?? 0 };
+  })();
 
   const slotKeyOf = (type: SlotType) =>
     type === "item" ? SKILLS_KEYS.item : SKILLS_KEYS[type as keyof typeof SKILLS_KEYS];
@@ -811,10 +848,13 @@ export const useBattleBar = ({
 
   const hasAnySlot = Object.values(turnData).some(Boolean);
 
+  /** Slot taken away by control (stun / paralysis, or Knockdown / Windburn on its type). */
+  const isSlotChained = (type: SlotType) => controlled || controlBlocked.includes(type);
+
   const isSlotLocked = (type: SlotType) =>
     type === "item"
       ? isOpponentTurn || controlled
-      : isOpponentTurn || controlled || skillLockedByCycle(type);
+      : isOpponentTurn || isSlotChained(type) || skillLockedByCycle(type);
 
   /** Who acted on a given 0-based turn index, per the fixed turn order. */
   const actorOfTurn = (turnIndex: number): number | undefined => {
@@ -855,6 +895,7 @@ export const useBattleBar = ({
   return {
     isOpponentTurn,
     controlled,
+    isSlotChained,
     turnQueue,
     participantById,
     sideOf,
@@ -866,6 +907,7 @@ export const useBattleBar = ({
     isAllTurnsOpen,
     toggleAllTurnsVisibility,
     turnLogs,
+    turnLogsTurn,
     formatBattleEvent: (event: BattleEvent) => formatBattleEvent(event, snapshotData),
     formatLogTime,
     activeTurnActorName,
@@ -879,6 +921,8 @@ export const useBattleBar = ({
     pickerType,
     setPickerType,
     renderPicker,
+    pickerProps,
+    myResources,
     setSlot,
     clearSlot,
     clearAllSlots,

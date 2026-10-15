@@ -14,7 +14,11 @@ export interface EffectLike {
   name?: string;
   attribute?: string;
   magnitude?: number;
+  /** Second strength of a complex effect — Burn: dodge reduction, percentage points. */
+  secondary_magnitude?: number | null;
   duration?: number;
+  /** Participant who cast it (battle state only). */
+  owner_id?: number;
 }
 
 export interface EffectDescription {
@@ -28,6 +32,24 @@ export interface EffectDescription {
 const PERIODIC_DAMAGE = ["bleeding", "burn"];
 const PERCENT_MODIFIERS = ["armorbreak", "freeze", "electrify", "daze", "wet"];
 const CONTROL_EFFECTS = ["stun", "knockdown", "windburn"];
+
+export type DotKind = "bleeding" | "burn" | "poison";
+
+/**
+ * Which damage-over-time family an effect belongs to, or null if it deals none.
+ * Mirrors battle-service `_is_periodic_damage` (name or attribute bleeding / burn,
+ * or poison with attribute periodic_damage).
+ */
+export const periodicDamageKind = (
+  name?: string | null,
+  attribute?: string | null,
+): DotKind | null => {
+  const n = (name ?? "").toLowerCase();
+  const a = (attribute ?? "").toLowerCase();
+  if (n === "poison" && a === "periodic_damage") return "poison";
+  const hit = [n, a].find((k) => PERIODIC_DAMAGE.includes(k));
+  return hit ? (hit as DotKind) : null;
+};
 
 export const pluralizeTurn = (count: number): string => {
   const mod10 = count % 10;
@@ -83,7 +105,9 @@ export const CLEANSE_HINT =
   "Полный контроль с пропуском хода (оглушение, паралич) не снимается никогда — это правило боя, а не настройка предмета.";
 
 /** Selector -> Russian. An effect name (e.g. `Bleeding`) falls back to its own label. */
-export const cleanseSelectorLabel = (key: string | null | undefined): string => {
+export const cleanseSelectorLabel = (
+  key: string | null | undefined,
+): string => {
   if (!key) return CLEANSE_SELECTORS[0].label;
   const known = CLEANSE_SELECTORS.find((s) => s.value === key);
   if (known) return known.label;
@@ -95,10 +119,24 @@ export const cleanseSelectorLabel = (key: string | null | undefined): string => 
 const complexOption = (name: string) =>
   COMPLEX_EFFECTS.find((c) => c.value === name);
 
-const statLabel = (key: string): string =>
-  STAT_MODIFIERS.find((m) => m.key === key)?.label.replace("(%)", "").trim() ??
-  PRIMARY_ATTR_OPTIONS.find((a) => a.value === key)?.label ??
-  key;
+// Battle state stores stats under the engine's names (battle-service
+// `_ATTRIBUTE_ALIASES`); the editor's option list knows the editor's names.
+const ENGINE_TO_EDITOR_STAT: Record<string, string> = {
+  dodge: "dodge_chance",
+  critical_damage: "crit_damage",
+  crit_chance: "critical_hit_chance",
+};
+
+const statLabel = (rawKey: string): string => {
+  const key = ENGINE_TO_EDITOR_STAT[rawKey] ?? rawKey;
+  return (
+    STAT_MODIFIERS.find((m) => m.key === key)
+      ?.label.replace("(%)", "")
+      .trim() ??
+    PRIMARY_ATTR_OPTIONS.find((a) => a.value === key)?.label ??
+    rawKey
+  );
+};
 
 /**
  * Turn a raw effect into a readable Russian label + detail.
@@ -181,6 +219,12 @@ export const describeEffect = (e: EffectLike): EffectDescription => {
     let positive = false;
     if (isPeriodic) {
       magPart = mag ? `−${Math.abs(mag)} HP/ход` : "";
+      const dodgeDown = Math.abs(e.secondary_magnitude ?? 0);
+      if (key === "burn" && dodgeDown) {
+        magPart = [magPart, `−${dodgeDown}% уклонения`]
+          .filter(Boolean)
+          .join(", ");
+      }
     } else if (isPercentMod) {
       magPart = mag ? `${Math.abs(mag)}%` : "";
     } else if (isControl) {

@@ -268,6 +268,11 @@ export const validateBattleConfig = (item: Record<string, unknown>): string | nu
       return "Длительность эффекта должна быть от 0 до 100 ходов";
     if (!inRange(row.magnitude ?? 0, -MAX_EFFECT_MAGNITUDE, MAX_EFFECT_MAGNITUDE))
       return `Сила эффекта должна быть от -${MAX_EFFECT_MAGNITUDE} до ${MAX_EFFECT_MAGNITUDE}`;
+    if (
+      row.secondary_magnitude != null &&
+      !inRange(row.secondary_magnitude, -MAX_EFFECT_MAGNITUDE, MAX_EFFECT_MAGNITUDE)
+    )
+      return `Второе значение эффекта должно быть от -${MAX_EFFECT_MAGNITUDE} до ${MAX_EFFECT_MAGNITUDE}`;
   }
 
   for (const row of damage) {
@@ -430,6 +435,7 @@ export const buildItemPayload = (item: Record<string, unknown>): Record<string, 
         chance: num(row.chance ?? 100),
         duration: num(row.duration ?? 0),
         magnitude: num(row.magnitude ?? 0),
+        secondary_magnitude: numOrNull(row.secondary_magnitude),
         target_side: row.target_side || "self",
       }))
     : [];

@@ -26,6 +26,8 @@ export interface ItemEffect {
   chance?: number | null;
   duration?: number | null;
   magnitude?: number | null;
+  /** Effect-specific second value (Burn: dodge reduction, percentage points). */
+  secondary_magnitude?: number | null;
   attribute_key?: string | null;
 }
 
