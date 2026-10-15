@@ -87,10 +87,36 @@ jobs:
         timeout-minutes: 6
         run: cd ${{ matrix.working-dir }} && python -m pytest tests/ ${{ matrix.pytest-args }} -v
 
+  build-frontend:
+    name: Build frontend
+    runs-on: ubuntu-latest
+    # Built here instead of on the 4 GB VPS, where it took ~30 minutes
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/frontend/app-chaldea/package-lock.json
+
+      - name: Build
+        working-directory: services/frontend/app-chaldea
+        run: |
+          npm ci --legacy-peer-deps
+          npm run build
+          tar -czf "$GITHUB_WORKSPACE/frontend-dist.tar.gz" -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist.tar.gz
+          retention-days: 3
+
   deploy:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, build-frontend]
     env:
       TARGET: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
       RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -103,6 +129,15 @@ jobs:
         run: |
           echo "${{ secrets.SSH_PRIVATE_KEY_BASE64 }}" | base64 -d > key
           chmod 600 key
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+
+      - name: Upload frontend build
+        run: |
+          ssh $SSH_OPTS "$TARGET" "mkdir -p ~/deploy"
+          scp $SSH_OPTS frontend-dist.tar.gz "$TARGET:deploy/frontend-$RUN_ID.tar.gz"
 
       - name: Start deploy on the server
         run: |

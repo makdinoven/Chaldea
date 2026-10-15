@@ -14,6 +14,8 @@ services/photo-service/credentials/
 
 # Build output
 dist/
+# Prebuilt frontend dropped in by docker/deploy-prod.sh for the prod api-gateway image
+docker/api-gateway/frontend-dist/
 build/
 
 # Logs

@@ -42,6 +42,24 @@ git fetch origin main
 git reset --hard origin/main
 log "deploying $(git log -1 --format='%h %s')"
 
+# The api-gateway image only copies a ready frontend build. CI builds it on a
+# GitHub runner and uploads it next to this script; a manual run without that
+# archive builds it here in a throwaway container (slow, but works).
+FRONTEND_ARCHIVE="$STATE_DIR/frontend-$RUN_ID.tar.gz"
+FRONTEND_DIST="$REPO_DIR/docker/api-gateway/frontend-dist"
+rm -rf "$FRONTEND_DIST"
+mkdir -p "$FRONTEND_DIST"
+if [ -f "$FRONTEND_ARCHIVE" ]; then
+  log "frontend: unpacking CI build"
+  tar -xzf "$FRONTEND_ARCHIVE" -C "$FRONTEND_DIST"
+  rm -f "$FRONTEND_ARCHIVE"
+else
+  log "frontend: no CI build, building on the server"
+  docker run --rm -v "$REPO_DIR/services/frontend/app-chaldea:/src:ro" -v "$FRONTEND_DIST:/out" node:22-alpine \
+    sh -c "cp -r /src /app && cd /app && rm -rf node_modules dist && npm install --legacy-peer-deps && npm run build && cp -r dist/. /out/"
+fi
+[ -f "$FRONTEND_DIST/index.html" ] || { log "frontend build is missing index.html"; exit 1; }
+
 for service in $("${COMPOSE[@]}" config --services); do
   log "build $service"
   "${COMPOSE[@]}" build "$service"
