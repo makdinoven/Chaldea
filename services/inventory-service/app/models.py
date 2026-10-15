@@ -234,6 +234,8 @@ class ItemEffect(Base):
     chance = Column(Integer, nullable=False, default=100, server_default="100")
     duration = Column(Integer, nullable=False, default=1, server_default="1")
     magnitude = Column(Float, nullable=False, default=0.0, server_default="0")
+    # Effect-specific second value (e.g. Burn: dodge reduction in percentage points).
+    secondary_magnitude = Column(Float, nullable=True, default=None)
     attribute_key = Column(String(50), nullable=True)
 
     item = relationship("Items", back_populates="effects")

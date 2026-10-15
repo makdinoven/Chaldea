@@ -221,7 +221,8 @@ class TestGatedRoutesStillWorkForServices:
         slots = response.json()
         assert [s["slot_type"] for s in slots] == ["fast_slot_1"]
         assert slots[0]["item_id"] == POTION_ID
-        assert slots[0]["quantity"] == 5
+        # One item per belt slot, whatever the bag still holds (5 potions).
+        assert slots[0]["quantity"] == 1
         assert slots[0]["health_recovery"] == 30
 
     def test_the_twin_serves_an_ownerless_character(self, client, world):
@@ -357,7 +358,8 @@ class TestPlayerFastSlotsRoute:
         assert len(slots) == 1
         assert slots[0]["slot_type"] == "fast_slot_1"
         assert slots[0]["item_id"] == POTION_ID
-        assert slots[0]["quantity"] == 5
+        # One item per belt slot, whatever the bag still holds (5 potions).
+        assert slots[0]["quantity"] == 1
         assert slots[0]["name"] == "Зелье лечения"
         assert slots[0]["health_recovery"] == 30
         assert slots[0]["effects"] == []

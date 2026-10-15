@@ -1426,7 +1426,10 @@ def _get_fast_slots_core(db: Session, character_id: int) -> List[schemas.FastSlo
     Для каждого слота отдаёт:
       - slot_type: fast_slot_1…fast_slot_10
       - item_id   : id надетого consumable
-      - quantity  : сколько штук этого item_id осталось в инвентаре
+      - quantity  : всегда 1 — в слоте лежит ровно один предмет. При надевании
+                    он списывается из сумки (equip_item), в бою расходуется сам
+                    слот (consume_item_internal); остаток в сумке к слоту
+                    отношения не имеет.
 
     Общее тело для игрового и внутреннего маршрутов (FEAT-169 §3.2).
     """
@@ -1443,18 +1446,6 @@ def _get_fast_slots_core(db: Session, character_id: int) -> List[schemas.FastSlo
             # пропускаем пустые
             continue
 
-        # 2) Считаем в инвентаре оставшееся количество этого item_id
-        total_qty = (
-            db.query(models.CharacterInventory)
-              .filter(
-                  models.CharacterInventory.character_id == character_id,
-                  models.CharacterInventory.item_id == slot.item_id,
-              )
-              .with_entities(models.CharacterInventory.quantity)
-              .all()
-        )
-        # total_qty — список кортежей [(qty1,), (qty2,), …]
-        qty = sum(q[0] for q in total_qty)
         item = slot.item  # благодаря relationship
         if not item:
             continue  # на всякий случай
@@ -1465,7 +1456,7 @@ def _get_fast_slots_core(db: Session, character_id: int) -> List[schemas.FastSlo
         result.append(schemas.FastSlot(
             slot_type=slot.slot_type,
             item_id=slot.item_id,
-            quantity=qty,
+            quantity=1,
             name=item.name,
             image=item.image or "",
             health_recovery=item.health_recovery or 0,
@@ -1853,64 +1844,40 @@ def consume_item_internal(
     _internal=Depends(verify_internal_token),
 ):
     """
-    Списывает 1 единицу предмета из инвентаря персонажа и очищает
-    быстрый слот, если предмет закончился.
-    Используется battle-service при применении расходника в бою.
-    Только для межсервисных вызовов: требует `X-Internal-Token` (FEAT-169).
+    Расходует предмет, применённый в бою: очищает быстрый слот, из которого
+    его взяли. Сумку не трогает — штука ушла из неё ещё при надевании в слот
+    (equip_item). Пополнить пояс игрок может только вне боя.
+    Используется battle-service. Только для межсервисных вызовов:
+    требует `X-Internal-Token` (FEAT-169).
+
+    Раньше эндпоинт списывал штуку из СУМКИ и оставлял слот занятым, пока
+    сумка не опустеет: пояс из одного зелья тянул из сумки все остальные.
     """
     # FEAT-164: food is never usable in battle (defence in depth)
     food_item = db.query(models.Items.is_food).filter(models.Items.id == req.item_id).first()
     if food_item is not None and food_item[0]:
         raise HTTPException(status_code=400, detail="Еду нельзя использовать в бою")
 
-    # Atomic decrement: only succeeds if quantity > 0
-    result = db.execute(
-        text(
-            "UPDATE character_inventory "
-            "SET quantity = quantity - 1 "
-            "WHERE character_id = :cid AND item_id = :iid AND quantity > 0"
-        ),
-        {"cid": character_id, "iid": req.item_id},
+    query = db.query(models.EquipmentSlot).filter(
+        models.EquipmentSlot.character_id == character_id,
+        models.EquipmentSlot.item_id == req.item_id,
+        models.EquipmentSlot.slot_type.like("fast_slot_%"),
     )
+    if req.slot_type:
+        query = query.filter(models.EquipmentSlot.slot_type == req.slot_type)
+    slot = query.order_by(models.EquipmentSlot.slot_type).with_for_update().first()
+    if slot is None:
+        raise HTTPException(status_code=404, detail="Этого предмета нет в быстром слоте")
+
+    slot.item_id = None
+    db.add(slot)
     db.commit()
 
-    remaining = 0
-
-    if result.rowcount > 0:
-        # Read remaining quantity
-        row = db.execute(
-            text(
-                "SELECT quantity FROM character_inventory "
-                "WHERE character_id = :cid AND item_id = :iid"
-            ),
-            {"cid": character_id, "iid": req.item_id},
-        ).fetchone()
-        remaining = row[0] if row else 0
-
-        # Clean up inventory row if quantity reached 0
-        if remaining == 0:
-            db.execute(
-                text(
-                    "DELETE FROM character_inventory "
-                    "WHERE character_id = :cid AND item_id = :iid AND quantity = 0"
-                ),
-                {"cid": character_id, "iid": req.item_id},
-            )
-            db.commit()
-
-    # Always clear fast slot for this item when quantity is 0 or item wasn't in inventory
-    # This prevents the item from reappearing in future battles
-    if remaining == 0:
-        db.execute(
-            text(
-                "UPDATE equipment_slots SET item_id = NULL "
-                "WHERE character_id = :cid AND item_id = :iid "
-                "AND slot_type LIKE 'fast_slot_%%'"
-            ),
-            {"cid": character_id, "iid": req.item_id},
-        )
-        db.commit()
-
+    remaining = db.query(models.EquipmentSlot).filter(
+        models.EquipmentSlot.character_id == character_id,
+        models.EquipmentSlot.item_id == req.item_id,
+        models.EquipmentSlot.slot_type.like("fast_slot_%"),
+    ).count()
     return {"status": "ok", "remaining_quantity": remaining}
 
 

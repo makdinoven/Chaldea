@@ -66,10 +66,12 @@ def migration_db():
     op = Operations(MigrationContext.configure(conn))
     m024 = _load("024_item_battle_effects.py")
     m025 = _load("025_item_xp_buffs.py")
+    m026 = _load("026_item_effect_secondary_mag.py")
     m024.op = op
     m025.op = op
+    m026.op = op
 
-    yield {"conn": conn, "op": op, "m024": m024, "m025": m025}
+    yield {"conn": conn, "op": op, "m024": m024, "m025": m025, "m026": m026}
 
     conn.close()
     engine.dispose()
@@ -110,8 +112,8 @@ class TestRevisionChain:
         assert len(m024.revision) <= 32
         assert len(m025.revision) <= 32
 
-    def test_no_branch_and_025_is_head(self):
-        """Ровно один потомок у каждой ревизии, 025 — голова."""
+    def test_no_branch_and_026_is_head(self):
+        """Ровно один потомок у каждой ревизии, 026 — голова."""
         revisions, downs = set(), {}
         for fname in os.listdir(_VERSIONS_DIR):
             if not re.match(r"^\d{3}_.*\.py$", fname):
@@ -125,7 +127,7 @@ class TestRevisionChain:
         parents = [d for d in downs.values() if d]
         assert len(parents) == len(set(parents)), "ветвление в дереве миграций"
         heads = revisions - set(parents)
-        assert heads == {"025_item_xp_buffs"}
+        assert heads == {"026_item_effect_secondary_mag"}
 
 
 # ===========================================================================
@@ -153,9 +155,13 @@ class TestMigration024:
             <= _columns(conn, "items")
 
     def test_columns_match_the_orm_models(self, migration_db):
-        """Дрейф между models.py и миграцией ловится здесь, а не на проде."""
-        conn, m024 = migration_db["conn"], migration_db["m024"]
+        """Дрейф между models.py и миграцией ловится здесь, а не на проде.
+
+        026 adds `item_effects.secondary_magnitude` on top of 024.
+        """
+        conn, m024, m026 = migration_db["conn"], migration_db["m024"], migration_db["m026"]
         m024.upgrade()
+        m026.upgrade()
         conn.commit()
 
         assert _columns(conn, "item_effects") == \
@@ -214,6 +220,40 @@ class TestMigration024:
         conn.commit()
 
         assert conn.execute(text("SELECT name FROM items")).scalar() == "Зелье силы"
+
+
+class TestMigration026:
+
+    def test_chain_and_revision_length(self, migration_db):
+        m026 = migration_db["m026"]
+        assert m026.revision == "026_item_effect_secondary_mag"
+        assert m026.down_revision == "025_item_xp_buffs"
+        assert len(m026.revision) <= 32
+
+    def test_upgrade_adds_nullable_column_and_is_idempotent(self, migration_db):
+        conn, m024, m026 = migration_db["conn"], migration_db["m024"], migration_db["m026"]
+        m024.upgrade()
+        item_id = _add_item(conn, "Смесь")
+        conn.execute(text("INSERT INTO item_effects (item_id, effect_name) "
+                          "VALUES (:iid, 'Burn')"), {"iid": item_id})
+        conn.commit()
+
+        m026.upgrade()
+        m026.upgrade()  # re-run is a no-op
+        conn.commit()
+
+        assert "secondary_magnitude" in _columns(conn, "item_effects")
+        assert conn.execute(text(
+            "SELECT secondary_magnitude FROM item_effects")).scalar() is None
+
+    def test_downgrade_drops_column(self, migration_db):
+        conn, m024, m026 = migration_db["conn"], migration_db["m024"], migration_db["m026"]
+        m024.upgrade()
+        m026.upgrade()
+        conn.commit()
+        m026.downgrade()
+        conn.commit()
+        assert "secondary_magnitude" not in _columns(conn, "item_effects")
 
 
 # ===========================================================================

@@ -46,7 +46,8 @@ SLOT_KEYS = (
 # Keys `buffs.apply_new_effects` / `battle_engine.compute_damage_with_rolls`
 # read off each nested row.
 EFFECT_ROW_KEYS = (
-    "target_side", "effect_name", "chance", "duration", "magnitude", "attribute_key",
+    "target_side", "effect_name", "chance", "duration", "magnitude",
+    "secondary_magnitude", "attribute_key",
 )
 DAMAGE_ROW_KEYS = (
     "damage_type", "amount", "weapon_slot", "target_side", "chance",
@@ -132,7 +133,8 @@ class TestFastSlotPayloadShape:
 
         assert slot["slot_type"] == "fast_slot_1"
         assert slot["item_id"] == item_id
-        assert slot["quantity"] == 4
+        # A belt slot holds exactly one item — the 4 in the bag don't count.
+        assert slot["quantity"] == 1
         assert slot["name"] == "Зелье силы"
         assert slot["health_recovery"] == 30
         assert slot["mana_recovery"] == 10
@@ -207,7 +209,8 @@ class TestFastSlotPayloadShape:
         assert slot["health_recovery"] == 0
         assert slot["mana_recovery"] == 0
 
-    def test_quantity_sums_every_inventory_stack(self, client, db_session):
+    def test_slot_reports_one_item_whatever_the_bag_holds(self, client, db_session):
+        """Old rule summed every bag stack (7 + 3 = 10). Now a slot is one item."""
         item_id = _create_item_via_admin(client, name="Стопка", effects=[_EFFECT])
         _equip_fast_slot(db_session, 1, item_id, quantity=7)
         db_session.add(models.CharacterInventory(
@@ -215,7 +218,7 @@ class TestFastSlotPayloadShape:
         db_session.commit()
 
         slot = _fast_slots(client)[0]
-        assert slot["quantity"] == 10
+        assert slot["quantity"] == 1
         assert len(slot["effects"]) == 1, "вторая стопка не должна ломать эффекты"
 
     def test_several_slots_keep_their_own_effects(self, client, db_session):

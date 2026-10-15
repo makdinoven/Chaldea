@@ -348,12 +348,23 @@ class TestFoodRejectedElsewhere:
         assert _qty(env["db"], env["food_row"]) == 3
 
     def test_internal_consume_item_still_works_for_potions(self, env):
+        """A potion on the belt is spent from its slot; the bag is untouched."""
+        db = env["db"]
+        db.add(models.EquipmentSlot(
+            character_id=CID, slot_type="fast_slot_1", item_id=PLAIN_ID, is_enabled=True))
+        db.commit()
+
         resp = env["client"].post(
             f"/inventory/internal/characters/{CID}/consume_item", json={"item_id": PLAIN_ID},
             headers=_INTERNAL_HEADERS,
         )
         assert resp.status_code == 200, resp.text
-        assert _qty(env["db"], env["plain_row"]) == 1
+        assert resp.json()["remaining_quantity"] == 0
+        assert _qty(db, env["plain_row"]) == 2
+        db.expire_all()
+        slot = db.query(models.EquipmentSlot).filter_by(
+            character_id=CID, slot_type="fast_slot_1").first()
+        assert slot.item_id is None
 
 
 # ===========================================================================

@@ -375,6 +375,8 @@ class ItemEffectIn(BaseModel):
     chance: int = 100
     duration: int = 1
     magnitude: float = 0.0
+    # Effect-specific second value (e.g. Burn: dodge reduction, percentage points).
+    secondary_magnitude: Optional[float] = None
     attribute_key: Optional[str] = None
 
     @validator("target_side")
@@ -414,6 +416,16 @@ class ItemEffectIn(BaseModel):
             )
         return v
 
+    @validator("secondary_magnitude")
+    def _v_secondary_magnitude(cls, v):
+        if v is None:
+            return v
+        if not -MAX_EFFECT_MAGNITUDE <= v <= MAX_EFFECT_MAGNITUDE:
+            raise ValueError(
+                f"Второе значение эффекта должно быть от -{int(MAX_EFFECT_MAGNITUDE)} до {int(MAX_EFFECT_MAGNITUDE)}"
+            )
+        return v
+
 
 class ItemEffectOut(BaseModel):
     """Ответная форма строки эффекта — без валидации (см. заметку выше)."""
@@ -424,6 +436,7 @@ class ItemEffectOut(BaseModel):
     chance: int
     duration: int
     magnitude: float
+    secondary_magnitude: Optional[float] = None
     attribute_key: Optional[str] = None
 
     class Config:
@@ -1079,10 +1092,14 @@ class RevalidateEquipmentResponse(BaseModel):
 
 class ConsumeItemRequest(BaseModel):
     item_id: int
+    # The belt slot the item was used from (battle snapshot). Optional so an
+    # older caller still works: then the first belt slot holding the item goes.
+    slot_type: Optional[str] = None
 
 
 class ConsumeItemResponse(BaseModel):
     status: str
+    # Copies of this item still on the belt after the use.
     remaining_quantity: int
 
 
