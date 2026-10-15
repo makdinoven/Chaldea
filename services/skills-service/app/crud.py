@@ -177,6 +177,7 @@ def _effect_to_dict(e) -> dict:
         "chance": e.chance,
         "duration": e.duration,
         "magnitude": e.magnitude,
+        "secondary_magnitude": getattr(e, "secondary_magnitude", None),
         "attribute_key": e.attribute_key,
     }
 
@@ -636,6 +637,7 @@ def _merge_resolved_effects(effects: list[dict]) -> list[dict]:
 
     Merge rules:
       - magnitude: SUM
+      - secondary_magnitude: SUM (None only if both are None)
       - duration: SUM
       - chance: SUM (no cap — battle engine subtracts a vitality stat from
         proc chance, so storing >100% is intentional)
@@ -658,6 +660,11 @@ def _merge_resolved_effects(effects: list[dict]) -> list[dict]:
             a = existing.get("magnitude") or 0
             b = eff.get("magnitude") or 0
             existing["magnitude"] = a + b
+            # secondary_magnitude: SUM (None only if both are None)
+            s1, s2 = existing.get("secondary_magnitude"), eff.get("secondary_magnitude")
+            existing["secondary_magnitude"] = (
+                None if s1 is None and s2 is None else (s1 or 0) + (s2 or 0)
+            )
             # duration: SUM (None only if both are None)
             d1, d2 = existing.get("duration"), eff.get("duration")
             existing["duration"] = None if d1 is None and d2 is None else (d1 or 0) + (d2 or 0)

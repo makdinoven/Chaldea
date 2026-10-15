@@ -30,6 +30,7 @@ class EffectEntryRead(BaseModel):
     chance: int = 100
     duration: int = 1
     magnitude: float = 0.0
+    secondary_magnitude: Optional[float] = None
     attribute_key: Optional[str] = None
 
     class Config:
@@ -55,6 +56,7 @@ class EffectEntryWrite(BaseModel):
     chance: int = 100
     duration: int = 1
     magnitude: float = 0.0
+    secondary_magnitude: Optional[float] = None
     attribute_key: Optional[str] = None
 
 

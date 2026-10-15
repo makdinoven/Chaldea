@@ -74,6 +74,8 @@ class SkillBaseEffect(Base):
     chance: Mapped[int] = mapped_column(Integer, default=100)
     duration: Mapped[int] = mapped_column(Integer, default=1)
     magnitude: Mapped[float] = mapped_column(Float, default=0.0)
+    # Effect-specific second value (e.g. Burn: dodge reduction in percentage points).
+    secondary_magnitude: Mapped[float] = mapped_column(Float, nullable=True, default=None)
     attribute_key: Mapped[str] = mapped_column(String(50), nullable=True)
 
     skill = relationship("Skill", back_populates="base_effects")
@@ -132,6 +134,8 @@ class SkillPerkEffect(Base):
     chance: Mapped[int] = mapped_column(Integer, default=100)
     duration: Mapped[int] = mapped_column(Integer, default=1)
     magnitude: Mapped[float] = mapped_column(Float, default=0.0)
+    # Effect-specific second value (e.g. Burn: dodge reduction in percentage points).
+    secondary_magnitude: Mapped[float] = mapped_column(Float, nullable=True, default=None)
     attribute_key: Mapped[str] = mapped_column(String(50), nullable=True)
 
     perk = relationship("SkillPerk", back_populates="effects")
