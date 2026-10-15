@@ -369,12 +369,29 @@ admin-эндпоинтов соседей. Это строго лучше «вы
 
 ## MEDIUM
 
+### Баг: сбой посреди создания боя оставляет «висящий» бой, участники считаются занятыми
+**Сервис:** battle-service
+**Файл:** `services/battle-service/app/main.py` — `create_battle_endpoint` (~831) и `build_participant_info` (~311)
+**Обнаружено:** групповой бой в 3D (2026-10-16), локально
+**Приоритет:** MEDIUM
+**Описание:** запись боя и участники пишутся в БД до того, как собраны данные всех участников. Если для кого-то из них `build_participant_info` падает (например, у персонажа нет строки атрибутов → 500 «Не удалось получить атрибуты персонажа N»), клиент получает ошибку, но бой со статусом `in_progress` и уже вставленными участниками остаётся. Все они дальше получают «Персонаж уже в бою», пока бой не завершат вручную (`/battles/admin/{id}/force-finish`). Воспроизведено: бой 250 из 4 участников после ошибки на шестом.
+**Возможное решение:** собирать `build_participant_info` для всех участников до записи боя в БД (или в одной транзакции с откатом при любой ошибке, плюс не сохранять Redis-состояние).
+
+
 ~~### Баг: прямой заход по адресу `/rules` даёт 404 — nginx уводит SPA-путь в locations-service~~
 ~~**Сервис:** api-gateway (nginx) + frontend~~
 ~~**Обнаружено:** FEAT-173 (Reviewer, live-проверка, 2026-09-20)~~
 ~~**Описание:** для проксируемого блока `location /rules/` nginx сам отвечал `301` на запрос без завершающего слеша: `GET /rules` → `301 /rules/` → locations-service → `404`. SPA-маршрут `/rules` был недостижим по закладке и работал только при навигации внутри приложения.~~
 ~~**Исправлено в FEAT-173:** в оба конфига (`nginx.conf`, `nginx.prod.conf`) добавлены точные совпадения `location = /rules` и `location = /rules/` с `return 301 /guide` **до** префиксного блока `/rules/`. Точное совпадение имеет приоритет над префиксом, поэтому закладка на любую форму старого адреса попадает на редирект, а API-пути (`/rules/list`, `/rules/create`, …) не затронуты. Проверено live после пересборки шлюза: `/rules` и `/rules/` → `301 /guide`, `/rules/list` → 200 с четырьмя правилами.~~
 ~~**Остаётся общий риск:** любой будущий SPA-маршрут, совпадающий с префиксом сервиса, наступит на те же грабли — см. запись ниже про `/characters/list`.~~
+
+### Баг: `PUT /skills/admin/skill_perks/{id}` возвращает в ответе старые эффекты и урон перка
+**Сервис:** skills-service
+**Файл:** `services/skills-service/app/crud.py` (`update_perk` → `_load_perk`)
+**Обнаружено:** при добавлении `secondary_magnitude` (Возгорание: снижение уклонения), 2026-10-15
+**Приоритет:** MEDIUM
+**Описание:** `update_perk` удаляет старые строки `effects`/`damage_entries`, добавляет новые и делает `commit`, а затем перечитывает перк через `_load_perk`. Сессия создана с `expire_on_commit=False`, поэтому перк остаётся в identity map со старыми, уже загруженными коллекциями, и `selectinload` их не перезаписывает. В БД всё сохраняется верно, но тело ответа PUT содержит эффекты/урон **до** правки. Redux-экшен `skills/updatePerk` (`skillsAdminActions.ts`) кладёт `res.data` в стор — админка может показать устаревшие строки до перезагрузки.
+**Возможное решение:** в `_load_perk` добавить `.execution_options(populate_existing=True)` (или `db.expire(perk)` перед перечитыванием). Тест `tests/test_effect_secondary_magnitude.py::test_perk_effect_create_and_update` пока проверяет результат через повторный GET.
 
 ### Утечка: снапшот наблюдателя отдаёт характеристики, навыки и пояс любому игроку из той же локации
 **Сервис:** battle-service
@@ -757,6 +774,14 @@ UPDATE `users`, обнуление `characters.user_id`) объединены в
 ---
 
 ## LOW
+
+### Баг: в части админок `endurance` подписан как «Выносливость», хотя это «Живучесть»
+**Сервис:** frontend
+**Файлы:** `components/Admin/CharactersPage/tabs/AttributesTab.tsx:52`, `components/Admin/DungeonsPage/editor/PropertyPanel.tsx:32`, `components/Admin/MobsPage/AdminMobTemplateForm.tsx:22`, `components/Admin/PerksPage/PerkForm.tsx:89`, `components/Admin/TitlesPage/TitleForm.tsx:58`, `components/AdminNpcsPage/NpcEquipmentEditor.tsx:211`
+**Обнаружено:** аудит боевых эффектов (2026-10-16)
+**Приоритет:** LOW
+**Описание:** в игре `endurance` — «Живучесть» (от неё считается сопротивление эффектам), а «Выносливость» — ресурс `stamina`. Редактор рас (`StatPresetEditor.tsx`), `MobStatsEditor.tsx` и вторая подпись в `PerkForm.tsx:131` называют поле правильно, а перечисленные места — «Выносливость». Админ видит два поля с одним именем и путает их.
+**Возможное решение:** заменить подпись `endurance` на «Живучесть» в перечисленных местах (и `endurance_modifier` → «Живучесть» в редакторе экипировки NPC).
 
 ### Долг: `GET /battles/character/{id}/in-battle` описан как внутренний, но лежит вне `/internal/`
 **Сервис:** battle-service
