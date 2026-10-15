@@ -1,5 +1,21 @@
 # buffs.py
+from random import choice
 from typing import Dict, List
+
+# Stat keys the skill / item editors write → the attribute names the engine reads
+# (character-attributes-service columns). The editors offer "Шанс уклонения" as
+# `dodge_chance` and "Крит.урон" as `crit_damage`, but the damage formula reads
+# `dodge` and `critical_damage`: without these aliases those effects were stored,
+# shown on the card, and did nothing at all.
+_ATTRIBUTE_ALIASES = {
+    "crit_chance": "critical_hit_chance",
+    "dodge_chance": "dodge",
+    "crit_damage": "critical_damage",
+}
+
+
+def _canonical_attribute(attribute: str) -> str:
+    return _ATTRIBUTE_ALIASES.get(attribute, attribute)
 
 # ──────────────────────────────────────────────────────────
 def _normalize_effect(row: Dict) -> Dict:
@@ -7,13 +23,12 @@ def _normalize_effect(row: Dict) -> Dict:
     Разворачивает JSON-строку из БД в единый формат:
         {name, attribute, magnitude, duration}
     """
-    ALIASES = {"crit_chance": "critical_hit_chance"}
     name      = row["effect_name"]
     magnitude = row["magnitude"]
     duration  = row["duration"]
 
     if row.get("attribute_key"):  # StatModifier
-        attribute = ALIASES.get(row["attribute_key"], row["attribute_key"])
+        attribute = _canonical_attribute(row["attribute_key"])
     else:
         parts = [s.strip().lower() for s in name.split(":", 1)]
         if len(parts) == 2:
@@ -27,12 +42,16 @@ def _normalize_effect(row: Dict) -> Dict:
         else:
             attribute = name.replace(" ", "_").lower()
 
-    return {
+    eff = {
         "name"      : name,
         "attribute" : attribute,
         "magnitude" : magnitude,
         "duration"  : duration,
     }
+    # Second strength of a complex effect (Burn: dodge reduction, percentage points).
+    if row.get("secondary_magnitude") is not None:
+        eff["secondary_magnitude"] = row["secondary_magnitude"]
+    return eff
 
 
 def normalize_source(source) -> str | None:
@@ -96,7 +115,8 @@ def apply_new_effects(
     source=None,
 ) -> None:
     """
-    • Для hp/mana/energy/stamina — применяем сразу (clamp 0..max_*)
+    • Для hp/mana/energy/stamina — применяем сразу (clamp 0..max_*); при duration > 1 —
+      ещё по дозе на каждом ходу кастера (всего duration доз)
     • Для остальных — нормализуем и кладём в active_effects[pid]
     • is_enemy=True — эффекты применяются к врагу (положительные мгновенные
       значения инвертируются в урон, чтобы не лечить противника)
@@ -120,53 +140,76 @@ def apply_new_effects(
     обновлении уже активного эффекта он не трогается, иначе эффект пропустил бы
     один тик (подновлённый яд переставал бы наносить урон на ход).
     """
-    inst_attrs = {"hp", "mana", "energy", "stamina"}
     aid = str(pid)
     owner_id = int(owner_pid) if owner_pid is not None else int(pid)
     source_key = normalize_source(source)
 
     for row in raw_effect_rows:
         eff = _normalize_effect(row)
-        if eff["attribute"] in inst_attrs:
+        if eff["attribute"] in RESOURCE_ATTRS:
             magnitude = eff["magnitude"]
             # Вражеские эффекты с положительной magnitude на HP/mana/etc
             # должны наносить урон, а не лечить
             if is_enemy and magnitude > 0:
                 magnitude = -magnitude
-            part = state["participants"][aid]
-            mx = part[f"max_{eff['attribute']}"]
-            new = part[eff["attribute"]] + magnitude
-            part[eff["attribute"]] = max(0, min(mx, new))
-        else:
-            eff["owner_id"] = owner_id
-            # Freshly cast: must NOT tick on the same turn it was applied, so its
-            # remaining duration stays equal to the applied value until the next
-            # owner turn (FEAT-143 — keeps active-effect duration == log duration).
-            eff["fresh"] = True
-            if source_key:
-                eff["source"] = source_key
-            lst = state.setdefault("active_effects", {}).setdefault(aid, [])
-            key = _effect_identity(eff, int(pid))
-            existing = None
-            if key is not None:  # источника нет (навык) ⇒ всегда новая запись
-                existing = next(
-                    (e for e in lst if _effect_identity(e, int(pid)) == key), None
-                )
-            if existing is None:
-                lst.append(eff)
+            _change_resource(state["participants"][aid], eff["attribute"], magnitude)
+            # The first dose lands now; with a longer duration the rest arrive one
+            # per caster turn (tick_periodic_effects), `duration` doses in total.
+            if (eff.get("duration") or 0) <= 1:
                 continue
-            # Refresh-in-place: длительность не суммируется, а продлевается до
-            # большей из двух; сила эффекта берётся новая.
-            # Флаг `fresh` НЕ выставляется заново: он существует только для
-            # пропуска первого тика в ход наложения. Если сбрасывать его при
-            # обновлении, уже работающий DoT (например, подновлённый яд) терял
-            # бы один тик урона — игрок этого не ожидает. Уже висящий эффект
-            # продолжает тикать в своём ритме.
-            old_duration = existing.get("duration") or 0
-            new_duration = eff.get("duration") or 0
-            existing["duration"] = max(old_duration, new_duration)
-            existing["magnitude"] = eff["magnitude"]
-            existing["owner_id"] = owner_id
+            eff["magnitude"] = magnitude
+            eff["duration"] -= 1
+        elif eff["name"].lower() in _SKILL_BLOCKERS and eff["attribute"] == "random":
+            # "Случайно": the blocked skill type is drawn once, when the effect lands.
+            eff["attribute"] = choice(SKILL_TYPES)
+        # Everything left is durable: it goes into active_effects.
+        eff["owner_id"] = owner_id
+        # Freshly cast: must NOT tick on the same turn it was applied, so its
+        # remaining duration stays equal to the applied value until the next
+        # owner turn (FEAT-143 — keeps active-effect duration == log duration).
+        eff["fresh"] = True
+        if source_key:
+            eff["source"] = source_key
+        lst = state.setdefault("active_effects", {}).setdefault(aid, [])
+        key = _effect_identity(eff, int(pid))
+        existing = None
+        if key is not None:  # источника нет (навык) ⇒ всегда новая запись
+            existing = next(
+                (e for e in lst if _effect_identity(e, int(pid)) == key), None
+            )
+        if existing is None:
+            lst.append(eff)
+            continue
+        # Refresh-in-place: длительность не суммируется, а продлевается до
+        # большей из двух; сила эффекта берётся новая.
+        # Флаг `fresh` НЕ выставляется заново: он существует только для
+        # пропуска первого тика в ход наложения. Если сбрасывать его при
+        # обновлении, уже работающий DoT (например, подновлённый яд) терял
+        # бы один тик урона — игрок этого не ожидает. Уже висящий эффект
+        # продолжает тикать в своём ритме.
+        old_duration = existing.get("duration") or 0
+        new_duration = eff.get("duration") or 0
+        existing["duration"] = max(old_duration, new_duration)
+        existing["magnitude"] = eff["magnitude"]
+        if "secondary_magnitude" in eff:
+            existing["secondary_magnitude"] = eff["secondary_magnitude"]
+        existing["owner_id"] = owner_id
+
+
+# Resource rows (StatModifier hp / mana / energy / stamina) change the bar
+# directly instead of modifying a stat.
+RESOURCE_ATTRS = ("hp", "mana", "energy", "stamina")
+
+# Control effects that block one skill type; "random" is resolved on application.
+_SKILL_BLOCKERS = ("knockdown", "windburn")
+SKILL_TYPES = ("attack", "defense", "support")
+
+
+def _change_resource(part: Dict, attribute: str, delta: float) -> float:
+    """Adds `delta` to a resource bar, clamped to 0..max. Returns the real change."""
+    old = part[attribute]
+    part[attribute] = max(0, min(part[f"max_{attribute}"], old + delta))
+    return part[attribute] - old
 
 
 # Complex effects that deal periodic HP damage each turn (magnitude = HP/turn).
@@ -238,7 +281,14 @@ def tick_periodic_effects(state: Dict, participant_id: int | None = None) -> Lis
             eff_owner = eff.get("owner_id", int(pid))
             if owner_filter is not None and eff_owner != owner_filter:
                 continue
-            if eff.get("fresh") or not _is_periodic_damage(eff):
+            if eff.get("fresh"):
+                continue
+            if eff.get("attribute") in RESOURCE_ATTRS:
+                event = _tick_resource(state, pid, eff, eff_owner)
+                if event:
+                    events.append(event)
+                continue
+            if not _is_periodic_damage(eff):
                 continue
             amount = abs(eff.get("magnitude", 0))
             if amount <= 0:
@@ -259,6 +309,29 @@ def tick_periodic_effects(state: Dict, participant_id: int | None = None) -> Lis
                 "amount": int(dealt),
             })
     return events
+
+
+def _tick_resource(state: Dict, pid: str, eff: Dict, owner: int) -> Dict | None:
+    """One dose of a resource-over-time effect (StatModifier hp/mana/... with a
+    duration). Lost HP is logged like any periodic damage (`effect_tick`), so it
+    counts as damage received; every other change is a `resource_tick`."""
+    part = state["participants"].get(str(pid))
+    if not part or part["hp"] <= 0:
+        return None
+    attribute = eff["attribute"]
+    change = _change_resource(part, attribute, eff.get("magnitude", 0))
+    if not change:
+        return None
+    if attribute == "hp" and change < 0:
+        part["total_damage_received"] = part.get("total_damage_received", 0) + int(-change)
+        return {
+            "event": "effect_tick", "target": int(pid), "source": owner,
+            "effect": eff.get("name"), "attribute": attribute, "amount": int(-change),
+        }
+    return {
+        "event": "resource_tick", "target": int(pid), "source": owner,
+        "effect": eff.get("name"), "attribute": attribute, "amount": round(change, 2),
+    }
 
 
 def decrement_durations(state: Dict, participant_id: int | None = None) -> None:
@@ -327,21 +400,55 @@ def _expand_complex_effect(name: str, magnitude: float) -> Dict[str, float] | No
     return None
 
 
+# Derived stats per point of a primary attribute — mirrors
+# character-attributes-service `compute_derived_stats` (constants.py there:
+# STAT_BONUS_PER_POINT = 0.1, ENDURANCE_RES_EFFECTS_MULTIPLIER = 0.2). A battle
+# effect that moves a primary attribute moves these with it.
+_PHYSICAL_RESISTS = ("res_physical", "res_catting", "res_crushing", "res_piercing")
+_MAGICAL_RESISTS = ("res_magic", "res_fire", "res_ice", "res_watering",
+                    "res_electricity", "res_wind", "res_sainting", "res_damning")
+_DERIVED_PER_POINT = {
+    "strength": {k: 0.1 for k in _PHYSICAL_RESISTS},
+    "agility": {"dodge": 0.1},
+    "intelligence": {k: 0.1 for k in _MAGICAL_RESISTS},
+    "endurance": {"res_effects": 0.2},
+}
+
+
 def aggregate_modifiers(effects_for_participant: List[Dict]) -> Dict[str, float]:
     """
     Складывает magnitude по движковым ключам. Сложные эффекты-модификаторы
     (ArmorBreak, Freeze, Electrify, Daze, Wet, Holy, Curse) раскрываются в
     соответствующие каналы; остальные (StatModifier / Buff: / Resist: /
     MagicImpact через attribute_key) используют свой нормализованный attribute.
+    Изменение первичного атрибута тянет за собой производные (уклонение,
+    сопротивления) — так же, как в character-attributes-service.
     """
     summary: Dict[str, float] = {}
     for eff in effects_for_participant:
+        name = (eff.get("name") or "").lower()
+        if name == "burn":
+            # The DoT itself ticks elsewhere; while it burns, the target dodges worse.
+            dodge_down = abs(eff.get("secondary_magnitude") or 0)
+            if dodge_down:
+                summary["dodge"] = summary.get("dodge", 0.0) - dodge_down
+            continue
         expanded = _expand_complex_effect(eff.get("name", ""), eff.get("magnitude", 0))
         if expanded is not None:
             for key, delta in expanded.items():
                 summary[key] = summary.get(key, 0.0) + delta
-        else:
-            summary[eff["attribute"]] = summary.get(eff["attribute"], 0.0) + eff["magnitude"]
+            continue
+        attribute = _canonical_attribute(eff["attribute"])
+        if attribute in RESOURCE_ATTRS:
+            continue  # bars change per tick, not as a stat
+        summary[attribute] = summary.get(attribute, 0.0) + eff["magnitude"]
+
+    for primary, derived in _DERIVED_PER_POINT.items():
+        delta = summary.get(primary)
+        if not delta:
+            continue
+        for key, per_point in derived.items():
+            summary[key] = summary.get(key, 0.0) + delta * per_point
     return summary
 
 

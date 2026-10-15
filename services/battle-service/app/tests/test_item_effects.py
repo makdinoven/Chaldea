@@ -857,7 +857,7 @@ class TestSecondCoatingIsRejected:
         resp, _, consume, saved = _run_turn(state, payload=_payload(item_id=93))
         assert _events(resp, "item_rejected") == []
         assert _one(resp, "weapon_coating_applied")["item_id"] == 93
-        consume.assert_called_once_with(ATTACKER_CHAR, 93)
+        consume.assert_called_once_with(ATTACKER_CHAR, 93, "fast_slot_1")
         assert saved["participants"][str(ATTACKER_PID)]["weapon_coating"]["item_id"] == 93
 
 
@@ -867,17 +867,18 @@ class TestSecondCoatingIsRejected:
 
 class TestStackBookkeeping:
 
-    def test_quantity_is_decremented_by_one(self):
+    def test_one_use_spends_the_slot_whatever_its_quantity_says(self):
+        """A belt slot holds ONE item. A snapshot `quantity` > 1 (the old bag
+        count) must not buy extra uses: one use, the slot goes."""
         potion = _slot(item_id=42, quantity=5, health_recovery=10,
                        effects=[_effect_row("StatModifier", attribute_key="agility",
                                             magnitude=3, duration=2)])
         state = _state(fast_slots=[potion], attacker_over={"hp": 50})
         state["participants"][str(ATTACKER_PID)]["fast_slots"] = [potion]
-        resp, _, _, saved = _run_turn(state, payload=_payload(item_id=42))
-        slots = saved["participants"][str(ATTACKER_PID)]["fast_slots"]
-        assert len(slots) == 1
-        assert slots[0]["quantity"] == 4
-        assert _one(resp, "item_use")["quantity_left"] == 4
+        resp, _, consume, saved = _run_turn(state, payload=_payload(item_id=42))
+        assert saved["participants"][str(ATTACKER_PID)]["fast_slots"] == []
+        assert _one(resp, "item_use")["quantity_left"] == 0
+        consume.assert_called_once_with(ATTACKER_CHAR, 42, "fast_slot_1")
 
     def test_the_last_unit_frees_the_slot(self):
         potion = _slot(item_id=42, quantity=1, health_recovery=10)
@@ -902,11 +903,26 @@ class TestStackBookkeeping:
         a = _slot(item_id=42, quantity=2, health_recovery=10)
         b = _slot(item_id=43, quantity=7, slot_type="fast_slot_2", mana_recovery=10)
         state = _state(attacker_over={"hp": 50, "fast_slots": [a, b]})
-        resp, _, _, saved = _run_turn(state, payload=_payload(item_id=43))
-        slots = {s["item_id"]: s for s in
-                 saved["participants"][str(ATTACKER_PID)]["fast_slots"]}
-        assert slots[42]["quantity"] == 2
-        assert slots[43]["quantity"] == 6
+        resp, _, consume, saved = _run_turn(state, payload=_payload(item_id=43))
+        slots = saved["participants"][str(ATTACKER_PID)]["fast_slots"]
+        assert slots == [a], "the used slot goes, the other one is left as is"
+        assert _one(resp, "item_use")["quantity_left"] == 0
+        consume.assert_called_once_with(ATTACKER_CHAR, 43, "fast_slot_2")
+
+    def test_two_slots_with_the_same_item_lose_exactly_one(self):
+        a = _slot(item_id=42, quantity=1, health_recovery=10, slot_type="fast_slot_1")
+        b = _slot(item_id=42, quantity=1, health_recovery=10, slot_type="fast_slot_2")
+        state = _state(attacker_over={"hp": 50, "fast_slots": [a, b]})
+        resp, _, consume, saved = _run_turn(state, payload=_payload(item_id=42))
+        slots = saved["participants"][str(ATTACKER_PID)]["fast_slots"]
+        assert len(slots) == 1
+        assert slots[0]["item_id"] == 42
+        used = consume.call_args.args[2]
+        assert used in ("fast_slot_1", "fast_slot_2")
+        assert slots[0]["slot_type"] != used, (
+            "the slot sent to inventory-service must be the one removed from the snapshot"
+        )
+        assert _one(resp, "item_use")["quantity_left"] == 0
 
 
 class TestItemUsePayload:
@@ -1064,8 +1080,8 @@ class TestPreDeployState:
         assert resp.status_code == 200, resp.text
         part = saved["participants"][str(ATTACKER_PID)]
         assert part["hp"] == 80, "recovery from the cached slot fields, as before"
-        assert part["fast_slots"] == [], "one use, then the slot goes (legacy rule)"
-        consume.assert_called_once_with(ATTACKER_CHAR, 42)
+        assert part["fast_slots"] == [], "one use, then the slot goes"
+        consume.assert_called_once_with(ATTACKER_CHAR, 42, "fast_slot_1")
 
     def test_no_new_participant_key_is_invented_for_a_legacy_battle(self):
         state = self._legacy_state()

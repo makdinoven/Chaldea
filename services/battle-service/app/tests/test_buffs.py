@@ -299,7 +299,10 @@ class TestSkillEffectsStackIndependently:
         for _ in range(3):
             apply_new_effects(state, 1, [_row("StatModifier", attribute_key="strength",
                                               magnitude=5, duration=3)], owner_pid=1)
-        assert aggregate_modifiers(_effects_of(state, 1)) == {"strength": 15}
+        mods = aggregate_modifiers(_effects_of(state, 1))
+        assert mods["strength"] == 15
+        # Strength carries its derived stats along (0.1 physical resist per point).
+        assert mods["res_physical"] == pytest.approx(1.5)
 
 
 class TestItemEffectsRefreshInPlace:
@@ -593,7 +596,8 @@ class TestAggregateModifiers:
             {"name": "StatModifier", "attribute": "strength", "magnitude": -2},
             {"name": "StatModifier", "attribute": "agility", "magnitude": 3},
         ])
-        assert mods == {"strength": 3, "agility": 3}
+        assert mods["strength"] == 3
+        assert mods["agility"] == 3
 
     def test_armorbreak_lowers_every_physical_resist(self):
         mods = aggregate_modifiers([{"name": "ArmorBreak", "attribute": "armorbreak",
@@ -604,7 +608,8 @@ class TestAggregateModifiers:
     def test_holy_and_curse_are_mirror_images(self):
         holy = aggregate_modifiers([{"name": "Holy", "attribute": "holy", "magnitude": 4}])
         curse = aggregate_modifiers([{"name": "Curse", "attribute": "curse", "magnitude": 4}])
-        assert holy == {"strength": 4, "agility": 4, "intelligence": 4, "endurance": 4}
+        for primary in ("strength", "agility", "intelligence", "endurance"):
+            assert holy[primary] == 4
         assert curse == {k: -v for k, v in holy.items()}
 
     def test_daze_lowers_outgoing_damage(self):
@@ -843,3 +848,179 @@ class TestRemoveEffectsLegacyRecords:
         before = state["active_effects"]["1"]
         remove_effects(state, 1, selector="nonexistent")
         assert state["active_effects"]["1"] is before
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Effect audit (2026-10-16): every effect the editors offer must move something
+# the engine actually reads.
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestEditorStatKeysReachTheEngine:
+    """The skill editor writes `dodge_chance` / `crit_damage` / `crit_chance`;
+    the damage formula reads `dodge` / `critical_damage` / `critical_hit_chance`.
+    Before the aliases these effects were stored and shown, and did nothing."""
+
+    @pytest.mark.parametrize("editor_key, engine_key", [
+        ("dodge_chance", "dodge"),
+        ("crit_damage", "critical_damage"),
+        ("crit_chance", "critical_hit_chance"),
+        ("critical_hit_chance", "critical_hit_chance"),
+    ])
+    def test_editor_key_is_stored_under_the_engine_name(self, editor_key, engine_key):
+        state = _state()
+        apply_new_effects(state, 1, [_row("StatModifier", attribute_key=editor_key,
+                                          magnitude=12, duration=2)])
+        assert _effects_of(state, 1)[0]["attribute"] == engine_key
+        assert aggregate_modifiers(_effects_of(state, 1)) == {engine_key: 12}
+
+    def test_legacy_state_records_with_editor_keys_still_count(self):
+        """Battles already running hold records normalized before the fix."""
+        mods = aggregate_modifiers([
+            {"name": "StatModifier", "attribute": "dodge_chance", "magnitude": 30},
+            {"name": "StatModifier", "attribute": "crit_damage", "magnitude": 40},
+        ])
+        assert mods == {"dodge": 30, "critical_damage": 40}
+
+
+class TestRandomSkillBlock:
+    @pytest.mark.parametrize("name", ["Knockdown", "Windburn"])
+    def test_random_is_resolved_once_on_application(self, name, monkeypatch):
+        monkeypatch.setattr(buffs, "choice", lambda options: "defense")
+        state = _state()
+        apply_new_effects(state, 2, [_row(name, attribute_key="random", target_side="enemy")],
+                          is_enemy=True, owner_pid=1)
+        eff = _effects_of(state, 2)[0]
+        assert eff["attribute"] == "defense"
+        assert evaluate_control([eff]) == (None, {"defense"})
+
+    def test_random_draw_comes_from_the_three_skill_types(self):
+        state = _state()
+        for _ in range(30):
+            apply_new_effects(state, 2, [_row("Knockdown", attribute_key="random")],
+                              is_enemy=True, owner_pid=1)
+        drawn = {e["attribute"] for e in _effects_of(state, 2)}
+        assert drawn <= {"attack", "defense", "support"}
+        assert drawn, "something must be blocked"
+
+
+class TestResourceOverTime:
+    """StatModifier hp / mana / energy with a duration: one dose now, then one per
+    caster turn — `duration` doses in all."""
+
+    def _run_owner_turns(self, state, owner, turns):
+        events = []
+        decrement_durations(state, owner)          # end of the cast turn
+        for _ in range(turns):
+            events += tick_periodic_effects(state, owner)
+            decrement_durations(state, owner)
+        return events
+
+    def test_duration_one_stays_instant(self):
+        state = _state()
+        state["participants"]["1"]["hp"] = 50
+        apply_new_effects(state, 1, [_row("StatModifier", attribute_key="hp", magnitude=10)])
+        assert state["participants"]["1"]["hp"] == 60
+        assert _effects_of(state, 1) == []
+
+    def test_heal_over_time_gives_duration_doses(self):
+        state = _state()
+        state["participants"]["1"]["hp"] = 40
+        apply_new_effects(state, 1, [_row("StatModifier", attribute_key="hp", magnitude=10,
+                                          duration=3)], owner_pid=1)
+        assert state["participants"]["1"]["hp"] == 50, "first dose lands at once"
+        events = self._run_owner_turns(state, 1, turns=4)
+        assert state["participants"]["1"]["hp"] == 70, "three doses in total"
+        assert [e["event"] for e in events] == ["resource_tick", "resource_tick"]
+        assert _effects_of(state, 1) == []
+
+    def test_hp_drain_on_an_enemy_ticks_as_periodic_damage(self):
+        state = _state()
+        apply_new_effects(state, 2, [_row("StatModifier", attribute_key="hp", magnitude=5,
+                                          duration=3, target_side="enemy")],
+                          is_enemy=True, owner_pid=1)
+        assert state["participants"]["2"]["hp"] == 95
+        events = self._run_owner_turns(state, 1, turns=3)
+        assert state["participants"]["2"]["hp"] == 85
+        assert [(e["event"], e["amount"]) for e in events] == [("effect_tick", 5), ("effect_tick", 5)]
+        assert state["participants"]["2"]["total_damage_received"] == 10
+
+    def test_mana_over_time_is_a_resource_tick(self):
+        state = _state()
+        state["participants"]["1"]["mana"] = 10
+        apply_new_effects(state, 1, [_row("StatModifier", attribute_key="mana", magnitude=5,
+                                          duration=2)], owner_pid=1)
+        events = self._run_owner_turns(state, 1, turns=2)
+        assert state["participants"]["1"]["mana"] == 20
+        assert events == [{"event": "resource_tick", "target": 1, "source": 1,
+                           "effect": "StatModifier", "attribute": "mana", "amount": 5}]
+
+    def test_resource_records_are_not_stat_modifiers(self):
+        mods = aggregate_modifiers([{"name": "StatModifier", "attribute": "hp",
+                                     "magnitude": 10, "duration": 2}])
+        assert mods == {}
+
+    def test_dead_target_gets_no_more_doses(self):
+        state = _state()
+        apply_new_effects(state, 1, [_row("StatModifier", attribute_key="hp", magnitude=10,
+                                          duration=3)], owner_pid=1)
+        state["participants"]["1"]["hp"] = 0
+        assert self._run_owner_turns(state, 1, turns=2) == []
+        assert state["participants"]["1"]["hp"] == 0
+
+
+class TestDerivedStatsFollowPrimaries:
+    """Mirrors character-attributes-service compute_derived_stats."""
+
+    def test_agility_moves_dodge(self):
+        mods = aggregate_modifiers([{"name": "MagicImpact", "attribute": "agility", "magnitude": 10}])
+        assert mods["dodge"] == pytest.approx(1.0)
+
+    def test_strength_moves_physical_resists_only(self):
+        mods = aggregate_modifiers([{"name": "MagicImpact", "attribute": "strength", "magnitude": 10}])
+        for key in ("res_physical", "res_catting", "res_crushing", "res_piercing"):
+            assert mods[key] == pytest.approx(1.0)
+        assert "res_magic" not in mods
+
+    def test_intelligence_moves_every_magical_resist(self):
+        mods = aggregate_modifiers([{"name": "MagicImpact", "attribute": "intelligence", "magnitude": -10}])
+        for key in ("res_magic", "res_fire", "res_ice", "res_watering",
+                    "res_electricity", "res_wind", "res_sainting", "res_damning"):
+            assert mods[key] == pytest.approx(-1.0)
+
+    def test_endurance_moves_effect_resistance(self):
+        """Живучесть (endurance) → сопротивление эффектам, 0.2 per point."""
+        mods = aggregate_modifiers([{"name": "Curse", "attribute": "curse", "magnitude": 10}])
+        assert mods["res_effects"] == pytest.approx(-2.0)
+
+    def test_derived_resists_reach_the_percent_resist_builder(self):
+        attrs = {"res_physical": 2.0}
+        mods = aggregate_modifiers([{"name": "Holy", "attribute": "holy", "magnitude": 10}])
+        moved = {k: attrs.get(k, 0) + v for k, v in mods.items() if k.startswith("res_")}
+        assert build_percent_resist_buffs({}, moved)["physical"] == pytest.approx(3.0)
+
+
+class TestBurnLowersDodge:
+    def test_secondary_magnitude_lowers_dodge(self):
+        state = _state()
+        row = dict(_row("Burn", magnitude=4, duration=2, target_side="enemy"), secondary_magnitude=15)
+        apply_new_effects(state, 2, [row], is_enemy=True, owner_pid=1)
+        assert aggregate_modifiers(_effects_of(state, 2)) == {"dodge": -15}
+
+    def test_burn_without_secondary_value_changes_no_stat(self):
+        state = _state()
+        apply_new_effects(state, 2, [_row("Burn", magnitude=4, duration=2)],
+                          is_enemy=True, owner_pid=1)
+        assert aggregate_modifiers(_effects_of(state, 2)) == {}
+
+    def test_burn_still_ticks(self):
+        state = _state()
+        row = dict(_row("Burn", magnitude=4, duration=2), secondary_magnitude=15)
+        apply_new_effects(state, 2, [row], is_enemy=True, owner_pid=1)
+        decrement_durations(state, 1)
+        assert [e["amount"] for e in tick_periodic_effects(state, 1)] == [4]
+
+    def test_normalize_keeps_the_secondary_value_only_when_set(self):
+        assert "secondary_magnitude" not in _normalize_effect(_row("Burn", magnitude=4))
+        row = dict(_row("Burn", magnitude=4), secondary_magnitude=7)
+        assert _normalize_effect(row)["secondary_magnitude"] == 7

@@ -315,10 +315,10 @@ class TestItemUsageSuccess:
     """Verify that a valid item in fast_slots is consumed, recovery applied,
     and the stack is decremented (the slot goes away only at zero)."""
 
-    def test_consume_item_called_and_quantity_decremented(self):
-        """When item_id matches a fast_slot, consume_item is called and the
-        stack loses exactly one unit (FEAT-168: a stack of 5 gives 5 uses —
-        previously the whole slot was dropped after the first use)."""
+    def test_consume_item_called_with_the_slot_and_the_slot_is_spent(self):
+        """When item_id matches a fast_slot, consume_item is called with that
+        slot_type and the slot is spent after ONE use: a belt slot holds one
+        item, a snapshot `quantity` of 5 (the old bag count) buys no extra uses."""
         fast_slots = [
             {
                 "slot_type": "fast_slot_1",
@@ -330,9 +330,9 @@ class TestItemUsageSuccess:
             },
         ]
         state = _make_battle_state(hp_p1=60, fast_slots_p1=fast_slots)
-        consume_mock = AsyncMock(return_value={"status": "ok", "remaining_quantity": 4})
+        consume_mock = AsyncMock(return_value={"status": "ok", "remaining_quantity": 0})
 
-        patches = _build_common_patches(state, consume_result={"status": "ok", "remaining_quantity": 4})
+        patches = _build_common_patches(state, consume_result={"status": "ok", "remaining_quantity": 0})
         patches["main.consume_item"] = consume_mock
 
         payload = _make_action_payload(item_id=3)
@@ -340,17 +340,14 @@ class TestItemUsageSuccess:
 
         assert response.status_code == 200
 
-        # consume_item should have been called with character_id=10, item_id=3
-        consume_mock.assert_called_once_with(10, 3)
+        # character_id=10, item_id=3, and the slot the item was taken from
+        consume_mock.assert_called_once_with(10, 3, "fast_slot_1")
 
-        # After usage the slot stays in the belt with one unit less.
-        # Check via save_state mock — the state passed to save_state
         save_state_mock = patches["main.save_state"]
-        if save_state_mock.called:
-            saved_state = save_state_mock.call_args[0][1]
-            p1_slots = saved_state["participants"]["1"]["fast_slots"]
-            assert len(p1_slots) == 1, "A stack of 5 must not vanish after one use"
-            assert p1_slots[0]["quantity"] == 4, "Exactly one unit should be spent"
+        assert save_state_mock.called
+        saved_state = save_state_mock.call_args[0][1]
+        p1_slots = saved_state["participants"]["1"]["fast_slots"]
+        assert p1_slots == [], "One use spends the slot, whatever its quantity said"
 
     def test_last_unit_removes_slot(self):
         """The slot disappears only when the last unit of the stack is used."""
@@ -465,7 +462,8 @@ class TestItemUsageSuccess:
             assert p1["mana"] <= 100, "Mana should not exceed max_mana"
 
     def test_only_matching_slot_touched(self):
-        """When multiple fast_slots exist, only the matching one is spent."""
+        """When multiple fast_slots exist, only the matching one is spent;
+        the other slot is left exactly as it was."""
         fast_slots = [
             {
                 "slot_type": "fast_slot_1",
@@ -486,20 +484,18 @@ class TestItemUsageSuccess:
         ]
         state = _make_battle_state(hp_p1=60, fast_slots_p1=fast_slots)
 
-        patches = _build_common_patches(state, consume_result={"status": "ok", "remaining_quantity": 4})
+        untouched = dict(fast_slots[1])
+        patches = _build_common_patches(state, consume_result={"status": "ok", "remaining_quantity": 0})
         payload = _make_action_payload(item_id=3)
         response, ctx = _run_action(patches, payload)
 
         assert response.status_code == 200
 
         save_state_mock = patches["main.save_state"]
-        if save_state_mock.called:
-            saved_state = save_state_mock.call_args[0][1]
-            p1_slots = saved_state["participants"]["1"]["fast_slots"]
-            assert len(p1_slots) == 2, "Neither stack is empty, so both slots stay"
-            by_item = {s["item_id"]: s for s in p1_slots}
-            assert by_item[3]["quantity"] == 4, "Only the used stack loses a unit"
-            assert by_item[7]["quantity"] == 2, "The untouched stack keeps its quantity"
+        assert save_state_mock.called
+        saved_state = save_state_mock.call_args[0][1]
+        p1_slots = saved_state["participants"]["1"]["fast_slots"]
+        assert p1_slots == [untouched], "Only the used slot goes; the other is unchanged"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

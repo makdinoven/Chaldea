@@ -2550,6 +2550,16 @@ async def _make_action_core(
         base_defender_attributes, defender_buff_modifiers
     )
 
+    async def _res_effects_now(pid: int) -> float:
+        """Resistance to effects as it stands this turn: the character's own
+        `res_effects` plus whatever active effects add to it (a Curse lowering
+        endurance lowers it too — derived stats follow primary attributes)."""
+        _pd = participants_map.get(str(pid))
+        if not _pd:
+            return 0
+        _mods = aggregate_modifiers(battle_state.get("active_effects", {}).get(str(pid), []))
+        return apply_flat_modifiers(await attrs(_pd["character_id"]), _mods).get("res_effects", 0)
+
     # ------------------------------------------------------------------------------
     # 6. SUPPORT-навык (баффы на self)
     # ------------------------------------------------------------------------------
@@ -2576,7 +2586,7 @@ async def _make_action_core(
         enemy_effects = _filter_effects_by_chance(
             enemy_effects,
             attacker_luck_bonus,
-            base_defender_attributes.get("res_effects", 0),
+            await _res_effects_now(defender_pid),
         )
         if enemy_effects:
             apply_new_effects(
@@ -2624,7 +2634,7 @@ async def _make_action_core(
                 _epd = participants_map[str(_enemy_pid)]
                 _eff = _filter_effects_by_chance(
                     all_enemies_effects, attacker_luck_bonus,
-                    (await attrs(_epd["character_id"])).get("res_effects", 0),
+                    await _res_effects_now(_enemy_pid),
                 )
                 if not _eff:
                     continue
@@ -2662,7 +2672,7 @@ async def _make_action_core(
         enemy_effects = _filter_effects_by_chance(
             enemy_effects,
             attacker_luck_bonus,
-            base_defender_attributes.get("res_effects", 0),
+            await _res_effects_now(defender_pid),
         )
         if enemy_effects:
             apply_new_effects(
@@ -2709,7 +2719,7 @@ async def _make_action_core(
                 _epd = participants_map[str(_enemy_pid)]
                 _eff = _filter_effects_by_chance(
                     all_enemies_effects, attacker_luck_bonus,
-                    (await attrs(_epd["character_id"])).get("res_effects", 0),
+                    await _res_effects_now(_enemy_pid),
                 )
                 if not _eff:
                     continue
@@ -2768,7 +2778,9 @@ async def _make_action_core(
             else:
                 # 3) Try to consume item in inventory (best-effort, does not block usage)
                 try:
-                    consume_result = await consume_item(attacker_character_id, item_id)
+                    consume_result = await consume_item(
+                        attacker_character_id, item_id, matched_slot.get("slot_type")
+                    )
                     if consume_result.get("status") != "ok":
                         logger.warning(
                             f"[ITEM] Failed to consume item_id={item_id} in inventory for character "
@@ -2816,10 +2828,7 @@ async def _make_action_core(
                     return [request.participant_id]
 
                 async def _res_effects_of(pid: int) -> float:
-                    _pd = participants_map.get(str(pid))
-                    if not _pd:
-                        return 0
-                    return (await attrs(_pd["character_id"])).get("res_effects", 0)
+                    return await _res_effects_now(pid)
 
                 # Яд на оружие: его enemy-строки — это то, что получает цель ПРИ
                 # ПОПАДАНИИ, а не сейчас. Они уезжают в weapon_coating.
@@ -3017,22 +3026,13 @@ async def _make_action_core(
                             "— яд не нанесён", item_id, matched_slot.get("coating_turns"),
                         )
 
-                # ── 8) Расход стопки: списываем одну штуку, слот убираем на нуле.
-                # Раньше слот удалялся целиком, сколько бы зелий в нём ни лежало
-                # (ISSUES #4). Поле quantity есть и у слотов, снятых до FEAT-168
-                # (его клали ещё в inventory_client), поэтому бои, начатые до
-                # деплоя, тоже получают все применения стопки. Дефолт нужен для
-                # мусорных значений (нет ключа, None, 0, не число) — тогда
-                # считаем, что штука одна, и слот уходит после применения.
-                try:
-                    _quantity = int(matched_slot.get("quantity", 1) or 1)
-                except (TypeError, ValueError):
-                    _quantity = 1
-                quantity_left = max(0, _quantity - 1)
-                if quantity_left > 0:
-                    matched_slot["quantity"] = quantity_left
-                else:
-                    part["fast_slots"].pop(matched_idx)
+                # ── 8) Слот расходуется целиком: в быстром слоте лежит ровно один
+                # предмет (при надевании он списан из сумки), пополнить пояс
+                # можно только вне боя. `quantity` в снапшоте — бывший остаток
+                # сумки — больше не читается: из-за него один слот давал
+                # столько применений, сколько таких предметов лежало в сумке.
+                quantity_left = 0
+                part["fast_slots"].pop(matched_idx)
 
                 # 9) Log item_use event
                 turn_events.append({
@@ -3083,7 +3083,7 @@ async def _make_action_core(
         attack_enemy_effects = _filter_effects_by_chance(
             attack_enemy_effects,
             attacker_luck_bonus,
-            base_defender_attributes.get("res_effects", 0),
+            await _res_effects_now(defender_pid),
         )
         if attack_enemy_effects:
             apply_new_effects(
@@ -3133,7 +3133,7 @@ async def _make_action_core(
                 _epd = participants_map[str(_enemy_pid)]
                 _eff = _filter_effects_by_chance(
                     attack_all_enemies_effects, attacker_luck_bonus,
-                    (await attrs(_epd["character_id"])).get("res_effects", 0),
+                    await _res_effects_now(_enemy_pid),
                 )
                 if not _eff:
                     continue
@@ -3273,7 +3273,7 @@ async def _make_action_core(
                 _rows = _filter_effects_by_chance(
                     [dict(r) for r in _coating_effects if isinstance(r, dict)],
                     attacker_luck_bonus,
-                    (await attrs(_tpd["character_id"])).get("res_effects", 0),
+                    await _res_effects_now(_tpid),
                 )
                 if not _rows:
                     continue

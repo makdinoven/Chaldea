@@ -205,10 +205,10 @@ class TestConsumeItem:
     @pytest.mark.asyncio
     async def test_sends_the_internal_token(self, monkeypatch, token_env):
         calls = _patch_inventory_transport(
-            monkeypatch, _Resp(200, {"status": "ok", "remaining_quantity": 4})
+            monkeypatch, _Resp(200, {"status": "ok", "remaining_quantity": 0})
         )
 
-        result = await inventory_client.consume_item(11, 331)
+        result = await inventory_client.consume_item(11, 331, "fast_slot_3")
 
         assert len(calls) == 1, "consume_item never reached inventory-service"
         verb, url, kwargs = calls[0]
@@ -218,8 +218,22 @@ class TestConsumeItem:
             "battle-service dropped X-Internal-Token on consume_item — "
             "inventory-service answers 401 and the belt item is never spent"
         )
-        assert kwargs["json"] == {"item_id": 331}
-        assert result == {"status": "ok", "remaining_quantity": 4}
+        assert kwargs["json"] == {"item_id": 331, "slot_type": "fast_slot_3"}
+        assert result == {"status": "ok", "remaining_quantity": 0}
+
+    @pytest.mark.asyncio
+    async def test_slot_type_defaults_to_none(self, monkeypatch, token_env):
+        """An older call site without the slot still sends a valid body;
+        inventory-service then clears the first belt slot holding the item."""
+        calls = _patch_inventory_transport(
+            monkeypatch, _Resp(200, {"status": "ok", "remaining_quantity": 0})
+        )
+
+        await inventory_client.consume_item(11, 331)
+
+        assert len(calls) == 1
+        assert calls[0][2]["json"] == {"item_id": 331, "slot_type": None}
+        assert calls[0][2]["headers"]["X-Internal-Token"] == TOKEN
 
     @pytest.mark.asyncio
     async def test_401_is_reported_as_an_error_not_a_success(

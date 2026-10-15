@@ -32,16 +32,18 @@ async def get_item(item_id: int) -> dict:
         r.raise_for_status()
         return r.json()
 
-async def consume_item(character_id: int, item_id: int) -> dict:
+async def consume_item(character_id: int, item_id: int, slot_type: str | None = None) -> dict:
     """
-    Call inventory-service to consume 1 unit of item from character's inventory.
-    Returns {"status": "ok", "remaining_quantity": N} on success,
-    or {"status": "error", "detail": "..."} on failure.
+    Call inventory-service to spend the item used in battle: it clears the belt
+    slot it came from (`slot_type`). The bag is not touched — the item left it
+    when it was put on the belt.
+    Returns {"status": "ok", "remaining_quantity": N} (copies still on the belt)
+    on success, or {"status": "error", "detail": "..."} on failure.
     """
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.post(
             f"{BASE}/inventory/internal/characters/{character_id}/consume_item",
-            json={"item_id": item_id},
+            json={"item_id": item_id, "slot_type": slot_type},
             headers=_internal_token_headers(),
         )
         if r.status_code != 200:
