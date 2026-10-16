@@ -394,6 +394,13 @@ def reconcile_perks(db: Session, character_id: int) -> dict:
     granted: list[dict] = []
     revoked: list[dict] = []
 
+    # Two passes. Conditions are decided first, with nothing written: checking
+    # one may ask another service (gold balance, a quest), and character-service
+    # answers by calling back into this service, whose request writes the very
+    # `character_attributes` row a perk flip below locks. Deciding while holding
+    # that lock froze the pair until the 5 s HTTP timeout on every equip that
+    # flipped a perk — and the timed-out check then read as "condition not met".
+    flips: list[tuple] = []
     for perk in all_perks:
         conditions = perk.conditions or []
         if not conditions:
@@ -421,7 +428,11 @@ def reconcile_perks(db: Session, character_id: int) -> dict:
             for c in conditions
         )
 
-        if all_met and held_cp is None:
+        if all_met != (held_cp is not None):
+            flips.append((perk, held_cp, all_met))
+
+    for perk, held_cp, all_met in flips:
+        if all_met:
             cp = models.CharacterPerk(
                 character_id=character_id, perk_id=perk.id, is_custom=False
             )
@@ -434,7 +445,7 @@ def reconcile_perks(db: Session, character_id: int) -> dict:
             logger.info(
                 f"Перк '{perk.name}' (id={perk.id}) активирован для персонажа {character_id}"
             )
-        elif not all_met and held_cp is not None:
+        else:
             modifiers = crud.build_perk_modifiers_dict(perk, negative=True)
             if modifiers:
                 crud._apply_modifiers_internal(db, character_id, modifiers)

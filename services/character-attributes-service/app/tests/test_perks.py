@@ -1052,3 +1052,51 @@ class TestReconcilePerks:
         )
         res = reconcile_perks(db_session, 305)
         assert res["granted"] == []
+
+
+class TestReconcileDecidesBeforeWriting:
+    """Every condition is decided before any perk flip is written.
+
+    A gold-balance check asks character-service, which calls back into this
+    service — whose request writes the `character_attributes` row a flip locks.
+    Checking while holding that lock froze every equip that flipped a perk for
+    the full 5 s HTTP timeout on prod (and the timed-out check read as "not met").
+    """
+
+    @patch("perk_evaluator._fetch_character_level", return_value=None)
+    def test_gold_is_fetched_before_any_flip(self, _level, db_session):
+        from perk_evaluator import reconcile_perks
+
+        _create_attributes(db_session, character_id=1, intelligence=20)
+        _create_cumulative_stats(db_session, character_id=1)
+        # Flips on (gear raised intelligence) — listed first, so the old loop
+        # wrote it before reaching the gold perk below.
+        _create_perk_in_db(
+            db_session, name="Знания правят миром", sort_order=0,
+            conditions=[{"type": "attribute", "stat": "intelligence", "operator": ">=", "value": 15}],
+            bonuses={"flat": {"strength": 1}, "percent": {}, "contextual": {}, "passive": {}},
+        )
+        _create_perk_in_db(
+            db_session, name="Богач", sort_order=1,
+            conditions=[{"type": "gold_balance", "stat": "gold", "operator": ">=", "value": 100}],
+            bonuses={"flat": {}, "percent": {}, "contextual": {}, "passive": {}},
+        )
+
+        import crud as attr_crud
+
+        order = []
+        real_apply = attr_crud._apply_modifiers_internal
+
+        def apply(db, cid, mods):
+            order.append("write")
+            return real_apply(db, cid, mods)
+
+        def fetch_gold(_cid):
+            order.append("gold")
+            return 500
+
+        with patch("perk_evaluator._fetch_gold_balance", side_effect=fetch_gold),              patch.object(attr_crud, "_apply_modifiers_internal", side_effect=apply):
+            result = reconcile_perks(db_session, 1)
+
+        assert order == ["gold", "write"]
+        assert {p["name"] for p in result["granted"]} == {"Знания правят миром", "Богач"}
