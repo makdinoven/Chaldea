@@ -809,6 +809,17 @@ def delete_all_inventory_for_character(db: Session, character_id: int) -> dict:
     return {"items_deleted": items_deleted, "slots_deleted": slots_deleted}
 
 
+# Fast slots come only from gear: a character without a belt (or other item with
+# `fast_slot_bonus`) has none. The belt row in `equipment_slots` holds 10 of them.
+BASE_FAST_SLOTS = 0
+MAX_FAST_SLOTS = 10
+
+
+def fast_slot_number(slot_type: str) -> int:
+    """`fast_slot_7` -> 7 (sorting by the string would put fast_slot_10 second)."""
+    return int(slot_type.rsplit("_", 1)[1])
+
+
 def recalc_fast_slots(db: Session, character_id: int):
     # 1) Смотрим, какие предметы надеты
     eq_slots = db.query(models.EquipmentSlot).filter(
@@ -817,7 +828,6 @@ def recalc_fast_slots(db: Session, character_id: int):
     ).all()
 
     # 2) Суммируем бонусы
-    BASE_FAST_SLOTS = 4  # если хотите, что по умолчанию 4 слота, то ставьте 4
     total_bonus = 0
     for s in eq_slots:
         # Находим item_id => item => item.fast_slot_bonus
@@ -826,17 +836,14 @@ def recalc_fast_slots(db: Session, character_id: int):
             total_bonus += item_obj.fast_slot_bonus
 
     available_fast_slots = BASE_FAST_SLOTS + total_bonus
-    # Не больше 10
-    if available_fast_slots > 10:
-        available_fast_slots = 10
-    if available_fast_slots < 0:
-        available_fast_slots = 0
+    available_fast_slots = max(0, min(MAX_FAST_SLOTS, available_fast_slots))
 
     # 3) Получаем все fast_slot_* (1..10)
     fast_slots = db.query(models.EquipmentSlot).filter(
         models.EquipmentSlot.character_id == character_id,
         models.EquipmentSlot.slot_type.in_([f"fast_slot_{i}" for i in range(1, 11)])
-    ).order_by(models.EquipmentSlot.slot_type.asc()).all()
+    ).all()
+    fast_slots.sort(key=lambda slot: fast_slot_number(slot.slot_type))
 
     # Сортировка: fast_slot_1, fast_slot_2, ...
     # Активируем первые N, остальные деактивируем

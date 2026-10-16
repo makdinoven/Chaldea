@@ -88,7 +88,7 @@ const FastSlotDropTarget = ({ slot, slotIndex }: FastSlotDropTargetProps) => {
     return (
       <div
         className={`item-cell item-cell-empty ${CELL_SIZE_CLASSES} opacity-30`}
-        title="Слот недоступен"
+        title="Быстрые слоты открывает пояс"
       />
     );
   }
@@ -167,6 +167,8 @@ export default function FastSlots() {
   });
 
   if (mergedSlots.length === 0) return null;
+  // Fast slots come only from a belt (its fast_slot_bonus); without one there are none.
+  const noneOpen = mergedSlots.every((slot) => !slot.is_enabled);
 
   return (
     <div className="w-full flex flex-col gap-2.5">
@@ -176,6 +178,11 @@ export default function FastSlots() {
           Быстрые слоты
         </span>
       </div>
+      {noneOpen && (
+        <p className="text-xs leading-snug text-white/50">
+          Наденьте пояс — он открывает быстрые слоты.
+        </p>
+      )}
       <div className="grid grid-cols-5 gap-2">
         {mergedSlots.map((slot, index) => (
           <FastSlotDropTarget

@@ -1,7 +1,9 @@
 """The belt bonus must survive the Pydantic layer.
 
 `Items.fast_slot_bonus` and `crud.recalc_fast_slots` have existed for a long
-time: base 4 fast slots, plus the bonus of every equipped item, capped at 10.
+time: the bonus of every equipped item (a belt), capped at 10 — and since
+the slots became belt-only there is no base at all, so an inert bonus means
+no fast slots whatsoever.
 The admin item form has a «Бонус быстрых слотов» field and sends it. But the
 column was never declared on `schemas.ItemBase`, and Pydantic v1 drops unknown
 keys without complaining — so `models.Items(**item_in.dict(exclude_unset=True))`
@@ -21,7 +23,7 @@ import models
 import schemas
 
 
-BASE_FAST_SLOTS = 4
+BASE_FAST_SLOTS = 0  # fast slots come only from a belt
 MAX_FAST_SLOTS = 10
 
 
@@ -101,3 +103,66 @@ def test_equipped_bonus_changes_the_slot_count(db_session, bonus, expected_enabl
         models.EquipmentSlot.is_enabled.is_(True),
     ).count()
     assert enabled == expected_enabled
+
+
+def _character_with_slots(db_session, character_id, bonus):
+    """A character with a belt of `bonus` and all ten fast slots enabled."""
+    belt = models.Items(
+        name="Пояс", item_type="belt", item_rarity="common",
+        max_stack_size=1, is_unique=False, fast_slot_bonus=bonus,
+    )
+    potion = models.Items(
+        name="Зелье", item_type="consumable", item_rarity="common",
+        max_stack_size=10, is_unique=False,
+    )
+    db_session.add_all([belt, potion])
+    db_session.flush()
+    db_session.add(models.EquipmentSlot(
+        character_id=character_id, slot_type="belt", item_id=belt.id, is_enabled=True,
+    ))
+    for i in range(1, MAX_FAST_SLOTS + 1):
+        db_session.add(models.EquipmentSlot(
+            character_id=character_id, slot_type=f"fast_slot_{i}",
+            item_id=potion.id, is_enabled=True,
+        ))
+    db_session.commit()
+    return potion
+
+
+def _enabled_slot_types(db_session, character_id):
+    return sorted(
+        (s.slot_type for s in db_session.query(models.EquipmentSlot).filter(
+            models.EquipmentSlot.character_id == character_id,
+            models.EquipmentSlot.slot_type.like("fast_slot_%"),
+            models.EquipmentSlot.is_enabled.is_(True),
+        )),
+        key=crud.fast_slot_number,
+    )
+
+
+def test_no_belt_means_no_fast_slots(db_session):
+    """Without a belt every slot closes and what lay in them goes back to the bag."""
+    potion = _character_with_slots(db_session, 4343, bonus=0)
+
+    crud.recalc_fast_slots(db_session, 4343)
+
+    assert _enabled_slot_types(db_session, 4343) == []
+    bag = db_session.query(models.CharacterInventory).filter_by(character_id=4343, item_id=potion.id).all()
+    assert sum(row.quantity for row in bag) == MAX_FAST_SLOTS
+
+
+def test_belt_opens_the_first_slots_in_number_order(db_session):
+    """A +2 belt opens fast_slot_1 and fast_slot_2 — not fast_slot_1 and fast_slot_10,
+    which is what sorting the slot names as strings would pick."""
+    potion = _character_with_slots(db_session, 4444, bonus=2)
+
+    crud.recalc_fast_slots(db_session, 4444)
+
+    assert _enabled_slot_types(db_session, 4444) == ["fast_slot_1", "fast_slot_2"]
+    bag = db_session.query(models.CharacterInventory).filter_by(character_id=4444, item_id=potion.id).all()
+    assert sum(row.quantity for row in bag) == MAX_FAST_SLOTS - 2
+
+
+def test_fast_slot_number():
+    assert crud.fast_slot_number("fast_slot_1") == 1
+    assert crud.fast_slot_number("fast_slot_10") == 10
