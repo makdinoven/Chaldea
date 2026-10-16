@@ -2558,7 +2558,10 @@ async def _make_action_core(
         if not _pd:
             return 0
         _mods = aggregate_modifiers(battle_state.get("active_effects", {}).get(str(pid), []))
-        return apply_flat_modifiers(await attrs(_pd["character_id"]), _mods).get("res_effects", 0)
+        _a = apply_flat_modifiers(await attrs(_pd["character_id"]), _mods)
+        # Vulnerability to effects eats into it, as vul_<type> does for damage
+        # (buffs.net_resist; not imported — test suites mock `buffs` by name).
+        return float(_a.get("res_effects") or 0) - float(_a.get("vul_effects") or 0)
 
     # ------------------------------------------------------------------------------
     # 6. SUPPORT-навык (баффы на self)

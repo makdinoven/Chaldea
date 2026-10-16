@@ -186,20 +186,30 @@ const DerivedStatsSection = ({ attributes, classId, equipment }: DerivedStatsSec
       {/* Resist chips */}
       <div className="flex flex-wrap gap-1.5 mt-3">
         {RESIST_CHIPS.map(({ key, label, dotClass }) => {
-          const rawValue = attributes[key as keyof CharacterAttributes];
-          const value = typeof rawValue === 'number' ? rawValue : Number(rawValue ?? 0);
+          const resist = Number(attributes[key as keyof CharacterAttributes] ?? 0);
+          // Net protection, as the battle engine counts it: resistance minus vulnerability.
+          const vulKey = key.replace('res_', 'vul_');
+          const vulnerability = Number(attributes[vulKey as keyof CharacterAttributes] ?? 0);
+          const value = resist - vulnerability;
+          const title = vulnerability
+            ? `${STAT_LABELS[key] ?? key}: ${formatStatValue(resist, true)} − ${(STAT_LABELS[vulKey] ?? vulKey).toLowerCase()} ${formatStatValue(vulnerability, true)}`
+            : STAT_LABELS[key] ?? key;
           return (
             <span
               key={key}
-              title={STAT_LABELS[key] ?? key}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.04] border border-white/10 text-[11px] text-white/75"
+              title={title}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] ${
+                value < 0
+                  ? 'bg-site-red/10 border-site-red/40 text-site-red/90'
+                  : 'bg-white/[0.04] border-white/10 text-white/75'
+              }`}
             >
               <span
                 className={`w-[7px] h-[7px] rounded-full shrink-0 ${dotClass}`}
                 aria-hidden="true"
               />
               {label}
-              <span className="text-white font-medium font-mono">
+              <span className={`font-medium font-mono ${value < 0 ? 'text-site-red' : 'text-white'}`}>
                 {formatStatValue(value, PERCENTAGE_STATS.has(key))}
               </span>
             </span>

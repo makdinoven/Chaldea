@@ -184,6 +184,20 @@ export interface CharacterAttributes {
   res_sainting: number;
   res_wind: number;
   res_damning: number;
+  // Vulnerabilities (gear's vul_*_modifier): battle subtracts each from the matching res_*.
+  vul_effects?: number;
+  vul_physical?: number;
+  vul_catting?: number;
+  vul_crushing?: number;
+  vul_piercing?: number;
+  vul_magic?: number;
+  vul_fire?: number;
+  vul_ice?: number;
+  vul_watering?: number;
+  vul_electricity?: number;
+  vul_sainting?: number;
+  vul_wind?: number;
+  vul_damning?: number;
   active_experience: number;
 }
 

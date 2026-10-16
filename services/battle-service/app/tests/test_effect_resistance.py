@@ -79,3 +79,12 @@ def test_missing_resistance_is_treated_as_zero(value):
         roll.return_value = True
         _filter([_effect(70)], res_effects=value)
         roll.assert_called_once_with(70)
+
+
+@patch("main.roll_chance")
+def test_vulnerability_makes_effects_land_more_often(roll):
+    """Net resistance below zero (vul_effects > res_effects) raises the chance:
+    a 50 % effect against −10 rolls at 60 %."""
+    roll.return_value = True
+    _filter([_effect(50)], res_effects=-10.0)
+    roll.assert_called_once_with(60.0)

@@ -474,14 +474,25 @@ RESISTED_DAMAGE_TYPES = (
 )
 
 
+def net_resist(attributes: Dict[str, float], kind: str) -> float:
+    """Protection against `kind` (a damage type or "effects"): `res_<kind>`
+    minus `vul_<kind>`. Below zero the hit (or the effect) gets through harder.
+
+    The `vul_*` columns have always been summed from gear into the character's
+    attributes, but nothing in battle read them — a vulnerability on an item
+    was only text. Everything that defends now goes through here.
+    """
+    return float(attributes.get(f"res_{kind}") or 0.0) - float(attributes.get(f"vul_{kind}") or 0.0)
+
+
 def build_percent_resist_buffs(
     mods: Dict[str, float], attributes: Dict[str, float] | None = None
 ) -> Dict[str, float]:
     """Сопротивления защищающегося: боевые плюс, если переданы, постоянные.
 
     `mods` — временные `percent_resist*` от навыков и предметов.
-    `attributes` — атрибуты бойца; из них берутся колонки `res_<тип>`, то есть
-    сила, интеллект и модификаторы снаряжения.
+    `attributes` — атрибуты бойца; из них берутся колонки `res_<тип>` за вычетом
+    `vul_<тип>` (net_resist), то есть сила, интеллект и модификаторы снаряжения.
 
     Раньше функция знала только про баффы, и колонки `res_*` не читались в
     battle-service ни разу: сила и интеллект не давали защиты, а броня с
@@ -496,7 +507,7 @@ def build_percent_resist_buffs(
     out: Dict[str, float] = {}
     if attributes:
         for dmg_type in RESISTED_DAMAGE_TYPES:
-            value = float(attributes.get(f"res_{dmg_type}") or 0.0)
+            value = net_resist(attributes, dmg_type)
             if value:
                 out[dmg_type] = value
     for k, v in mods.items():

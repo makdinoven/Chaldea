@@ -1024,3 +1024,29 @@ class TestBurnLowersDodge:
         assert "secondary_magnitude" not in _normalize_effect(_row("Burn", magnitude=4))
         row = dict(_row("Burn", magnitude=4), secondary_magnitude=7)
         assert _normalize_effect(row)["secondary_magnitude"] == 7
+
+
+class TestVulnerabilities:
+    """`vul_*` from gear used to be summed into attributes and never read in
+    battle: a vulnerability on an item was only text. Now it eats into the
+    matching resistance (buffs.net_resist)."""
+
+    def test_vulnerability_lowers_damage_resist(self):
+        out = build_percent_resist_buffs({}, {"res_fire": 10, "vul_fire": 15})
+        assert out["fire"] == pytest.approx(-5.0)
+
+    def test_vulnerability_alone_is_negative_resist(self):
+        out = build_percent_resist_buffs({}, {"vul_ice": 5})
+        assert out["ice"] == pytest.approx(-5.0)
+
+    def test_equal_res_and_vul_cancel_out(self):
+        out = build_percent_resist_buffs({}, {"res_wind": 7, "vul_wind": 7})
+        assert "wind" not in out
+
+    def test_buffs_still_add_on_top(self):
+        out = build_percent_resist_buffs({"percent_resist_fire": 20}, {"res_fire": 10, "vul_fire": 15})
+        assert out["fire"] == pytest.approx(15.0)
+
+    def test_net_resist_for_effects(self):
+        assert buffs.net_resist({"res_effects": 4, "vul_effects": 10}, "effects") == pytest.approx(-6.0)
+        assert buffs.net_resist({}, "effects") == 0.0
