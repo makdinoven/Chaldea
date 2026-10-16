@@ -1041,6 +1041,18 @@ async def _reconcile_perks_async(character_id: int):
         logger.warning(f"Perk reconcile error for char {character_id}: {e}")
 
 
+# Side calls the player does not wait for (titles): kept referenced until done,
+# or the event loop may drop a pending task.
+_BACKGROUND_TASKS: set = set()
+
+
+def _in_background(coro) -> None:
+    """Run a non-fatal side call after the response instead of before it."""
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
 async def _evaluate_titles_async(character_id: int, action: str):
     """Ask character-service to re-evaluate titles. **Awaited, never blocking.**
 
@@ -1244,15 +1256,17 @@ async def equip_item(character_id: int, req: schemas.EquipItemRequest, db: Sessi
     # count toward "items equipped" — quick/fast slots (potions/consumables) must
     # NOT (FEAT-143 bug 4). Re-equip abuse of the same item is a known limitation
     # of a cumulative counter (needs a distinct/current-count redesign).
+    #
+    # The stats endpoint reconciles perks and evaluates titles itself, so after
+    # it neither is called again — doing both twice, one after another, was most
+    # of what an equip cost. Perks are awaited either way (they can move the
+    # stats the profile shows right after); titles never change those, so the
+    # bare-perks path runs them after the response.
     if not str(getattr(slot, "slot_type", "")).startswith("fast_slot_"):
         await _track_cumulative_stats_async(character_id, {"items_equipped": 1})
-
-    # Re-evaluate perks — equipping changed attributes (FEAT-143 dynamic perks).
-    await _reconcile_perks_async(character_id)
-
-    # Trigger title evaluation after equip (non-fatal). Awaited, not blocking:
-    # character-service calls this service back while handling it.
-    await _evaluate_titles_async(character_id, "equip")
+    else:
+        await _reconcile_perks_async(character_id)
+        _in_background(_evaluate_titles_async(character_id, "equip"))
 
     return slot
 
@@ -1346,8 +1360,8 @@ async def unequip_item(character_id: int, slot_type: str, db: Session = Depends(
     # perks may need to deactivate (FEAT-143 dynamic perks).
     await _reconcile_perks_async(character_id)
 
-    # Trigger title evaluation after unequip (non-fatal). Awaited, not blocking.
-    await _evaluate_titles_async(character_id, "unequip")
+    # Title evaluation never moves the stats on screen: after the response.
+    _in_background(_evaluate_titles_async(character_id, "unequip"))
 
     return slot
 
