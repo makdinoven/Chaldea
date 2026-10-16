@@ -328,6 +328,51 @@ def get_item_admin(
     return _get_item_core(db, item_id)
 
 
+def _worn_modifiers(db: Session, item: models.Items) -> dict:
+    """What every equipped copy of `item` adds to its wearer: {slot_id: (character_id, mods)}.
+
+    Built exactly as equip builds them — with the slot's sharpening, gems and
+    durability — so the difference before/after an edit is what the wearer's
+    attributes are owed.
+    """
+    worn = {}
+    for slot in db.query(models.EquipmentSlot).filter(models.EquipmentSlot.item_id == item.id).all():
+        gems = crud.get_socketed_gems(slot)
+        worn[slot.id] = (slot.character_id, crud.build_modifiers_dict(
+            item,
+            enhancement_bonuses=crud.get_enhancement_bonuses(slot),
+            gem_items=crud.load_gem_items(db, gems) if gems else [],
+            current_durability=slot.current_durability,
+            max_durability=item.max_durability,
+            slot_type=slot.slot_type,
+        ))
+    return worn
+
+
+def _wearer_deltas(before: dict, after: dict) -> dict:
+    """{character_id: {stat: delta}} — only non-zero changes."""
+    deltas: dict = {}
+    for slot_id, (character_id, old_mods) in before.items():
+        new_mods = after.get(slot_id, (character_id, {}))[1]
+        for key in set(old_mods) | set(new_mods):
+            diff = new_mods.get(key, 0) - old_mods.get(key, 0)
+            if diff:
+                per_char = deltas.setdefault(character_id, {})
+                per_char[key] = per_char.get(key, 0) + diff
+    return deltas
+
+
+async def _settle_wearers(deltas: dict) -> None:
+    """Apply an item edit's difference to everyone wearing it, then re-check their perks."""
+    for character_id, mods in deltas.items():
+        try:
+            await apply_modifiers_in_attributes_service(character_id, mods)
+        except Exception as e:
+            logger.error(f"Item edit: could not resync attributes of character {character_id}: {e}")
+            continue
+        await _reconcile_perks_async(character_id)
+
+
 @router.put("/items/{item_id}", response_model=schemas.Item)
 def update_item(item_id: int, item_in: schemas.ItemCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user = Depends(require_permission("items:update"))):
     """Обновляет все переданные поля предмета."""
@@ -339,6 +384,10 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, background_tasks: Bac
             raise HTTPException(status_code=400, detail="Предмет с таким названием уже существует")
     _ensure_linked_recipe_exists(db, item_in)
     wearability_before = (db_item.item_type, db_item.weapon_subclass, db_item.armor_subclass)
+    # Equip added the old numbers to every wearer and unequip will take away the
+    # new ones; without settling the difference now, editing a worn item left
+    # its wearers' attributes drifting by it for good.
+    worn_before = _worn_modifiers(db, db_item)
     for field, value in item_in.dict(exclude_unset=True).items():
         if field in crud.ITEM_NESTED_EFFECT_FIELDS:
             continue  # FEAT-168: child tables, written below
@@ -356,6 +405,12 @@ def update_item(item_id: int, item_in: schemas.ItemCreate, background_tasks: Bac
     crud.delete_stale_conversions(db, db_item)
     db.commit()
     db.refresh(db_item)
+
+    # Before the wear check below: an item that no longer fits gets unequipped
+    # there, subtracting the new numbers — the wearer must hold them first.
+    deltas = _wearer_deltas(worn_before, _worn_modifiers(db, db_item))
+    if deltas:
+        background_tasks.add_task(_settle_wearers, deltas)
 
     if (db_item.item_type, db_item.weapon_subclass, db_item.armor_subclass) != wearability_before:
         wearer_ids = [
