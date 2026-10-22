@@ -20,6 +20,7 @@ import ProfileCard, { MotionProfileCard } from '../shared/ProfileCard';
 import SectionHeader from '../shared/SectionHeader';
 import ActiveBattleCard from './ActiveBattleCard';
 import { EMPTY_DATE_PLACEHOLDER, parseServerDate } from '../../../utils/serverDate';
+import { battlePath } from '../../../utils/battlePath';
 
 /* ── Types ── */
 
@@ -244,7 +245,7 @@ const BattlesTab = ({ characterId }: BattlesTabProps) => {
 
   const hasActiveFilter = filterType !== ALL_FILTER_KEY || filterResult !== ALL_FILTER_KEY;
   const battleUrl = preview
-    ? `/location/${preview.location_id ?? locationId}/battle/${preview.battle_id}`
+    ? battlePath(preview.location_id ?? locationId, preview.battle_id)
     : '';
 
   const renderPagination = () => {

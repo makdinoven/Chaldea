@@ -12,6 +12,7 @@ import {
   type PartyState,
 } from '../../../api/party';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
+import { battlePath } from '../../../utils/battlePath';
 
 export interface PartyPlayer {
   id: number;
@@ -79,7 +80,7 @@ const PartyLobbyModal = ({
         setParty(p);
         if (p.status === 'started' && p.battle_id && !navigatedRef.current) {
           navigatedRef.current = true;
-          navigate(`/location/${locationId}/battle/${p.battle_id}`);
+          navigate(battlePath(locationId, p.battle_id));
         } else if (p.status === 'cancelled') {
           toast('Группа распущена');
           onClose();
@@ -148,7 +149,7 @@ const PartyLobbyModal = ({
     try {
       const res = await startParty(party.id);
       navigatedRef.current = true;
-      navigate(`/location/${locationId}/battle/${res.battle_id}`);
+      navigate(battlePath(locationId, res.battle_id));
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } } };
       toast.error(err?.response?.data?.detail || 'Не удалось начать бой');

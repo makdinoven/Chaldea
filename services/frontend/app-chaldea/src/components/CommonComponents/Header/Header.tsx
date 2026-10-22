@@ -50,6 +50,7 @@ const Header = () => {
     { label: 'Мой профиль', path: '/user-profile' },
     { label: 'Персонаж', path: '/profile' },
     { label: 'Сообщения', path: '/messages' },
+    { label: 'Настройки', path: '/settings' },
     { label: 'Выход', path: '/', onClick: handleLogout },
   ];
 

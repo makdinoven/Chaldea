@@ -17,6 +17,7 @@ import {
 } from "./BattleEffects";
 import type { ArenaEffect, ArenaFighter, ArenaSceneProps, DotHit, DotKind, Evade, TurnOutcome } from "./arenaTypes";
 import type { CastFx } from "./CastEffects";
+import { useClientPrefs } from "../../../../utils/clientPrefs";
 
 // Seen from above like a card-game board: the viewer's team on the near row
 // (bottom of the screen), the opponents on the far row (top).
@@ -603,11 +604,13 @@ const ArenaScene = ({ fighters, onSelect, aims, turnDeadline, turnPaused, boardA
   const lastCritAt = useRef<number | null>(null);
   if (outcome?.crits.length) lastCritAt.current = outcome.at;
   const critRollAt = lastCritAt.current;
+  // «Облегчённая графика» in the settings: plain resolution, no smoothing, no drifting dust.
+  const lowGraphics = useClientPrefs().graphics === "low";
 
   return (
     <Canvas
-      dpr={[1, 1.75]}
-      gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
+      dpr={lowGraphics ? 1 : [1, 1.75]}
+      gl={{ antialias: !lowGraphics, alpha: true, powerPreference: "high-performance" }}
       camera={{ fov: CAMERA_FOV, near: 0.1, far: 120, position: [0, 16, 5] }}
     >
       <CameraRig portrait={portrait} />
@@ -618,6 +621,7 @@ const ArenaScene = ({ fighters, onSelect, aims, turnDeadline, turnPaused, boardA
         boardArtUrl={boardArtUrl}
         critRollAt={critRollAt}
         turnNumber={turnNumber}
+        lowGraphics={lowGraphics}
       />
       <Fighters
         portrait={portrait}

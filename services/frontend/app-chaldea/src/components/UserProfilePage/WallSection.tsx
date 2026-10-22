@@ -19,13 +19,15 @@ import {
   type WallPost,
   type ProfileStyleSettings,
 } from '../../redux/slices/userProfileSlice';
-import { buildColorEffectStyle } from './ProfileSettingsModal';
+import { buildColorEffectStyle } from './profileStyle';
 import WysiwygEditor from '../CommonComponents/WysiwygEditor/WysiwygEditor';
 import { formatServerDate } from '../../utils/serverDate';
 
 interface WallSectionProps {
   profileUserId: number;
   isOwnProfile: boolean;
+  /** Whether the owner's privacy lets this viewer write on the wall. */
+  canPost?: boolean;
 }
 
 const PostCard = ({
@@ -179,7 +181,7 @@ const PostCard = ({
   );
 };
 
-const WallSection = ({ profileUserId, isOwnProfile }: WallSectionProps) => {
+const WallSection = ({ profileUserId, isOwnProfile, canPost = true }: WallSectionProps) => {
   const dispatch = useAppDispatch();
   const posts = useAppSelector(selectWallPosts);
   const postsLoading = useAppSelector(selectPostsLoading);
@@ -233,8 +235,9 @@ const WallSection = ({ profileUserId, isOwnProfile }: WallSectionProps) => {
       setEditorKey((k) => k + 1);
       setIsEditorOpen(false);
       toast.success('Пост опубликован');
-    } catch {
-      toast.error('Не удалось опубликовать пост');
+    } catch (err) {
+      const detail = typeof err === 'string' ? err : null;
+      toast.error(detail ?? 'Не удалось опубликовать пост');
     } finally {
       setPosting(false);
     }
@@ -247,7 +250,7 @@ const WallSection = ({ profileUserId, isOwnProfile }: WallSectionProps) => {
   return (
     <div className="flex flex-col gap-4">
       {/* New post form with WYSIWYG editor */}
-      {isLoggedIn && (
+      {isLoggedIn && canPost && (
         <div ref={formRef}>
           <AnimatePresence mode="wait">
             {!isEditorOpen ? (

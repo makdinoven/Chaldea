@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { User, Calendar, FileText, UserPlus, UserCheck, UserX, Settings, Activity, MessageSquare } from 'react-feather';
-import { createConversation } from '../../redux/slices/messengerSlice';
+import { Calendar, FileText, UserPlus, UserCheck, UserX, Activity, MessageSquare, Slash, Lock } from 'react-feather';
+import { createConversation, blockUser, unblockUser } from '../../redux/slices/messengerSlice';
+import { checkBlock } from '../../api/messengerApi';
+import type { BlockCheckResponse } from '../../types/messenger';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
   loadUserProfile,
@@ -22,7 +24,7 @@ import {
 import WallSection from './WallSection';
 import FriendsSection from './FriendsSection';
 import CharactersSection from './CharactersSection';
-import ProfileSettingsModal, { buildColorEffectStyle, buildNicknameTextShadow } from './ProfileSettingsModal';
+import { buildColorEffectStyle, buildNicknameTextShadow } from './profileStyle';
 import AvatarWithFrame from '../common/AvatarWithFrame';
 import { formatServerDate } from '../../utils/serverDate';
 
@@ -37,6 +39,13 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 
 const AVATAR_SIZE_DESKTOP = 180;
+
+const HiddenNotice = ({ text }: { text: string }) => (
+  <div className="gray-bg p-8 flex flex-col items-center gap-2 text-center">
+    <Lock size={20} className="text-white/30" />
+    <p className="text-white/50 text-sm">{text}</p>
+  </div>
+);
 const AVATAR_SIZE_MOBILE = 120;
 
 const UserProfilePage = () => {
@@ -52,7 +61,8 @@ const UserProfilePage = () => {
   const isOwnProfile = profileUserId !== null && profileUserId === currentUserId;
 
   const [activeTab, setActiveTab] = useState<Tab>('wall');
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [blockState, setBlockState] = useState<BlockCheckResponse | null>(null);
+  const [blockBusy, setBlockBusy] = useState(false);
   const [messageSending, setMessageSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -73,9 +83,15 @@ const UserProfilePage = () => {
     if (!profileUserId) return;
 
     dispatch(resetUserProfile());
-    dispatch(loadUserProfile(profileUserId));
-    dispatch(loadWallPosts({ userId: profileUserId, page: 1 }));
-    dispatch(loadFriends(profileUserId));
+    // The wall and the friends list load only when the owner lets this viewer see them.
+    dispatch(loadUserProfile(profileUserId))
+      .unwrap()
+      .then((loaded) => {
+        const can = loaded.viewer_permissions;
+        if (can?.can_view_wall ?? true) dispatch(loadWallPosts({ userId: profileUserId, page: 1 }));
+        if (can?.can_view_friends ?? true) dispatch(loadFriends(profileUserId));
+      })
+      .catch(() => {});
 
     if (isOwnProfile) {
       dispatch(loadIncomingRequests());
@@ -86,6 +102,41 @@ const UserProfilePage = () => {
       dispatch(resetUserProfile());
     };
   }, [profileUserId, dispatch, isOwnProfile]);
+
+  useEffect(() => {
+    setBlockState(null);
+    if (!profileUserId || isOwnProfile || currentUserId === null) return undefined;
+    let cancelled = false;
+    checkBlock(profileUserId)
+      .then(({ data }) => {
+        if (!cancelled) setBlockState(data);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [profileUserId, isOwnProfile, currentUserId]);
+
+  const handleToggleBlock = async () => {
+    if (!profileUserId || !blockState || blockBusy) return;
+    setBlockBusy(true);
+    try {
+      if (blockState.blocked_by_me) {
+        await dispatch(unblockUser(profileUserId)).unwrap();
+        toast.success('Пользователь разблокирован');
+      } else {
+        await dispatch(blockUser(profileUserId)).unwrap();
+        toast.success('Пользователь заблокирован');
+      }
+      const { data } = await checkBlock(profileUserId);
+      setBlockState(data);
+      dispatch(loadUserProfile(profileUserId));
+    } catch (err) {
+      toast.error(typeof err === 'string' ? err : 'Не удалось изменить блокировку');
+    } finally {
+      setBlockBusy(false);
+    }
+  };
 
   const handleAvatarClick = () => {
     if (!isOwnProfile) return;
@@ -130,8 +181,8 @@ const UserProfilePage = () => {
         dispatch(loadUserProfile(profileUserId));
         toast.success('Запрос отменён');
       }
-    } catch {
-      toast.error('Не удалось выполнить действие');
+    } catch (err) {
+      toast.error(typeof err === 'string' ? err : 'Не удалось выполнить действие');
     }
   };
 
@@ -183,6 +234,9 @@ const UserProfilePage = () => {
     : null;
 
   const friendshipStatus = profile.friendship_status;
+  const permissions = profile.viewer_permissions;
+  const canSendFriendRequest = (permissions?.can_send_friend_request ?? true) && !blockState?.is_blocked;
+  const canPostOnWall = (permissions?.can_post_wall ?? true) && !blockState?.is_blocked;
 
   // Compute header background styles
   const headerBgStyle: React.CSSProperties = {};
@@ -212,28 +266,36 @@ const UserProfilePage = () => {
         className={`${!profile.profile_bg_image ? 'gray-bg' : 'rounded-card'} p-6 flex flex-col sm:flex-row items-center sm:items-start gap-6 relative`}
         style={headerBgStyle}
       >
-        {/* Settings gear (own profile only) */}
-        {isOwnProfile && (
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="absolute top-4 right-4 text-white/40 hover:text-white transition-colors z-10"
-            title="Настройки профиля"
-          >
-            <Settings size={20} />
-          </button>
-        )}
-
-        {/* Message button (other profiles only) */}
+        {/* Message + block (other profiles only) */}
         {!isOwnProfile && currentUserId && (
-          <button
-            onClick={handleMessage}
-            disabled={messageSending}
-            className="btn-blue absolute bottom-4 right-4 z-10 flex items-center gap-2 !px-3 !py-1.5 !text-sm disabled:opacity-50"
-            title="Написать сообщение"
-          >
-            <MessageSquare size={16} />
-            <span className="hidden sm:inline">Написать</span>
-          </button>
+          <div className="absolute bottom-4 right-4 z-10 flex items-center gap-2">
+            {blockState && (
+              <button
+                onClick={handleToggleBlock}
+                disabled={blockBusy}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-card text-sm bg-black/40 backdrop-blur-sm transition-colors duration-200 ease-site disabled:opacity-50 ${
+                  blockState.blocked_by_me ? 'text-white/70 hover:text-white' : 'text-white/50 hover:text-site-red'
+                }`}
+                title={blockState.blocked_by_me ? 'Разблокировать' : 'Заблокировать'}
+              >
+                <Slash size={16} />
+                <span className="hidden sm:inline">
+                  {blockState.blocked_by_me ? 'Разблокировать' : 'Заблокировать'}
+                </span>
+              </button>
+            )}
+            {!blockState?.is_blocked && (
+              <button
+                onClick={handleMessage}
+                disabled={messageSending}
+                className="btn-blue flex items-center gap-2 !px-3 !py-1.5 !text-sm disabled:opacity-50"
+                title="Написать сообщение"
+              >
+                <MessageSquare size={16} />
+                <span className="hidden sm:inline">Написать</span>
+              </button>
+            )}
+          </div>
         )}
 
         {/* Avatars row */}
@@ -356,7 +418,8 @@ const UserProfilePage = () => {
             </div>
           )}
 
-          {/* Post count */}
+          {/* Post count — absent when the owner hides the wall */}
+          {profile.post_stats && (
           <div
             className={`flex items-center gap-1.5 text-white/90 text-sm justify-center sm:justify-start ${hasBgImage ? 'w-fit rounded-md px-2 py-0.5 mx-auto sm:mx-0' : ''}`}
             style={hasBgImage ? { ...textShadowStyle, backgroundColor: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(4px)' } : textShadowStyle}
@@ -364,6 +427,7 @@ const UserProfilePage = () => {
             <FileText size={14} />
             <span>Записей: {profile.post_stats.total_posts}</span>
           </div>
+          )}
 
           {/* Activity stub */}
           <div
@@ -374,8 +438,8 @@ const UserProfilePage = () => {
             <span>Активность: {profile.activity_points ?? 0}</span>
           </div>
 
-          {/* Friend action button */}
-          {!isOwnProfile && currentUserId && (
+          {/* Friend action button — a new request only where the owner accepts them */}
+          {!isOwnProfile && currentUserId && (friendshipStatus === 'accepted' || friendshipStatus === 'pending_sent' || friendshipStatus === 'pending_received' || canSendFriendRequest) && (
             <div className="flex justify-center sm:justify-start mt-1">
               {friendshipStatus === 'accepted' ? (
                 <div className="flex items-center gap-2 text-green-400 text-sm">
@@ -445,31 +509,32 @@ const UserProfilePage = () => {
         {/* ── Tab Content ── */}
         <div className="px-3 sm:px-4 md:px-6 pt-4 pb-4 md:pb-6">
           {activeTab === 'wall' && (
-            <WallSection
-              profileUserId={profileUserId}
-              isOwnProfile={isOwnProfile}
-            />
+            permissions?.can_view_wall === false ? (
+              <HiddenNotice text="Пользователь скрыл свою стену" />
+            ) : (
+              <WallSection
+                profileUserId={profileUserId}
+                isOwnProfile={isOwnProfile}
+                canPost={isOwnProfile || canPostOnWall}
+              />
+            )
           )}
           {activeTab === 'characters' && (
             <CharactersSection profileUserId={profileUserId} />
           )}
           {activeTab === 'friends' && (
-            <FriendsSection
-              profileUserId={profileUserId}
-              isOwnProfile={isOwnProfile}
-            />
+            permissions?.can_view_friends === false ? (
+              <HiddenNotice text="Пользователь скрыл список друзей" />
+            ) : (
+              <FriendsSection
+                profileUserId={profileUserId}
+                isOwnProfile={isOwnProfile}
+              />
+            )
           )}
         </div>
       </div>
 
-      {/* ── Profile Settings Modal ── */}
-      {isOwnProfile && profile && (
-        <ProfileSettingsModal
-          isOpen={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-          profile={profile}
-        />
-      )}
     </div>
   );
 };

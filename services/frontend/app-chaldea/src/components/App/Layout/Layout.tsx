@@ -5,6 +5,8 @@ import { Outlet } from 'react-router-dom';
 import { useWebSocket } from '../../../hooks/useWebSocket';
 import { useAppSelector, useAppDispatch } from '../../../redux/store';
 import { fetchUnreadCount, selectTotalUnread } from '../../../redux/slices/messengerSlice';
+import { selectSiteBackgroundUrl } from '../../../redux/slices/userSlice';
+import { fetchNotificationPreferences } from '../../../redux/slices/notificationSlice';
 import ChatWidget from '../../Chat/ChatWidget';
 import ConnectionStatus from '../../common/ConnectionStatus';
 
@@ -15,13 +17,12 @@ const Layout = () => {
   const totalUnread = useAppSelector(selectTotalUnread);
   const baseTitleRef = useRef('');
 
-  // For logged-in users: load the unread count and ask for notification permission.
+  // For logged-in users: load the unread count and how they want to be notified.
+  // System notifications are asked for from the settings page, not on arrival.
   useEffect(() => {
     if (userId !== null) {
       dispatch(fetchUnreadCount());
-      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-        Notification.requestPermission().catch(() => {});
-      }
+      dispatch(fetchNotificationPreferences());
     }
   }, [userId, dispatch]);
 
@@ -35,16 +36,16 @@ const Layout = () => {
       : baseTitleRef.current;
   }, [totalUnread]);
 
-  // Apply saved site background from localStorage on mount
+  // The site background lives in the account; a background saved in this
+  // browser before that (localStorage) still shows until the account has one.
+  const accountBg = useAppSelector(selectSiteBackgroundUrl);
   useEffect(() => {
-    const savedBg = localStorage.getItem('site_bg_url');
-    if (savedBg) {
-      document.body.style.backgroundImage = `url(${savedBg})`;
-    }
+    const bg = accountBg ?? localStorage.getItem('site_bg_url');
+    document.body.style.backgroundImage = bg ? `url(${bg})` : '';
     return () => {
       document.body.style.backgroundImage = '';
     };
-  }, []);
+  }, [accountBg]);
 
   return (
     <>

@@ -30,6 +30,7 @@ interface GetMeResponse {
   permissions: string[];
   avatar: string | null;
   character: CharacterData | null;
+  site_background_url?: string | null;
 }
 
 interface UserState {
@@ -41,6 +42,8 @@ interface UserState {
   roleDisplayName: string | null;
   permissions: string[];
   avatar: string | null;
+  /** The account's site background; undefined until /users/me has answered. */
+  siteBackgroundUrl: string | null | undefined;
   status: 'idle' | 'loading' | 'succeeded' | 'failed';
   error: string | null;
   authInitialized: boolean;
@@ -55,6 +58,7 @@ const initialState: UserState = {
   roleDisplayName: null,
   permissions: [],
   avatar: null,
+  siteBackgroundUrl: undefined,
   status: "idle",
   error: null,
   authInitialized: false,
@@ -126,6 +130,10 @@ const userSlice = createSlice({
       state.permissions = [];
       state.character = null;
       state.avatar = null;
+      state.siteBackgroundUrl = undefined;
+    },
+    setSiteBackgroundUrl(state, action: PayloadAction<string | null>) {
+      state.siteBackgroundUrl = action.payload;
     },
     setAuthInitialized(state) {
       state.authInitialized = true;
@@ -172,6 +180,7 @@ const userSlice = createSlice({
         state.permissions = permissions || [];
         state.avatar = avatar;
         state.character = character;
+        state.siteBackgroundUrl = action.payload.site_background_url ?? null;
       })
       .addCase(getMe.rejected, (state, action) => {
         state.status = "failed";
@@ -188,7 +197,7 @@ const userSlice = createSlice({
   },
 });
 
-export const { logout, setAuthInitialized, setCharacterAfterTeleport, setCharacterLocation } = userSlice.actions;
+export const { logout, setSiteBackgroundUrl, setAuthInitialized, setCharacterAfterTeleport, setCharacterLocation } = userSlice.actions;
 export default userSlice.reducer;
 
 // --- Selectors ---
@@ -196,4 +205,5 @@ export default userSlice.reducer;
 export const selectPermissions = (state: RootState) => state.user.permissions;
 export const selectRole = (state: RootState) => state.user.role;
 export const selectRoleDisplayName = (state: RootState) => state.user.roleDisplayName;
+export const selectSiteBackgroundUrl = (state: RootState) => state.user.siteBackgroundUrl;
 export const selectAuthInitialized = (state: RootState) => state.user.authInitialized;

@@ -308,6 +308,8 @@ interface ArenaEnvironmentProps {
   boardArtUrl: string | null;
   critRollAt: number | null;
   turnNumber: number;
+  /** Skip the drifting dust on weak devices. */
+  lowGraphics?: boolean;
 }
 
 /** Loads a same-origin image for canvas use; null until loaded or if it fails. */
@@ -329,7 +331,7 @@ const useImage = (url: string | null) => {
 };
 
 /** The table of fates: a candle-lit board, seen from above, on which the gods play. */
-const ArenaEnvironment = ({ turnDeadline, turnPaused, portrait, boardArtUrl, critRollAt, turnNumber }: ArenaEnvironmentProps) => {
+const ArenaEnvironment = ({ turnDeadline, turnPaused, portrait, boardArtUrl, critRollAt, turnNumber, lowGraphics = false }: ArenaEnvironmentProps) => {
   const { width, depth } = boardSize(portrait);
   const art = useImage(boardArtUrl);
   const wood = useMemo(createTableWoodTexture, []);
@@ -419,7 +421,7 @@ const ArenaEnvironment = ({ turnDeadline, turnPaused, portrait, boardArtUrl, cri
       {!portrait && <TableProps boardWidth={width} turnNumber={turnNumber} turnDeadline={turnDeadline} critRollAt={critRollAt} />}
 
       {/* Dust drifting through the light cone */}
-      <Sparkles count={60} scale={[10, 6, 8]} position={[0, 3, 0]} size={1.6} speed={0.18} color="#f2e4c8" opacity={0.5} />
+      {!lowGraphics && <Sparkles count={60} scale={[10, 6, 8]} position={[0, 3, 0]} size={1.6} speed={0.18} color="#f2e4c8" opacity={0.5} />}
 
       <fog attach="fog" args={["#050407", 20, 40]} />
     </group>

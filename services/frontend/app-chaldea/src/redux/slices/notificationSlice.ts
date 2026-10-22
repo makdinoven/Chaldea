@@ -11,7 +11,35 @@ export interface NotificationItem {
   status: 'unread' | 'read';
   created_at: string;
   link?: string;
+  category?: NotificationCategory | null;
 }
+
+/** Kinds of notification a player can quieten. Battles and messages from the administration always come through. */
+export type NotificationCategory =
+  | 'messages'
+  | 'social'
+  | 'trade'
+  | 'party'
+  | 'world'
+  | 'progress'
+  | 'battle'
+  | 'system';
+
+export type ConfigurableCategory = Exclude<NotificationCategory, 'battle' | 'system'>;
+
+/** all — in the bell and as a popup with sound; bell — quietly into the bell; off — not at all. */
+export type NotificationMode = 'all' | 'bell' | 'off';
+
+export type NotificationPreferences = Record<ConfigurableCategory, NotificationMode>;
+
+export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  messages: 'all',
+  social: 'all',
+  trade: 'all',
+  party: 'all',
+  world: 'all',
+  progress: 'all',
+};
 
 export interface PaginatedResponse<T> {
   items: T[];
@@ -27,6 +55,7 @@ export interface NotificationState {
   dropdownOpen: boolean;
   status: 'idle' | 'loading' | 'succeeded' | 'failed';
   error: string | null;
+  preferences: NotificationPreferences;
 }
 
 const initialState: NotificationState = {
@@ -36,6 +65,7 @@ const initialState: NotificationState = {
   dropdownOpen: false,
   status: 'idle',
   error: null,
+  preferences: DEFAULT_NOTIFICATION_PREFERENCES,
 };
 
 // --- Async Thunks ---
@@ -116,6 +146,42 @@ export const markAllAsRead = createAsyncThunk<
   },
 );
 
+const preferencesError = (error: unknown, fallback: string) =>
+  axios.isAxiosError(error) && typeof error.response?.data?.detail === 'string'
+    ? error.response.data.detail
+    : fallback;
+
+export const fetchNotificationPreferences = createAsyncThunk<
+  NotificationPreferences,
+  void,
+  { rejectValue: string }
+>('notifications/fetchPreferences', async (_, thunkAPI) => {
+  try {
+    const response = await axios.get<{ preferences: Partial<NotificationPreferences> }>(
+      `${BASE_URL_DEFAULT}/notifications/me/preferences`,
+    );
+    return { ...DEFAULT_NOTIFICATION_PREFERENCES, ...response.data.preferences };
+  } catch (error: unknown) {
+    return thunkAPI.rejectWithValue(preferencesError(error, 'Не удалось загрузить настройки уведомлений'));
+  }
+});
+
+export const updateNotificationPreferences = createAsyncThunk<
+  NotificationPreferences,
+  Partial<NotificationPreferences>,
+  { rejectValue: string }
+>('notifications/updatePreferences', async (preferences, thunkAPI) => {
+  try {
+    const response = await axios.put<{ preferences: Partial<NotificationPreferences> }>(
+      `${BASE_URL_DEFAULT}/notifications/me/preferences`,
+      { preferences },
+    );
+    return { ...DEFAULT_NOTIFICATION_PREFERENCES, ...response.data.preferences };
+  } catch (error: unknown) {
+    return thunkAPI.rejectWithValue(preferencesError(error, 'Не удалось сохранить настройки уведомлений'));
+  }
+});
+
 // --- Slice ---
 
 const notificationSlice = createSlice({
@@ -172,6 +238,12 @@ const notificationSlice = createSlice({
       })
       .addCase(markAllAsRead.rejected, (state, action) => {
         state.error = action.payload ?? 'Произошла ошибка';
+      })
+      .addCase(fetchNotificationPreferences.fulfilled, (state, action) => {
+        state.preferences = action.payload;
+      })
+      .addCase(updateNotificationPreferences.fulfilled, (state, action) => {
+        state.preferences = action.payload;
       });
   },
 });
@@ -187,6 +259,8 @@ export const selectUnreadCount = (state: { notifications: NotificationState }) =
   state.notifications.unreadCount;
 export const selectDropdownOpen = (state: { notifications: NotificationState }) =>
   state.notifications.dropdownOpen;
+export const selectNotificationPreferences = (state: { notifications: NotificationState }) =>
+  state.notifications.preferences;
 export const selectSSEConnected = (state: { notifications: NotificationState }) =>
   state.notifications.sseConnected;
 

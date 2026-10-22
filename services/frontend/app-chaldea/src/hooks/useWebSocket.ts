@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../redux/store';
-import { addNotification, NotificationItem } from '../redux/slices/notificationSlice';
+import {
+  addNotification,
+  selectNotificationPreferences,
+  type NotificationItem,
+} from '../redux/slices/notificationSlice';
 import { addMessage, removeMessage } from '../redux/slices/chatSlice';
 import {
   receivePrivateMessage,
@@ -46,6 +50,8 @@ import type {
 import type { ChatMessage, ChatChannel } from '../types/chat';
 import { getAccessToken, refreshAccessToken } from '../api/authToken';
 import toast from 'react-hot-toast';
+import { alertPlayer } from '../utils/alertPlayer';
+import { battlePath } from '../utils/battlePath';
 
 const MAX_RECONNECT_DELAY = 30000;
 const INITIAL_RECONNECT_DELAY = 1000;
@@ -57,6 +63,34 @@ interface WebSocketMessage {
   type: string;
   data?: unknown;
 }
+
+/** Fields the notification consumer adds to every bell event it pushes. */
+interface BellEventData {
+  notification_id?: number;
+  message?: string;
+  category?: string;
+  /** The player chose «только колокольчик» for this kind. */
+  silent?: boolean;
+  [key: string]: unknown;
+}
+
+/** Where a bell entry leads, for events that carry enough to know. */
+const bellLink = (type: string, data: BellEventData): string | undefined => {
+  switch (type) {
+    case 'friend_request':
+    case 'wall_post':
+      return '/user-profile';
+    case 'friend_accepted':
+      return typeof data.user_id === 'number' ? `/user-profile/${data.user_id}` : undefined;
+    case 'character_request_rejected':
+      return '/my-requests';
+    default:
+      return undefined;
+  }
+};
+
+/** Events about fighting get the battle sound. */
+const isBattleEvent = (type: string) => type.startsWith('pvp_') || type.startsWith('battle_');
 
 interface UseWebSocketReturn {
   connected: boolean;
@@ -120,6 +154,12 @@ const useWebSocket = (): UseWebSocketReturn => {
   useEffect(() => {
     currentUserIdRef.current = currentUserId;
   }, [currentUserId]);
+  // Messenger events are not filtered by the server; the «Сообщения» setting is applied here.
+  const notificationPrefs = useAppSelector(selectNotificationPreferences);
+  const messagesModeRef = useRef(notificationPrefs.messages);
+  useEffect(() => {
+    messagesModeRef.current = notificationPrefs.messages;
+  }, [notificationPrefs.messages]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectDelayRef = useRef(INITIAL_RECONNECT_DELAY);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -170,10 +210,10 @@ const useWebSocket = (): UseWebSocketReturn => {
 
           switch (parsed.type) {
             case 'notification': {
-              const notification = parsed.data as NotificationItem;
+              const notification = parsed.data as NotificationItem & { silent?: boolean };
               dispatch(addNotification(notification));
               if (notification.message) {
-                toast(notification.message);
+                alertPlayer({ text: notification.message, silent: notification.silent });
               }
               break;
             }
@@ -199,11 +239,12 @@ const useWebSocket = (): UseWebSocketReturn => {
               const pvpMessage = battleType === 'pvp_attack'
                 ? `${pvpData.attacker_name ?? 'Кто-то'} напал на вас! Бой #${pvpData.battle_id} начинается.`
                 : `Бой #${pvpData.battle_id} начинается!`;
-              if (battleType === 'pvp_attack') {
-                toast.error(pvpMessage, { duration: 8000 });
-              } else {
-                toast.success(pvpMessage, { duration: 6000 });
-              }
+              alertPlayer({
+                text: pvpMessage,
+                tone: battleType === 'pvp_attack' ? 'error' : 'success',
+                duration: battleType === 'pvp_attack' ? 8000 : 6000,
+                sound: 'battle',
+              });
               dispatch(addNotification({
                 id: pvpData.notification_id ?? Date.now(),
                 user_id: 0,
@@ -213,16 +254,24 @@ const useWebSocket = (): UseWebSocketReturn => {
                 // Route needs both ids (location/:locationId/battle/:battleId);
                 // fall back gracefully if location_id is somehow absent.
                 link: pvpData.location_id != null
-                  ? `/location/${pvpData.location_id}/battle/${pvpData.battle_id}`
+                  ? battlePath(pvpData.location_id, pvpData.battle_id)
                   : undefined,
               } as NotificationItem));
               break;
             }
             case 'party_invitation': {
-              const inv = parsed.data as { leader_name?: string };
-              toast(`${inv.leader_name ?? 'Игрок'} приглашает вас в группу`, {
-                duration: 7000,
-              });
+              const inv = parsed.data as BellEventData & { leader_name?: string };
+              const text = `${inv.leader_name ?? 'Игрок'} приглашает вас в группу`;
+              if (inv.notification_id) {
+                dispatch(addNotification({
+                  id: inv.notification_id,
+                  user_id: 0,
+                  message: inv.message ?? text,
+                  status: 'unread',
+                  created_at: new Date().toISOString(),
+                } as NotificationItem));
+              }
+              alertPlayer({ text, duration: 7000, silent: inv.silent });
               break;
             }
             case 'party_started': {
@@ -230,7 +279,12 @@ const useWebSocket = (): UseWebSocketReturn => {
                 battle_id: number;
                 battle_url?: string;
               };
-              toast.success(`Бой #${ps.battle_id} начинается!`, { duration: 6000 });
+              alertPlayer({
+                text: `Бой #${ps.battle_id} начинается!`,
+                tone: 'success',
+                duration: 6000,
+                sound: 'battle',
+              });
               dispatch(addNotification({
                 id: Date.now(),
                 user_id: 0,
@@ -244,18 +298,16 @@ const useWebSocket = (): UseWebSocketReturn => {
             case 'private_message': {
               const pm = parsed.data as WsPrivateMessageData;
               dispatch(receivePrivateMessage(pm));
-              // Desktop notification when the tab is in the background.
-              if (
-                typeof document !== 'undefined' && document.hidden &&
-                typeof Notification !== 'undefined' && Notification.permission === 'granted'
-              ) {
-                try {
-                  new Notification(pm.sender_username || 'Новое сообщение', {
-                    body: pm.content || '📷 Изображение',
-                  });
-                } catch {
-                  // Ignore — notifications are best-effort.
-                }
+              // A sound and, in the background, a system notification — no popup:
+              // the unread counter already shows it. Not for one's own messages
+              // echoed from another device.
+              if (pm.sender_id !== currentUserIdRef.current && messagesModeRef.current === 'all') {
+                alertPlayer({
+                  title: pm.sender_username || 'Новое сообщение',
+                  text: pm.content || '📷 Изображение',
+                  sound: 'message',
+                  noToast: true,
+                });
               }
               break;
             }
@@ -314,7 +366,9 @@ const useWebSocket = (): UseWebSocketReturn => {
             case 'messenger_mention': {
               const m = parsed.data as { from_username?: string };
               const text = `${m.from_username ?? 'Кто-то'} упомянул вас`;
-              toast(text);
+              const mode = messagesModeRef.current;
+              if (mode === 'off') break;
+              alertPlayer({ text, sound: 'message', silent: mode === 'bell' });
               dispatch(addNotification({
                 id: Date.now(),
                 user_id: 0,
@@ -328,7 +382,7 @@ const useWebSocket = (): UseWebSocketReturn => {
               const outbidData = parsed.data as WsAuctionOutbidData;
               dispatch(handleAuctionOutbid(outbidData));
               if (outbidData.message) {
-                toast(outbidData.message);
+                alertPlayer({ text: outbidData.message, silent: (outbidData as { silent?: boolean }).silent });
                 dispatch(addNotification({
                   id: outbidData.notification_id,
                   user_id: 0,
@@ -343,7 +397,7 @@ const useWebSocket = (): UseWebSocketReturn => {
               const soldData = parsed.data as WsAuctionSoldData;
               dispatch(handleAuctionSold(soldData));
               if (soldData.message) {
-                toast(soldData.message);
+                alertPlayer({ text: soldData.message, silent: (soldData as { silent?: boolean }).silent });
                 dispatch(addNotification({
                   id: soldData.notification_id,
                   user_id: 0,
@@ -358,7 +412,7 @@ const useWebSocket = (): UseWebSocketReturn => {
               const wonData = parsed.data as WsAuctionWonData;
               dispatch(handleAuctionWon(wonData));
               if (wonData.message) {
-                toast(wonData.message);
+                alertPlayer({ text: wonData.message, silent: (wonData as { silent?: boolean }).silent });
                 dispatch(addNotification({
                   id: wonData.notification_id,
                   user_id: 0,
@@ -373,7 +427,7 @@ const useWebSocket = (): UseWebSocketReturn => {
               const expiredData = parsed.data as WsAuctionExpiredData;
               dispatch(handleAuctionExpired(expiredData));
               if (expiredData.message) {
-                toast(expiredData.message);
+                alertPlayer({ text: expiredData.message, silent: (expiredData as { silent?: boolean }).silent });
                 dispatch(addNotification({
                   id: expiredData.notification_id,
                   user_id: 0,
@@ -399,7 +453,7 @@ const useWebSocket = (): UseWebSocketReturn => {
                   status: 'unread',
                   created_at: new Date().toISOString(),
                 } as NotificationItem));
-                toast(ticketReplyData.message);
+                alertPlayer({ text: ticketReplyData.message });
               }
               break;
             }
@@ -411,8 +465,27 @@ const useWebSocket = (): UseWebSocketReturn => {
             case 'ping':
               // Keepalive — ignore
               break;
-            default:
+            default: {
+              // Any other bell event (friends, duels, character requests,
+              // battle groups…): into the bell, and a popup unless quietened.
+              const data = parsed.data as BellEventData | undefined;
+              if (data?.notification_id && typeof data.message === 'string') {
+                dispatch(addNotification({
+                  id: data.notification_id,
+                  user_id: 0,
+                  message: data.message,
+                  status: 'unread',
+                  created_at: new Date().toISOString(),
+                  link: bellLink(parsed.type, data),
+                } as NotificationItem));
+                alertPlayer({
+                  text: data.message,
+                  silent: data.silent,
+                  sound: isBattleEvent(parsed.type) ? 'battle' : 'notification',
+                });
+              }
               break;
+            }
           }
         } catch {
           // Non-JSON or malformed message — ignore

@@ -58,6 +58,7 @@ export interface ProfileSettingsPayload {
   status_text?: string | null;
   profile_bg_position?: string | null;
   post_color?: string | null;
+  site_background_url?: string | null;
   profile_style_settings?: {
     post_color_opacity?: number;
     post_color_blur?: number;
@@ -79,6 +80,24 @@ export interface ProfileSettingsPayload {
 
 export const updateProfileSettings = (data: ProfileSettingsPayload) =>
   axios.put(`${BASE_URL_DEFAULT}/users/me/settings`, data);
+
+// Privacy (own account)
+export type AudiencePrivacy = 'all' | 'friends' | 'nobody';
+
+export interface PrivacySettings {
+  message_privacy: AudiencePrivacy;
+  wall_view_privacy: AudiencePrivacy;
+  wall_post_privacy: AudiencePrivacy;
+  friends_list_privacy: AudiencePrivacy;
+  friend_request_privacy: 'all' | 'nobody';
+  show_online: boolean;
+}
+
+export const fetchPrivacySettings = () =>
+  axios.get<PrivacySettings>(`${BASE_URL_DEFAULT}/users/me/privacy`);
+
+export const updatePrivacySettings = (data: Partial<PrivacySettings>) =>
+  axios.put<PrivacySettings>(`${BASE_URL_DEFAULT}/users/me/privacy`, data);
 
 // Username Change
 export const updateUsername = (username: string) =>

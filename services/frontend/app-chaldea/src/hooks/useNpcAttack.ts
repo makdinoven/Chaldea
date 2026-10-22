@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import axios from 'axios';
+import { battlePath } from '../utils/battlePath';
 
 interface UseNpcAttackOptions {
   npcId: number;
@@ -46,7 +47,7 @@ const useNpcAttack = ({ npcId, npcName, currentCharacterId }: UseNpcAttackOption
         battle_type: 'pvp_attack',
       });
       toast.success(`Бой с ${npcName} начинается!`);
-      navigate(`/location/${locationId}/battle/${result.battle_id}`);
+      navigate(battlePath(locationId, result.battle_id));
     } catch (err) {
       const message =
         axios.isAxiosError(err) && err.response?.data?.detail

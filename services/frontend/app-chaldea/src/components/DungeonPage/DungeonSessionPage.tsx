@@ -26,6 +26,7 @@ import DungeonPartyPanel from './DungeonPartyPanel';
 import DungeonInventory from './DungeonInventory';
 import DungeonLootDistribution from './DungeonLootDistribution';
 import ModalShell from '../CommonComponents/ModalShell/ModalShell';
+import { battlePath } from '../../utils/battlePath';
 
 // --- Mobile Tab ---
 
@@ -268,7 +269,7 @@ const DungeonSessionPage = () => {
 
   const handleGoToBattle = useCallback(() => {
     if (sessionState?.active_battle_id) {
-      navigate(`/location/${sessionState.location_id}/battle/${sessionState.active_battle_id}`);
+      navigate(battlePath(sessionState.location_id, sessionState.active_battle_id));
     }
   }, [navigate, sessionState?.active_battle_id]);
 

@@ -9,7 +9,7 @@ import {
   selectUserProfile,
   UserCharacterItem,
 } from '../../redux/slices/userProfileSlice';
-import { buildColorEffectStyle } from './ProfileSettingsModal';
+import { buildColorEffectStyle } from './profileStyle';
 import { formatServerDate } from '../../utils/serverDate';
 
 /** Mapping race IDs to Tailwind ring colors */

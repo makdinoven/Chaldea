@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
@@ -37,11 +38,11 @@ import { uploadGroupAvatar } from '../../api/messengerApi';
 import ConversationList from './ConversationList';
 import MessageArea from './MessageArea';
 import NewConversationModal from './NewConversationModal';
-import MessengerSettings from './MessengerSettings';
 import toast from 'react-hot-toast';
 
 const MessengerPage = () => {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
 
   const conversations = useAppSelector(selectConversations);
   const activeConversation = useAppSelector(selectActiveConversation);
@@ -56,7 +57,6 @@ const MessengerPage = () => {
   const typingUsernames = useAppSelector(selectTypingUsernames(activeConversationId));
 
   const [showNewModal, setShowNewModal] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isSending, setIsSending] = useState(false);
 
@@ -277,7 +277,7 @@ const MessengerPage = () => {
             onSelectConversation={handleSelectConversation}
             onTogglePin={handleTogglePin}
             onNewConversation={() => setShowNewModal(true)}
-            onOpenSettings={() => setShowSettings(true)}
+            onOpenSettings={() => navigate('/settings?tab=privacy')}
           />
         </div>
 
@@ -323,11 +323,6 @@ const MessengerPage = () => {
         onCreate={handleCreateConversation}
       />
 
-      {/* Settings modal */}
-      <MessengerSettings
-        isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
-      />
     </motion.div>
   );
 };

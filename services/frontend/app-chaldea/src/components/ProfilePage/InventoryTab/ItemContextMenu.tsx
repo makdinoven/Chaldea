@@ -32,6 +32,7 @@ import {
   RUNE_SOCKET_TYPES,
   SHARPENABLE_ITEM_TYPES,
 } from '../../../constants/professions';
+import { getClientPrefs } from '../../../utils/clientPrefs';
 
 const parseSocketedGems = (raw: string | null | undefined): (number | null)[] => {
   if (!raw) return [];
@@ -64,6 +65,12 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
     message: string;
     onConfirm: () => void;
   }>({ isOpen: false, message: '', onConfirm: () => {} });
+
+  /** Asks first — unless the player turned confirmations off in the settings. */
+  const confirmDangerous = (request: { isOpen: true; message: string; onConfirm: () => void }) => {
+    if (getClientPrefs().confirmDangerous) setConfirmModal(request);
+    else request.onConfirm();
+  };
 
   // Repair modal state
   const [repairModal, setRepairModal] = useState<{
@@ -344,7 +351,7 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
       label: 'Выбросить',
       handler: () => {
         dispatch(closeContextMenu());
-        setConfirmModal({
+        confirmDangerous({
           isOpen: true,
           message: `Предмет "${item.name}" (x1) будет выброшен.`,
           onConfirm: () => {
@@ -367,7 +374,7 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
         label: 'Удалить',
         handler: () => {
           dispatch(closeContextMenu());
-          setConfirmModal({
+          confirmDangerous({
             isOpen: true,
             message: `Все предметы "${item.name}" (x${inventoryItem.quantity}) будут выброшены.`,
             onConfirm: () => {
@@ -395,7 +402,7 @@ const ItemContextMenu = ({ characterId }: ItemContextMenuProps) => {
         label: 'Бросить на локацию',
         handler: () => {
           dispatch(closeContextMenu());
-          setConfirmModal({
+          confirmDangerous({
             isOpen: true,
             message: `Бросить "${item.name}" (x1) на локацию "${currentLocation.name}"?`,
             onConfirm: async () => {

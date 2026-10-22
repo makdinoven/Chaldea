@@ -87,7 +87,7 @@ export interface UserProfile {
   avatar: string | null;
   registered_at: string | null;
   character: CharacterShort | null;
-  post_stats: PostStats;
+  post_stats: PostStats | null;
   is_friend: boolean | null;
   friendship_status: string | null;
   friendship_id: number | null;
@@ -103,6 +103,15 @@ export interface UserProfile {
   profile_style_settings?: ProfileStyleSettings | null;
   last_active_at?: string | null;
   activity_points?: number;
+  /** What the viewer may do on this profile under its owner's privacy settings. */
+  viewer_permissions?: ViewerPermissions;
+}
+
+export interface ViewerPermissions {
+  can_view_wall: boolean;
+  can_post_wall: boolean;
+  can_view_friends: boolean;
+  can_send_friend_request: boolean;
 }
 
 export interface UserCharacterItem {
@@ -176,11 +185,21 @@ export const loadWallPosts = createAsyncThunk(
   },
 );
 
+/** The server's own Russian reason (privacy, blocks) when it gave one. */
+const detailOf = (err: unknown): string | undefined => {
+  const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+  return typeof detail === 'string' ? detail : undefined;
+};
+
 export const createPost = createAsyncThunk(
   'userProfile/createPost',
-  async ({ userId, content }: { userId: number; content: string }) => {
-    const { data } = await createWallPost(userId, content);
-    return data as WallPost;
+  async ({ userId, content }: { userId: number; content: string }, { rejectWithValue }) => {
+    try {
+      const { data } = await createWallPost(userId, content);
+      return data as WallPost;
+    } catch (err) {
+      return rejectWithValue(detailOf(err) ?? 'Не удалось опубликовать пост');
+    }
   },
 );
 
@@ -226,9 +245,13 @@ export const loadOutgoingRequests = createAsyncThunk(
 
 export const sendRequest = createAsyncThunk(
   'userProfile/sendRequest',
-  async (friendId: number) => {
-    const { data } = await sendFriendRequest(friendId);
-    return data;
+  async (friendId: number, { rejectWithValue }) => {
+    try {
+      const { data } = await sendFriendRequest(friendId);
+      return data;
+    } catch (err) {
+      return rejectWithValue(detailOf(err) ?? 'Не удалось отправить запрос');
+    }
   },
 );
 
@@ -284,6 +307,7 @@ export const updateProfileSettings = createAsyncThunk(
         profile_bg_position?: string | null;
         post_color?: string | null;
         profile_style_settings?: ProfileStyleSettings | null;
+        site_background_url?: string | null;
       };
     },
     { dispatch, rejectWithValue },

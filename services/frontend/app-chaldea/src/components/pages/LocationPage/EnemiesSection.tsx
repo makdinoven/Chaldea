@@ -16,6 +16,7 @@ import {
   type PackMemberInLocation,
 } from '../../../api/mobPacks';
 import { getMyParty, type Party } from '../../../api/squads';
+import { battlePath } from '../../../utils/battlePath';
 
 interface EnemiesSectionProps {
   locationId: number;
@@ -220,7 +221,7 @@ const EnemiesSection = ({
         ? await createPartyMobBattle(characterId, mob.character_id)
         : await createBattle(characterId, mob.character_id);
       toast.success(group ? 'Групповой бой начинается!' : 'Бой начинается!');
-      navigate(`/location/${locationId}/battle/${result.battle_id}`);
+      navigate(battlePath(locationId, result.battle_id));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Не удалось начать бой');
     } finally {
@@ -246,7 +247,7 @@ const EnemiesSection = ({
         ? await createPartyPackBattle(characterId, pack.active_pack_id)
         : await createPackBattle(characterId, pack.active_pack_id);
       toast.success(group ? 'Групповой бой начинается!' : 'Бой начинается!');
-      navigate(`/location/${locationId}/battle/${result.battle_id}`);
+      navigate(battlePath(locationId, result.battle_id));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Не удалось начать бой');
     } finally {

@@ -17,7 +17,7 @@ import {
   type FriendRequest,
 } from '../../redux/slices/userProfileSlice';
 import { formatLastActive, isOnline } from '../../utils/formatLastActive';
-import { buildColorEffectStyle } from './ProfileSettingsModal';
+import { buildColorEffectStyle } from './profileStyle';
 
 interface FriendsSectionProps {
   profileUserId: number;

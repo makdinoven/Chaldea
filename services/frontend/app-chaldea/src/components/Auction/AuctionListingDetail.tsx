@@ -18,6 +18,8 @@ import ItemArtwork from '../CommonComponents/ItemArtwork';
 import ItemTypeLine from '../CommonComponents/ItemTypeLine';
 import { shownRarity } from '../../constants/items';
 import ModalShell from '../CommonComponents/ModalShell/ModalShell';
+import ConfirmationModal from '../ui/ConfirmationModal';
+import { getClientPrefs } from '../../utils/clientPrefs';
 
 interface AuctionListingDetailProps {
   listingId: number;
@@ -61,6 +63,14 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
     } catch (err) {
       toast.error(typeof err === 'string' ? err : 'Не удалось сделать ставку');
     }
+  };
+
+  const [buyoutConfirmOpen, setBuyoutConfirmOpen] = useState(false);
+
+  /** A buyout spends the gold at once: ask first, unless confirmations are off in the settings. */
+  const requestBuyout = () => {
+    if (getClientPrefs().confirmDangerous) setBuyoutConfirmOpen(true);
+    else void handleBuyout();
   };
 
   const handleBuyout = async () => {
@@ -228,7 +238,7 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
                   {/* Buyout */}
                   {listing.buyout_price && (
                     <button
-                      onClick={handleBuyout}
+                      onClick={requestBuyout}
                       disabled={actionLoading}
                       className="btn-blue w-full !text-sm disabled:opacity-50"
                     >
@@ -252,6 +262,21 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
               )}
             </>
           )}
+
+      <ConfirmationModal
+        isOpen={buyoutConfirmOpen}
+        title="Выкупить лот?"
+        message={
+          listing?.buyout_price
+            ? `Выкупить за ${listing.buyout_price.toLocaleString('ru-RU')} зол.? Золото спишется сразу.`
+            : ''
+        }
+        onCancel={() => setBuyoutConfirmOpen(false)}
+        onConfirm={() => {
+          setBuyoutConfirmOpen(false);
+          void handleBuyout();
+        }}
+      />
     </ModalShell>
   );
 };

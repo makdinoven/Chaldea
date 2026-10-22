@@ -19,6 +19,7 @@ import { buildSpread } from './spreadLayout';
 import type { NodePageAction, NodePageModel } from './nodePageModel';
 import type { SkillPageAction, SkillPageModel } from './skillPageModel';
 import type { CharacterTreeProgressResponse, FullClassTreeResponse } from '../types';
+import { useClientPrefs } from '../../../utils/clientPrefs';
 
 /*
   The skill tree as three books lying on the table of fates, one per class.
@@ -624,10 +625,12 @@ const BookTableScene = ({
   }, []);
 
   const current = books[focus];
+  // «Облегчённая графика» in the settings: plain resolution, no smoothing, no drifting dust.
+  const lowGraphics = useClientPrefs().graphics === 'low';
 
   return (
     <div ref={frame} className="relative w-full h-full touch-pan-y" onPointerDown={handlePointerDown} onPointerUp={handlePointerUp}>
-      <Canvas dpr={[1, 1.75]} gl={{ antialias: true, powerPreference: 'high-performance' }} camera={{ fov: CAMERA_FOV, near: 0.1, far: 300 }}>
+      <Canvas dpr={lowGraphics ? 1 : [1, 1.75]} gl={{ antialias: !lowGraphics, powerPreference: 'high-performance' }} camera={{ fov: CAMERA_FOV, near: 0.1, far: 300 }}>
         <color attach="background" args={[BACKGROUND]} />
         <ambientLight intensity={0.28} />
         <hemisphereLight args={['#8090c0', '#1a1008', 0.35]} />
@@ -670,7 +673,7 @@ const BookTableScene = ({
             />
           )}
         </MetalEnvironment>
-        <Sparkles raycast={noRaycast} count={70} scale={[span + 12, 4, 10]} position={[0, 2, 0]} size={2.2} speed={0.2} opacity={0.4} color="#e8c48a" />
+        {!lowGraphics && <Sparkles raycast={noRaycast} count={70} scale={[span + 12, 4, 10]} position={[0, 2, 0]} size={2.2} speed={0.2} opacity={0.4} color="#e8c48a" />}
         <CameraRig
           focusX={xOf(focus)}
           open={opened}

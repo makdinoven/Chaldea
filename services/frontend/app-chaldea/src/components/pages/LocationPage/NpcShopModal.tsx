@@ -10,6 +10,8 @@ import { ITEM_TYPE_ICONS } from '../../ProfilePage/constants';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
 import { shownRarity } from '../../../constants/items';
 import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
+import ConfirmationModal from '../../ui/ConfirmationModal';
+import { getClientPrefs } from '../../../utils/clientPrefs';
 
 /* ── Types ── */
 
@@ -156,6 +158,14 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
     } finally {
       setProcessing(false);
     }
+  };
+
+  const [sellConfirm, setSellConfirm] = useState<InventoryItem | null>(null);
+
+  /** Selling can't be undone: ask first, unless confirmations are off in the settings. */
+  const requestSell = (invItem: InventoryItem) => {
+    if (getClientPrefs().confirmDangerous) setSellConfirm(invItem);
+    else void handleSell(invItem);
   };
 
   const handleSell = async (invItem: InventoryItem) => {
@@ -434,7 +444,7 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
                         </span>
                       )}
                       <button
-                        onClick={() => handleSell(inv)}
+                        onClick={() => requestSell(inv)}
                         disabled={processing || qty > inv.quantity}
                         className="
                           ml-auto px-3 py-1 rounded text-xs font-medium uppercase
@@ -454,6 +464,24 @@ const NpcShopModal = ({ npcId, npcName, npcAvatar, onClose }: NpcShopModalProps)
           </div>
         )
       )}
+
+      <ConfirmationModal
+        isOpen={sellConfirm !== null}
+        title="Продать предмет?"
+        message={
+          sellConfirm
+            ? `«${sellConfirm.item.name}» x${getSellQuantity(sellConfirm.item_id)} за ${(
+                (sellPriceMap.get(sellConfirm.item_id) ?? 0) * getSellQuantity(sellConfirm.item_id)
+              ).toLocaleString()} золота`
+            : ''
+        }
+        onCancel={() => setSellConfirm(null)}
+        onConfirm={() => {
+          const invItem = sellConfirm;
+          setSellConfirm(null);
+          if (invItem) void handleSell(invItem);
+        }}
+      />
     </ModalShell>
   );
 };

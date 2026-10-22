@@ -13,6 +13,7 @@ import { getPendingTrades, cancelTrade } from '../../../api/trade';
 import type { PendingTradeEntry } from '../../../api/trade';
 import { useAppSelector } from '../../../redux/store';
 import TradeModal from './TradeModal';
+import { battlePath } from '../../../utils/battlePath';
 
 const POLL_INTERVAL = 7000; // 7 seconds
 
@@ -81,7 +82,7 @@ const PendingInvitationsPanel = ({ locationId }: PendingInvitationsPanelProps) =
       toast.success('Вызов принят! Бой начинается.');
       setIncoming((prev) => prev.filter((inv) => inv.invitation_id !== invitationId));
       if (result.battle_id) {
-        navigate(`/location/${locationId}/battle/${result.battle_id}`);
+        navigate(battlePath(locationId, result.battle_id));
       }
     } catch (err) {
       const message =

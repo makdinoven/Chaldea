@@ -51,6 +51,8 @@ import CharactersHubPage from "../pages/CharactersPage/CharactersHubPage";
 import CharactersListPage from "../pages/CharactersPage/CharactersListPage";
 import SelectCharacterPage from "../pages/SelectCharacterPage/SelectCharacterPage";
 import MyRequestsPage from "../pages/MyRequestsPage/MyRequestsPage";
+import SettingsPage from "../SettingsPage/SettingsPage";
+import ClientPrefsEffects from "./ClientPrefsEffects";
 import BestiaryPage from "../Bestiary/BestiaryPage";
 import ArchivePage from "../pages/ArchivePage/ArchivePage";
 import ArchiveArticlePage from "../pages/ArchivePage/ArchiveArticlePage";
@@ -94,7 +96,7 @@ const App = () => {
   }, [dispatch]);
 
   return (
-    <>
+    <ClientPrefsEffects>
       <Toaster
         position="top-right"
         toastOptions={{
@@ -127,6 +129,11 @@ const App = () => {
             <Route path="my-requests" element={
               <ProtectedRoute>
                 <MyRequestsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="settings" element={
+              <ProtectedRoute>
+                <SettingsPage />
               </ProtectedRoute>
             } />
             <Route path="requestsPage" element={
@@ -369,7 +376,7 @@ const App = () => {
           </Route>
         </Routes>
       </Router>
-    </>
+    </ClientPrefsEffects>
   );
 };
 

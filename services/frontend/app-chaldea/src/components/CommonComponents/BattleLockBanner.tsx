@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import type { BattlePreview, BattlePreviewParticipant } from '../../api/battles';
+import { battlePath } from '../../utils/battlePath';
 
 interface BattleLockBannerProps {
   message: string;
@@ -146,7 +147,7 @@ const BattleLockBanner = ({
       {canReturn && (
         <button
           type="button"
-          onClick={() => navigate(`/location/${returnLocationId}/battle/${battleId}`)}
+          onClick={() => navigate(battlePath(returnLocationId, battleId))}
           className="flex items-center justify-center gap-2 shrink-0 w-full sm:w-auto px-5 py-2.5 rounded-card bg-site-red text-white text-sm font-medium hover:brightness-110 transition-all duration-200 ease-site"
         >
           Вернуться к бою
