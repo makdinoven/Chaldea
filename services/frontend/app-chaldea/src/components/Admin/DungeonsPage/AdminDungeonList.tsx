@@ -8,6 +8,7 @@ import {
   selectDungeonsLoading,
   selectDungeonsError,
 } from '../../../redux/slices/dungeonAdminSlice';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 const STABILITY_LABELS: Record<string, string> = {
   static: 'Статичный',
@@ -204,30 +205,33 @@ const AdminDungeonList = () => {
       </div>
 
       {/* Delete confirmation modal */}
-      {deleteConfirmId !== null && (
-        <div className="modal-overlay">
-          <div className="modal-content gold-outline gold-outline-thick">
-            <h2 className="gold-text text-2xl uppercase mb-4">Подтверждение</h2>
-            <p className="text-white mb-6">
-              Удалить подземелье? Все комнаты и коридоры будут удалены. Это действие нельзя отменить.
-            </p>
-            <div className="flex gap-4">
-              <button
-                className="btn-blue"
-                onClick={() => handleDelete(deleteConfirmId)}
-              >
-                Удалить
-              </button>
-              <button
-                className="btn-line"
-                onClick={() => setDeleteConfirmId(null)}
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalShell
+        open={deleteConfirmId !== null}
+        onClose={() => setDeleteConfirmId(null)}
+        title="Подтверждение"
+        size="sm"
+        closeOnBackdrop={false}
+        footer={
+          <>
+            <button
+              className="btn-blue w-full sm:w-auto"
+              onClick={() => deleteConfirmId !== null && handleDelete(deleteConfirmId)}
+            >
+              Удалить
+            </button>
+            <button
+              className="btn-line w-full sm:w-auto sm:px-6"
+              onClick={() => setDeleteConfirmId(null)}
+            >
+              Отмена
+            </button>
+          </>
+        }
+      >
+        <p className="text-white">
+          Удалить подземелье? Все комнаты и коридоры будут удалены. Это действие нельзя отменить.
+        </p>
+      </ModalShell>
     </div>
   );
 };

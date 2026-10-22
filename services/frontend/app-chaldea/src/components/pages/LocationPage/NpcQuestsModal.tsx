@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../../api/api';
 import { useAppSelector } from '../../../redux/store';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 /* ── Types ── */
 
@@ -99,161 +100,141 @@ const NpcQuestsModal = ({ npcId, npcName, npcAvatar, onClose }: NpcQuestsModalPr
     }
   };
 
-  const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget) onClose();
-  };
-
   return (
-    <div className="modal-overlay !bg-black/80" onClick={handleOverlayClick}>
-      <div className="modal-content gold-outline gold-outline-thick relative max-w-2xl w-full mx-4 max-h-[90vh] flex flex-col">
-        {/* Close button */}
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 text-white/50 hover:text-white transition-colors z-10"
-          aria-label="Закрыть"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-4">
-          <div className="gold-outline relative w-12 h-12 rounded-full overflow-hidden bg-black/40 shrink-0">
-            {npcAvatar ? (
-              <img src={npcAvatar} alt={npcName} className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-white/20">
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                </svg>
-              </div>
-            )}
-          </div>
-          <div>
-            <h2 className="gold-text text-lg sm:text-xl font-medium uppercase tracking-wide">
-              Задания
-            </h2>
-            <p className="text-white/50 text-xs sm:text-sm">{npcName}</p>
-          </div>
-        </div>
-
-        {/* Quest list */}
-        <div className="flex-1 overflow-y-auto gold-scrollbar space-y-3 pr-1">
-          {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
-            </div>
-          ) : quests.length === 0 ? (
-            <p className="text-center text-white/50 text-sm py-8">
-              Нет доступных заданий
-            </p>
+    <ModalShell
+      open
+      onClose={onClose}
+      title="Задания"
+      size="lg"
+      icon={
+        <div className="gold-outline relative w-9 h-9 rounded-full overflow-hidden bg-black/40 shrink-0">
+          {npcAvatar ? (
+            <img src={npcAvatar} alt={npcName} className="w-full h-full object-cover" />
           ) : (
-            quests.map((quest) => (
-              <div
-                key={quest.id}
-                className="bg-black/50 rounded-card p-4 border border-gold/20 hover:border-gold/40 transition-colors"
-              >
-                {/* Title + type badge */}
-                <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-2">
-                  <h3 className="text-white font-medium text-sm sm:text-base">
-                    {quest.title}
-                  </h3>
-                  <span className="px-2 py-0.5 rounded-full bg-gold/20 text-gold text-[10px] sm:text-xs font-medium uppercase shrink-0 self-start">
-                    {QUEST_TYPE_LABELS[quest.quest_type] || quest.quest_type}
-                  </span>
-                </div>
+            <div className="w-full h-full flex items-center justify-center text-white/20">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+            </div>
+          )}
+        </div>
+      }
+    >
+      <p className="text-white/50 text-xs sm:text-sm mb-4">{npcName}</p>
+      <div className="space-y-3">
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
+          </div>
+        ) : quests.length === 0 ? (
+          <p className="text-center text-white/50 text-sm py-8">
+            Нет доступных заданий
+          </p>
+        ) : (
+          quests.map((quest) => (
+            <div
+              key={quest.id}
+              className="bg-black/50 rounded-card p-4 border border-gold/20 hover:border-gold/40 transition-colors"
+            >
+              {/* Title + type badge */}
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-2">
+                <h3 className="text-white font-medium text-sm sm:text-base">
+                  {quest.title}
+                </h3>
+                <span className="px-2 py-0.5 rounded-full bg-gold/20 text-gold text-[10px] sm:text-xs font-medium uppercase shrink-0 self-start">
+                  {QUEST_TYPE_LABELS[quest.quest_type] || quest.quest_type}
+                </span>
+              </div>
 
-                {/* Description */}
-                <p className="text-white/70 text-xs sm:text-sm mb-3 leading-relaxed">
-                  {quest.description}
+              {/* Description */}
+              <p className="text-white/70 text-xs sm:text-sm mb-3 leading-relaxed">
+                {quest.description}
+              </p>
+
+              {/* Min level */}
+              {quest.min_level > 1 && (
+                <p className="text-white/40 text-xs mb-2">
+                  Мин. уровень: {quest.min_level}
                 </p>
+              )}
 
-                {/* Min level */}
-                {quest.min_level > 1 && (
-                  <p className="text-white/40 text-xs mb-2">
-                    Мин. уровень: {quest.min_level}
-                  </p>
-                )}
-
-                {/* Rewards */}
-                <div className="flex flex-wrap items-center gap-3 mb-3">
-                  <span className="text-white/50 text-xs uppercase font-medium">Награда:</span>
-                  {quest.reward_currency > 0 && (
-                    <span className="flex items-center gap-1 text-xs">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
-                        <circle cx="10" cy="10" r="8" />
-                      </svg>
-                      <span className="text-yellow-300 font-medium">{quest.reward_currency}</span>
-                    </span>
-                  )}
-                  {quest.reward_exp > 0 && (
-                    <span className="flex items-center gap-1 text-xs">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-site-blue" fill="currentColor" viewBox="0 0 20 20">
-                        <path d="M10 2l2.5 5.5L18 8.5l-4 4 1 5.5L10 15l-5 3 1-5.5-4-4 5.5-1z" />
-                      </svg>
-                      <span className="text-site-blue font-medium">{quest.reward_exp} XP</span>
-                    </span>
-                  )}
-                  {quest.reward_items?.map((ri) => (
-                    <span key={ri.item_id} className="flex items-center gap-1 text-xs">
-                      {ri.item_image ? (
-                        <img src={ri.item_image} alt={ri.item_name} className="w-5 h-5 rounded-full object-cover" />
-                      ) : (
-                        <span className="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[8px] text-white/30">?</span>
-                      )}
-                      <span className="text-white/80">{ri.item_name} x{ri.quantity}</span>
-                    </span>
-                  ))}
-                </div>
-
-                {/* Action button based on status */}
-                {quest.player_status === 'active' ? (
-                  <div className="w-full px-4 py-2.5 rounded-card border border-site-blue/50 bg-site-blue/10 text-site-blue text-sm font-medium uppercase tracking-wide flex items-center justify-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              {/* Rewards */}
+              <div className="flex flex-wrap items-center gap-3 mb-3">
+                <span className="text-white/50 text-xs uppercase font-medium">Награда:</span>
+                {quest.reward_currency > 0 && (
+                  <span className="flex items-center gap-1 text-xs">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                      <circle cx="10" cy="10" r="8" />
                     </svg>
-                    Задание принято
-                  </div>
-                ) : quest.player_status === 'completed' ? (
-                  <div className="w-full px-4 py-2.5 rounded-card border border-green-500/50 bg-green-900/10 text-green-400 text-sm font-medium uppercase tracking-wide flex items-center justify-center gap-2">
+                    <span className="text-yellow-300 font-medium">{quest.reward_currency}</span>
+                  </span>
+                )}
+                {quest.reward_exp > 0 && (
+                  <span className="flex items-center gap-1 text-xs">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-site-blue" fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M10 2l2.5 5.5L18 8.5l-4 4 1 5.5L10 15l-5 3 1-5.5-4-4 5.5-1z" />
+                    </svg>
+                    <span className="text-site-blue font-medium">{quest.reward_exp} XP</span>
+                  </span>
+                )}
+                {quest.reward_items?.map((ri) => (
+                  <span key={ri.item_id} className="flex items-center gap-1 text-xs">
+                    {ri.item_image ? (
+                      <img src={ri.item_image} alt={ri.item_name} className="w-5 h-5 rounded-full object-cover" />
+                    ) : (
+                      <span className="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[8px] text-white/30">?</span>
+                    )}
+                    <span className="text-white/80">{ri.item_name} x{ri.quantity}</span>
+                  </span>
+                ))}
+              </div>
+
+              {/* Action button based on status */}
+              {quest.player_status === 'active' ? (
+                <div className="w-full px-4 py-2.5 rounded-card border border-site-blue/50 bg-site-blue/10 text-site-blue text-sm font-medium uppercase tracking-wide flex items-center justify-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Задание принято
+                </div>
+              ) : quest.player_status === 'completed' ? (
+                <div className="w-full px-4 py-2.5 rounded-card border border-green-500/50 bg-green-900/10 text-green-400 text-sm font-medium uppercase tracking-wide flex items-center justify-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Задание выполнено
+                </div>
+              ) : dialogueQuestIds.has(quest.id) ? (
+                <button
+                  disabled
+                  className="w-full px-4 py-2.5 rounded-card border border-red-500/50 bg-red-900/20 text-red-400 text-sm font-medium uppercase tracking-wide cursor-not-allowed opacity-80 flex items-center justify-center gap-2"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                  Можно взять в диалоге
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleAccept(quest.id)}
+                  disabled={accepting === quest.id}
+                  className="w-full px-4 py-2.5 rounded-card border border-gold/50 bg-gold/10 text-gold text-sm font-medium uppercase tracking-wide hover:bg-gold/20 hover:border-gold/80 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center gap-2"
+                >
+                  {accepting === quest.id ? (
+                    <div className="w-4 h-4 border-2 border-gold/30 border-t-gold rounded-full animate-spin" />
+                  ) : (
                     <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    Задание выполнено
-                  </div>
-                ) : dialogueQuestIds.has(quest.id) ? (
-                  <button
-                    disabled
-                    className="w-full px-4 py-2.5 rounded-card border border-red-500/50 bg-red-900/20 text-red-400 text-sm font-medium uppercase tracking-wide cursor-not-allowed opacity-80 flex items-center justify-center gap-2"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                    Можно взять в диалоге
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => handleAccept(quest.id)}
-                    disabled={accepting === quest.id}
-                    className="w-full px-4 py-2.5 rounded-card border border-gold/50 bg-gold/10 text-gold text-sm font-medium uppercase tracking-wide hover:bg-gold/20 hover:border-gold/80 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center gap-2"
-                  >
-                    {accepting === quest.id ? (
-                      <div className="w-4 h-4 border-2 border-gold/30 border-t-gold rounded-full animate-spin" />
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    )}
-                    Принять задание
-                  </button>
-                )}
-              </div>
-            ))
-          )}
-        </div>
+                  )}
+                  Принять задание
+                </button>
+              )}
+            </div>
+          ))
+        )}
       </div>
-    </div>
+    </ModalShell>
   );
 };
 

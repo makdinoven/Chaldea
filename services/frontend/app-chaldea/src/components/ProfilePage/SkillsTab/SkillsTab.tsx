@@ -26,7 +26,7 @@ import FilterChips, { type FilterChipItem } from '../shared/FilterChips';
 import EmptyState from '../shared/EmptyState';
 import ErrorState from '../shared/ErrorState';
 import LoadingState from '../shared/LoadingState';
-import ModalShell from '../shared/ModalShell';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import PanelCounter from '../shared/PanelCounter';
 import PanelToolbar from '../shared/PanelToolbar';
 import PanelScrollArea from '../shared/PanelScrollArea';

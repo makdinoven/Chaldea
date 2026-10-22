@@ -19,6 +19,7 @@ import { hasPermission } from '../../../utils/permissions';
 import PvpRequestsPanel from './PvpRequestsPanel';
 import AdminPagination from '../AdminPagination/AdminPagination';
 import { formatServerDateTime } from '../../../utils/serverDate';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 // --- Types ---
 
@@ -632,60 +633,49 @@ const AdminJoinRequestsSection = () => {
       {error && <div className="text-site-red text-sm">{error}</div>}
 
       {/* Confirmation modal */}
-      <AnimatePresence>
+      <ModalShell
+        open={!!confirmAction}
+        onClose={() => setConfirmAction(null)}
+        title={confirmAction?.action === 'approve' ? 'Одобрить заявку' : 'Отклонить заявку'}
+        size="sm"
+        dismissible={!actionLoading}
+        footer={
+          confirmAction && (
+            <>
+              <button
+                onClick={handleAction}
+                disabled={actionLoading}
+                className={
+                  confirmAction.action === 'approve'
+                    ? 'btn-blue w-full sm:w-auto disabled:opacity-50'
+                    : 'btn-line w-full sm:w-auto !border-red-500/50 !text-red-400 hover:!text-red-300 !px-6 disabled:opacity-50'
+                }
+              >
+                {actionLoading
+                  ? 'Выполнение...'
+                  : confirmAction.action === 'approve'
+                    ? 'Одобрить'
+                    : 'Отклонить'}
+              </button>
+              <button
+                onClick={() => setConfirmAction(null)}
+                disabled={actionLoading}
+                className="btn-line w-full sm:w-auto !px-6"
+              >
+                Отмена
+              </button>
+            </>
+          )
+        }
+      >
         {confirmAction && (
-          <motion.div
-            className="modal-overlay"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            onClick={() => !actionLoading && setConfirmAction(null)}
-          >
-            <motion.div
-              className="modal-content gold-outline gold-outline-thick"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h2 className="gold-text text-2xl uppercase mb-4">
-                {confirmAction.action === 'approve' ? 'Одобрить заявку' : 'Отклонить заявку'}
-              </h2>
-              <p className="text-white mb-6">
-                {confirmAction.action === 'approve'
-                  ? 'Игрок будет добавлен в бой. Если все заявки рассмотрены, бой продолжится.'
-                  : 'Заявка будет отклонена. Игрок не сможет подать повторную заявку на этот бой.'}
-              </p>
-              <div className="flex gap-4">
-                <button
-                  onClick={handleAction}
-                  disabled={actionLoading}
-                  className={
-                    confirmAction.action === 'approve'
-                      ? 'btn-blue disabled:opacity-50'
-                      : 'btn-line !border-red-500/50 !text-red-400 hover:!text-red-300 !w-auto !px-6 disabled:opacity-50'
-                  }
-                >
-                  {actionLoading
-                    ? 'Выполнение...'
-                    : confirmAction.action === 'approve'
-                      ? 'Одобрить'
-                      : 'Отклонить'}
-                </button>
-                <button
-                  onClick={() => setConfirmAction(null)}
-                  disabled={actionLoading}
-                  className="btn-line !w-auto !px-6"
-                >
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
+          <p className="text-white">
+            {confirmAction.action === 'approve'
+              ? 'Игрок будет добавлен в бой. Если все заявки рассмотрены, бой продолжится.'
+              : 'Заявка будет отклонена. Игрок не сможет подать повторную заявку на этот бой.'}
+          </p>
         )}
-      </AnimatePresence>
+      </ModalShell>
 
       {/* Content */}
       <div className="gray-bg overflow-hidden">

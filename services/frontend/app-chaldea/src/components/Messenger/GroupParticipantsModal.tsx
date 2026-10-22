@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { X, UserPlus, UserX, Image as ImageIcon } from 'react-feather';
+import { UserPlus, UserX, Image as ImageIcon } from 'react-feather';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import { setConversationAvatar } from '../../redux/slices/messengerSlice';
@@ -14,6 +13,7 @@ import { fetchAllUsers } from '../../api/usersApi';
 import type { GroupParticipant } from '../../types/messenger';
 import type { UserPublicItem } from '../../types/users';
 import AvatarWithFrame from '../common/AvatarWithFrame';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 interface GroupParticipantsModalProps {
   isOpen: boolean;
@@ -127,30 +127,12 @@ const GroupParticipantsModal = ({
   }, [allUsers, existingIds, search]);
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="modal-overlay" onClick={onClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="modal-content gold-outline gold-outline-thick w-full max-w-md mx-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-4 gap-2">
-              <h2 className="gold-text text-xl font-medium uppercase truncate">
-                {conversationTitle || 'Участники'}
-              </h2>
-              <button
-                onClick={onClose}
-                className="text-white/40 hover:text-white/70 cursor-pointer flex-shrink-0"
-                aria-label="Закрыть"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
+    <ModalShell
+      open={isOpen}
+      onClose={onClose}
+      title={conversationTitle || 'Участники'}
+      size="sm"
+    >
             {/* Creator: edit avatar */}
             {isCreator && (
               <label className="flex items-center gap-2 mb-4 w-fit text-site-blue text-sm cursor-pointer hover:text-gold-light transition-colors duration-200 ease-site">
@@ -161,7 +143,7 @@ const GroupParticipantsModal = ({
             )}
 
             {/* Participants */}
-            <div className="max-h-[300px] overflow-y-auto gold-scrollbar mb-3">
+            <div className="mb-3">
               {loading ? (
                 <div className="flex items-center justify-center py-6">
                   <Spinner />
@@ -248,10 +230,7 @@ const GroupParticipantsModal = ({
                 <UserPlus size={14} /> Добавить участника
               </button>
             ))}
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+    </ModalShell>
   );
 };
 

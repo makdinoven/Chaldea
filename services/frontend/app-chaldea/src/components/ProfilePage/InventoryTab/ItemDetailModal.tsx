@@ -1,6 +1,4 @@
 import { useEffect } from 'react';
-import { createPortal } from 'react-dom';
-import { motion, AnimatePresence } from 'motion/react';
 import { useAppSelector, useAppDispatch } from '../../../redux/store';
 import {
   selectItemDetailModal,
@@ -14,6 +12,7 @@ import { STAT_LABELS, PERCENTAGE_STATS } from '../constants';
 import toast from 'react-hot-toast';
 import ItemArtwork from '../../CommonComponents/ItemArtwork';
 import ItemTypeLine from '../../CommonComponents/ItemTypeLine';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import { describeItemBattleLines, describeXpBuffLines } from '../../../utils/itemEffects';
 
 /** Modifier field keys that are numeric on ItemData */
@@ -182,16 +181,6 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
     }));
   }, [isOpen, inventoryItem, characterId, slotType, dispatch]);
 
-  // Close on Escape
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') dispatch(closeItemDetailModal());
-    };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [isOpen, dispatch]);
-
   const handleClose = () => dispatch(closeItemDetailModal());
 
   // Find repair kits in inventory
@@ -312,47 +301,33 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
     });
   }
 
-  return createPortal(
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          key="item-detail-overlay"
-          className="modal-overlay"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
-          onClick={handleClose}
-        >
-          <motion.div
-            className="modal-content gold-outline gold-outline-thick w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto gold-scrollbar"
-            style={{ overflowX: 'hidden' }}
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-            onClick={(e) => e.stopPropagation()}
-          >
+  return (
+    <ModalShell
+      open={isOpen}
+      onClose={handleClose}
+      title={item.name}
+      size="md"
+      footer={
+        <button onClick={handleClose} className="btn-line w-full sm:w-auto">
+          Закрыть
+        </button>
+      }
+    >
             {loading && !detail ? (
               <div className="flex items-center justify-center py-12">
                 <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin" />
               </div>
             ) : (
               <div className="overflow-hidden">
-                {/* Header: full picture + name + rarity */}
+                {/* Header: full picture + enhancement + type (the name is the modal title) */}
                 <div className="flex flex-col items-center gap-3 mb-4 text-center">
                   <ItemArtwork name={item.name} fullImage={item.full_image} image={item.image} />
                   <div className="min-w-0 max-w-full">
-                    <div className="flex items-center justify-center gap-2 flex-wrap">
-                      <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase break-words">
-                        {item.name}
-                      </h2>
-                      {enhancementSpent > 0 && (
-                        <span className="text-gold text-sm font-medium bg-gold/10 px-2 py-0.5 rounded-full">
-                          +{enhancementSpent}
-                        </span>
-                      )}
-                    </div>
+                    {enhancementSpent > 0 && (
+                      <span className="text-gold text-sm font-medium bg-gold/10 px-2 py-0.5 rounded-full">
+                        +{enhancementSpent}
+                      </span>
+                    )}
                     <div className="mt-2">
                       <ItemTypeLine item={item} />
                     </div>
@@ -596,21 +571,9 @@ const ItemDetailModalInner = ({ characterId }: ItemDetailModalInnerProps) => {
                     </span>
                   )}
                 </div>
-
-                {/* Close button */}
-                <button
-                  onClick={handleClose}
-                  className="btn-line w-full mt-4"
-                >
-                  Закрыть
-                </button>
               </div>
             )}
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>,
-    document.body,
+    </ModalShell>
   );
 };
 

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
   fetchDungeonsAtLocation,
@@ -24,6 +24,7 @@ import type { Player } from '../pages/LocationPage/types';
 import type { DungeonWsMessage } from '../../hooks/useDungeonWebSocket';
 import useDungeonWebSocket from '../../hooks/useDungeonWebSocket';
 import DungeonPartyPanel from './DungeonPartyPanel';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 interface DungeonEntranceProps {
   locationId: number;
@@ -356,203 +357,163 @@ const DungeonEntrance = ({ locationId, players, currentCharacterId }: DungeonEnt
       </div>
 
       {/* Solo Confirm Modal */}
-      <AnimatePresence>
-        {soloConfirmDungeonId !== null && (
-          <div className="modal-overlay" onClick={() => setSoloConfirmDungeonId(null)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick max-w-sm w-full mx-4"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={soloConfirmDungeonId !== null}
+        onClose={() => setSoloConfirmDungeonId(null)}
+        title="Подтверждение"
+        size="sm"
+        footer={
+          <>
+            <button
+              onClick={() => setSoloConfirmDungeonId(null)}
+              className="btn-line text-sm w-full sm:w-auto"
             >
-              <h3 className="gold-text text-lg font-medium uppercase mb-3">
-                Подтверждение
-              </h3>
-              <p className="text-white/80 text-sm mb-5">
-                Вы уверены, что хотите войти в подземелье в одиночку?
-              </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    const id = soloConfirmDungeonId;
-                    setSoloConfirmDungeonId(null);
-                    handleSoloEntry(id);
-                  }}
-                  disabled={sessionLoading}
-                  className="btn-blue text-sm flex-1 py-2 disabled:opacity-50"
-                >
-                  {sessionLoading ? 'Вход...' : 'Да, войти'}
-                </button>
-                <button
-                  onClick={() => setSoloConfirmDungeonId(null)}
-                  className="btn-line text-sm flex-1 py-2"
-                >
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+              Отмена
+            </button>
+            <button
+              onClick={() => {
+                const id = soloConfirmDungeonId;
+                setSoloConfirmDungeonId(null);
+                if (id !== null) handleSoloEntry(id);
+              }}
+              disabled={sessionLoading}
+              className="btn-blue text-sm w-full sm:w-auto disabled:opacity-50"
+            >
+              {sessionLoading ? 'Вход...' : 'Да, войти'}
+            </button>
+          </>
+        }
+      >
+        <p className="text-white/80 text-sm">
+          Вы уверены, что хотите войти в подземелье в одиночку?
+        </p>
+      </ModalShell>
 
       {/* Group Confirm Modal */}
-      <AnimatePresence>
-        {groupConfirmDungeonId !== null && (
-          <div className="modal-overlay" onClick={() => setGroupConfirmDungeonId(null)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick max-w-sm w-full mx-4"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={groupConfirmDungeonId !== null}
+        onClose={() => setGroupConfirmDungeonId(null)}
+        title="Войти в подземелье"
+        size="sm"
+        footer={
+          <>
+            <button
+              onClick={() => setGroupConfirmDungeonId(null)}
+              className="btn-line text-sm w-full sm:w-auto"
             >
-              <h3 className="gold-text text-lg font-medium uppercase mb-3">
-                Войти в подземелье
-              </h3>
-              <p className="text-white/80 text-sm mb-5">
-                Как войти в подземелье?
-              </p>
-              <div className="flex flex-col gap-2">
-                {canPartyRun && (
-                  <button
-                    onClick={() => {
-                      const id = groupConfirmDungeonId;
-                      setGroupConfirmDungeonId(null);
-                      if (id !== null) handlePartyRun(id);
-                    }}
-                    disabled={partyRunLoading}
-                    className="btn-blue text-sm w-full py-2 disabled:opacity-50"
-                  >
-                    {partyRunLoading
-                      ? 'Заходим...'
-                      : `Отрядом (${coLocatedMates.length + 1})`}
-                  </button>
-                )}
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => {
-                      const id = groupConfirmDungeonId;
-                      setGroupConfirmDungeonId(null);
-                      if (id !== null) handleSoloEntry(id);
-                    }}
-                    disabled={sessionLoading}
-                    className="btn-blue text-sm flex-1 py-2 disabled:opacity-50"
-                  >
-                    {sessionLoading ? 'Вход...' : 'В соло'}
-                  </button>
-                  <button
-                    onClick={() => setGroupConfirmDungeonId(null)}
-                    className="btn-line text-sm flex-1 py-2"
-                  >
-                    Отмена
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+              Отмена
+            </button>
+            <button
+              onClick={() => {
+                const id = groupConfirmDungeonId;
+                setGroupConfirmDungeonId(null);
+                if (id !== null) handleSoloEntry(id);
+              }}
+              disabled={sessionLoading}
+              className="btn-blue text-sm w-full sm:w-auto disabled:opacity-50"
+            >
+              {sessionLoading ? 'Вход...' : 'В соло'}
+            </button>
+            {canPartyRun && (
+              <button
+                onClick={() => {
+                  const id = groupConfirmDungeonId;
+                  setGroupConfirmDungeonId(null);
+                  if (id !== null) handlePartyRun(id);
+                }}
+                disabled={partyRunLoading}
+                className="btn-blue text-sm w-full sm:w-auto disabled:opacity-50"
+              >
+                {partyRunLoading
+                  ? 'Заходим...'
+                  : `Отрядом (${coLocatedMates.length + 1})`}
+              </button>
+            )}
+          </>
+        }
+      >
+        <p className="text-white/80 text-sm">
+          Как войти в подземелье?
+        </p>
+      </ModalShell>
 
       {/* Enter Dungeon Confirm Modal */}
-      <AnimatePresence>
-        {enterConfirm && (
-          <div className="modal-overlay" onClick={() => setEnterConfirm(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick max-w-sm w-full mx-4"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={enterConfirm}
+        onClose={() => setEnterConfirm(false)}
+        title="Подтверждение"
+        size="sm"
+        footer={
+          <>
+            <button
+              onClick={() => setEnterConfirm(false)}
+              className="btn-line text-sm w-full sm:w-auto"
             >
-              <h3 className="gold-text text-lg font-medium uppercase mb-3">
-                Подтверждение
-              </h3>
-              <p className="text-white/80 text-sm mb-5">
-                Войти в подземелье с текущей группой?
-              </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={handleEnterConfirmed}
-                  disabled={sessionLoading}
-                  className="btn-blue text-sm flex-1 py-2 disabled:opacity-50"
-                >
-                  {sessionLoading ? 'Вход...' : 'Да, войти'}
-                </button>
-                <button
-                  onClick={() => setEnterConfirm(false)}
-                  className="btn-line text-sm flex-1 py-2"
-                >
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+              Отмена
+            </button>
+            <button
+              onClick={handleEnterConfirmed}
+              disabled={sessionLoading}
+              className="btn-blue text-sm w-full sm:w-auto disabled:opacity-50"
+            >
+              {sessionLoading ? 'Вход...' : 'Да, войти'}
+            </button>
+          </>
+        }
+      >
+        <p className="text-white/80 text-sm">
+          Войти в подземелье с текущей группой?
+        </p>
+      </ModalShell>
 
       {/* Invite Modal */}
-      <AnimatePresence>
-        {showInviteModal && (
-          <div className="modal-overlay" onClick={() => setShowInviteModal(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick max-w-md w-full mx-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="gold-text text-xl font-medium uppercase mb-4">
-                Пригласить в группу
-              </h3>
-
-              {invitablePlayers.length === 0 ? (
-                <p className="text-white/60 text-sm">
-                  Нет доступных персонажей для приглашения на этой локации
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2 max-h-60 overflow-y-auto gold-scrollbar">
-                  {invitablePlayers.map((player) => (
-                    <button
-                      key={player.id}
-                      onClick={() => handleInvite(player.id)}
-                      disabled={sessionLoading}
-                      className="flex items-center gap-3 px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-left disabled:opacity-50"
-                    >
-                      <div className="gold-outline relative w-8 h-8 rounded-full overflow-hidden bg-black/40 shrink-0">
-                        {player.avatar ? (
-                          <img src={player.avatar} alt={player.name} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-white/20">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                            </svg>
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <span className="text-white text-sm truncate block">{player.name}</span>
-                        <span className="text-white/40 text-xs">Ур. {player.level}</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-
+      <ModalShell
+        open={showInviteModal}
+        onClose={() => setShowInviteModal(false)}
+        title="Пригласить в группу"
+        size="sm"
+        footer={
+          <button
+            onClick={() => setShowInviteModal(false)}
+            className="btn-line text-sm w-full sm:w-auto"
+          >
+            Закрыть
+          </button>
+        }
+      >
+        {invitablePlayers.length === 0 ? (
+          <p className="text-white/60 text-sm">
+            Нет доступных персонажей для приглашения на этой локации
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {invitablePlayers.map((player) => (
               <button
-                onClick={() => setShowInviteModal(false)}
-                className="btn-line text-sm mt-4 w-full"
+                key={player.id}
+                onClick={() => handleInvite(player.id)}
+                disabled={sessionLoading}
+                className="flex items-center gap-3 px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-left disabled:opacity-50"
               >
-                Закрыть
+                <div className="gold-outline relative w-8 h-8 rounded-full overflow-hidden bg-black/40 shrink-0">
+                  {player.avatar ? (
+                    <img src={player.avatar} alt={player.name} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-white/20">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-white text-sm truncate block">{player.name}</span>
+                  <span className="text-white/40 text-xs">Ур. {player.level}</span>
+                </div>
               </button>
-            </motion.div>
+            ))}
           </div>
         )}
-      </AnimatePresence>
+      </ModalShell>
     </section>
   );
 };

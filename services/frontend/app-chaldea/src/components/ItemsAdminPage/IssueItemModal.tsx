@@ -4,7 +4,7 @@ import { fetchItems, issueItem } from "../../api/items";
 import useDebounce from "../../hooks/useDebounce";
 import toast from "react-hot-toast";
 import { itemGrantErrorMessage } from "../../api/errors";
-import { motion, AnimatePresence } from "motion/react";
+import ModalShell from "../CommonComponents/ModalShell/ModalShell";
 import type { ItemData } from "./ItemsAdminPage";
 
 /* ── Types ── */
@@ -78,129 +78,119 @@ const IssueItemModal = ({ open, onClose, initialItem }: IssueItemModalProps) => 
   };
 
   return (
-    <AnimatePresence>
-      {open && (
-        <div className="modal-overlay" onClick={onClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-            className="modal-content gold-outline gold-outline-thick w-full max-w-[480px] mx-4 !p-5 sm:!p-8 max-h-[85dvh] flex flex-col gap-4 overflow-auto gold-scrollbar"
-            onClick={(e) => e.stopPropagation()}
+    <ModalShell
+      open={open}
+      onClose={onClose}
+      title="Выдать предмет"
+      size="sm"
+      footer={
+        <>
+          <button
+            className="btn-blue w-full sm:w-auto !text-base !px-6 !py-2"
+            onClick={give}
+            disabled={!selectedChar || !selectedItem || issuing}
           >
-            <h2 className="gold-text text-2xl font-medium uppercase tracking-[0.06em]">
-              Выдать предмет
-            </h2>
-
-            {/* ── Item search ── */}
-            <div className="flex flex-col gap-2">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
-                Поиск предмета
-              </span>
-              <input
-                className="input-underline"
-                placeholder="Название предмета"
-                value={itemQ}
-                onChange={(e) => setItemQ(e.target.value)}
-              />
-              <ul className="flex flex-col max-h-[180px] overflow-auto gold-scrollbar border border-white/10 rounded-card">
-                {items.map((i) => (
-                  <li
-                    key={i.id}
-                    className={`px-4 py-2.5 cursor-pointer text-sm transition-colors duration-200 ${
-                      selectedItem?.id === i.id
-                        ? "bg-site-blue/25 text-white"
-                        : "text-white/70 hover:bg-white/[0.07]"
-                    }`}
-                    onClick={() => setSelectedItem(i)}
-                  >
-                    {i.name}{" "}
-                    <span className="text-white/40">(id {i.id})</span>
-                  </li>
-                ))}
-                {items.length === 0 && (
-                  <li className="px-4 py-2.5 text-sm text-white/30">Ничего не найдено</li>
-                )}
-              </ul>
-            </div>
-
-            {/* ── Character search ── */}
-            <div className="flex flex-col gap-2">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
-                Поиск персонажа
-              </span>
-              <input
-                className="input-underline"
-                placeholder="Имя персонажа"
-                value={charQ}
-                onChange={(e) => setCharQ(e.target.value)}
-              />
-              <ul className="flex flex-col max-h-[180px] overflow-auto gold-scrollbar border border-white/10 rounded-card">
-                {visibleChars.map((c) => (
-                  <li
-                    key={c.id}
-                    className={`px-4 py-2.5 cursor-pointer text-sm transition-colors duration-200 ${
-                      selectedChar?.id === c.id
-                        ? "bg-site-blue/25 text-white"
-                        : "text-white/70 hover:bg-white/[0.07]"
-                    }`}
-                    onClick={() => setSelectedChar(c)}
-                  >
-                    {c.name}{" "}
-                    <span className="text-white/40">(id {c.id})</span>
-                  </li>
-                ))}
-                {visibleChars.length === 0 && (
-                  <li className="px-4 py-2.5 text-sm text-white/30">Ничего не найдено</li>
-                )}
-              </ul>
-            </div>
-
-            {/* ── Quantity ── */}
-            <label className="flex flex-col gap-1">
-              <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
-                Количество
-              </span>
-              <input
-                type="number"
-                min={1}
-                value={qty}
-                onChange={(e) => setQty(+e.target.value)}
-                className="input-underline w-24"
-              />
-            </label>
-
-            {/* ── Error ── */}
-            {issueError && (
-              <p
-                role="alert"
-                className="text-site-red text-sm leading-snug break-words rounded-card border border-site-red/30 bg-site-red/10 px-3 py-2"
+            {issuing ? "Выдаём…" : "Выдать"}
+          </button>
+          <button
+            className="btn-line w-full sm:w-auto !px-6"
+            onClick={onClose}
+          >
+            Отмена
+          </button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        {/* ── Item search ── */}
+        <div className="flex flex-col gap-2">
+          <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+            Поиск предмета
+          </span>
+          <input
+            className="input-underline"
+            placeholder="Название предмета"
+            value={itemQ}
+            onChange={(e) => setItemQ(e.target.value)}
+          />
+          <ul className="flex flex-col max-h-[180px] overflow-auto gold-scrollbar border border-white/10 rounded-card">
+            {items.map((i) => (
+              <li
+                key={i.id}
+                className={`px-4 py-2.5 cursor-pointer text-sm transition-colors duration-200 ${
+                  selectedItem?.id === i.id
+                    ? "bg-site-blue/25 text-white"
+                    : "text-white/70 hover:bg-white/[0.07]"
+                }`}
+                onClick={() => setSelectedItem(i)}
               >
-                {issueError}
-              </p>
+                {i.name}{" "}
+                <span className="text-white/40">(id {i.id})</span>
+              </li>
+            ))}
+            {items.length === 0 && (
+              <li className="px-4 py-2.5 text-sm text-white/30">Ничего не найдено</li>
             )}
-
-            {/* ── Buttons ── */}
-            <div className="flex flex-col sm:flex-row sm:justify-end gap-3 sm:gap-4 pt-2">
-              <button
-                className="btn-blue !text-base !px-6 !py-2"
-                onClick={give}
-                disabled={!selectedChar || !selectedItem || issuing}
-              >
-                {issuing ? "Выдаём…" : "Выдать"}
-              </button>
-              <button
-                className="btn-line !w-auto !px-6"
-                onClick={onClose}
-              >
-                Отмена
-              </button>
-            </div>
-          </motion.div>
+          </ul>
         </div>
-      )}
-    </AnimatePresence>
+
+        {/* ── Character search ── */}
+        <div className="flex flex-col gap-2">
+          <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+            Поиск персонажа
+          </span>
+          <input
+            className="input-underline"
+            placeholder="Имя персонажа"
+            value={charQ}
+            onChange={(e) => setCharQ(e.target.value)}
+          />
+          <ul className="flex flex-col max-h-[180px] overflow-auto gold-scrollbar border border-white/10 rounded-card">
+            {visibleChars.map((c) => (
+              <li
+                key={c.id}
+                className={`px-4 py-2.5 cursor-pointer text-sm transition-colors duration-200 ${
+                  selectedChar?.id === c.id
+                    ? "bg-site-blue/25 text-white"
+                    : "text-white/70 hover:bg-white/[0.07]"
+                }`}
+                onClick={() => setSelectedChar(c)}
+              >
+                {c.name}{" "}
+                <span className="text-white/40">(id {c.id})</span>
+              </li>
+            ))}
+            {visibleChars.length === 0 && (
+              <li className="px-4 py-2.5 text-sm text-white/30">Ничего не найдено</li>
+            )}
+          </ul>
+        </div>
+
+        {/* ── Quantity ── */}
+        <label className="flex flex-col gap-1">
+          <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+            Количество
+          </span>
+          <input
+            type="number"
+            min={1}
+            value={qty}
+            onChange={(e) => setQty(+e.target.value)}
+            className="input-underline w-24"
+          />
+        </label>
+
+        {/* ── Error ── */}
+        {issueError && (
+          <p
+            role="alert"
+            className="text-site-red text-sm leading-snug break-words rounded-card border border-site-red/30 bg-site-red/10 px-3 py-2"
+          >
+            {issueError}
+          </p>
+        )}
+      </div>
+    </ModalShell>
   );
 };
 

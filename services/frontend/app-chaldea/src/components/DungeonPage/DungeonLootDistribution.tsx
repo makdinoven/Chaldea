@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
   distributeLootThunk,
@@ -344,42 +345,33 @@ const DungeonLootDistribution = ({
       )}
 
       {/* Discard confirmation modal */}
-      <AnimatePresence>
-        {showDiscardConfirm && (
-          <div className="modal-overlay" onClick={() => setShowDiscardConfirm(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick max-w-sm w-full mx-4"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={showDiscardConfirm}
+        onClose={() => setShowDiscardConfirm(false)}
+        title="Выбросить всю добычу?"
+        size="sm"
+        footer={
+          <>
+            <button
+              onClick={() => setShowDiscardConfirm(false)}
+              className="btn-line text-sm w-full sm:w-auto"
             >
-              <h3 className="gold-text text-lg font-medium uppercase mb-3">
-                Выбросить всю добычу?
-              </h3>
-              <p className="text-white/70 text-sm mb-4">
-                Вы не назначили ни одного предмета. Все предметы будут потеряны.
-              </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={handleDiscardAndDistribute}
-                  disabled={distributeLoading}
-                  className="text-sm px-5 py-2 flex-1 rounded-card bg-site-red/20 border border-site-red/40 text-site-red hover:bg-site-red/30 transition-colors disabled:opacity-50"
-                >
-                  {distributeLoading ? 'Выполнение...' : 'Выбросить всё'}
-                </button>
-                <button
-                  onClick={() => setShowDiscardConfirm(false)}
-                  className="btn-line text-sm px-5 py-2 flex-1"
-                >
-                  Назад
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+              Назад
+            </button>
+            <button
+              onClick={handleDiscardAndDistribute}
+              disabled={distributeLoading}
+              className="text-sm px-5 py-2 w-full sm:w-auto rounded-card bg-site-red/20 border border-site-red/40 text-site-red hover:bg-site-red/30 transition-colors disabled:opacity-50"
+            >
+              {distributeLoading ? 'Выполнение...' : 'Выбросить всё'}
+            </button>
+          </>
+        }
+      >
+        <p className="text-white/70 text-sm">
+          Вы не назначили ни одного предмета. Все предметы будут потеряны.
+        </p>
+      </ModalShell>
     </div>
   );
 };

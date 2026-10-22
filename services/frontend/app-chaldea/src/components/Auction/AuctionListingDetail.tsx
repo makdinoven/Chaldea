@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
@@ -18,6 +17,7 @@ import { STAT_LABELS } from '../ProfilePage/constants';
 import ItemArtwork from '../CommonComponents/ItemArtwork';
 import ItemTypeLine from '../CommonComponents/ItemTypeLine';
 import { shownRarity } from '../../constants/items';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 interface AuctionListingDetailProps {
   listingId: number;
@@ -86,16 +86,7 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
     RARITY_COLOR_MAP[shownRarity(listing?.item.item_type, listing?.item.item_rarity) ?? ''] ?? 'text-white';
 
   return (
-    <AnimatePresence>
-      <div className="modal-overlay" onClick={handleClose}>
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
-          className="modal-content gold-outline gold-outline-thick max-w-lg mx-4 max-h-[90vh] overflow-y-auto gold-scrollbar"
-          onClick={(e) => e.stopPropagation()}
-        >
+    <ModalShell open onClose={handleClose} title="Лот аукциона" size="md">
           {loading && (
             <div className="flex items-center justify-center py-12">
               <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin" />
@@ -114,14 +105,7 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
           {listing && !loading && (
             <>
               {/* Header: full picture + name */}
-              <div className="relative flex flex-col items-center gap-3 mb-5 text-center">
-                <button
-                  onClick={handleClose}
-                  className="absolute top-0 right-0 text-white/40 hover:text-white transition-colors text-xl"
-                  aria-label="Закрыть"
-                >
-                  &times;
-                </button>
+              <div className="flex flex-col items-center gap-3 mb-5 text-center">
                 <div className="w-full px-6">
                   <ItemArtwork
                     name={listing.item.name}
@@ -268,9 +252,7 @@ const AuctionListingDetail = ({ listingId, characterId }: AuctionListingDetailPr
               )}
             </>
           )}
-        </motion.div>
-      </div>
-    </AnimatePresence>
+    </ModalShell>
   );
 };
 

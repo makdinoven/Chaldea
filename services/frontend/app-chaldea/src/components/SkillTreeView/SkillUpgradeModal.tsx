@@ -1,6 +1,5 @@
 // SkillUpgradeModal — perk system (FEAT-125)
 import { useEffect, useState, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import axios from 'axios';
 import type {
@@ -11,6 +10,7 @@ import type {
 import PerkCard, { type PerkCardState } from './PerkCard';
 import { parseServerDate } from '../../utils/serverDate';
 import { ruDamageType, ruEffectName, ruTargetSide } from './skillLabels';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 interface SkillUpgradeModalProps {
   skillId: number;
@@ -165,35 +165,7 @@ const SkillUpgradeModal = ({
   };
 
   return (
-    <AnimatePresence>
-      <motion.div
-        key="overlay"
-        className="modal-overlay fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-4"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-      >
-        <motion.div
-          key="content"
-          initial={{ opacity: 0, scale: 0.95, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 20 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
-          className="modal-content relative w-full max-w-[680px] max-h-[92vh] overflow-y-auto gold-scrollbar bg-[#12121e]/95 border border-white/10 rounded-card shadow-card"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Close */}
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Закрыть"
-            className="absolute top-2 right-3 text-white/60 hover:text-white text-2xl leading-none"
-          >
-            ×
-          </button>
-
-          <div className="p-4 sm:p-6">
+    <ModalShell open onClose={onClose} title="Улучшение навыка" size="lg">
             {loading && !skill && (
               <div className="flex items-center justify-center py-12">
                 <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin" />
@@ -344,10 +316,7 @@ const SkillUpgradeModal = ({
                 )}
               </>
             )}
-          </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+    </ModalShell>
   );
 };
 

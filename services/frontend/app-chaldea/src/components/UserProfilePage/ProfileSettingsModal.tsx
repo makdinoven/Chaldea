@@ -1,6 +1,4 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { X } from 'react-feather';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
@@ -16,6 +14,7 @@ import ColorPicker from '../common/ColorPicker';
 import BackgroundPositionPicker from './BackgroundPositionPicker';
 import FramePicker from './FramePicker';
 import BackgroundPicker from './BackgroundPicker';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 const NICKNAME_FONT_OPTIONS = [
   { value: '', label: 'По умолчанию' },
@@ -363,29 +362,22 @@ const ProfileSettingsModal = ({ isOpen, onClose, profile }: ProfileSettingsModal
   };
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="modal-overlay" onClick={onClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="modal-content gold-outline gold-outline-thick relative w-full max-w-[520px] max-h-[85vh] overflow-hidden !p-0"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="overflow-y-auto max-h-[85vh] gold-scrollbar p-8">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="gold-text text-2xl font-medium uppercase">Настройки профиля</h2>
-              <button
-                onClick={onClose}
-                className="text-white/50 hover:text-white transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
+    <ModalShell
+      open={isOpen}
+      onClose={onClose}
+      title="Настройки профиля"
+      size="md"
+      footer={
+        <button
+          type="button"
+          onClick={handleSave}
+          className="btn-blue w-full sm:w-auto"
+          disabled={settingsUpdating}
+        >
+          {settingsUpdating ? 'Сохранение...' : 'Сохранить'}
+        </button>
+      }
+    >
             <div className="flex flex-col gap-6">
               {/* Section: Background color + sliders */}
               <div>
@@ -744,22 +736,8 @@ const ProfileSettingsModal = ({ isOpen, onClose, profile }: ProfileSettingsModal
                   {statusText.length}/{MAX_STATUS_LENGTH}
                 </p>
               </div>
-
-              {/* Save button */}
-              <button
-                type="button"
-                onClick={handleSave}
-                className="btn-blue w-full"
-                disabled={settingsUpdating}
-              >
-                {settingsUpdating ? 'Сохранение...' : 'Сохранить'}
-              </button>
             </div>
-            </div>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+    </ModalShell>
   );
 };
 

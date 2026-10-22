@@ -16,6 +16,7 @@ import type { Race, Subrace, SubraceCreateData } from '../../../redux/slices/rac
 import RaceForm from './RaceForm';
 import SubraceForm from './SubraceForm';
 import { STAT_FIELDS } from './StatPresetEditor';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 const AdminRacesPage = () => {
   const dispatch = useAppDispatch();
@@ -377,40 +378,39 @@ const AdminRacesPage = () => {
       )}
 
       {/* Delete confirmation modal */}
-      {confirmDelete && (
-        <div
-          className="fixed inset-0 bg-black/85 z-[1000] flex items-center justify-center px-5"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setConfirmDelete(null);
-          }}
-        >
-          <div className="modal-content gold-outline gold-outline-thick max-w-md w-full">
-            <h2 className="gold-text text-2xl uppercase mb-4">Подтверждение удаления</h2>
-            <p className="text-white mb-6">
-              Вы уверены, что хотите удалить{' '}
-              {confirmDelete.type === 'race' ? 'расу' : 'подрасу'}{' '}
-              <span className="text-gold font-medium">{confirmDelete.name}</span>?
-            </p>
-            <div className="flex gap-4">
-              <button
-                className="px-6 py-2 bg-site-red text-white border-none rounded cursor-pointer font-medium
-                  transition-colors hover:bg-[#d45a3a]"
-                onClick={handleConfirmDelete}
-                disabled={loading}
-              >
-                {loading ? 'Удаление...' : 'Удалить'}
-              </button>
-              <button
-                className="px-6 py-2 bg-white/10 text-white border-none rounded cursor-pointer font-medium
-                  transition-colors hover:bg-white/20"
-                onClick={() => setConfirmDelete(null)}
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalShell
+        open={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        title="Подтверждение удаления"
+        size="sm"
+        footer={
+          <>
+            <button
+              className="w-full sm:w-auto px-6 py-2 bg-site-red text-white border-none rounded cursor-pointer font-medium
+                transition-colors hover:bg-[#d45a3a]"
+              onClick={handleConfirmDelete}
+              disabled={loading}
+            >
+              {loading ? 'Удаление...' : 'Удалить'}
+            </button>
+            <button
+              className="w-full sm:w-auto px-6 py-2 bg-white/10 text-white border-none rounded cursor-pointer font-medium
+                transition-colors hover:bg-white/20"
+              onClick={() => setConfirmDelete(null)}
+            >
+              Отмена
+            </button>
+          </>
+        }
+      >
+        {confirmDelete && (
+          <p className="text-white">
+            Вы уверены, что хотите удалить{' '}
+            {confirmDelete.type === 'race' ? 'расу' : 'подрасу'}{' '}
+            <span className="text-gold font-medium">{confirmDelete.name}</span>?
+          </p>
+        )}
+      </ModalShell>
     </div>
   );
 };

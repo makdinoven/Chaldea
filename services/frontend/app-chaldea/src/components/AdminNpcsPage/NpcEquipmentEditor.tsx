@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../api/api';
 import useDebounce from '../../hooks/useDebounce';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 /* ── Types ── */
 
@@ -309,89 +310,80 @@ const NpcEquipmentEditor = ({ npcId, npcName, onClose }: NpcEquipmentEditorProps
       )}
 
       {/* Item Picker Modal */}
-      {pickerSlot && (
-        <div className="modal-overlay" onClick={closePicker}>
-          <div
-            className="modal-content gold-outline gold-outline-thick relative w-full max-w-[560px] max-h-[80vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Picker Header */}
-            <div className="flex flex-col gap-3 mb-4">
-              <h3 className="gold-text text-lg sm:text-xl font-medium uppercase tracking-[0.06em]">
-                {SLOT_LABELS[pickerSlot]} — выбор предмета
-              </h3>
-              <input
-                className="input-underline"
-                placeholder="Поиск по названию..."
-                value={pickerSearch}
-                onChange={(e) => setPickerSearch(e.target.value)}
-                autoFocus
-              />
-            </div>
+      <ModalShell
+        open={!!pickerSlot}
+        onClose={closePicker}
+        title={pickerSlot ? `${SLOT_LABELS[pickerSlot]} — выбор предмета` : ''}
+        size="md"
+        bodyClassName="flex flex-col"
+        footer={
+          <button onClick={closePicker} className="btn-line w-full sm:w-auto !px-6">
+            Закрыть
+          </button>
+        }
+      >
+        <input
+          className="input-underline shrink-0 mb-4"
+          placeholder="Поиск по названию..."
+          value={pickerSearch}
+          onChange={(e) => setPickerSearch(e.target.value)}
+          autoFocus
+        />
 
-            {/* Picker List */}
-            <div className="gold-scrollbar overflow-y-auto flex-1 max-h-[50vh] flex flex-col gap-1">
-              {pickerLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <div className="w-6 h-6 border-3 border-white/30 border-t-gold rounded-full animate-spin" />
-                </div>
-              ) : filteredPickerItems.length === 0 ? (
-                <p className="text-white/30 text-sm text-center py-8">
-                  {pickerItems.length === 0
-                    ? 'Нет предметов для этого слота'
-                    : 'Ничего не найдено'}
-                </p>
-              ) : (
-                filteredPickerItems.map((item) => {
-                  const mods = formatModifiers(item);
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => handleEquip(pickerSlot, item.id)}
-                      disabled={actionLoading === pickerSlot}
-                      className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-card hover:bg-white/[0.07] transition-colors duration-200 disabled:opacity-50"
+        {/* Picker List */}
+        <div className="gold-scrollbar overflow-y-auto flex-1 min-h-0 flex flex-col gap-1">
+          {pickerLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="w-6 h-6 border-3 border-white/30 border-t-gold rounded-full animate-spin" />
+            </div>
+          ) : filteredPickerItems.length === 0 ? (
+            <p className="text-white/30 text-sm text-center py-8">
+              {pickerItems.length === 0
+                ? 'Нет предметов для этого слота'
+                : 'Ничего не найдено'}
+            </p>
+          ) : (
+            filteredPickerItems.map((item) => {
+              const mods = formatModifiers(item);
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => handleEquip(pickerSlot, item.id)}
+                  disabled={actionLoading === pickerSlot}
+                  className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-card hover:bg-white/[0.07] transition-colors duration-200 disabled:opacity-50"
+                >
+                  {/* Item image */}
+                  {item.image ? (
+                    <img
+                      src={item.image}
+                      alt={item.name}
+                      className="w-9 h-9 rounded object-cover shrink-0 border border-white/10"
+                    />
+                  ) : (
+                    <div className="w-9 h-9 rounded bg-white/[0.05] shrink-0 flex items-center justify-center text-white/20 text-[10px]">
+                      ?
+                    </div>
+                  )}
+
+                  {/* Item details */}
+                  <div className="flex-1 min-w-0">
+                    <div
+                      className={`text-sm font-medium truncate ${RARITY_COLORS[item.item_rarity] ?? 'text-white'}`}
                     >
-                      {/* Item image */}
-                      {item.image ? (
-                        <img
-                          src={item.image}
-                          alt={item.name}
-                          className="w-9 h-9 rounded object-cover shrink-0 border border-white/10"
-                        />
-                      ) : (
-                        <div className="w-9 h-9 rounded bg-white/[0.05] shrink-0 flex items-center justify-center text-white/20 text-[10px]">
-                          ?
-                        </div>
-                      )}
-
-                      {/* Item details */}
-                      <div className="flex-1 min-w-0">
-                        <div
-                          className={`text-sm font-medium truncate ${RARITY_COLORS[item.item_rarity] ?? 'text-white'}`}
-                        >
-                          {item.name}
-                        </div>
-                        <div className="text-white/30 text-xs truncate">
-                          {RARITY_LABELS[item.item_rarity] ?? item.item_rarity}
-                          {item.item_level ? ` | Ур. ${item.item_level}` : ''}
-                          {mods ? ` | ${mods}` : ''}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-
-            {/* Close button */}
-            <div className="mt-4 flex justify-end">
-              <button onClick={closePicker} className="btn-line !w-auto !px-6">
-                Закрыть
-              </button>
-            </div>
-          </div>
+                      {item.name}
+                    </div>
+                    <div className="text-white/30 text-xs truncate">
+                      {RARITY_LABELS[item.item_rarity] ?? item.item_rarity}
+                      {item.item_level ? ` | Ур. ${item.item_level}` : ''}
+                      {mods ? ` | ${mods}` : ''}
+                    </div>
+                  </div>
+                </button>
+              );
+            })
+          )}
         </div>
-      )}
+      </ModalShell>
     </div>
   );
 };

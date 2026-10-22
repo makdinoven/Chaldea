@@ -6,7 +6,7 @@
 import { useState } from 'react';
 import { Hammer } from 'lucide-react';
 import type { CharacterProfession, Profession } from '../../../types/professions';
-import ModalShell from '../shared/ModalShell';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import ProfileCard from '../shared/ProfileCard';
 import GoldIconFrame from '../shared/GoldIconFrame';
 

@@ -25,6 +25,7 @@ import EditDistrictForm from './EditForms/EditDistrictForm/EditDistrictForm';
 import EditLocationForm from './EditForms/EditLocationForm/EditLocationForm';
 import AdminClickableZoneEditor from './AdminClickableZoneEditor/AdminClickableZoneEditor';
 import RegionMapEditor from './RegionMapEditor/RegionMapEditor';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 import type { Area } from '../../redux/actions/adminLocationsActions';
 
@@ -230,12 +231,6 @@ const AdminLocationsPage = () => {
   const toggleDistrict = (e: React.MouseEvent, districtId: number) => {
     e.stopPropagation();
     setOpenedDistricts((prev) => ({ ...prev, [districtId]: !prev[districtId] }));
-  };
-
-  const handleOverlayClick = (e: React.MouseEvent, closeForm: () => void) => {
-    if (e.target === e.currentTarget) {
-      closeForm();
-    }
   };
 
   // --- Delete handlers ---
@@ -609,9 +604,11 @@ const AdminLocationsPage = () => {
 
         {/* --- Modal: Edit Country --- */}
         {editingCountry && (
-          <div
-            className="fixed inset-0 bg-black/85 z-[1000] overflow-y-auto py-10 px-5 flex items-start justify-center cursor-pointer"
-            onClick={(e) => handleOverlayClick(e, () => setEditingCountry(null))}
+          <ModalShell
+            open
+            onClose={() => setEditingCountry(null)}
+            size="lg"
+            title={(editingCountry as { id?: number }).id ? 'Изменение страны' : 'Создание страны'}
           >
             <EditCountryForm
               initialData={editingCountry}
@@ -641,14 +638,16 @@ const AdminLocationsPage = () => {
                 dispatch(fetchCountriesList());
               }}
             />
-          </div>
+          </ModalShell>
         )}
 
         {/* --- Modal: Edit Region --- */}
         {editingRegion && (
-          <div
-            className="fixed inset-0 bg-black/85 z-[1000] overflow-y-auto py-10 px-5 flex items-start justify-center cursor-pointer"
-            onClick={(e) => handleOverlayClick(e, () => setEditingRegion(null))}
+          <ModalShell
+            open
+            onClose={() => setEditingRegion(null)}
+            size="lg"
+            title={(editingRegion as { id?: number }).id ? 'Изменение региона' : 'Создание региона'}
           >
             <EditRegionForm
               regionId={(editingRegion as { id?: number }).id || 'new'}
@@ -660,14 +659,16 @@ const AdminLocationsPage = () => {
                 dispatch(fetchCountriesList());
               }}
             />
-          </div>
+          </ModalShell>
         )}
 
         {/* --- Modal: Edit District --- */}
         {editingDistrict && (
-          <div
-            className="fixed inset-0 bg-black/85 z-[1000] overflow-y-auto py-10 px-5 flex items-start justify-center cursor-pointer"
-            onClick={(e) => handleOverlayClick(e, () => setEditingDistrict(null))}
+          <ModalShell
+            open
+            onClose={() => setEditingDistrict(null)}
+            size="lg"
+            title={(editingDistrict as { id?: number | string }).id ? 'Изменение зоны' : 'Создание зоны'}
           >
             <EditDistrictForm
               districtId={(editingDistrict as { id?: number | string }).id || 'new'}
@@ -678,14 +679,16 @@ const AdminLocationsPage = () => {
                 dispatch(fetchCountriesList());
               }}
             />
-          </div>
+          </ModalShell>
         )}
 
         {/* --- Modal: Edit Location --- */}
         {editingItem && editingItem.type === 'location' && (
-          <div
-            className="fixed inset-0 bg-black/85 z-[1000] overflow-y-auto py-10 px-5 flex items-start justify-center cursor-pointer"
-            onClick={(e) => handleOverlayClick(e, () => setEditingItem(null))}
+          <ModalShell
+            open
+            onClose={() => setEditingItem(null)}
+            size="xl"
+            title={editingItem.id !== 'new' ? 'Изменение локации' : 'Создание локации'}
           >
             <EditLocationForm
               locationId={editingItem.id}
@@ -696,7 +699,7 @@ const AdminLocationsPage = () => {
                 dispatch(fetchCountriesList());
               }}
             />
-          </div>
+          </ModalShell>
         )}
       </div>
     </div>

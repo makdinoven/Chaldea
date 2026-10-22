@@ -4,7 +4,7 @@ import { useRef } from 'react';
 import { Star } from 'lucide-react';
 import type { CharacterPerk } from '../../../types/perks';
 import { formatServerDate } from '../../../utils/serverDate';
-import ModalShell from '../shared/ModalShell';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import ProfileCard from '../shared/ProfileCard';
 import GoldIconFrame from '../shared/GoldIconFrame';
 import ProgressBar from '../shared/ProgressBar';

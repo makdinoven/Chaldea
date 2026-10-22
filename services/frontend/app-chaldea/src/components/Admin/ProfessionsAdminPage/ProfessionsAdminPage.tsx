@@ -13,6 +13,7 @@ import { fetchCharacters } from "../../../api/characters";
 import toast from "react-hot-toast";
 import { motion, AnimatePresence } from "motion/react";
 import useDebounce from "../../../hooks/useDebounce";
+import ModalShell from "../../CommonComponents/ModalShell/ModalShell";
 import type {
   Profession,
   ProfessionRank,
@@ -756,89 +757,79 @@ const ProfessionsAdminPage = () => {
       </motion.div>
 
       {/* Set Rank Modal */}
-      <AnimatePresence>
-        {setRankOpen && (
-          <div className="modal-overlay" onClick={() => setSetRankOpen(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
-              className="modal-content gold-outline gold-outline-thick w-full max-w-[480px] max-h-[85vh] flex flex-col gap-4 overflow-auto gold-scrollbar mx-4"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={setRankOpen}
+        onClose={() => setSetRankOpen(false)}
+        title="Установить ранг"
+        size="sm"
+        footer={
+          <>
+            <button
+              className="btn-blue w-full sm:w-auto !text-base !px-6 !py-2"
+              onClick={handleSetRank}
+              disabled={!selectedChar || submitting}
             >
-              <h2 className="gold-text text-2xl font-medium uppercase tracking-[0.06em]">
-                Установить ранг
-              </h2>
-
-              {/* Character search */}
-              <div className="flex flex-col gap-2">
-                <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
-                  Поиск персонажа
-                </span>
-                <input
-                  className="input-underline"
-                  placeholder="Имя персонажа"
-                  value={charQuery}
-                  onChange={(e) => setCharQuery(e.target.value)}
-                />
-                <ul className="flex flex-col max-h-[180px] overflow-auto gold-scrollbar border border-white/10 rounded-card">
-                  {filteredChars.map((c) => (
-                    <li
-                      key={c.id}
-                      className={`px-4 py-2.5 cursor-pointer text-sm transition-colors duration-200 ${
-                        selectedChar?.id === c.id
-                          ? "bg-site-blue/25 text-white"
-                          : "text-white/70 hover:bg-white/[0.07]"
-                      }`}
-                      onClick={() => setSelectedChar(c)}
-                    >
-                      {c.name}{" "}
-                      <span className="text-white/40">(id {c.id})</span>
-                    </li>
-                  ))}
-                  {filteredChars.length === 0 && (
-                    <li className="px-4 py-2.5 text-sm text-white/30">
-                      Ничего не найдено
-                    </li>
-                  )}
-                </ul>
-              </div>
-
-              {/* Rank number */}
-              <label className="flex flex-col gap-1">
-                <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
-                  Номер ранга
-                </span>
-                <input
-                  type="number"
-                  min={1}
-                  value={setRankNumber}
-                  onChange={(e) => setSetRankNumber(Number(e.target.value))}
-                  className="input-underline"
-                />
-              </label>
-
-              {/* Buttons */}
-              <div className="flex justify-end gap-4 pt-2">
-                <button
-                  className="btn-blue !text-base !px-6 !py-2"
-                  onClick={handleSetRank}
-                  disabled={!selectedChar || submitting}
+              {submitting ? "Установка..." : "Установить"}
+            </button>
+            <button
+              className="btn-line w-full sm:w-auto !px-6"
+              onClick={() => setSetRankOpen(false)}
+            >
+              Отмена
+            </button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          {/* Character search */}
+          <div className="flex flex-col gap-2">
+            <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+              Поиск персонажа
+            </span>
+            <input
+              className="input-underline"
+              placeholder="Имя персонажа"
+              value={charQuery}
+              onChange={(e) => setCharQuery(e.target.value)}
+            />
+            <ul className="flex flex-col max-h-[180px] overflow-auto gold-scrollbar border border-white/10 rounded-card">
+              {filteredChars.map((c) => (
+                <li
+                  key={c.id}
+                  className={`px-4 py-2.5 cursor-pointer text-sm transition-colors duration-200 ${
+                    selectedChar?.id === c.id
+                      ? "bg-site-blue/25 text-white"
+                      : "text-white/70 hover:bg-white/[0.07]"
+                  }`}
+                  onClick={() => setSelectedChar(c)}
                 >
-                  {submitting ? "Установка..." : "Установить"}
-                </button>
-                <button
-                  className="btn-line !w-auto !px-6"
-                  onClick={() => setSetRankOpen(false)}
-                >
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
+                  {c.name}{" "}
+                  <span className="text-white/40">(id {c.id})</span>
+                </li>
+              ))}
+              {filteredChars.length === 0 && (
+                <li className="px-4 py-2.5 text-sm text-white/30">
+                  Ничего не найдено
+                </li>
+              )}
+            </ul>
           </div>
-        )}
-      </AnimatePresence>
+
+          {/* Rank number */}
+          <label className="flex flex-col gap-1">
+            <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+              Номер ранга
+            </span>
+            <input
+              type="number"
+              min={1}
+              value={setRankNumber}
+              onChange={(e) => setSetRankNumber(Number(e.target.value))}
+              className="input-underline"
+            />
+          </label>
+        </div>
+      </ModalShell>
     </div>
   );
 };

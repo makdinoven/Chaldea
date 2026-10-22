@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import {
   getFramesCatalog,
   getBackgroundsCatalog,
@@ -15,6 +15,7 @@ import type {
 } from '../../../types/cosmetics';
 import FrameEditor from './FrameEditor';
 import BackgroundEditor from './BackgroundEditor';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 /* ── Dictionaries ── */
 
@@ -431,99 +432,89 @@ const AdminCosmeticsPage = () => {
       )}
 
       {/* Grant Cosmetic Modal */}
-      <AnimatePresence>
-        {grantOpen && (
-          <div className="modal-overlay" onClick={() => setGrantOpen(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick w-full max-w-[480px] flex flex-col gap-4 mx-4"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={grantOpen}
+        onClose={() => setGrantOpen(false)}
+        title="Выдать косметику"
+        size="sm"
+        footer={
+          <>
+            <button
+              className="btn-blue w-full sm:w-auto !text-base !px-6 !py-2"
+              onClick={handleGrant}
+              disabled={granting || !grantUserId || !grantSlug}
             >
-              <h2 className="gold-text text-2xl font-medium uppercase tracking-[0.06em]">
-                Выдать косметику
-              </h2>
+              {granting ? 'Выдача...' : 'Выдать'}
+            </button>
+            <button
+              className="btn-line w-full sm:w-auto !px-6"
+              onClick={() => setGrantOpen(false)}
+            >
+              Отмена
+            </button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          {/* User ID */}
+          <label className="flex flex-col gap-1">
+            <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+              ID пользователя
+            </span>
+            <input
+              type="number"
+              value={grantUserId}
+              onChange={(e) => setGrantUserId(e.target.value)}
+              className="input-underline"
+              placeholder="123"
+              min={1}
+            />
+          </label>
 
-              {/* User ID */}
-              <label className="flex flex-col gap-1">
-                <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
-                  ID пользователя
-                </span>
-                <input
-                  type="number"
-                  value={grantUserId}
-                  onChange={(e) => setGrantUserId(e.target.value)}
-                  className="input-underline"
-                  placeholder="123"
-                  min={1}
-                />
-              </label>
+          {/* Cosmetic Type */}
+          <label className="flex flex-col gap-1">
+            <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+              Тип косметики
+            </span>
+            <select
+              value={grantType}
+              onChange={(e) => {
+                setGrantType(e.target.value as 'frame' | 'background');
+                setGrantSlug('');
+              }}
+              className="input-underline"
+            >
+              <option value="frame" className="bg-site-dark text-white">
+                Рамка
+              </option>
+              <option value="background" className="bg-site-dark text-white">
+                Подложка
+              </option>
+            </select>
+          </label>
 
-              {/* Cosmetic Type */}
-              <label className="flex flex-col gap-1">
-                <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
-                  Тип косметики
-                </span>
-                <select
-                  value={grantType}
-                  onChange={(e) => {
-                    setGrantType(e.target.value as 'frame' | 'background');
-                    setGrantSlug('');
-                  }}
-                  className="input-underline"
-                >
-                  <option value="frame" className="bg-site-dark text-white">
-                    Рамка
-                  </option>
-                  <option value="background" className="bg-site-dark text-white">
-                    Подложка
-                  </option>
-                </select>
-              </label>
-
-              {/* Cosmetic selector */}
-              <label className="flex flex-col gap-1">
-                <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
-                  Косметика
-                </span>
-                <select
-                  value={grantSlug}
-                  onChange={(e) => setGrantSlug(e.target.value)}
-                  className="input-underline"
-                >
-                  <option value="" className="bg-site-dark text-white">
-                    -- Выберите --
-                  </option>
-                  {grantOptions.map((c) => (
-                    <option key={c.slug} value={c.slug} className="bg-site-dark text-white">
-                      {c.name} ({c.slug})
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {/* Buttons */}
-              <div className="flex justify-end gap-4 pt-2">
-                <button
-                  className="btn-blue !text-base !px-6 !py-2"
-                  onClick={handleGrant}
-                  disabled={granting || !grantUserId || !grantSlug}
-                >
-                  {granting ? 'Выдача...' : 'Выдать'}
-                </button>
-                <button
-                  className="btn-line !w-auto !px-6"
-                  onClick={() => setGrantOpen(false)}
-                >
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+          {/* Cosmetic selector */}
+          <label className="flex flex-col gap-1">
+            <span className="text-white/50 text-xs font-medium uppercase tracking-[0.06em]">
+              Косметика
+            </span>
+            <select
+              value={grantSlug}
+              onChange={(e) => setGrantSlug(e.target.value)}
+              className="input-underline"
+            >
+              <option value="" className="bg-site-dark text-white">
+                -- Выберите --
+              </option>
+              {grantOptions.map((c) => (
+                <option key={c.slug} value={c.slug} className="bg-site-dark text-white">
+                  {c.name} ({c.slug})
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </ModalShell>
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 import { fetchAllUsers } from '../../api/usersApi';
 import type { UserPublicItem } from '../../types/users';
 import type { ConversationType } from '../../types/messenger';
@@ -134,21 +134,26 @@ const NewConversationModal = ({
     selectedUsers.some((u) => u.id === userId);
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="modal-overlay" onClick={onClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="modal-content gold-outline gold-outline-thick w-full max-w-md mx-4"
-            onClick={(e) => e.stopPropagation()}
+    <ModalShell
+      open={isOpen}
+      onClose={onClose}
+      title="Новый диалог"
+      size="sm"
+      footer={
+        <>
+          <button onClick={onClose} className="btn-line !text-sm w-full sm:w-auto">
+            Отмена
+          </button>
+          <button
+            onClick={handleCreate}
+            disabled={selectedUsers.length === 0 || isCreating}
+            className="btn-blue !text-sm w-full sm:w-auto disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <h2 className="gold-text text-xl font-medium uppercase mb-4">
-              Новый диалог
-            </h2>
-
+            {isCreating ? 'Создание...' : 'Создать'}
+          </button>
+        </>
+      }
+    >
             {/* Type toggle (when multiple users selected) */}
             {selectedUsers.length > 1 && (
               <div className="flex gap-2 mb-4">
@@ -238,7 +243,7 @@ const NewConversationModal = ({
             />
 
             {/* User list */}
-            <div className="max-h-[250px] overflow-y-auto gold-scrollbar border border-white/10 rounded-card mb-4">
+            <div className="max-h-[250px] overflow-y-auto gold-scrollbar border border-white/10 rounded-card">
               {loadingUsers ? (
                 <div className="flex items-center justify-center py-6">
                   <div className="w-5 h-5 border-2 border-gold/30 border-t-gold rounded-full animate-spin" />
@@ -288,26 +293,7 @@ const NewConversationModal = ({
               )}
             </div>
 
-            {/* Actions */}
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={onClose}
-                className="btn-line !px-4 !py-1.5 !text-sm"
-              >
-                Отмена
-              </button>
-              <button
-                onClick={handleCreate}
-                disabled={selectedUsers.length === 0 || isCreating}
-                className="btn-blue !px-4 !py-1.5 !text-sm disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {isCreating ? 'Создание...' : 'Создать'}
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+    </ModalShell>
   );
 };
 

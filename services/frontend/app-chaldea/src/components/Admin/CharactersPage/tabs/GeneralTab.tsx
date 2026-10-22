@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { useAppDispatch, useAppSelector } from '../../../../redux/store';
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -18,6 +18,7 @@ import { selectPermissions } from '../../../../redux/slices/userSlice';
 import { hasPermission } from '../../../../utils/permissions';
 import useDebounce from '../../../../hooks/useDebounce';
 import type { AdminCharacterListItem, LocationOption } from '../types';
+import ModalShell from '../../../CommonComponents/ModalShell/ModalShell';
 
 interface GeneralTabProps {
   character: AdminCharacterListItem;
@@ -409,155 +410,132 @@ const GeneralTab = ({ character }: GeneralTabProps) => {
       </div>
 
       {/* Move confirmation modal */}
-      <AnimatePresence>
-        {showMoveModal && destination && (
-          <div className="modal-overlay" onClick={() => !moving && setShowMoveModal(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={showMoveModal && !!destination}
+        onClose={() => setShowMoveModal(false)}
+        title="Перенос персонажа"
+        size="sm"
+        dismissible={!moving}
+        footer={
+          <>
+            <button className="btn-blue w-full sm:w-auto" onClick={handleMove} disabled={moving}>
+              {moving ? 'Перенос...' : 'Перенести'}
+            </button>
+            <button
+              className="btn-line w-full sm:w-auto sm:px-6"
+              onClick={() => setShowMoveModal(false)}
+              disabled={moving}
             >
-              <h2 className="gold-text text-2xl uppercase mb-4">Перенос персонажа</h2>
-              <p className="text-white mb-4 break-words">
-                Перенести персонажа <span className="text-gold font-medium">{character.name}</span>{' '}
-                из{' '}
-                <span className="text-gold font-medium">
-                  {currentLocationId == null
-                    ? '— (без локации)'
-                    : currentLocationName ?? `#${currentLocationId}`}
-                </span>{' '}
-                в <span className="text-gold font-medium">{destination.name}</span>?
-              </p>
-              <p className="text-white/60 text-sm mb-2">Вместе с переносом произойдёт:</p>
-              <ul className="text-white/60 text-sm mb-6 list-disc pl-5 space-y-1">
-                <li>открытые намерения и заявки в старой локации будут погашены;</li>
-                <li>активная сессия сбора ресурсов будет отменена (половина выносливости вернётся);</li>
-                <li>кулдаун перехода будет сброшен.</li>
-              </ul>
-              <p className="text-white/60 text-sm mb-6">
-                Персонажа в бою или в подземелье перенести нельзя — сервер откажет.
-              </p>
-              <div className="flex flex-col gap-4 sm:flex-row">
-                <button className="btn-blue" onClick={handleMove} disabled={moving}>
-                  {moving ? 'Перенос...' : 'Перенести'}
-                </button>
-                <button
-                  className="btn-line"
-                  onClick={() => setShowMoveModal(false)}
-                  disabled={moving}
-                >
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
+              Отмена
+            </button>
+          </>
+        }
+      >
+        {destination && (
+          <>
+            <p className="text-white mb-4 break-words">
+              Перенести персонажа <span className="text-gold font-medium">{character.name}</span>{' '}
+              из{' '}
+              <span className="text-gold font-medium">
+                {currentLocationId == null
+                  ? '— (без локации)'
+                  : currentLocationName ?? `#${currentLocationId}`}
+              </span>{' '}
+              в <span className="text-gold font-medium">{destination.name}</span>?
+            </p>
+            <p className="text-white/60 text-sm mb-2">Вместе с переносом произойдёт:</p>
+            <ul className="text-white/60 text-sm mb-6 list-disc pl-5 space-y-1">
+              <li>открытые намерения и заявки в старой локации будут погашены;</li>
+              <li>активная сессия сбора ресурсов будет отменена (половина выносливости вернётся);</li>
+              <li>кулдаун перехода будет сброшен.</li>
+            </ul>
+            <p className="text-white/60 text-sm">
+              Персонажа в бою или в подземелье перенести нельзя — сервер откажет.
+            </p>
+          </>
         )}
-      </AnimatePresence>
+      </ModalShell>
 
       {/* Unlink confirmation modal */}
-      <AnimatePresence>
-        {showUnlinkModal && (
-          <div className="modal-overlay" onClick={() => setShowUnlinkModal(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h2 className="gold-text text-2xl uppercase mb-4">Подтверждение</h2>
-              <p className="text-white mb-6">
-                Отвязать персонажа <span className="text-gold font-medium">{character.name}</span>{' '}
-                от аккаунта пользователя #{character.user_id}?
-              </p>
-              <div className="flex gap-4">
-                <button className="btn-blue" onClick={handleUnlink}>
-                  Отвязать
-                </button>
-                <button className="btn-line" onClick={() => setShowUnlinkModal(false)}>
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <ModalShell
+        open={showUnlinkModal}
+        onClose={() => setShowUnlinkModal(false)}
+        title="Подтверждение"
+        size="sm"
+        footer={
+          <>
+            <button className="btn-blue w-full sm:w-auto" onClick={handleUnlink}>
+              Отвязать
+            </button>
+            <button className="btn-line w-full sm:w-auto sm:px-6" onClick={() => setShowUnlinkModal(false)}>
+              Отмена
+            </button>
+          </>
+        }
+      >
+        <p className="text-white">
+          Отвязать персонажа <span className="text-gold font-medium">{character.name}</span>{' '}
+          от аккаунта пользователя #{character.user_id}?
+        </p>
+      </ModalShell>
 
       {/* Reset tree confirmation modal */}
-      <AnimatePresence>
-        {showResetTreeModal && (
-          <div className="modal-overlay" onClick={() => setShowResetTreeModal(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={showResetTreeModal}
+        onClose={() => setShowResetTreeModal(false)}
+        title="Сброс дерева навыков"
+        size="sm"
+        footer={
+          <>
+            <button
+              className="btn-blue w-full sm:w-auto"
+              onClick={handleResetTree}
+              disabled={resettingTree}
             >
-              <h2 className="gold-text text-2xl uppercase mb-4">Сброс дерева навыков</h2>
-              <p className="text-white mb-2">
-                Сбросить весь прогресс дерева навыков персонажа{' '}
-                <span className="text-gold font-medium">{character.name}</span>?
-              </p>
-              <p className="text-site-red text-sm mb-6">
-                Будут удалены все выбранные узлы (включая подкласс), все купленные навыки из дерева.
-                Опыт не возвращается.
-              </p>
-              <div className="flex gap-4">
-                <button
-                  className="btn-blue"
-                  onClick={handleResetTree}
-                  disabled={resettingTree}
-                >
-                  {resettingTree ? 'Сброс...' : 'Подтвердить сброс'}
-                </button>
-                <button className="btn-line" onClick={() => setShowResetTreeModal(false)}>
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+              {resettingTree ? 'Сброс...' : 'Подтвердить сброс'}
+            </button>
+            <button className="btn-line w-full sm:w-auto sm:px-6" onClick={() => setShowResetTreeModal(false)}>
+              Отмена
+            </button>
+          </>
+        }
+      >
+        <p className="text-white mb-2">
+          Сбросить весь прогресс дерева навыков персонажа{' '}
+          <span className="text-gold font-medium">{character.name}</span>?
+        </p>
+        <p className="text-site-red text-sm">
+          Будут удалены все выбранные узлы (включая подкласс), все купленные навыки из дерева.
+          Опыт не возвращается.
+        </p>
+      </ModalShell>
 
       {/* Delete confirmation modal */}
-      <AnimatePresence>
-        {showDeleteModal && (
-          <div className="modal-overlay" onClick={() => setShowDeleteModal(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        title="Удаление персонажа"
+        size="sm"
+        footer={
+          <>
+            <button
+              className="btn-blue w-full sm:w-auto"
+              onClick={handleDelete}
             >
-              <h2 className="gold-text text-2xl uppercase mb-4">Удаление персонажа</h2>
-              <p className="text-white mb-6">
-                Вы уверены, что хотите удалить персонажа{' '}
-                <span className="text-gold font-medium">{character.name}</span>? Это действие
-                необратимо. Будут удалены инвентарь, навыки, атрибуты и связь с аккаунтом.
-              </p>
-              <div className="flex gap-4">
-                <button
-                  className="btn-blue"
-                  onClick={handleDelete}
-                >
-                  Удалить
-                </button>
-                <button className="btn-line" onClick={() => setShowDeleteModal(false)}>
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+              Удалить
+            </button>
+            <button className="btn-line w-full sm:w-auto sm:px-6" onClick={() => setShowDeleteModal(false)}>
+              Отмена
+            </button>
+          </>
+        }
+      >
+        <p className="text-white">
+          Вы уверены, что хотите удалить персонажа{' '}
+          <span className="text-gold font-medium">{character.name}</span>? Это действие
+          необратимо. Будут удалены инвентарь, навыки, атрибуты и связь с аккаунтом.
+        </p>
+      </ModalShell>
     </motion.div>
   );
 };

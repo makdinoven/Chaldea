@@ -414,10 +414,12 @@ const SkillHand = ({
   const [playing, setPlaying] = useState<number | null>(null);
 
   useEffect(() => {
+    // While the skill card (a ModalShell) is open, Escape closes only the card.
+    if (cardSkill) return undefined;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, cardSkill]);
 
   const sortedSkills = [...skills].sort((a, b) => {
     const la = resolvedById[skillId(a)]?.level_requirement ?? 999;

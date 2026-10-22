@@ -1,5 +1,5 @@
-import { motion, AnimatePresence } from 'motion/react';
 import type { BattleRewards } from '../../../api/mobs';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 interface BattleRewardsModalProps {
   rewards: BattleRewards;
@@ -9,24 +9,24 @@ interface BattleRewardsModalProps {
 
 const BattleRewardsModal = ({ rewards, visible, onClose }: BattleRewardsModalProps) => {
   return (
-    <AnimatePresence>
-      {visible && (
-        <div className="modal-overlay" onClick={onClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.3, ease: 'easeOut' }}
-            className="modal-content gold-outline gold-outline-thick max-w-md w-full mx-4"
-            onClick={(e) => e.stopPropagation()}
-          >
+    <ModalShell
+      open={visible}
+      onClose={onClose}
+      title="Награды"
+      size="sm"
+      footer={
+        <button onClick={onClose} className="btn-blue w-full sm:w-auto">
+          Закрыть
+        </button>
+      }
+    >
             {/* Victory title */}
             <h2 className="gold-text text-3xl sm:text-4xl font-medium uppercase text-center mb-6">
               Победа!
             </h2>
 
             {/* Rewards list */}
-            <div className="flex flex-col gap-4 mb-6">
+            <div className="flex flex-col gap-4">
               {/* XP */}
               {rewards.xp > 0 && (
                 <div className="flex items-center gap-3 p-3 rounded-card bg-white/5">
@@ -135,17 +135,7 @@ const BattleRewardsModal = ({ rewards, visible, onClose }: BattleRewardsModalPro
               )}
             </div>
 
-            {/* Close button */}
-            <button
-              onClick={onClose}
-              className="btn-blue w-full text-base py-3"
-            >
-              Закрыть
-            </button>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+    </ModalShell>
   );
 };
 

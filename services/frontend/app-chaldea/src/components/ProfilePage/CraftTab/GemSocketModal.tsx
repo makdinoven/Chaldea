@@ -17,7 +17,7 @@ import {
 import { fetchInventory, fetchEquipment } from '../../../redux/slices/profileSlice';
 import type { AvailableGem, SocketGemInfo } from '../../../types/gems';
 import { JEWELRY_SOCKET_TYPES } from '../../../constants/professions';
-import ModalShell from '../shared/ModalShell';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import ProfileCard from '../shared/ProfileCard';
 import GoldIconFrame from '../shared/GoldIconFrame';
 import SectionHeader from '../shared/SectionHeader';

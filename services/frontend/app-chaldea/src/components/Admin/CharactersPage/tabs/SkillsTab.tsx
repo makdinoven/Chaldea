@@ -13,6 +13,7 @@ import {
 } from '../../../../redux/slices/adminCharactersSlice';
 import { fetchAllSkills } from '../../../../api/adminCharacters';
 import type { SkillInfo } from '../types';
+import ModalShell from '../../../CommonComponents/ModalShell/ModalShell';
 
 interface SkillsTabProps {
   characterId: number;
@@ -203,38 +204,33 @@ const SkillsTab = ({ characterId }: SkillsTabProps) => {
         )}
       </div>
 
-      <AnimatePresence>
-        {deleteTarget && (
-          <div className="modal-overlay" onClick={() => setDeleteTarget(null)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Удаление навыка"
+        size="sm"
+        footer={
+          <>
+            <button type="button" className="btn-blue w-full sm:w-auto" onClick={handleRemoveSkill}>
+              Удалить
+            </button>
+            <button
+              type="button"
+              className="btn-line w-full sm:w-auto sm:px-6"
+              onClick={() => setDeleteTarget(null)}
             >
-              <h2 className="gold-text text-2xl uppercase mb-4">Удаление навыка</h2>
-              <p className="text-white mb-6">
-                Удалить навык{' '}
-                <span className="text-gold font-medium">{deleteTarget.skillName}</span> у персонажа?
-              </p>
-              <div className="flex gap-4">
-                <button type="button" className="btn-blue" onClick={handleRemoveSkill}>
-                  Удалить
-                </button>
-                <button
-                  type="button"
-                  className="btn-line"
-                  onClick={() => setDeleteTarget(null)}
-                >
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
+              Отмена
+            </button>
+          </>
+        }
+      >
+        {deleteTarget && (
+          <p className="text-white">
+            Удалить навык{' '}
+            <span className="text-gold font-medium">{deleteTarget.skillName}</span> у персонажа?
+          </p>
         )}
-      </AnimatePresence>
+      </ModalShell>
     </motion.div>
   );
 };

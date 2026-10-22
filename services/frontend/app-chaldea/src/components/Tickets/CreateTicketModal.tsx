@@ -1,9 +1,9 @@
 import { useState, useCallback, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import { Paperclip } from 'react-feather';
 import { uploadTicketAttachment } from '../../api/ticketApi';
 import type { TicketCategory, CreateTicketPayload } from '../../types/ticket';
 import toast from 'react-hot-toast';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 interface CreateTicketModalProps {
   isOpen: boolean;
@@ -84,21 +84,31 @@ const CreateTicketModal = ({ isOpen, onClose, onSubmit, isLoading }: CreateTicke
   }, [isLoading, onClose]);
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="modal-overlay" onClick={handleClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="w-full max-w-lg mx-4 rounded-card border border-white/10 bg-black/50 backdrop-blur-md p-6 sm:p-8"
-            onClick={(e) => e.stopPropagation()}
+    <ModalShell
+      open={isOpen}
+      onClose={handleClose}
+      title="Создать тикет"
+      size="md"
+      dismissible={!isLoading}
+      footer={
+        <>
+          <button
+            onClick={handleClose}
+            disabled={isLoading}
+            className="btn-line !text-sm w-full sm:w-auto"
           >
-            <h2 className="gold-text text-2xl font-medium uppercase mb-6">
-              Создать тикет
-            </h2>
-
+            Отмена
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={isLoading || uploading}
+            className="btn-blue !text-sm w-full sm:w-auto disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {isLoading ? 'Создание...' : 'Создать'}
+          </button>
+        </>
+      }
+    >
             {/* Category */}
             <div className="mb-4">
               <label className="text-white/60 text-xs font-medium uppercase tracking-wider mb-1.5 block">
@@ -150,7 +160,7 @@ const CreateTicketModal = ({ isOpen, onClose, onSubmit, isLoading }: CreateTicke
             </div>
 
             {/* Attachment */}
-            <div className="mb-6">
+            <div>
               {attachmentUrl ? (
                 <div className="flex items-center gap-3">
                   <img
@@ -184,27 +194,7 @@ const CreateTicketModal = ({ isOpen, onClose, onSubmit, isLoading }: CreateTicke
               />
             </div>
 
-            {/* Actions */}
-            <div className="flex gap-4 justify-end">
-              <button
-                onClick={handleClose}
-                disabled={isLoading}
-                className="btn-line !px-4 !py-2 !text-sm"
-              >
-                Отмена
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={isLoading || uploading}
-                className="btn-blue !px-4 !py-2 !text-sm disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {isLoading ? 'Создание...' : 'Создать'}
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+    </ModalShell>
   );
 };
 

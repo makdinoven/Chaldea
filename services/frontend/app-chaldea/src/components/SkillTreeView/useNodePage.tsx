@@ -1,11 +1,11 @@
 import { useCallback, useMemo, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import { useAppDispatch } from '../../redux/store';
 import { chooseNode, purchaseSkill, resetTree } from '../../redux/actions/playerTreeActions';
 import { computeTreeStates } from './utils/computeNodeState';
 import { toSameOriginMedia } from '../pages/BattlePage/Arena3D/sameOriginMedia';
 import SkillUpgradeModal from './SkillUpgradeModal';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 import type { NodePageAction, NodePageModel, NodePageTone } from './Books3D/nodePageModel';
 import type {
   CharacterTreeProgressResponse,
@@ -211,38 +211,36 @@ const useNodePage = ({
           onRefresh={onRefresh}
         />
       )}
-      <AnimatePresence>
-        {resetConfirmOpen && (
-          <div className="modal-overlay" onClick={() => setResetConfirmOpen(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick max-w-md"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={resetConfirmOpen}
+        onClose={() => setResetConfirmOpen(false)}
+        title="Сбросить прогресс?"
+        size="sm"
+        footer={
+          <>
+            <button
+              onClick={() => setResetConfirmOpen(false)}
+              className="btn-line text-sm w-full sm:w-auto"
             >
-              <h2 className="gold-text text-xl uppercase mb-4">Сбросить прогресс?</h2>
-              <p className="text-white/70 text-sm mb-2">Все выбранные узлы будут сброшены (кроме подкласса).</p>
-              <p className="text-site-red text-sm mb-6">
-                Купленные навыки из сброшенных узлов будут удалены. Опыт не возвращается!
-              </p>
-              <div className="flex gap-4">
-                <button
-                  onClick={handleReset}
-                  disabled={resetting}
-                  className="px-6 py-2 rounded-card bg-site-red/80 hover:bg-site-red text-white text-sm font-medium transition-colors duration-200 ease-site disabled:opacity-40"
-                >
-                  {resetting ? 'Сброс...' : 'Подтвердить сброс'}
-                </button>
-                <button onClick={() => setResetConfirmOpen(false)} className="btn-line text-sm">
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+              Отмена
+            </button>
+            <button
+              onClick={handleReset}
+              disabled={resetting}
+              className="w-full sm:w-auto px-6 py-2 rounded-card bg-site-red/80 hover:bg-site-red text-white text-sm font-medium transition-colors duration-200 ease-site disabled:opacity-40"
+            >
+              {resetting ? 'Сброс...' : 'Подтвердить сброс'}
+            </button>
+          </>
+        }
+      >
+        <p className="text-white/70 text-sm mb-2">
+          Все выбранные узлы будут сброшены (кроме подкласса).
+        </p>
+        <p className="text-site-red text-sm">
+          Купленные навыки из сброшенных узлов будут удалены. Опыт не возвращается!
+        </p>
+      </ModalShell>
     </>
   );
 

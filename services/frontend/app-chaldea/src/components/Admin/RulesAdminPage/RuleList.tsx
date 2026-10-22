@@ -5,6 +5,7 @@ import { GUIDE_SECTIONS, isGuideSection } from "../../../constants/guideSections
 import type { GuideSection } from "../../../constants/guideSections";
 import toast from "react-hot-toast";
 import { motion } from "motion/react";
+import ModalShell from "../../CommonComponents/ModalShell/ModalShell";
 
 /* ── Helpers ── */
 
@@ -176,33 +177,36 @@ const RuleList = ({ onEdit, onCreate }: RuleListProps) => {
       </div>
 
       {/* Delete confirmation modal */}
-      {deleteTarget && (
-        <div className="modal-overlay">
-          <div className="modal-content gold-outline gold-outline-thick">
-            <h2 className="gold-text text-2xl uppercase mb-4">
-              Удаление правила
-            </h2>
-            <p className="text-white mb-6">
-              Удалить правило &laquo;{deleteTarget.title}&raquo;? Это действие
-              нельзя отменить.
-            </p>
-            <div className="flex gap-4">
-              <button
-                className="btn-blue !text-base !px-6 !py-2"
-                onClick={confirmDelete}
-              >
-                Удалить
-              </button>
-              <button
-                className="btn-line !w-auto !px-6"
-                onClick={() => setDeleteTarget(null)}
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalShell
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Удаление правила"
+        size="sm"
+        closeOnBackdrop={false}
+        footer={
+          <>
+            <button
+              className="btn-blue w-full sm:w-auto !text-base !px-6 !py-2"
+              onClick={confirmDelete}
+            >
+              Удалить
+            </button>
+            <button
+              className="btn-line w-full sm:w-auto !px-6"
+              onClick={() => setDeleteTarget(null)}
+            >
+              Отмена
+            </button>
+          </>
+        }
+      >
+        {deleteTarget && (
+          <p className="text-white">
+            Удалить правило &laquo;{deleteTarget.title}&raquo;? Это действие
+            нельзя отменить.
+          </p>
+        )}
+      </ModalShell>
     </div>
   );
 };

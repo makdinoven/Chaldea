@@ -16,7 +16,6 @@
  * Tailwind only, no React.FC, mobile responsive (360px+).
  */
 import { useEffect, useMemo, useState } from 'react';
-import { motion } from 'motion/react';
 import { useAppDispatch, useAppSelector } from '../../../../redux/store';
 import {
   loadGatheringTools,
@@ -27,6 +26,7 @@ import {
 } from '../../../../redux/slices/gatheringSlice';
 import type { GatheringTool, GatheringCategory, ToolCategory } from '../../../../types/gathering';
 import type { ToolSelectionModalProps } from './gatheringSection.types';
+import ModalShell from '../../../CommonComponents/ModalShell/ModalShell';
 
 /** Toolless categories (ingredients) have no entry and never open this modal */
 const NODE_CATEGORY_TO_TOOL: Partial<Record<GatheringCategory, ToolCategory>> = {
@@ -184,136 +184,107 @@ const ToolSelectionModal = ({
   const oneTool = hasFetched && usableTools.length === 1;
   const manyTools = hasFetched && usableTools.length > 1;
 
+  // The confirm target of the current screen: null = without a tool,
+  // undefined = nothing to confirm (still loading).
+  let confirmTarget: number | null | undefined;
+  let confirmLabel = 'Подтвердить';
+  if (noTools) {
+    confirmTarget = null;
+    confirmLabel = 'Продолжить без инструмента';
+  } else if (oneTool) {
+    confirmTarget = usableTools[0].id;
+  } else if (manyTools) {
+    confirmTarget = selectedToolId;
+  }
+  const hasActions = noTools || oneTool || manyTools;
+
   return (
-    <div
-      className="modal-overlay"
-      onClick={handleClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Выбор инструмента"
+    <ModalShell
+      open
+      onClose={handleClose}
+      title="Выбор инструмента"
+      size="sm"
+      dismissible={!submitting}
+      footer={
+        hasActions ? (
+          <>
+            <button
+              type="button"
+              onClick={handleClose}
+              disabled={submitting}
+              className="btn-line w-full sm:w-auto text-sm py-2 disabled:opacity-50"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (noTools) void handleConfirm(null);
+                else if (confirmTarget) void handleConfirm(confirmTarget);
+              }}
+              disabled={submitting || (manyTools && selectedToolId === null)}
+              className="btn-blue w-full sm:w-auto text-sm py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {submitting ? 'Запуск…' : confirmLabel}
+            </button>
+          </>
+        ) : undefined
+      }
     >
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
-        className="modal-content gold-outline gold-outline-thick max-w-md w-full mx-4 max-h-[85vh] overflow-y-auto gold-scrollbar"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="gold-text text-lg sm:text-xl font-medium uppercase mb-2">
-          Выбор инструмента
-        </h3>
-        <p className="text-white/70 text-xs sm:text-sm mb-4">
-          {toolCategory ? `Категория: ${TOOL_CATEGORY_LABELS[toolCategory]}` : 'Инструмент не нужен'}
+      <p className="text-white/70 text-xs sm:text-sm mb-4">
+        {toolCategory ? `Категория: ${TOOL_CATEGORY_LABELS[toolCategory]}` : 'Инструмент не нужен'}
+      </p>
+
+      {showLoading && (
+        <div className="flex items-center justify-center py-6">
+          <div className="w-6 h-6 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
+        </div>
+      )}
+
+      {error && !showLoading && (
+        <div role="alert" className="text-red-400 text-sm mb-3 break-words">
+          {error}
+        </div>
+      )}
+
+      {noTools && (
+        <p className="text-white text-sm leading-relaxed">
+          У вас нет подходящих инструментов. Без инструмента сбор будет
+          в 2 раза дольше и без бонусов. Продолжить?
         </p>
+      )}
 
-        {showLoading && (
-          <div className="flex items-center justify-center py-6">
-            <div className="w-6 h-6 border-2 border-white/30 border-t-gold rounded-full animate-spin" />
-          </div>
-        )}
+      {oneTool && (
+        <div className="flex flex-col gap-3">
+          <p className="text-white text-sm">
+            {`Использовать «${usableTools[0].name}»?`}
+          </p>
+          <ToolRow
+            tool={usableTools[0]}
+            selected
+            onSelect={() => setSelectedToolId(usableTools[0].id)}
+          />
+        </div>
+      )}
 
-        {error && !showLoading && (
-          <div role="alert" className="text-red-400 text-sm mb-3 break-words">
-            {error}
+      {manyTools && (
+        <div className="flex flex-col gap-3">
+          <p className="text-white/70 text-xs sm:text-sm">
+            Выберите инструмент для сбора:
+          </p>
+          <div className="flex flex-col gap-2">
+            {usableTools.map((tool) => (
+              <ToolRow
+                key={tool.id}
+                tool={tool}
+                selected={selectedToolId === tool.id}
+                onSelect={() => setSelectedToolId(tool.id)}
+              />
+            ))}
           </div>
-        )}
-
-        {noTools && (
-          <div className="flex flex-col gap-3">
-            <p className="text-white text-sm leading-relaxed">
-              У вас нет подходящих инструментов. Без инструмента сбор будет
-              в 2 раза дольше и без бонусов. Продолжить?
-            </p>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <button
-                type="button"
-                onClick={() => handleConfirm(null)}
-                disabled={submitting}
-                className="btn-blue text-sm flex-1 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {submitting ? 'Запуск…' : 'Продолжить без инструмента'}
-              </button>
-              <button
-                type="button"
-                onClick={handleClose}
-                disabled={submitting}
-                className="btn-line text-sm flex-1 py-2 disabled:opacity-50"
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        )}
-
-        {oneTool && (
-          <div className="flex flex-col gap-3">
-            <p className="text-white text-sm">
-              {`Использовать «${usableTools[0].name}»?`}
-            </p>
-            <ToolRow
-              tool={usableTools[0]}
-              selected
-              onSelect={() => setSelectedToolId(usableTools[0].id)}
-            />
-            <div className="flex flex-col sm:flex-row gap-2">
-              <button
-                type="button"
-                onClick={() => handleConfirm(usableTools[0].id)}
-                disabled={submitting}
-                className="btn-blue text-sm flex-1 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {submitting ? 'Запуск…' : 'Подтвердить'}
-              </button>
-              <button
-                type="button"
-                onClick={handleClose}
-                disabled={submitting}
-                className="btn-line text-sm flex-1 py-2 disabled:opacity-50"
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        )}
-
-        {manyTools && (
-          <div className="flex flex-col gap-3">
-            <p className="text-white/70 text-xs sm:text-sm">
-              Выберите инструмент для сбора:
-            </p>
-            <div className="flex flex-col gap-2 max-h-[50vh] overflow-y-auto gold-scrollbar pr-1">
-              {usableTools.map((tool) => (
-                <ToolRow
-                  key={tool.id}
-                  tool={tool}
-                  selected={selectedToolId === tool.id}
-                  onSelect={() => setSelectedToolId(tool.id)}
-                />
-              ))}
-            </div>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <button
-                type="button"
-                onClick={() => selectedToolId && handleConfirm(selectedToolId)}
-                disabled={submitting || selectedToolId === null}
-                className="btn-blue text-sm flex-1 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {submitting ? 'Запуск…' : 'Подтвердить'}
-              </button>
-              <button
-                type="button"
-                onClick={handleClose}
-                disabled={submitting}
-                className="btn-line text-sm flex-1 py-2 disabled:opacity-50"
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        )}
-      </motion.div>
-    </div>
+        </div>
+      )}
+    </ModalShell>
   );
 };
 

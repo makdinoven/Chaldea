@@ -17,6 +17,7 @@ import type { NeighborEdge, PathWaypoint, ArrowEdge } from '../../redux/actions/
 import toast from 'react-hot-toast';
 import PathEditorCanvas from './PathEditorCanvas';
 import PathEditorToolbar from './PathEditorToolbar';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 type EditorMode = 'draw' | 'edit' | 'delete' | 'arrow';
 
@@ -742,76 +743,73 @@ const AdminPathEditorPage = () => {
         </div>
       </div>
       {/* Arrow creation form */}
-      {showArrowForm && arrowPlacementPos && (
-        <div
-          className="modal-overlay"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setShowArrowForm(false);
-              setArrowPlacementPos(null);
-            }
-          }}
-        >
-          <div className="modal-content max-w-sm w-full mx-4">
-            <h3 className="gold-text text-lg font-medium uppercase mb-4">
-              Создать стрелку перехода
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs text-white/50 uppercase tracking-wide block mb-1">
-                  Целевой регион
-                </label>
-                <select
-                  value={arrowTargetRegionId}
-                  onChange={(e) => setArrowTargetRegionId(e.target.value ? Number(e.target.value) : '')}
-                  className="w-full bg-black/40 border border-white/20 rounded px-3 py-2 text-white text-sm focus:border-gold/50 focus:outline-none"
-                >
-                  <option value="">Выберите регион...</option>
-                  {allRegions.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-white/50 uppercase tracking-wide block mb-1">
-                  Метка (необязательно)
-                </label>
-                <input
-                  type="text"
-                  value={arrowLabel}
-                  onChange={(e) => setArrowLabel(e.target.value)}
-                  placeholder="Например: К региону..."
-                  className="input-underline w-full text-sm"
-                  maxLength={255}
-                />
-              </div>
-              <div className="text-xs text-white/40">
-                Позиция: ({arrowPlacementPos.x.toFixed(1)}, {arrowPlacementPos.y.toFixed(1)})
-              </div>
-              <div className="flex gap-2">
-                <button
-                  className="btn-blue text-sm py-1.5 flex-1"
-                  onClick={handleArrowCreate}
-                  disabled={saving || !arrowTargetRegionId}
-                >
-                  {saving ? 'Создание...' : 'Создать'}
-                </button>
-                <button
-                  className="btn-line text-sm py-1.5 flex-1"
-                  onClick={() => {
-                    setShowArrowForm(false);
-                    setArrowPlacementPos(null);
-                  }}
-                >
-                  Отмена
-                </button>
-              </div>
+      <ModalShell
+        open={showArrowForm && !!arrowPlacementPos}
+        onClose={() => {
+          setShowArrowForm(false);
+          setArrowPlacementPos(null);
+        }}
+        title="Создать стрелку перехода"
+        size="sm"
+        footer={
+          <>
+            <button
+              className="btn-blue w-full sm:w-auto text-sm py-1.5"
+              onClick={handleArrowCreate}
+              disabled={saving || !arrowTargetRegionId}
+            >
+              {saving ? 'Создание...' : 'Создать'}
+            </button>
+            <button
+              className="btn-line w-full sm:w-auto sm:px-6 text-sm py-1.5"
+              onClick={() => {
+                setShowArrowForm(false);
+                setArrowPlacementPos(null);
+              }}
+            >
+              Отмена
+            </button>
+          </>
+        }
+      >
+        {arrowPlacementPos && (
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-white/50 uppercase tracking-wide block mb-1">
+                Целевой регион
+              </label>
+              <select
+                value={arrowTargetRegionId}
+                onChange={(e) => setArrowTargetRegionId(e.target.value ? Number(e.target.value) : '')}
+                className="w-full bg-black/40 border border-white/20 rounded px-3 py-2 text-white text-sm focus:border-gold/50 focus:outline-none"
+              >
+                <option value="">Выберите регион...</option>
+                {allRegions.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-white/50 uppercase tracking-wide block mb-1">
+                Метка (необязательно)
+              </label>
+              <input
+                type="text"
+                value={arrowLabel}
+                onChange={(e) => setArrowLabel(e.target.value)}
+                placeholder="Например: К региону..."
+                className="input-underline w-full text-sm"
+                maxLength={255}
+              />
+            </div>
+            <div className="text-xs text-white/40">
+              Позиция: ({arrowPlacementPos.x.toFixed(1)}, {arrowPlacementPos.y.toFixed(1)})
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalShell>
     </div>
   );
 };

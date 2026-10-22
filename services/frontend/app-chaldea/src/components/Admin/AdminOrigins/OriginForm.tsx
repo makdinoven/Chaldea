@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type {
   OriginCountryAdmin,
   OriginCountryCreatePayload,
 } from '../../../api/origins';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 /**
  * FEAT-154 (rules 8-10) — create/edit one origin country.
@@ -74,156 +74,140 @@ const OriginForm = ({ origin, onSave, onCancel, loading }: OriginFormProps) => {
     });
   };
 
-  const handleOverlayClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) onCancel();
-  };
-
-  /*
-    Portalled to `document.body`, like `ItemDetailModal` / `ConfirmationModal`
-    and every overlay on `CharactersListPage`. Not cosmetic: the admin page is
-    rendered inside an animated (transformed) wrapper, and a transformed
-    ancestor becomes the containing block for `position: fixed` descendants —
-    so this overlay's `inset-0` resolved against the scrolling page instead of
-    the viewport, its `z-[1000]` stayed trapped in that ancestor's stacking
-    context, and the site header (`relative z-50`) drew over the heading.
-  */
-  return createPortal(
-    <div
-      className="fixed inset-0 bg-black/85 z-[1000] overflow-y-auto py-6 px-3 sm:py-10 sm:px-5 flex items-start justify-center"
-      onClick={handleOverlayClick}
+  return (
+    <ModalShell
+      open
+      onClose={onCancel}
+      title={origin ? 'Редактировать происхождение' : 'Создать происхождение'}
+      size="lg"
+      footer={
+        <>
+          <button
+            type="submit"
+            form="origin-form"
+            disabled={!canSubmit}
+            className="w-full sm:w-auto px-6 py-2 bg-site-blue text-white border-none rounded cursor-pointer font-medium
+              transition-colors hover:bg-[#5d8fa8] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Сохранение...' : 'Сохранить'}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="w-full sm:w-auto px-6 py-2 bg-white/10 text-white border-none rounded cursor-pointer font-medium
+              transition-colors hover:bg-white/20"
+          >
+            Отмена
+          </button>
+        </>
+      }
     >
-      <div className="modal-content gold-outline gold-outline-thick w-full max-w-2xl">
-        <h2 className="gold-text text-xl sm:text-2xl uppercase mb-6">
-          {origin ? 'Редактировать происхождение' : 'Создать происхождение'}
-        </h2>
+      <form id="origin-form" onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div>
+          <label className={LABEL_CLASS}>Название</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            maxLength={120}
+            placeholder="Например, Империя Мидденгерд"
+            className={FIELD_CLASS}
+          />
+        </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div>
-            <label className={LABEL_CLASS}>Название</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              maxLength={120}
-              placeholder="Например, Империя Мидденгерд"
-              className={FIELD_CLASS}
-            />
-          </div>
+        <div>
+          <label className={LABEL_CLASS}>Краткое описание</label>
+          <textarea
+            value={summary}
+            onChange={(e) => setSummary(e.target.value)}
+            rows={3}
+            placeholder="Что игрок должен знать о родине при выборе"
+            className={`${FIELD_CLASS} resize-y`}
+          />
+          <p className="mt-1 text-white/40 text-xs">
+            Это текст для игрока. Админские описания стран из карты мира здесь не используются.
+          </p>
+        </div>
 
-          <div>
-            <label className={LABEL_CLASS}>Краткое описание</label>
-            <textarea
-              value={summary}
-              onChange={(e) => setSummary(e.target.value)}
-              rows={3}
-              placeholder="Что игрок должен знать о родине при выборе"
-              className={`${FIELD_CLASS} resize-y`}
-            />
+        <div>
+          <label className={LABEL_CLASS}>Отношение к Скитальцам</label>
+          <textarea
+            value={attitude}
+            onChange={(e) => setAttitude(e.target.value)}
+            rows={3}
+            placeholder="Например: почитают как героев / считают еретиками"
+            className={`${FIELD_CLASS} resize-y`}
+          />
+        </div>
+
+        <div>
+          <label className={LABEL_CLASS}>Слаг статьи Архива</label>
+          <input
+            type="text"
+            value={archiveSlug}
+            onChange={(e) => setArchiveSlug(e.target.value)}
+            placeholder="middengerd"
+            className={FIELD_CLASS}
+          />
+          {slugError ? (
+            <p className="mt-1 text-site-red text-xs">{slugError}</p>
+          ) : (
             <p className="mt-1 text-white/40 text-xs">
-              Это текст для игрока. Админские описания стран из карты мира здесь не используются.
+              Необязательно. Ведёт на статью Архива, если она есть.
             </p>
-          </div>
+          )}
+        </div>
 
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className={LABEL_CLASS}>Отношение к Скитальцам</label>
-            <textarea
-              value={attitude}
-              onChange={(e) => setAttitude(e.target.value)}
-              rows={3}
-              placeholder="Например: почитают как героев / считают еретиками"
-              className={`${FIELD_CLASS} resize-y`}
-            />
-          </div>
-
-          <div>
-            <label className={LABEL_CLASS}>Слаг статьи Архива</label>
+            <label className={LABEL_CLASS}>Ссылка на герб</label>
             <input
               type="text"
-              value={archiveSlug}
-              onChange={(e) => setArchiveSlug(e.target.value)}
-              placeholder="middengerd"
+              value={emblemUrl}
+              onChange={(e) => setEmblemUrl(e.target.value)}
+              placeholder="https://…"
               className={FIELD_CLASS}
             />
-            {slugError ? (
-              <p className="mt-1 text-site-red text-xs">{slugError}</p>
-            ) : (
-              <p className="mt-1 text-white/40 text-xs">
-                Необязательно. Ведёт на статью Архива, если она есть.
-              </p>
-            )}
           </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className={LABEL_CLASS}>Ссылка на герб</label>
-              <input
-                type="text"
-                value={emblemUrl}
-                onChange={(e) => setEmblemUrl(e.target.value)}
-                placeholder="https://…"
-                className={FIELD_CLASS}
-              />
-            </div>
-            <div>
-              <label className={LABEL_CLASS}>Ссылка на карту</label>
-              <input
-                type="text"
-                value={mapImageUrl}
-                onChange={(e) => setMapImageUrl(e.target.value)}
-                placeholder="https://…"
-                className={FIELD_CLASS}
-              />
-            </div>
-          </div>
-
-          {emblemUrl.trim() && (
-            <img
-              src={emblemUrl.trim()}
-              alt="Герб"
-              className="max-h-[90px] w-auto object-contain rounded border border-white/10 self-start"
-            />
-          )}
-
-          <div className="sm:max-w-[50%]">
-            <label className={LABEL_CLASS}>Порядок сортировки</label>
+          <div>
+            <label className={LABEL_CLASS}>Ссылка на карту</label>
             <input
-              type="number"
-              value={sortOrder}
-              onChange={(e) => setSortOrder(e.target.value)}
+              type="text"
+              value={mapImageUrl}
+              onChange={(e) => setMapImageUrl(e.target.value)}
+              placeholder="https://…"
               className={FIELD_CLASS}
             />
-            {sortOrderError ? (
-              <p className="mt-1 text-site-red text-xs">{sortOrderError}</p>
-            ) : (
-              <p className="mt-1 text-white/40 text-xs">
-                Порядок в списке при создании персонажа. Меньше — выше.
-              </p>
-            )}
           </div>
+        </div>
 
-          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-2">
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              className="px-6 py-2 bg-site-blue text-white border-none rounded cursor-pointer font-medium
-                transition-colors hover:bg-[#5d8fa8] disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? 'Сохранение...' : 'Сохранить'}
-            </button>
-            <button
-              type="button"
-              onClick={onCancel}
-              className="px-6 py-2 bg-white/10 text-white border-none rounded cursor-pointer font-medium
-                transition-colors hover:bg-white/20"
-            >
-              Отмена
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>,
-    document.body,
+        {emblemUrl.trim() && (
+          <img
+            src={emblemUrl.trim()}
+            alt="Герб"
+            className="max-h-[90px] w-auto object-contain rounded border border-white/10 self-start"
+          />
+        )}
+
+        <div className="sm:max-w-[50%]">
+          <label className={LABEL_CLASS}>Порядок сортировки</label>
+          <input
+            type="number"
+            value={sortOrder}
+            onChange={(e) => setSortOrder(e.target.value)}
+            className={FIELD_CLASS}
+          />
+          {sortOrderError ? (
+            <p className="mt-1 text-site-red text-xs">{sortOrderError}</p>
+          ) : (
+            <p className="mt-1 text-white/40 text-xs">
+              Порядок в списке при создании персонажа. Меньше — выше.
+            </p>
+          )}
+        </div>
+      </form>
+    </ModalShell>
   );
 };
 

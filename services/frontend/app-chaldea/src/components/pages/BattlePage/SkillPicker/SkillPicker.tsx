@@ -6,8 +6,9 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
-import { X, Zap, Droplet, Clock, TrendingUp, Info, Ban } from "lucide-react";
+import { Zap, Droplet, Clock, TrendingUp, Info, Ban } from "lucide-react";
 import ResolvedSkillCard from "../../../ProfilePage/SkillsTab/ResolvedSkillCard";
+import ModalShell from "../../../CommonComponents/ModalShell/ModalShell";
 import type {
   ResolvedSkill,
   SkillWithPerks,
@@ -120,26 +121,15 @@ const SkillPicker = ({
   const activeCoatingText = describeActiveCoating(weaponCoating);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div
-        className="modal-content gold-outline w-full max-w-lg mx-4 max-h-[85vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
+    <>
+      <ModalShell
+        open
+        onClose={onClose}
+        title={TYPE_TITLES[type]}
+        size="md"
+        // The nested skill card handles Escape / backdrop itself while it is open.
+        dismissible={!cardSkill}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="gold-text text-lg font-medium uppercase">
-            {TYPE_TITLES[type]}
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-white/40 hover:text-white transition-colors"
-            aria-label="Закрыть"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
         {selectedId != null && (
           <button
             type="button"
@@ -147,14 +137,14 @@ const SkillPicker = ({
               onClear();
               onClose();
             }}
-            className="mb-3 flex items-center gap-1.5 text-sm text-white/60 hover:text-site-red transition-colors self-start"
+            className="mb-3 flex items-center gap-1.5 text-sm text-white/60 hover:text-site-red transition-colors"
           >
             <Ban size={15} /> Убрать из слота
           </button>
         )}
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto gold-scrollbar pr-1 -mr-1">
+        <div>
           {loading ? (
             <div className="flex justify-center py-10">
               <div className="w-7 h-7 border-2 border-gold border-t-transparent rounded-full animate-spin" />
@@ -300,7 +290,7 @@ const SkillPicker = ({
             </ul>
           )}
         </div>
-      </div>
+      </ModalShell>
 
       {/* Nested skill card modal */}
       {cardSkill && (
@@ -311,7 +301,7 @@ const SkillPicker = ({
           onClose={closeCard}
         />
       )}
-    </div>
+    </>
   );
 };
 
@@ -369,27 +359,7 @@ export const SkillCardModal = ({
   loading: boolean;
   onClose: () => void;
 }) => (
-  <div
-    className="modal-overlay"
-    onClick={(e) => {
-      e.stopPropagation();
-      onClose();
-    }}
-  >
-    <div
-      className="modal-content gold-outline w-full max-w-md mx-4 max-h-[85vh] overflow-y-auto gold-scrollbar"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div className="flex justify-end mb-1">
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-white/40 hover:text-white transition-colors"
-          aria-label="Закрыть"
-        >
-          <X size={20} />
-        </button>
-      </div>
+  <ModalShell open onClose={onClose} title="Карточка навыка" size="sm">
       {loading && !resolved ? (
         <div className="flex justify-center py-6">
           <div className="w-6 h-6 border-2 border-gold border-t-transparent rounded-full animate-spin" />
@@ -399,8 +369,7 @@ export const SkillCardModal = ({
       ) : (
         <p className="text-white/50 text-center py-4">Характеристики навыка недоступны</p>
       )}
-    </div>
-  </div>
+  </ModalShell>
 );
 
 /** Loads a skill's perks for the full card. */

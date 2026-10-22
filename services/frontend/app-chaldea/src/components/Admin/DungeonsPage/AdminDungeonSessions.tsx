@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import type { AdminSession } from '../../../api/dungeons';
 import { formatServerDateTime } from '../../../utils/serverDate';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 const STATUS_LABELS: Record<string, string> = {
   forming: 'Формируется',
@@ -216,32 +217,36 @@ const AdminDungeonSessions = () => {
       )}
 
       {/* Cleanup confirmation modal */}
-      {cleanupId !== null && (
-        <div className="modal-overlay">
-          <div className="modal-content gold-outline gold-outline-thick">
-            <h2 className="gold-text text-2xl uppercase mb-4">Подтверждение</h2>
-            <p className="text-white mb-6">
-              Принудительно завершить сессию #{cleanupId}? Все участники будут освобождены, инвентарь удалён.
-            </p>
-            <div className="flex gap-4">
-              <button
-                className="btn-blue"
-                onClick={() => handleCleanup(cleanupId)}
-                disabled={cleaning}
-              >
-                {cleaning ? 'Завершение...' : 'Завершить'}
-              </button>
-              <button
-                className="btn-line"
-                onClick={() => setCleanupId(null)}
-                disabled={cleaning}
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModalShell
+        open={cleanupId !== null}
+        onClose={() => setCleanupId(null)}
+        title="Подтверждение"
+        size="sm"
+        closeOnBackdrop={false}
+        dismissible={!cleaning}
+        footer={
+          <>
+            <button
+              className="btn-blue w-full sm:w-auto"
+              onClick={() => cleanupId !== null && handleCleanup(cleanupId)}
+              disabled={cleaning}
+            >
+              {cleaning ? 'Завершение...' : 'Завершить'}
+            </button>
+            <button
+              className="btn-line w-full sm:w-auto sm:px-6"
+              onClick={() => setCleanupId(null)}
+              disabled={cleaning}
+            >
+              Отмена
+            </button>
+          </>
+        }
+      >
+        <p className="text-white">
+          Принудительно завершить сессию #{cleanupId}? Все участники будут освобождены, инвентарь удалён.
+        </p>
+      </ModalShell>
     </div>
   );
 };

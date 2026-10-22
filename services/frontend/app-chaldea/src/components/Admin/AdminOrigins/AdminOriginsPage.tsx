@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import {
@@ -16,6 +15,7 @@ import { selectPermissions, selectRole } from '../../../redux/slices/userSlice';
 import { hasPermission } from '../../../utils/permissions';
 import OriginForm from './OriginForm';
 import OriginStartingPoints from './OriginStartingPoints';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 /**
  * FEAT-154 (rules 8-10, task #23) — admin registry of origin countries.
@@ -323,46 +323,42 @@ const AdminOriginsPage = () => {
         />
       )}
 
-      {/*
-        Portalled for the same reason as `OriginForm`: this page renders inside
-        an animated (transformed) wrapper, which becomes the containing block
-        for `position: fixed` and traps `.modal-overlay`'s z-index under the
-        site header. Both overlays on this page use the one approach.
-      */}
-      {confirmHide && createPortal(
-        <div className="modal-overlay" onClick={() => setConfirmHide(null)}>
-          <div
-            className="modal-content gold-outline gold-outline-thick w-full max-w-md"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="gold-text text-xl uppercase mb-4">Скрыть происхождение</h2>
+      <ModalShell
+        open={!!confirmHide}
+        onClose={() => setConfirmHide(null)}
+        title="Скрыть происхождение"
+        size="sm"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={handleConfirmHide}
+              className="w-full sm:w-auto px-6 py-2 bg-site-red/20 text-site-red rounded font-medium transition-colors hover:bg-site-red/30"
+            >
+              Скрыть
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmHide(null)}
+              className="w-full sm:w-auto px-6 py-2 bg-white/10 text-white rounded font-medium transition-colors hover:bg-white/20"
+            >
+              Отмена
+            </button>
+          </>
+        }
+      >
+        {confirmHide && (
+          <>
             <p className="text-white mb-2">
               «{confirmHide.name}» перестанет показываться игрокам при создании персонажа.
             </p>
-            <p className="text-white/60 text-sm mb-6">
+            <p className="text-white/60 text-sm">
               Запись не удаляется: она останется в этом списке с пометкой «Скрыто от игроков»,
               и её можно вернуть кнопкой «Вернуть». Уже созданные персонажи не пострадают.
             </p>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <button
-                type="button"
-                onClick={handleConfirmHide}
-                className="px-6 py-2 bg-site-red/20 text-site-red rounded font-medium transition-colors hover:bg-site-red/30"
-              >
-                Скрыть
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmHide(null)}
-                className="px-6 py-2 bg-white/10 text-white rounded font-medium transition-colors hover:bg-white/20"
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )}
+          </>
+        )}
+      </ModalShell>
     </div>
   );
 };

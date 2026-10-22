@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { motion } from 'motion/react';
 import axios from 'axios';
 import { diffWords, type ChangeObject } from 'diff';
 import { BASE_URL } from '../../../api/api';
 import { formatServerDateTime } from '../../../utils/serverDate';
 import { htmlToPlainText, isFormattingOnlyChange } from '../../../utils/postText';
 import type { PostVersionEntry, PostVersionHistory } from './types';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 /**
  * FEAT-160 (T8): what a post used to say, and who changed it.
@@ -271,15 +271,6 @@ const PostVersionHistoryModal = ({ postId, onClose }: PostVersionHistoryModalPro
     void load();
   }, [load]);
 
-  // Esc closes — the modal is read-only, there is nothing to lose.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const versions = history?.versions ?? [];
   const current = versions[selected] ?? null;
   const previous = selected > 0 ? (versions[selected - 1] ?? null) : null;
@@ -319,208 +310,186 @@ const PostVersionHistoryModal = ({ postId, onClose }: PostVersionHistoryModalPro
     history !== null && versions.length <= 1 && !!history.post_edited_at;
 
   return (
-    <div className="modal-overlay p-3 sm:p-4" role="presentation">
-      <motion.div
-        role="dialog"
-        aria-modal="true"
-        aria-label="История правок поста"
-        initial={{ opacity: 0, scale: 0.97 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
-        className="modal-content gold-outline !w-[min(96vw,860px)] !max-w-[min(96vw,860px)]
-                   !p-4 sm:!p-6 max-h-[92vh] overflow-y-auto gold-scrollbar
-                   flex flex-col gap-4"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <h2 className="gold-text text-base sm:text-xl uppercase break-words">
-            История правок
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Закрыть"
-            title="Закрыть"
-            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-[8px] text-white/40
-                       hover:text-white transition-colors duration-200 ease-site"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+    // Esc closes (ModalShell) — the modal is read-only, there is nothing to
+    // lose. The backdrop stays inert, as before.
+    <ModalShell
+      open
+      onClose={onClose}
+      title="История правок"
+      size="xl"
+      closeOnBackdrop={false}
+      bodyClassName="flex flex-col gap-4"
+      footer={
+        <button type="button" onClick={onClose} className="btn-line w-full sm:w-auto text-xs px-4 py-1.5">
+          Закрыть
+        </button>
+      }
+    >
+      {loading && (
+        <div className="flex items-center gap-2.5 text-white/50 text-xs py-6">
+          <div className="w-4 h-4 border-2 border-gold/25 border-t-gold rounded-full animate-spin" />
+          Загружаем историю правок…
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="flex flex-col items-start gap-2.5 py-4">
+          <p className="text-site-red text-xs sm:text-sm break-words">{error}</p>
+          <button type="button" onClick={() => void load()} className="btn-line text-xs px-4 py-1.5">
+            Повторить
           </button>
         </div>
+      )}
 
-        {loading && (
-          <div className="flex items-center gap-2.5 text-white/50 text-xs py-6">
-            <div className="w-4 h-4 border-2 border-gold/25 border-t-gold rounded-full animate-spin" />
-            Загружаем историю правок…
-          </div>
-        )}
+      {!loading && !error && history && (
+        <>
+          {showLostOriginalBanner && (
+            <p className="text-gold/80 text-[11px] sm:text-xs leading-relaxed break-words
+                          border border-gold-dark/30 bg-gold/[0.06] rounded-card p-2.5">
+              Более ранние версии не сохранились: пост редактировали до появления истории
+              правок.
+            </p>
+          )}
 
-        {!loading && error && (
-          <div className="flex flex-col items-start gap-2.5 py-4">
-            <p className="text-site-red text-xs sm:text-sm break-words">{error}</p>
-            <button type="button" onClick={() => void load()} className="btn-line text-xs px-4 py-1.5">
-              Повторить
-            </button>
-          </div>
-        )}
+          {nothingToCompare ? (
+            <p className="text-white/55 text-xs sm:text-sm leading-relaxed break-words">
+              Пост редактировали до появления истории правок — сравнивать не с чем.
+              Ниже показан текущий текст поста.
+            </p>
+          ) : versions.length <= 1 ? (
+            <p className="text-white/55 text-xs sm:text-sm leading-relaxed break-words">
+              Пост ни разу не редактировали — сохранена одна версия.
+            </p>
+          ) : null}
 
-        {!loading && !error && history && (
-          <>
-            {showLostOriginalBanner && (
-              <p className="text-gold/80 text-[11px] sm:text-xs leading-relaxed break-words
-                            border border-gold-dark/30 bg-gold/[0.06] rounded-card p-2.5">
-                Более ранние версии не сохранились: пост редактировали до появления истории
-                правок.
-              </p>
-            )}
-
-            {nothingToCompare ? (
-              <p className="text-white/55 text-xs sm:text-sm leading-relaxed break-words">
-                Пост редактировали до появления истории правок — сравнивать не с чем.
-                Ниже показан текущий текст поста.
-              </p>
-            ) : versions.length <= 1 ? (
-              <p className="text-white/55 text-xs sm:text-sm leading-relaxed break-words">
-                Пост ни разу не редактировали — сохранена одна версия.
-              </p>
-            ) : null}
-
-            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 min-w-0">
-              {/* Version list. Newest first — that is where an admin looks.
-                  Below `sm` it collapses into a horizontal chip scroller so the
-                  diff still gets the width at 360px. */}
-              <div
-                className="flex sm:flex-col gap-1.5 shrink-0 sm:w-[210px]
-                           overflow-x-auto sm:overflow-x-visible sm:overflow-y-auto
-                           sm:max-h-[52vh] gold-scrollbar pb-1 sm:pb-0"
-                role="listbox"
-                aria-label="Версии поста"
-              >
-                {[...versions].reverse().map((entry) => {
-                  const index = versions.indexOf(entry);
-                  const active = index === selected;
-                  return (
-                    <button
-                      key={entry.version_no}
-                      type="button"
-                      role="option"
-                      aria-selected={active}
-                      onClick={() => setSelected(index)}
-                      className={`shrink-0 sm:shrink text-left rounded-card border px-2.5 py-2
-                                  transition-colors duration-200 ease-site min-w-[150px] sm:min-w-0
-                                  ${
-                                    active
-                                      ? 'border-gold-dark/50 bg-gold/[0.08] text-white'
-                                      : 'border-white/[0.07] bg-white/[0.02] text-white/60 hover:border-gold-dark/30 hover:text-white'
-                                  }`}
-                    >
-                      <span className="flex items-center gap-1.5 flex-wrap text-[11.5px] font-medium">
-                        Версия {entry.version_no}
-                        {entry.is_current && (
-                          <span className="text-gold text-[9px] font-bold uppercase tracking-[0.06em]
-                                           bg-gold/15 px-1.5 py-0.5 rounded-full">
-                            текущая
-                          </span>
-                        )}
-                      </span>
-                      <span className="block text-[10.5px] text-white/45 break-words">
-                        {authorLabel(entry)}
-                      </span>
-                      <span className="block text-[10.5px] text-white/35 break-words">
-                        {timeLabel(entry)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Diff pane */}
-              <div className="flex flex-col gap-2.5 min-w-0 flex-1">
-                {current && (
-                  <p className="text-white/40 text-[11px] leading-relaxed break-words">
-                    {previous ? (
-                      <>
-                        Сравнение: версия {previous.version_no} → версия {current.version_no}.
-                        Правку сделал {authorLabel(current)}, {timeLabel(current)}.
-                      </>
-                    ) : (
-                      <>
-                        Версия {current.version_no} — самая ранняя из сохранённых, сравнивать
-                        не с чем.
-                      </>
-                    )}
-                  </p>
-                )}
-
-                {previous ? (
-                  <>
-                    {formattingOnly && (
-                      <p className="text-gold/85 text-[11px] sm:text-xs leading-relaxed break-words
-                                    border border-gold-dark/30 bg-gold/[0.06] rounded-card p-2.5">
-                        Текст не изменился — правка коснулась только оформления.
-                      </p>
-                    )}
-
-                    {!formattingOnly && (
-                      <DiffPane
-                        runs={textDiff}
-                        before={htmlToPlainText(beforeHtml)}
-                        after={htmlToPlainText(afterHtml)}
-                        beforeCaption={`Версия ${previous.version_no}`}
-                        afterCaption={`Версия ${current?.version_no ?? ''}`}
-                        oversizeNotice="Правка слишком велика для пословного сравнения — версии показаны целиком."
-                      />
-                    )}
-
-                    {/* Always available, collapsed by default: the raw markup
-                        difference, as ESCAPED SOURCE TEXT. */}
-                    <div className="flex flex-col gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setMarkupOpen((prev) => !prev)}
-                        aria-expanded={markupOpen}
-                        className="self-start text-site-blue text-[11px] hover:text-white
-                                   transition-colors duration-200 ease-site break-words text-left"
-                      >
-                        {markupOpen ? 'Скрыть различия в разметке' : 'Показать различия в разметке'}
-                      </button>
-                      {markupOpen && (
-                        <div className="flex flex-col gap-2">
-                          <p className="text-white/35 text-[10.5px] leading-relaxed break-words">
-                            Исходный HTML показан как текст и не выполняется.
-                          </p>
-                          <DiffPane
-                            runs={markupDiff}
-                            before={beforeHtml}
-                            after={afterHtml}
-                            beforeCaption={`Разметка версии ${previous.version_no}`}
-                            afterCaption={`Разметка версии ${current?.version_no ?? ''}`}
-                            oversizeNotice="Разметка слишком велика для пословного сравнения — версии показаны целиком."
-                            mono
-                          />
-                        </div>
+          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 min-w-0">
+            {/* Version list. Newest first — that is where an admin looks.
+                Below `sm` it collapses into a horizontal chip scroller so the
+                diff still gets the width at 360px. */}
+            <div
+              className="flex sm:flex-col gap-1.5 shrink-0 sm:w-[210px]
+                         overflow-x-auto sm:overflow-x-visible sm:overflow-y-auto
+                         sm:max-h-[52vh] gold-scrollbar pb-1 sm:pb-0"
+              role="listbox"
+              aria-label="Версии поста"
+            >
+              {[...versions].reverse().map((entry) => {
+                const index = versions.indexOf(entry);
+                const active = index === selected;
+                return (
+                  <button
+                    key={entry.version_no}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    onClick={() => setSelected(index)}
+                    className={`shrink-0 sm:shrink text-left rounded-card border px-2.5 py-2
+                                transition-colors duration-200 ease-site min-w-[150px] sm:min-w-0
+                                ${
+                                  active
+                                    ? 'border-gold-dark/50 bg-gold/[0.08] text-white'
+                                    : 'border-white/[0.07] bg-white/[0.02] text-white/60 hover:border-gold-dark/30 hover:text-white'
+                                }`}
+                  >
+                    <span className="flex items-center gap-1.5 flex-wrap text-[11.5px] font-medium">
+                      Версия {entry.version_no}
+                      {entry.is_current && (
+                        <span className="text-gold text-[9px] font-bold uppercase tracking-[0.06em]
+                                         bg-gold/15 px-1.5 py-0.5 rounded-full">
+                          текущая
+                        </span>
                       )}
-                    </div>
-                  </>
-                ) : (
-                  <div className="text-[13px] sm:text-sm leading-relaxed whitespace-pre-wrap
-                                  break-words text-white/70 bg-black/25 rounded-card p-2.5 sm:p-3">
-                    {htmlToPlainText(afterHtml) || '(пусто)'}
-                  </div>
-                )}
-              </div>
+                    </span>
+                    <span className="block text-[10.5px] text-white/45 break-words">
+                      {authorLabel(entry)}
+                    </span>
+                    <span className="block text-[10.5px] text-white/35 break-words">
+                      {timeLabel(entry)}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
-          </>
-        )}
 
-        <div className="flex justify-end">
-          <button type="button" onClick={onClose} className="btn-line text-xs px-4 py-1.5">
-            Закрыть
-          </button>
-        </div>
-      </motion.div>
-    </div>
+            {/* Diff pane */}
+            <div className="flex flex-col gap-2.5 min-w-0 flex-1">
+              {current && (
+                <p className="text-white/40 text-[11px] leading-relaxed break-words">
+                  {previous ? (
+                    <>
+                      Сравнение: версия {previous.version_no} → версия {current.version_no}.
+                      Правку сделал {authorLabel(current)}, {timeLabel(current)}.
+                    </>
+                  ) : (
+                    <>
+                      Версия {current.version_no} — самая ранняя из сохранённых, сравнивать
+                      не с чем.
+                    </>
+                  )}
+                </p>
+              )}
+
+              {previous ? (
+                <>
+                  {formattingOnly && (
+                    <p className="text-gold/85 text-[11px] sm:text-xs leading-relaxed break-words
+                                  border border-gold-dark/30 bg-gold/[0.06] rounded-card p-2.5">
+                      Текст не изменился — правка коснулась только оформления.
+                    </p>
+                  )}
+
+                  {!formattingOnly && (
+                    <DiffPane
+                      runs={textDiff}
+                      before={htmlToPlainText(beforeHtml)}
+                      after={htmlToPlainText(afterHtml)}
+                      beforeCaption={`Версия ${previous.version_no}`}
+                      afterCaption={`Версия ${current?.version_no ?? ''}`}
+                      oversizeNotice="Правка слишком велика для пословного сравнения — версии показаны целиком."
+                    />
+                  )}
+
+                  {/* Always available, collapsed by default: the raw markup
+                      difference, as ESCAPED SOURCE TEXT. */}
+                  <div className="flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMarkupOpen((prev) => !prev)}
+                      aria-expanded={markupOpen}
+                      className="self-start text-site-blue text-[11px] hover:text-white
+                                 transition-colors duration-200 ease-site break-words text-left"
+                    >
+                      {markupOpen ? 'Скрыть различия в разметке' : 'Показать различия в разметке'}
+                    </button>
+                    {markupOpen && (
+                      <div className="flex flex-col gap-2">
+                        <p className="text-white/35 text-[10.5px] leading-relaxed break-words">
+                          Исходный HTML показан как текст и не выполняется.
+                        </p>
+                        <DiffPane
+                          runs={markupDiff}
+                          before={beforeHtml}
+                          after={afterHtml}
+                          beforeCaption={`Разметка версии ${previous.version_no}`}
+                          afterCaption={`Разметка версии ${current?.version_no ?? ''}`}
+                          oversizeNotice="Разметка слишком велика для пословного сравнения — версии показаны целиком."
+                          mono
+                        />
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="text-[13px] sm:text-sm leading-relaxed whitespace-pre-wrap
+                                break-words text-white/70 bg-black/25 rounded-card p-2.5 sm:p-3">
+                  {htmlToPlainText(afterHtml) || '(пусто)'}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </ModalShell>
   );
 };
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 import { useAppDispatch, useAppSelector } from '../../redux/store';
 import {
   fetchBlocks,
@@ -56,21 +56,17 @@ const MessengerSettings = ({ isOpen, onClose }: MessengerSettingsProps) => {
   };
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="modal-overlay" onClick={onClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="modal-content gold-outline gold-outline-thick w-full max-w-md mx-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="gold-text text-xl font-medium uppercase mb-6">
-              Настройки мессенджера
-            </h2>
-
+    <ModalShell
+      open={isOpen}
+      onClose={onClose}
+      title="Настройки мессенджера"
+      size="sm"
+      footer={
+        <button onClick={onClose} className="btn-line !text-sm w-full sm:w-auto">
+          Закрыть
+        </button>
+      }
+    >
             {/* Privacy setting */}
             <div className="mb-6">
               <label className="text-white/50 text-xs uppercase tracking-wider mb-2 block">
@@ -113,7 +109,7 @@ const MessengerSettings = ({ isOpen, onClose }: MessengerSettingsProps) => {
             </div>
 
             {/* Blocked users */}
-            <div className="mb-4">
+            <div>
               <label className="text-white/50 text-xs uppercase tracking-wider mb-2 block">
                 Заблокированные пользователи
               </label>
@@ -123,7 +119,7 @@ const MessengerSettings = ({ isOpen, onClose }: MessengerSettingsProps) => {
                   Нет заблокированных пользователей
                 </p>
               ) : (
-                <div className="max-h-[200px] overflow-y-auto gold-scrollbar border border-white/10 rounded-card">
+                <div className="border border-white/10 rounded-card">
                   {blocks.map((block) => (
                     <div
                       key={block.id}
@@ -144,19 +140,7 @@ const MessengerSettings = ({ isOpen, onClose }: MessengerSettingsProps) => {
               )}
             </div>
 
-            {/* Close button */}
-            <div className="flex justify-end mt-4">
-              <button
-                onClick={onClose}
-                className="btn-line !px-4 !py-1.5 !text-sm"
-              >
-                Закрыть
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+    </ModalShell>
   );
 };
 

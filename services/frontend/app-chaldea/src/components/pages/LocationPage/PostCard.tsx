@@ -3,6 +3,7 @@ import { Post, Player } from './types';
 import PlayerActionsMenu from './PlayerActionsMenu';
 import useNpcAttack from '../../../hooks/useNpcAttack';
 import ArchiveLinkPreview from '../../CommonComponents/ArchiveLinkPreview/ArchiveLinkPreview';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import { formatRelativeTime, parseServerDate, serverDateMs } from '../../../utils/serverDate';
 import { sanitizePostHtml } from '../../../utils/sanitizePostHtml';
 import { useAppSelector } from '../../../redux/store';
@@ -582,37 +583,25 @@ const PostCard = ({
 
       {/* Report / Deletion request modal */}
       {modalType && (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div
-            className="modal-content max-w-md w-full mx-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="gold-text text-base font-medium mb-3">
-              {modalType === 'report' ? 'Пожаловаться на пост' : 'Запрос на удаление поста'}
-            </h3>
-
-            <p className="text-white/50 text-xs mb-3 line-clamp-2">
-              {post.content}
-            </p>
-
-            <textarea
-              value={modalReason}
-              onChange={(e) => setModalReason(e.target.value)}
-              placeholder="Причина (необязательно)"
-              className="w-full bg-black/40 border border-white/10 rounded-card text-white text-sm p-3 resize-none h-20 focus:outline-none focus:border-site-blue/50 placeholder:text-white/30"
-            />
-
-            <div className="flex justify-end gap-3 mt-4">
+        <ModalShell
+          open
+          onClose={closeModal}
+          title={modalType === 'report' ? 'Пожаловаться на пост' : 'Запрос на удаление поста'}
+          size="sm"
+          dismissible={!modalSubmitting}
+          footer={
+            <>
               <button
                 onClick={closeModal}
-                className="btn-line text-xs px-4 py-1.5"
+                disabled={modalSubmitting}
+                className="btn-line w-full sm:w-auto text-xs px-4 py-1.5"
               >
                 Отмена
               </button>
               <button
                 onClick={handleModalSubmit}
                 disabled={modalSubmitting}
-                className="btn-blue text-xs px-4 py-1.5 disabled:opacity-50"
+                className="btn-blue w-full sm:w-auto text-xs px-4 py-1.5 disabled:opacity-50"
               >
                 {modalSubmitting
                   ? 'Отправка...'
@@ -620,9 +609,20 @@ const PostCard = ({
                     ? 'Отправить жалобу'
                     : 'Отправить запрос'}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <p className="text-white/50 text-xs mb-3 line-clamp-2">
+            {post.content}
+          </p>
+
+          <textarea
+            value={modalReason}
+            onChange={(e) => setModalReason(e.target.value)}
+            placeholder="Причина (необязательно)"
+            className="w-full bg-black/40 border border-white/10 rounded-card text-white text-sm p-3 resize-none h-20 focus:outline-none focus:border-site-blue/50 placeholder:text-white/30"
+          />
+        </ModalShell>
       )}
     </article>
   );

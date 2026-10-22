@@ -14,7 +14,7 @@ import {
 import { fetchInventory } from '../../../redux/slices/profileSlice';
 import type { RefineSource } from '../../../types/professions';
 import { RARITY_TEXT_COLORS } from '../../../constants/items';
-import ModalShell from '../shared/ModalShell';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import GoldIconFrame from '../shared/GoldIconFrame';
 import LoadingState from '../shared/LoadingState';
 

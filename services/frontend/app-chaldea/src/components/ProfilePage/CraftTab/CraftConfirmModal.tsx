@@ -1,7 +1,7 @@
 // FEAT-166: craft confirmation on the shared portaled ModalShell.
 import { Hammer } from 'lucide-react';
 import type { Recipe } from '../../../types/professions';
-import ModalShell from '../shared/ModalShell';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import ProfileCard from '../shared/ProfileCard';
 import GoldIconFrame from '../shared/GoldIconFrame';
 import LoadingState from '../shared/LoadingState';

@@ -21,7 +21,7 @@ import {
   WHETSTONE_GROUP_LABELS,
   WHETSTONE_GROUP_TARGETS,
 } from '../../../constants/professions';
-import ModalShell from '../shared/ModalShell';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import GoldIconFrame from '../shared/GoldIconFrame';
 import SectionHeader from '../shared/SectionHeader';
 import ProgressBar from '../shared/ProgressBar';

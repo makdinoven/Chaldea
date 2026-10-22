@@ -177,13 +177,9 @@ const EditCountryForm = ({ initialData, onCancel, onSuccess }: EditCountryFormPr
 
   return (
     <div
-      className="bg-[rgba(22,37,49,0.95)] p-8 rounded-lg text-[#d4e6f3] max-w-[800px] mx-auto shadow-[0_4px_20px_rgba(0,0,0,0.5)]"
+      className="text-[#d4e6f3]"
       onClick={(e) => e.stopPropagation()}
     >
-      <h2 className="text-center mb-8 text-[#a8c6df] uppercase tracking-wider text-xl font-medium">
-        {initialData ? 'ИЗМЕНЕНИЕ СТРАНЫ' : 'СОЗДАНИЕ СТРАНЫ'}
-      </h2>
-
       <form onSubmit={handleSubmit}>
         <div className="mb-6">
           <label className="block mb-2 text-[#8ab3d5] font-medium">ОБЛАСТЬ:</label>

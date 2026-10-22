@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { motion } from 'motion/react';
 import toast from 'react-hot-toast';
 import axios from 'axios';
 import { submitJoinRequest } from '../../../api/battles';
 import type { LocationBattleParticipant } from '../../../api/battles';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 interface JoinRequestModalProps {
   battleId: number;
@@ -69,87 +69,80 @@ const JoinRequestModal = ({
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
-        className="modal-content gold-outline gold-outline-thick max-w-md w-full mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="gold-text text-lg sm:text-xl font-medium uppercase mb-4">
-          Подать заявку
-        </h3>
-
-        <p className="text-white/70 text-sm mb-4">
-          Выберите команду, к которой хотите присоединиться:
-        </p>
-
-        {/* Team selection */}
-        <div className="flex flex-col sm:flex-row gap-3 mb-6">
-          {/* Team 1 (index 0) */}
-          <button
-            type="button"
-            onClick={() => setSelectedTeam(0)}
-            disabled={loading}
-            className={`flex-1 flex flex-col gap-2 p-3 sm:p-4 rounded-card border-2 transition-all duration-200 cursor-pointer ${
-              selectedTeam === 0
-                ? 'border-gold bg-gold/10'
-                : 'border-white/10 bg-white/5 hover:border-white/30 hover:bg-white/10'
-            } disabled:cursor-not-allowed disabled:opacity-50`}
-          >
-            <span
-              className={`text-sm font-medium uppercase tracking-wider ${
-                selectedTeam === 0 ? 'text-gold' : 'text-white/60'
-              }`}
-            >
-              Команда 1
-            </span>
-            {renderTeamMembers(team0)}
-          </button>
-
-          {/* Team 2 (index 1) */}
-          <button
-            type="button"
-            onClick={() => setSelectedTeam(1)}
-            disabled={loading}
-            className={`flex-1 flex flex-col gap-2 p-3 sm:p-4 rounded-card border-2 transition-all duration-200 cursor-pointer ${
-              selectedTeam === 1
-                ? 'border-gold bg-gold/10'
-                : 'border-white/10 bg-white/5 hover:border-white/30 hover:bg-white/10'
-            } disabled:cursor-not-allowed disabled:opacity-50`}
-          >
-            <span
-              className={`text-sm font-medium uppercase tracking-wider ${
-                selectedTeam === 1 ? 'text-gold' : 'text-white/60'
-              }`}
-            >
-              Команда 2
-            </span>
-            {renderTeamMembers(team1)}
-          </button>
-        </div>
-
-        {/* Buttons */}
-        <div className="flex justify-end gap-3">
+    <ModalShell
+      open
+      onClose={onClose}
+      title="Подать заявку"
+      size="sm"
+      dismissible={!loading}
+      footer={
+        <>
           <button
             onClick={onClose}
             disabled={loading}
-            className="btn-line text-xs sm:text-sm px-4 py-1.5"
+            className="btn-line w-full sm:w-auto text-xs sm:text-sm px-4 py-1.5"
           >
             Отмена
           </button>
           <button
             onClick={handleSubmit}
             disabled={selectedTeam === null || loading}
-            className="btn-blue text-xs sm:text-sm px-4 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn-blue w-full sm:w-auto text-xs sm:text-sm px-4 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? 'Отправка...' : 'Отправить заявку'}
           </button>
-        </div>
-      </motion.div>
-    </div>
+        </>
+      }
+    >
+      <p className="text-white/70 text-sm mb-4">
+        Выберите команду, к которой хотите присоединиться:
+      </p>
+
+      {/* Team selection */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        {/* Team 1 (index 0) */}
+        <button
+          type="button"
+          onClick={() => setSelectedTeam(0)}
+          disabled={loading}
+          className={`flex-1 flex flex-col gap-2 p-3 sm:p-4 rounded-card border-2 transition-all duration-200 cursor-pointer ${
+            selectedTeam === 0
+              ? 'border-gold bg-gold/10'
+              : 'border-white/10 bg-white/5 hover:border-white/30 hover:bg-white/10'
+          } disabled:cursor-not-allowed disabled:opacity-50`}
+        >
+          <span
+            className={`text-sm font-medium uppercase tracking-wider ${
+              selectedTeam === 0 ? 'text-gold' : 'text-white/60'
+            }`}
+          >
+            Команда 1
+          </span>
+          {renderTeamMembers(team0)}
+        </button>
+
+        {/* Team 2 (index 1) */}
+        <button
+          type="button"
+          onClick={() => setSelectedTeam(1)}
+          disabled={loading}
+          className={`flex-1 flex flex-col gap-2 p-3 sm:p-4 rounded-card border-2 transition-all duration-200 cursor-pointer ${
+            selectedTeam === 1
+              ? 'border-gold bg-gold/10'
+              : 'border-white/10 bg-white/5 hover:border-white/30 hover:bg-white/10'
+          } disabled:cursor-not-allowed disabled:opacity-50`}
+        >
+          <span
+            className={`text-sm font-medium uppercase tracking-wider ${
+              selectedTeam === 1 ? 'text-gold' : 'text-white/60'
+            }`}
+          >
+            Команда 2
+          </span>
+          {renderTeamMembers(team1)}
+        </button>
+      </div>
+    </ModalShell>
   );
 };
 

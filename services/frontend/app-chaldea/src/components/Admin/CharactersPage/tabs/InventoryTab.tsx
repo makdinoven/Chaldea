@@ -15,6 +15,7 @@ import {
 import { searchItemsCatalog } from '../../../../api/adminCharacters';
 import { EQUIPMENT_SLOT_ORDER, EQUIPMENT_SLOT_LABELS } from '../../../ProfilePage/constants';
 import type { ItemData } from '../types';
+import ModalShell from '../../../CommonComponents/ModalShell/ModalShell';
 
 interface InventoryTabProps {
   characterId: number;
@@ -329,65 +330,55 @@ const InventoryTab = ({ characterId }: InventoryTabProps) => {
       </div>
 
       {/* Delete item confirmation modal */}
-      <AnimatePresence>
+      <ModalShell
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Удаление предмета"
+        size="sm"
+        footer={
+          <>
+            <button className="btn-blue w-full sm:w-auto" onClick={handleRemoveItem}>
+              Удалить
+            </button>
+            <button className="btn-line w-full sm:w-auto sm:px-6" onClick={() => setDeleteTarget(null)}>
+              Отмена
+            </button>
+          </>
+        }
+      >
         {deleteTarget && (
-          <div className="modal-overlay" onClick={() => setDeleteTarget(null)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h2 className="gold-text text-2xl uppercase mb-4">Удаление предмета</h2>
-              <p className="text-white mb-6">
-                Удалить предмет{' '}
-                <span className="text-gold font-medium">{deleteTarget.name}</span> из инвентаря?
-              </p>
-              <div className="flex gap-4">
-                <button className="btn-blue" onClick={handleRemoveItem}>
-                  Удалить
-                </button>
-                <button className="btn-line" onClick={() => setDeleteTarget(null)}>
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
+          <p className="text-white">
+            Удалить предмет{' '}
+            <span className="text-gold font-medium">{deleteTarget.name}</span> из инвентаря?
+          </p>
         )}
-      </AnimatePresence>
+      </ModalShell>
 
       {/* Unequip confirmation modal */}
-      <AnimatePresence>
+      <ModalShell
+        open={!!unequipTarget}
+        onClose={() => setUnequipTarget(null)}
+        title="Снять предмет"
+        size="sm"
+        footer={
+          <>
+            <button className="btn-blue w-full sm:w-auto" onClick={handleUnequip}>
+              Снять
+            </button>
+            <button className="btn-line w-full sm:w-auto sm:px-6" onClick={() => setUnequipTarget(null)}>
+              Отмена
+            </button>
+          </>
+        }
+      >
         {unequipTarget && (
-          <div className="modal-overlay" onClick={() => setUnequipTarget(null)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h2 className="gold-text text-2xl uppercase mb-4">Снять предмет</h2>
-              <p className="text-white mb-6">
-                Снять{' '}
-                <span className="text-gold font-medium">{unequipTarget.name}</span> со слота{' '}
-                {EQUIPMENT_SLOT_LABELS[unequipTarget.slotType] ?? unequipTarget.slotType}?
-              </p>
-              <div className="flex gap-4">
-                <button className="btn-blue" onClick={handleUnequip}>
-                  Снять
-                </button>
-                <button className="btn-line" onClick={() => setUnequipTarget(null)}>
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-          </div>
+          <p className="text-white">
+            Снять{' '}
+            <span className="text-gold font-medium">{unequipTarget.name}</span> со слота{' '}
+            {EQUIPMENT_SLOT_LABELS[unequipTarget.slotType] ?? unequipTarget.slotType}?
+          </p>
         )}
-      </AnimatePresence>
+      </ModalShell>
     </motion.div>
   );
 };

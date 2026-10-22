@@ -12,10 +12,16 @@ import {
   type TeleportOption,
 } from '../../../redux/slices/teleportSlice';
 import { setCharacterAfterTeleport } from '../../../redux/slices/userSlice';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 interface TeleportMenuProps {
   npcId: number;
   npcName: string;
+  /**
+   * Reports whether the destinations dialog is open, so a parent modal can
+   * hand Escape over to it instead of closing underneath it.
+   */
+  onOpenChange?: (open: boolean) => void;
 }
 
 const formatCooldown = (seconds: number): string => {
@@ -25,7 +31,7 @@ const formatCooldown = (seconds: number): string => {
   return `${h} ч ${m} мин`;
 };
 
-const TeleportMenu = ({ npcId, npcName }: TeleportMenuProps) => {
+const TeleportMenu = ({ npcId, npcName, onOpenChange }: TeleportMenuProps) => {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
 
@@ -46,6 +52,14 @@ const TeleportMenu = ({ npcId, npcName }: TeleportMenuProps) => {
       dispatch(fetchTeleportOptions(npcId));
     }
   }, [open, npcId, dispatch]);
+
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
+
+  // Unmounting with the dialog open (e.g. the parent closed) must not leave
+  // the parent thinking it is still covered.
+  useEffect(() => () => onOpenChange?.(false), [onOpenChange]);
 
   const handleOpen = () => setOpen(true);
   const handleClose = () => {
@@ -94,127 +108,93 @@ const TeleportMenu = ({ npcId, npcName }: TeleportMenuProps) => {
         Телепорт
       </button>
 
-      {open && (
-        <div
-          className="modal-overlay !bg-black/80"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) handleClose();
-          }}
-        >
-          <div className="modal-content gold-outline gold-outline-thick relative max-w-lg w-full mx-4">
-            <button
-              onClick={handleClose}
-              className="absolute top-4 right-4 text-white/50 hover:text-white transition-colors z-10"
-              aria-label="Закрыть"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+      <ModalShell
+        open={open}
+        onClose={handleClose}
+        title={`Телепорт — ${npcName}`}
+        size="md"
+        dismissible={!confirming}
+      >
+        {cooldownActive && (
+          <p className="text-yellow-400 text-sm text-center mb-3">
+            Телепорт будет доступен через {formatCooldown(cooldownSecondsRemaining)}
+          </p>
+        )}
 
-            <h2 className="gold-text text-lg sm:text-xl font-medium uppercase text-center mb-4">
-              Телепорт — {npcName}
-            </h2>
+        {loading && (
+          <div className="flex items-center justify-center py-8">
+            <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
+          </div>
+        )}
 
-            {cooldownActive && (
-              <p className="text-yellow-400 text-sm text-center mb-3">
-                Телепорт будет доступен через {formatCooldown(cooldownSecondsRemaining)}
-              </p>
-            )}
+        {optionsError && !loading && (
+          <p className="text-site-red text-sm text-center mb-3">{optionsError}</p>
+        )}
 
-            {loading && (
-              <div className="flex items-center justify-center py-8">
-                <div className="w-8 h-8 border-4 border-white/30 border-t-gold rounded-full animate-spin" />
-              </div>
-            )}
+        {executeError && (
+          <p className="text-site-red text-sm text-center mb-3">{executeError}</p>
+        )}
 
-            {optionsError && !loading && (
-              <p className="text-site-red text-sm text-center mb-3">{optionsError}</p>
-            )}
+        {!loading && options && options.length === 0 && (
+          <p className="text-white/60 text-sm text-center py-6">
+            Нет доступных направлений
+          </p>
+        )}
 
-            {executeError && (
-              <p className="text-site-red text-sm text-center mb-3">{executeError}</p>
-            )}
-
-            {!loading && options && options.length === 0 && (
-              <p className="text-white/60 text-sm text-center py-6">
-                Нет доступных направлений
-              </p>
-            )}
-
-            {!loading && options && options.length > 0 && (
-              <div className="flex flex-col gap-2 max-h-[60vh] overflow-y-auto gold-scrollbar pr-1">
-                {options.map((opt) => (
-                  <div
-                    key={opt.link_id}
+        {!loading && options && options.length > 0 && (
+          <div className="flex flex-col gap-2">
+            {options.map((opt) => (
+              <div
+                key={opt.link_id}
+                className="
+                  flex flex-col sm:flex-row sm:items-center sm:justify-between
+                  gap-2 p-3 rounded-card bg-white/5 border border-white/10
+                "
+              >
+                <div className="flex flex-col">
+                  <span className="text-white text-sm font-medium">
+                    {opt.to_location_name}
+                  </span>
+                  <span className="text-white/50 text-xs">{opt.to_npc_name}</span>
+                </div>
+                <div className="flex items-center gap-3 justify-between sm:justify-end">
+                  <span className="gold-text text-sm font-medium whitespace-nowrap">
+                    {opt.cost_gold} зол.
+                  </span>
+                  <button
+                    onClick={() => setConfirming(opt)}
+                    disabled={executing || cooldownActive}
                     className="
-                      flex flex-col sm:flex-row sm:items-center sm:justify-between
-                      gap-2 p-3 rounded-card bg-white/5 border border-white/10
+                      px-3 py-1.5 rounded-card text-xs sm:text-sm font-medium uppercase
+                      border border-gold/50 bg-gold/10 text-gold
+                      hover:bg-gold/20 hover:border-gold/80
+                      transition-all duration-200
+                      disabled:opacity-50 disabled:cursor-not-allowed
                     "
                   >
-                    <div className="flex flex-col">
-                      <span className="text-white text-sm font-medium">
-                        {opt.to_location_name}
-                      </span>
-                      <span className="text-white/50 text-xs">{opt.to_npc_name}</span>
-                    </div>
-                    <div className="flex items-center gap-3 justify-between sm:justify-end">
-                      <span className="gold-text text-sm font-medium whitespace-nowrap">
-                        {opt.cost_gold} зол.
-                      </span>
-                      <button
-                        onClick={() => setConfirming(opt)}
-                        disabled={executing || cooldownActive}
-                        className="
-                          px-3 py-1.5 rounded-card text-xs sm:text-sm font-medium uppercase
-                          border border-gold/50 bg-gold/10 text-gold
-                          hover:bg-gold/20 hover:border-gold/80
-                          transition-all duration-200
-                          disabled:opacity-50 disabled:cursor-not-allowed
-                        "
-                      >
-                        Телепортироваться
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                    Телепортироваться
+                  </button>
+                </div>
               </div>
-            )}
+            ))}
           </div>
-        </div>
-      )}
+        )}
+      </ModalShell>
 
       {confirming && (
-        <div
-          className="modal-overlay !bg-black/90"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setConfirming(null);
-          }}
-        >
-          <div className="modal-content gold-outline gold-outline-thick relative max-w-md w-full mx-4">
-            <h3 className="gold-text text-lg font-medium uppercase text-center mb-4">
-              Подтверждение
-            </h3>
-            <p className="text-white/80 text-sm text-center mb-2">
-              Телепортироваться в локацию
-            </p>
-            <p className="text-white text-base text-center font-medium mb-2">
-              {confirming.to_location_name}
-            </p>
-            <p className="text-white/60 text-sm text-center mb-4">
-              Стоимость: <span className="gold-text font-medium">{confirming.cost_gold} зол.</span>
-            </p>
-
-            {executeError && (
-              <p className="text-site-red text-sm text-center mb-3">{executeError}</p>
-            )}
-
-            <div className="flex flex-col sm:flex-row gap-2 justify-center">
+        <ModalShell
+          open
+          onClose={() => setConfirming(null)}
+          title="Подтверждение"
+          size="sm"
+          dismissible={!executing}
+          footer={
+            <>
               <button
                 onClick={() => setConfirming(null)}
                 disabled={executing}
                 className="
-                  flex-1 px-4 py-2 rounded-card text-sm font-medium uppercase
+                  w-full sm:w-auto px-4 py-2 rounded-card text-sm font-medium uppercase
                   border border-white/30 text-white/80
                   hover:bg-white/10 transition-all duration-200
                   disabled:opacity-50 disabled:cursor-not-allowed
@@ -226,7 +206,7 @@ const TeleportMenu = ({ npcId, npcName }: TeleportMenuProps) => {
                 onClick={handleExecute}
                 disabled={executing}
                 className="
-                  flex-1 px-4 py-2 rounded-card text-sm font-medium uppercase
+                  w-full sm:w-auto px-4 py-2 rounded-card text-sm font-medium uppercase
                   border border-gold/50 bg-gold/10 text-gold
                   hover:bg-gold/20 hover:border-gold/80
                   transition-all duration-200
@@ -235,9 +215,23 @@ const TeleportMenu = ({ npcId, npcName }: TeleportMenuProps) => {
               >
                 {executing ? 'Телепортация...' : 'Подтвердить'}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <p className="text-white/80 text-sm text-center mb-2">
+            Телепортироваться в локацию
+          </p>
+          <p className="text-white text-base text-center font-medium mb-2">
+            {confirming.to_location_name}
+          </p>
+          <p className="text-white/60 text-sm text-center">
+            Стоимость: <span className="gold-text font-medium">{confirming.cost_gold} зол.</span>
+          </p>
+
+          {executeError && (
+            <p className="text-site-red text-sm text-center mt-3">{executeError}</p>
+          )}
+        </ModalShell>
       )}
     </>
   );

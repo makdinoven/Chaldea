@@ -1,6 +1,3 @@
-import { useEffect } from 'react';
-import { createPortal } from 'react-dom';
-import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
 import {
@@ -9,6 +6,7 @@ import {
   repairItem,
 } from '../../../redux/slices/profileSlice';
 import type { InventoryItem } from '../../../redux/slices/profileSlice';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 interface RepairModalProps {
   isOpen: boolean;
@@ -26,15 +24,6 @@ const RepairModal = ({ isOpen, characterId, inventoryItem, source, onClose }: Re
   const repairKits = inventory.filter(
     (inv) => inv.item.repair_power != null && inv.item.repair_power > 0,
   );
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [isOpen, onClose]);
 
   const handleRepair = async (repairKitItemId: number) => {
     try {
@@ -60,39 +49,28 @@ const RepairModal = ({ isOpen, characterId, inventoryItem, source, onClose }: Re
     }
   };
 
-  return createPortal(
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          key="repair-modal-overlay"
-          className="modal-overlay"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
-          onClick={onClose}
-        >
-          <motion.div
-            className="modal-content gold-outline gold-outline-thick max-w-sm mx-4"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="gold-text text-xl font-medium uppercase mb-2 text-center">
-              Починить
-            </h2>
+  return (
+    <ModalShell
+      open={isOpen}
+      onClose={onClose}
+      title="Починить"
+      size="sm"
+      footer={
+        <button onClick={onClose} className="btn-line w-full sm:w-auto">
+          Отмена
+        </button>
+      }
+    >
             <p className="text-white text-sm text-center mb-4">
               {inventoryItem.item.name}
             </p>
 
             {repairKits.length === 0 ? (
-              <p className="text-white/50 text-sm text-center mb-4">
+              <p className="text-white/50 text-sm text-center">
                 Нет ремонт-комплектов в инвентаре
               </p>
             ) : (
-              <div className="flex flex-col gap-2 mb-4">
+              <div className="flex flex-col gap-2">
                 {repairKits.map((kit) => (
                   <button
                     key={kit.id}
@@ -132,14 +110,7 @@ const RepairModal = ({ isOpen, characterId, inventoryItem, source, onClose }: Re
               </div>
             )}
 
-            <button onClick={onClose} className="btn-line w-full">
-              Отмена
-            </button>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>,
-    document.body,
+    </ModalShell>
   );
 };
 

@@ -1,4 +1,4 @@
-import { motion } from 'motion/react';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 export interface ConfirmDialogProps {
   /** Modal heading. */
@@ -16,10 +16,9 @@ export interface ConfirmDialogProps {
 }
 
 /**
- * Small reusable confirmation modal built on the design-system
- * `modal-overlay` / `modal-content` / `gold-outline` classes.
+ * Small reusable confirmation modal on the site's ModalShell.
  * Generic on purpose — it is reused for «Отмена», draft overwrite and
- * draft deletion.
+ * draft deletion. Callers mount it conditionally, so it is always open.
  */
 const ConfirmDialog = ({
   title,
@@ -31,25 +30,14 @@ const ConfirmDialog = ({
   onCancel,
 }: ConfirmDialogProps) => {
   return (
-    <div
-      className="modal-overlay p-4"
-      role="presentation"
-      onClick={onCancel}
-    >
-      <motion.div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        initial={{ opacity: 0, scale: 0.96 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
-        className="modal-content gold-outline gold-outline-thick !w-[min(92vw,480px)] !max-w-[min(92vw,480px)] !p-5 sm:!p-7"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="gold-text text-lg sm:text-xl uppercase mb-3 break-words">{title}</h2>
-        <p className="text-white/80 text-sm mb-6 break-words">{message}</p>
-        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2.5 sm:gap-3">
-          <button type="button" className="btn-line !text-xs !py-2 !px-5" onClick={onCancel}>
+    <ModalShell
+      open
+      onClose={onCancel}
+      title={title}
+      size="sm"
+      footer={
+        <>
+          <button type="button" className="btn-line w-full sm:w-auto !text-xs !py-2 !px-5" onClick={onCancel}>
             {cancelLabel}
           </button>
           <button
@@ -57,16 +45,18 @@ const ConfirmDialog = ({
             autoFocus
             className={
               danger
-                ? 'px-5 py-2 rounded-[10px] border border-site-red/60 text-site-red text-xs font-medium hover:bg-site-red/10 transition-colors duration-200 ease-site'
-                : 'btn-blue !py-2 !px-5 !text-xs'
+                ? 'w-full sm:w-auto px-5 py-2 rounded-[10px] border border-site-red/60 text-site-red text-xs font-medium hover:bg-site-red/10 transition-colors duration-200 ease-site'
+                : 'btn-blue w-full sm:w-auto !py-2 !px-5 !text-xs'
             }
             onClick={onConfirm}
           >
             {confirmLabel}
           </button>
-        </div>
-      </motion.div>
-    </div>
+        </>
+      }
+    >
+      <p className="text-white/80 text-sm break-words">{message}</p>
+    </ModalShell>
   );
 };
 

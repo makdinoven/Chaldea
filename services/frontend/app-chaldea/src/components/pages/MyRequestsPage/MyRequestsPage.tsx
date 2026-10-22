@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
@@ -16,6 +15,7 @@ import CharacterPassport, {
   fromModerationRequest,
 } from '../../CommonComponents/CharacterPassport';
 import RequestEditor from './RequestEditor';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import { serverDateMs } from '../../../utils/serverDate';
 
 /**
@@ -178,16 +178,6 @@ export default function MyRequestsPage() {
     [requests, openId],
   );
 
-  // Escape closes the unfolded application — the modal is a reading view.
-  useEffect(() => {
-    if (!opened) return undefined;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpenId(null);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [opened]);
-
   /**
    * Rule 30a — ONLY a rejected application may be reworked. Rendered on the
    * collapsed card (so the player can act without opening it) and again inside
@@ -297,62 +287,38 @@ export default function MyRequestsPage() {
       )}
 
       {/*
-        The unfolded application. Portalled to `document.body` on purpose, the
-        same fix `CharactersListPage` and `AdminOrigins` carry: this page sits
-        inside a transformed ancestor, which becomes the containing block for
-        `position: fixed` children — `.modal-overlay`'s `inset: 0` would then
-        resolve against the scrolling page instead of the viewport and the sheet
-        would climb out of the top of the screen, under the site header.
+        The unfolded application — a reading view, so Escape and the backdrop
+        close it. ModalShell portals it to `document.body` (this page sits
+        inside a transformed ancestor, which would otherwise become the
+        containing block for `position: fixed`) and scrolls the passport inside
+        its body while the frame and close button stay put.
       */}
-      {opened &&
-        createPortal(
-          <div className="modal-overlay" onClick={() => setOpenId(null)}>
-            {/*
-              Two boxes, as on the characters grid: the outer one is the frame,
-              so «Закрыть» stays pinned while the inner one scrolls the passport
-              inside 90vh instead of growing off the display.
-            */}
-            <div
-              className="relative mx-4 my-auto w-full max-w-4xl"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <button
-                type="button"
-                onClick={() => setOpenId(null)}
-                aria-label="Закрыть"
-                className="absolute right-3 top-3 z-10 text-ink/60 transition-colors hover:text-ink"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-              <div className="gold-scrollbar max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-card">
-                <CharacterPassport
-                  data={toPassport(opened)}
-                  variant="full"
-                  currentGameYear={currentGameYear}
-                  audience="self"
-                  footer={
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <p className="lore-body text-ink-muted text-sm">
-                        {STATUS_HINTS[opened.status] ?? ''}
-                      </p>
-                      {editButton(opened)}
-                    </div>
-                  }
-                />
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )}
+      {opened && (
+        <ModalShell
+          open
+          onClose={() => setOpenId(null)}
+          title={opened.name || 'Заявка на персонажа'}
+          size="xl"
+          bodyClassName="p-2 sm:p-3"
+        >
+          <div className="overflow-x-hidden rounded-card">
+            <CharacterPassport
+              data={toPassport(opened)}
+              variant="full"
+              currentGameYear={currentGameYear}
+              audience="self"
+              footer={
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="lore-body text-ink-muted text-sm">
+                    {STATUS_HINTS[opened.status] ?? ''}
+                  </p>
+                  {editButton(opened)}
+                </div>
+              }
+            />
+          </div>
+        </ModalShell>
+      )}
     </div>
   );
 }

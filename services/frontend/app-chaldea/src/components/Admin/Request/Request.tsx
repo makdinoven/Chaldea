@@ -9,6 +9,7 @@ import type { OriginCountry } from '../../../api/origins';
 import CharacterPassport, {
   fromModerationRequest,
 } from '../../CommonComponents/CharacterPassport';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 /**
  * FEAT-154 (task #21) — the moderator's view of one character request.
@@ -191,54 +192,52 @@ const Request = ({
         footer={footer}
       />
 
-      {rejectOpen && (
-        <div className="modal-overlay" onClick={() => !busy && setRejectOpen(false)}>
-          <div
-            className="modal-content gold-outline gold-outline-thick relative mx-4 w-full max-w-lg"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="gold-text mb-4 text-lg font-medium uppercase sm:text-xl">
-              Отклонить заявку
-            </h2>
-            <p className="text-white/70 mb-3 text-sm">
-              Причина будет отправлена игроку вместе с уведомлением. Поле можно оставить пустым.
-            </p>
-            <textarea
-              value={reason}
-              onChange={(e) => setReason(e.target.value.slice(0, MAX_REJECTION_REASON_LENGTH))}
-              maxLength={MAX_REJECTION_REASON_LENGTH}
-              rows={5}
-              placeholder="Например: описание внешности не соответствует выбранной подрасе"
-              className="textarea-bordered w-full !text-sm"
-            />
-            <p
-              className={`mt-1 text-right text-xs ${
-                remaining === 0 ? 'text-site-red' : 'text-white/40'
-              }`}
+      <ModalShell
+        open={rejectOpen}
+        onClose={() => setRejectOpen(false)}
+        title="Отклонить заявку"
+        size="md"
+        dismissible={!busy}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={handleReject}
+              disabled={busy}
+              className="btn-blue w-full sm:w-auto !text-sm disabled:opacity-50"
             >
-              Осталось символов: {remaining}
-            </p>
-            <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-center">
-              <button
-                type="button"
-                onClick={handleReject}
-                disabled={busy}
-                className="btn-blue !text-sm disabled:opacity-50"
-              >
-                {busy ? 'Отправка...' : 'Отклонить заявку'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setRejectOpen(false)}
-                disabled={busy}
-                className="btn-line !text-sm disabled:opacity-50"
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+              {busy ? 'Отправка...' : 'Отклонить заявку'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setRejectOpen(false)}
+              disabled={busy}
+              className="btn-line w-full sm:w-auto sm:px-6 !text-sm disabled:opacity-50"
+            >
+              Отмена
+            </button>
+          </>
+        }
+      >
+        <p className="text-white/70 mb-3 text-sm">
+          Причина будет отправлена игроку вместе с уведомлением. Поле можно оставить пустым.
+        </p>
+        <textarea
+          value={reason}
+          onChange={(e) => setReason(e.target.value.slice(0, MAX_REJECTION_REASON_LENGTH))}
+          maxLength={MAX_REJECTION_REASON_LENGTH}
+          rows={5}
+          placeholder="Например: описание внешности не соответствует выбранной подрасе"
+          className="textarea-bordered w-full !text-sm"
+        />
+        <p
+          className={`mt-1 text-right text-xs ${
+            remaining === 0 ? 'text-site-red' : 'text-white/40'
+          }`}
+        >
+          Осталось символов: {remaining}
+        </p>
+      </ModalShell>
     </div>
   );
 };

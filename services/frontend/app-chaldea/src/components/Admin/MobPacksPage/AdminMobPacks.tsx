@@ -16,6 +16,7 @@ import {
   type ActiveMobPack,
 } from '../../../api/mobPacks';
 import { fetchMobTemplates, type MobTemplateListItem } from '../../../api/mobs';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 interface LocationOption {
   id: number;
@@ -475,242 +476,236 @@ const AdminMobPacks = () => {
       )}
 
       {/* ── Form modal ── */}
-      {formOpen && (
-        <div className="modal-overlay" onClick={() => !saving && setFormOpen(false)}>
-          <div
-            className="modal-content max-w-[560px] w-full max-h-[90vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="gold-text text-xl font-medium mb-4">
-              {editingId != null ? 'Редактирование стаи' : 'Новая стая'}
-            </h2>
+      <ModalShell
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        title={editingId != null ? 'Редактирование стаи' : 'Новая стая'}
+        size="md"
+        dismissible={!saving}
+        footer={
+          <>
+            <button
+              onClick={() => setFormOpen(false)}
+              disabled={saving}
+              className="w-full sm:w-auto text-sm px-4 py-2 rounded border border-white/20 text-white/70 hover:bg-white/5"
+            >
+              Отмена
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="btn-blue w-full sm:w-auto text-sm px-6 py-2 disabled:opacity-50"
+            >
+              {saving ? 'Сохранение...' : 'Сохранить'}
+            </button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <label className="flex flex-col gap-1">
+            <span className="text-white/60 text-xs uppercase">Название</span>
+            <input
+              type="text"
+              value={form.name}
+              onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+              className="input-underline"
+              placeholder="Например, Стая волков"
+            />
+          </label>
 
-            <div className="flex flex-col gap-4">
-              <label className="flex flex-col gap-1">
-                <span className="text-white/60 text-xs uppercase">Название</span>
+          <label className="flex flex-col gap-1">
+            <span className="text-white/60 text-xs uppercase">Описание</span>
+            <textarea
+              value={form.description}
+              onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+              className="input-underline resize-none"
+              rows={2}
+            />
+          </label>
+
+          <div className="flex flex-col gap-2">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.respawn_enabled}
+                onChange={(e) => setForm((p) => ({ ...p, respawn_enabled: e.target.checked }))}
+                className="w-4 h-4 accent-gold"
+              />
+              <span className="text-white/80 text-sm">
+                Респавн стаи (возрождается целиком)
+              </span>
+            </label>
+            {form.respawn_enabled && (
+              <label className="flex items-center gap-2 pl-6">
+                <span className="text-white/50 text-xs">через</span>
                 <input
-                  type="text"
-                  value={form.name}
-                  onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                  className="input-underline"
-                  placeholder="Например, Стая волков"
+                  type="number"
+                  min={1}
+                  value={form.respawn_seconds ?? ''}
+                  onChange={(e) =>
+                    setForm((p) => ({
+                      ...p,
+                      respawn_seconds: e.target.value === '' ? null : Number(e.target.value),
+                    }))
+                  }
+                  className="input-underline !text-sm w-24"
                 />
+                <span className="text-white/50 text-xs">сек.</span>
               </label>
-
-              <label className="flex flex-col gap-1">
-                <span className="text-white/60 text-xs uppercase">Описание</span>
-                <textarea
-                  value={form.description}
-                  onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
-                  className="input-underline resize-none"
-                  rows={2}
-                />
-              </label>
-
-              <div className="flex flex-col gap-2">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={form.respawn_enabled}
-                    onChange={(e) => setForm((p) => ({ ...p, respawn_enabled: e.target.checked }))}
-                    className="w-4 h-4 accent-gold"
-                  />
-                  <span className="text-white/80 text-sm">
-                    Респавн стаи (возрождается целиком)
-                  </span>
-                </label>
-                {form.respawn_enabled && (
-                  <label className="flex items-center gap-2 pl-6">
-                    <span className="text-white/50 text-xs">через</span>
-                    <input
-                      type="number"
-                      min={1}
-                      value={form.respawn_seconds ?? ''}
-                      onChange={(e) =>
-                        setForm((p) => ({
-                          ...p,
-                          respawn_seconds: e.target.value === '' ? null : Number(e.target.value),
-                        }))
-                      }
-                      className="input-underline !text-sm w-24"
-                    />
-                    <span className="text-white/50 text-xs">сек.</span>
-                  </label>
-                )}
-              </div>
-
-              {/* Composition */}
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-white/60 text-xs uppercase">Состав</span>
-                  <span className={`text-xs ${overCap ? 'text-amber-300' : 'text-white/40'}`}>
-                    {totalMobs} мобов
-                    {overCap && ` · в бою только ${BATTLE_MAX_TEAM_SIZE}`}
-                  </span>
-                </div>
-
-                {form.members.length > 0 && (
-                  <div className="flex flex-col gap-2">
-                    {form.members.map((m) => (
-                      <div
-                        key={m.mob_template_id}
-                        className="bg-white/[0.04] rounded-card p-2 flex items-center gap-2"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <span className="text-white text-sm truncate block">{m.name}</span>
-                          <span className="text-white/40 text-[10px]">
-                            {TIER_LABELS[m.tier] || m.tier}
-                          </span>
-                        </div>
-                        <label className="flex items-center gap-1">
-                          <span className="text-white/40 text-[10px]">×</span>
-                          <input
-                            type="number"
-                            min={1}
-                            value={m.quantity}
-                            onChange={(e) => changeMemberQty(m.mob_template_id, e.target.value)}
-                            className="input-underline !text-sm w-16"
-                          />
-                        </label>
-                        <button
-                          onClick={() => removeMember(m.mob_template_id)}
-                          className="text-site-red text-xs hover:text-white px-2"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Searchable mob picker */}
-                <div className="flex flex-col gap-2">
-                  <input
-                    type="text"
-                    value={mobSearch}
-                    onChange={(e) => setMobSearch(e.target.value)}
-                    placeholder="Найти моба по имени..."
-                    className="input-underline"
-                  />
-                  <div className="max-h-56 overflow-y-auto rounded-card border border-white/10 divide-y divide-white/5">
-                    {templatesLoading ? (
-                      <p className="text-white/40 text-xs p-3">Загрузка мобов...</p>
-                    ) : templatesError ? (
-                      <p className="text-site-red text-xs p-3">{templatesError}</p>
-                    ) : availableTemplates.length === 0 ? (
-                      <p className="text-white/40 text-xs p-3">
-                        {mobSearch.trim()
-                          ? 'Мобы не найдены'
-                          : form.members.length > 0
-                            ? 'Все доступные мобы уже добавлены'
-                            : 'Нет доступных мобов'}
-                      </p>
-                    ) : (
-                      availableTemplates.map((t) => (
-                        <button
-                          key={t.id}
-                          type="button"
-                          onClick={() => addMember(t.id)}
-                          className="w-full text-left px-3 py-2 flex items-center justify-between gap-2 hover:bg-white/5 transition-colors"
-                        >
-                          <span className="text-white text-sm truncate">{t.name}</span>
-                          <span className="text-white/40 text-[10px] whitespace-nowrap">
-                            {TIER_LABELS[t.tier] || t.tier} · ур. {t.level}
-                          </span>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-2 justify-end mt-6">
-              <button
-                onClick={() => setFormOpen(false)}
-                disabled={saving}
-                className="text-sm px-4 py-2 rounded border border-white/20 text-white/70 hover:bg-white/5"
-              >
-                Отмена
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="btn-blue text-sm px-6 py-2 disabled:opacity-50"
-              >
-                {saving ? 'Сохранение...' : 'Сохранить'}
-              </button>
-            </div>
+            )}
           </div>
-        </div>
-      )}
 
-      {/* ── Placement modal ── */}
-      {placingPack && (
-        <div className="modal-overlay" onClick={() => !placing && setPlacingPack(null)}>
-          <div
-            className="modal-content max-w-[420px] w-full"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="gold-text text-xl font-medium mb-4">
-              Разместить «{placingPack.name}»
-            </h2>
-            <div className="flex flex-col gap-2 mb-6">
-              <span className="text-white/60 text-xs uppercase">Локация</span>
+          {/* Composition */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-white/60 text-xs uppercase">Состав</span>
+              <span className={`text-xs ${overCap ? 'text-amber-300' : 'text-white/40'}`}>
+                {totalMobs} мобов
+                {overCap && ` · в бою только ${BATTLE_MAX_TEAM_SIZE}`}
+              </span>
+            </div>
+
+            {form.members.length > 0 && (
+              <div className="flex flex-col gap-2">
+                {form.members.map((m) => (
+                  <div
+                    key={m.mob_template_id}
+                    className="bg-white/[0.04] rounded-card p-2 flex items-center gap-2"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <span className="text-white text-sm truncate block">{m.name}</span>
+                      <span className="text-white/40 text-[10px]">
+                        {TIER_LABELS[m.tier] || m.tier}
+                      </span>
+                    </div>
+                    <label className="flex items-center gap-1">
+                      <span className="text-white/40 text-[10px]">×</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={m.quantity}
+                        onChange={(e) => changeMemberQty(m.mob_template_id, e.target.value)}
+                        className="input-underline !text-sm w-16"
+                      />
+                    </label>
+                    <button
+                      onClick={() => removeMember(m.mob_template_id)}
+                      className="text-site-red text-xs hover:text-white px-2"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Searchable mob picker */}
+            <div className="flex flex-col gap-2">
               <input
                 type="text"
-                value={locationSearch}
-                onChange={(e) => setLocationSearch(e.target.value)}
-                placeholder="Найти локацию по названию..."
+                value={mobSearch}
+                onChange={(e) => setMobSearch(e.target.value)}
+                placeholder="Найти моба по имени..."
                 className="input-underline"
               />
-              <div className="max-h-56 overflow-y-auto rounded-card border border-white/10 divide-y divide-white/5">
-                {locationResults.shown.length === 0 ? (
+              <div className="max-h-56 overflow-y-auto gold-scrollbar rounded-card border border-white/10 divide-y divide-white/5">
+                {templatesLoading ? (
+                  <p className="text-white/40 text-xs p-3">Загрузка мобов...</p>
+                ) : templatesError ? (
+                  <p className="text-site-red text-xs p-3">{templatesError}</p>
+                ) : availableTemplates.length === 0 ? (
                   <p className="text-white/40 text-xs p-3">
-                    {locationSearch.trim() ? 'Локации не найдены' : 'Нет доступных локаций'}
+                    {mobSearch.trim()
+                      ? 'Мобы не найдены'
+                      : form.members.length > 0
+                        ? 'Все доступные мобы уже добавлены'
+                        : 'Нет доступных мобов'}
                   </p>
                 ) : (
-                  locationResults.shown.map((l) => (
+                  availableTemplates.map((t) => (
                     <button
-                      key={l.id}
+                      key={t.id}
                       type="button"
-                      onClick={() => setPlaceLocationId(l.id)}
-                      className={`w-full text-left px-3 py-2 text-sm truncate transition-colors ${
-                        placeLocationId === l.id
-                          ? 'bg-gold/20 text-gold'
-                          : 'text-white hover:bg-white/5'
-                      }`}
+                      onClick={() => addMember(t.id)}
+                      className="w-full text-left px-3 py-2 flex items-center justify-between gap-2 hover:bg-white/5 transition-colors"
                     >
-                      {l.name}
+                      <span className="text-white text-sm truncate">{t.name}</span>
+                      <span className="text-white/40 text-[10px] whitespace-nowrap">
+                        {TIER_LABELS[t.tier] || t.tier} · ур. {t.level}
+                      </span>
                     </button>
                   ))
                 )}
               </div>
-              {locationResults.total > locationResults.shown.length && (
-                <span className="text-white/40 text-[10px]">
-                  Показаны первые {locationResults.shown.length} из {locationResults.total} — уточните поиск
-                </span>
-              )}
-            </div>
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setPlacingPack(null)}
-                disabled={placing}
-                className="text-sm px-4 py-2 rounded border border-white/20 text-white/70 hover:bg-white/5"
-              >
-                Отмена
-              </button>
-              <button
-                onClick={handlePlace}
-                disabled={placing || placeLocationId === ''}
-                className="btn-blue text-sm px-6 py-2 disabled:opacity-50"
-              >
-                {placing ? 'Размещение...' : 'Разместить'}
-              </button>
             </div>
           </div>
         </div>
-      )}
+      </ModalShell>
+
+      {/* ── Placement modal ── */}
+      <ModalShell
+        open={!!placingPack}
+        onClose={() => setPlacingPack(null)}
+        title={placingPack ? `Разместить «${placingPack.name}»` : ''}
+        size="sm"
+        dismissible={!placing}
+        footer={
+          <>
+            <button
+              onClick={() => setPlacingPack(null)}
+              disabled={placing}
+              className="w-full sm:w-auto text-sm px-4 py-2 rounded border border-white/20 text-white/70 hover:bg-white/5"
+            >
+              Отмена
+            </button>
+            <button
+              onClick={handlePlace}
+              disabled={placing || placeLocationId === ''}
+              className="btn-blue w-full sm:w-auto text-sm px-6 py-2 disabled:opacity-50"
+            >
+              {placing ? 'Размещение...' : 'Разместить'}
+            </button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2">
+          <span className="text-white/60 text-xs uppercase">Локация</span>
+          <input
+            type="text"
+            value={locationSearch}
+            onChange={(e) => setLocationSearch(e.target.value)}
+            placeholder="Найти локацию по названию..."
+            className="input-underline"
+          />
+          <div className="max-h-56 overflow-y-auto gold-scrollbar rounded-card border border-white/10 divide-y divide-white/5">
+            {locationResults.shown.length === 0 ? (
+              <p className="text-white/40 text-xs p-3">
+                {locationSearch.trim() ? 'Локации не найдены' : 'Нет доступных локаций'}
+              </p>
+            ) : (
+              locationResults.shown.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => setPlaceLocationId(l.id)}
+                  className={`w-full text-left px-3 py-2 text-sm truncate transition-colors ${
+                    placeLocationId === l.id
+                      ? 'bg-gold/20 text-gold'
+                      : 'text-white hover:bg-white/5'
+                  }`}
+                >
+                  {l.name}
+                </button>
+              ))
+            )}
+          </div>
+          {locationResults.total > locationResults.shown.length && (
+            <span className="text-white/40 text-[10px]">
+              Показаны первые {locationResults.shown.length} из {locationResults.total} — уточните поиск
+            </span>
+          )}
+        </div>
+      </ModalShell>
     </div>
   );
 };

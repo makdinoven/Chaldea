@@ -9,6 +9,7 @@ import {
 import type { ArchiveCategoryWithCount } from "../../../api/archive";
 import toast from "react-hot-toast";
 import { motion } from "motion/react";
+import ModalShell from "../../CommonComponents/ModalShell/ModalShell";
 
 /* ── Slug generator (same as article form) ── */
 
@@ -429,38 +430,43 @@ const ArchiveCategoryManager = () => {
       </div>
 
       {/* Delete confirmation modal */}
-      {deleteTarget && (
-        <div className="modal-overlay">
-          <div className="modal-content gold-outline gold-outline-thick">
-            <h2 className="gold-text text-2xl uppercase mb-4">
-              Удаление категории
-            </h2>
-            <p className="text-white mb-2">
+      <ModalShell
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Удаление категории"
+        size="sm"
+        closeOnBackdrop={false}
+        footer={
+          <>
+            <button
+              className="btn-blue w-full sm:w-auto !text-base !px-6 !py-2"
+              onClick={confirmDelete}
+            >
+              Удалить
+            </button>
+            <button
+              className="btn-line w-full sm:w-auto !px-6"
+              onClick={() => setDeleteTarget(null)}
+            >
+              Отмена
+            </button>
+          </>
+        }
+      >
+        {deleteTarget && (
+          <>
+            <p className="text-white">
               Удалить категорию &laquo;{deleteTarget.name}&raquo;?
             </p>
             {deleteTarget.article_count > 0 && (
-              <p className="text-site-red text-sm mb-4">
+              <p className="text-site-red text-sm mt-2">
                 В этой категории {deleteTarget.article_count} статей. Статьи не будут удалены,
                 но потеряют привязку к этой категории.
               </p>
             )}
-            <div className="flex gap-4 mt-4">
-              <button
-                className="btn-blue !text-base !px-6 !py-2"
-                onClick={confirmDelete}
-              >
-                Удалить
-              </button>
-              <button
-                className="btn-line !w-auto !px-6"
-                onClick={() => setDeleteTarget(null)}
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </ModalShell>
     </div>
   );
 };

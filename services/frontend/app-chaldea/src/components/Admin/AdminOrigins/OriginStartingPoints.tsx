@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 import {
   addOriginStartingPoint,
@@ -10,6 +9,7 @@ import {
   type LocationSearchResult,
   type StartingPoint,
 } from '../../../api/startingPoints';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 /**
  * FEAT-155 (rules 5-7, 13) — the recommended starting points of one origin.
@@ -195,207 +195,196 @@ const OriginStartingPoints = ({
     }
   };
 
-  const handleOverlayClick = (event: React.MouseEvent) => {
-    if (event.target === event.currentTarget) onClose();
-  };
-
-  // Portalled for the same reason as `OriginForm`: the admin page renders
-  // inside an animated (transformed) wrapper, which would become the containing
-  // block for `position: fixed` and trap this overlay under the site header.
-  return createPortal(
-    <div
-      className="fixed inset-0 bg-black/85 z-[1000] overflow-y-auto py-6 px-3 sm:py-10 sm:px-5 flex items-start justify-center"
-      onClick={handleOverlayClick}
+  return (
+    <ModalShell
+      open
+      onClose={onClose}
+      title={`Стартовые точки: ${originName}`}
+      size="lg"
+      footer={
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-full sm:w-auto px-6 py-2 bg-white/10 text-white rounded font-medium transition-colors hover:bg-white/20"
+        >
+          Готово
+        </button>
+      }
     >
-      <div className="modal-content gold-outline gold-outline-thick w-full max-w-3xl">
-        <h2 className="gold-text text-lg sm:text-2xl uppercase mb-2 break-words">
-          Стартовые точки: {originName}
-        </h2>
-        <p className="field-hint mb-5">
-          Это подсказка для игрока, а не ограничение: выбрать он сможет любую точку. Первая
-          точка набора подаётся как родина персонажа — порядок задаёте вы. Локация, ещё не
-          отмеченная стартовой, становится ею при добавлении сюда.
-        </p>
+      <p className="field-hint mb-5">
+        Это подсказка для игрока, а не ограничение: выбрать он сможет любую точку. Первая
+        точка набора подаётся как родина персонажа — порядок задаёте вы. Локация, ещё не
+        отмеченная стартовой, становится ею при добавлении сюда.
+      </p>
 
-        {/* ── The curated set ─────────────────────────────────────────── */}
-        {loading && <p className="text-white/60 text-sm py-4">Загрузка набора…</p>}
+      {/* ── The curated set ─────────────────────────────────────────── */}
+      {loading && <p className="text-white/60 text-sm py-4">Загрузка набора…</p>}
 
-        {!loading && loadError && (
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-5 p-3 rounded border border-site-red/40 bg-site-red/10">
-            <p className="text-site-red text-sm flex-1">{loadError}</p>
-            <button
-              type="button"
-              onClick={() => void load()}
-              className="px-4 py-1.5 bg-white/10 text-white rounded text-sm transition-colors hover:bg-white/20"
-            >
-              Повторить
-            </button>
-          </div>
-        )}
-
-        {!loading && !loadError && points.length === 0 && (
-          <p className="text-white/60 text-sm py-2 mb-4">
-            Набор пуст. Игрок с этим происхождением увидит шаг «Присяга» без подсказок —
-            ровно как раньше.
-          </p>
-        )}
-
-        {points.length > 0 && (
-          <ol className="flex flex-col gap-2 mb-6">
-            {points.map((point, index) => (
-              <li
-                key={point.id}
-                className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 p-3 rounded-card bg-white/[0.05]"
-              >
-                <span className="text-white/40 text-xs w-6 shrink-0">{index + 1}.</span>
-
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-white text-sm sm:text-base font-medium break-words">
-                      {point.name}
-                    </span>
-                    {index === 0 && (
-                      <span className="text-xs px-2 py-0.5 rounded-full border border-gold/50 text-gold">
-                        Родина
-                      </span>
-                    )}
-                  </div>
-                  {breadcrumbs(point) && (
-                    <p className="text-white/40 text-[11px] leading-snug break-words">
-                      {breadcrumbs(point)}
-                    </p>
-                  )}
-                </div>
-
-                {canUpdate && (
-                  <div className="flex flex-wrap gap-2 sm:shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => void handleMove(index, -1)}
-                      disabled={busy || index === 0}
-                      aria-label={`Поднять «${point.name}» выше`}
-                      title="Выше"
-                      className="px-3 py-1.5 bg-white/10 text-white rounded text-sm transition-colors
-                        hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleMove(index, 1)}
-                      disabled={busy || index === points.length - 1}
-                      aria-label={`Опустить «${point.name}» ниже`}
-                      title="Ниже"
-                      className="px-3 py-1.5 bg-white/10 text-white rounded text-sm transition-colors
-                        hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      ↓
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleRemove(point)}
-                      disabled={busy}
-                      className="px-3 py-1.5 bg-site-red/20 text-site-red rounded text-sm transition-colors
-                        hover:bg-site-red/30 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      Убрать
-                    </button>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
-
-        {/* ── Search over the whole catalogue (rule 6) ─────────────────── */}
-        {canUpdate && (
-          <div className="flex flex-col gap-2">
-            <label
-              htmlFor="origin-location-search"
-              className="block text-white/60 font-medium text-sm uppercase tracking-wide"
-            >
-              Добавить точку
-            </label>
-            <input
-              id="origin-location-search"
-              type="text"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Название локации или её номер"
-              className="w-full p-2.5 bg-black/30 border border-white/10 rounded text-white
-                transition-colors focus:border-site-blue/50 focus:outline-none"
-            />
-
-            {query.trim().length > 0 && query.trim().length < MIN_QUERY_LENGTH && (
-              <p className="text-white/40 text-xs">Введите хотя бы два символа.</p>
-            )}
-            {searching && <p className="text-white/40 text-xs">Ищем…</p>}
-            {searchError && <p className="text-site-red text-xs">{searchError}</p>}
-            {!searching && !searchError && searched && results.length === 0 && (
-              <p className="text-white/40 text-xs">Ничего не нашлось.</p>
-            )}
-
-            {results.length > 0 && (
-              <ul className="flex flex-col gap-2 max-h-[320px] overflow-y-auto gold-scrollbar pr-1">
-                {results.map((location) => {
-                  const already = chosenIds.has(location.id);
-                  return (
-                    <li
-                      key={location.id}
-                      className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 p-3 rounded-card bg-white/[0.03]"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-white text-sm break-words">{location.name}</span>
-                          <span className="text-white/30 text-[11px]">#{location.id}</span>
-                          {!location.is_starting && (
-                            <span className="text-xs px-2 py-0.5 rounded-full border border-white/20 text-white/60">
-                              Станет стартовой
-                            </span>
-                          )}
-                        </div>
-                        {breadcrumbs(location) && (
-                          <p className="text-white/40 text-[11px] leading-snug break-words">
-                            {breadcrumbs(location)}
-                          </p>
-                        )}
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => void handleAdd(location)}
-                        disabled={busy || already}
-                        className="px-3 py-1.5 bg-green-600/20 text-white rounded text-sm transition-colors
-                          hover:bg-green-600/30 disabled:opacity-40 disabled:cursor-not-allowed sm:shrink-0"
-                      >
-                        {already ? 'Уже в наборе' : 'Добавить'}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        )}
-
-        {!canUpdate && (
-          <p className="text-white/40 text-xs">
-            Права «origins:update» у вас нет — набор доступен только для просмотра.
-          </p>
-        )}
-
-        <div className="flex mt-6">
+      {!loading && loadError && (
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-5 p-3 rounded border border-site-red/40 bg-site-red/10">
+          <p className="text-site-red text-sm flex-1">{loadError}</p>
           <button
             type="button"
-            onClick={onClose}
-            className="px-6 py-2 bg-white/10 text-white rounded font-medium transition-colors hover:bg-white/20"
+            onClick={() => void load()}
+            className="px-4 py-1.5 bg-white/10 text-white rounded text-sm transition-colors hover:bg-white/20"
           >
-            Готово
+            Повторить
           </button>
         </div>
-      </div>
-    </div>,
-    document.body,
+      )}
+
+      {!loading && !loadError && points.length === 0 && (
+        <p className="text-white/60 text-sm py-2 mb-4">
+          Набор пуст. Игрок с этим происхождением увидит шаг «Присяга» без подсказок —
+          ровно как раньше.
+        </p>
+      )}
+
+      {points.length > 0 && (
+        <ol className="flex flex-col gap-2 mb-6">
+          {points.map((point, index) => (
+            <li
+              key={point.id}
+              className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 p-3 rounded-card bg-white/[0.05]"
+            >
+              <span className="text-white/40 text-xs w-6 shrink-0">{index + 1}.</span>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-white text-sm sm:text-base font-medium break-words">
+                    {point.name}
+                  </span>
+                  {index === 0 && (
+                    <span className="text-xs px-2 py-0.5 rounded-full border border-gold/50 text-gold">
+                      Родина
+                    </span>
+                  )}
+                </div>
+                {breadcrumbs(point) && (
+                  <p className="text-white/40 text-[11px] leading-snug break-words">
+                    {breadcrumbs(point)}
+                  </p>
+                )}
+              </div>
+
+              {canUpdate && (
+                <div className="flex flex-wrap gap-2 sm:shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => void handleMove(index, -1)}
+                    disabled={busy || index === 0}
+                    aria-label={`Поднять «${point.name}» выше`}
+                    title="Выше"
+                    className="px-3 py-1.5 bg-white/10 text-white rounded text-sm transition-colors
+                      hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleMove(index, 1)}
+                    disabled={busy || index === points.length - 1}
+                    aria-label={`Опустить «${point.name}» ниже`}
+                    title="Ниже"
+                    className="px-3 py-1.5 bg-white/10 text-white rounded text-sm transition-colors
+                      hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleRemove(point)}
+                    disabled={busy}
+                    className="px-3 py-1.5 bg-site-red/20 text-site-red rounded text-sm transition-colors
+                      hover:bg-site-red/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Убрать
+                  </button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {/* ── Search over the whole catalogue (rule 6) ─────────────────── */}
+      {canUpdate && (
+        <div className="flex flex-col gap-2">
+          <label
+            htmlFor="origin-location-search"
+            className="block text-white/60 font-medium text-sm uppercase tracking-wide"
+          >
+            Добавить точку
+          </label>
+          <input
+            id="origin-location-search"
+            type="text"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Название локации или её номер"
+            className="w-full p-2.5 bg-black/30 border border-white/10 rounded text-white
+              transition-colors focus:border-site-blue/50 focus:outline-none"
+          />
+
+          {query.trim().length > 0 && query.trim().length < MIN_QUERY_LENGTH && (
+            <p className="text-white/40 text-xs">Введите хотя бы два символа.</p>
+          )}
+          {searching && <p className="text-white/40 text-xs">Ищем…</p>}
+          {searchError && <p className="text-site-red text-xs">{searchError}</p>}
+          {!searching && !searchError && searched && results.length === 0 && (
+            <p className="text-white/40 text-xs">Ничего не нашлось.</p>
+          )}
+
+          {results.length > 0 && (
+            <ul className="flex flex-col gap-2 max-h-[320px] overflow-y-auto gold-scrollbar pr-1">
+              {results.map((location) => {
+                const already = chosenIds.has(location.id);
+                return (
+                  <li
+                    key={location.id}
+                    className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 p-3 rounded-card bg-white/[0.03]"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-white text-sm break-words">{location.name}</span>
+                        <span className="text-white/30 text-[11px]">#{location.id}</span>
+                        {!location.is_starting && (
+                          <span className="text-xs px-2 py-0.5 rounded-full border border-white/20 text-white/60">
+                            Станет стартовой
+                          </span>
+                        )}
+                      </div>
+                      {breadcrumbs(location) && (
+                        <p className="text-white/40 text-[11px] leading-snug break-words">
+                          {breadcrumbs(location)}
+                        </p>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => void handleAdd(location)}
+                      disabled={busy || already}
+                      className="px-3 py-1.5 bg-green-600/20 text-white rounded text-sm transition-colors
+                        hover:bg-green-600/30 disabled:opacity-40 disabled:cursor-not-allowed sm:shrink-0"
+                    >
+                      {already ? 'Уже в наборе' : 'Добавить'}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {!canUpdate && (
+        <p className="text-white/40 text-xs">
+          Права «origins:update» у вас нет — набор доступен только для просмотра.
+        </p>
+      )}
+
+    </ModalShell>
   );
 };
 

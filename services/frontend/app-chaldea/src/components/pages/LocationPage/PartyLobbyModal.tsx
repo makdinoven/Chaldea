@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { motion } from 'motion/react';
 import { X } from 'react-feather';
 import {
   createParty,
@@ -12,6 +11,7 @@ import {
   startParty,
   type PartyState,
 } from '../../../api/party';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 export interface PartyPlayer {
   id: number;
@@ -173,155 +173,144 @@ const PartyLobbyModal = ({
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <motion.div
-        initial={{ opacity: 0, scale: 0.96, y: 16 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
-        className="modal-content gold-outline gold-outline-thick w-[92%] max-w-[560px] max-h-[80vh] overflow-y-auto gold-scrollbar"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="gold-text text-xl uppercase">Сбор группы</h2>
-          <button
-            onClick={onClose}
-            className="text-white/50 hover:text-white transition-colors"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        {loading || !party ? (
-          <p className="text-white/50 text-sm py-8 text-center">Загрузка...</p>
-        ) : (
+    <ModalShell
+      open
+      onClose={onClose}
+      title="Сбор группы"
+      size="md"
+      footer={
+        loading || !party ? undefined : (
           <>
-            {/* Teams */}
-            <div className="grid grid-cols-2 gap-3">
-              {TEAMS.map((team) => {
-                const members = party.members.filter((m) => m.team === team);
-                return (
-                  <div key={team} className="bg-white/5 rounded-card p-3">
-                    <p className="text-white/50 text-xs font-medium uppercase tracking-wider mb-2">
-                      Команда {team + 1}
-                    </p>
-                    <div className="flex flex-col gap-2">
-                      {members.length === 0 && (
-                        <p className="text-white/25 text-xs italic">Пусто</p>
-                      )}
-                      {members.map((m) => (
-                        <div
-                          key={m.character_id}
-                          className="flex items-center gap-2 bg-white/5 rounded p-1.5"
-                        >
-                          {m.character_avatar ? (
-                            <img
-                              src={m.character_avatar}
-                              alt=""
-                              className="w-7 h-7 rounded object-cover flex-shrink-0"
-                            />
-                          ) : (
-                            <div className="w-7 h-7 rounded bg-white/10 flex-shrink-0" />
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-white text-xs truncate">
-                              {m.character_name}
-                              {m.is_leader && (
-                                <span className="text-gold ml-1">★</span>
-                              )}
-                            </p>
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-white/40 text-[10px]">
-                                Ур.{m.character_level}
-                              </span>
-                              {statusBadge(m.status)}
-                            </div>
-                          </div>
-                          {isLeader && !m.is_leader && (
-                            <button
-                              onClick={() => handleKick(m.character_id)}
-                              disabled={busy}
-                              className="text-white/30 hover:text-site-red transition-colors flex-shrink-0"
-                              title="Убрать"
-                            >
-                              <X size={13} />
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Invite list (leader only) */}
+            <button
+              onClick={handleLeave}
+              disabled={busy}
+              className="w-full sm:w-auto sm:mr-auto text-site-red/70 hover:text-site-red text-xs transition-colors disabled:opacity-40"
+            >
+              {isLeader ? 'Распустить группу' : 'Покинуть группу'}
+            </button>
             {isLeader && (
-              <div className="mt-4 border-t border-white/10 pt-3">
-                <p className="text-white/50 text-xs font-medium uppercase tracking-wider mb-2">
-                  Пригласить игроков на локации
-                </p>
-                {invitable.length === 0 ? (
-                  <p className="text-white/25 text-xs italic">
-                    Нет доступных игроков
+              <button
+                onClick={handleStart}
+                disabled={busy || !canStart}
+                className="btn-blue w-full sm:w-auto text-sm px-5 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                title={
+                  canStart
+                    ? ''
+                    : 'Нужно минимум 2 готовых игрока в двух командах'
+                }
+              >
+                Начать бой
+              </button>
+            )}
+          </>
+        )
+      }
+    >
+      {loading || !party ? (
+        <p className="text-white/50 text-sm py-8 text-center">Загрузка...</p>
+      ) : (
+        <>
+          {/* Teams */}
+          <div className="grid grid-cols-2 gap-3">
+            {TEAMS.map((team) => {
+              const members = party.members.filter((m) => m.team === team);
+              return (
+                <div key={team} className="bg-white/5 rounded-card p-3">
+                  <p className="text-white/50 text-xs font-medium uppercase tracking-wider mb-2">
+                    Команда {team + 1}
                   </p>
-                ) : (
-                  <div className="flex flex-col gap-1.5 max-h-[160px] overflow-y-auto gold-scrollbar pr-1">
-                    {invitable.map((p) => (
+                  <div className="flex flex-col gap-2">
+                    {members.length === 0 && (
+                      <p className="text-white/25 text-xs italic">Пусто</p>
+                    )}
+                    {members.map((m) => (
                       <div
-                        key={p.id}
+                        key={m.character_id}
                         className="flex items-center gap-2 bg-white/5 rounded p-1.5"
                       >
+                        {m.character_avatar ? (
+                          <img
+                            src={m.character_avatar}
+                            alt=""
+                            className="w-7 h-7 rounded object-cover flex-shrink-0"
+                          />
+                        ) : (
+                          <div className="w-7 h-7 rounded bg-white/10 flex-shrink-0" />
+                        )}
                         <div className="flex-1 min-w-0">
-                          <p className="text-white text-xs truncate">{p.name}</p>
-                          <span className="text-white/40 text-[10px]">
-                            Ур.{p.level}
-                          </span>
+                          <p className="text-white text-xs truncate">
+                            {m.character_name}
+                            {m.is_leader && (
+                              <span className="text-gold ml-1">★</span>
+                            )}
+                          </p>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-white/40 text-[10px]">
+                              Ур.{m.character_level}
+                            </span>
+                            {statusBadge(m.status)}
+                          </div>
                         </div>
-                        {TEAMS.map((team) => (
+                        {isLeader && !m.is_leader && (
                           <button
-                            key={team}
-                            onClick={() => handleInvite(p.id, team)}
+                            onClick={() => handleKick(m.character_id)}
                             disabled={busy}
-                            className="btn-line text-[10px] px-2 py-1 disabled:opacity-40"
+                            className="text-white/30 hover:text-site-red transition-colors flex-shrink-0"
+                            title="Убрать"
                           >
-                            → К{team + 1}
+                            <X size={13} />
                           </button>
-                        ))}
+                        )}
                       </div>
                     ))}
                   </div>
-                )}
-              </div>
-            )}
+                </div>
+              );
+            })}
+          </div>
 
-            {/* Footer actions */}
-            <div className="mt-5 flex items-center justify-between gap-3">
-              <button
-                onClick={handleLeave}
-                disabled={busy}
-                className="text-site-red/70 hover:text-site-red text-xs transition-colors disabled:opacity-40"
-              >
-                {isLeader ? 'Распустить группу' : 'Покинуть группу'}
-              </button>
-              {isLeader && (
-                <button
-                  onClick={handleStart}
-                  disabled={busy || !canStart}
-                  className="btn-blue text-sm px-5 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title={
-                    canStart
-                      ? ''
-                      : 'Нужно минимум 2 готовых игрока в двух командах'
-                  }
-                >
-                  Начать бой
-                </button>
+          {/* Invite list (leader only) */}
+          {isLeader && (
+            <div className="mt-4 border-t border-white/10 pt-3">
+              <p className="text-white/50 text-xs font-medium uppercase tracking-wider mb-2">
+                Пригласить игроков на локации
+              </p>
+              {invitable.length === 0 ? (
+                <p className="text-white/25 text-xs italic">
+                  Нет доступных игроков
+                </p>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {invitable.map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex items-center gap-2 bg-white/5 rounded p-1.5"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white text-xs truncate">{p.name}</p>
+                        <span className="text-white/40 text-[10px]">
+                          Ур.{p.level}
+                        </span>
+                      </div>
+                      {TEAMS.map((team) => (
+                        <button
+                          key={team}
+                          onClick={() => handleInvite(p.id, team)}
+                          disabled={busy}
+                          className="btn-line text-[10px] px-2 py-1 disabled:opacity-40"
+                        >
+                          → К{team + 1}
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
-          </>
-        )}
-      </motion.div>
-    </div>
+          )}
+        </>
+      )}
+    </ModalShell>
   );
 };
 

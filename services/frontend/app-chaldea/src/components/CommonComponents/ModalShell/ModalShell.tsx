@@ -1,15 +1,20 @@
-// FEAT-166 — shared profile-tab primitive: portaled modal with a PanelShell-like
-// header band. Always rendered into document.body, because PanelShell
-// (`backdrop-blur`) and the tab wrapper (motion transform) create a containing
-// block that breaks `position: fixed` for in-place overlays.
-import { useEffect } from 'react';
+// The site's one modal (FEAT-166, born in the profile): a portaled dialog in a
+// gold frame, with a header band, a body that scrolls on its own gold
+// scrollbar, and an optional pinned footer. Every modal on the site is built on
+// it, so they all look and behave alike.
+//
+// Always rendered into document.body: a parent with `backdrop-blur` or a
+// motion transform creates a containing block that breaks `position: fixed`
+// for in-place overlays. The frame sits on the dialog and only the body
+// scrolls — a frame on a scrolling box scrolls away with its content.
+import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { X } from 'lucide-react';
-import { hasPaddingClass } from './classUtils';
+import { hasPaddingClass } from '../../ProfilePage/shared/classUtils';
 
-export type ModalShellSize = 'sm' | 'md' | 'lg';
+export type ModalShellSize = 'sm' | 'md' | 'lg' | 'xl';
 
 interface ModalShellProps {
   open: boolean;
@@ -18,9 +23,16 @@ interface ModalShellProps {
   title?: string;
   /** 18px icon left of the title (lucide `text-gold` or project SVG) */
   icon?: ReactNode;
+  /** Controls before the icon and title, e.g. a «back» button */
+  headerStart?: ReactNode;
   size?: ModalShellSize;
   /** Close on overlay click (default true) */
   closeOnBackdrop?: boolean;
+  /**
+   * Close on Escape (default true). Off for editors where a stray key press
+   * would throw away unsaved work; the X still closes.
+   */
+  closeOnEscape?: boolean;
   /**
    * Default true. `false` hides the X and ignores backdrop clicks and Escape
    * (e.g. while a request is in flight).
@@ -37,7 +49,15 @@ const SIZE_CLASSES: Record<ModalShellSize, string> = {
   sm: 'max-w-md',
   md: 'max-w-xl',
   lg: 'max-w-3xl',
+  xl: 'max-w-5xl',
 };
+
+/**
+ * Open modals, oldest first. Modals open on top of one another (a confirm over
+ * the dialog that asked for it); Escape belongs to the topmost alone, or one
+ * press would close the whole stack.
+ */
+const openStack: symbol[] = [];
 
 const CLOSE_BUTTON_CLASSES =
   'flex items-center justify-center w-8 h-8 shrink-0 text-white/40 hover:text-white transition-colors duration-200 ease-site';
@@ -47,21 +67,35 @@ const ModalShell = ({
   onClose,
   title,
   icon,
+  headerStart,
   size = 'md',
   closeOnBackdrop = true,
+  closeOnEscape = true,
   dismissible = true,
   footer,
   bodyClassName = '',
   children,
 }: ModalShellProps) => {
+  const stackId = useRef(Symbol('modal'));
   useEffect(() => {
-    if (!open || !dismissible) return undefined;
+    if (!open) return undefined;
+    const id = stackId.current;
+    openStack.push(id);
+    return () => {
+      const at = openStack.lastIndexOf(id);
+      if (at >= 0) openStack.splice(at, 1);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !dismissible || !closeOnEscape) return undefined;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key !== 'Escape' || openStack[openStack.length - 1] !== stackId.current) return;
+      onClose();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [open, dismissible, onClose]);
+  }, [open, dismissible, closeOnEscape, onClose]);
 
   if (typeof document === 'undefined') return null;
 
@@ -105,6 +139,7 @@ const ModalShell = ({
           >
             {title ? (
               <div className="gradient-divider-h relative flex items-center gap-2.5 px-5 py-4 bg-black/20 rounded-t-[15px] shrink-0 min-w-0">
+                {headerStart}
                 {icon}
                 <h3 className="gold-text text-sm font-medium uppercase tracking-[0.12em] min-w-0 break-words">
                   {title}

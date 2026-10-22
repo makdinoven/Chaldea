@@ -9,7 +9,7 @@ import type { Profession } from '../../../types/professions';
 import PanelShell from '../PanelShell';
 import { MotionProfileCard } from '../shared/ProfileCard';
 import GoldIconFrame from '../shared/GoldIconFrame';
-import ModalShell from '../shared/ModalShell';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 interface ProfessionSelectProps {
   professions: Profession[];

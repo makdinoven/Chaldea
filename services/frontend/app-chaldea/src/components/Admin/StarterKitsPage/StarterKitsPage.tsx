@@ -16,6 +16,7 @@ import {
 } from '../../../api/starterKits';
 import { fetchOrigins, type OriginCountry } from '../../../api/origins';
 import CoverageMatrix, { kitKey } from './CoverageMatrix';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 /**
  * FEAT-154 (rules 12a-12c, task #32) — starter kits in two dimensions.
@@ -630,13 +631,33 @@ const StarterKitsPage = () => {
         })}
       </motion.div>
 
-      {confirmRevert && (
-        <div className="modal-overlay" onClick={() => setConfirmRevert(null)}>
-          <div
-            className="modal-content gold-outline gold-outline-thick w-full max-w-md"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="gold-text text-lg sm:text-xl uppercase mb-4">Вернуть к набору класса</h2>
+      <ModalShell
+        open={!!confirmRevert}
+        onClose={() => setConfirmRevert(null)}
+        title="Вернуть к набору класса"
+        size="sm"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={revertToClassDefault}
+              disabled={busyKey !== null}
+              className="btn-blue w-full sm:w-auto"
+            >
+              {busyKey !== null ? 'Выполняется...' : 'Вернуть к набору класса'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmRevert(null)}
+              className="w-full sm:w-auto px-4 py-2 bg-white/10 text-white rounded text-sm transition-colors hover:bg-white/20"
+            >
+              Отмена
+            </button>
+          </>
+        }
+      >
+        {confirmRevert && (
+          <>
             <p className="text-white mb-2">
               Пара «
               {classes.find((c) => c.id_class === confirmRevert.classId)?.name ??
@@ -644,31 +665,14 @@ const StarterKitsPage = () => {
               × {originName(confirmRevert.originId)}» перестанет иметь свой набор и снова начнёт
               выдавать набор по умолчанию для класса.
             </p>
-            <p className="text-white/60 text-sm mb-6">
+            <p className="text-white/60 text-sm">
               Набор класса при этом не меняется, и уже созданные персонажи ничего не теряют — им
               выданное остаётся при них. Свой набор для пары можно будет собрать заново в любой
               момент.
             </p>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <button
-                type="button"
-                onClick={revertToClassDefault}
-                disabled={busyKey !== null}
-                className="btn-blue flex-1"
-              >
-                {busyKey !== null ? 'Выполняется...' : 'Вернуть к набору класса'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmRevert(null)}
-                className="px-4 py-2 bg-white/10 text-white rounded text-sm transition-colors hover:bg-white/20 flex-1"
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </ModalShell>
     </div>
   );
 };

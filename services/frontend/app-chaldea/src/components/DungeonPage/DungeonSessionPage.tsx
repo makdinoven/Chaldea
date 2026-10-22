@@ -25,6 +25,7 @@ import DungeonRoom from './DungeonRoom';
 import DungeonPartyPanel from './DungeonPartyPanel';
 import DungeonInventory from './DungeonInventory';
 import DungeonLootDistribution from './DungeonLootDistribution';
+import ModalShell from '../CommonComponents/ModalShell/ModalShell';
 
 // --- Mobile Tab ---
 
@@ -544,63 +545,53 @@ const DungeonSessionPage = () => {
       </div>
 
       {/* Flee confirmation modal */}
-      <AnimatePresence>
-        {showFleeModal && (
-          <div className="modal-overlay" onClick={() => setShowFleeModal(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick max-w-sm w-full mx-4"
-              onClick={(e) => e.stopPropagation()}
+      <ModalShell
+        open={showFleeModal}
+        onClose={() => setShowFleeModal(false)}
+        title="Сбежать из подземелья?"
+        size="sm"
+        footer={
+          <>
+            <button
+              onClick={() => setShowFleeModal(false)}
+              className="btn-line text-sm w-full sm:w-auto"
             >
-              <h3 className="gold-text text-lg font-medium uppercase mb-3">
-                Сбежать из подземелья?
-              </h3>
-              <p className="text-white/70 text-sm mb-2">
-                Отряд развернётся и покинет подземелье.
-              </p>
-              <div className="bg-site-red/10 border border-site-red/30 rounded-card p-3 mb-4">
-                <p className="text-site-red text-sm font-medium">
-                  Внимание: каждый предмет в групповом инвентаре имеет 50% шанс быть потерян!
-                </p>
-              </div>
+              Остаться
+            </button>
+            <button
+              onClick={handleFlee}
+              disabled={fleeLoading}
+              className="text-sm px-5 py-2 w-full sm:w-auto rounded-card bg-site-red/20 border border-site-red/40 text-site-red hover:bg-site-red/30 transition-colors disabled:opacity-50"
+            >
+              {fleeLoading ? 'Побег...' : 'Сбежать'}
+            </button>
+          </>
+        }
+      >
+        <p className="text-white/70 text-sm mb-2">
+          Отряд развернётся и покинет подземелье.
+        </p>
+        <div className="bg-site-red/10 border border-site-red/30 rounded-card p-3">
+          <p className="text-site-red text-sm font-medium">
+            Внимание: каждый предмет в групповом инвентаре имеет 50% шанс быть потерян!
+          </p>
+        </div>
 
-              {sessionState.group_inventory.length > 0 && (
-                <div className="mb-4">
-                  <p className="text-white/50 text-xs mb-1">
-                    Под угрозой ({sessionState.group_inventory.length} предметов):
-                  </p>
-                  <div className="text-white/40 text-xs">
-                    {sessionState.group_inventory.map((item) => (
-                      <span key={item.item_id} className="mr-2">
-                        {item.item_name} x{item.quantity}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-3">
-                <button
-                  onClick={handleFlee}
-                  disabled={fleeLoading}
-                  className="text-sm px-5 py-2 flex-1 rounded-card bg-site-red/20 border border-site-red/40 text-site-red hover:bg-site-red/30 transition-colors disabled:opacity-50"
-                >
-                  {fleeLoading ? 'Побег...' : 'Сбежать'}
-                </button>
-                <button
-                  onClick={() => setShowFleeModal(false)}
-                  className="btn-line text-sm px-5 py-2 flex-1"
-                >
-                  Остаться
-                </button>
-              </div>
-            </motion.div>
+        {sessionState.group_inventory.length > 0 && (
+          <div className="mt-4">
+            <p className="text-white/50 text-xs mb-1">
+              Под угрозой ({sessionState.group_inventory.length} предметов):
+            </p>
+            <div className="text-white/40 text-xs">
+              {sessionState.group_inventory.map((item) => (
+                <span key={item.item_id} className="mr-2">
+                  {item.item_name} x{item.quantity}
+                </span>
+              ))}
+            </div>
           </div>
         )}
-      </AnimatePresence>
+      </ModalShell>
     </div>
   );
 };

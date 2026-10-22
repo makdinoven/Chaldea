@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, Link } from 'react-router-dom';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { BASE_URL } from '../../../api/api';
@@ -25,6 +25,7 @@ import { fetchGameTime } from '../../../redux/actions/gameTimeActions';
 import { selectCurrentGameYear } from '../../../redux/slices/gameTimeSlice';
 import { fetchRaces } from '../../../redux/slices/racesSlice';
 import { useAppDispatch, useAppSelector } from '../../../redux/store';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 import CharacterPassport, {
   fromCharacterListItem,
   fromCharacterPublic,
@@ -388,54 +389,46 @@ const CharactersListPage = () => {
       )}
 
       {/*
-        Every overlay on this page is portalled to `document.body`, following
-        `ItemDetailModal` / `ConfirmationModal`. It is not cosmetic: this page's
+        Every overlay on this page is portalled to `document.body` (ModalShell
+        does it for the dialogs; the loading spinner below does it by hand). It
+        is not cosmetic: this page's
         root is a `motion.div` that animates `y`, and a transformed ancestor
         becomes the containing block for `position: fixed` descendants — so
         `.modal-overlay`'s `inset: 0` would resolve against the whole scrolling
         page instead of the viewport. That is what let the passport modal grow
         past the top of the screen and hide under the site header.
       */}
-      {createPortal(
-        <AnimatePresence>
-          {claimTarget && (
-            <div className="modal-overlay" onClick={() => setClaimTarget(null)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="modal-content gold-outline gold-outline-thick relative max-w-md w-full mx-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h2 className="gold-text text-lg sm:text-xl font-medium uppercase text-center mb-4">
-                Подать заявку
-              </h2>
-              <p className="text-white text-sm sm:text-base text-center mb-6">
-                Вы уверены, что хотите подать заявку на персонажа{' '}
-                <span className="text-gold font-medium">{claimTarget.name}</span>?
-              </p>
-              <div className="flex gap-3 justify-center">
-                <button
-                  onClick={handleClaimConfirm}
-                  disabled={claimLoading}
-                  className="btn-blue !text-sm disabled:opacity-50"
-                >
-                  {claimLoading ? 'Отправка...' : 'Подтвердить'}
-                </button>
-                <button
-                  onClick={() => setClaimTarget(null)}
-                  disabled={claimLoading}
-                  className="btn-line !text-sm"
-                >
-                  Отмена
-                </button>
-              </div>
-            </motion.div>
-            </div>
-          )}
-        </AnimatePresence>,
-        document.body,
+      {claimTarget && (
+        <ModalShell
+          open
+          onClose={() => setClaimTarget(null)}
+          title="Подать заявку"
+          size="sm"
+          dismissible={!claimLoading}
+          footer={
+            <>
+              <button
+                onClick={() => setClaimTarget(null)}
+                disabled={claimLoading}
+                className="btn-line w-full sm:w-auto !text-sm"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={handleClaimConfirm}
+                disabled={claimLoading}
+                className="btn-blue w-full sm:w-auto !text-sm disabled:opacity-50"
+              >
+                {claimLoading ? 'Отправка...' : 'Подтвердить'}
+              </button>
+            </>
+          }
+        >
+          <p className="text-white text-sm sm:text-base text-center">
+            Вы уверены, что хотите подать заявку на персонажа{' '}
+            <span className="text-gold font-medium">{claimTarget.name}</span>?
+          </p>
+        </ModalShell>
       )}
 
       {/* Loading indicator while the full passport is fetched */}
@@ -447,45 +440,27 @@ const CharactersListPage = () => {
           document.body,
         )}
 
-      {/* Character detail modal — the FULL passport */}
-      {detail &&
-        detailPassport &&
-        createPortal(
-          <div className="modal-overlay" onClick={() => setDetail(null)}>
-            {/*
-              Two boxes on purpose. The outer one is the modal frame: it never
-              scrolls, so «Закрыть» stays pinned to its corner no matter how far
-              down the chronicle the reader is. The inner one is the viewport
-              cap — the passport is now tall enough (identity band + ledger +
-              full-width chronicle) to outgrow any screen, so it scrolls
-              INSIDE 90vh instead of growing off the top of the display. The
-              overlay centres it, which leaves ~5vh of clearance top and bottom
-              and puts the identity band on screen the moment it opens.
-            */}
-            <div
-              className="relative mx-4 my-auto w-full max-w-4xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                onClick={() => setDetail(null)}
-                aria-label="Закрыть"
-                className="absolute right-3 top-3 z-10 text-ink/60 hover:text-ink transition-colors"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-              <div className="max-h-[90vh] overflow-y-auto overflow-x-hidden gold-scrollbar rounded-card">
-                <CharacterPassport
-                  data={detailPassport}
-                  variant="full"
-                  currentGameYear={currentGameYear}
-                />
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )}
+      {/* Character detail modal — the FULL passport. ModalShell keeps the
+          frame and close button pinned while only the body scrolls, so the
+          tall passport (identity band + ledger + chronicle) stays inside the
+          screen instead of growing off the top of the display. */}
+      {detail && detailPassport && (
+        <ModalShell
+          open
+          onClose={() => setDetail(null)}
+          title={detail.character.name}
+          size="xl"
+          bodyClassName="p-2 sm:p-3"
+        >
+          <div className="overflow-x-hidden rounded-card">
+            <CharacterPassport
+              data={detailPassport}
+              variant="full"
+              currentGameYear={currentGameYear}
+            />
+          </div>
+        </ModalShell>
+      )}
     </motion.div>
   );
 };

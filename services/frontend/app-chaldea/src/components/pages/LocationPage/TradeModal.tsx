@@ -12,6 +12,7 @@ import type { TradeState, TradeItem } from '../../../api/trade';
 import TradeItemSelector from './TradeItemSelector';
 import goldCoinsIcon from '../../../assets/icons/gold-coins.svg';
 import { ITEM_TYPE_ICONS } from '../../ProfilePage/constants';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 interface TradeModalProps {
   tradeId: number;
@@ -167,151 +168,145 @@ const TradeModal = ({
   const isCompleteOrClosed = completed || trade?.status === 'completed' || trade?.status === 'cancelled';
 
   return (
-    <div className="modal-overlay">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
-        className="modal-content gold-outline gold-outline-thick relative w-full max-w-4xl mx-3 sm:mx-4 max-h-[90vh] overflow-y-auto gold-scrollbar-wide"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <h2 className="gold-text text-xl sm:text-2xl font-medium uppercase text-center mb-4 sm:mb-6">
-          Обмен с {targetCharacterName}
-        </h2>
+    // Not dismissible on purpose (as before): the window closes only by
+    // cancelling the trade or after it completes, never leaving it dangling.
+    <ModalShell
+      open
+      onClose={onClose}
+      title={`Обмен с ${targetCharacterName}`}
+      size="xl"
+      dismissible={false}
+      footer={
+        trade && !completed ? (
+          <button
+            onClick={handleCancel}
+            disabled={cancelling || isCompleteOrClosed}
+            className="w-full sm:w-auto text-site-red hover:text-site-red/80 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {cancelling ? 'Отмена...' : 'Отменить обмен'}
+          </button>
+        ) : undefined
+      }
+    >
+      {/* Completed state */}
+      {completed && (
+        <div className="text-center py-8">
+          <p className="text-xl text-green-400 font-medium mb-2">Обмен завершён!</p>
+          <p className="text-white/60 text-sm">Окно закроется автоматически...</p>
+        </div>
+      )}
 
-        {/* Completed state */}
-        {completed && (
-          <div className="text-center py-8">
-            <p className="text-xl text-green-400 font-medium mb-2">Обмен завершён!</p>
-            <p className="text-white/60 text-sm">Окно закроется автоматически...</p>
-          </div>
-        )}
+      {/* Loading state */}
+      {!trade && !completed && (
+        <div className="flex items-center justify-center py-12">
+          <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+        </div>
+      )}
 
-        {/* Loading state */}
-        {!trade && !completed && (
-          <div className="flex items-center justify-center py-12">
-            <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-          </div>
-        )}
+      {/* Trade content */}
+      {trade && !completed && (
+        <>
+          {/* Two-column layout */}
+          <div className="flex flex-col md:flex-row gap-4 sm:gap-6">
+            {/* My side */}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="gold-text text-sm sm:text-base font-medium uppercase tracking-wide">
+                  Ваше предложение
+                </h3>
+                {mySide?.confirmed && (
+                  <span className="text-green-400 text-xs bg-green-400/10 px-2 py-0.5 rounded-full border border-green-400/20">
+                    подтверждено
+                  </span>
+                )}
+              </div>
 
-        {/* Trade content */}
-        {trade && !completed && (
-          <>
-            {/* Two-column layout */}
-            <div className="flex flex-col md:flex-row gap-4 sm:gap-6">
-              {/* My side */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="gold-text text-sm sm:text-base font-medium uppercase tracking-wide">
-                    Ваше предложение
-                  </h3>
-                  {mySide?.confirmed && (
-                    <span className="text-green-400 text-xs bg-green-400/10 px-2 py-0.5 rounded-full border border-green-400/20">
-                      подтверждено
-                    </span>
-                  )}
-                </div>
+              {/* Item selector (inventory grid) */}
+              <TradeItemSelector
+                characterId={currentCharacterId}
+                selectedItems={selectedItems}
+                onItemsChange={setSelectedItems}
+              />
 
-                {/* Item selector (inventory grid) */}
-                <TradeItemSelector
-                  characterId={currentCharacterId}
-                  selectedItems={selectedItems}
-                  onItemsChange={setSelectedItems}
+              {/* Gold input */}
+              <div className="flex items-center gap-2 mt-3 px-1.5">
+                <img src={goldCoinsIcon} alt="Золото" className="w-5 h-5 flex-shrink-0" />
+                <input
+                  type="number"
+                  min="0"
+                  value={goldInput}
+                  onChange={(e) => setGoldInput(e.target.value)}
+                  className="input-underline w-20 sm:w-24 text-sm"
+                  placeholder="0"
                 />
+                <span className="text-white/50 text-xs">золота</span>
+              </div>
 
-                {/* Gold input */}
+              {/* Action buttons */}
+              <div className="flex flex-col gap-2 mt-3">
+                <button
+                  onClick={handleUpdateOffer}
+                  disabled={updating || isCompleteOrClosed}
+                  className="btn-line text-xs sm:text-sm w-full disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {updating ? 'Обновление...' : 'Обновить предложение'}
+                </button>
+                <button
+                  onClick={handleConfirm}
+                  disabled={confirming || mySide?.confirmed || isCompleteOrClosed}
+                  className="btn-blue text-xs sm:text-sm w-full disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {confirming
+                    ? 'Подтверждение...'
+                    : mySide?.confirmed
+                      ? 'Подтверждено'
+                      : 'Подтвердить'}
+                </button>
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div className="hidden md:block w-px bg-gradient-to-b from-transparent via-white/20 to-transparent" />
+            <div className="md:hidden h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+
+            {/* Their side */}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="gold-text text-sm sm:text-base font-medium uppercase tracking-wide">
+                  Предложение {theirSide?.character_name || targetCharacterName}
+                </h3>
+                {theirSide?.confirmed && (
+                  <span className="text-green-400 text-xs bg-green-400/10 px-2 py-0.5 rounded-full border border-green-400/20">
+                    подтверждено
+                  </span>
+                )}
+              </div>
+
+              {/* Their items grid */}
+              <TheirItemsGrid items={theirSide?.items || []} />
+
+              {/* Their gold */}
+              {theirSide && theirSide.gold > 0 && (
                 <div className="flex items-center gap-2 mt-3 px-1.5">
                   <img src={goldCoinsIcon} alt="Золото" className="w-5 h-5 flex-shrink-0" />
-                  <input
-                    type="number"
-                    min="0"
-                    value={goldInput}
-                    onChange={(e) => setGoldInput(e.target.value)}
-                    className="input-underline w-20 sm:w-24 text-sm"
-                    placeholder="0"
-                  />
+                  <span className="text-gold text-sm font-medium">
+                    {theirSide.gold}
+                  </span>
                   <span className="text-white/50 text-xs">золота</span>
                 </div>
+              )}
 
-                {/* Action buttons */}
-                <div className="flex flex-col gap-2 mt-3">
-                  <button
-                    onClick={handleUpdateOffer}
-                    disabled={updating || isCompleteOrClosed}
-                    className="btn-line text-xs sm:text-sm w-full disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {updating ? 'Обновление...' : 'Обновить предложение'}
-                  </button>
-                  <button
-                    onClick={handleConfirm}
-                    disabled={confirming || mySide?.confirmed || isCompleteOrClosed}
-                    className="btn-blue text-xs sm:text-sm w-full disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {confirming
-                      ? 'Подтверждение...'
-                      : mySide?.confirmed
-                        ? 'Подтверждено'
-                        : 'Подтвердить'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Divider */}
-              <div className="hidden md:block w-px bg-gradient-to-b from-transparent via-white/20 to-transparent" />
-              <div className="md:hidden h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-
-              {/* Their side */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="gold-text text-sm sm:text-base font-medium uppercase tracking-wide">
-                    Предложение {theirSide?.character_name || targetCharacterName}
-                  </h3>
-                  {theirSide?.confirmed && (
-                    <span className="text-green-400 text-xs bg-green-400/10 px-2 py-0.5 rounded-full border border-green-400/20">
-                      подтверждено
-                    </span>
-                  )}
-                </div>
-
-                {/* Their items grid */}
-                <TheirItemsGrid items={theirSide?.items || []} />
-
-                {/* Their gold */}
-                {theirSide && theirSide.gold > 0 && (
-                  <div className="flex items-center gap-2 mt-3 px-1.5">
-                    <img src={goldCoinsIcon} alt="Золото" className="w-5 h-5 flex-shrink-0" />
-                    <span className="text-gold text-sm font-medium">
-                      {theirSide.gold}
-                    </span>
-                    <span className="text-white/50 text-xs">золота</span>
-                  </div>
-                )}
-
-                {/* Status indicator */}
-                {theirSide && !theirSide.confirmed && theirSide.items.length === 0 && theirSide.gold === 0 && (
-                  <p className="text-white/30 text-xs text-center mt-3">
-                    Ожидание предложения...
-                  </p>
-                )}
-              </div>
+              {/* Status indicator */}
+              {theirSide && !theirSide.confirmed && theirSide.items.length === 0 && theirSide.gold === 0 && (
+                <p className="text-white/30 text-xs text-center mt-3">
+                  Ожидание предложения...
+                </p>
+              )}
             </div>
-
-            {/* Cancel button */}
-            <div className="mt-6 flex justify-center">
-              <button
-                onClick={handleCancel}
-                disabled={cancelling || isCompleteOrClosed}
-                className="text-site-red hover:text-site-red/80 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {cancelling ? 'Отмена...' : 'Отменить обмен'}
-              </button>
-            </div>
-          </>
-        )}
-      </motion.div>
-    </div>
+          </div>
+        </>
+      )}
+    </ModalShell>
   );
 };
 

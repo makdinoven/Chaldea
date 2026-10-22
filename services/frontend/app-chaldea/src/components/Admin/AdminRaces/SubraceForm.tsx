@@ -9,6 +9,7 @@ import {
   selectOriginsLoading,
   selectOriginsError,
 } from '../../../redux/slices/originsSlice';
+import ModalShell from '../../CommonComponents/ModalShell/ModalShell';
 
 /**
  * FEAT-154 (rules 11, 14, 15) — the subrace editor also owns the appearance
@@ -114,203 +115,195 @@ const SubraceForm = ({ subrace, races, defaultRaceId, onSave, onCancel, loading 
     }
   };
 
-  const handleOverlayClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
-      onCancel();
-    }
-  };
-
   return (
-    <div
-      className="fixed inset-0 bg-black/85 z-[1000] overflow-y-auto py-6 px-3 sm:py-10 sm:px-5 flex items-start justify-center"
-      onClick={handleOverlayClick}
+    <ModalShell
+      open
+      onClose={onCancel}
+      title={subrace ? 'Редактировать подрасу' : 'Создать подрасу'}
+      size="lg"
+      footer={
+        <>
+          <button
+            type="submit"
+            form="subrace-form"
+            disabled={loading || !name.trim() || !isPresetValid || Boolean(heightError)}
+            className="w-full sm:w-auto px-6 py-2 bg-site-blue text-white border-none rounded cursor-pointer font-medium
+              transition-colors hover:bg-[#5d8fa8] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Сохранение...' : 'Сохранить'}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="w-full sm:w-auto px-6 py-2 bg-white/10 text-white border-none rounded cursor-pointer font-medium
+              transition-colors hover:bg-white/20"
+          >
+            Отмена
+          </button>
+        </>
+      }
     >
-      <div className="modal-content gold-outline gold-outline-thick w-full max-w-2xl">
-        <h2 className="gold-text text-xl sm:text-2xl uppercase mb-6">
-          {subrace ? 'Редактировать подрасу' : 'Создать подрасу'}
-        </h2>
+      <form id="subrace-form" onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div>
+          <label className={LABEL_CLASS}>Раса</label>
+          <select
+            value={raceId}
+            onChange={(e) => setRaceId(Number(e.target.value))}
+            className={FIELD_CLASS}
+          >
+            {races.map((race) => (
+              <option key={race.id_race} value={race.id_race} className="bg-site-dark text-white">
+                {race.name}
+              </option>
+            ))}
+          </select>
+        </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div>
-            <label className={LABEL_CLASS}>Раса</label>
-            <select
-              value={raceId}
-              onChange={(e) => setRaceId(Number(e.target.value))}
-              className={FIELD_CLASS}
-            >
-              {races.map((race) => (
-                <option key={race.id_race} value={race.id_race} className="bg-site-dark text-white">
-                  {race.name}
-                </option>
-              ))}
-            </select>
-          </div>
+        <div>
+          <label className={LABEL_CLASS}>Название</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            placeholder="Введите название подрасы"
+            className={FIELD_CLASS}
+          />
+        </div>
 
-          <div>
-            <label className={LABEL_CLASS}>Название</label>
+        <div>
+          <label className={LABEL_CLASS}>Описание</label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            placeholder="Введите описание подрасы"
+            className={`${FIELD_CLASS} resize-y`}
+          />
+        </div>
+
+        <div>
+          <label className={LABEL_CLASS}>Отличительные особенности</label>
+          <textarea
+            value={distinctiveFeatures}
+            onChange={(e) => setDistinctiveFeatures(e.target.value)}
+            rows={3}
+            placeholder="Только про облик: кожа, рост, чешуя, рога, хвост, глаза"
+            className={`${FIELD_CLASS} resize-y`}
+          />
+          <p className="mt-1 text-white/40 text-xs">
+            Показывается на шаге «Личность» как памятка о внешности. Если поле пустое,
+            игрок увидит обычное описание подрасы.
+          </p>
+        </div>
+
+        <div>
+          <label className={LABEL_CLASS}>Характерный рост, см</label>
+          <div className="flex flex-col sm:flex-row gap-3">
             <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              placeholder="Введите название подрасы"
+              type="number"
+              min={1}
+              value={heightMin}
+              onChange={(e) => setHeightMin(e.target.value)}
+              placeholder="От"
+              aria-label="Минимальный рост, см"
+              className={FIELD_CLASS}
+            />
+            <input
+              type="number"
+              min={1}
+              value={heightMax}
+              onChange={(e) => setHeightMax(e.target.value)}
+              placeholder="До"
+              aria-label="Максимальный рост, см"
               className={FIELD_CLASS}
             />
           </div>
-
-          <div>
-            <label className={LABEL_CLASS}>Описание</label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
-              placeholder="Введите описание подрасы"
-              className={`${FIELD_CLASS} resize-y`}
-            />
-          </div>
-
-          <div>
-            <label className={LABEL_CLASS}>Отличительные особенности</label>
-            <textarea
-              value={distinctiveFeatures}
-              onChange={(e) => setDistinctiveFeatures(e.target.value)}
-              rows={3}
-              placeholder="Только про облик: кожа, рост, чешуя, рога, хвост, глаза"
-              className={`${FIELD_CLASS} resize-y`}
-            />
+          {heightError ? (
+            <p className="mt-1 text-site-red text-xs">{heightError}</p>
+          ) : (
             <p className="mt-1 text-white/40 text-xs">
-              Показывается на шаге «Личность» как памятка о внешности. Если поле пустое,
-              игрок увидит обычное описание подрасы.
+              Необязательно. Рост персонажа вне диапазона вызовет мягкое предупреждение,
+              но не заблокирует заявку.
             </p>
-          </div>
+          )}
+        </div>
 
-          <div>
-            <label className={LABEL_CLASS}>Характерный рост, см</label>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <input
-                type="number"
-                min={1}
-                value={heightMin}
-                onChange={(e) => setHeightMin(e.target.value)}
-                placeholder="От"
-                aria-label="Минимальный рост, см"
-                className={FIELD_CLASS}
-              />
-              <input
-                type="number"
-                min={1}
-                value={heightMax}
-                onChange={(e) => setHeightMax(e.target.value)}
-                placeholder="До"
-                aria-label="Максимальный рост, см"
-                className={FIELD_CLASS}
-              />
+        <div>
+          <label className={LABEL_CLASS}>Характерные происхождения</label>
+          {originsLoading && (
+            <p className="text-white/40 text-xs">Загрузка списка происхождений…</p>
+          )}
+          {originsError && (
+            <div className="flex flex-wrap items-center gap-3 p-2.5 rounded border border-site-red/40 bg-site-red/10">
+              <p className="text-site-red text-xs">{originsError}</p>
+              <button
+                type="button"
+                onClick={() => dispatch(fetchOriginsThunk())}
+                className="text-site-blue text-xs underline hover:text-white transition-colors"
+              >
+                Повторить
+              </button>
             </div>
-            {heightError ? (
-              <p className="mt-1 text-site-red text-xs">{heightError}</p>
-            ) : (
-              <p className="mt-1 text-white/40 text-xs">
-                Необязательно. Рост персонажа вне диапазона вызовет мягкое предупреждение,
-                но не заблокирует заявку.
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label className={LABEL_CLASS}>Характерные происхождения</label>
-            {originsLoading && (
-              <p className="text-white/40 text-xs">Загрузка списка происхождений…</p>
-            )}
-            {originsError && (
-              <div className="flex flex-wrap items-center gap-3 p-2.5 rounded border border-site-red/40 bg-site-red/10">
-                <p className="text-site-red text-xs">{originsError}</p>
-                <button
-                  type="button"
-                  onClick={() => dispatch(fetchOriginsThunk())}
-                  className="text-site-blue text-xs underline hover:text-white transition-colors"
-                >
-                  Повторить
-                </button>
-              </div>
-            )}
-            {!originsLoading && !originsError && origins.length === 0 && (
-              <p className="text-white/40 text-xs">
-                Справочник происхождений пуст. Заполните его в разделе «Происхождения».
-              </p>
-            )}
-            {origins.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {origins.map((origin) => {
-                  const active = typicalOriginIds.includes(origin.id);
-                  return (
-                    <button
-                      key={origin.id}
-                      type="button"
-                      onClick={() => toggleOrigin(origin.id)}
-                      aria-pressed={active}
-                      className={`chip-outline rounded-full px-3 py-1.5 text-xs font-medium ${
-                        active ? 'chip-outline-active' : ''
-                      }`}
-                    >
-                      {origin.name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            <p className="mt-1 text-white/40 text-xs">
-              Нехарактерный выбор игрока не запрещён — он лишь помечается как редкий.
+          )}
+          {!originsLoading && !originsError && origins.length === 0 && (
+            <p className="text-white/40 text-xs">
+              Справочник происхождений пуст. Заполните его в разделе «Происхождения».
             </p>
-          </div>
+          )}
+          {origins.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {origins.map((origin) => {
+                const active = typicalOriginIds.includes(origin.id);
+                return (
+                  <button
+                    key={origin.id}
+                    type="button"
+                    onClick={() => toggleOrigin(origin.id)}
+                    aria-pressed={active}
+                    className={`chip-outline rounded-full px-3 py-1.5 text-xs font-medium ${
+                      active ? 'chip-outline-active' : ''
+                    }`}
+                  >
+                    {origin.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <p className="mt-1 text-white/40 text-xs">
+            Нехарактерный выбор игрока не запрещён — он лишь помечается как редкий.
+          </p>
+        </div>
 
-          <div>
-            <label className={LABEL_CLASS}>Изображение</label>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={handleImageChange}
-              className="text-white/60 text-sm max-w-full"
+        <div>
+          <label className={LABEL_CLASS}>Изображение</label>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleImageChange}
+            className="text-white/60 text-sm max-w-full"
+          />
+          {subrace?.image && !imageFile && (
+            <img
+              src={subrace.image}
+              alt={subrace.name}
+              className="mt-2 max-w-full max-h-[150px] rounded border border-white/10 object-cover"
             />
-            {subrace?.image && !imageFile && (
-              <img
-                src={subrace.image}
-                alt={subrace.name}
-                className="mt-2 max-w-full max-h-[150px] rounded border border-white/10 object-cover"
-              />
-            )}
-            {imageFile && (
-              <p className="mt-1 text-white/40 text-xs">
-                Выбрано: {imageFile.name}
-              </p>
-            )}
-          </div>
+          )}
+          {imageFile && (
+            <p className="mt-1 text-white/40 text-xs">
+              Выбрано: {imageFile.name}
+            </p>
+          )}
+        </div>
 
-          <div>
-            <label className={`${LABEL_CLASS} mb-2`}>Пресет статов</label>
-            <StatPresetEditor value={statPreset} onChange={setStatPreset} />
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-2">
-            <button
-              type="submit"
-              disabled={loading || !name.trim() || !isPresetValid || Boolean(heightError)}
-              className="px-6 py-2 bg-site-blue text-white border-none rounded cursor-pointer font-medium
-                transition-colors hover:bg-[#5d8fa8] disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? 'Сохранение...' : 'Сохранить'}
-            </button>
-            <button
-              type="button"
-              onClick={onCancel}
-              className="px-6 py-2 bg-white/10 text-white border-none rounded cursor-pointer font-medium
-                transition-colors hover:bg-white/20"
-            >
-              Отмена
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div>
+          <label className={`${LABEL_CLASS} mb-2`}>Пресет статов</label>
+          <StatPresetEditor value={statPreset} onChange={setStatPreset} />
+        </div>
+      </form>
+    </ModalShell>
   );
 };
 
