@@ -24,6 +24,31 @@ const hexToRgba = (hex: string, alpha: number): string => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
+/**
+ * Relative luminance above which a colour contrasts better with black than
+ * with white (WCAG contrast: the two are equal at about 0.18). Mid greys and
+ * warm mid tones fall above it.
+ */
+const LIGHT_LUMINANCE = 0.18;
+
+/** Whether a colour reads better on dark than on light. */
+const isLightColour = (hex: string): boolean => {
+  const channel = (offset: number) => {
+    const c = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5) > LIGHT_LUMINANCE;
+};
+
+/**
+ * The plate laid under a featured card's text so it reads on any cover. The
+ * text colour is the admin's choice per article (dark for a light cover,
+ * light for a dark one), so the plate goes the opposite way: dark under light
+ * text, pale under dark text.
+ */
+const textPlateClass = (textColour: string) =>
+  isLightColour(textColour) ? 'bg-black/70' : 'bg-white/75';
+
 /* ---------- Greek letter decorative effects (inspired by Bestiary runes) ---------- */
 
 const GREEK_LETTERS = 'ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψω';
@@ -418,9 +443,8 @@ const ArchivePage = () => {
                   >
                     <Link
                       to={`/archive/${article.slug}`}
-                      className="block group relative rounded-card overflow-hidden shadow-card
+                      className="group relative flex flex-col justify-end min-h-[220px] rounded-card overflow-hidden shadow-card
                                  hover:shadow-hover transition-shadow duration-200"
-                      style={{ minHeight: '220px' }}
                     >
                       {/* Background image or darker parchment fallback */}
                       {article.cover_image_url ? (
@@ -438,12 +462,15 @@ const ArchivePage = () => {
                           }}
                         />
                       )}
-                      {/* Dark overlay */}
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent" />
                       {/* Hover overlay */}
                       <div className="absolute inset-0 bg-amber-700/0 group-hover:bg-amber-700/10 transition-colors duration-200" />
 
-                      <div className="relative z-[1] h-full flex flex-col justify-end p-4 sm:p-5">
+                      {/* Text on a plate at the foot of the cover, so it reads on any picture */}
+                      <div
+                        className={`relative z-[1] m-2 sm:m-3 rounded-lg p-3 sm:p-4 backdrop-blur-sm ${textPlateClass(
+                          article.cover_text_color || '#FFFFFF',
+                        )}`}
+                      >
                         <h3
                           className="text-lg sm:text-xl font-medium mb-1 line-clamp-2"
                           style={{ fontFamily: titleFont, color: article.cover_text_color || '#FFFFFF' }}
